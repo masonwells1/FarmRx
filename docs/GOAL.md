@@ -69,7 +69,8 @@ don't build it yet.
       offline fallback; Sol review 3 findings fixed; Claude browser-verified desktop+mobile
       (375px overflow bug found+fixed, incl pre-existing position-grid overflow). Phase 2
       (paid Barchart) parked below as decision #6. USDA basis feed arrives with backend.
-- [ ] Module 4: Profitability (input costs, arrangement comparison, breakeven, PROFITABILITY
+- [~] Module 4: Profitability — SCHEMA DRAFTED 2026-07-11 (0006+0007 by Sol, Claude-reviewed,
+      NOT applied; UI build waits on foundation-sequence answer) (input costs, arrangement comparison, breakeven, PROFITABILITY
       MATRIX ⭐, cost/acre by field, branded PDF)
       · ADOPT from competitor report: "BU TO COVER" column on every cost line (4.1) ·
         equivalent-cash-rent normalization in arrangement comparison (4.2) · breakeven-YIELD
@@ -101,6 +102,9 @@ don't build it yet.
    Default if no answer: owner-only v1.
 5. Paid "we set up your numbers" service (their $2,495 model) as a Crop RX offering?
    Pure business call — no default.
+6a. Module 4 schema drafted 2026-07-11 (0006+0007, NOT applied; explainer docs/schema-module4.md):
+   flex-lease formula in the draft = trigger + %-above-trigger + optional cap — does that match
+   real CropRx flex leases? Say "apply the profitability schema" when ready (after grain).
 6. Futures feed Phase 2 (2026-07-11): Barchart OnDemand EOD ~$49/mo is the cheapest
    COMPLIANT raw-quote API (needed only when our UI must compute with live board prices;
    get written sales confirmation it covers end-user display). Default if no answer:
