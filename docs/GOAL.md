@@ -64,7 +64,11 @@ don't build it yet.
       DECIDED BY CLAUDE: Phase 1 $0 = TradingView delayed widgets (licensed embed,
       attribution kept) for quotes + manual planned price stays the math source;
       USDA AMS MARS API (public domain) for basis/cash history when backend lands.
-      Phase 1 widget build queued. Phase 2 (paid) parked below as decision #6.
+      Phase 1 SHIPPED 2026-07-11: 6 TradingView delayed tiles on Grain page (front months
+      + Dec26 corn/Nov26 beans/Jul27 wheat), display-only (math still manual prices), calm
+      offline fallback; Sol review 3 findings fixed; Claude browser-verified desktop+mobile
+      (375px overflow bug found+fixed, incl pre-existing position-grid overflow). Phase 2
+      (paid Barchart) parked below as decision #6. USDA basis feed arrives with backend.
 - [ ] Module 4: Profitability (input costs, arrangement comparison, breakeven, PROFITABILITY
       MATRIX ⭐, cost/acre by field, branded PDF)
       · ADOPT from competitor report: "BU TO COVER" column on every cost line (4.1) ·
