@@ -1,0 +1,18 @@
+:root {
+  --crx-green: #28A26A;
+  --deep-green: #218A5C;
+  --charcoal: #2E2E2E;
+  --matte-gray: #4E4E4E;
+  --light-green: #E8F5EE;
+  --premix-bg: #F5F5F5;
+  --warn-red: #C62828;
+  --warn-bg: #FFF3E0;
+  --chrome-green: #17513A;
+  --amber: #E8A33D;
+  --hairline: #E3E6E4;
+  --surface: #FCFDFC;
+  --on-dark: #F8FCF9;
+  --radius: 16px;
+  --brand-font: Helvetica, Arial, sans-serif;
+  --ui-font: 'Inter', Helvetica, Arial, sans-serif;
+}
