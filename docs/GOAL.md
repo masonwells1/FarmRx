@@ -59,7 +59,12 @@ don't build it yet.
       (grain reads gated owner/manager + per-member override — current RLS lets any active
       member read grain; no exposure until real logins exist, MUST land before first
       employee login)
-- [ ] Free futures API (delayed, labeled) + manual basis — completes Grain v1 market data
+- [~] Free futures feed (research DONE 2026-07-11 → docs/futures-feed-research.md):
+      no free raw-quote API is license-compliant for customer display (CME licensing);
+      DECIDED BY CLAUDE: Phase 1 $0 = TradingView delayed widgets (licensed embed,
+      attribution kept) for quotes + manual planned price stays the math source;
+      USDA AMS MARS API (public domain) for basis/cash history when backend lands.
+      Phase 1 widget build queued. Phase 2 (paid) parked below as decision #6.
 - [ ] Module 4: Profitability (input costs, arrangement comparison, breakeven, PROFITABILITY
       MATRIX ⭐, cost/acre by field, branded PDF)
       · ADOPT from competitor report: "BU TO COVER" column on every cost line (4.1) ·
@@ -92,6 +97,10 @@ don't build it yet.
    Default if no answer: owner-only v1.
 5. Paid "we set up your numbers" service (their $2,495 model) as a Crop RX offering?
    Pure business call — no default.
+6. Futures feed Phase 2 (2026-07-11): Barchart OnDemand EOD ~$49/mo is the cheapest
+   COMPLIANT raw-quote API (needed only when our UI must compute with live board prices;
+   get written sales confirmation it covers end-user display). Default if no answer:
+   stay on $0 Phase 1 widgets.
 - DECIDED BY CLAUDE (technical/UX): monthly calendar grid with live futures per cell +
   one-tap strategy templates becomes the PRIMARY marketing-plan view (their best UX,
   handoff 2.6 compatible); fields stay first-class but Grain page must not be gated on
