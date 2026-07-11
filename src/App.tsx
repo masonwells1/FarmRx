@@ -5,6 +5,7 @@ import { bootstrapInitialOwnerFarm, findOnlyAccessibleFarm } from './auth/bootst
 import { RequireSession } from './auth/RequireSession'
 import { FieldDetailPage, FieldFormPage, FieldsPage } from './FieldsModule'
 import { GrainPage } from './GrainModule'
+import { ProfitabilityPage } from './ProfitabilityModule'
 import { grainServices, replayFieldsQueue } from './data'
 import { getSyncStatus, retrySavedChanges, subscribeSyncStatus } from './data/syncStatus'
 import type { EntityType } from './data/fields'
@@ -87,7 +88,7 @@ function AppLayout() {
             <Route path="/fields/:id/edit" element={<FieldFormPage />} />
             <Route path="/grain" element={<GrainPage services={grainServices} />} />
             <Route path="/inventory" element={<EmptyPage />} />
-            <Route path="/profitability" element={<EmptyPage />} />
+            <Route path="/profitability" element={<ProfitabilityPage />} />
             <Route path="/equipment" element={<EmptyPage />} />
             <Route path="/tasks" element={<EmptyPage />} />
             <Route path="*" element={<Navigate to="/fields" replace />} />

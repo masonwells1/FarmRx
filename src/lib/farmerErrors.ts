@@ -5,6 +5,7 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (/network|fetch|timeout|connection|econn/.test(message)) return 'We could not reach Farm Rx. Check your signal and try again.'
   if (/sign-in ended|jwt|auth|unauthori[sz]ed|\b401\b/.test(message)) return 'Your sign-in ended. Please sign in again.'
   if (/permission|rls|forbidden|\b403\b/.test(message)) return 'You do not have permission to make that change.'
+  if (/belongs to another farm|belongs to a different farm/.test(message)) return 'These saved profitability budgets belong to another farm. Farm Rx left them untouched.'
   if (/duplicate|already exists|\b23505\b/.test(message)) return 'That record already exists. Check it and try again.'
   if (/invalid|malformed|validation|must be|required|\b22p02\b/.test(message) && /save/.test(action)) return 'Check the field details and try again.'
   return `Farm Rx could not ${action} right now. Please try again.`

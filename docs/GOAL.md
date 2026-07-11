@@ -78,9 +78,16 @@ don't build it yet.
       offline fallback; Sol review 3 findings fixed; Claude browser-verified desktop+mobile
       (375px overflow bug found+fixed, incl pre-existing position-grid overflow). Phase 2
       (paid Barchart) parked below as decision #6. USDA basis feed arrives with backend.
-- [~] Module 4: Profitability — SCHEMA DRAFTED 2026-07-11 (0006+0007 by Sol, Claude-reviewed,
-      NOT applied; UI build waits on foundation-sequence answer) (input costs, arrangement comparison, breakeven, PROFITABILITY
-      MATRIX ⭐, cost/acre by field, branded PDF)
+- [~] Module 4: Profitability — SCHEMA DRAFTED (0006+0007, NOT applied) AND **UI BUILT ON
+      MOCK + BROWSER-VERIFIED 2026-07-11** (Terra build → Sol review 13 findings/6 P1 →
+      all fixed → Claude verified hands-on with exact arithmetic: owned ground drops the
+      $245 land line ($833→$588/ac), crop-share equivalent rent = 40%×$929.20 revenue −
+      40%×$588 landlord-paid inputs = $136.48, matrix cell math, BU TO COVER, copy-budget,
+      duplicate-allocation guard, budget-switch cell reset, 0 text <18px / 0 targets <48px,
+      375px clean). Separate storage key; Fields data injected; flex formula stays UI shape
+      pending decision 6a. REMAINING: apply 0006/0007 (after grain), live repository swap,
+      branded PDF export. NOTE: page shows honest load error in dev until 0009 is applied
+      (it reads Fields live).
       · ADOPT from competitor report: "BU TO COVER" column on every cost line (4.1) ·
         equivalent-cash-rent normalization in arrangement comparison (4.2) · breakeven-YIELD
         alongside breakeven-price (4.3) · "copy from another budget" (4.1) · our matrix stays

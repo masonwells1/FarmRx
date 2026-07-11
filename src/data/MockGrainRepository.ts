@@ -1,5 +1,5 @@
 import type { FieldsRepository } from './fields'
-import type { CashBid, FuturesQuote, GrainContract, GrainData, GrainRepository, GrainWorkspace, MarketDataService, MarketingPlanTarget, PositionScope, ProductionEstimate, ProfitabilityRepository, UsdaReportDate } from './grain'
+import type { CashBid, FuturesQuote, GrainContract, GrainData, GrainRepository, GrainWorkspace, MarketDataService, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaReportDate } from './grain'
 import { sameScope, scopeOf, validateGrainContract } from './grain'
 
 const STORAGE_KEY = 'farm-rx-local-data'
@@ -59,10 +59,6 @@ function grainSlice(workspace: GrainWorkspace): GrainData { const { fields: _fie
 
 export class MockMarketDataService implements MarketDataService {
   async getQuotes(): Promise<FuturesQuote[]> { const as_of = `Delayed · ${new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Chicago' }).format(new Date(Date.now() - 15 * 60_000))} CT`; const suffix = String(year).slice(-2); const next = String(year + 1).slice(-2); return [{ symbol: 'ZC', contract: `Sep ${suffix}`, label: 'Sep corn', price: 4.44, crop_year: year, new_crop: false, delayed: true, as_of }, { symbol: 'ZC', contract: `Dec ${suffix}`, label: 'Dec corn', price: 4.68, crop_year: year, new_crop: true, delayed: true, as_of }, { symbol: 'ZS', contract: `Aug ${suffix}`, label: 'Aug beans', price: 10.18, crop_year: year, new_crop: false, delayed: true, as_of }, { symbol: 'ZS', contract: `Nov ${suffix}`, label: 'Nov beans', price: 10.42, crop_year: year, new_crop: true, delayed: true, as_of }, { symbol: 'ZW', contract: `Sep ${suffix}`, label: 'Sep wheat', price: 5.33, crop_year: year, new_crop: false, delayed: true, as_of }, { symbol: 'ZW', contract: `Jul ${next}`, label: 'Jul wheat', price: 5.61, crop_year: year, new_crop: true, delayed: true, as_of }] }
-}
-
-export class MockProfitabilityRepository implements ProfitabilityRepository {
-  async getBreakeven(scope: PositionScope, fields: GrainWorkspace['fields']) { const acres = fields.crop_assignments.filter((assignment) => assignment.crop_year === scope.crop_year && assignment.commodity_id === scope.commodity_id).reduce((total, assignment) => total + assignment.planted_acres, 0); const perAcreCosts: Record<string, number> = { corn_yellow: 865, corn_white: 900, corn_non_gmo: 882, soybeans: 610, soybeans_double_crop: 465, wheat: 401 }; const expectedYield: Record<string, number> = { corn_yellow: 202, corn_white: 190, corn_non_gmo: 180, soybeans: 62, soybeans_double_crop: 46, wheat: 82 }; return acres > 0 ? (perAcreCosts[scope.commodity_id] ?? 0) / (expectedYield[scope.commodity_id] ?? 1) : null }
 }
 
 export class MockGrainRepository implements GrainRepository {

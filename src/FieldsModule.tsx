@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { fieldsRepository, moduleYear } from './data'
 import type { Arrangement, CropAssignment, Field, FieldDraft, FieldsData, LandArrangementType } from './data/fields'
 import { farmerError } from './lib/farmerErrors'
+import { equivalentCashRentForField } from './data/profitabilityCalculations'
 
 type SortKey = 'name' | 'entity' | 'crop' | 'arrangement' | 'acres'
 type InputShareKey = 'landlord_seed_pct' | 'landlord_fertilizer_pct' | 'landlord_chemical_pct' | 'landlord_fuel_pct' | 'landlord_labor_custom_pct' | 'landlord_crop_insurance_pct' | 'landlord_equipment_pct' | 'landlord_interest_pct' | 'landlord_other_input_pct'
@@ -26,26 +27,9 @@ function arrangementText(arrangement?: Arrangement) {
   return `Crop share · landlord ${number.format(arrangement.landlord_crop_pct ?? 0)}%`
 }
 function cropPrice(assignment: CropAssignment) { return assignment.expected_price_per_bu ?? null }
-function fieldEquivalentRent(field: Field, assignments: CropAssignment[], arrangement: Arrangement) {
-  if (arrangement.arrangement_type === 'owned') return null
-  if (arrangement.arrangement_type === 'cash_rent') return arrangement.cash_rent_per_acre
-  if (assignments.length === 0) return null
-  if (arrangement.arrangement_type === 'crop_share') {
-    if (assignments.some((assignment) => assignment.expected_yield_per_acre === null || cropPrice(assignment) === null)) return null
-    return assignments.reduce((total, assignment) => total + assignment.planted_acres / field.total_acres * assignment.expected_yield_per_acre! * cropPrice(assignment)! * (arrangement.landlord_crop_pct ?? 0) / 100, 0)
-  }
-  const formula = arrangement.flex_bonus_formula
-  if (!formula) return null
-  const bonuses = assignments.map((assignment) => {
-    const yieldPerAcre = assignment.expected_yield_per_acre ?? null
-    const price = cropPrice(assignment)
-    if ((formula.type === 'price' && price === null) || (formula.type === 'yield' && yieldPerAcre === null) || (formula.type === 'revenue' && (yieldPerAcre === null || price === null))) return null
-    if (formula.type === 'price') return assignment.planted_acres / field.total_acres * Math.max(0, price! - formula.trigger) * formula.bonus_rate
-    if (formula.type === 'yield') return assignment.planted_acres / field.total_acres * Math.max(0, yieldPerAcre! - formula.trigger) * formula.bonus_rate
-    return assignment.planted_acres / field.total_acres * Math.max(0, yieldPerAcre! * price! - formula.trigger) * formula.bonus_rate / 100
-  })
-  if (bonuses.some((value) => value === null)) return null
-  return (arrangement.cash_rent_per_acre ?? 0) + bonuses.reduce<number>((total, value) => total + (value ?? 0), 0)
+/** Shared lease math for field detail and Profitability. Keep both screens in the same dollars-per-acre language. */
+export function fieldEquivalentRent(field: Field, assignments: CropAssignment[], arrangement: Arrangement) {
+  return equivalentCashRentForField(field, assignments, arrangement)
 }
 function flexLabels(type: 'price' | 'yield' | 'revenue') { return type === 'price' ? { trigger: 'Price trigger ($/bu)', rate: 'Bonus rate ($/ac per $/bu)' } : type === 'yield' ? { trigger: 'Yield trigger (bu/ac)', rate: 'Bonus rate ($/ac per bu/ac)' } : { trigger: 'Revenue trigger ($/ac)', rate: 'Bonus rate (%)' } }
 function zeroShares() { return Object.fromEntries(inputShareKeys.map((key) => [key, 0])) as Record<InputShareKey, number> }

@@ -1,4 +1,5 @@
 import type { Commodity, FieldsData } from './fields'
+import type { ProfitabilityRepository } from './profitability'
 
 export type ProductionMathBasis = 'projected' | 'actual'
 export type GrainContractType = 'cash_spot' | 'forward_cash' | 'basis' | 'hta'
@@ -86,8 +87,6 @@ export interface UsdaReportDate { id: string; report_name: string; report_date: 
 
 export interface FuturesQuote { symbol: 'ZC' | 'ZS' | 'ZW'; contract: string; label: string; price: number; crop_year: number; new_crop: boolean; delayed: true; as_of: string }
 export interface MarketDataService { getQuotes(): Promise<FuturesQuote[]> }
-export interface ProfitabilityRepository { getBreakeven(scope: PositionScope, fields: FieldsData): Promise<number | null> }
-
 export interface GrainData { production_estimates: ProductionEstimate[]; grain_contracts: GrainContract[]; marketing_plan_targets: MarketingPlanTarget[]; insurance_units: InsuranceUnit[]; grain_bins: GrainBin[]; bin_inventory: BinInventory[]; cash_bids: CashBid[]; usda_report_dates: UsdaReportDate[] }
 export interface GrainWorkspace extends GrainData { fields: FieldsData }
 export interface GrainRepository {
