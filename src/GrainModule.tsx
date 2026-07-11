@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { MarketQuoteSection } from './components/MarketQuote'
+import { farmerError } from './lib/farmerErrors'
 import type { GrainContract, GrainContractType, GrainServices, GrainWorkspace, MarketingPlanTarget, PositionScope, ProductionEstimate } from './data/grain'
 import { sameScope, scopeOf } from './data/grain'
 
@@ -34,10 +35,11 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const [editingTarget, setEditingTarget] = useState<{ month: number; target?: MarketingPlanTarget } | null>(null)
   const [savedAt, setSavedAt] = useState('')
   const [planError, setPlanError] = useState('')
-  const refresh = async () => { const data = await services.grainRepository.getData(); setWorkspace(data); setSelectedEstimateId((current) => data.production_estimates.some((estimate) => estimate.id === current) ? current : data.production_estimates[0]?.id ?? '') }
+  const [loadError, setLoadError] = useState('')
+  const refresh = async () => { try { const data = await services.grainRepository.getData(); setWorkspace(data); setLoadError(''); setSelectedEstimateId((current) => data.production_estimates.some((estimate) => estimate.id === current) ? current : data.production_estimates[0]?.id ?? '') } catch (caught) { setLoadError(farmerError(caught, 'load your grain records')) } }
   useEffect(() => { void refresh() }, [])
   const whisper = () => setSavedAt(`Saved ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date())}`)
-  if (!workspace) return <section className="page"><div className="loading-state">Loading grain position…</div></section>
+  if (!workspace) return <section className="page"><div className="loading-state" role={loadError ? 'alert' : undefined}>{loadError || 'Loading grain position…'}</div></section>
   const selectedEstimate = workspace.production_estimates.find((estimate) => estimate.id === selectedEstimateId) ?? workspace.production_estimates[0]
   if (!selectedEstimate) return <section className="page"><div className="loading-state">Add a crop assignment in Fields to begin your grain position.</div></section>
   const selectedScope = scopeOf(selectedEstimate)

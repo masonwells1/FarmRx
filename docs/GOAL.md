@@ -52,13 +52,22 @@ don't build it yet.
       math proven, fail-closed corrupt-envelope test, landlord phone round-trip, 18px/48px
       clean, 0 console errors) + committed 2026-07-11. npm run regression now runs both
       repository suites.
-- [ ] FOUNDATION BLOCK (Claude's Call #1, walked through with Mason 2026-07-11, sequence
-      pending his OK): real Supabase auth + swap Fields/Grain repositories from mock →
-      live DB, offline write-queue design at the repository seam (v1 scope: entries never
-      lost; queue + sync, not full offline browsing), AND the employee grain-privacy fix
-      (grain reads gated owner/manager + per-member override — current RLS lets any active
-      member read grain; no exposure until real logins exist, MUST land before first
-      employee login)
+- [~] FOUNDATION BLOCK — CODE BUILT + BROWSER-VERIFIED 2026-07-11 (Sol design →
+      Terra build → Sol adversarial review 13 findings/5 P1 → all fixed → Claude verified
+      hands-on): REAL Supabase auth live in dev (sign-in/sign-out/session-restore/wrong-
+      password all proven in browser with test account farmtest@croprxsolutions.com on the
+      farm-rx dev DB; real farm name renders from real DB), SupabaseFieldsRepository +
+      durable offline write-queue (FIFO replay, multi-tab locks, never-lose-an-entry,
+      honest synced/pending wording) behind the unchanged repository seam, Grain pinned to
+      mock via explicit backend manifest, MockGrain now reads Fields via injection (no
+      copies). Regressions: 3 suites incl. 15-check live-repo contract suite, all passing.
+      DRAFTED NOT APPLIED: 0008 employee privacy (grain/financials owner/manager-only +
+      per-member View financials), 0009 fields live support (5 missing UI columns +
+      atomic save_field_bundle RPC w/ replay receipts + idempotent bootstrap_first_farm).
+      ⚠ GATE: Fields+Grain pages in dev show an honest "could not load" error until 0009
+      is APPLIED (decision #7 below) — the DB lacks 5 columns the UI round-trips.
+      Remaining after 0009 apply: live-path manual test matrix (foundation-design.md),
+      sign-out message says "sign-in ended" instead of a neutral goodbye (polish)
 - [~] Free futures feed (research DONE 2026-07-11 → docs/futures-feed-research.md):
       no free raw-quote API is license-compliant for customer display (CME licensing);
       DECIDED BY CLAUDE: Phase 1 $0 = TradingView delayed widgets (licensed embed,
@@ -105,6 +114,14 @@ don't build it yet.
 6a. Module 4 schema drafted 2026-07-11 (0006+0007, NOT applied; explainer docs/schema-module4.md):
    flex-lease formula in the draft = trigger + %-above-trigger + optional cap — does that match
    real CropRx flex leases? Say "apply the profitability schema" when ready (after grain).
+7. **APPLY FIELDS SUPPORT SCHEMA (0009)** — drafted+Claude-reviewed 2026-07-11, explainer
+   at docs/schema-fields-support.md. Additive only (5 columns + save function + receipts +
+   first-farm bootstrap). THIS is what turns real login + live Fields ON in dev; until then
+   Fields/Grain pages show an honest load error. Say "apply the fields support schema".
+   Note: 0009 applies right after the live 0001–0003; it does NOT need grain (0004/0005).
+8. **APPLY EMPLOYEE PRIVACY SCHEMA (0008)** — drafted 2026-07-11 (grain+financials become
+   owner/manager-only with per-employee View financials switch). Applies AFTER 0004–0007;
+   must land before the first employee login. Explainer inside docs/foundation-design.md.
 6. Futures feed Phase 2 (2026-07-11): Barchart OnDemand EOD ~$49/mo is the cheapest
    COMPLIANT raw-quote API (needed only when our UI must compute with live board prices;
    get written sales confirmation it covers end-user display). Default if no answer:

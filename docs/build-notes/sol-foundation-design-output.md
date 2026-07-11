@@ -1,0 +1,3 @@
+Verification is intentionally incomplete: `0008_employee_privacy.sql` was statically reviewed for all 11 required policy changes, but it was not executed because you prohibited database operations and its prerequisite tables from drafts `0004–0007` do not exist yet.
+
+No app, database, or git action was performed. The migration remains **DRAFT ONLY and unproven against PostgreSQL** until tested later in an isolated development database after `0004–0007`.

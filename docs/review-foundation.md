@@ -1,0 +1,31 @@
+## Findings
+
+1. **P1** — Pending writes can be overtaken and falsely reported synced, `src/data/QueuedFieldsRepository.ts:57`. `saveField()` never checks for an existing queue, so a newer online save can reach Supabase before older queued saves and line 69 publishes `synced: 0` while those entries still exist. Serialize saves per user/farm; when the queue is nonempty, append behind its tail and replay strictly FIFO before publishing synced.
+
+2. **P1** — Multi-tab saves can lose queue entries, `src/data/writeQueue.ts:25`. Queue append is an unlocked read-modify-write, while the cross-tab lock only protects replay; two tabs can overwrite each other’s envelopes. The fallback lease at `src/data/QueuedFieldsRepository.ts:30` is also non-atomic and expires after 15 seconds without renewal, allowing double replay. Use the same Web Lock for append/removal/replay, implement a renewable ownership-verified fallback lease, and regression-test simultaneous tabs.
+
+3. **P1** — The RPC accepts stale crop-assignment IDs as new rows, `supabase/migrations/0009_fields_live_support.sql:405`. A missing supplied ID falls through to INSERT at line 489, directly violating the requirement that unknown/stale existing IDs reject. Add an explicit new-versus-existing marker to the queued draft contract; require existing IDs to resolve to the field/farm and require new IDs not to exist.
+
+4. **P1** — Owner bootstrap is not idempotent under concurrent retry, `src/auth/bootstrapFarm.ts:12`. Two tabs can both observe zero farms and insert separate farms before either becomes visible to the other, leaving the account permanently blocked by the multiple-farm check. Move initial bootstrap behind a restricted idempotent RPC with an advisory lock/consumed onboarding marker, or otherwise enforce one bootstrap operation server-side.
+
+5. **P1** — The claimed 15-check regression gate mostly tests its own fake, `src/data/SupabaseFieldsRepository.regression.ts:47`. Examples: check 4 inspects only submitted phone text, check 5’s preserved-ID assertion is tautological, check 6 never verifies history or earlier-date rejection, check 7 uses a fake that never mutates before failing, check 10 omits storage-full/corrupt/read-back cases, checks 11–12 omit failure/head-retention and lost-response duplication, check 13 merely checks that an unused key is absent, and check 14 never performs a Grain save. Replace these with stateful contract tests that exercise every listed outcome, including malformed canonical results and multi-tab races.
+
+6. **P2** — Supabase transport failures may not be queued, `src/data/QueuedFieldsRepository.ts:11`. The classifier reads messages only from `Error` instances, but Supabase commonly returns thrown error-shaped objects; an online “failed to fetch” result can therefore bypass the queue. Safely inspect a record’s string `message`/status/cause and classify transport versus definite server rejection centrally.
+
+7. **P2** — Queued saves are not overlaid into subsequent reads, `src/data/QueuedFieldsRepository.ts:52`. `getData()` always replays and then requires a live load; offline refresh fails instead of returning the maintained workspace, and `queuedField()` overlays only the field—not its arrangement or crop assignments. Preserve the last workspace, overlay the complete normalized bundle, and return it with the required offline message when a live refresh is unavailable.
+
+8. **P2** — Replay is not triggered when authentication/farm resolution completes, `src/data/QueuedFieldsRepository.ts:46`. It runs only through `getData()`, an online event, or manual retry, so opening a non-data route can leave pending work untouched while the global store starts as synced. Trigger context-specific queue inspection/replay after sign-in and farm resolution and reset/recompute status when users change.
+
+9. **P2** — Session restore can overwrite a newer auth event, `src/auth/AuthProvider.tsx:28`. The listener may apply `SIGNED_IN`, after which the earlier `getSession()` promise can resolve with stale null and force `signed_out`. Guard the restore result with an event/version token so it cannot replace newer listener state.
+
+10. **P2** — Storage queue validation is only superficial, `src/data/writeQueue.ts:8`. Any object qualifies as a draft, extra/invalid fields are accepted, and UUID/date/content shapes are not validated; corruption is detected later only by incidental replay failure. Validate the complete exact envelope and normalized `FieldDraft` schema before accepting or modifying it.
+
+11. **P2** — Farmer UI can expose raw technical failures, `src/FieldsModule.tsx:81`. Save forms render `Error.message` directly, so fetch, malformed-row, or adapter diagnostics can appear verbatim. Map repository/auth/database failures to a fixed farmer-English error taxonomy and keep technical details out of rendered state.
+
+12. **P2** — Every customer is labeled “Wells Farm Group,” `src/App.tsx:62`. The now-live shell still presents mock farm identity in both sidebar and header. Populate the wrapper from the resolved canonical farm or omit the name until it is loaded.
+
+13. **P2** — Write receipts prevent membership deletion forever, `supabase/migrations/0009_fields_live_support.sql:32`. The composite membership foreign key uses `ON DELETE RESTRICT`, so any member who has saved a field can no longer be removed through the existing membership delete policy. Preserve receipt identity without blocking lifecycle operations—for example, archive/revoke memberships rather than delete them, or redesign receipt actor provenance with an explicit retention policy.
+
+The exact Supabase hostname assertion, explicit Fields-live/Grain-mock manifest, absence of a live-to-mock Fields fallback, strict numeric/enum mappers, required sync-notice wording, and new 18px/48px styling are clean. Draft `0008` correctly targets the policies created by `0005`/`0007`, preserves the rep toggle-plus-named-grant rule, and does not permit employee self-grants. Draft `0009` otherwise uses static JSON handling, farm-bound parent checks, transaction-scoped receipt locking, restricted execution grants, and atomic function semantics.
+
+VERDICT: NEEDS FIXES (5 P1)

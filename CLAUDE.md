@@ -36,6 +36,11 @@
   → kill the codex PID and relaunch the task (fresh prompt, stdin closed). Never sit waiting.
 - Codex via `codex exec -m <model>`: **gpt-5.6-sol** = architecture/schema/security/review,
   **gpt-5.6-terra** = everyday module building/UI, **gpt-5.6-luna** = boilerplate/docs/mechanical.
+- **Absolute paths in codex launches:** the orchestrator shell's cwd can silently reset to C:\
+  between calls, so `$(cat relative/prompt.md)` can expand to EMPTY (codex then no-ops and asks
+  "what would you like me to work on?" while still exiting 0). Always pass the prompt file and
+  `-o` output file as absolute `C:\FarmRx\...` paths, and after launching, head the task output
+  to confirm the prompt text actually arrived (cost us a lost fix round on 2026-07-11).
 - CRX Manager (`C:\CRX_Manager`) is READ-ONLY reference material for porting — never modify it
   from this project.
 

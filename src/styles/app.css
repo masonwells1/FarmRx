@@ -195,9 +195,17 @@ tbody tr:nth-child(even) td { background: var(--premix-bg); }
 .login-card { display: grid; gap: 7px; margin: 34px auto 0; padding: 28px; border-radius: 12px; background: var(--surface); text-align: left; }
 .login-card label { color: var(--matte-gray); font-size: 18px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .login-card input { width: 100%; min-height: 52px; margin-bottom: 12px; padding: 12px 14px; border: 2px solid var(--hairline); border-radius: 9px; color: var(--charcoal); background: var(--surface); }
+.login-card select { width: 100%; min-height: 52px; margin-bottom: 12px; padding: 12px 14px; border: 2px solid var(--hairline); border-radius: 9px; color: var(--charcoal); background: var(--surface); font-size: 18px; }
 .login-card input::placeholder { color: #717171; }
 .login-card input:focus { border-color: var(--crx-green); outline: none; }
 .login-card .primary-action { width: 100%; margin-top: 2px; }
+.opening-farm { color: var(--on-dark); font-size: 22px; font-weight: 700; }
+.sign-out, .sync-notice button { min-width: 48px; min-height: 48px; padding: 10px 14px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface); color: var(--deep-green); font-size: 18px; font-weight: 700; }
+.sync-notice { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 48px; padding: 10px 24px; font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sync-notice.synced { color: var(--deep-green); background: var(--light-green); }
+.sync-notice.pending, .sync-notice.syncing { color: #604a22; background: #fffaf0; }
+.sync-notice.blocked { color: #7a261f; background: #fff1ef; }
+.auth-error { margin: 8px 0; color: #9b2c20; font-size: 18px; font-weight: 600; }
 .slogan { margin: 30px 0 0; color: var(--crx-green); font-family: var(--brand-font); font-size: 18px; font-weight: 700; letter-spacing: .08em; }
 .byline { margin: 8px 0 0; color: #b8dcc9; font-size: 18px; }
 

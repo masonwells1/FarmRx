@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "regression": "npx tsx src/data/MockFieldsRepository.regression.ts && npx tsx src/data/MockGrainRepository.regression.ts",
+    "regression": "tsx src/data/MockFieldsRepository.regression.ts && tsx src/data/MockGrainRepository.regression.ts && tsx src/data/SupabaseFieldsRepository.regression.ts",
     "preview": "vite preview"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.6",
+    "@supabase/supabase-js": "^2.110.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-router-dom": "^7.8.2"
