@@ -1,7 +1,10 @@
 import type { Arrangement, Commodity, CropAssignment, Entity, Farm, Field, FieldDraft, FieldsData, FieldsRepository, FlexBonusFormula, LandArrangementType } from './fields'
 
-const STORAGE_KEY = 'farm-rx-module-1-fields-v1'
-const STORAGE_VERSION = 1
+// Module 2 shares this envelope so a storage upgrade carries existing Fields
+// forward instead of replacing them with a fresh seed.
+const STORAGE_KEY = 'farm-rx-local-data'
+const LEGACY_STORAGE_KEY = 'farm-rx-module-1-fields-v1'
+const STORAGE_VERSION = 2
 const currentYear = new Date().getFullYear()
 const now = () => new Date().toISOString()
 const newId = () => crypto.randomUUID()
@@ -121,11 +124,22 @@ function assertData(data: FieldsData) {
 function load(): FieldsData {
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
-    if (!saved) return seedData()
-    const envelope: unknown = JSON.parse(saved)
-    if (!isRecord(envelope) || envelope.version !== STORAGE_VERSION || !isRecord(envelope.data)) throw new Error('Unsupported or corrupt saved data.')
-    assertData(envelope.data as unknown as FieldsData)
-    return envelope.data as unknown as FieldsData
+    if (saved) {
+      const envelope: unknown = JSON.parse(saved)
+      if (!isRecord(envelope) || envelope.version !== STORAGE_VERSION || !isRecord(envelope.fields)) throw new Error('Unsupported or corrupt saved data.')
+      assertData(envelope.fields as unknown as FieldsData)
+      return envelope.fields as unknown as FieldsData
+    }
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY)
+    if (legacy) {
+      const envelope: unknown = JSON.parse(legacy)
+      if (!isRecord(envelope) || envelope.version !== 1 || !isRecord(envelope.data)) throw new Error('Unsupported legacy saved data.')
+      assertData(envelope.data as unknown as FieldsData)
+      const migrated = envelope.data as unknown as FieldsData
+      persist(migrated)
+      return migrated
+    }
+    const data = seedData(); persist(data); return data
   } catch {
     const data = seedData()
     persist(data)
@@ -134,7 +148,15 @@ function load(): FieldsData {
 }
 
 function persist(data: FieldsData) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, data })) } catch { /* Local storage may be unavailable or full; keep the current session usable. */ }
+  try {
+    const existing = localStorage.getItem(STORAGE_KEY)
+    let grain: unknown
+    if (existing) {
+      const envelope: unknown = JSON.parse(existing)
+      if (isRecord(envelope) && envelope.version === STORAGE_VERSION) grain = envelope.grain
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, fields: data, ...(grain === undefined ? {} : { grain }) }))
+  } catch { /* Local storage may be unavailable or full; keep the current session usable. */ }
 }
 
 const zeroInputShares = { landlord_seed_pct: 0, landlord_fertilizer_pct: 0, landlord_chemical_pct: 0, landlord_fuel_pct: 0, landlord_labor_custom_pct: 0, landlord_crop_insurance_pct: 0, landlord_equipment_pct: 0, landlord_interest_pct: 0, landlord_other_input_pct: 0 }

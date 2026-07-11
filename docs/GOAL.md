@@ -46,6 +46,14 @@ don't build it yet.
       list (beat their ~10s), detail page as 4 edit-in-place cards (Basics/Land agreement/
       Yield & price/Records), KPI row w/ "Crops assigned x/y" nudge, landlord contact on
       agreement card, equivalent-cash-rent display
+- [ ] FOUNDATION BLOCK (Claude's Call #1, walked through with Mason 2026-07-11, sequence
+      pending his OK): real Supabase auth + swap Fields/Grain repositories from mock →
+      live DB, offline write-queue design at the repository seam (v1 scope: entries never
+      lost; queue + sync, not full offline browsing), AND the employee grain-privacy fix
+      (grain reads gated owner/manager + per-member override — current RLS lets any active
+      member read grain; no exposure until real logins exist, MUST land before first
+      employee login)
+- [ ] Free futures API (delayed, labeled) + manual basis — completes Grain v1 market data
 - [ ] Module 4: Profitability (input costs, arrangement comparison, breakeven, PROFITABILITY
       MATRIX ⭐, cost/acre by field, branded PDF)
       · ADOPT from competitor report: "BU TO COVER" column on every cost line (4.1) ·
@@ -65,6 +73,9 @@ don't build it yet.
 - Re-surface pending decisions briefly at the top of each progress report; never nag.
 
 ## Pending decisions (parked, non-blocking — from competitor report, 2026-07-11)
+0. **APPLY MODULE 2 SCHEMA** (0004+0005, drafted+Claude-reviewed 2026-07-11, explainer at
+   docs/schema-module2.md): waiting for Mason's explicit OK, same as Module 1. Grain UI
+   builds on mock data meanwhile — nothing blocked.
 1. Cost of Carry (store-vs-sell verdict page): add to Module 2 post-ship roadmap, or skip?
 2. Crop-as-named-enterprise ("Corn on Corn") vs plain commodity budgets — schema is being
    drafted to allow BOTH cheaply (optional enterprise label); v1 UI ships commodity-only

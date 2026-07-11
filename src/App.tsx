@@ -1,6 +1,8 @@
 import type { FormEvent } from 'react'
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { FieldDetailPage, FieldFormPage, FieldsPage } from './FieldsModule'
+import { GrainPage } from './GrainModule'
+import { grainServices } from './data'
 
 const navigation = [
   { label: 'Fields', path: '/fields', icon: '▦' },
@@ -64,7 +66,7 @@ function AppLayout() {
             <Route path="/fields/new" element={<FieldFormPage />} />
             <Route path="/fields/:id" element={<FieldDetailPage />} />
             <Route path="/fields/:id/edit" element={<FieldFormPage />} />
-            <Route path="/grain" element={<EmptyPage />} />
+            <Route path="/grain" element={<GrainPage services={grainServices} />} />
             <Route path="/inventory" element={<EmptyPage />} />
             <Route path="/profitability" element={<EmptyPage />} />
             <Route path="/equipment" element={<EmptyPage />} />

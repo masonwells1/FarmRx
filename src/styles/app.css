@@ -170,6 +170,86 @@ tbody tr:nth-child(even) td { background: var(--premix-bg); }
 .slogan { margin: 30px 0 0; color: var(--crx-green); font-family: var(--brand-font); font-size: 18px; font-weight: 700; letter-spacing: .08em; }
 .byline { margin: 8px 0 0; color: #b8dcc9; font-size: 18px; }
 
+/* Module 2: Grain */
+.grain-page { display: grid; gap: 24px; }
+.grain-heading { margin-bottom: 0; }
+.market-stamp, .delayed-label { color: var(--matte-gray); font-size: 16px; }
+.delayed-label { white-space: nowrap; }
+.position-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.position-card, .grain-section { border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); }
+.position-card { padding: 20px; box-shadow: 0 3px 10px rgb(23 81 58 / 5%); }
+.position-top, .section-heading, .position-foot, .plan-status, .bin-row, .modal-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.eyebrow { display: block; color: var(--deep-green); font-size: 14px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.position-card h2, .grain-section h2 { margin: 2px 0 0; font-family: var(--brand-font); font-size: 24px; line-height: 1.2; }
+.math-toggle { display: flex; min-height: 40px; overflow: hidden; padding: 0; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface); font-size: 14px; font-weight: 700; }
+.math-toggle:disabled { cursor: not-allowed; opacity: .55; }
+.math-toggle span { display: grid; place-items: center; min-width: 76px; padding: 8px; }
+.math-toggle .active { color: var(--on-dark); background: var(--deep-green); }
+.position-sentence { min-height: 79px; margin: 18px 0; font-size: 19px; font-weight: 600; line-height: 1.45; }
+.position-sentence small { color: var(--matte-gray); font-weight: 500; }
+.position-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--hairline); border-left: 1px solid var(--hairline); }
+.position-stats > div { display: grid; gap: 2px; min-height: 88px; padding: 11px 12px; border-right: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); }
+.position-stats span, .position-stats small { color: var(--matte-gray); font-size: 14px; font-weight: 600; }
+.position-stats strong { color: var(--charcoal); font-size: 18px; line-height: 1.2; }
+.position-foot { margin-top: 14px; color: var(--matte-gray); font-size: 14px; }
+.position-foot strong { color: var(--charcoal); }
+.position-foot em { color: var(--deep-green); font-style: normal; font-weight: 700; }
+.grain-section { overflow: hidden; }
+.grain-section > .section-heading, .bins-card > .section-heading, .basis-card > .section-heading { padding: 20px 20px 16px; }
+.section-heading p { margin: 4px 0 0; color: var(--matte-gray); font-size: 16px; }
+.commodity-picker { min-width: 220px; display: grid; gap: 4px; color: var(--matte-gray); font-size: 14px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.commodity-picker select, .contract-entry select, .contract-entry input, .basis-entry select, .basis-entry input, .target-modal input { width: 100%; min-height: 48px; padding: 9px 10px; border: 2px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); }
+.template-bar { display: flex; gap: 10px; overflow-x: auto; padding: 0 20px 17px; border-bottom: 1px solid var(--hairline); }
+.template-button { min-width: 186px; min-height: 76px; display: grid; align-content: center; gap: 3px; padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--light-green); color: var(--deep-green); text-align: left; }
+.template-button:hover { border-color: var(--crx-green); background: #dff2e7; }
+.template-button strong { font-size: 16px; }
+.template-button span { color: var(--matte-gray); font-size: 13px; line-height: 1.25; }
+.month-grid { display: grid; grid-template-columns: repeat(12, minmax(88px, 1fr)); overflow-x: auto; padding: 18px 20px; gap: 8px; }
+.month-cell { min-width: 88px; min-height: 116px; display: grid; align-content: start; gap: 4px; padding: 10px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); color: var(--charcoal); text-align: left; }
+.month-cell:hover, .month-cell.planned { border-color: var(--crx-green); background: var(--light-green); }
+.month-cell span, .month-cell small { color: var(--matte-gray); font-size: 13px; font-weight: 700; }
+.month-cell strong { color: var(--deep-green); font-size: 21px; }
+.month-cell em { color: var(--charcoal); font-size: 12px; font-style: normal; font-weight: 600; }
+.plan-status { align-items: center; padding: 16px 20px; border-top: 1px solid var(--hairline); background: #fafcfb; }
+.plan-status div { display: grid; gap: 2px; }
+.plan-status span:not(.status-chip) { color: var(--matte-gray); font-size: 14px; }
+.plan-status strong { font-size: 17px; }
+.status-chip { display: inline-flex; align-items: center; min-height: 34px; padding: 5px 11px; border-radius: 99px; font-size: 14px; font-weight: 700; white-space: nowrap; }
+.status-chip.on-track { background: var(--light-green); color: var(--deep-green); }
+.status-chip.behind { background: var(--warn-bg); color: #a96500; }
+.saved-whisper { color: var(--deep-green); font-size: 15px; font-weight: 700; }
+.contract-entry { display: grid; grid-template-columns: 1.4fr 1.2fr 1fr .75fr .75fr auto; gap: 10px; align-items: end; padding: 16px 20px 20px; border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); background: var(--light-green); }
+.contract-entry > label { display: grid; gap: 4px; color: var(--matte-gray); font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.contract-entry details { grid-column: 1 / -1; color: var(--deep-green); font-size: 16px; font-weight: 700; }
+.contract-entry summary { min-height: 32px; cursor: pointer; }
+.contract-entry details > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+.contract-entry details label { display: grid; gap: 4px; color: var(--matte-gray); font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
+.contract-entry .primary-action { min-height: 48px; padding: 10px 14px; white-space: nowrap; }
+.contracts-card td small { display: block; color: var(--matte-gray); font-size: 14px; font-weight: 500; }
+.storage-layout { display: grid; grid-template-columns: 1.05fr .95fr; }
+.bins-card { border-right: 1px solid var(--hairline); }
+.bin-list { padding: 0 20px 6px; }
+.bin-row { align-items: center; padding: 14px 0; border-top: 1px solid var(--hairline); }
+.bin-row > div:first-child { display: grid; gap: 2px; }
+.bin-row > div:first-child span { color: var(--matte-gray); font-size: 14px; }
+.commodity-badge { display: inline-flex; padding: 4px 8px; border-radius: 99px; background: #eef0ef; color: var(--matte-gray); font-size: 12px; font-weight: 700; }
+.commodity-badge.ip { background: #fff2d9; color: #8a5b05; }
+.bin-balance { display: grid; gap: 2px; text-align: right; }
+.bin-balance span { color: var(--matte-gray); font-size: 13px; }
+.bin-balance strong { color: var(--charcoal); }
+.basis-entry { display: grid; grid-template-columns: 1.2fr 1fr .7fr auto; gap: 8px; padding: 0 20px 16px; }
+.basis-entry .secondary-action { white-space: nowrap; }
+.basis-list { padding: 0 20px 12px; }
+.basis-list > div { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 11px 0; border-top: 1px solid var(--hairline); }
+.basis-list span, .basis-list small { color: var(--matte-gray); font-size: 14px; }
+.basis-list strong { color: var(--deep-green); }
+.compliance-note { padding: 18px 20px; border-left: 5px solid var(--amber); border-radius: 8px; background: #fffaf0; color: #604a22; }
+.compliance-note strong { display: block; margin-bottom: 2px; }
+.target-modal-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 20px; background: rgb(23 81 58 / 42%); }
+.target-modal { width: min(100%, 480px); display: grid; gap: 17px; padding: 24px; border-radius: var(--radius); background: var(--surface); box-shadow: 0 16px 50px rgb(0 0 0 / 25%); }
+.target-modal label { display: grid; gap: 6px; color: var(--matte-gray); font-weight: 700; }
+.target-modal label small { color: var(--matte-gray); font-size: 14px; font-weight: 500; }
+
 @media (max-width: 767px) {
   body { padding-bottom: 70px; }
   .sidebar { display: none; }
@@ -210,4 +290,75 @@ tbody tr:nth-child(even) td { background: var(--premix-bg); }
   .login-page { padding: 0; background: var(--chrome-green); }
   .login-panel { min-height: 100vh; width: 100%; padding: 52px 20px 36px; border-radius: 0; box-shadow: none; }
   .login-card { padding: 24px 20px; }
+}
+
+/* Module 2 accessibility baseline: every Grain label is 18px+ and every control is a 48px target. */
+.grain-page .market-stamp, .grain-page .delayed-label, .grain-page .eyebrow, .grain-page .section-heading p,
+.grain-page .commodity-picker, .grain-page .template-button strong, .grain-page .template-button span,
+.grain-page .month-cell span, .grain-page .month-cell small, .grain-page .month-cell em, .grain-page .plan-status span:not(.status-chip),
+.grain-page .plan-status strong, .grain-page .status-chip, .grain-page .saved-whisper, .grain-page .contract-entry > label,
+.grain-page .contract-entry details, .grain-page .contract-entry details label, .grain-page .contracts-card td small,
+.grain-page .bin-row > div:first-child span, .grain-page .commodity-badge, .grain-page .bin-balance span,
+.grain-page .basis-list span, .grain-page .basis-list small, .grain-page .position-stats span, .grain-page .position-stats small,
+.grain-page .position-foot, .grain-page .target-modal label small { font-size: 18px; }
+.grain-page button, .grain-page input, .grain-page select, .grain-page summary { min-height: 48px; font-size: 18px; }
+.grain-page .math-toggle { min-height: 48px; font-size: 18px; }
+.grain-page .math-toggle button { min-width: 106px; border: 0; background: var(--surface); color: var(--charcoal); font-weight: 700; }
+.grain-page .math-toggle button.active { color: var(--on-dark); background: var(--deep-green); }
+.grain-page .math-toggle button:disabled { cursor: not-allowed; opacity: .55; }
+.grain-page .position-stats strong { font-size: 20px; }
+.grain-page .position-foot { flex-wrap: wrap; }
+.grain-page .production-editor { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 12px; align-items: end; margin-top: 14px; }
+.grain-page .production-editor label { display: grid; gap: 5px; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
+.grain-page .production-editor strong { min-height: 48px; display: flex; align-items: center; color: var(--charcoal); }
+.grain-page .grain-inline-error { margin: 12px 20px; font-size: 18px; }
+.grain-page .contract-entry { grid-template-columns: 1.2fr 1fr .8fr .8fr auto; }
+.grain-page .contract-entry details { grid-column: 1 / -1; }
+.grain-page .contract-entry details summary { display: flex; align-items: center; }
+.grain-page .progress-track { height: 24px; margin: 0 20px 20px; overflow: hidden; border-radius: 99px; background: var(--premix-bg); }
+.grain-page .progress-track span { height: 100%; display: block; background: var(--crx-green); }
+.grain-page .actual-plan-card { overflow: hidden; }
+.grain-page .basis-chart { width: calc(100% - 40px); height: 150px; margin: 0 20px; overflow: visible; }
+.grain-page .basis-chart text { fill: var(--matte-gray); font-size: 13px; }
+.grain-page .basis-zero { stroke: var(--hairline); stroke-width: 2; }
+.grain-page .basis-positive { fill: var(--crx-green); }
+.grain-page .basis-negative { fill: var(--amber); }
+.grain-page .usda-calendar { padding-bottom: 20px; }
+.grain-page .report-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 0 20px; max-height: 460px; overflow-y: auto; }
+.grain-page .report-grid a { min-height: 96px; display: grid; align-content: center; gap: 5px; padding: 12px; border: 1px solid var(--hairline); border-radius: 9px; color: var(--deep-green); font-size: 18px; text-decoration: none; }
+.grain-page .report-grid a:hover { background: var(--light-green); }
+.grain-page .report-grid span, .grain-page .compliance-note span { color: var(--matte-gray); font-size: 18px; }
+.grain-page .computed-price { margin: 0; padding: 12px; border-radius: 8px; background: var(--light-green); font-size: 18px; font-weight: 700; }
+@media (max-width: 767px) {
+  .grain-page .production-editor { grid-template-columns: 1fr; }
+  .grain-page .contract-entry { grid-template-columns: 1fr; }
+  .grain-page .contract-entry > label, .grain-page .contract-entry details { grid-column: auto; }
+  .grain-page .report-grid { grid-template-columns: 1fr; max-height: 420px; padding: 0 16px; }
+  .grain-page .basis-chart { width: calc(100% - 32px); margin: 0 16px; }
+}
+
+@media (max-width: 767px) {
+  .grain-heading { gap: 8px; }
+  .market-stamp { font-size: 14px; }
+  .position-grid { grid-template-columns: 1fr; }
+  .position-card { padding: 16px; }
+  .position-sentence { min-height: 0; font-size: 18px; }
+  .position-foot { align-items: start; flex-direction: column; gap: 4px; }
+  .grain-section > .section-heading, .bins-card > .section-heading, .basis-card > .section-heading { padding: 18px 16px 14px; }
+  .section-heading { align-items: start; flex-direction: column; gap: 10px; }
+  .commodity-picker { width: 100%; }
+  .template-bar { padding-right: 16px; padding-left: 16px; }
+  .month-grid { padding-right: 16px; padding-left: 16px; }
+  .plan-status { align-items: start; flex-direction: column; padding: 15px 16px; }
+  .contract-entry { grid-template-columns: 1fr 1fr; padding: 16px; }
+  .contract-entry > label:first-child, .contract-entry > label:nth-child(2), .contract-entry details { grid-column: 1 / -1; }
+  .contract-entry details > div { grid-template-columns: 1fr 1fr; }
+  .contract-entry .primary-action { width: 100%; }
+  .storage-layout { grid-template-columns: 1fr; }
+  .bins-card { border-right: 0; border-bottom: 1px solid var(--hairline); }
+  .bin-list, .basis-list { padding-right: 16px; padding-left: 16px; }
+  .bin-row { align-items: start; flex-wrap: wrap; }
+  .bin-balance { margin-left: auto; }
+  .basis-entry { grid-template-columns: 1fr; padding: 0 16px 16px; }
+  .basis-entry .secondary-action { width: 100%; }
 }
