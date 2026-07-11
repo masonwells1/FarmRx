@@ -22,6 +22,10 @@ don't build it yet.
 - No push/deploy without Mason's explicit OK.
 
 ## Roadmap (checklist)
+**DB STATE 2026-07-11 ~5:45PM: ALL drafted migrations 0004-0011 APPLIED to farm-rx
+(Mason approved "Apply everything"). 11 migrations live, advisors clean (expected
+WARNs only). Fields proven LIVE end-to-end in browser: real sign-in -> live list ->
+quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postgres.**
 - [x] Phase 0a: project home, git, docs, .claude guardrails, taste-skill, design brief
 - [x] Phase 0a2: private GitHub repo github.com/masonwells1/FarmRx created + main pushed 2026-07-11
       (initial push approved by Mason; FUTURE pushes still require his OK — no auto-push)
@@ -99,7 +103,12 @@ don't build it yet.
       stored), one-field application records w/ regulatory snapshots + RUP completeness
       view, idempotent CRX delivery-event inbox hook, Module 4 cost-source UUIDs.
       Runs after 0001–0003 only (no 0008 dependency — inventory/spray = ordinary member
-      data, workers keep their own workflow). UI on mock = next.
+      data, workers keep their own workflow). UI BUILT ON MOCK + BROWSER-VERIFIED
+      2026-07-11 (Terra build after one plan-and-wait stall relaunch → Sol review 9
+      findings/6 P1 incl gal→lb conversion hole + false compliance completeness → all
+      fixed → Claude verified live: shelf w/ RUP badge + derived on-hand, receive 30 gal
+      → 120→150 gal proven, honest low-stock nudges, 0 targets <48px, farm-isolation
+      guard proven fail-closed when farm id changed). REMAINING: live repository swap.
 - [ ] Modules 5/6: Equipment & Tasks · Module 7: machine data
 
 ## Loop policy (Mason, 2026-07-11): keep working, never block on questions
@@ -111,7 +120,29 @@ don't build it yet.
   but waiting on a hard stop never pauses other work.
 - Re-surface pending decisions briefly at the top of each progress report; never nag.
 
+## NEXT WORK QUEUE (post-apply, 2026-07-11 evening — in order)
+1. Grain live repository swap (Sol design → Terra build → review → verify): SupabaseGrain
+   repositories behind the existing seam, flip backends.grain to 'supabase'; alerts + USDA
+   MARS basis feed ride along per handoff 2.6. Profitability + Inventory live swaps follow
+   the same pattern after.
+2. Flex-formula reconciliation: UI {type,trigger,bonus_rate} vs applied 0006 view
+   {basis,trigger,rate_pct,cap_per_acre} — views fail closed on UI shape (no wrong math,
+   but flex answers return empty). Align one way; ASK MASON which formula matches real
+   CropRx leases.
+3. Customer onboarding path: admin-side account+farm creation flow (currently only the
+   test harness can provision).
+4. Live-path manual test matrix from docs/foundation-design.md (multi-user permission
+   checks: owner/manager/worker/granted employee/rep; offline replay on real signal drop).
+5. Real-device PWA pass (phone install, sunlight/gloves two-tap flows).
+6. Polish: neutral sign-out message; enable leaked-password protection (Supabase dashboard
+   Auth toggle — 1 minute, flagged by security advisor).
+7. Ship gate prep: deploy needs Mason's explicit OK (never auto).
+
 ## Pending decisions (parked, non-blocking — from competitor report, 2026-07-11)
+**RESOLVED 2026-07-11 by Mason's "Apply everything": former decisions #0 (grain 0004/0005),
+#6a (profitability 0006/0007), #7 (fields support 0009), #8 (employee privacy 0008) — ALL
+APPLIED along with Module 3's 0010/0011. Only the flex-formula QUESTION from 6a survives
+(see NEXT WORK QUEUE #2).**
 0. **APPLY MODULE 2 SCHEMA** (0004+0005, drafted+Claude-reviewed 2026-07-11, explainer at
    docs/schema-module2.md): waiting for Mason's explicit OK, same as Module 1. Grain UI
    builds on mock data meanwhile — nothing blocked.

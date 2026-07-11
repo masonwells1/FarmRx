@@ -1,5 +1,6 @@
 import { MockGrainRepository, MockMarketDataService, createGrainId } from './MockGrainRepository'
 import { MockProfitabilityRepository } from './MockProfitabilityRepository'
+import { MockInventoryRepository } from './inventory'
 import { supabase } from '../lib/supabaseClient'
 import { supabaseConfig } from '../lib/supabaseConfig'
 import { moduleBackends } from './backends'
@@ -39,7 +40,8 @@ export const fieldsRepository: FieldsRepository = queuedFields
 /** Called once the signed-in user's sole farm has been resolved. */
 export const replayFieldsQueue = () => queuedFields.inspectAndReplay()
 
-if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'mock' || moduleBackends.profitability !== 'mock') throw new Error('Farm Rx backend configuration is invalid.')
+if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'mock' || moduleBackends.inventory !== 'mock' || moduleBackends.profitability !== 'mock') throw new Error('Farm Rx backend configuration is invalid.')
 export const profitabilityRepository = new MockProfitabilityRepository(fieldsRepository)
+export const inventoryRepository = new MockInventoryRepository(fieldsRepository)
 export const grainServices: GrainServices = { grainRepository: new MockGrainRepository(fieldsRepository), marketDataService: new MockMarketDataService(), profitabilityRepository, createGrainId }
 export const moduleYear = new Date().getFullYear()

@@ -6,7 +6,8 @@ import { RequireSession } from './auth/RequireSession'
 import { FieldDetailPage, FieldFormPage, FieldsPage } from './FieldsModule'
 import { GrainPage } from './GrainModule'
 import { ProfitabilityPage } from './ProfitabilityModule'
-import { grainServices, replayFieldsQueue } from './data'
+import { InventoryPage } from './InventoryModule'
+import { grainServices, inventoryRepository, replayFieldsQueue } from './data'
 import { getSyncStatus, retrySavedChanges, subscribeSyncStatus } from './data/syncStatus'
 import type { EntityType } from './data/fields'
 import { farmerError } from './lib/farmerErrors'
@@ -87,7 +88,7 @@ function AppLayout() {
             <Route path="/fields/:id" element={<FieldDetailPage />} />
             <Route path="/fields/:id/edit" element={<FieldFormPage />} />
             <Route path="/grain" element={<GrainPage services={grainServices} />} />
-            <Route path="/inventory" element={<EmptyPage />} />
+            <Route path="/inventory" element={<InventoryPage repository={inventoryRepository} />} />
             <Route path="/profitability" element={<ProfitabilityPage />} />
             <Route path="/equipment" element={<EmptyPage />} />
             <Route path="/tasks" element={<EmptyPage />} />
