@@ -93,7 +93,14 @@ don't build it yet.
         alongside breakeven-price (4.3) · "copy from another budget" (4.1) · our matrix stays
         front-and-center + interactive + contour line (theirs is buried/static — beatable)
 - [ ] **SHIP GATE: Fields + Grain in front of real customers** ← the goal
-- [ ] Module 3: Inventory & compliance · Modules 5/6: Equipment & Tasks · Module 7: machine data
+- [~] Module 3: Inventory & compliance — SCHEMA DRAFTED 2026-07-11 (0010+0011 by Sol,
+      Claude spot-check-reviewed, NOT applied; explainer docs/schema-module3.md): farm
+      product catalog, append-only receipts/adjustments ledger, derived on-hand (never
+      stored), one-field application records w/ regulatory snapshots + RUP completeness
+      view, idempotent CRX delivery-event inbox hook, Module 4 cost-source UUIDs.
+      Runs after 0001–0003 only (no 0008 dependency — inventory/spray = ordinary member
+      data, workers keep their own workflow). UI on mock = next.
+- [ ] Modules 5/6: Equipment & Tasks · Module 7: machine data
 
 ## Loop policy (Mason, 2026-07-11): keep working, never block on questions
 - The loop runs continuously and only surfaces questions that GENUINELY need Mason
@@ -129,6 +136,10 @@ don't build it yet.
 8. **APPLY EMPLOYEE PRIVACY SCHEMA (0008)** — drafted 2026-07-11 (grain+financials become
    owner/manager-only with per-employee View financials switch). Applies AFTER 0004–0007;
    must land before the first employee login. Explainer inside docs/foundation-design.md.
+9. Module 3 owner questions (2026-07-11, from docs/schema-module3.md): (a) should ordinary
+   workers see receipt PRICES? (default adopted: yes-visible v1, split later if a farm asks)
+   (b) seed sold by bag vs seed_unit (schema supports both); (c) one field per spray record
+   (default adopted: yes, batch ID later); (d) which license fields on the compliance PDF.
 6. Futures feed Phase 2 (2026-07-11): Barchart OnDemand EOD ~$49/mo is the cheapest
    COMPLIANT raw-quote API (needed only when our UI must compute with live board prices;
    get written sales confirmation it covers end-user display). Default if no answer:
