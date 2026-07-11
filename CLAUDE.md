@@ -35,8 +35,8 @@
 - "Done" = ran and watched it work (open the page / run the endpoint), not just "tests pass".
 
 ## How changes ship
-- Local git only for now; no remote configured. Get explicit approval before: pushing to any
-  remote, deploying, changing the live database, or deleting data.
+- Remote: private repo git@github.com:masonwells1/FarmRx.git (main). Get explicit approval
+  before: pushing, deploying, changing the live database, or deleting data. No auto-push.
 - Build order (handoff Part 6): Fields → Grain → Profitability → Inventory → Equipment/Tasks →
   Machine data import. Ship Fields + Grain to real customers before building the rest.
 

@@ -23,10 +23,13 @@ don't build it yet.
 
 ## Roadmap (checklist)
 - [x] Phase 0a: project home, git, docs, .claude guardrails, taste-skill, design brief
-- [ ] Phase 0b: CRX Manager engine analysis doc (`docs/crx-engines.md`, Sol)
-- [ ] Phase 0c: app shell running in browser (Vite React TS PWA, brand tokens, login + nav, Terra)
-- [ ] Phase 0d: Supabase free project + Module 1 schema (fields, crop_assignments, arrangements,
-      entities, RLS + share-toggle) — Sol designs, review gate before apply
+- [x] Phase 0a2: private GitHub repo github.com/masonwells1/FarmRx created + main pushed 2026-07-11
+      (initial push approved by Mason; FUTURE pushes still require his OK — no auto-push)
+- [x] Phase 0b: CRX Manager engine analysis doc (`docs/crx-engines.md`, Sol) — done 2026-07-11, 30KB, real schemas + RLS warnings
+- [x] Phase 0c: app shell running in browser (Vite React TS PWA, brand tokens, login + nav, Terra) — verified 2026-07-11: build+tsc clean, login→Fields works, no console errors
+- [~] Phase 0d: Supabase free project CREATED 2026-07-11 (name `farm-rx`, ref `agvsozfbstpekuqxpqjr`,
+      us-east-2, $0/mo — separate from live CRX-DATABASE). Module 1 schema draft in progress —
+      Sol designs, REVIEW GATE with Mason before apply
 - [ ] Module 1: Fields (list, detail, fast add/edit, stat boxes)
 - [ ] Module 2: Grain (expected production, projected→actual switch, contracts, position view,
       marketing plan targets + alerts, insurance guarantee, bins, manual basis + free futures API)
