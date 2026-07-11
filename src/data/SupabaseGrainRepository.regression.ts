@@ -5,8 +5,10 @@ import { fieldsSeedForRegression } from './MockFieldsRepository'
 import { SupabaseGrainRepository } from './SupabaseGrainRepository'
 import { moduleBackends } from './backends'
 import { supabaseConfig } from '../lib/supabaseConfig'
+import { getSyncStatus } from './syncStatus'
+import { isMarsBid, latestBasis } from './basisMath'
 import type { FieldsRepository } from './fields'
-import type { CashBid, GrainContract, MarketingPlanTarget, ProductionEstimate } from './grain'
+import type { CashBid, GrainContract, GrainWorkspace, MarketingPlanTarget, ProductionEstimate } from './grain'
 import type { StorageLike } from './writeQueue'
 
 const stamp = '2026-07-11T00:00:00.000Z'; const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -24,13 +26,19 @@ function fixture() {
   const report = { id: uid(8), report_name: 'WASDE', report_date: '2026-08-12', release_at: null, source_url: null, notes: null, created_at: stamp, updated_at: stamp }
   return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], cash_bids: [bid], usda_report_dates: [report] } }
 }
+/** Lets tests perturb what the "server" hands back, independent of what was sent, to prove the repository
+ * confirms the canonical response rather than trusting its own request. Unset (null) by default so every
+ * existing test keeps its original round-trip behavior. */
+type ResponseMutators = { production?: (value: ProductionEstimate) => ProductionEstimate; contract?: (value: GrainContract) => GrainContract; plan?: (value: MarketingPlanTarget[]) => MarketingPlanTarget[]; bid?: (value: CashBid) => CashBid }
 class FakeGateway implements GrainDataGateway {
   readonly state = fixture(); fail = false; productionInputs: ProductionEstimate[] = []; contractInputs: GrainContract[] = []; planInputs: ReplaceMarketingPlanInput[] = []; bidInputs: CashBid[] = []
+  mutate: ResponseMutators = {}; throwError: Error | null = null
+  private guard() { if (this.throwError) throw this.throwError }
   async loadWorkspace(_farmId: string): Promise<GrainRowBundle> { if (this.fail) throw new Error('network timeout'); return structuredClone(this.state.bundle) }
-  async upsertProductionEstimate(_farm: string, row: ProductionEstimate) { this.productionInputs.push(structuredClone(row)); return structuredClone(row) }
-  async upsertContract(_farm: string, row: GrainContract) { this.contractInputs.push(structuredClone(row)); return structuredClone(row) }
-  async replaceMarketingPlan(input: ReplaceMarketingPlanInput) { this.planInputs.push(structuredClone(input)); return structuredClone(input.targets) }
-  async upsertCashBid(_farm: string, row: CashBid) { this.bidInputs.push(structuredClone(row)); return structuredClone(row) }
+  async upsertProductionEstimate(_farm: string, row: ProductionEstimate) { this.guard(); this.productionInputs.push(structuredClone(row)); const response = structuredClone(row); return this.mutate.production ? this.mutate.production(response) : response }
+  async upsertContract(_farm: string, row: GrainContract) { this.guard(); this.contractInputs.push(structuredClone(row)); const response = structuredClone(row); return this.mutate.contract ? this.mutate.contract(response) : response }
+  async replaceMarketingPlan(input: ReplaceMarketingPlanInput) { this.guard(); this.planInputs.push(structuredClone(input)); const response = structuredClone(input.targets); return this.mutate.plan ? this.mutate.plan(response) : response }
+  async upsertCashBid(_farm: string, row: CashBid) { this.guard(); this.bidInputs.push(structuredClone(row)); const response = structuredClone(row); return this.mutate.bid ? this.mutate.bid(response) : response }
 }
 function repository(gateway: FakeGateway) { const fields = gateway.state.fields; const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fields), saveField: async () => { throw new Error('not used') } }; return new SupabaseGrainRepository({ gateway, fieldsRepository, getFarmId: async () => fields.farm.id, createId: () => uid(99), clock: () => stamp }) }
 async function run() {
@@ -73,6 +81,64 @@ async function run() {
   const replayStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
   const replayGateway = new FakeGateway(); const replayRepo = repository(replayGateway); let online = false; const replay = new QueuedGrainRepository(replayRepo, { ...offlineDependencies, storage: replayStorage, isOffline: () => !online })
   await replay.saveContract({ ...data.grain_contracts[0], id: uid(60) }); await replay.saveCashBid({ ...data.cash_bids[0], id: uid(61) }); online = true; await replay.inspectAndReplay(); assert(replayGateway.contractInputs[0]?.id === uid(60) && replayGateway.bidInputs[0]?.id === uid(61), 'FIFO replay did not preserve operation order and IDs.')
+  // 16: canonical-confirmation rejections — the repository must confirm the server's echoed rows, never trust its own request.
+  const baseTarget = data.marketing_plan_targets[0]
+  gateway.mutate.plan = (rows) => rows.map((row) => ({ ...row, id: uid(940) }))
+  await rejects(() => repo.replaceMarketingPlanTargets(gateway.state.scope, [baseTarget]), 'A plan response with a wrong id must reject.')
+  gateway.mutate = {}
+  gateway.mutate.plan = (rows) => rows.map((row) => ({ ...row, commodity_id: `${row.commodity_id}-other` }))
+  await rejects(() => repo.replaceMarketingPlanTargets(gateway.state.scope, [baseTarget]), 'A plan response with a wrong scope must reject.')
+  gateway.mutate = {}
+  const twoTargets: MarketingPlanTarget[] = [{ ...baseTarget, id: uid(941), target_month: '2026-09-01', target_pct_of_production: 10 }, { ...baseTarget, id: uid(942), target_month: '2026-10-01', target_pct_of_production: 10 }]
+  gateway.mutate.plan = (rows) => rows.slice(0, 1)
+  await rejects(() => repo.replaceMarketingPlanTargets(gateway.state.scope, twoTargets), 'An incomplete plan response (fewer rows than submitted) must reject.')
+  gateway.mutate = {}
+  gateway.mutate.plan = (rows) => [...rows, ...rows]
+  await rejects(() => repo.replaceMarketingPlanTargets(gateway.state.scope, [baseTarget]), 'A duplicated plan response (repeated rows) must reject.')
+  gateway.mutate = {}
+  // 17: when replay's canonical confirmation fails, the queued head must be retained, not confirmed away.
+  const retentionStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
+  const retentionGateway = new FakeGateway(); const retentionWriter = repository(retentionGateway)
+  let retentionOnline = false
+  const retentionKey = grainWriteQueueKey(supabaseConfig.projectRef, uid(10), data.fields.farm.id)
+  const retentionRepo = new QueuedGrainRepository(retentionWriter, { getContext: async () => ({ userId: uid(10), farmId: data.fields.farm.id }), projectRef: supabaseConfig.projectRef, storage: retentionStorage, createId: (() => { let n = 300; return () => uid(n++) })(), clock: () => stamp, isOffline: () => !retentionOnline })
+  await retentionRepo.saveContract({ ...data.grain_contracts[0], id: uid(950) })
+  assert(new GrainWriteQueue(retentionStorage, retentionKey).read().entries.length === 1, 'Setup for the queue-retention test failed to enqueue offline.')
+  retentionGateway.mutate.contract = (row) => ({ ...row, id: uid(951) })
+  retentionOnline = true
+  await retentionRepo.inspectAndReplay()
+  const afterWrongIdReplay = new GrainWriteQueue(retentionStorage, retentionKey).read().entries
+  assert(afterWrongIdReplay.length === 1 && afterWrongIdReplay[0].kind === 'saveContract' && afterWrongIdReplay[0].row.id === uid(950), 'A canonical-confirmation rejection during replay must retain the queue head.')
+  assert(getSyncStatus().kind === 'blocked', 'A canonical-confirmation rejection during replay must classify as blocked, not synced.')
+  // 18: a permission-shaped (403) gateway error must classify as blocked, not be retried as a transport failure.
+  const permissionStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
+  const permissionGateway = new FakeGateway(); const permissionWriter = repository(permissionGateway)
+  let permissionOnline = false
+  const permissionKey = grainWriteQueueKey(supabaseConfig.projectRef, uid(10), data.fields.farm.id)
+  const permissionRepo = new QueuedGrainRepository(permissionWriter, { getContext: async () => ({ userId: uid(10), farmId: data.fields.farm.id }), projectRef: supabaseConfig.projectRef, storage: permissionStorage, createId: (() => { let n = 400; return () => uid(n++) })(), clock: () => stamp, isOffline: () => !permissionOnline })
+  await permissionRepo.saveCashBid({ ...data.cash_bids[0], id: uid(960) })
+  assert(new GrainWriteQueue(permissionStorage, permissionKey).read().entries.length === 1, 'Setup for the 403 test failed to enqueue offline.')
+  permissionGateway.throwError = Object.assign(new Error('permission denied for table grain_cash_bids'), { status: 403 })
+  permissionOnline = true
+  await permissionRepo.inspectAndReplay()
+  const afterForbiddenReplay = new GrainWriteQueue(permissionStorage, permissionKey).read().entries
+  assert(afterForbiddenReplay.length === 1 && afterForbiddenReplay[0].kind === 'saveCashBid' && afterForbiddenReplay[0].row.id === uid(960), 'A 403/permission-shaped gateway error must retain the queue head — it is not transport-retryable.')
+  assert(getSyncStatus().kind === 'blocked', 'A 403/permission-shaped gateway error must classify as blocked.')
+  // 19: plan validation must reject over-100% totals and duplicate months before ever reaching the gateway.
+  const planCallsBeforeValidation = gateway.planInputs.length
+  const overTotalTargets: MarketingPlanTarget[] = [{ ...baseTarget, id: uid(970), target_month: '2026-09-01', target_pct_of_production: 60 }, { ...baseTarget, id: uid(971), target_month: '2026-10-01', target_pct_of_production: 45 }]
+  await rejects(() => repo.replaceMarketingPlanTargets(gateway.state.scope, overTotalTargets), 'An over-100% marketing plan must reject.')
+  assert(gateway.planInputs.length === planCallsBeforeValidation, 'An over-100% marketing plan reached the gateway; it must reject before that call.')
+  const dupMonthTargets: MarketingPlanTarget[] = [{ ...baseTarget, id: uid(972), target_month: '2026-09-01', target_pct_of_production: 10 }, { ...baseTarget, id: uid(973), target_month: '2026-09-01', target_pct_of_production: 10 }]
+  await rejects(() => repo.replaceMarketingPlanTargets(gateway.state.scope, dupMonthTargets), 'A duplicate-month marketing plan must reject.')
+  assert(gateway.planInputs.length === planCallsBeforeValidation, 'A duplicate-month marketing plan reached the gateway; it must reject before that call.')
+  // 20: the extracted basisMath module must exclude MARS feed rows and use manual bids, even when MARS is the newest row.
+  const marsRow: CashBid = { ...data.cash_bids[0], id: uid(980), bid_date: '2026-07-20', basis: -0.05 }
+  const manualRow: CashBid = { ...data.cash_bids[0], id: uid(981), bid_date: '2026-07-12', basis: -0.18, notes: null }
+  const olderManualRow: CashBid = { ...data.cash_bids[0], id: uid(982), bid_date: '2026-07-05', basis: -0.3, notes: null }
+  const basisWorkspace: GrainWorkspace = { ...data, cash_bids: [marsRow, manualRow, olderManualRow] }
+  assert(isMarsBid(marsRow) && !isMarsBid(manualRow) && !isMarsBid(olderManualRow), 'isMarsBid must classify MARS-tagged and manual rows correctly.')
+  assert(latestBasis(basisWorkspace, gateway.state.scope) === manualRow.basis, 'latestBasis must use the latest manual bid and exclude the MARS feed row even when MARS is newest.')
   assert(moduleBackends.fields === 'supabase' && moduleBackends.grain === 'supabase', 'Release composition did not select live Fields and Grain.')
   console.log('SupabaseGrainRepository regressions passed.')
 }

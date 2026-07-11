@@ -127,10 +127,17 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
 ## via the Agent tool with the same task prompts. At 9:00PM switch back to Codex.
 
 ## NEXT WORK QUEUE (post-apply, 2026-07-11 evening — in order)
-1. Grain live repository swap (Sol design → Terra build → review → verify): SupabaseGrain
-   repositories behind the existing seam, flip backends.grain to 'supabase'; alerts + USDA
-   MARS basis feed ride along per handoff 2.6. Profitability + Inventory live swaps follow
-   the same pattern after.
+1. [x] GRAIN LIVE — DONE + browser-proven 2026-07-11 ~7:15PM (commit afb283d): Sol design →
+   Terra build → Sol review (14 findings/9 P1) → fixes → Opus re-review COMMIT-READY →
+   0012 applied (after DB parser caught a CASE-in-IF syntax bug both static reviews
+   missed) → live proof: first-estimate editor wrote 195bu×160ac (31,200 bu reads back),
+   Balanced Seller template wrote 5 rows through replace_marketing_plan_targets RPC
+   (verified in Postgres). Claude also fixed 2 runtime-only bugs (uncached React store
+   snapshot = blank page; timestamp validator rejecting real PostgREST stamps).
+   FOLLOW-UPS: deploy deliver-grain-alert edge function (needs Mason OK? it's the dev
+   project — do with next apply batch); P2 test-coverage additions from Opus re-review
+   (canonical-confirmation rejection tests, MARS math-exclusion pure test, buyer dropdown
+   filter). Profitability + Inventory live swaps follow the same pattern.
 2. Flex-formula reconciliation: UI {type,trigger,bonus_rate} vs applied 0006 view
    {basis,trigger,rate_pct,cap_per_acre} — views fail closed on UI shape (no wrong math,
    but flex answers return empty). Align one way; ASK MASON which formula matches real
