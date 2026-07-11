@@ -30,13 +30,28 @@ don't build it yet.
 - [~] Phase 0d: Supabase free project CREATED 2026-07-11 (name `farm-rx`, ref `agvsozfbstpekuqxpqjr`,
       us-east-2, $0/mo — separate from live CRX-DATABASE). Module 1 schema draft in progress —
       Sol designs, REVIEW GATE with Mason before apply
-- [ ] Module 1: Fields (list, detail, fast add/edit, stat boxes)
+- [x] Module 1: Fields UI on MOCK data (list/detail/add-edit, stat boxes) — built by Terra,
+      Sol adversarial review found 14 issues, all fixed, browser-verified + committed
+      2026-07-11 (161a097). REMAINING for Module 1 done-done: swap MockFieldsRepository →
+      Supabase repository + real auth (do together with or right before first-customer setup)
 - [ ] Module 2: Grain (expected production, projected→actual switch, contracts, position view,
       marketing plan targets + alerts, insurance guarantee, bins, manual basis + free futures API)
       · Note 2026-07-11: Mason says marketing-update notifications are NOT a must-build —
         keep handoff 2.6 alerts in the spec at normal priority, no special treatment
+      · ADOPT from competitor report (docs/competitor-farmprofitmanager.md): monthly plan
+        grid + strategy templates (primary view) · "Safe to Forward" bu + Min Rev Guarantee
+        on position view (2.7) · Actual-vs-Plan status chips + cumulative chart · ROI-
+        relative price targets (breakeven-anchored) · inline add-sale rows w/ autosave
+- [ ] Module 1 polish pass (from competitor report): inline autosaving add-field row in the
+      list (beat their ~10s), detail page as 4 edit-in-place cards (Basics/Land agreement/
+      Yield & price/Records), KPI row w/ "Crops assigned x/y" nudge, landlord contact on
+      agreement card, equivalent-cash-rent display
 - [ ] Module 4: Profitability (input costs, arrangement comparison, breakeven, PROFITABILITY
       MATRIX ⭐, cost/acre by field, branded PDF)
+      · ADOPT from competitor report: "BU TO COVER" column on every cost line (4.1) ·
+        equivalent-cash-rent normalization in arrangement comparison (4.2) · breakeven-YIELD
+        alongside breakeven-price (4.3) · "copy from another budget" (4.1) · our matrix stays
+        front-and-center + interactive + contour line (theirs is buried/static — beatable)
 - [ ] **SHIP GATE: Fields + Grain in front of real customers** ← the goal
 - [ ] Module 3: Inventory & compliance · Modules 5/6: Equipment & Tasks · Module 7: machine data
 
@@ -49,8 +64,21 @@ don't build it yet.
   but waiting on a hard stop never pauses other work.
 - Re-surface pending decisions briefly at the top of each progress report; never nag.
 
-## Pending decisions (parked, non-blocking)
-- (none right now)
+## Pending decisions (parked, non-blocking — from competitor report, 2026-07-11)
+1. Cost of Carry (store-vs-sell verdict page): add to Module 2 post-ship roadmap, or skip?
+2. Crop-as-named-enterprise ("Corn on Corn") vs plain commodity budgets — schema is being
+   drafted to allow BOTH cheaply (optional enterprise label); v1 UI ships commodity-only
+   unless Mason says otherwise.
+3. Firm offers (standing elevator orders counting toward position): in v1 contracts or later?
+   Default if no answer: later (2.5 note).
+4. Alert emails to a second address (advisor/spouse): allowed, or owner-only per Rule 2?
+   Default if no answer: owner-only v1.
+5. Paid "we set up your numbers" service (their $2,495 model) as a Crop RX offering?
+   Pure business call — no default.
+- DECIDED BY CLAUDE (technical/UX): monthly calendar grid with live futures per cell +
+  one-tap strategy templates becomes the PRIMARY marketing-plan view (their best UX,
+  handoff 2.6 compatible); fields stay first-class but Grain page must not be gated on
+  a complete field list.
 
 ## Open questions for Mason (answer when relevant, handoff Part 8)
 1. Scale tickets / load tracking — in or out? (matters at Module 2)
