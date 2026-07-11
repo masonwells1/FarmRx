@@ -34,8 +34,12 @@ don't build it yet.
       Sol adversarial review found 14 issues, all fixed, browser-verified + committed
       2026-07-11 (161a097). REMAINING for Module 1 done-done: swap MockFieldsRepository →
       Supabase repository + real auth (do together with or right before first-customer setup)
-- [ ] Module 2: Grain (expected production, projected→actual switch, contracts, position view,
-      marketing plan targets + alerts, insurance guarantee, bins, manual basis + free futures API)
+- [x] Module 2: Grain UI on MOCK data — flagship built (position cards w/ two-second sentence,
+      honest partial-pricing math, monthly plan grid + atomic templates, ROI-relative targets,
+      contracts 15s entry, bins, basis history chart, USDA calendar, Safe-to-Forward + min rev
+      guarantee, disclaimer). Terra build → Sol review (13 findings) → fixes → Claude
+      browser-verified + committed 2026-07-11 (12f0eb4). REMAINING for done-done: apply 0004/0005
+      schema (parked for Mason), real futures API, alerts (arrive with backend swap)
       · Note 2026-07-11: Mason says marketing-update notifications are NOT a must-build —
         keep handoff 2.6 alerts in the spec at normal priority, no special treatment
       · ADOPT from competitor report (docs/competitor-farmprofitmanager.md): monthly plan
