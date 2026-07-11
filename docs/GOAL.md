@@ -46,10 +46,12 @@ don't build it yet.
         grid + strategy templates (primary view) · "Safe to Forward" bu + Min Rev Guarantee
         on position view (2.7) · Actual-vs-Plan status chips + cumulative chart · ROI-
         relative price targets (breakeven-anchored) · inline add-sale rows w/ autosave
-- [ ] Module 1 polish pass (from competitor report): inline autosaving add-field row in the
-      list (beat their ~10s), detail page as 4 edit-in-place cards (Basics/Land agreement/
-      Yield & price/Records), KPI row w/ "Crops assigned x/y" nudge, landlord contact on
-      agreement card, equivalent-cash-rent display
+- [x] Module 1 polish pass — built by Terra, Sol adversarial review (10 findings, 4 P1
+      incl false-Saved on storage failure + corrupt-envelope Grain wipe), all fixed,
+      Claude browser-verified (quick-add persists, nudge filter, $360/ac equivalent-rent
+      math proven, fail-closed corrupt-envelope test, landlord phone round-trip, 18px/48px
+      clean, 0 console errors) + committed 2026-07-11. npm run regression now runs both
+      repository suites.
 - [ ] FOUNDATION BLOCK (Claude's Call #1, walked through with Mason 2026-07-11, sequence
       pending his OK): real Supabase auth + swap Fields/Grain repositories from mock →
       live DB, offline write-queue design at the repository seam (v1 scope: entries never

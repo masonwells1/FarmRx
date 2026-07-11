@@ -42,7 +42,7 @@ const seedFields: Field[] = fieldSeed.map(([name, entityNumber, total_acres, cou
 function arrangement(field_id: string, arrangement_type: LandArrangementType, values: Partial<Arrangement> = {}): Arrangement {
   return {
     id: seedId(201 + seedFields.findIndex((field) => field.id === field_id)), farm_id: farm.id, field_id, arrangement_type, landlord_name: null, effective_from: `${currentYear}-01-01`, effective_to: null,
-    cash_rent_per_acre: null, flex_bonus_formula: null, landlord_crop_pct: null, landlord_seed_pct: 0, landlord_fertilizer_pct: 0, landlord_chemical_pct: 0, landlord_fuel_pct: 0, landlord_labor_custom_pct: 0,
+    landlord_phone: null, landlord_contact_notes: null, cash_rent_per_acre: null, flex_bonus_formula: null, landlord_crop_pct: null, landlord_seed_pct: 0, landlord_fertilizer_pct: 0, landlord_chemical_pct: 0, landlord_fuel_pct: 0, landlord_labor_custom_pct: 0,
     landlord_crop_insurance_pct: 0, landlord_equipment_pct: 0, landlord_interest_pct: 0, landlord_other_input_pct: 0, notes: null, created_at: farm.created_at, updated_at: farm.updated_at, ...values,
   }
 }
@@ -57,13 +57,15 @@ const seedArrangements: Arrangement[] = [
 ]
 
 const crop = (fieldIndex: number, commodity_id: string, planted_acres: number, planting_sequence = 1, crop_year = currentYear, harvested_bushels: number | null = null): CropAssignment => ({
-  id: seedId(301 + fieldIndex * 10 + planting_sequence + (crop_year === currentYear ? 0 : 100)), farm_id: farm.id, field_id: seedFields[fieldIndex].id, crop_year, commodity_id, planted_acres, planting_sequence, variety: null, planting_date: null, harvest_date: null, harvested_bushels, notes: null, created_at: farm.created_at, updated_at: farm.updated_at,
+  id: seedId(301 + fieldIndex * 10 + planting_sequence + (crop_year === currentYear ? 0 : 100)), farm_id: farm.id, field_id: seedFields[fieldIndex].id, crop_year, commodity_id, planted_acres, planting_sequence, variety: null, planting_date: null, harvest_date: null, harvested_bushels, expected_yield_per_acre: null, expected_price_per_bu: null, notes: null, created_at: farm.created_at, updated_at: farm.updated_at,
 })
 const seedAssignments: CropAssignment[] = [
   crop(0, 'corn_yellow', 422.5), crop(1, 'soybeans', 318), crop(2, 'corn_white', 280), crop(3, 'soybeans', 186.25), crop(4, 'corn_non_gmo', 155.5), crop(5, 'wheat', 50), crop(6, 'corn_yellow', 227.75), crop(7, 'soybeans', 40), crop(8, 'corn_yellow', 364), crop(9, 'wheat', 92), crop(9, 'soybeans_double_crop', 92, 2), crop(0, 'soybeans', 422.5, 1, currentYear - 1, 23238), crop(1, 'corn_yellow', 318, 1, currentYear - 1, 61056),
 ]
 
 function seedData(): FieldsData { return structuredClone({ farm, entities, fields: seedFields, crop_assignments: seedAssignments, arrangements: seedArrangements, commodities }) }
+/** Test-only fixture factory; callers receive a clone and cannot mutate the app seed. */
+export function fieldsSeedForRegression(): FieldsData { return seedData() }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) }
 function isString(value: unknown): value is string { return typeof value === 'string' }
 function isFiniteNumber(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value) }
@@ -86,6 +88,8 @@ function assertArrangement(arrangement: Arrangement, field: Field, farmId: strin
   assert(arrangement.farm_id === farmId && arrangement.field_id === field.id, 'Arrangement must belong to its field and farm.')
   assert(arrangementTypes.has(arrangement.arrangement_type), 'Unknown land arrangement type.')
   assertNullableString(arrangement.landlord_name, 'Landlord name must be text or blank.')
+  assert(arrangement.landlord_phone === undefined || arrangement.landlord_phone === null || isString(arrangement.landlord_phone), 'Landlord phone must be text or blank.')
+  assert(arrangement.landlord_contact_notes === undefined || arrangement.landlord_contact_notes === null || isString(arrangement.landlord_contact_notes), 'Landlord contact notes must be text or blank.')
   assert(validDate(arrangement.effective_from), 'Arrangement effective date is invalid.')
   assert(arrangement.effective_to === null || validDate(arrangement.effective_to), 'Arrangement end date is invalid.')
   assert(arrangement.effective_to === null || arrangement.effective_to >= arrangement.effective_from, 'Arrangement end date cannot be before its effective date.')
@@ -115,21 +119,49 @@ function assertData(data: FieldsData) {
   }
   const assignmentKeys = new Set<string>()
   for (const assignment of data.crop_assignments) {
-    assertUuid(assignment.id, 'Crop assignment ID must be a UUID.'); const field = data.fields.find((item) => item.id === assignment.field_id); assert(field && assignment.farm_id === data.farm.id && commodityIds.has(assignment.commodity_id), 'Crop assignment field or commodity is invalid.'); assert(Number.isInteger(assignment.crop_year) && assignment.crop_year >= 1900 && assignment.crop_year <= 2200 && Number.isInteger(assignment.planting_sequence) && assignment.planting_sequence > 0, 'Crop year or planting sequence is invalid.'); assert(isFiniteNumber(assignment.planted_acres) && assignment.planted_acres > 0 && assignment.planted_acres <= field.total_acres, 'Crop acres are invalid.'); assertNullableString(assignment.variety, 'Variety must be text or blank.'); assert(assignment.planting_date === null || validDate(assignment.planting_date), 'Planting date is invalid.'); assert(assignment.harvest_date === null || validDate(assignment.harvest_date), 'Harvest date is invalid.'); assert(assignment.harvest_date === null || assignment.planting_date === null || assignment.harvest_date >= assignment.planting_date, 'Harvest date cannot be before planting date.'); assert(assignment.harvested_bushels === null || (isFiniteNumber(assignment.harvested_bushels) && assignment.harvested_bushels >= 0), 'Harvested bushels must be zero or greater.'); const key = `${assignment.field_id}|${assignment.crop_year}|${assignment.commodity_id}|${assignment.planting_sequence}`; assert(!assignmentKeys.has(key), 'Crop assignments must be unique by field, year, commodity, and sequence.'); assignmentKeys.add(key)
+    assertUuid(assignment.id, 'Crop assignment ID must be a UUID.'); const field = data.fields.find((item) => item.id === assignment.field_id); assert(field && assignment.farm_id === data.farm.id && commodityIds.has(assignment.commodity_id), 'Crop assignment field or commodity is invalid.'); assert(Number.isInteger(assignment.crop_year) && assignment.crop_year >= 1900 && assignment.crop_year <= 2200 && Number.isInteger(assignment.planting_sequence) && assignment.planting_sequence > 0, 'Crop year or planting sequence is invalid.'); assert(isFiniteNumber(assignment.planted_acres) && assignment.planted_acres > 0 && assignment.planted_acres <= field.total_acres, 'Crop acres are invalid.'); assertNullableString(assignment.variety, 'Variety must be text or blank.'); assert(assignment.planting_date === null || validDate(assignment.planting_date), 'Planting date is invalid.'); assert(assignment.harvest_date === null || validDate(assignment.harvest_date), 'Harvest date is invalid.'); assert(assignment.harvest_date === null || assignment.planting_date === null || assignment.harvest_date >= assignment.planting_date, 'Harvest date cannot be before planting date.'); assert(assignment.harvested_bushels === null || (isFiniteNumber(assignment.harvested_bushels) && assignment.harvested_bushels >= 0), 'Harvested bushels must be zero or greater.'); assert(assignment.expected_yield_per_acre === undefined || assignment.expected_yield_per_acre === null || (isFiniteNumber(assignment.expected_yield_per_acre) && assignment.expected_yield_per_acre > 0), 'Expected yield must be greater than zero when entered.'); assert(assignment.expected_price_per_bu === undefined || assignment.expected_price_per_bu === null || (isFiniteNumber(assignment.expected_price_per_bu) && assignment.expected_price_per_bu >= 0), 'Expected price must be zero or greater when entered.'); const key = `${assignment.field_id}|${assignment.crop_year}|${assignment.commodity_id}|${assignment.planting_sequence}`; assert(!assignmentKeys.has(key), 'Crop assignments must be unique by field, year, commodity, and sequence.'); assignmentKeys.add(key)
   }
   const currentFields = new Set<string>(); const arrangementDates = new Set<string>()
   for (const item of data.arrangements) { const field = data.fields.find((candidate) => candidate.id === item.field_id); assert(field, 'Arrangement has an invalid field.'); assertArrangement(item, field, data.farm.id); const dateKey = `${item.field_id}|${item.effective_from}`; assert(!arrangementDates.has(dateKey), 'Arrangement effective dates must be unique per field.'); arrangementDates.add(dateKey); if (item.effective_to === null) { assert(!currentFields.has(item.field_id), 'Only one current arrangement is allowed per field.'); currentFields.add(item.field_id) } }
 }
 
+export function readFieldsEnvelope(serialized: string): FieldsData {
+  const envelope: unknown = JSON.parse(serialized)
+  if (!isRecord(envelope) || envelope.version !== STORAGE_VERSION || !isRecord(envelope.fields)) throw new Error('Unsupported or corrupt saved data.')
+  assertData(envelope.fields as unknown as FieldsData)
+  return envelope.fields as unknown as FieldsData
+}
+
+export function writeFieldsEnvelope(existing: string | null, fields: FieldsData): string {
+  if (existing === null) return JSON.stringify({ version: STORAGE_VERSION, fields })
+  const envelope: unknown = JSON.parse(existing)
+  if (!isRecord(envelope) || envelope.version !== STORAGE_VERSION) throw new Error('Cannot safely preserve the saved Grain data. Your existing data was not changed.')
+  const range = topLevelJsonValueRange(existing, 'fields')
+  if (!range) throw new Error('Cannot safely preserve the saved Grain data. Your existing data was not changed.')
+  // Replace only the Fields token. Every other character, including Grain, remains byte-for-byte unchanged.
+  return `${existing.slice(0, range.start)}${JSON.stringify(fields)}${existing.slice(range.end)}`
+}
+
+function skipWhitespace(serialized: string, index: number) { while (index < serialized.length && /\s/.test(serialized[index])) index += 1; return index }
+function jsonStringEnd(serialized: string, index: number) { assert(serialized[index] === '"', 'Saved data is corrupt.'); index += 1; while (index < serialized.length) { if (serialized[index] === '\\') { index += 2; continue } if (serialized[index] === '"') return index + 1; index += 1 } throw new Error('Saved data is corrupt.') }
+function jsonValueEnd(serialized: string, index: number): number {
+  const first = serialized[index]
+  if (first === '"') return jsonStringEnd(serialized, index)
+  if (first === '{' || first === '[') { const close = first === '{' ? '}' : ']'; let depth = 0; while (index < serialized.length) { const character = serialized[index]; if (character === '"') { index = jsonStringEnd(serialized, index); continue } if (character === first) depth += 1; if (character === close && --depth === 0) return index + 1; index += 1 } throw new Error('Saved data is corrupt.') }
+  while (index < serialized.length && !/[\s,}\]]/.test(serialized[index])) index += 1
+  return index
+}
+function topLevelJsonValueRange(serialized: string, property: string): { start: number; end: number } | null {
+  let index = skipWhitespace(serialized, 0); assert(serialized[index] === '{', 'Saved data is corrupt.'); index += 1
+  while (true) { index = skipWhitespace(serialized, index); if (serialized[index] === '}') return null; const keyStart = index; const keyEnd = jsonStringEnd(serialized, keyStart); const key = JSON.parse(serialized.slice(keyStart, keyEnd)) as string; index = skipWhitespace(serialized, keyEnd); assert(serialized[index] === ':', 'Saved data is corrupt.'); index = skipWhitespace(serialized, index + 1); const start = index; const end = jsonValueEnd(serialized, start); if (key === property) return { start, end }; index = skipWhitespace(serialized, end); if (serialized[index] === '}') return null; assert(serialized[index] === ',', 'Saved data is corrupt.'); index += 1 }
+}
+
 function load(): FieldsData {
+  const saved = localStorage.getItem(STORAGE_KEY)
+  if (saved !== null) {
+    try { return readFieldsEnvelope(saved) } catch { return seedData() }
+  }
   try {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved) {
-      const envelope: unknown = JSON.parse(saved)
-      if (!isRecord(envelope) || envelope.version !== STORAGE_VERSION || !isRecord(envelope.fields)) throw new Error('Unsupported or corrupt saved data.')
-      assertData(envelope.fields as unknown as FieldsData)
-      return envelope.fields as unknown as FieldsData
-    }
     const legacy = localStorage.getItem(LEGACY_STORAGE_KEY)
     if (legacy) {
       const envelope: unknown = JSON.parse(legacy)
@@ -140,27 +172,18 @@ function load(): FieldsData {
       return migrated
     }
     const data = seedData(); persist(data); return data
-  } catch {
-    const data = seedData()
-    persist(data)
-    return data
-  }
+  } catch { return seedData() }
 }
 
 function persist(data: FieldsData) {
-  try {
-    const existing = localStorage.getItem(STORAGE_KEY)
-    let grain: unknown
-    if (existing) {
-      const envelope: unknown = JSON.parse(existing)
-      if (isRecord(envelope) && envelope.version === STORAGE_VERSION) grain = envelope.grain
-    }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, fields: data, ...(grain === undefined ? {} : { grain }) }))
-  } catch { /* Local storage may be unavailable or full; keep the current session usable. */ }
+  const existing = localStorage.getItem(STORAGE_KEY)
+  const serialized = writeFieldsEnvelope(existing, data)
+  localStorage.setItem(STORAGE_KEY, serialized)
+  if (localStorage.getItem(STORAGE_KEY) !== serialized) throw new Error('Could not confirm the field save. Your typed values are still here; please try again.')
 }
 
 const zeroInputShares = { landlord_seed_pct: 0, landlord_fertilizer_pct: 0, landlord_chemical_pct: 0, landlord_fuel_pct: 0, landlord_labor_custom_pct: 0, landlord_crop_insurance_pct: 0, landlord_equipment_pct: 0, landlord_interest_pct: 0, landlord_other_input_pct: 0 }
-function arrangementTermsEqual(left: Arrangement, right: Arrangement): boolean { return left.arrangement_type === right.arrangement_type && left.landlord_name === right.landlord_name && left.cash_rent_per_acre === right.cash_rent_per_acre && JSON.stringify(left.flex_bonus_formula) === JSON.stringify(right.flex_bonus_formula) && left.landlord_crop_pct === right.landlord_crop_pct && inputShareKeys.every((key) => left[key] === right[key]) && left.notes === right.notes }
+function arrangementTermsEqual(left: Arrangement, right: Arrangement): boolean { return left.arrangement_type === right.arrangement_type && left.landlord_name === right.landlord_name && (left.landlord_phone ?? null) === (right.landlord_phone ?? null) && (left.landlord_contact_notes ?? null) === (right.landlord_contact_notes ?? null) && left.cash_rent_per_acre === right.cash_rent_per_acre && JSON.stringify(left.flex_bonus_formula) === JSON.stringify(right.flex_bonus_formula) && left.landlord_crop_pct === right.landlord_crop_pct && inputShareKeys.every((key) => left[key] === right[key]) && left.notes === right.notes }
 function dayBefore(date: string): string { const value = new Date(`${date}T00:00:00Z`); value.setUTCDate(value.getUTCDate() - 1); return value.toISOString().slice(0, 10) }
 
 export class MockFieldsRepository implements FieldsRepository {
@@ -172,7 +195,7 @@ export class MockFieldsRepository implements FieldsRepository {
     const field: Field = { id: existing?.id ?? newId(), farm_id: data.farm.id, name: draft.name.trim(), operating_entity_id: draft.operating_entity_id, total_acres: draft.total_acres, county: draft.county?.trim() || null, state: draft.state?.trim() || null, legal_description: draft.legal_description?.trim() || null, fsa_farm_number: draft.fsa_farm_number?.trim() || null, fsa_tract_number: draft.fsa_tract_number?.trim() || null, soil_productivity_index: draft.soil_productivity_index, is_active: existing?.is_active ?? true, created_at: existing?.created_at ?? timestamp, updated_at: timestamp }
     const candidate: Arrangement = { id: newId(), farm_id: field.farm_id, field_id: field.id, effective_to: null, created_at: timestamp, updated_at: timestamp, ...zeroInputShares, ...draft.arrangement }
     assertArrangement(candidate, field, data.farm.id)
-    assert(draft.crop_assignments.length > 0, 'Add at least one crop assignment.'); for (const assignment of draft.crop_assignments) { assert(Number.isInteger(assignment.crop_year) && assignment.crop_year >= 1900 && assignment.crop_year <= 2200, 'Crop year must be between 1900 and 2200.'); assert(data.commodities.some((commodity) => commodity.id === assignment.commodity_id), 'Select a valid commodity.'); assert(isFiniteNumber(assignment.planted_acres) && assignment.planted_acres > 0 && assignment.planted_acres <= field.total_acres, 'Each planted acreage must be greater than zero and cannot exceed the field acres.'); assert(Number.isInteger(assignment.planting_sequence) && assignment.planting_sequence > 0, 'Planting sequence must be a positive whole number.'); assert(assignment.harvested_bushels === null || (isFiniteNumber(assignment.harvested_bushels) && assignment.harvested_bushels >= 0), 'Harvested bushels must be zero or greater.') }
+    for (const assignment of draft.crop_assignments) { assert(Number.isInteger(assignment.crop_year) && assignment.crop_year >= 1900 && assignment.crop_year <= 2200, 'Crop year must be between 1900 and 2200.'); assert(data.commodities.some((commodity) => commodity.id === assignment.commodity_id), 'Select a valid commodity.'); assert(isFiniteNumber(assignment.planted_acres) && assignment.planted_acres > 0 && assignment.planted_acres <= field.total_acres, 'Each planted acreage must be greater than zero and cannot exceed the field acres.'); assert(Number.isInteger(assignment.planting_sequence) && assignment.planting_sequence > 0, 'Planting sequence must be a positive whole number.'); assert(assignment.harvested_bushels === null || (isFiniteNumber(assignment.harvested_bushels) && assignment.harvested_bushels >= 0), 'Harvested bushels must be zero or greater.'); assert(assignment.expected_yield_per_acre === null || (isFiniteNumber(assignment.expected_yield_per_acre) && assignment.expected_yield_per_acre > 0), 'Expected yield must be greater than zero when entered.'); assert(assignment.expected_price_per_bu === null || (isFiniteNumber(assignment.expected_price_per_bu) && assignment.expected_price_per_bu >= 0), 'Expected price must be zero or greater when entered.') }
     const draftAssignmentKeys = new Set(draft.crop_assignments.map((item) => `${item.crop_year}|${item.commodity_id}|${item.planting_sequence}`)); assert(draftAssignmentKeys.size === draft.crop_assignments.length, 'Crop assignments must have unique crop, year, and planting sequence combinations.')
     data.fields = existing ? data.fields.map((item) => item.id === field.id ? field : item) : [...data.fields, field]
     const current = data.arrangements.find((item) => item.field_id === field.id && item.effective_to === null)
@@ -180,7 +203,21 @@ export class MockFieldsRepository implements FieldsRepository {
     else if (current && candidate.effective_from <= current.effective_from) { assert(candidate.effective_from === current.effective_from, 'A changed arrangement must have an effective date after the current arrangement begins.'); data.arrangements = data.arrangements.map((item) => item.id === current.id ? { ...candidate, id: current.id, created_at: current.created_at } : item) }
     else if (current) { data.arrangements = data.arrangements.map((item) => item.id === current.id ? { ...item, effective_to: dayBefore(candidate.effective_from), updated_at: timestamp } : item); data.arrangements.push(candidate) }
     else { assert(!data.arrangements.some((item) => item.field_id === field.id && item.effective_from === candidate.effective_from), 'An arrangement already starts on that date.'); data.arrangements.push(candidate) }
-    const years = new Set(draft.crop_assignments.map((assignment) => assignment.crop_year)); data.crop_assignments = data.crop_assignments.filter((item) => !(item.field_id === field.id && years.has(item.crop_year))); data.crop_assignments.push(...draft.crop_assignments.map((assignment) => ({ ...assignment, id: newId(), farm_id: field.farm_id, field_id: field.id, created_at: timestamp, updated_at: timestamp })))
+    if (draft.crop_assignments.length) {
+      const years = new Set(draft.crop_assignments.map((assignment) => assignment.crop_year))
+      const existingAssignments = data.crop_assignments.filter((item) => item.field_id === field.id)
+      const existingById = new Map(existingAssignments.map((item) => [item.id, item]))
+      const preservedIds = new Set<string>()
+      const replacements = draft.crop_assignments.map((assignment) => {
+        const previous = assignment.id ? existingById.get(assignment.id) : undefined
+        if (assignment.id && !previous) throw new Error('A crop record changed before it could be saved. Refresh the field and try again.')
+        if (previous) preservedIds.add(previous.id)
+        return { ...assignment, id: previous?.id ?? newId(), farm_id: field.farm_id, field_id: field.id, expected_yield_per_acre: assignment.expected_yield_per_acre ?? null, expected_price_per_bu: assignment.expected_price_per_bu ?? null, created_at: previous?.created_at ?? timestamp, updated_at: timestamp }
+      })
+      data.crop_assignments = data.crop_assignments.filter((item) => item.field_id !== field.id || !years.has(item.crop_year) || preservedIds.has(item.id))
+      data.crop_assignments.push(...replacements.filter((item) => !preservedIds.has(item.id)))
+      data.crop_assignments = data.crop_assignments.map((item) => replacements.find((replacement) => replacement.id === item.id) ?? item)
+    }
     assertData(data); persist(data); return field
   }
 }
