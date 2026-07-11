@@ -1,14 +1,13 @@
-import { MockGrainRepository, MockMarketDataService, createGrainId } from './MockGrainRepository'
 import { MockProfitabilityRepository } from './MockProfitabilityRepository'
 import { MockInventoryRepository } from './inventory'
 import { supabase } from '../lib/supabaseClient'
 import { supabaseConfig } from '../lib/supabaseConfig'
 import { moduleBackends } from './backends'
 import { QueuedFieldsRepository } from './QueuedFieldsRepository'
+import { createSupabaseGrainServices } from './createSupabaseGrainServices'
 import { SupabaseFieldsDataGateway } from './SupabaseFieldsDataGateway'
 import { SupabaseFieldsRepository } from './SupabaseFieldsRepository'
 import type { FieldsRepository } from './fields'
-import type { GrainServices } from './grain'
 
 async function currentUserId() {
   const { data, error } = await supabase.auth.getUser()
@@ -40,8 +39,10 @@ export const fieldsRepository: FieldsRepository = queuedFields
 /** Called once the signed-in user's sole farm has been resolved. */
 export const replayFieldsQueue = () => queuedFields.inspectAndReplay()
 
-if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'mock' || moduleBackends.inventory !== 'mock' || moduleBackends.profitability !== 'mock') throw new Error('Farm Rx backend configuration is invalid.')
+if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'supabase' || moduleBackends.inventory !== 'mock' || moduleBackends.profitability !== 'mock') throw new Error('Farm Rx backend configuration is invalid.')
 export const profitabilityRepository = new MockProfitabilityRepository(fieldsRepository)
 export const inventoryRepository = new MockInventoryRepository(fieldsRepository)
-export const grainServices: GrainServices = { grainRepository: new MockGrainRepository(fieldsRepository), marketDataService: new MockMarketDataService(), profitabilityRepository, createGrainId }
+const liveGrain = createSupabaseGrainServices({ fieldsRepository, profitabilityRepository, getFarmId: currentFarmId, getContext: async () => ({ userId: await currentUserId(), farmId: await currentFarmId() }), projectRef: supabaseConfig.projectRef, storage, isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
+export const grainServices = liveGrain.services
+export const replayGrainQueue = () => liveGrain.replayGrainQueue()
 export const moduleYear = new Date().getFullYear()

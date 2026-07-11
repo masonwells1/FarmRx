@@ -1,0 +1,31 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' }
+const delivered = new Map<string, number>()
+const hour = 60 * 60 * 1000
+const clean = (value: unknown, max = 160) => typeof value === 'string' ? value.replace(/[<>\u0000-\u001f]/g, '').slice(0, max) : ''
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
+
+Deno.serve(async (request) => {
+  if (request.method === 'OPTIONS') return new Response('ok', { headers: cors })
+  try {
+    const authorization = request.headers.get('Authorization')
+    if (!authorization) return json({ error: 'Sign in required.' }, 401)
+    const url = Deno.env.get('SUPABASE_URL')!; const anon = Deno.env.get('SUPABASE_ANON_KEY')!; const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const caller = createClient(url, anon, { global: { headers: { Authorization: authorization } } }); const admin = createClient(url, service)
+    const { data: auth, error: authError } = await caller.auth.getUser(); if (authError || !auth.user?.email) return json({ error: 'Sign in required.' }, 401)
+    const body = await request.json() as Record<string, unknown>; const alertKey = clean(body.alertKey); const farmId = clean(body.farmId, 36); const kind = clean(body.kind, 32)
+    if (!/^(price_target|target_deadline|usda_report)$/.test(kind) || !/^[a-z0-9:_\-.]{1,160}$/i.test(alertKey) || !/^[0-9a-f-]{36}$/i.test(farmId)) return json({ error: 'Invalid alert.' }, 400)
+    const { data: membership } = await admin.from('farm_memberships').select('role,status').eq('farm_id', farmId).eq('user_id', auth.user.id).maybeSingle()
+    if (membership?.role !== 'owner' || membership.status !== 'active') return json({ error: 'Only the farm owner can receive this alert.' }, 403)
+    const throttleKey = `${farmId}:${alertKey}`; if ((delivered.get(throttleKey) ?? 0) + hour > Date.now()) return json({ delivered: false, throttled: true })
+    let subject = 'Farm Rx grain reminder'; let message = 'A grain item needs your review.'
+    if (kind === 'price_target') { const targetId = clean(body.targetId, 36); const observationId = clean(body.observationId, 36); const [{ data: target }, { data: bid }] = await Promise.all([admin.from('marketing_plan_targets').select('id,target_price,commodity_id,farm_id').eq('id', targetId).eq('farm_id', farmId).maybeSingle(), admin.from('cash_bids').select('id,cash_price,commodity_id,farm_id').eq('id', observationId).eq('farm_id', farmId).maybeSingle()]); if (!target || !bid || bid.cash_price === null || bid.cash_price < target.target_price || bid.commodity_id !== target.commodity_id) return json({ error: 'Alert is no longer current.' }, 409); subject = 'Farm Rx price target reached'; message = `A saved cash-price target was reached for ${clean(target.commodity_id, 80)}.` }
+    if (kind === 'target_deadline') { const targetId = clean(body.targetId, 36); const { data: target } = await admin.from('marketing_plan_targets').select('id,deadline,commodity_id').eq('id', targetId).eq('farm_id', farmId).maybeSingle(); if (!target?.deadline) return json({ error: 'Alert is no longer current.' }, 409); subject = 'Farm Rx marketing deadline'; message = `A saved marketing deadline is coming up for ${clean(target.commodity_id, 80)}.` }
+    if (kind === 'usda_report') { const reportId = clean(body.reportId, 36); const { data: report } = await admin.from('usda_report_dates').select('id,report_name,report_date').eq('id', reportId).maybeSingle(); if (!report) return json({ error: 'Alert is no longer current.' }, 409); subject = 'Farm Rx USDA report reminder'; message = `${clean(report.report_name, 100)} is scheduled for ${clean(report.report_date, 10)}.` }
+    const resendKey = Deno.env.get('RESEND_API_KEY'); if (!resendKey) throw new Error('Email provider is not configured.')
+    const sent = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: Deno.env.get('GRAIN_ALERT_FROM') ?? 'Farm Rx <alerts@farmrx.app>', to: [auth.user.email], subject, text: message }) })
+    if (!sent.ok) throw new Error(`Email provider returned ${sent.status}`)
+    delivered.set(throttleKey, Date.now()); console.info(JSON.stringify({ event: 'grain_alert_delivered', farmId, alertKey, ownerId: auth.user.id })); return json({ delivered: true })
+  } catch (error) { console.error(JSON.stringify({ event: 'grain_alert_delivery_failed', error: error instanceof Error ? error.message : 'unknown' })); return json({ error: 'Farm Rx could not send that email right now.' }, 503) }
+})

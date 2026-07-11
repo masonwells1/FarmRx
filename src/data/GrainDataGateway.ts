@@ -1,0 +1,22 @@
+import type { CashBid, GrainContract, MarketingPlanTarget, PositionScope, ProductionEstimate } from './grain'
+
+/** The network boundary deliberately exposes untrusted rows only. */
+export interface GrainRowBundle {
+  production_estimates: unknown[]
+  grain_contracts: unknown[]
+  marketing_plan_targets: unknown[]
+  insurance_units: unknown[]
+  grain_bins: unknown[]
+  bin_inventory: unknown[]
+  cash_bids: unknown[]
+  usda_report_dates: unknown[]
+}
+
+export interface ReplaceMarketingPlanInput { farmId: string; scope: PositionScope; targets: MarketingPlanTarget[] }
+export interface GrainDataGateway {
+  loadWorkspace(farmId: string): Promise<GrainRowBundle>
+  upsertProductionEstimate(farmId: string, row: ProductionEstimate): Promise<unknown>
+  upsertContract(farmId: string, row: GrainContract): Promise<unknown>
+  replaceMarketingPlan(input: ReplaceMarketingPlanInput): Promise<unknown[]>
+  upsertCashBid(farmId: string, row: CashBid): Promise<unknown>
+}

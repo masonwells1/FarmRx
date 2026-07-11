@@ -1,6 +1,6 @@
 export const moduleBackends = Object.freeze({
   fields: 'supabase',
-  grain: 'mock',
+  grain: 'supabase',
   inventory: 'mock',
   profitability: 'mock',
 } as const satisfies {

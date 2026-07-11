@@ -76,8 +76,8 @@ async function run() {
   assert(replayStorage.getItem(writeQueueKey(supabaseConfig.projectRef, userB, data.farm.id)) === null, 'Another user can see this queue.')
   // 14. Grain reads injected Fields and preserves its own storage slice.
   const previousLocalStorage = globalThis.localStorage; Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage }); const injected: FieldsRepository = { getData: async () => data, saveField: async (value) => ({ ...data.fields[0], id: value.id ?? data.fields[0].id }) }; const grain = new MockGrainRepository(injected); const grainData = await grain.getData(); const grainEnvelope = writeGrainEnvelope(storage.getItem('farm-rx-local-data'), { ...grainData, fields: data }); assert(grainData.fields.farm.id === data.farm.id && !('fields' in (JSON.parse(grainEnvelope).grain as object)), 'Injected Grain crossed into Fields storage.'); Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: previousLocalStorage })
-  // 15. release composition is deliberately live Fields + mock Grain at the exact project ref.
-  assert(moduleBackends.fields === 'supabase' && moduleBackends.grain === 'mock' && supabaseConfig.projectRef === 'agvsozfbstpekuqxpqjr', 'Backend manifest or project identity drifted.')
+  // 15. release composition is deliberately live Fields + queued live Grain at the exact project ref.
+  assert(moduleBackends.fields === 'supabase' && moduleBackends.grain === 'supabase' && supabaseConfig.projectRef === 'agvsozfbstpekuqxpqjr', 'Backend manifest or project identity drifted.')
 }
 
 void run().then(() => console.log('SupabaseFieldsRepository regressions passed.'))

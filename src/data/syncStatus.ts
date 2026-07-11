@@ -4,12 +4,27 @@ export type SyncState =
   | { kind: 'syncing'; pending: number }
   | { kind: 'blocked'; pending: number; message: string }
 
-let current: SyncState = { kind: 'synced', pending: 0 }
-let retryAction: (() => void) | null = null
+type Module = 'fields' | 'grain'
+const states: Record<Module, SyncState> = { fields: { kind: 'synced', pending: 0 }, grain: { kind: 'synced', pending: 0 } }
+const retries: Partial<Record<Module, () => void>> = {}
 const listeners = new Set<() => void>()
-
-export function getSyncStatus() { return current }
+function aggregate(): SyncState {
+  const values = Object.values(states)
+  const pending = values.reduce((total, value) => total + value.pending, 0)
+  const blocked = values.find((value) => value.kind === 'blocked')
+  if (blocked) return { kind: 'blocked', pending, message: blocked.message }
+  if (values.some((value) => value.kind === 'syncing')) return { kind: 'syncing', pending }
+  if (pending) return { kind: 'pending', pending }
+  return { kind: 'synced', pending: 0 }
+}
+// useSyncExternalStore requires a stable snapshot reference between changes;
+// recompute the aggregate only when a module's state is set.
+let snapshot: SyncState = aggregate()
+export function getSyncStatus() { return snapshot }
 export function subscribeSyncStatus(listener: () => void) { listeners.add(listener); return () => listeners.delete(listener) }
-export function setSyncStatus(next: SyncState) { current = next; listeners.forEach((listener) => listener()) }
-export function setSyncRetryAction(action: (() => void) | null) { retryAction = action }
-export function retrySavedChanges() { retryAction?.() }
+export function setModuleSyncStatus(module: Module, next: SyncState) { states[module] = next; snapshot = aggregate(); listeners.forEach((listener) => listener()) }
+export function setModuleSyncRetryAction(module: Module, action: (() => void) | null) { if (action) retries[module] = action; else delete retries[module] }
+/** Compatibility for non-queue callers; queues must identify their module. */
+export function setSyncStatus(next: SyncState) { setModuleSyncStatus('fields', next) }
+export function setSyncRetryAction(action: (() => void) | null) { setModuleSyncRetryAction('fields', action) }
+export function retrySavedChanges() { Object.values(retries).forEach((retry) => retry?.()) }

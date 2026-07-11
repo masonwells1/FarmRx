@@ -4,6 +4,8 @@ import type { ProfitabilityRepository } from './profitability'
 export type ProductionMathBasis = 'projected' | 'actual'
 export type GrainContractType = 'cash_spot' | 'forward_cash' | 'basis' | 'hta'
 export type GrainStorageLocationType = 'on_farm' | 'commercial'
+/** Matches the tiny rounding allowance enforced by the plan RPC. */
+export const MARKETING_PLAN_PERCENT_TOLERANCE = 100.000001
 
 export interface PositionScope {
   farm_id: string

@@ -1,7 +1,7 @@
 import type { Arrangement, CropAssignment, Field, FieldDraft, FieldsData, FieldsRepository } from './fields'
 import type { FieldsOperationWriter } from './SupabaseFieldsRepository'
 import { normalizeFieldDraft } from './SupabaseFieldsRepository'
-import { setSyncRetryAction, setSyncStatus } from './syncStatus'
+import { setModuleSyncRetryAction, setModuleSyncStatus } from './syncStatus'
 import { FieldsWriteQueue, type FieldsQueueEntryV1, type StorageLike, writeQueueKey } from './writeQueue'
 
 type Context = { userId: string; farmId: string }
@@ -42,7 +42,7 @@ export class QueuedFieldsRepository implements FieldsRepository {
   private workspace: FieldsData | null = null
   constructor(private readonly writer: FieldsRepository & FieldsOperationWriter, private readonly dependencies: QueueDependencies) {
     if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() })
-    setSyncRetryAction(() => { void this.replayCurrent() })
+    setModuleSyncRetryAction('fields', () => { void this.replayCurrent() })
   }
   private async contextAndQueue() { const context = await this.dependencies.getContext(); return { context, queue: new FieldsWriteQueue(this.dependencies.storage, writeQueueKey(this.dependencies.projectRef, context.userId, context.farmId)) } }
   private async locked<T>(queue: FieldsWriteQueue, task: (verify: () => void) => Promise<T>) { return serial(queue.key, () => crossTabLock(queue.key, this.dependencies.storage, this.dependencies.createId, task)) }
@@ -56,9 +56,9 @@ export class QueuedFieldsRepository implements FieldsRepository {
     const entry: FieldsQueueEntryV1 = { version: 1, module: 'fields', kind: 'saveField', operationId, userId: context.userId, farmId: context.farmId, enqueuedAt: this.dependencies.clock(), draft: normalized as FieldsQueueEntryV1['draft'] }
     const result = await this.locked(queue, async (verify) => {
       verify(); const pending = queue.read().entries.length
-      const enqueue = () => { verify(); const next = queue.append(entry); setSyncStatus({ kind: 'pending', pending: next.entries.length }); this.workspace = this.workspace ? this.overlayQueued(this.workspace, next.entries) : this.workspace; return this.queuedField(normalized) }
+      const enqueue = () => { verify(); const next = queue.append(entry); setModuleSyncStatus('fields', { kind: 'pending', pending: next.entries.length }); this.workspace = this.workspace ? this.overlayQueued(this.workspace, next.entries) : this.workspace; return this.queuedField(normalized) }
       if (pending > 0 || this.dependencies.isOffline()) return enqueue()
-      try { const field = await this.writer.saveFieldOperation(normalized, operationId); verify(); if (queue.read().entries.length) setSyncStatus({ kind: 'pending', pending: queue.read().entries.length }); else setSyncStatus({ kind: 'synced', pending: 0 }); return field }
+      try { const field = await this.writer.saveFieldOperation(normalized, operationId); verify(); if (queue.read().entries.length) setModuleSyncStatus('fields', { kind: 'pending', pending: queue.read().entries.length }); else setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }); return field }
       catch (error) { if (isTransportFailure(error, this.dependencies.isOffline())) return enqueue(); throw error }
     })
     void this.replayCurrent()
@@ -79,6 +79,6 @@ export class QueuedFieldsRepository implements FieldsRepository {
   async replayCurrent() {
     let contextAndQueue: Awaited<ReturnType<QueuedFieldsRepository['contextAndQueue']>>; try { contextAndQueue = await this.contextAndQueue() } catch { return }
     const { context, queue } = contextAndQueue
-    try { await this.locked(queue, async (verify) => { let envelope = queue.read(); if (!envelope.entries.length) { setSyncStatus({ kind: 'synced', pending: 0 }); return }; while (envelope.entries.length) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); setSyncStatus({ kind: 'syncing', pending: envelope.entries.length }); try { await this.writer.saveFieldOperation(head.draft, head.operationId); verify(); envelope = queue.removeConfirmedHead(head.operationId) } catch (error) { if (isTransportFailure(error, this.dependencies.isOffline())) { setSyncStatus({ kind: 'pending', pending: envelope.entries.length }); return }; setSyncStatus({ kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } }; setSyncStatus({ kind: 'synced', pending: 0 }) }) } catch { setSyncStatus({ kind: 'blocked', pending: 0, message: blocked }) }
+    try { await this.locked(queue, async (verify) => { let envelope = queue.read(); if (!envelope.entries.length) { setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }); return }; if (this.dependencies.isOffline()) { setModuleSyncStatus('fields', { kind: 'pending', pending: envelope.entries.length }); return }; while (envelope.entries.length) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); setModuleSyncStatus('fields', { kind: 'syncing', pending: envelope.entries.length }); try { await this.writer.saveFieldOperation(head.draft, head.operationId); verify(); envelope = queue.removeConfirmedHead(head.operationId) } catch (error) { if (isTransportFailure(error, this.dependencies.isOffline())) { setModuleSyncStatus('fields', { kind: 'pending', pending: envelope.entries.length }); return }; setModuleSyncStatus('fields', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } }; setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }) }) } catch { setModuleSyncStatus('fields', { kind: 'blocked', pending: 0, message: blocked }) }
   }
 }

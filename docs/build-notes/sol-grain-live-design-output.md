@@ -1,0 +1,5 @@
+- Created [grain-live-design.md](C:\FarmRx\docs\grain-live-design.md).
+- Covers gateway, strict mapping, farm binding, write paths, and release flip.
+- Specifies isolated FIFO offline queuing and discarding mock test data.
+- Defines USDA MARS, owner-only alerts, regressions, and live checks.
+- Migration `0012` needed: **Yes**, for atomic marketing-plan replacement.

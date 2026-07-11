@@ -120,6 +120,12 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
   but waiting on a hard stop never pauses other work.
 - Re-surface pending decisions briefly at the top of each progress report; never nag.
 
+## BUILDER FALLBACK (Mason, 2026-07-11 ~6:20PM): Codex usage runs out ~7:20PM and resets
+## ~9:00PM. When a codex exec fails with a usage-limit error, switch delegation to Claude
+## subagents — Opus 4.8 (model "opus") takes Sol's role (architecture/schema/security/
+## adversarial review), Sonnet 5 (model "sonnet") takes Terra's role (modules/UI builds) —
+## via the Agent tool with the same task prompts. At 9:00PM switch back to Codex.
+
 ## NEXT WORK QUEUE (post-apply, 2026-07-11 evening — in order)
 1. Grain live repository swap (Sol design → Terra build → review → verify): SupabaseGrain
    repositories behind the existing seam, flip backends.grain to 'supabase'; alerts + USDA
