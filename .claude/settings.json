@@ -1,0 +1,48 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(node:*)",
+      "Bash(tsc:*)",
+      "Bash(vite:*)",
+      "Bash(codex:*)",
+      "Bash(supabase:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git stash:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(cat:*)",
+      "Read(//c/FarmRx/**)",
+      "Edit(//c/FarmRx/**)",
+      "Write(//c/FarmRx/**)",
+      "Glob(//c/FarmRx/**)",
+      "Grep(//c/FarmRx/**)",
+      "WebFetch(domain:*)",
+      "WebSearch"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(vercel:*)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(rm -rf:*)",
+      "Write(.env)",
+      "Edit(.env)",
+      "Write(.env.*)",
+      "Edit(.env.*)",
+      "Write(//c/CRX_Manager/**)",
+      "Edit(//c/CRX_Manager/**)"
+    ]
+  }
+}
