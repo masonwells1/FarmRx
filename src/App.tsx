@@ -1,5 +1,6 @@
 import type { FormEvent } from 'react'
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { FieldDetailPage, FieldFormPage, FieldsPage } from './FieldsModule'
 
 const navigation = [
   { label: 'Fields', path: '/fields', icon: '▦' },
@@ -38,18 +39,6 @@ const emptyStates: Record<string, { title: string; message: string; action: stri
   },
 }
 
-const fields = [
-  { name: 'North Home', entity: 'Wells Farms LLC', crop: 'Corn', acres: 1240 },
-  { name: 'River Bottom', entity: 'Wells Farms LLC', crop: 'Soybeans', acres: 980 },
-  { name: 'West Ridge', entity: 'Wells Family Farms', crop: 'Corn', acres: 860 },
-  { name: 'Cedar Creek', entity: 'Wells Family Farms', crop: 'Soybeans', acres: 740 },
-  { name: 'Other fields', entity: 'Wells Land Co.', crop: 'Mixed', acres: 1000 },
-]
-
-function formatNumber(value: number) {
-  return new Intl.NumberFormat('en-US').format(value)
-}
-
 function AppLayout() {
   return (
     <div className="app-shell">
@@ -67,11 +56,14 @@ function AppLayout() {
       <main className="app-main">
         <header className="topbar">
           <div className="product-name">Farm <span>Rx</span></div>
-          <div className="farm-summary">Wells Farm Group · <span className="numeric">4,820 ac</span></div>
+          <div className="farm-summary">Wells Farm Group</div>
         </header>
         <div className="content-area">
           <Routes>
             <Route path="/fields" element={<FieldsPage />} />
+            <Route path="/fields/new" element={<FieldFormPage />} />
+            <Route path="/fields/:id" element={<FieldDetailPage />} />
+            <Route path="/fields/:id/edit" element={<FieldFormPage />} />
             <Route path="/grain" element={<EmptyPage />} />
             <Route path="/inventory" element={<EmptyPage />} />
             <Route path="/profitability" element={<EmptyPage />} />
@@ -97,65 +89,6 @@ function Navigation({ className }: { className: string }) {
           <span>{item.label}</span>
         </NavLink>
       ))}
-    </div>
-  )
-}
-
-function FieldsPage() {
-  return (
-    <section className="page">
-      <div className="page-heading">
-        <div>
-          <h1>Fields</h1>
-          <p>Every acre in one clear view.</p>
-        </div>
-        <button className="primary-action" type="button">Add a field</button>
-      </div>
-
-      <div className="stats-grid" aria-label="Farm totals">
-        <StatCard label="Total acres" value="4,820" unit="ac" />
-        <StatCard label="Fields" value="37" />
-        <StatCard label="Entities" value="3" />
-      </div>
-
-      <section className="data-card" aria-labelledby="field-list-heading">
-        <div className="card-heading" id="field-list-heading">Field list</div>
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Field</th>
-                <th scope="col">Entity</th>
-                <th scope="col">Crop</th>
-                <th className="align-right" scope="col">Acres</th>
-              </tr>
-            </thead>
-            <tbody>
-              {fields.map((field) => (
-                <tr key={field.name}>
-                  <td className="field-name">{field.name}</td>
-                  <td>{field.entity}</td>
-                  <td>{field.crop}</td>
-                  <td className="align-right numeric">{formatNumber(field.acres)} ac</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="table-total">
-          <span>Total acres</span>
-          <span className="numeric">4,820 ac</span>
-        </div>
-      </section>
-    </section>
-  )
-}
-
-function StatCard({ label, value, unit }: { label: string; value: string; unit?: string }) {
-  return (
-    <div className="stat-card">
-      <div className="stat-label">{label}</div>
-      <div className="stat-value numeric">{value}{unit && <span className="stat-unit"> {unit}</span>}</div>
     </div>
   )
 }

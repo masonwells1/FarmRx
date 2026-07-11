@@ -20,8 +20,20 @@
 - Supabase project: **separate free-tier project for Farm Rx** — NEVER the live CRX-Manager database.
 - Live URL / production: not deployed yet.
 
+## Standing loop (Mason-approved 2026-07-11)
+- If a session opens here with no specific request, resume the build loop: next unchecked
+  item in `docs/GOAL.md`, per its Loop policy (never block on questions; park them in
+  Pending decisions and keep working). Each Codex build gets a Sol adversarial self-review
+  before Claude verifies in-browser and commits.
+
 ## AI delegation (Codex CLI, Claude orchestrates)
 - Claude = orchestrator: plans, splits work, reviews, verifies in the browser.
+- **Codex launch rule:** always end `codex exec` invocations with `< /dev/null` (an open stdin
+  pipe makes codex block on "Reading additional input from stdin..." forever — cost us 1.5h
+  on 2026-07-11).
+- **Stall watchdog:** while any codex background task runs, every loop wakeup checks progress
+  (newest `~/.codex/sessions/<date>` file mtime + new files in repo). No activity for 15+ min
+  → kill the codex PID and relaunch the task (fresh prompt, stdin closed). Never sit waiting.
 - Codex via `codex exec -m <model>`: **gpt-5.6-sol** = architecture/schema/security/review,
   **gpt-5.6-terra** = everyday module building/UI, **gpt-5.6-luna** = boilerplate/docs/mechanical.
 - CRX Manager (`C:\CRX_Manager`) is READ-ONLY reference material for porting — never modify it

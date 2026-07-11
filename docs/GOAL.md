@@ -33,10 +33,24 @@ don't build it yet.
 - [ ] Module 1: Fields (list, detail, fast add/edit, stat boxes)
 - [ ] Module 2: Grain (expected production, projected→actual switch, contracts, position view,
       marketing plan targets + alerts, insurance guarantee, bins, manual basis + free futures API)
+      · Note 2026-07-11: Mason says marketing-update notifications are NOT a must-build —
+        keep handoff 2.6 alerts in the spec at normal priority, no special treatment
 - [ ] Module 4: Profitability (input costs, arrangement comparison, breakeven, PROFITABILITY
       MATRIX ⭐, cost/acre by field, branded PDF)
 - [ ] **SHIP GATE: Fields + Grain in front of real customers** ← the goal
 - [ ] Module 3: Inventory & compliance · Modules 5/6: Equipment & Tasks · Module 7: machine data
+
+## Loop policy (Mason, 2026-07-11): keep working, never block on questions
+- The loop runs continuously and only surfaces questions that GENUINELY need Mason
+  (business decisions, money, irreversible actions).
+- **If Mason doesn't reply, do NOT idle**: park the question in "Pending decisions" below,
+  skip to the next actionable ledger item, and keep building.
+- Hard stops stay hard (push/deploy/new DB migrations/deletes wait for explicit OK) —
+  but waiting on a hard stop never pauses other work.
+- Re-surface pending decisions briefly at the top of each progress report; never nag.
+
+## Pending decisions (parked, non-blocking)
+- (none right now)
 
 ## Open questions for Mason (answer when relevant, handoff Part 8)
 1. Scale tickets / load tracking — in or out? (matters at Module 2)
