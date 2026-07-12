@@ -7,6 +7,7 @@ export const moduleBackends = Object.freeze({
   fieldLog: 'supabase',
   scouting: 'supabase',
   harvest: 'supabase',
+  programs: 'supabase',
   notifications: 'supabase',
 } as const satisfies {
   fields: 'supabase'
@@ -17,5 +18,6 @@ export const moduleBackends = Object.freeze({
   fieldLog: 'supabase'
   scouting: 'supabase'
   harvest: 'supabase'
+  programs: 'supabase'
   notifications: 'supabase'
 })

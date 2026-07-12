@@ -299,7 +299,21 @@ Module 3's existing delivery-event inbox hook.
         (crop row 160.00/2026-05-01/corn untouched) ✓; app record=draft, 0 products, on-hand unchanged ✓;
         same-program-twice rejected ✓; cross-farm crop rejected ✓; outsider write rejected ✓; 12-cap trips ✓.
         Security advisor clean for 0024 (no new lints beyond the accepted authenticated-definer pattern).
-  - [ ] CHUNK 2 template builder + offline · 3 assign+tracker · 4 tasks+reminders · 5 weather+applied+cost · 6 polish.
+  - [x] CHUNK 2 template builder + offline writes DONE + BROWSER-PROVEN 2026-07-12 (Terra build):
+        /programs page — My programs list (kind badge + archived filter) + template builder (name/
+        category/crop-year/notes) + passes (Move up/down, free-type products name/rate/unit/$/ac) +
+        archive. 9 client files (programs.ts, gateway, repo, versioned FIFO queue w/ Web-Lock cross-tab,
+        regression). Sol adversarial review found 3 P1 (pass-edit sent afterId=null → bumped pass to
+        top; cross-tab queue could clobber; loose canonical-order accepted → could drop durable queue
+        entry) + 5 P2 + 1 P3 — ALL fixed by Terra (predecessor-aware edit + canonical reload, Harvest-
+        style Web Lock, strict UUID/uniqueness order validation, offline pending projection, honest
+        corrupt-queue count, cost/notes-only guard, strict row mapping, archived builder read-only);
+        Programs regression 5→10 groups. Opus firsthand: tsc -b --force + build + full regression green.
+        BROWSER-PROVEN on 375px against farm-rx TEST (then cleaned up): created program (persisted to
+        DB), added 2 passes w/ free-type products (persisted), reordered (Move down swapped seq 1/2),
+        EDITED a pass and it STAYED in place (P1-1 fix), archived program (is_archived=true, left active
+        list, shows under Show-archived w/ Archived badge), 0px horizontal overflow at 375px. Commit: (this).
+  - [ ] CHUNK 3 assign+tracker · 4 tasks+reminders · 5 weather+applied+cost · 6 polish.
       OPERATING MODEL (Mason 2026-07-12): **Opus = orchestrator** (plan/delegate/verify-in-browser/
       report). **Terra + Luna = the everyday workers** (most chunks; Terra modules/UI, Luna boilerplate/
       docs/mechanical). **Sol = complex/architectural work AND Opus's peer advisor** (equal-or-better —
