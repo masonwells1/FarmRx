@@ -138,10 +138,16 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
    project — do with next apply batch); P2 test-coverage additions from Opus re-review
    (canonical-confirmation rejection tests, MARS math-exclusion pure test, buyer dropdown
    filter). Profitability + Inventory live swaps follow the same pattern.
-2. Flex-formula reconciliation: UI {type,trigger,bonus_rate} vs applied 0006 view
-   {basis,trigger,rate_pct,cap_per_acre} — views fail closed on UI shape (no wrong math,
-   but flex answers return empty). Align one way; ASK MASON which formula matches real
-   CropRx leases.
+2. Flex-formula upgrade — RESEARCHED 2026-07-11 (Mason asked for U of I research →
+   docs/flex-lease-research.md, farmdoc sources cited): 4 published structures; recommended
+   superset JSON schema {method, base_rent_per_acre, rate_pct, trigger_revenue_per_acre,
+   base_price_per_bu, base_yield_per_acre, min_rent_per_acre?, max_rent_per_acre?,
+   price_source_note}. v1 = base_plus_bonus + pct_of_revenue w/ min-max (park lease-form
+   Options I/II price/price+yield indexing; fields reserved). KEY FINDING: current UI
+   'price'/'yield' per-unit bonus types match NO published U of I structure — existing
+   saved rows of those types need Mason's confirmation before migration (default: keep
+   readable, stop offering for new leases). BUILD after profitability swap: Fields
+   arrangement editor + shared calc + regression; 0006 view alignment later.
 3. Customer onboarding path: admin-side account+farm creation flow (currently only the
    test harness can provision).
 4. Live-path manual test matrix from docs/foundation-design.md (multi-user permission

@@ -1,10 +1,10 @@
-import { MockProfitabilityRepository } from './MockProfitabilityRepository'
 import { MockInventoryRepository } from './inventory'
 import { supabase } from '../lib/supabaseClient'
 import { supabaseConfig } from '../lib/supabaseConfig'
 import { moduleBackends } from './backends'
 import { QueuedFieldsRepository } from './QueuedFieldsRepository'
 import { createSupabaseGrainServices } from './createSupabaseGrainServices'
+import { createSupabaseProfitabilityServices } from './createSupabaseProfitabilityServices'
 import { SupabaseFieldsDataGateway } from './SupabaseFieldsDataGateway'
 import { SupabaseFieldsRepository } from './SupabaseFieldsRepository'
 import type { FieldsRepository } from './fields'
@@ -39,10 +39,13 @@ export const fieldsRepository: FieldsRepository = queuedFields
 /** Called once the signed-in user's sole farm has been resolved. */
 export const replayFieldsQueue = () => queuedFields.inspectAndReplay()
 
-if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'supabase' || moduleBackends.inventory !== 'mock' || moduleBackends.profitability !== 'mock') throw new Error('Farm Rx backend configuration is invalid.')
-export const profitabilityRepository = new MockProfitabilityRepository(fieldsRepository)
+if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'supabase' || moduleBackends.inventory !== 'mock' || moduleBackends.profitability !== 'supabase') throw new Error('Farm Rx backend configuration is invalid.')
+const getContext = async () => ({ userId: await currentUserId(), farmId: await currentFarmId() })
+const liveProfitability = createSupabaseProfitabilityServices({ fieldsRepository, getFarmId: currentFarmId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
+export const profitabilityRepository = liveProfitability.profitabilityRepository
+export const replayProfitabilityQueue = () => liveProfitability.replayProfitabilityQueue()
 export const inventoryRepository = new MockInventoryRepository(fieldsRepository)
-const liveGrain = createSupabaseGrainServices({ fieldsRepository, profitabilityRepository, getFarmId: currentFarmId, getContext: async () => ({ userId: await currentUserId(), farmId: await currentFarmId() }), projectRef: supabaseConfig.projectRef, storage, isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
+const liveGrain = createSupabaseGrainServices({ fieldsRepository, profitabilityRepository, getFarmId: currentFarmId, getContext, projectRef: supabaseConfig.projectRef, storage, isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const grainServices = liveGrain.services
 export const replayGrainQueue = () => liveGrain.replayGrainQueue()
 export const moduleYear = new Date().getFullYear()

@@ -7,7 +7,7 @@ import { FieldDetailPage, FieldFormPage, FieldsPage } from './FieldsModule'
 import { GrainPage } from './GrainModule'
 import { ProfitabilityPage } from './ProfitabilityModule'
 import { InventoryPage } from './InventoryModule'
-import { grainServices, inventoryRepository, replayFieldsQueue, replayGrainQueue } from './data'
+import { grainServices, inventoryRepository, replayFieldsQueue, replayGrainQueue, replayProfitabilityQueue } from './data'
 import { getSyncStatus, retrySavedChanges, subscribeSyncStatus } from './data/syncStatus'
 import type { EntityType } from './data/fields'
 import { farmerError } from './lib/farmerErrors'
@@ -119,7 +119,7 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
     let active = true
     void findOnlyAccessibleFarm().then((farm) => {
       if (!active) return
-      if (farm) { setState('ready'); void replayFieldsQueue(); void replayGrainQueue() }
+      if (farm) { setState('ready'); void replayFieldsQueue(); void replayGrainQueue(); void replayProfitabilityQueue() }
       else if (user?.app_metadata.initial_farm_owner === true) setState('setup')
       else { setMessage('Crop RX needs to finish your farm setup.'); setState('blocked') }
     }).catch((error: unknown) => {

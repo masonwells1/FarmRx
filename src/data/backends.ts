@@ -2,7 +2,7 @@ export const moduleBackends = Object.freeze({
   fields: 'supabase',
   grain: 'supabase',
   inventory: 'mock',
-  profitability: 'mock',
+  profitability: 'supabase',
 } as const satisfies {
   fields: 'supabase'
   grain: 'mock' | 'supabase'

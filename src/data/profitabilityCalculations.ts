@@ -81,3 +81,17 @@ export function breakevenCellKeys(cells: MatrixCell[]) {
 }
 
 export function fieldAdjustedCostPerAcre(lines: BudgetCostLine[], equivalentRent: number | null) { return equivalentRent === null ? totalCostPerAcre(lines) : nonLandCostPerAcre(lines) + equivalentRent }
+
+/** Shared by the mock and live repositories so a new budget's default price/yield matrix cannot drift between backends. */
+export function defaultMatrixValues(budget: Pick<CropBudget, 'expected_price_per_bushel' | 'expected_yield_per_acre'>) {
+  const priceStep = Math.max(.1, Number((budget.expected_price_per_bushel * .08).toFixed(2)))
+  const yieldStep = Math.max(1, Math.round(budget.expected_yield_per_acre * .1))
+  // Shift the whole window up instead of clamping each entry: per-entry clamping
+  // collapsed low expectations into duplicate values, which the live matrix
+  // (distinct-values rule) correctly rejects.
+  const priceBase = Math.max(budget.expected_price_per_bushel, .01 + 2 * priceStep)
+  const yieldBase = Math.max(budget.expected_yield_per_acre, 1 + 2 * yieldStep)
+  const priceValues = [-2, -1, 0, 1, 2].map((offset) => Number((priceBase + offset * priceStep).toFixed(2)))
+  const yieldValues = [-2, -1, 0, 1, 2].map((offset) => yieldBase + offset * yieldStep)
+  return { priceValues, yieldValues }
+}

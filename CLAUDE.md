@@ -53,6 +53,8 @@
 - Install: `npm install`
 - Run locally (preview): `npm run dev`
 - Build: `npm run build`
+- Typecheck: **`npx tsc -b --force`** — plain `npx tsc --noEmit` at repo root checks ZERO
+  files (root tsconfig has `files: []`) and passes vacuously; discovered 2026-07-11.
 - Test: `npm run test` (once tests exist)
 - "Done" = ran and watched it work (open the page / run the endpoint), not just "tests pass".
 
