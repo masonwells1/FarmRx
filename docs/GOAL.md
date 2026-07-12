@@ -348,7 +348,30 @@ Module 3's existing delivery-event inbox hook.
         still 1/1 (no spam); Apply → card done + pass applied; program card has NO Edit/Delete and taps
         through to /programs?pass=550e824e…; DB guard rejects a linkage-less program task. 25 migrations
         now (0024 programs + 0025 guard). Commit: (this).
-  - [ ] CHUNK 5 weather spray-light + planned-vs-actual cost · 6 polish.
+  - [x] CHUNK 5 weather spray-light + Apply→application-record (link/create-draft) + planned-vs-actual
+        cost — DONE + BROWSER-PROVEN on farm-rx TEST 2026-07-12 (commit: this). Terra build → Sol review
+        found 6 P1 blockers (tracker rewrite dropped Skip/Reschedule/Refresh/Reassign/Unassign; partial-
+        cost crash; link reported-as-failure; completed-link broke Inventory; offline apply didn't stick;
+        + migration hygiene) → Terra fix round 1 → Sol re-review found 3 more (link trusted client canonical
+        values; program rows dropped farm_id tenant check; product-less draft not actually rendered) →
+        Terra fix round 2. Opus authored migration 0026 (CREATE OR REPLACE the two cost views: gate
+        planned_cost_per_acre/total to NULL unless every planned line priced, append known-lines sums);
+        APPLIED + registered to farm-rx TEST (26 migrations now). Opus firsthand: tsc -b --force + build +
+        full regression green (Programs 23, Chunk5 4 behavioral, Inventory 9). BROWSER-PROVEN against live
+        farm-rx via the real app client + RPCs (then fully cleaned up): (1) mixed priced/unpriced program →
+        view returns is_complete=false, per_acre=NULL, known=$12; tracker shows "Partial estimate: $12.00/ac
+        known lines", NEVER $0. (2) Season tracker at 375px shows ALL restored controls (Apply/Skip/
+        Reschedule/Reassign/Unassign) + spray light "Good · wind 3–10 mph As of…" on the planned SPRAY pass
+        only, status word once. (3) Apply→create-draft: on-hand 20gal UNCHANGED, draft status='draft'/
+        un-posted, ZERO inventory application_products, free-type lines only via program_application_products
+        view. (4) Inventory Spray-record tab renders the product-less draft safely as "Draft / un-posted",
+        "on-hand was not changed". (5) Link to a COMPLETED record submitting 2026-07-25/99ac → server stored
+        the record's own 2026-07-12/40ac (canonicalizes to server truth, ignores client values). Regression
+        adds: stale/false client canonical rejected; foreign-farm program row rejected; behavioral draft/
+        completed render derivation. Regenerated verify login note in docs/build-notes/verify-login.md.
+  - [ ] CHUNK 6 polish + full Programs regression sweep: plain-English copy, empty/error states, archived
+        filters, 18px/48px/tabular-nums checks, complete end-to-end Programs regression. (Last chunk of
+        Module 8.)
       OPERATING MODEL (Mason 2026-07-12): **Opus = orchestrator** (plan/delegate/verify-in-browser/
       report). **Terra + Luna = the everyday workers** (most chunks; Terra modules/UI, Luna boilerplate/
       docs/mechanical). **Sol = complex/architectural work AND Opus's peer advisor** (equal-or-better —

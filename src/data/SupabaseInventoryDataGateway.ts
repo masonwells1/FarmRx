@@ -7,17 +7,18 @@ function productColumns(value: InventoryProductWrite & { farm_id: string }) { co
 
 export class SupabaseInventoryDataGateway implements InventoryDataGateway {
   async loadWorkspace(farmId: string): Promise<InventoryRowBundle> {
-    const [products, receipts, receipt_lines, adjustments, applications, application_products, on_hand, rup_completeness] = await Promise.all([
+    const [products, receipts, receipt_lines, adjustments, applications, application_products, program_application_products, on_hand, rup_completeness] = await Promise.all([
       supabase.from('inventory_products').select('*').eq('farm_id', farmId).order('name').order('id'),
       supabase.from('inventory_receipts').select('*').eq('farm_id', farmId).order('created_at').order('id'),
       supabase.from('inventory_receipt_lines').select('*').eq('farm_id', farmId).order('receipt_id').order('id'),
       supabase.from('inventory_adjustments').select('*').eq('farm_id', farmId).order('adjusted_at').order('id'),
       supabase.from('application_records').select('*').eq('farm_id', farmId).order('application_date').order('id'),
       supabase.from('application_products').select('*').eq('farm_id', farmId).order('application_id').order('id'),
+      supabase.from('program_application_products').select('*').eq('farm_id', farmId).order('application_record_id').order('sequence'),
       supabase.from('inventory_on_hand').select('*').eq('farm_id', farmId).order('product_id'),
       supabase.from('rup_application_completeness').select('*').eq('farm_id', farmId).order('application_id').order('application_product_id'),
     ])
-    return { products: rows(products.data, products.error), receipts: rows(receipts.data, receipts.error), receipt_lines: rows(receipt_lines.data, receipt_lines.error), adjustments: rows(adjustments.data, adjustments.error), applications: rows(applications.data, applications.error), application_products: rows(application_products.data, application_products.error), on_hand: rows(on_hand.data, on_hand.error), rup_completeness: rows(rup_completeness.data, rup_completeness.error) }
+    return { products: rows(products.data, products.error), receipts: rows(receipts.data, receipts.error), receipt_lines: rows(receipt_lines.data, receipt_lines.error), adjustments: rows(adjustments.data, adjustments.error), applications: rows(applications.data, applications.error), application_products: rows(application_products.data, application_products.error), program_application_products: rows(program_application_products.data, program_application_products.error), on_hand: rows(on_hand.data, on_hand.error), rup_completeness: rows(rup_completeness.data, rup_completeness.error) }
   }
   async upsertProduct(farmId: string, value: InventoryProductWrite) { const result = await supabase.from('inventory_products').upsert(productColumns({ ...value, farm_id: farmId }), { onConflict: 'id' }).select('*').single(); return row(result.data, result.error) }
   async saveReceiptBundle(input: ReceiptBundleWrite) { const { data, error } = await supabase.rpc('save_inventory_receipt_bundle', { p_farm_id: input.farmId, p_receipt: input.receipt, p_lines: input.lines }); return row(data, error) }

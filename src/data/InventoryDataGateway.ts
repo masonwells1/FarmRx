@@ -1,7 +1,7 @@
 import type { AdjustmentInput, ApplicationInput, InventoryProduct, ReceiptInput } from './inventory'
 
 /** The database boundary deliberately exposes untrusted rows only. */
-export interface InventoryRowBundle { products: unknown[]; receipts: unknown[]; receipt_lines: unknown[]; adjustments: unknown[]; applications: unknown[]; application_products: unknown[]; on_hand: unknown[]; rup_completeness: unknown[] }
+export interface InventoryRowBundle { products: unknown[]; receipts: unknown[]; receipt_lines: unknown[]; adjustments: unknown[]; applications: unknown[]; application_products: unknown[]; program_application_products: unknown[]; on_hand: unknown[]; rup_completeness: unknown[] }
 export type InventoryProductWrite = Omit<InventoryProduct, 'created_at' | 'updated_at'>
 export type ReceiptBundleWrite = { farmId: string; receipt: Record<string, unknown>; lines: Array<Record<string, unknown>> }
 export type ApplicationBundleWrite = { farmId: string; application: Record<string, unknown>; products: Array<Record<string, unknown>> }

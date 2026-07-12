@@ -1,4 +1,4 @@
-import { normalizeProgramProductDraft, uuid, validDate, validateActualProgramProducts, validateProgramDraft, validateProgramPassDraft, validateProgramProductDraft, type ActualProgramProduct, type ProgramDraft, type ProgramPassDraft, type ProgramProductDraft } from './programs'
+import { normalizeProgramProductDraft, uuid, validDate, validateActualProgramProducts, validateProgramDraft, validateProgramPassDraft, validateProgramProductDraft, type ActualProgramProduct, type ProgramApplicationLink, type ProgramDraft, type ProgramPassDraft, type ProgramProductDraft } from './programs'
 import type { StorageLike } from './writeQueue'
 type Base = { version: 1; module: 'programs'; operationId: string; userId: string; farmId: string; enqueuedAt: string }
 export type ProgramsQueueEntryV1 =
@@ -11,7 +11,7 @@ export type ProgramsQueueEntryV1 =
   | Base & { kind: 'refresh_program_assignment'; assignmentId: string }
   | Base & { kind: 'reassign_program_assignment'; assignmentId: string; newProgramId: string; reason: string }
   | Base & { kind: 'reschedule_program_pass'; assignedPassId: string; dueOn: string; timingLabel: string | null }
-  | Base & { kind: 'mark_program_pass_applied'; assignedPassId: string; appliedOn: string; appliedAcres: number; actualProducts: ActualProgramProduct[] }
+  | Base & { kind: 'mark_program_pass_applied'; assignedPassId: string; appliedOn: string; appliedAcres: number; actualProducts: ActualProgramProduct[]; applicationLink: ProgramApplicationLink }
   | Base & { kind: 'skip_program_pass'; assignedPassId: string; skippedOn: string; reason: string }
   | Base & { kind: 'unassign_program'; assignmentId: string; reason: string }
 export interface ProgramsQueueEnvelopeV1 { version: 1; entries: ProgramsQueueEntryV1[] }
@@ -32,7 +32,7 @@ function valid(v: unknown): v is ProgramsQueueEntryV1 { if (!rec(v) || !goodBase
   if (v.kind === 'refresh_program_assignment') return exact(v, [...base, 'assignmentId']) && uuidValue(v.assignmentId)
   if (v.kind === 'reassign_program_assignment') return exact(v, [...base, 'assignmentId', 'newProgramId', 'reason']) && uuidValue(v.assignmentId) && uuidValue(v.newProgramId) && reason(v.reason)
   if (v.kind === 'reschedule_program_pass') return exact(v, [...base, 'assignedPassId', 'dueOn', 'timingLabel']) && uuidValue(v.assignedPassId) && typeof v.dueOn === 'string' && validDate(v.dueOn) && (v.timingLabel === null || typeof v.timingLabel === 'string' && v.timingLabel.length <= 160)
-  if (v.kind === 'mark_program_pass_applied') return exact(v, [...base, 'assignedPassId', 'appliedOn', 'appliedAcres', 'actualProducts']) && uuidValue(v.assignedPassId) && typeof v.appliedOn === 'string' && validDate(v.appliedOn) && typeof v.appliedAcres === 'number' && Number.isFinite(v.appliedAcres) && v.appliedAcres > 0 && Array.isArray(v.actualProducts) && validateActualProgramProducts(v.actualProducts as ActualProgramProduct[]) === null
+  if (v.kind === 'mark_program_pass_applied') { const link = v.applicationLink; const validLink = rec(link) && ((link.kind === 'none' && exact(link, ['kind'])) || (link.kind === 'create' && exact(link, ['kind', 'applicationRecordId']) && uuidValue(link.applicationRecordId)) || (link.kind === 'link' && uuidValue(link.applicationRecordId) && ((exact(link, ['kind', 'applicationRecordId'])) || (exact(link, ['kind', 'applicationRecordId', 'canonicalAppliedOn', 'canonicalAppliedAcres']) && typeof link.canonicalAppliedOn === 'string' && validDate(link.canonicalAppliedOn) && typeof link.canonicalAppliedAcres === 'number' && Number.isFinite(link.canonicalAppliedAcres) && link.canonicalAppliedAcres > 0)))); return exact(v, [...base, 'assignedPassId', 'appliedOn', 'appliedAcres', 'actualProducts', 'applicationLink']) && uuidValue(v.assignedPassId) && typeof v.appliedOn === 'string' && validDate(v.appliedOn) && typeof v.appliedAcres === 'number' && Number.isFinite(v.appliedAcres) && v.appliedAcres > 0 && Array.isArray(v.actualProducts) && validateActualProgramProducts(v.actualProducts as ActualProgramProduct[]) === null && validLink }
   if (v.kind === 'skip_program_pass') return exact(v, [...base, 'assignedPassId', 'skippedOn', 'reason']) && uuidValue(v.assignedPassId) && typeof v.skippedOn === 'string' && validDate(v.skippedOn) && reason(v.reason)
   return v.kind === 'unassign_program' && exact(v, [...base, 'assignmentId', 'reason']) && uuidValue(v.assignmentId) && reason(v.reason)
 }
