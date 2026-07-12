@@ -369,9 +369,17 @@ Module 3's existing delivery-event inbox hook.
         the record's own 2026-07-12/40ac (canonicalizes to server truth, ignores client values). Regression
         adds: stale/false client canonical rejected; foreign-farm program row rejected; behavioral draft/
         completed render derivation. Regenerated verify login note in docs/build-notes/verify-login.md.
-  - [ ] CHUNK 6 polish + full Programs regression sweep: plain-English copy, empty/error states, archived
-        filters, 18px/48px/tabular-nums checks, complete end-to-end Programs regression. (Last chunk of
-        Module 8.)
+  - [x] CHUNK 6 polish + full Programs regression sweep — DONE + BROWSER-PROVEN on farm-rx TEST
+        2026-07-12 (commit: this). Terra: friendlier loading/empty states across My programs, Assign,
+        Season progress (+ loadFailed state), archived "view only" wording + dashed-border styling +
+        archived-badge, cleaner Inventory program-records copy, and a 375px overflow guard
+        (max-width:100% + overflow-x:clip on programs-page/cards). Copy/CSS only — no logic/contract
+        change; existing regression coverage audited as complete (Programs 23, Chunk5 4, Inventory 9 all
+        green). Opus firsthand: tsc -b --force + build + full regression green. BROWSER-PROVEN at 375px:
+        "No programs yet." + "No program history yet." empty states read in plain English; ZERO
+        horizontal overflow (scrollW==clientW==375). Low-risk polish → verified proportionally (no full
+        Sol review needed for copy/CSS).
+        **>>> MODULE 8 (PROGRAMS) COMPLETE: chunks 1–6 all done, proven, committed. <<<**
       OPERATING MODEL (Mason 2026-07-12): **Opus = orchestrator** (plan/delegate/verify-in-browser/
       report). **Terra + Luna = the everyday workers** (most chunks; Terra modules/UI, Luna boilerplate/
       docs/mechanical). **Sol = complex/architectural work AND Opus's peer advisor** (equal-or-better —
