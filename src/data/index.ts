@@ -5,6 +5,7 @@ import { QueuedFieldsRepository } from './QueuedFieldsRepository'
 import { createSupabaseGrainServices } from './createSupabaseGrainServices'
 import { createSupabaseProfitabilityServices } from './createSupabaseProfitabilityServices'
 import { createSupabaseInventoryServices } from './createSupabaseInventoryServices'
+import { createSupabaseEquipmentTasksServices } from './createSupabaseEquipmentTasksServices'
 import { SupabaseFieldsDataGateway } from './SupabaseFieldsDataGateway'
 import { SupabaseFieldsRepository } from './SupabaseFieldsRepository'
 import type { FieldsRepository } from './fields'
@@ -39,7 +40,7 @@ export const fieldsRepository: FieldsRepository = queuedFields
 /** Called once the signed-in user's sole farm has been resolved. */
 export const replayFieldsQueue = () => queuedFields.inspectAndReplay()
 
-if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'supabase' || moduleBackends.inventory !== 'supabase' || moduleBackends.profitability !== 'supabase') throw new Error('Farm Rx backend configuration is invalid.')
+if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'supabase' || moduleBackends.inventory !== 'supabase' || moduleBackends.profitability !== 'supabase' || moduleBackends.equipment_tasks !== 'supabase') throw new Error('Farm Rx backend configuration is invalid.')
 const getContext = async () => ({ userId: await currentUserId(), farmId: await currentFarmId() })
 const liveProfitability = createSupabaseProfitabilityServices({ fieldsRepository, getFarmId: currentFarmId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const profitabilityRepository = liveProfitability.profitabilityRepository
@@ -47,6 +48,9 @@ export const replayProfitabilityQueue = () => liveProfitability.replayProfitabil
 const liveInventory = createSupabaseInventoryServices({ fieldsRepository, getFarmId: currentFarmId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const inventoryRepository = liveInventory.inventoryRepository
 export const replayInventoryQueue = () => liveInventory.replayInventoryQueue()
+const liveEquipmentTasks = createSupabaseEquipmentTasksServices({ fieldsRepository, getFarmId: currentFarmId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
+export const equipmentTasksRepository = liveEquipmentTasks.equipmentTasksRepository
+export const replayEquipmentTasksQueue = () => liveEquipmentTasks.replayEquipmentTasksQueue()
 const liveGrain = createSupabaseGrainServices({ fieldsRepository, profitabilityRepository, getFarmId: currentFarmId, getContext, projectRef: supabaseConfig.projectRef, storage, isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const grainServices = liveGrain.services
 export const replayGrainQueue = () => liveGrain.replayGrainQueue()

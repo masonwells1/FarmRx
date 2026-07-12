@@ -123,7 +123,35 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
       rate-above-label-max + REI/PHI-unknown warnings (the old crash case), cancelled a
       10-gal receipt with reason → cancelled_by recorded as the test user in Postgres.
       0015 applied (15 migrations, verified). All four modules now LIVE.
-- [ ] Modules 5/6: Equipment & Tasks · Module 7: machine data
+- [x] Modules 5/6: Equipment & Tasks — BUILT + LIVE + BROWSER-PROVEN 2026-07-12 ~6AM
+      (Mason's explicit "build the equipment module and the taskboard now" directive):
+      recon stole CRX Manager's Team Board patterns (3-column card board, overdue
+      escalation amber<3d/red>=3d/critical>=7d, quick-add, linked chips, done history)
+      while deliberately dropping tags/comments/attachments/realtime; Equipment goes
+      BEYOND CRX (it has no maintenance records/meter history/warranty at all): asset
+      records, meter-reading history (append-only, backwards allowed for replaced
+      meters), service intervals (every N hours/miles and/or months) that AUTO-GENERATE
+      board tasks via idempotent RPC (one open card per reminder — proven through
+      reload + mileage-jump cycle-key change), service/repair log w/ costs +
+      cost-per-machine, warranty chips. Tasks board: To Do/Doing/Done, KPI tiles
+      (Open/Mine/Overdue/Done), assignees via safe member-name view, field+machine
+      linked chips, server-stamped completion. 0016+0017 applied (17 migrations).
+      Gauntlet: Opus review caught 4 blockers pre-apply (due-view farm_id drift =
+      module would never load; missing p_reading_id = service logging impossible;
+      mapper/DB length-cap mismatch; Done column hidden by precedence bug) + vacuous
+      suite rebuilt (9 coverage groups); browser then caught a 5th P1 NOBODY saw
+      statically: SELECT..FOR UPDATE under RLS made a WORKER's service entry fail →
+      0017 removed the row locks (advisory lock suffices; apply-agent proved the fix
+      by impersonating the worker in a rolled-back transaction). Live proof: Truck 7
+      (Peterbilt 389) created, 120k→135k miles, oil-change reminder auto-card exactly
+      once, worker completed it (completed_by=worker in Postgres), worker logged the
+      $385.50 service w/ reading 135,100 → interval reset (due-view empty), cost-to-
+      date on card, role gating (worker: no Add/Edit machine, no interval forms, no
+      Delete; owner: all present). PARKED P3 polish: service-log completion should
+      auto-close leftover auto-task cards (today the still-due reminder honestly
+      regenerates until the service is actually logged); DOT fleet compliance
+      (DVIRs/IFTA/CDL) NOT built — needs Mason's explicit confirmation.
+- [ ] Module 7: machine data import (Deere/FieldView/AgFiniti) — last by design
 
 ## Loop policy (Mason, 2026-07-11): keep working, never block on questions
 - The loop runs continuously and only surfaces questions that GENUINELY need Mason

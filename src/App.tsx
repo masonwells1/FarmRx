@@ -7,7 +7,8 @@ import { FieldDetailPage, FieldFormPage, FieldsPage } from './FieldsModule'
 import { GrainPage } from './GrainModule'
 import { ProfitabilityPage } from './ProfitabilityModule'
 import { InventoryPage } from './InventoryModule'
-import { grainServices, inventoryRepository, replayFieldsQueue, replayGrainQueue, replayInventoryQueue, replayProfitabilityQueue } from './data'
+import { EquipmentPage, TasksPage } from './EquipmentTasksModule'
+import { equipmentTasksRepository, grainServices, inventoryRepository, replayEquipmentTasksQueue, replayFieldsQueue, replayGrainQueue, replayInventoryQueue, replayProfitabilityQueue } from './data'
 import { getSyncStatus, retrySavedChanges, subscribeSyncStatus } from './data/syncStatus'
 import type { EntityType } from './data/fields'
 import { farmerError } from './lib/farmerErrors'
@@ -20,34 +21,6 @@ const navigation = [
   { label: 'Equipment', path: '/equipment', icon: '◇' },
   { label: 'Tasks', path: '/tasks', icon: '✓' },
 ]
-
-const emptyStates: Record<string, { title: string; message: string; action: string }> = {
-  '/grain': {
-    title: 'Grain',
-    message: 'Your grain position will be ready when you are.',
-    action: 'Add a contract',
-  },
-  '/inventory': {
-    title: 'Inventory',
-    message: 'Keep the whole shed in one simple, trusted record.',
-    action: 'Add a product',
-  },
-  '/profitability': {
-    title: 'Profitability',
-    message: 'Start with a field and see the numbers that matter.',
-    action: 'Set up a scenario',
-  },
-  '/equipment': {
-    title: 'Equipment',
-    message: 'A clear place to keep every machine ready to work.',
-    action: 'Add equipment',
-  },
-  '/tasks': {
-    title: 'Tasks',
-    message: 'Keep the next job clear for everyone on the farm.',
-    action: 'Create a task',
-  },
-}
 
 function AppLayout() {
   const { signOut } = useAuth()
@@ -90,8 +63,8 @@ function AppLayout() {
             <Route path="/grain" element={<GrainPage services={grainServices} />} />
             <Route path="/inventory" element={<InventoryPage repository={inventoryRepository} />} />
             <Route path="/profitability" element={<ProfitabilityPage />} />
-            <Route path="/equipment" element={<EmptyPage />} />
-            <Route path="/tasks" element={<EmptyPage />} />
+            <Route path="/equipment" element={<EquipmentPage repository={equipmentTasksRepository} />} />
+            <Route path="/tasks" element={<TasksPage repository={equipmentTasksRepository} />} />
             <Route path="*" element={<Navigate to="/fields" replace />} />
           </Routes>
         </div>
@@ -119,7 +92,7 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
     let active = true
     void findOnlyAccessibleFarm().then((farm) => {
       if (!active) return
-      if (farm) { setState('ready'); void replayFieldsQueue(); void replayGrainQueue(); void replayInventoryQueue(); void replayProfitabilityQueue() }
+      if (farm) { setState('ready'); void replayFieldsQueue(); void replayGrainQueue(); void replayInventoryQueue(); void replayProfitabilityQueue(); void replayEquipmentTasksQueue() }
       else if (user?.app_metadata.initial_farm_owner === true) setState('setup')
       else { setMessage('Crop RX needs to finish your farm setup.'); setState('blocked') }
     }).catch((error: unknown) => {
@@ -158,21 +131,6 @@ function Navigation({ className }: { className: string }) {
         </NavLink>
       ))}
     </div>
-  )
-}
-
-function EmptyPage() {
-  const location = useLocation()
-  const state = emptyStates[location.pathname]
-
-  return (
-    <section className="page empty-page">
-      <div className="empty-state">
-        <h1>{state.title}</h1>
-        <p>{state.message}</p>
-        <button className="primary-action" type="button">{state.action}</button>
-      </div>
-    </section>
   )
 }
 
