@@ -12,7 +12,8 @@ import { WeatherPage } from './WeatherModule'
 import { FieldLogPage } from './FieldLogModule'
 import { ScoutingPage } from './ScoutingModule'
 import { HarvestPage } from './HarvestModule'
-import { equipmentTasksRepository, fieldLogRepository, fieldsRepository, grainServices, harvestRepository, inventoryRepository, replayEquipmentTasksQueue, replayFieldLocationQueue, replayFieldLogQueue, replayFieldsQueue, replayGrainQueue, replayHarvestQueue, replayInventoryQueue, replayProfitabilityQueue, replayScoutingQueue, scoutingRepository } from './data'
+import { NotificationsPage, NotificationBell } from './NotificationsModule'
+import { equipmentTasksRepository, fieldLogRepository, fieldsRepository, grainServices, harvestRepository, inventoryRepository, notificationsRepository, replayEquipmentTasksQueue, replayFieldLocationQueue, replayFieldLogQueue, replayFieldsQueue, replayGrainQueue, replayHarvestQueue, replayInventoryQueue, replayNotificationsQueue, replayProfitabilityQueue, replayScoutingQueue, scoutingRepository } from './data'
 import { getSyncStatus, retrySavedChanges, subscribeSyncStatus } from './data/syncStatus'
 import type { EntityType } from './data/fields'
 import { farmerError } from './lib/farmerErrors'
@@ -28,6 +29,7 @@ const navigation = [
   { label: 'Field Log', path: '/field-log', icon: '≡' },
   { label: 'Scouting', path: '/scouting', icon: '◉' },
   { label: 'Harvest', path: '/harvest', icon: '⌁' },
+  { label: 'Alerts', path: '/notifications', icon: '♧' },
 ]
 
 function AppLayout() {
@@ -58,7 +60,7 @@ function AppLayout() {
         <header className="topbar">
           <div className="product-name">Farm <span>Rx</span></div>
           {farmName && <div className="farm-summary">{farmName}</div>}
-          <button className="sign-out" type="button" onClick={handleSignOut} disabled={signingOut}>{signingOut ? 'Signing out…' : 'Sign out'}</button>
+          <div className="topbar-actions"><NotificationBell repository={notificationsRepository} /><button className="sign-out" type="button" onClick={handleSignOut} disabled={signingOut}>{signingOut ? 'Signing out…' : 'Sign out'}</button></div>
         </header>
         {signOutError && <p className="auth-error" role="alert">{signOutError}</p>}
         <SyncNotice />
@@ -77,6 +79,7 @@ function AppLayout() {
             <Route path="/field-log" element={<FieldLogPage fieldLogRepository={fieldLogRepository} fieldsRepository={fieldsRepository} />} />
             <Route path="/scouting" element={<ScoutingPage scoutingRepository={scoutingRepository} fieldsRepository={fieldsRepository} />} />
             <Route path="/harvest" element={<HarvestPage harvestRepository={harvestRepository} />} />
+            <Route path="/notifications" element={<NotificationsPage repository={notificationsRepository} />} />
             <Route path="*" element={<Navigate to="/fields" replace />} />
           </Routes>
         </div>
@@ -102,7 +105,7 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
   const [message, setMessage] = useState('')
   useEffect(() => {
     let active = true
-    const replayOnReconnect = () => { void (async () => { await replayFieldsQueue(); await replayHarvestQueue(); void replayGrainQueue(); void replayInventoryQueue(); void replayProfitabilityQueue(); void replayEquipmentTasksQueue(); await replayFieldLocationQueue(); await replayFieldLogQueue(); await replayScoutingQueue() })() }
+    const replayOnReconnect = () => { void (async () => { await replayFieldsQueue(); await replayHarvestQueue(); void replayGrainQueue(); void replayInventoryQueue(); void replayProfitabilityQueue(); void replayEquipmentTasksQueue(); await replayFieldLocationQueue(); await replayFieldLogQueue(); await replayScoutingQueue(); await replayNotificationsQueue() })() }
     window.addEventListener('online', replayOnReconnect)
     void findOnlyAccessibleFarm().then((farm) => {
       if (!active) return

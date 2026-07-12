@@ -233,10 +233,34 @@ pulled Equipment/Tasks forward. Build order + status:
       7→8 groups. Live proof on farm-rx: 32000bu → 200 bu/ac + $139,200; 31999.50bu (fractional,
       post-fix) → 200 bu/ac + $136,957.86, stored 31999.50 exactly, no false-fail; expected/
       planting untouched. tsc+build+regression green firsthand.
-- [ ] Feature E: Push reminders (in-app + phone push) — one notification layer across all of
-      it (spray window opens, rain logged reminders, scouting follow-ups, harvest reminders,
-      plus existing service/task reminders). Web push (service worker + VAPID keys + a
-      notifications table + permission prompt). Built LAST — it references the others.
+- [x] Feature E: Push reminders — IN-APP CENTER LIVE + BROWSER-PROVEN 2026-07-12; phone-push
+      plumbing BUILT (live send gated on Mason: VAPID secret + HTTPS). In-app notification center
+      (bell + unread badge + /notifications "Alerts" list, category chips, tap→link, mark read /
+      mark all read) with per-person privacy. 0023 applied (23 migrations): notifications +
+      push_subscriptions tables (RLS own-only; direct UPDATE limited to read_at; insert via RPC
+      only) + create_notification (dedupe) / mark_notifications_read (own-only) / save+delete_push_
+      subscription RPCs + generate_due_service_tasks extended to raise a deduped owner 'service'
+      notification. Generation hooks: spray-window-good (Feature A) + scouting-follow-up (Feature
+      C), best-effort/deduped/non-blocking. Phone push: custom SW (src/sw.ts, vite injectManifest)
+      with push + notificationclick handlers, subscribe/unsubscribe flow + VAPID public key, honest
+      "needs permission/HTTPS" states; send-push edge function written (supabase/functions/send-push,
+      web-push+VAPID, fail-closed if secret unset). VAPID keypair generated (private key in
+      scratchpad only, NEVER committed). Gauntlet: 0023 behaviorally proven (owner→worker notif;
+      worker reads it; owner CANNOT see worker's = cross-user RLS; dedupe=1 row). Sol review: 2 P1
+      (injectManifest dropped offline nav fallback + skipWaiting/clientsClaim → RESTORED via
+      NavigationRoute+precache) + P2/P3 (mark-read no-op honesty, bell badge refresh, push-save
+      rollback, SW payload safety, 'default'≠denied, 18px) all fixed by Terra; notifications suite
+      5→9 groups. Browser-proven on farm-rx: seeded notif → bell count → alerts list → mark read →
+      read_at in Postgres; scouting note+follow-up → auto 'scouting' notification appeared; mark-all
+      -read cleared the bell badge instantly; honest "phone alerts blocked in this browser" state.
+      tsc+build(SW precache intact)+regression green firsthand. REMAINING for live phone push
+      (Mason): set VAPID_PRIVATE_KEY/PUBLIC_KEY/SUBJECT edge secrets + deploy send-push + the
+      HTTPS tailscale-serve link (push needs a secure context). Also parked: scheduled "while app
+      closed" evaluator (pg_cron/scheduled edge fn) for dawn spray-forecast pushes.
+
+## 🎉 CUSTOMER-VALUE BATCH COMPLETE (A–E) 2026-07-12 — all built, reviewed, proven, committed LOCALLY.
+Commits: A 7a9fe73 · B 982fec3 · C 7e219c4 · D 4029884 · E (this). 23 migrations (0018–0023) applied
+to farm-rx TEST project. NOTHING pushed or deployed. Phone-push live send + real-device pass await Mason.
 
 ## Loop policy (Mason, 2026-07-11): keep working, never block on questions
 - The loop runs continuously and only surfaces questions that GENUINELY need Mason

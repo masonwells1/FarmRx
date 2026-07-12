@@ -1,0 +1,2 @@
+export const vapidPublicKey = 'BHSRggdLDW1TGtro9XAhAyr_pqT4I8AymxW6kv8T06SV4LjXAFu4lP2fVp3eKwLkhJoffhwe0Pg5CH_tOSq5otI'
+export function vapidPublicKeyBytes() { const padding = '='.repeat((4 - vapidPublicKey.length % 4) % 4); const base64 = (vapidPublicKey + padding).replace(/-/g, '+').replace(/_/g, '/'); const raw = atob(base64); return Uint8Array.from(raw, (character) => character.charCodeAt(0)) }

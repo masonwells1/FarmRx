@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { fieldLocationClient, fieldsRepository } from './data'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { fieldLocationClient, fieldsRepository, notificationsRepository } from './data'
+import { useAuth } from './auth/AuthProvider'
 import type { Field } from './data/fields'
 import { bestWindowToday, compassLabel, evaluateSprayWindow, formatF, formatHour, formatMph, weatherService } from './data/weatherService'
 import type { DailyForecast, ForecastBundle, WeatherSample } from './data/weather'
@@ -12,6 +13,7 @@ const contextFor = (bundle: ForecastBundle, sample: WeatherSample) => { const da
 const displayTime = (value: string) => new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(value))
 
 export function WeatherPage() {
+  const { user } = useAuth()
   const [fields, setFields] = useState<Field[]>([]); const [cards, setCards] = useState<Record<string, CardState>>({}); const [loading, setLoading] = useState(true); const [pageError, setPageError] = useState<string | null>(null); const [manualFor, setManualFor] = useState<string | null>(null); const [message, setMessage] = useState<Record<string, string>>({})
   const located = useMemo(() => fields.filter((field) => field.latitude !== null && field.longitude !== null), [fields])
   const loadFields = async () => { setLoading(true); setPageError(null); try { setFields((await fieldsRepository.getData()).fields.filter((field) => field.is_active)) } catch (error) { setPageError(farmerError(error, 'load your fields')) } finally { setLoading(false) } }
@@ -19,6 +21,20 @@ export function WeatherPage() {
   const refreshAll = async () => { await Promise.all(located.map(refreshField)) }
   useEffect(() => { void loadFields() }, [])
   useEffect(() => { if (located.length) void refreshAll() }, [located.length])
+  const sprayLevels = useRef(new Map<string, string>())
+  useEffect(() => {
+    if (!user) return
+    for (const field of located) {
+      const bundle = cards[field.id]?.bundle
+      if (!bundle) continue
+      const verdict = evaluateSprayWindow(bundle.current, contextFor(bundle, bundle.current)).level
+      const day = bundle.current.time.slice(0, 10); const key = `${field.id}:${day}`; const previous = sprayLevels.current.get(key)
+      sprayLevels.current.set(key, verdict)
+      if (previous && previous !== 'good' && verdict === 'good') {
+        void notificationsRepository.raiseNotification(field.farm_id, user.id, 'spray', `Spray window is good on ${field.name}`, 'Current field conditions have turned good for spraying today.', '/weather', `spray:${field.id}:${day}`).catch(() => undefined)
+      }
+    }
+  }, [cards, located, user])
   const saveLocation = async (field: Field, latitude: number, longitude: number, source: 'gps' | 'manual') => { try { setMessage((old) => ({ ...old, [field.id]: 'Saving location…' })); const saved = await fieldLocationClient.saveLocation(field.id, latitude, longitude, source); const next = { ...field, latitude, longitude, location_source: source }; setFields((rows) => rows.map((row) => row.id === field.id ? next : row)); setMessage((old) => ({ ...old, [field.id]: saved ? 'Location saved.' : 'Location saved on this device. Farm Rx will try when you reconnect; if you do not have permission, it will stay saved here and show needs attention.' })); setManualFor(null); void refreshField(next) } catch (error) { setMessage((old) => ({ ...old, [field.id]: farmerError(error, 'save this location') })) } }
   const useLocation = (field: Field) => { if (!navigator.geolocation) { setManualFor(field.id); setMessage((old) => ({ ...old, [field.id]: 'Location is not available here. Enter it below instead.' })); return } setMessage((old) => ({ ...old, [field.id]: 'Getting your current location…' })); navigator.geolocation.getCurrentPosition((position) => { void saveLocation(field, position.coords.latitude, position.coords.longitude, 'gps') }, () => { setManualFor(field.id); setMessage((old) => ({ ...old, [field.id]: 'We could not use your location. Enter it below instead.' })) }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }) }
   if (loading) return <main className="weather-page"><header className="page-heading"><div><p className="eyebrow">Field forecast</p><h1>Weather &amp; Spray</h1></div></header><section className="weather-card loading-state">Loading your fields…</section></main>

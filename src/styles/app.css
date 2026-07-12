@@ -70,6 +70,32 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 
 .app-main { min-width: 0; flex: 1; }
 .topbar { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 15px 32px; border-bottom: 1px solid var(--hairline); background: var(--surface); }
+.topbar-actions { display: flex; align-items: center; gap: 12px; }
+.alert-bell { position: relative; min-width: 48px; min-height: 48px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--deep-green); font: inherit; font-size: 25px; }
+.alert-bell svg { width: 25px; height: 25px; vertical-align: middle; }
+.alert-bell b { position: absolute; top: -8px; right: -8px; min-width: 28px; height: 28px; display: grid; place-items: center; padding: 0 4px; border-radius: 99px; background: var(--warn-red); color: var(--on-dark); font-size: 18px; font-variant-numeric: tabular-nums; }
+
+/* Notification center: plain-language, phone-first alerts without crowding the farm work. */
+.notifications-page { display: grid; gap: 18px; }
+.notifications-heading { margin-bottom: 0; }
+.phone-alerts { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; padding: 20px; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--light-green); }
+.phone-alerts h2 { margin: 0; color: var(--deep-green); font-size: 22px; }
+.phone-alerts p { margin: 6px 0 0; color: var(--matte-gray); }
+.phone-alerts .phone-alert-message { grid-column: 1 / -1; margin: 0; color: var(--deep-green); font-weight: 700; }
+.mark-all { justify-self: start; min-height: 48px; color: var(--deep-green); font: inherit; font-weight: 700; text-decoration: underline; }
+.notifications-list { display: grid; gap: 12px; }
+.notification-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); }
+.notification-row.unread { border-left: 6px solid var(--crx-green); background: var(--light-green); }
+.notification-open { min-width: 0; display: grid; gap: 7px; padding: 4px; border: 0; background: transparent; color: var(--charcoal); font: inherit; text-align: left; cursor: pointer; }
+.notification-open strong { font-size: 19px; }
+.notification-open p { margin: 0; color: var(--matte-gray); }
+.notification-open time { color: var(--matte-gray); font-size: 18px; }
+.notification-category { width: fit-content; min-height: 30px; display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 99px; background: var(--light-green); color: var(--deep-green); font-size: 18px; font-weight: 700; }
+.notification-category.spray, .notification-category.service { background: #e7f3e9; }
+.notification-category.scouting, .notification-category.task { background: var(--warn-bg); color: #604a22; }
+.notification-category.harvest { background: #f3eee1; color: #69531f; }
+.notification-read { min-width: 118px; }
+@media (max-width: 767px) { .topbar-actions { gap: 8px; }.phone-alerts, .notification-row { grid-template-columns: 1fr; }.phone-alerts > button, .notification-read { width: 100%; }.notification-row { gap: 8px; }.notification-open { min-height: 0; }.notifications-page { gap: 16px; } }
 .product-name { color: var(--charcoal); font-size: 24px; font-weight: 700; }
 .farm-summary { color: var(--matte-gray); font-size: 18px; }
 .content-area { max-width: 1320px; margin: 0 auto; padding: 32px; }
