@@ -1,7 +1,7 @@
 import { fieldsSeedForRegression } from './MockFieldsRepository'
 import { MockProfitabilityRepository, PROFITABILITY_STORAGE_KEY } from './MockProfitabilityRepository'
-import { budgetAnalysis, equivalentCashRentForScenario, fieldAdjustedCostPerAcre, matrixProfitPerAcre, totalCostPerAcre } from './profitabilityCalculations'
-import type { Arrangement, FieldsRepository } from './fields'
+import { budgetAnalysis, computeStructuredFlexRent, equivalentCashRentForField, equivalentCashRentForScenario, fieldAdjustedCostPerAcre, matrixProfitPerAcre, totalCostPerAcre } from './profitabilityCalculations'
+import type { Arrangement, FieldsRepository, StructuredFlexBonusFormula } from './fields'
 import type { CropBudget } from './profitability'
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -65,8 +65,55 @@ async function regression_failClosedAndVerifiedWrite() {
   await failingRepo.saveCostLine({ ...line, amount_per_acre: line.amount_per_acre + 1 }).then(() => { throw new Error('Unverified profitability write was accepted.') }, () => undefined)
 }
 
+/** Structured flex formula with every field defaulted to null except the ones the caller overrides — matches "store only the fields each method uses" (docs/flex-lease-research.md §3). */
+function structuredFormula(patch: Partial<StructuredFlexBonusFormula> & { method: StructuredFlexBonusFormula['method'] }): StructuredFlexBonusFormula {
+  return { base_rent_per_acre: null, rate_pct: null, trigger_revenue_per_acre: null, base_price_per_bu: null, base_yield_per_acre: null, min_rent_per_acre: null, max_rent_per_acre: null, price_source_note: null, ...patch }
+}
+
+/** Worked examples straight from docs/flex-lease-research.md (U of I farmdoc S3/S5), plus the fail-closed contract for computeStructuredFlexRent / equivalentCashRentForScenario. */
+async function regression_flexLeaseMethods() {
+  // Type A (pct_of_revenue), farmdoc's 2025 central-Illinois example: 30% x (244 bu x $4.30) = $314.76, unclamped when inside the min/max band.
+  const pctOfRevenue = structuredFormula({ method: 'pct_of_revenue', rate_pct: 30 })
+  const pctRent = computeStructuredFlexRent(pctOfRevenue, 244, 4.30)
+  assert(pctRent !== null && Math.abs(pctRent - 314.76) < 0.001, `pct_of_revenue worked example is wrong: got ${pctRent}.`)
+  const pctFloored = computeStructuredFlexRent(structuredFormula({ method: 'pct_of_revenue', rate_pct: 30, min_rent_per_acre: 350 }), 244, 4.30)
+  assert(pctFloored === 350, `pct_of_revenue minimum did not clamp: got ${pctFloored}.`)
+  const pctCapped = computeStructuredFlexRent(structuredFormula({ method: 'pct_of_revenue', rate_pct: 30, max_rent_per_acre: 300 }), 244, 4.30)
+  assert(pctCapped === 300, `pct_of_revenue maximum did not clamp: got ${pctCapped}.`)
+
+  // Type D (base_plus_bonus), farmdoc daily S3's own numbers: $200 + 40% x (190 bu x $6.00 - $720) = $200 + 40% x $420 = $368.
+  const basePlusBonus = structuredFormula({ method: 'base_plus_bonus', base_rent_per_acre: 200, rate_pct: 40, trigger_revenue_per_acre: 720 })
+  const bonusRent = computeStructuredFlexRent(basePlusBonus, 190, 6.00)
+  assert(bonusRent !== null && Math.abs(bonusRent - 368) < 0.001, `base_plus_bonus worked example is wrong: got ${bonusRent}.`)
+  const belowTrigger = computeStructuredFlexRent(basePlusBonus, 100, 6.00)
+  assert(belowTrigger === 200, `base_plus_bonus below the trigger must return exactly the base rent: got ${belowTrigger}.`)
+  const cappedBonus = computeStructuredFlexRent(structuredFormula({ method: 'base_plus_bonus', base_rent_per_acre: 200, rate_pct: 40, trigger_revenue_per_acre: 720, max_rent_per_acre: 350 }), 190, 6.00)
+  assert(cappedBonus === 350, `base_plus_bonus maximum did not cap: got ${cappedBonus}.`)
+
+  // Legacy shape (docs §3 "Translation of existing saved shapes") must keep computing identically after the refactor.
+  assert(equivalentCashRentForScenario(arrangement({ arrangement_type: 'flex_cash_rent', cash_rent_per_acre: 100, flex_bonus_formula: { type: 'revenue', trigger: 800, bonus_rate: 10 } }), 200, 5, []) === 120, 'Legacy revenue-shape flex rent must keep computing exactly as before.')
+
+  // Fail closed: an unrecognized/parked method, or a formula missing a field its method requires, returns null — never a guess.
+  assert(computeStructuredFlexRent(structuredFormula({ method: 'base_flex_price' }), 200, 5) === null, 'An unrecognized/parked method must fail closed to null.')
+  assert(computeStructuredFlexRent(structuredFormula({ method: 'pct_of_revenue', rate_pct: null }), 200, 5) === null, 'pct_of_revenue with a missing rate must fail closed to null.')
+  assert(computeStructuredFlexRent(structuredFormula({ method: 'base_plus_bonus', base_rent_per_acre: 200, rate_pct: 40 }), 200, 5) === null, 'base_plus_bonus missing its trigger must fail closed to null.')
+  assert(equivalentCashRentForScenario(arrangement({ arrangement_type: 'flex_cash_rent', cash_rent_per_acre: 0, flex_bonus_formula: structuredFormula({ method: 'pct_of_revenue', rate_pct: 30 }) }), 244, 4.30, []) !== null, 'A valid structured formula must still resolve through the full arrangement path.')
+
+  // Double-crop: base rent is a fixed $/ac on the WHOLE field and must be counted once.
+  // Wheat 80bu x $6 + double-crop beans 40bu x $12 on the same 100 ac -> blended revenue
+  // $960/ac; rent = 200 + 40% x (960 - 720) = $296 (the pre-fix weighted path gave $400).
+  const doubleCropField = { id: 'field-dc', total_acres: 100 } as Parameters<typeof equivalentCashRentForField>[0]
+  const doubleCropAssignments = [
+    { field_id: 'field-dc', planted_acres: 100, expected_yield_per_acre: 80, expected_price_per_bu: 6 },
+    { field_id: 'field-dc', planted_acres: 100, expected_yield_per_acre: 40, expected_price_per_bu: 12 },
+  ] as Parameters<typeof equivalentCashRentForField>[1]
+  const doubleCropRent = equivalentCashRentForField(doubleCropField, doubleCropAssignments, arrangement({ arrangement_type: 'flex_cash_rent', cash_rent_per_acre: 200, flex_bonus_formula: basePlusBonus }), [])
+  assert(doubleCropRent !== null && Math.abs(doubleCropRent - 296) < 0.001, `Double-crop structured flex rent must count base once and blend revenue: got ${doubleCropRent}.`)
+}
+
 await regression_roundTripCopyAndBytes()
 await regression_sharedCalculations()
 await regression_farmIsolationAndAllocationUniqueness()
 await regression_failClosedAndVerifiedWrite()
+await regression_flexLeaseMethods()
 console.log('MockProfitabilityRepository regressions passed.')

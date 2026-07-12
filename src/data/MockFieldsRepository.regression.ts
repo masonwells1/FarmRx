@@ -77,11 +77,35 @@ async function regressionSameDateAndFutureArrangementHistory() {
   })
 }
 
+async function regressionFlexLeaseMethodsSaveTime() {
+  const storage = new FakeStorage(); const fields = fieldsSeedForRegression(); storage.setItem(storageKey, JSON.stringify({ version: 2, fields, grain: { protected: true } }))
+  await withStorage(storage, async () => {
+    const repository = new MockFieldsRepository(); const loaded = await repository.getData()
+    // A valid pct_of_revenue formula (docs/flex-lease-research.md §4) saves and round-trips.
+    const validPct = { arrangement_type: 'flex_cash_rent' as const, cash_rent_per_acre: 0, flex_bonus_formula: { method: 'pct_of_revenue' as const, base_rent_per_acre: null, rate_pct: 30, trigger_revenue_per_acre: null, base_price_per_bu: null, base_yield_per_acre: null, min_rent_per_acre: 200, max_rent_per_acre: 400, price_source_note: 'Fall average, Elevator A' } }
+    await repository.saveField(draft(loaded, validPct))
+    const reread = await repository.getData(); const savedArrangement = currentArrangement(reread, loaded.fields[1].id)
+    assert(JSON.stringify(savedArrangement.flex_bonus_formula) === JSON.stringify(validPct.flex_bonus_formula), 'A valid structured flex formula did not round-trip through saveField().')
+    // A valid base_plus_bonus formula saves too.
+    const validBonus = { arrangement_type: 'flex_cash_rent' as const, cash_rent_per_acre: 200, flex_bonus_formula: { method: 'base_plus_bonus' as const, base_rent_per_acre: 200, rate_pct: 40, trigger_revenue_per_acre: 720, base_price_per_bu: null, base_yield_per_acre: null, min_rent_per_acre: null, max_rent_per_acre: 550, price_source_note: null } }
+    await repository.saveField(draft(await repository.getData(), validBonus))
+    // Fail closed: an out-of-range rate is rejected before it reaches storage.
+    const invalid = { arrangement_type: 'flex_cash_rent' as const, cash_rent_per_acre: 0, flex_bonus_formula: { method: 'pct_of_revenue' as const, base_rent_per_acre: null, rate_pct: 150, trigger_revenue_per_acre: null, base_price_per_bu: null, base_yield_per_acre: null, min_rent_per_acre: null, max_rent_per_acre: null, price_source_note: null } }
+    let rejected = false; try { await repository.saveField(draft(await repository.getData(), invalid)) } catch { rejected = true }
+    assert(rejected, 'A pct_of_revenue rate above 100 percent must be rejected before saving.')
+    // Fail closed: an unrecognized method is rejected before it reaches storage.
+    const unknownMethod = { arrangement_type: 'flex_cash_rent' as const, cash_rent_per_acre: 0, flex_bonus_formula: { method: 'made_up_method', base_rent_per_acre: null, rate_pct: 30, trigger_revenue_per_acre: null, base_price_per_bu: null, base_yield_per_acre: null } } as unknown as Partial<Arrangement>
+    let rejectedUnknown = false; try { await repository.saveField(draft(await repository.getData(), unknownMethod)) } catch { rejectedUnknown = true }
+    assert(rejectedUnknown, 'An unrecognized flex method must be rejected before saving.')
+  })
+}
+
 async function run() {
   await regression_contactRoundTripAndGrainPreservation()
   await regressionWriteFailurePropagates()
   await regressionUnsafeEnvelopesRemainUntouched()
   await regressionSameDateAndFutureArrangementHistory()
+  await regressionFlexLeaseMethodsSaveTime()
   // Confirm that the final writer still yields a valid Fields compartment after real repository saves.
   const check = fieldsSeedForRegression(); readFieldsEnvelope(JSON.stringify({ version: 2, fields: check }))
   console.log('MockFieldsRepository regressions passed.')

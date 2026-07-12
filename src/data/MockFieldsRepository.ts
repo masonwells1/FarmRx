@@ -1,4 +1,5 @@
 import type { Arrangement, Commodity, CropAssignment, Entity, Farm, Field, FieldDraft, FieldsData, FieldsRepository, FlexBonusFormula, LandArrangementType } from './fields'
+import { structuredFlexFormulaError } from './flexLeaseValidation'
 
 // Module 2 shares this envelope so a storage upgrade carries existing Fields
 // forward instead of replacing them with a fresh seed.
@@ -78,6 +79,7 @@ function assertPercent(value: unknown, message: string) { assert(isFiniteNumber(
 
 function assertFlexFormula(value: unknown): asserts value is FlexBonusFormula {
   assert(isRecord(value), 'Flex rent requires a bonus formula.')
+  if (isString(value.method)) { const error = structuredFlexFormulaError(value); assert(error === null, error ?? 'Flex rent formula is invalid.'); return }
   assert(value.type === 'price' || value.type === 'yield' || value.type === 'revenue', 'Flex bonus type must be price, yield, or revenue.')
   assert(isFiniteNumber(value.trigger) && value.trigger >= 0, 'Flex bonus trigger must be zero or greater.')
   assert(isFiniteNumber(value.bonus_rate) && value.bonus_rate > 0, 'Flex bonus rate must be greater than zero.')

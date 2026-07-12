@@ -5,7 +5,7 @@ import { MockGrainRepository, writeGrainEnvelope } from './MockGrainRepository'
 import { QueuedFieldsRepository } from './QueuedFieldsRepository'
 import { SupabaseFieldsRepository } from './SupabaseFieldsRepository'
 import { getSyncStatus } from './syncStatus'
-import { writeQueueKey } from './writeQueue'
+import { FieldsWriteQueue, writeQueueKey } from './writeQueue'
 import { moduleBackends } from './backends'
 import { supabaseConfig } from '../lib/supabaseConfig'
 
@@ -64,6 +64,13 @@ async function run() {
   const storage = new FakeStorage(); storage.setItem('farm-rx-local-data', 'grain-token-bytes'); await live.saveField(draft(data)); assert(storage.getItem('farm-rx-local-data') === 'grain-token-bytes', 'Fields adapter touched Grain storage.')
   // 9. offline saves persist only the versioned queue and publish pending.
   const userA = '00000000-0000-4000-8000-0000000000aa'; const userB = '00000000-0000-4000-8000-0000000000bb'; const offlineWriter = repository(new FakeFieldsDataGateway()); const queued = new QueuedFieldsRepository(offlineWriter, { getContext: async () => ({ userId: userA, farmId: data.farm.id }), projectRef: supabaseConfig.projectRef, storage, createId: ids(), clock: () => '2026-07-11T00:00:00.000Z', isOffline: () => true }); const queuedField = await queued.saveField({ ...draft(data), crop_assignments: [] }); const queueKey = writeQueueKey(supabaseConfig.projectRef, userA, data.farm.id); assert(queuedField.id === data.fields[0].id && storage.getItem(queueKey) !== null && getSyncStatus().kind === 'pending', 'Offline save was not honestly queued.')
+  // 9b. a structured flex formula (docs/flex-lease-research.md §3) queues offline too — the
+  // write queue's own byte-validator must recognize the new schema, not just the legacy shape.
+  const flexBaseline = draft(data)
+  const flexDraft: FieldDraft = { ...flexBaseline, arrangement: { ...flexBaseline.arrangement, arrangement_type: 'flex_cash_rent', cash_rent_per_acre: 0, flex_bonus_formula: { method: 'pct_of_revenue', base_rent_per_acre: null, rate_pct: 30, trigger_revenue_per_acre: null, base_price_per_bu: null, base_yield_per_acre: null, min_rent_per_acre: 200, max_rent_per_acre: 400, price_source_note: 'Fall average, Elevator A' } }, crop_assignments: [] }
+  await queued.saveField(flexDraft)
+  const flexQueueEntry = new FieldsWriteQueue(storage, queueKey).read().entries.at(-1)
+  assert((flexQueueEntry?.draft.arrangement.flex_bonus_formula as { method?: string } | null)?.method === 'pct_of_revenue', 'A structured flex formula was not accepted by the offline write queue.')
   // 10. full, corrupt, and unknown queue values reject without replacement.
   const badStorage = new FakeStorage(); badStorage.setItem(queueKey, '{"version":2,"entries":[]}'); const badQueued = new QueuedFieldsRepository(repository(new FakeFieldsDataGateway()), { getContext: async () => ({ userId: userA, farmId: data.farm.id }), projectRef: supabaseConfig.projectRef, storage: badStorage, createId: ids(), clock: () => '2026-07-11T00:00:00.000Z', isOffline: () => true }); await rejects(() => badQueued.saveField({ ...draft(data), crop_assignments: [] }), 'Unknown queue version must reject.'); assert(badStorage.getItem(queueKey) === '{"version":2,"entries":[]}', 'Unsafe queue was overwritten.')
   // 11-12. replay is FIFO, retains IDs after a transport failure, and receipt replay does not duplicate.

@@ -170,6 +170,9 @@ tbody tr:nth-child(even) td { background: var(--premix-bg); }
 .equivalent-rent strong { color: var(--deep-green); font-family: var(--brand-font); font-size: 20px; }
 .equivalent-rent span { color: var(--charcoal); font-size: 18px; }
 .equivalent-rent small { color: var(--matte-gray); font-size: 18px; }
+.flex-preview { grid-column: 1 / -1; margin: 0; padding: 14px 16px; border-radius: 9px; background: var(--light-green); color: var(--deep-green); font-size: 18px; font-weight: 700; }
+.flex-legacy-note { grid-column: 1 / -1; display: grid; gap: 12px; justify-items: start; padding: 16px; border-radius: 9px; background: var(--warn-bg); }
+.flex-legacy-note p { margin: 0; color: var(--charcoal); font-size: 18px; }
 .yield-list, .record-list { display: grid; padding: 0 20px; }
 .yield-list > div, .record-list > div { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 16px; align-items: center; min-height: 68px; padding: 10px 0; border-top: 1px solid var(--hairline); }
 .yield-list > div:first-child, .record-list > div:first-child { border-top: 0; }

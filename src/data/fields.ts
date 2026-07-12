@@ -59,11 +59,54 @@ export interface CropAssignment {
 
 export type FlexBonusType = 'price' | 'yield' | 'revenue'
 
-export interface FlexBonusFormula {
+/**
+ * Legacy per-unit flex shape (Module 1). Still readable and still computes exactly as it does
+ * today (docs/flex-lease-research.md §3) — the arrangement editor no longer offers it for new
+ * or edited leases because it matches no published University of Illinois lease structure.
+ */
+export interface LegacyFlexBonusFormula {
   type: FlexBonusType
   trigger: number
   bonus_rate: number
 }
+
+/**
+ * v1 supported methods (docs/flex-lease-research.md §4, U of I farmdoc Types A and D).
+ * `base_flex_price` / `base_flex_price_yield` are reserved field names for the lease-form
+ * Option I / Option II structures (§1 Types B/C) — parked for later, not computed in v1.
+ */
+export type FlexMethod = 'base_plus_bonus' | 'pct_of_revenue' | 'base_flex_price' | 'base_flex_price_yield'
+/** The subset of FlexMethod the v1 calculator and arrangement editor actually implement. */
+export type SupportedFlexMethod = 'base_plus_bonus' | 'pct_of_revenue'
+
+/**
+ * Recommended single JSON schema (docs/flex-lease-research.md §3): one shape covers every U of
+ * I structure. Store only the fields a given method uses; leave the rest null (never absent),
+ * matching the schema's own example.
+ */
+export interface StructuredFlexBonusFormula {
+  method: FlexMethod
+  /** required for base_plus_bonus / base_flex_*; null for pct_of_revenue */
+  base_rent_per_acre: number | null
+  /** base_plus_bonus: landlord % of revenue above trigger. pct_of_revenue: % of gross revenue. null for base_flex_* */
+  rate_pct: number | null
+  /** base_plus_bonus only, else null */
+  trigger_revenue_per_acre: number | null
+  /** base_flex_price / base_flex_price_yield only, else null */
+  base_price_per_bu: number | null
+  /** base_flex_price_yield only, else null */
+  base_yield_per_acre: number | null
+  /** optional floor; for base_plus_bonus the base IS the floor — leave null */
+  min_rent_per_acre?: number | null
+  /** optional cap */
+  max_rent_per_acre?: number | null
+  /** free text, display-only */
+  price_source_note?: string | null
+}
+
+export type FlexBonusFormula = LegacyFlexBonusFormula | StructuredFlexBonusFormula
+/** Discriminates the two saved shapes without a runtime dependency cycle. */
+export function isLegacyFlexBonusFormula(formula: FlexBonusFormula): formula is LegacyFlexBonusFormula { return 'type' in formula }
 
 export interface Arrangement {
   id: string

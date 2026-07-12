@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FocusEvent, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { fieldsRepository, moduleYear } from './data'
-import type { Arrangement, CropAssignment, Field, FieldDraft, FieldsData, LandArrangementType } from './data/fields'
+import type { Arrangement, CropAssignment, Field, FieldDraft, FieldsData, FlexBonusFormula, LandArrangementType, LegacyFlexBonusFormula, StructuredFlexBonusFormula, SupportedFlexMethod } from './data/fields'
+import { isLegacyFlexBonusFormula } from './data/fields'
 import { farmerError } from './lib/farmerErrors'
-import { equivalentCashRentForField } from './data/profitabilityCalculations'
+import { computeStructuredFlexRent, equivalentCashRentForField } from './data/profitabilityCalculations'
+import { structuredFlexFormulaError } from './data/flexLeaseValidation'
 
 type SortKey = 'name' | 'entity' | 'crop' | 'arrangement' | 'acres'
 type InputShareKey = 'landlord_seed_pct' | 'landlord_fertilizer_pct' | 'landlord_chemical_pct' | 'landlord_fuel_pct' | 'landlord_labor_custom_pct' | 'landlord_crop_insurance_pct' | 'landlord_equipment_pct' | 'landlord_interest_pct' | 'landlord_other_input_pct'
@@ -19,11 +21,23 @@ function cropRows(data: FieldsData, fieldId: string, year?: number) { return dat
 function cropName(data: FieldsData, commodityId: string) { return data.commodities.find((item) => item.id === commodityId)?.name ?? commodityId }
 function cropNames(data: FieldsData, fieldId: string) { return cropRows(data, fieldId, moduleYear).map((item) => cropName(data, item.commodity_id)) }
 function cropKey(assignment: Pick<CropAssignment, 'crop_year' | 'commodity_id' | 'planting_sequence'>) { return `${assignment.crop_year}|${assignment.commodity_id}|${assignment.planting_sequence}` }
+const flexMethodOptions: Array<{ value: SupportedFlexMethod; label: string }> = [
+  { value: 'base_plus_bonus', label: 'Base rent + bonus above a revenue trigger' },
+  { value: 'pct_of_revenue', label: 'Percent of gross revenue (with min/max)' },
+]
+function flexSummaryText(arrangement: Arrangement) {
+  const formula = arrangement.flex_bonus_formula
+  if (!formula) return `Flex rent · base ${money.format(arrangement.cash_rent_per_acre ?? 0)}/ac`
+  if (isLegacyFlexBonusFormula(formula)) return `Flex rent · base ${money.format(arrangement.cash_rent_per_acre ?? 0)}/ac`
+  if (formula.method === 'pct_of_revenue') return `Flex rent · ${number.format(formula.rate_pct ?? 0)}% of gross revenue`
+  if (formula.method === 'base_plus_bonus') return `Flex rent · base ${money.format(formula.base_rent_per_acre ?? 0)}/ac + bonus`
+  return `Flex rent · base ${money.format(arrangement.cash_rent_per_acre ?? 0)}/ac`
+}
 function arrangementText(arrangement?: Arrangement) {
   if (!arrangement) return 'No agreement recorded'
   if (arrangement.arrangement_type === 'owned') return 'Owned'
   if (arrangement.arrangement_type === 'cash_rent') return `Cash rent ${money.format(arrangement.cash_rent_per_acre ?? 0)}/ac`
-  if (arrangement.arrangement_type === 'flex_cash_rent') return `Flex rent · base ${money.format(arrangement.cash_rent_per_acre ?? 0)}/ac`
+  if (arrangement.arrangement_type === 'flex_cash_rent') return flexSummaryText(arrangement)
   return `Crop share · landlord ${number.format(arrangement.landlord_crop_pct ?? 0)}%`
 }
 function cropPrice(assignment: CropAssignment) { return assignment.expected_price_per_bu ?? null }
@@ -31,8 +45,71 @@ function cropPrice(assignment: CropAssignment) { return assignment.expected_pric
 export function fieldEquivalentRent(field: Field, assignments: CropAssignment[], arrangement: Arrangement) {
   return equivalentCashRentForField(field, assignments, arrangement)
 }
-function flexLabels(type: 'price' | 'yield' | 'revenue') { return type === 'price' ? { trigger: 'Price trigger ($/bu)', rate: 'Bonus rate ($/ac per $/bu)' } : type === 'yield' ? { trigger: 'Yield trigger (bu/ac)', rate: 'Bonus rate ($/ac per bu/ac)' } : { trigger: 'Revenue trigger ($/ac)', rate: 'Bonus rate (%)' } }
+/** Plain-English description of a legacy per-unit formula (editor no longer offers these — read-only until the owner switches methods). */
+function legacyFlexDescription(formula: LegacyFlexBonusFormula) {
+  if (formula.type === 'price') return `plus ${money.format(formula.bonus_rate)}/ac for every $1/bu the price is above ${money.format(formula.trigger)}/bu`
+  if (formula.type === 'yield') return `plus ${money.format(formula.bonus_rate)}/ac for every bu/ac the yield is above ${number.format(formula.trigger)} bu/ac`
+  return `plus ${number.format(formula.bonus_rate)}% of gross revenue above ${money.format(formula.trigger)}/ac`
+}
 function zeroShares() { return Object.fromEntries(inputShareKeys.map((key) => [key, 0])) as Record<InputShareKey, number> }
+
+interface FlexEditValues { keepLegacy: boolean; method: SupportedFlexMethod; baseRent: string; ratePct: string; triggerRevenue: string; minRent: string; maxRent: string; priceSourceNote: string }
+/** Seeds the editor: a saved legacy formula opens read-only (keepLegacy) so it is never silently rewritten; a saved structured formula opens pre-filled; a fresh flex lease defaults to percent-of-revenue (farmdoc's most-used v1 structure). */
+function flexEditValuesFromArrangement(arrangement: Arrangement): FlexEditValues {
+  const formula = arrangement.flex_bonus_formula
+  const legacy = formula !== null && isLegacyFlexBonusFormula(formula)
+  const structured = formula !== null && !legacy && (formula as StructuredFlexBonusFormula).method !== undefined && ((formula as StructuredFlexBonusFormula).method === 'base_plus_bonus' || (formula as StructuredFlexBonusFormula).method === 'pct_of_revenue') ? formula as StructuredFlexBonusFormula : null
+  return {
+    keepLegacy: legacy,
+    method: structured?.method === 'base_plus_bonus' ? 'base_plus_bonus' : 'pct_of_revenue',
+    baseRent: structured?.base_rent_per_acre != null ? String(structured.base_rent_per_acre) : '',
+    ratePct: structured?.rate_pct != null ? String(structured.rate_pct) : '',
+    triggerRevenue: structured?.trigger_revenue_per_acre != null ? String(structured.trigger_revenue_per_acre) : '',
+    minRent: structured?.min_rent_per_acre != null ? String(structured.min_rent_per_acre) : '',
+    maxRent: structured?.max_rent_per_acre != null ? String(structured.max_rent_per_acre) : '',
+    priceSourceNote: structured?.price_source_note ?? '',
+  }
+}
+function numOrNull(value: string) { return value.trim() === '' ? null : Number(value) }
+function buildStructuredFlexFormula(method: SupportedFlexMethod, values: FlexEditValues): StructuredFlexBonusFormula {
+  return {
+    method,
+    base_rent_per_acre: method === 'base_plus_bonus' ? numOrNull(values.baseRent) : null,
+    rate_pct: numOrNull(values.ratePct),
+    trigger_revenue_per_acre: method === 'base_plus_bonus' ? numOrNull(values.triggerRevenue) : null,
+    base_price_per_bu: null,
+    base_yield_per_acre: null,
+    min_rent_per_acre: method === 'pct_of_revenue' ? numOrNull(values.minRent) : null,
+    max_rent_per_acre: numOrNull(values.maxRent),
+    price_source_note: values.priceSourceNote.trim() || null,
+  }
+}
+function flexPreviewText(formula: StructuredFlexBonusFormula, previewYield: number | null, previewPrice: number | null) {
+  if (previewYield === null || previewPrice === null) return 'Add an expected yield and a manual planned price on this field to preview the rent.'
+  const rent = computeStructuredFlexRent(formula, previewYield, previewPrice)
+  if (rent === null) return 'Enter the fields above to preview this lease’s rent.'
+  return `At ${number.format(previewYield)} bu and ${money.format(previewPrice)} this lease pays ${money.format(rent)}/ac.`
+}
+function FlexMethodFields({ values, legacyFormula, onChange, previewYield, previewPrice }: { values: FlexEditValues; legacyFormula: LegacyFlexBonusFormula | null; onChange: (patch: Partial<FlexEditValues>) => void; previewYield: number | null; previewPrice: number | null }) {
+  if (values.keepLegacy) return <div className="flex-legacy-note"><p>This lease keeps its current formula: {legacyFormula ? legacyFlexDescription(legacyFormula) : 'an older bonus format.'} Farm Rx will not change it unless you switch methods.</p><button type="button" className="secondary-action" onClick={() => onChange({ keepLegacy: false })}>Switch to a supported method</button></div>
+  const preview = flexPreviewText(buildStructuredFlexFormula(values.method, values), previewYield, previewPrice)
+  return <>
+    <FormControl label="Flex rent method"><select value={values.method} onChange={(event) => onChange({ method: event.target.value as SupportedFlexMethod })}>{flexMethodOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></FormControl>
+    {values.method === 'base_plus_bonus' && <>
+      <FormControl label="Base rent ($/ac)"><input type="number" min="0" step="0.01" value={values.baseRent} onChange={(event) => onChange({ baseRent: event.target.value })} /></FormControl>
+      <FormControl label="Bonus rate above trigger (%)"><input type="number" min="0.01" max="100" step="0.01" value={values.ratePct} onChange={(event) => onChange({ ratePct: event.target.value })} /></FormControl>
+      <FormControl label="Revenue trigger ($/ac)"><input type="number" min="0" step="0.01" value={values.triggerRevenue} onChange={(event) => onChange({ triggerRevenue: event.target.value })} /></FormControl>
+      <FormControl label="Maximum rent — optional ($/ac)"><input type="number" min="0" step="0.01" value={values.maxRent} onChange={(event) => onChange({ maxRent: event.target.value })} /></FormControl>
+    </>}
+    {values.method === 'pct_of_revenue' && <>
+      <FormControl label="Percent of gross revenue (%)"><input type="number" min="0.01" max="100" step="0.01" value={values.ratePct} onChange={(event) => onChange({ ratePct: event.target.value })} /></FormControl>
+      <FormControl label="Minimum rent — optional ($/ac)"><input type="number" min="0" step="0.01" value={values.minRent} onChange={(event) => onChange({ minRent: event.target.value })} /></FormControl>
+      <FormControl label="Maximum rent — optional ($/ac)"><input type="number" min="0" step="0.01" value={values.maxRent} onChange={(event) => onChange({ maxRent: event.target.value })} /></FormControl>
+    </>}
+    <FormControl label="Price source note — optional"><input placeholder="e.g. Fall average at ADM Decatur" value={values.priceSourceNote} onChange={(event) => onChange({ priceSourceNote: event.target.value })} /></FormControl>
+    <p className="flex-preview numeric">{preview}</p>
+  </>
+}
 
 function useFieldsData() { const [data, setData] = useState<FieldsData | null>(null); const [error, setError] = useState(''); const refresh = async () => { try { setData(await fieldsRepository.getData()); setError('') } catch (caught) { setError(farmerError(caught, 'load your farm')) } }; useEffect(() => { void refresh() }, []); return { data, error, refresh } }
 function toDraft(field: Field, arrangement: Arrangement, assignments: CropAssignment[] = [], fieldPatch: Partial<Field> = {}, arrangementPatch: Partial<Arrangement> = {}): FieldDraft {
@@ -85,10 +162,66 @@ function BasicsCard({ data, field, arrangement, onSave }: { data: FieldsData; fi
   return <Card title="Basics" editing={editing} onEdit={() => { setEditing((value) => !value); setError('') }}>{editing ? <div className="card-form"><FormControl label="Field name"><input value={values.name} onChange={(event) => setValues({ ...values, name: event.target.value })} /></FormControl><FormControl label="Acres"><input type="number" min="0.01" step="0.01" value={values.acres} onChange={(event) => setValues({ ...values, acres: event.target.value })} /></FormControl><FormControl label="County / location"><input value={values.county} onChange={(event) => setValues({ ...values, county: event.target.value })} /></FormControl><FormControl label="State"><input value={values.state} onChange={(event) => setValues({ ...values, state: event.target.value })} /></FormControl><FormControl label="FSA farm number"><input value={values.fsaFarm} onChange={(event) => setValues({ ...values, fsaFarm: event.target.value })} /></FormControl><FormControl label="FSA tract number"><input value={values.fsaTract} onChange={(event) => setValues({ ...values, fsaTract: event.target.value })} /></FormControl><CardSave error={error} onSave={() => void save()} /></div> : <InfoGrid><Info label="Acres" value={formatAcres(field.total_acres)} numeric /><Info label="County / location" value={[field.county, field.state].filter(Boolean).join(', ') || '—'} /><Info label="FSA farm / tract" value={[field.fsa_farm_number, field.fsa_tract_number].filter(Boolean).join(' / ') || '—'} /><Info label="Operating entity" value={data.entities.find((entity) => entity.id === field.operating_entity_id)?.name ?? '—'} /></InfoGrid>}</Card>
 }
 function AgreementCard({ data, field, arrangement, onSave }: { data: FieldsData; field: Field; arrangement: Arrangement; onSave: (draft: FieldDraft) => Promise<void> }) {
-  const [editing, setEditing] = useState(false); const [values, setValues] = useState({ type: arrangement.arrangement_type, landlord: arrangement.landlord_name ?? '', phone: arrangement.landlord_phone ?? '', contactNotes: arrangement.landlord_contact_notes ?? '', rent: arrangement.cash_rent_per_acre?.toString() ?? '', share: arrangement.landlord_crop_pct?.toString() ?? '', effective: arrangement.effective_from, bonusType: arrangement.flex_bonus_formula?.type ?? 'revenue', bonusTrigger: arrangement.flex_bonus_formula?.trigger.toString() ?? '', bonusRate: arrangement.flex_bonus_formula?.bonus_rate.toString() ?? '' }); const [error, setError] = useState(''); const currentRows = cropRows(data, field.id, moduleYear); const labels = flexLabels(values.bonusType)
-  const save = async () => { const rent = values.rent === '' ? null : Number(values.rent); const share = values.share === '' ? null : Number(values.share); const trigger = Number(values.bonusTrigger); const rate = Number(values.bonusRate); if ((values.type === 'cash_rent' || values.type === 'flex_cash_rent') && (rent === null || !Number.isFinite(rent) || rent < 0)) { setError('Enter a cash rent rate of zero or greater.'); return } if (values.type === 'flex_cash_rent' && (!Number.isFinite(trigger) || trigger < 0 || !Number.isFinite(rate) || rate <= 0)) { setError('Enter a flex trigger of zero or greater and a bonus rate above zero.'); return } if (values.type === 'crop_share' && (share === null || !Number.isFinite(share) || share <= 0 || share >= 100)) { setError('Enter a landlord crop share between 0 and 100.'); return } const formula = values.type === 'flex_cash_rent' ? { type: values.bonusType, trigger, bonus_rate: rate } : null; try { await onSave(toDraft(field, arrangement, currentRows, {}, { arrangement_type: values.type, landlord_name: values.landlord.trim() || null, landlord_phone: values.phone.trim() || null, landlord_contact_notes: values.contactNotes.trim() || null, effective_from: values.effective || today, cash_rent_per_acre: values.type === 'cash_rent' || values.type === 'flex_cash_rent' ? rent : null, flex_bonus_formula: formula, landlord_crop_pct: values.type === 'crop_share' ? share : null, ...(values.type === 'crop_share' ? {} : zeroShares()) })); setEditing(false); setError('') } catch (reason) { setError(farmerError(reason, 'save agreement')) } }
-  const equivalent = fieldEquivalentRent(field, currentRows, arrangement); const needs = arrangement.arrangement_type === 'flex_cash_rent' && arrangement.flex_bonus_formula?.type === 'price' ? 'a manual planned price' : arrangement.arrangement_type === 'flex_cash_rent' && arrangement.flex_bonus_formula?.type === 'yield' ? 'an expected yield' : 'an expected yield and a manual planned price'
-  return <Card title="Land agreement" editing={editing} onEdit={() => { setEditing((value) => !value); setError('') }}>{editing ? <div className="card-form"><FormControl label="Arrangement type"><select value={values.type} onChange={(event) => setValues({ ...values, type: event.target.value as LandArrangementType })}>{arrangementOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></FormControl><FormControl label="Terms effective from"><input type="date" value={values.effective} onChange={(event) => setValues({ ...values, effective: event.target.value })} /></FormControl>{values.type !== 'owned' && <><FormControl label="Landlord name"><input value={values.landlord} onChange={(event) => setValues({ ...values, landlord: event.target.value })} /></FormControl><FormControl label="Landlord phone"><input type="tel" value={values.phone} onChange={(event) => setValues({ ...values, phone: event.target.value })} /></FormControl><FormControl label="Landlord contact notes"><textarea rows={2} value={values.contactNotes} onChange={(event) => setValues({ ...values, contactNotes: event.target.value })} /></FormControl></>}{(values.type === 'cash_rent' || values.type === 'flex_cash_rent') && <FormControl label={values.type === 'flex_cash_rent' ? 'Base rent ($/ac)' : 'Cash rent ($/ac)'}><input type="number" min="0" step="0.01" value={values.rent} onChange={(event) => setValues({ ...values, rent: event.target.value })} /></FormControl>}{values.type === 'flex_cash_rent' && <><FormControl label="Flex bonus type"><select value={values.bonusType} onChange={(event) => setValues({ ...values, bonusType: event.target.value as 'price' | 'yield' | 'revenue' })}><option value="price">Grain price</option><option value="yield">Yield</option><option value="revenue">Gross revenue</option></select></FormControl><FormControl label={labels.trigger}><input type="number" min="0" step="0.01" value={values.bonusTrigger} onChange={(event) => setValues({ ...values, bonusTrigger: event.target.value })} /></FormControl><FormControl label={labels.rate}><input type="number" min="0.01" step="0.01" value={values.bonusRate} onChange={(event) => setValues({ ...values, bonusRate: event.target.value })} /></FormControl></>}{values.type === 'crop_share' && <FormControl label="Landlord crop share (%)"><input type="number" min="0.01" max="99.99" step="0.01" value={values.share} onChange={(event) => setValues({ ...values, share: event.target.value })} /></FormControl>}<CardSave error={error} onSave={() => void save()} /></div> : <><InfoGrid><Info label="Arrangement" value={arrangementText(arrangement)} /><Info label="Landlord" value={arrangement.landlord_name || '—'} /><Info label="Phone" value={arrangement.landlord_phone || '—'} /><Info label="Contact notes" value={arrangement.landlord_contact_notes || '—'} /></InfoGrid><div className="equivalent-rent"><strong>{arrangement.arrangement_type === 'cash_rent' ? 'Field cash rent' : 'Field equivalent cash rent'}</strong>{arrangement.arrangement_type === 'owned' ? <span>— · Owned ground has no rent estimate.</span> : currentRows.length === 0 ? <span>— · Assign a current-year crop to estimate rent.</span> : <><span><b className="numeric">{equivalent === null ? '—' : `${money.format(equivalent)}/ac`}</b>{equivalent === null && ` · enter ${needs}`}</span>{equivalent !== null && arrangement.arrangement_type !== 'cash_rent' && <small>Base rent is counted once; crop components are weighted by planted acres. Prices use the manual planned price.</small>}</>}</div></>}</Card>
+  const [editing, setEditing] = useState(false)
+  const [values, setValues] = useState({ type: arrangement.arrangement_type, landlord: arrangement.landlord_name ?? '', phone: arrangement.landlord_phone ?? '', contactNotes: arrangement.landlord_contact_notes ?? '', rent: arrangement.cash_rent_per_acre?.toString() ?? '', share: arrangement.landlord_crop_pct?.toString() ?? '', effective: arrangement.effective_from, flex: flexEditValuesFromArrangement(arrangement) })
+  const [error, setError] = useState('')
+  const currentRows = cropRows(data, field.id, moduleYear)
+  const previewCrop = currentRows[0]
+  const setFlex = (patch: Partial<FlexEditValues>) => setValues((current) => ({ ...current, flex: { ...current.flex, ...patch } }))
+  const savedLegacyFormula = arrangement.flex_bonus_formula && isLegacyFlexBonusFormula(arrangement.flex_bonus_formula) ? arrangement.flex_bonus_formula : null
+
+  const save = async () => {
+    const rent = values.rent === '' ? null : Number(values.rent)
+    const share = values.share === '' ? null : Number(values.share)
+    if (values.type === 'cash_rent' && (rent === null || !Number.isFinite(rent) || rent < 0)) { setError('Enter a cash rent rate of zero or greater.'); return }
+    if (values.type === 'flex_cash_rent' && values.flex.keepLegacy && (rent === null || !Number.isFinite(rent) || rent < 0)) { setError('Enter a base rent of zero or greater.'); return }
+    if (values.type === 'crop_share' && (share === null || !Number.isFinite(share) || share <= 0 || share >= 100)) { setError('Enter a landlord crop share between 0 and 100.'); return }
+    let flexFormula: FlexBonusFormula | null = null
+    let flexCashRent: number | null = rent
+    if (values.type === 'flex_cash_rent') {
+      if (values.flex.keepLegacy) {
+        if (!savedLegacyFormula) { setError('This lease no longer has a formula to keep. Choose a method below.'); return }
+        flexFormula = savedLegacyFormula
+      } else {
+        const built = buildStructuredFlexFormula(values.flex.method, values.flex)
+        const problem = structuredFlexFormulaError(built as unknown as Record<string, unknown>)
+        if (problem) { setError(problem); return }
+        flexFormula = built
+        // The live arrangements table still requires a non-null cash_rent_per_acre for every
+        // flex_cash_rent row (a pre-existing DB constraint this src-only change cannot alter);
+        // the structured calculator never reads it — computeStructuredFlexRent uses only the
+        // formula's own fields — so this is a display-only placeholder, not part of the math.
+        flexCashRent = built.method === 'base_plus_bonus' ? (built.base_rent_per_acre ?? 0) : (built.min_rent_per_acre ?? 0)
+      }
+    }
+    try {
+      await onSave(toDraft(field, arrangement, currentRows, {}, {
+        arrangement_type: values.type,
+        landlord_name: values.landlord.trim() || null,
+        landlord_phone: values.phone.trim() || null,
+        landlord_contact_notes: values.contactNotes.trim() || null,
+        effective_from: values.effective || today,
+        cash_rent_per_acre: values.type === 'cash_rent' ? rent : values.type === 'flex_cash_rent' ? flexCashRent : null,
+        flex_bonus_formula: values.type === 'flex_cash_rent' ? flexFormula : null,
+        landlord_crop_pct: values.type === 'crop_share' ? share : null,
+        ...(values.type === 'crop_share' ? {} : zeroShares()),
+      }))
+      setEditing(false); setError('')
+    } catch (reason) { setError(farmerError(reason, 'save agreement')) }
+  }
+
+  const equivalent = fieldEquivalentRent(field, currentRows, arrangement)
+  const needs = arrangement.arrangement_type === 'flex_cash_rent' && savedLegacyFormula?.type === 'price' ? 'a manual planned price' : arrangement.arrangement_type === 'flex_cash_rent' && savedLegacyFormula?.type === 'yield' ? 'an expected yield' : 'an expected yield and a manual planned price'
+
+  return <Card title="Land agreement" editing={editing} onEdit={() => { setEditing((value) => !value); setError('') }}>{editing ? <div className="card-form">
+    <FormControl label="Arrangement type"><select value={values.type} onChange={(event) => setValues({ ...values, type: event.target.value as LandArrangementType })}>{arrangementOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></FormControl>
+    <FormControl label="Terms effective from"><input type="date" value={values.effective} onChange={(event) => setValues({ ...values, effective: event.target.value })} /></FormControl>
+    {values.type !== 'owned' && <><FormControl label="Landlord name"><input value={values.landlord} onChange={(event) => setValues({ ...values, landlord: event.target.value })} /></FormControl><FormControl label="Landlord phone"><input type="tel" value={values.phone} onChange={(event) => setValues({ ...values, phone: event.target.value })} /></FormControl><FormControl label="Landlord contact notes"><textarea rows={2} value={values.contactNotes} onChange={(event) => setValues({ ...values, contactNotes: event.target.value })} /></FormControl></>}
+    {(values.type === 'cash_rent' || (values.type === 'flex_cash_rent' && values.flex.keepLegacy)) && <FormControl label={values.type === 'flex_cash_rent' ? 'Base rent ($/ac)' : 'Cash rent ($/ac)'}><input type="number" min="0" step="0.01" value={values.rent} onChange={(event) => setValues({ ...values, rent: event.target.value })} /></FormControl>}
+    {values.type === 'flex_cash_rent' && <FlexMethodFields values={values.flex} legacyFormula={savedLegacyFormula} onChange={setFlex} previewYield={previewCrop?.expected_yield_per_acre ?? null} previewPrice={previewCrop?.expected_price_per_bu ?? null} />}
+    {values.type === 'crop_share' && <FormControl label="Landlord crop share (%)"><input type="number" min="0.01" max="99.99" step="0.01" value={values.share} onChange={(event) => setValues({ ...values, share: event.target.value })} /></FormControl>}
+    <CardSave error={error} onSave={() => void save()} />
+  </div> : <><InfoGrid><Info label="Arrangement" value={arrangementText(arrangement)} /><Info label="Landlord" value={arrangement.landlord_name || '—'} /><Info label="Phone" value={arrangement.landlord_phone || '—'} /><Info label="Contact notes" value={arrangement.landlord_contact_notes || '—'} /></InfoGrid><div className="equivalent-rent"><strong>{arrangement.arrangement_type === 'cash_rent' ? 'Field cash rent' : 'Field equivalent cash rent'}</strong>{arrangement.arrangement_type === 'owned' ? <span>— · Owned ground has no rent estimate.</span> : currentRows.length === 0 ? <span>— · Assign a current-year crop to estimate rent.</span> : <><span><b className="numeric">{equivalent === null ? '—' : `${money.format(equivalent)}/ac`}</b>{equivalent === null && ` · enter ${needs}`}</span>{equivalent !== null && arrangement.arrangement_type !== 'cash_rent' && <small>Base rent is counted once; crop components are weighted by planted acres. Prices use the manual planned price.</small>}{arrangement.arrangement_type === 'flex_cash_rent' && savedLegacyFormula && <small>This lease uses Farm Rx's older per-unit bonus format: {legacyFlexDescription(savedLegacyFormula)}</small>}</>}</div></>}</Card>
 }
 function YieldPriceCard({ data, field, arrangement, onSave }: { data: FieldsData; field: Field; arrangement: Arrangement; onSave: (draft: FieldDraft) => Promise<void> }) {
   const rows = cropRows(data, field.id, moduleYear); const [editing, setEditing] = useState(false); const [values, setValues] = useState(rows.map((row) => ({ id: row.id, yield: row.expected_yield_per_acre?.toString() ?? '', price: row.expected_price_per_bu?.toString() ?? '' }))); const [error, setError] = useState('')

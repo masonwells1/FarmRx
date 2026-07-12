@@ -1,5 +1,6 @@
-import type { Arrangement, Commodity, CropAssignment, Entity, EntityType, Farm, Field, FieldDraft, FieldsData, FieldsRepository, FlexBonusFormula, LandArrangementType } from './fields'
+import type { Arrangement, Commodity, CropAssignment, Entity, EntityType, Farm, Field, FieldDraft, FieldsData, FieldsRepository, FlexBonusFormula, FlexMethod, LandArrangementType } from './fields'
 import type { FieldsDataGateway, SaveFieldBundleInput } from './FieldsDataGateway'
+import { structuredFlexFormulaError } from './flexLeaseValidation'
 
 export interface FieldsOperationWriter {
   saveFieldOperation(draft: FieldDraft, operationId: string): Promise<Field>
@@ -22,9 +23,28 @@ function nullableFinite(value: unknown, label: string): number | null { return v
 function bool(value: unknown, label: string): boolean { if (typeof value !== 'boolean') fail(`${label} is malformed.`); return value }
 function iso(value: unknown, label: string): string { return text(value, label) }
 function nullableDate(value: unknown, label: string): string | null { return value === null ? null : text(value, label) }
+const flexMethods = new Set<FlexMethod>(['base_plus_bonus', 'pct_of_revenue', 'base_flex_price', 'base_flex_price_yield'])
 function nullableFlex(value: unknown): FlexBonusFormula | null {
   if (value === null) return null
   const formula = record(value, 'Flex rent formula')
+  // The structured schema (docs/flex-lease-research.md §3) is discriminated by "method"; the
+  // legacy Module 1 shape by "type". Both stay readable — see docs/flex-lease-research.md §3
+  // "Translation of existing saved shapes".
+  if (typeof formula.method === 'string') {
+    const method = formula.method
+    if (!flexMethods.has(method as FlexMethod)) fail('Flex rent formula method is malformed.')
+    return {
+      method: method as FlexMethod,
+      base_rent_per_acre: nullableFinite(formula.base_rent_per_acre ?? null, 'Flex base rent'),
+      rate_pct: nullableFinite(formula.rate_pct ?? null, 'Flex rate percent'),
+      trigger_revenue_per_acre: nullableFinite(formula.trigger_revenue_per_acre ?? null, 'Flex revenue trigger'),
+      base_price_per_bu: nullableFinite(formula.base_price_per_bu ?? null, 'Flex base price'),
+      base_yield_per_acre: nullableFinite(formula.base_yield_per_acre ?? null, 'Flex base yield'),
+      min_rent_per_acre: nullableFinite(formula.min_rent_per_acre ?? null, 'Flex minimum rent'),
+      max_rent_per_acre: nullableFinite(formula.max_rent_per_acre ?? null, 'Flex maximum rent'),
+      price_source_note: nullableText(formula.price_source_note ?? null, 'Flex price source note'),
+    }
+  }
   const type = text(formula.type, 'Flex rent formula type')
   if (type !== 'price' && type !== 'yield' && type !== 'revenue') fail('Flex rent formula type is malformed.')
   return { type, trigger: finite(formula.trigger, 'Flex rent trigger'), bonus_rate: finite(formula.bonus_rate, 'Flex rent bonus rate') }
@@ -47,6 +67,15 @@ function validateWorkspace(data: FieldsData, farmId: string) {
   if (data.entities.some((row) => row.farm_id !== farmId) || data.fields.some((row) => row.farm_id !== farmId || !entities.has(row.operating_entity_id)) || data.arrangements.some((row) => row.farm_id !== farmId || !fields.has(row.field_id)) || data.crop_assignments.some((row) => row.farm_id !== farmId || !fields.has(row.field_id) || !commodities.has(row.commodity_id))) fail('Farm data contains a record that does not belong to this farm.')
 }
 
+/** Fails closed before a flex_cash_rent draft ever leaves the browser (farmerError maps this to "Check the field details and try again."). */
+function assertFlexFormulaDraft(formula: FlexBonusFormula | null) {
+  assert(formula !== null, 'Flex rent requires a bonus formula.')
+  const value = formula as unknown as Record<string, unknown>
+  if (typeof value.method === 'string') { const error = structuredFlexFormulaError(value); assert(error === null, error ?? 'Flex rent formula is invalid.'); return }
+  assert(value.type === 'price' || value.type === 'yield' || value.type === 'revenue', 'Flex bonus type must be price, yield, or revenue.')
+  assert(typeof value.trigger === 'number' && Number.isFinite(value.trigger) && value.trigger >= 0, 'Flex bonus trigger must be zero or greater.')
+  assert(typeof value.bonus_rate === 'number' && Number.isFinite(value.bonus_rate) && value.bonus_rate > 0, 'Flex bonus rate must be greater than zero.')
+}
 function cleanText(value: string | null): string | null { return value === null ? null : value.trim() || null }
 function assert(condition: unknown, message: string): asserts condition { if (!condition) fail(message) }
 function validDate(value: string | null): boolean { return value === null || (/^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`))) }
@@ -59,6 +88,7 @@ export function normalizeFieldDraft(draft: FieldDraft, createId: IdSource): Norm
   assert(draft.soil_productivity_index === null || (Number.isFinite(draft.soil_productivity_index) && draft.soil_productivity_index >= 0), 'Soil productivity index must be zero or greater.')
   assert(arrangementTypes.has(draft.arrangement.arrangement_type), 'Unknown land arrangement type.')
   assert(validDate(draft.arrangement.effective_from), 'Arrangement effective date is invalid.')
+  if (draft.arrangement.arrangement_type === 'flex_cash_rent') assertFlexFormulaDraft(draft.arrangement.flex_bonus_formula)
   for (const key of shareKeys) assert(Number.isFinite(draft.arrangement[key]) && draft.arrangement[key] >= 0 && draft.arrangement[key] <= 100, 'Landlord input percentages must be between 0 and 100.')
   const assignments = draft.crop_assignments.map((row) => {
     assert(Number.isInteger(row.crop_year) && row.crop_year >= 1900 && row.crop_year <= 2200, 'Crop year must be between 1900 and 2200.')

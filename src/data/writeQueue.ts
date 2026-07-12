@@ -16,10 +16,21 @@ const nullableString = (value: unknown) => value === null || typeof value === 's
 const nullableNumber = (value: unknown) => value === null || (typeof value === 'number' && Number.isFinite(value))
 const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(value)
 
+const legacyFlexTypes = ['price', 'yield', 'revenue']
+const structuredFlexMethods = ['base_plus_bonus', 'pct_of_revenue', 'base_flex_price', 'base_flex_price_yield']
+/** Accepts both saved flex_bonus_formula shapes (docs/flex-lease-research.md §3) so a queued
+ * offline entry using the new structured schema round-trips through the write queue instead of
+ * being rejected as corrupt. */
+function isFlexFormula(value: unknown): boolean {
+  if (value === null) return true
+  if (!isRecord(value)) return false
+  if (typeof value.method === 'string') return structuredFlexMethods.includes(value.method) && exact(value, ['method', 'base_rent_per_acre', 'rate_pct', 'trigger_revenue_per_acre', 'base_price_per_bu', 'base_yield_per_acre', 'min_rent_per_acre', 'max_rent_per_acre', 'price_source_note']) && nullableNumber(value.base_rent_per_acre) && nullableNumber(value.rate_pct) && nullableNumber(value.trigger_revenue_per_acre) && nullableNumber(value.base_price_per_bu) && nullableNumber(value.base_yield_per_acre) && nullableNumber(value.min_rent_per_acre) && nullableNumber(value.max_rent_per_acre) && nullableString(value.price_source_note)
+  return exact(value, ['type', 'trigger', 'bonus_rate']) && legacyFlexTypes.includes(String(value.type)) && finite(value.trigger) && finite(value.bonus_rate)
+}
 function isArrangement(value: unknown): boolean {
   if (!isRecord(value)) return false
   const keys = ['id', 'arrangement_type', 'landlord_name', 'landlord_phone', 'landlord_contact_notes', 'effective_from', 'cash_rent_per_acre', 'flex_bonus_formula', 'landlord_crop_pct', 'landlord_seed_pct', 'landlord_fertilizer_pct', 'landlord_chemical_pct', 'landlord_fuel_pct', 'landlord_labor_custom_pct', 'landlord_crop_insurance_pct', 'landlord_equipment_pct', 'landlord_interest_pct', 'landlord_other_input_pct', 'notes']
-  return exact(value, keys) && isUuid(value.id) && ['owned', 'cash_rent', 'flex_cash_rent', 'crop_share'].includes(String(value.arrangement_type)) && nullableString(value.landlord_name) && nullableString(value.landlord_phone) && nullableString(value.landlord_contact_notes) && isDate(value.effective_from) && nullableNumber(value.cash_rent_per_acre) && nullableNumber(value.landlord_crop_pct) && nullableString(value.notes) && ['landlord_seed_pct', 'landlord_fertilizer_pct', 'landlord_chemical_pct', 'landlord_fuel_pct', 'landlord_labor_custom_pct', 'landlord_crop_insurance_pct', 'landlord_equipment_pct', 'landlord_interest_pct', 'landlord_other_input_pct'].every((key) => finite(value[key])) && (value.flex_bonus_formula === null || (isRecord(value.flex_bonus_formula) && exact(value.flex_bonus_formula, ['type', 'trigger', 'bonus_rate']) && ['price', 'yield', 'revenue'].includes(String(value.flex_bonus_formula.type)) && finite(value.flex_bonus_formula.trigger) && finite(value.flex_bonus_formula.bonus_rate)))
+  return exact(value, keys) && isUuid(value.id) && ['owned', 'cash_rent', 'flex_cash_rent', 'crop_share'].includes(String(value.arrangement_type)) && nullableString(value.landlord_name) && nullableString(value.landlord_phone) && nullableString(value.landlord_contact_notes) && isDate(value.effective_from) && nullableNumber(value.cash_rent_per_acre) && nullableNumber(value.landlord_crop_pct) && nullableString(value.notes) && ['landlord_seed_pct', 'landlord_fertilizer_pct', 'landlord_chemical_pct', 'landlord_fuel_pct', 'landlord_labor_custom_pct', 'landlord_crop_insurance_pct', 'landlord_equipment_pct', 'landlord_interest_pct', 'landlord_other_input_pct'].every((key) => finite(value[key])) && isFlexFormula(value.flex_bonus_formula)
 }
 function isCrop(value: unknown): boolean {
   if (!isRecord(value)) return false
