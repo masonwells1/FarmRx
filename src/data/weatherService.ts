@@ -1,10 +1,11 @@
-import type { CurrentConditions, DailyForecast, ForecastBundle, HourlyForecast, SprayContext, SprayLevel, SprayVerdict, SprayWindow, WeatherSample } from './weather'
+import type { CurrentConditions, DailyForecast, DailyHistory, DailyHistoryBundle, ForecastBundle, HourlyForecast, SprayContext, SprayLevel, SprayVerdict, SprayWindow, WeatherSample } from './weather'
 import type { StorageLike } from './writeQueue'
 
 export const weatherCacheVersion = 'v1'
 const cacheAgeMs = 30 * 60 * 1000
 type Deps = { fetch: typeof fetch; clock: () => Date; storage: StorageLike }
 type CacheEnvelope = { version: 1; fetched_at: string; bundle: Omit<ForecastBundle, 'stale'> }
+type HistoryCacheEnvelope = { version: 1; fetched_at: string; daily: DailyHistory[] }
 const rank: Record<SprayLevel, number> = { good: 0, caution: 1, poor: 2 }
 const at = (time: string) => Date.parse(time)
 const number = (value: unknown, label: string) => { const result = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN; if (!Number.isFinite(result)) throw new Error(`Weather ${label} was unavailable.`); return result }
@@ -15,6 +16,7 @@ const records = (value: unknown) => { if (!value || typeof value !== 'object' ||
 const timestamp = (value: unknown, label: string) => { const result = text(value, label); if (!Number.isFinite(at(result))) throw new Error(`Weather ${label} was unavailable.`); return result }
 
 export function weatherCacheKey(lat: number, lon: number) { return `farm-rx-weather:${weatherCacheVersion}:${lat.toFixed(3)}:${lon.toFixed(3)}` }
+export function weatherHistoryCacheKey(lat: number, lon: number, startISODate: string, endISODate: string) { return `farm-rx-weather-history:${weatherCacheVersion}:${lat.toFixed(3)}:${lon.toFixed(3)}:${startISODate}:${endISODate}` }
 function parseCache(raw: string): CacheEnvelope { const data = records(JSON.parse(raw)); if (data.version !== 1 || typeof data.fetched_at !== 'string' || !Number.isFinite(at(data.fetched_at)) || !data.bundle || typeof data.bundle !== 'object') throw new Error('Saved forecast needs to be refreshed.'); return data as unknown as CacheEnvelope }
 function sample(values: Record<string, unknown>, index?: number): WeatherSample {
   const value = (key: string) => index === undefined ? values[key] : array(values[key], key)[index]
@@ -38,6 +40,24 @@ function validateBundle(payload: unknown, fetched_at: string): Omit<ForecastBund
 function normalize(payload: unknown, fetched_at: string): Omit<ForecastBundle, 'stale'> {
   const root = records(payload); const current = sample(records(root.current)); const hourlyRaw = records(root.hourly); const times = nonEmptyArray(hourlyRaw.time, 'hourly time'); ['temperature_2m', 'relative_humidity_2m', 'precipitation', 'precipitation_probability', 'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m', 'cloud_cover'].forEach((key) => aligned(hourlyRaw, key, times.length)); const hourly: HourlyForecast[] = times.map((_, index) => sample(hourlyRaw, index)); const dailyRaw = records(root.daily); const dates = nonEmptyArray(dailyRaw.time, 'daily time'); const daily: DailyForecast[] = dates.map((_, index) => ({ date: text(aligned(dailyRaw, 'time', dates.length)[index], 'date'), precipitation_sum_in: number(aligned(dailyRaw, 'precipitation_sum', dates.length)[index], 'daily rain'), precipitation_probability_max: nullableNumber(aligned(dailyRaw, 'precipitation_probability_max', dates.length)[index]), temperature_max_f: number(aligned(dailyRaw, 'temperature_2m_max', dates.length)[index], 'daily high'), temperature_min_f: number(aligned(dailyRaw, 'temperature_2m_min', dates.length)[index], 'daily low'), sunrise: aligned(dailyRaw, 'sunrise', dates.length)[index] === null ? null : text(aligned(dailyRaw, 'sunrise', dates.length)[index], 'sunrise'), sunset: aligned(dailyRaw, 'sunset', dates.length)[index] === null ? null : text(aligned(dailyRaw, 'sunset', dates.length)[index], 'sunset') })); return validateBundle({ current, hourly, daily }, fetched_at)
 }
+function validDate(value: string) { return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value }
+function addUtcDays(value: string, days: number) { const date = new Date(`${value}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
+/** The archive API can lag live weather by several days, so do not ask it for newer data. */
+export function latestSafeArchiveDate(now: Date) { return addUtcDays(now.toISOString().slice(0, 10), -5) }
+/** A GDD total is honest only when every requested day is present exactly once. */
+export function hasContinuousDailyHistory(daily: DailyHistory[], startISODate: string, endISODate: string) {
+  if (!validDate(startISODate) || !validDate(endISODate) || startISODate > endISODate) return false
+  const expected = Math.round((Date.parse(`${endISODate}T00:00:00Z`) - Date.parse(`${startISODate}T00:00:00Z`)) / 86_400_000) + 1
+  return daily.length === expected && daily.every((day, index) => day.date === addUtcDays(startISODate, index) && Number.isFinite(day.temperature_max_f) && Number.isFinite(day.temperature_min_f))
+}
+function normalizeHistory(payload: unknown, fetched_at: string): DailyHistory[] {
+  if (!Number.isFinite(at(fetched_at))) throw new Error('Weather fetch time was unavailable.')
+  const daily = records(records(payload).daily); const dates = nonEmptyArray(daily.time, 'daily history time'); const maxes = aligned(daily, 'temperature_2m_max', dates.length); const mins = aligned(daily, 'temperature_2m_min', dates.length)
+  return dates.map((raw, index) => { const dateValue = text(raw, 'daily history date'); if (!validDate(dateValue)) throw new Error('Weather daily history date was unavailable.'); return { date: dateValue, temperature_max_f: number(maxes[index], 'daily high'), temperature_min_f: number(mins[index], 'daily low') } })
+}
+function validateHistoryCache(value: unknown, startISODate: string, endISODate: string): HistoryCacheEnvelope { const envelope = records(value); if (envelope.version !== 1 || typeof envelope.fetched_at !== 'string' || !Number.isFinite(at(envelope.fetched_at)) || !Array.isArray(envelope.daily)) throw new Error('Saved weather history needs to be refreshed.'); const daily = envelope.daily.map((day) => { const row = records(day); const dateValue = text(row.date, 'daily history date'); if (!validDate(dateValue)) throw new Error('Saved weather history needs to be refreshed.'); return { date: dateValue, temperature_max_f: number(row.temperature_max_f, 'daily high'), temperature_min_f: number(row.temperature_min_f, 'daily low') } }); if (!hasContinuousDailyHistory(daily, startISODate, endISODate)) throw new Error('Saved weather history needs to be refreshed.'); return { version: 1, fetched_at: envelope.fetched_at, daily } }
+/** Pure base-temperature accumulation. Temperatures below the base never subtract heat units. */
+export function growingDegreeDays(daily: DailyHistory[], base = 50) { if (!Number.isFinite(base)) throw new Error('Enter a valid GDD base temperature.'); return Math.round(daily.reduce((total, day) => total + Math.max(0, (day.temperature_max_f + day.temperature_min_f) / 2 - base), 0)) }
 
 export function createWeatherService(deps: Deps) {
   async function fetchForecast(lat: number, lon: number): Promise<ForecastBundle> {
@@ -48,7 +68,17 @@ export function createWeatherService(deps: Deps) {
     const query = new URLSearchParams({ latitude: String(lat), longitude: String(lon), current: 'temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover', hourly: 'temperature_2m,relative_humidity_2m,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover', daily: 'precipitation_sum,precipitation_probability_max,temperature_2m_max,temperature_2m_min,sunrise,sunset', temperature_unit: 'fahrenheit', wind_speed_unit: 'mph', precipitation_unit: 'inch', timezone: 'auto', forecast_days: '7' })
     try { const response = await deps.fetch(`https://api.open-meteo.com/v1/forecast?${query}`); if (!response.ok) throw new Error('Weather service did not respond.'); const fetched_at = now.toISOString(); const bundle = normalize(await response.json(), fetched_at); const envelope: CacheEnvelope = { version: 1, fetched_at, bundle }; try { deps.storage.setItem(key, JSON.stringify(envelope)) } catch { /* Caching is optional; live weather remains usable. */ } return { ...bundle, stale: false } } catch (error) { if (cached) return { ...cached, stale: true }; throw new Error('Forecast unavailable — reconnect for the latest.') }
   }
-  return { fetchForecast }
+  async function fetchDailyHistory(lat: number, lon: number, startISODate: string, endISODate: string): Promise<DailyHistoryBundle> {
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180 || !validDate(startISODate) || !validDate(endISODate) || startISODate > endISODate) throw new Error('Enter a valid field location and date range.')
+    const now = deps.clock(); const latestArchiveDate = latestSafeArchiveDate(now); const cappedEnd = endISODate > latestArchiveDate ? latestArchiveDate : endISODate
+    if (startISODate > cappedEnd) throw new Error('Weather history is not available yet.')
+    const key = weatherHistoryCacheKey(lat, lon, startISODate, cappedEnd); let cached: HistoryCacheEnvelope | null = null
+    try { const raw = deps.storage.getItem(key); if (raw) cached = validateHistoryCache(JSON.parse(raw), startISODate, cappedEnd) } catch { cached = null }
+    if (cached && now.getTime() - at(cached.fetched_at) < cacheAgeMs) return { daily: cached.daily, fetched_at: cached.fetched_at, stale: false }
+    const query = new URLSearchParams({ latitude: String(lat), longitude: String(lon), start_date: startISODate, end_date: cappedEnd, daily: 'temperature_2m_max,temperature_2m_min', temperature_unit: 'fahrenheit', timezone: 'auto' })
+    try { const response = await deps.fetch(`https://archive-api.open-meteo.com/v1/archive?${query}`); if (!response.ok) throw new Error('Weather history service did not respond.'); const fetched_at = now.toISOString(); const daily = normalizeHistory(await response.json(), fetched_at); if (!hasContinuousDailyHistory(daily, startISODate, cappedEnd)) throw new Error('Weather history is not available yet.'); const envelope: HistoryCacheEnvelope = { version: 1, fetched_at, daily }; try { deps.storage.setItem(key, JSON.stringify(envelope)) } catch { /* Caching is optional. */ } return { daily, fetched_at, stale: false } } catch { if (cached) return { daily: cached.daily, fetched_at: cached.fetched_at, stale: true }; throw new Error('Weather history is not available yet — reconnect and try again.') }
+  }
+  return { fetchForecast, fetchDailyHistory }
 }
 export const weatherService = typeof window === 'undefined' ? null : createWeatherService({ fetch: window.fetch.bind(window), clock: () => new Date(), storage: window.localStorage })
 

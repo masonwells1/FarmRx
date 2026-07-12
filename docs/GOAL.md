@@ -180,8 +180,25 @@ pulled Equipment/Tasks forward. Build order + status:
       page overflow (strips scroll internally) → 18px baseline confirmed. tsc+build+regression
       green firsthand. PARKED follow-up: inventory "use current weather" pre-fill button (kept
       out of first pass to keep review focused); GPS branch shares the proven manual save path.
-- [ ] Feature B: Rain gauge + field log — per-field rainfall entry, running season total,
-      growing-degree-days; simple timeline. Sits next to weather.
+- [x] Feature B: Rain gauge + field log — BUILT + LIVE + BROWSER-PROVEN 2026-07-12.
+      Per-field rainfall + dated notes (one field_log_entries table, entry_type rainfall|note),
+      running 2026-season rainfall total, reverse-chron timeline with edit/delete, and
+      growing-degree-days (base 50) accumulated from the crop's planting date using Open-Meteo's
+      FREE archive API + the Feature A location. 0019 applied (19 migrations): field_log_entries
+      + save_field_log_entry (receipt-idempotent) + delete_field_log_entry (idempotent), gated
+      owner/manager/worker. Gauntlet: 0019 RPCs behaviorally proven via owner impersonation
+      (insert→row, replay→no dup, delete→0 rows). Sol review found 1 P1 (GDD could show an
+      understated "since planting" number — archive lags ~5 days and a partial response was
+      accepted as the whole season) + P2s (offline save appeared to vanish; corrupt queue entry
+      didn't fail closed; client validation didn't match DB future/length checks; 375px form
+      overflow) + P3 (16px<18px) — ALL fixed by Terra; field-log suite 6→7 groups, weather 7→8.
+      Live proof on farm-rx: logged 0.80 in on North Quarter via UI → save_field_log_entry wrote
+      the row to Postgres (verified) → season total 0.00→0.80 → deleted via UI →
+      delete_field_log_entry → 0 rows (verified); set North Quarter crop_assignment planting_date
+      2026-05-01 → GDD rendered "1,256, weather data through 2026-07-07" (P1 fix: end capped at
+      today−5 with honest caption, not understated to today); 375px single-column form, no page
+      overflow with a 400-char note. tsc+build+regression green firsthand. (Test data note: North
+      Quarter now has location 40.11,-88.21 + planting_date 2026-05-01 — left in place, realistic.)
 - [ ] Feature C: Scouting notes with photos — walk a field, drop a GPS pin, attach photos
       (Supabase Storage bucket, per-farm isolation), category (weed/disease/pest/other),
       optional auto-create a follow-up task. Feeds the Tasks board.

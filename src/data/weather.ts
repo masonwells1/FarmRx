@@ -32,6 +32,19 @@ export interface ForecastBundle {
   stale: boolean
 }
 
+export interface DailyHistory {
+  date: string
+  temperature_max_f: number
+  temperature_min_f: number
+}
+
+export interface DailyHistoryBundle {
+  daily: DailyHistory[]
+  fetched_at: string
+  /** True only when a previously saved history range is shown after a failed refresh. */
+  stale: boolean
+}
+
 export type SprayLevel = 'good' | 'caution' | 'poor'
 export interface SprayVerdict { level: SprayLevel; reasons: string[] }
 export interface SprayContext {

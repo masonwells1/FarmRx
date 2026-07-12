@@ -1,7 +1,7 @@
 import { createFieldLocationClient, mapFieldLocationEcho, type FieldLocationGateway } from './fieldLocation'
 import { fieldsSeedForRegression } from './MockFieldsRepository'
 import { mapField } from './SupabaseFieldsRepository'
-import { bestWindowToday, compassLabel, createWeatherService, evaluateSprayWindow, weatherCacheKey } from './weatherService'
+import { bestWindowToday, compassLabel, createWeatherService, evaluateSprayWindow, growingDegreeDays, hasContinuousDailyHistory, latestSafeArchiveDate, weatherCacheKey, weatherHistoryCacheKey } from './weatherService'
 import type { WeatherSample } from './weather'
 
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message) }
@@ -19,6 +19,7 @@ const context = (patch: Partial<Parameters<typeof evaluateSprayWindow>[1]> = {})
 const payload = { current: { time: '2026-07-12T10:00', temperature_2m: 72, relative_humidity_2m: 65, precipitation: 0, wind_speed_10m: 6, wind_direction_10m: 90, wind_gusts_10m: 8, cloud_cover: 20 }, hourly: { time: ['2026-07-12T10:00'], temperature_2m: [72], relative_humidity_2m: [65], precipitation: [0], precipitation_probability: [0], wind_speed_10m: [6], wind_direction_10m: [90], wind_gusts_10m: [8], cloud_cover: [20] }, daily: { time: ['2026-07-12'], precipitation_sum: [0], precipitation_probability_max: [0], temperature_2m_max: [82], temperature_2m_min: [61], sunrise: ['2026-07-12T05:45'], sunset: ['2026-07-12T20:20'] } }
 const clone = <T,>(value: T): T => structuredClone(value)
 const response = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
+const historyPayload = (dates: string[], highs = dates.map(() => 80), lows = dates.map(() => 60)) => ({ daily: { time: dates, temperature_2m_max: highs, temperature_2m_min: lows } })
 
 async function run() {
   // Group 1: spray boundaries, including the evaluated hour's rain chance.
@@ -76,6 +77,23 @@ async function run() {
   const queuedBytes = [...raceStorage.values.entries()].find(([storageKey]) => storageKey.includes('farm-rx-field-location-queue:'))?.[1]; const queued = queuedBytes ? JSON.parse(queuedBytes).entries : []; assert(queued.length === 1 && queued[0].latitude === 39, 'A pin queued during A\'s in-flight send must survive in the queue.')
   online = true; await raceClient.replay(); await raceClient.replay(); assert(raceCalls.join('|') === '38|39', 'The surviving pin must replay exactly once after reconnecting.')
 
-  console.log('Weather service regressions passed (6 coverage groups).')
+  // Group 7: archive-backed GDD requires a lag-safe, complete daily history range.
+  const historyNow = new Date('2026-07-12T15:00:00Z'); assert(latestSafeArchiveDate(historyNow) === '2026-07-07', 'The archive end cap must stay five full days behind today.')
+  let requestedHistoryUrl = ''; const fullHistory = historyPayload(['2026-07-05', '2026-07-06', '2026-07-07'])
+  const historyService = createWeatherService({ storage: new Storage(), clock: () => historyNow, fetch: async (url) => { requestedHistoryUrl = String(url); return response(fullHistory) } })
+  const history = await historyService.fetchDailyHistory(38, -88, '2026-07-05', '2026-07-12'); assert(history.daily.length === 3 && requestedHistoryUrl.includes('end_date=2026-07-07'), 'GDD history must request only through the archive lag cap and accept a complete range.')
+  await rejects(() => createWeatherService({ storage: new Storage(), clock: () => historyNow, fetch: async () => response(historyPayload(['2026-07-07'])) }).fetchDailyHistory(38, -88, '2026-07-05', '2026-07-12'), 'A one-day partial history must never become a season GDD total.')
+  await rejects(() => createWeatherService({ storage: new Storage(), clock: () => historyNow, fetch: async () => response(fullHistory) }).fetchDailyHistory(38, -88, '2026-07-12', '2026-07-12'), 'A future planting date without archive history must not produce GDD.')
+  assert(!hasContinuousDailyHistory([{ date: '2026-07-05', temperature_max_f: 80, temperature_min_f: 60 }, { date: '2026-07-07', temperature_max_f: 80, temperature_min_f: 60 }], '2026-07-05', '2026-07-07'), 'Missing calendar days must fail continuous GDD coverage.')
+  const corruptHistoryStorage = new Storage(); corruptHistoryStorage.setItem(weatherHistoryCacheKey(38, -88, '2026-07-05', '2026-07-07'), JSON.stringify({ version: 1, fetched_at: historyNow.toISOString(), daily: [{ date: '2026-07-07', temperature_max_f: 80, temperature_min_f: 60 }] })); let corruptHistoryCalls = 0
+  const refreshedHistory = await createWeatherService({ storage: corruptHistoryStorage, clock: () => historyNow, fetch: async () => { corruptHistoryCalls += 1; return response(fullHistory) } }).fetchDailyHistory(38, -88, '2026-07-05', '2026-07-12'); assert(corruptHistoryCalls === 1 && refreshedHistory.daily.length === 3, 'A corrupt short history cache must be ignored and refreshed, not rendered as GDD.')
+
+  // Group 8: pure growing-degree-day math keeps below-base days at zero and rounds only after the full sum.
+  assert(growingDegreeDays([{ date: '2026-05-01', temperature_max_f: 48, temperature_min_f: 36 }]) === 0, 'Below-base days must add zero GDD.')
+  assert(growingDegreeDays([{ date: '2026-05-02', temperature_max_f: 80, temperature_min_f: 60 }]) === 20, 'An above-base day must use the average high and low.')
+  assert(growingDegreeDays([{ date: '2026-05-03', temperature_max_f: 40, temperature_min_f: 20 }, { date: '2026-05-04', temperature_max_f: 70, temperature_min_f: 50 }]) === 10, 'Negative daily values must clamp before summing.')
+  assert(growingDegreeDays([{ date: '2026-05-05', temperature_max_f: 53, temperature_min_f: 50 }]) === 2, 'Fractional daily GDD must round the final farmer-facing total.')
+  assert(growingDegreeDays([]) === 0, 'An empty history range must have zero GDD.')
+  console.log('Weather service regressions passed (8 coverage groups).')
 }
 void run()

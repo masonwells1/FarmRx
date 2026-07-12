@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "regression": "tsx src/data/MockFieldsRepository.regression.ts && tsx src/data/MockGrainRepository.regression.ts && tsx src/data/SupabaseFieldsRepository.regression.ts && tsx src/data/SupabaseGrainRepository.regression.ts && tsx src/data/MockProfitabilityRepository.regression.ts && tsx src/data/SupabaseProfitabilityRepository.regression.ts && tsx src/data/MockInventoryRepository.regression.ts && tsx src/data/SupabaseInventoryRepository.regression.ts && tsx src/data/SupabaseEquipmentTasksRepository.regression.ts && tsx src/data/weatherService.regression.ts",
+    "regression": "tsx src/data/MockFieldsRepository.regression.ts && tsx src/data/MockGrainRepository.regression.ts && tsx src/data/SupabaseFieldsRepository.regression.ts && tsx src/data/SupabaseGrainRepository.regression.ts && tsx src/data/MockProfitabilityRepository.regression.ts && tsx src/data/SupabaseProfitabilityRepository.regression.ts && tsx src/data/MockInventoryRepository.regression.ts && tsx src/data/SupabaseInventoryRepository.regression.ts && tsx src/data/SupabaseEquipmentTasksRepository.regression.ts && tsx src/data/SupabaseFieldLogRepository.regression.ts && tsx src/data/weatherService.regression.ts",
     "preview": "vite preview"
   },
   "dependencies": {

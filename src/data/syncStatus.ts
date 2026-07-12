@@ -4,8 +4,8 @@ export type SyncState =
   | { kind: 'syncing'; pending: number }
   | { kind: 'blocked'; pending: number; message: string }
 
-type Module = 'fields' | 'grain' | 'profitability' | 'inventory' | 'equipment_tasks' | 'weather'
-const states: Record<Module, SyncState> = { fields: { kind: 'synced', pending: 0 }, grain: { kind: 'synced', pending: 0 }, profitability: { kind: 'synced', pending: 0 }, inventory: { kind: 'synced', pending: 0 }, equipment_tasks: { kind: 'synced', pending: 0 }, weather: { kind: 'synced', pending: 0 } }
+type Module = 'fields' | 'grain' | 'profitability' | 'inventory' | 'equipment_tasks' | 'weather' | 'fieldLog'
+const states: Record<Module, SyncState> = { fields: { kind: 'synced', pending: 0 }, grain: { kind: 'synced', pending: 0 }, profitability: { kind: 'synced', pending: 0 }, inventory: { kind: 'synced', pending: 0 }, equipment_tasks: { kind: 'synced', pending: 0 }, weather: { kind: 'synced', pending: 0 }, fieldLog: { kind: 'synced', pending: 0 } }
 const retries: Partial<Record<Module, () => void>> = {}
 const listeners = new Set<() => void>()
 function aggregate(): SyncState {
