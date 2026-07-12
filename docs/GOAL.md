@@ -169,11 +169,25 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
    service-role key in an env var — never committed/shipped; creates a confirmed user
    flagged initial_farm_owner → app shows "Set up your farm"). REMAINING: Mason's 2
    dashboard toggles (see MASON ACTION ITEMS) + a real end-to-end provisioning run.
-4. Live-path manual test matrix from docs/foundation-design.md (multi-user permission
-   checks: owner/manager/worker/granted employee/rep; offline replay on real signal drop).
-5. Real-device PWA pass (phone install, sunlight/gloves two-tap flows).
-6. Polish: neutral sign-out message; enable leaked-password protection (Supabase dashboard
-   Auth toggle — 1 minute, flagged by security advisor).
+4. [x] Live-path multi-user test matrix — PROVEN IN BROWSER 2026-07-12 ~3:30AM against the
+   live DB with real signups (created while public signups are still open — do NOT delete
+   these test users when signups get disabled):
+   · farmworker@croprxsolutions.com (worker member, no financial flag): Fields visible
+     (2 fields / 245.5 ac), Inventory visible (live 20 gal shelf), Grain DENIED with the
+     farmer-English "Grain records are private on this farm" message, Profitability DENIED
+     (data safe; message is the generic try-again one — P3 polish below).
+   · farmrep@croprxsolutions.com (rep with an enabled farm_rep_access grant): with the
+     farm's share_with_rep OFF → completely locked out (no farm at all); flipped ON →
+     Grain opens. TWO-PART RULE PROVEN both directions; sharing restored to OFF after.
+   REMAINING from this item: offline replay on a real signal drop (needs the phone pass).
+5. Real-device PWA pass (phone install, sunlight/gloves two-tap flows) — MASON + Claude.
+6. Polish: neutral sign-out message; profitability privacy-denial message should match
+   grain's honest wording (P3, found in the worker test); Resend email key for the
+   deployed deliver-grain-alert function (it fails safe with a farmer-friendly error
+   until a RESEND_API_KEY secret is added — needs a Resend account, Mason decision).
+   ALSO DONE 2026-07-12: deliver-grain-alert edge function DEPLOYED to farm-rx (ACTIVE,
+   JWT required — unauthenticated probe returns 401; the earlier deploy agent hung and
+   was killed).
 7. Ship gate prep: deploy needs Mason's explicit OK (never auto).
 
 ## MASON ACTION ITEMS (2 minutes in the Supabase dashboard, farm-rx project — 2026-07-11)
