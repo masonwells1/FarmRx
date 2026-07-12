@@ -380,6 +380,17 @@ Module 3's existing delivery-event inbox hook.
         horizontal overflow (scrollW==clientW==375). Low-risk polish → verified proportionally (no full
         Sol review needed for copy/CSS).
         **>>> MODULE 8 (PROGRAMS) COMPLETE: chunks 1–6 all done, proven, committed. <<<**
+  - [x] **FARM RX PUSHED + DEPLOYED TO PRODUCTION 2026-07-12** (Mason OK'd push + deploy). All local
+        history pushed to GitHub git@github.com:masonwells1/FarmRx.git (main). Mason connected the repo
+        to Vercel → **https://farm-rx.vercel.app** (auto-deploys on every future push). vercel.json =
+        Vite + SPA rewrite; NO env vars (supabaseConfig ships the PUBLIC publishable key; RLS protects).
+        Supabase Auth site_url + uri_allow_list set to the prod URL (was localhost:3000). LIVE E2E
+        PROVEN over HTTPS in browser: login (farmtest@) → /fields real data (2 fields/245.5ac) →
+        /programs renders; deep-link /programs serves the app (no 404); no console errors; signed out.
+        OPEN PROD FOLLOW-UPS (Mason's calls): custom SMTP for real signup/reset emails (default SMTP is
+        test-rate-limited; email-confirm is ON); public signups still OPEN (disable_signup=False — likely
+        want OFF + provision-customer.mjs); test farm/accounts still in prod DB (RLS-isolated); phone-push
+        SEND still gated (in-app alerts work).
       OPERATING MODEL (Mason 2026-07-12): **Opus = orchestrator** (plan/delegate/verify-in-browser/
       report). **Terra + Luna = the everyday workers** (most chunks; Terra modules/UI, Luna boilerplate/
       docs/mechanical). **Sol = complex/architectural work AND Opus's peer advisor** (equal-or-better —
