@@ -313,7 +313,26 @@ Module 3's existing delivery-event inbox hook.
         DB), added 2 passes w/ free-type products (persisted), reordered (Move down swapped seq 1/2),
         EDITED a pass and it STAYED in place (P1-1 fix), archived program (is_archived=true, left active
         list, shows under Show-archived w/ Archived badge), 0px horizontal overflow at 375px. Commit: (this).
-  - [ ] CHUNK 3 assign+tracker · 4 tasks+reminders · 5 weather+applied+cost · 6 polish.
+  - [x] CHUNK 3 assign + season tracker DONE + BROWSER-PROVEN 2026-07-12 (Terra build): "Assign to
+        fields" (program picker → crop-year checkboxes reading "Field — Commodity — Year — planting N")
+        + "Season progress" tracker (grouped by crop, then program w/ kind badge; per-pass Apply/Skip/
+        Reschedule; per-assignment Refresh/Reassign/Unassign). mark-applied called with
+        create_record=false + record_id=null (NO application record this chunk — Chunk 5). Sol review:
+        2 P1 (canonical echo not fully validated before queue-head removal; offline projection faked
+        actionable assignment IDs + misattributed reassign history) + 3 P2 (archived terminal history
+        hidden; picker didn't show existing programs / block dup; regression not faithful) + 1 P3 — ALL
+        fixed by Terra (full canonical read-back before 'synced'; non-actionable pending placeholders;
+        archived terminal tracks visible read-only; picker shows/blocks dup w/ specific message; regression
+        5→22 groups w/ malformed-echo + lost-response per op). Opus firsthand: tsc + build + regression green.
+        BROWSER-PROVEN on farm-rx TEST (then cleaned): assign program→crop persisted (program_assignment +
+        materialized pass "Post Herbicide" + product "Glyphosate 32 oz/ac", verified in Postgres); tracker
+        rendered crop+program+pass; Apply→status='applied' 160ac, NO record created/linked, crop row
+        untouched (160.00/2026-05-01). HONESTY NOTE: Opus first reported a "P0 assign writes nothing"
+        smoking-gun — that was a TEST-HARNESS ERROR (the JS selector clicked the "Assign to fields" TAB,
+        not the "Assign to 1 field" submit button); the assign flow was never broken. Sol's P1/P2/P3 were
+        real + fixed regardless, so the fix round was legitimate. Lesson: confirm the RPC actually fired
+        (network/root-cause) before declaring a code bug. Commit: (this).
+  - [ ] CHUNK 4 tasks+reminders · 5 weather+applied+cost · 6 polish.
       OPERATING MODEL (Mason 2026-07-12): **Opus = orchestrator** (plan/delegate/verify-in-browser/
       report). **Terra + Luna = the everyday workers** (most chunks; Terra modules/UI, Luna boilerplate/
       docs/mechanical). **Sol = complex/architectural work AND Opus's peer advisor** (equal-or-better —

@@ -2,6 +2,7 @@ export type FarmViewerRole = 'owner' | 'manager' | 'worker' | 'read_only'
 export type ProgramKind = 'chemical' | 'fertility' | 'fungicide' | 'other'
 export type ProgramPassType = 'pre' | 'post' | 'fungicide' | 'planter_fertility' | 'custom'
 export type ProgramActivityType = 'spray' | 'fertility' | 'other'
+export type AssignedPassStatus = 'planned' | 'applied' | 'skipped' | 'cancelled'
 
 export interface ProgramProductDraft { id: string | null; product_name: string; rate_text: string; unit_text: string; estimated_cost_per_acre: number | null; notes: string | null }
 export interface ProgramPassDraft { id: string | null; name: string; pass_type: ProgramPassType; activity_type: ProgramActivityType; timing_label: string | null; target_date: string | null; planting_offset_days: number | null; reminder_lead_days: number; notes: string | null }
@@ -9,8 +10,13 @@ export interface ProgramDraft { id: string | null; name: string; program_kind: P
 export interface ProgramProduct extends Omit<ProgramProductDraft, 'id'> { id: string; farm_id: string; program_pass_id: string; sequence: number; is_archived: boolean }
 export interface ProgramPass extends Omit<ProgramPassDraft, 'id'> { id: string; farm_id: string; program_id: string; sequence: number; is_archived: boolean; products: ProgramProduct[]; pending?: boolean }
 export interface Program extends Omit<ProgramDraft, 'id'> { id: string; farm_id: string; revision: number; is_archived: boolean; passes: ProgramPass[]; pending?: boolean }
-export interface ProgramsData { programs: Program[]; viewer: { user_id: string; role: FarmViewerRole } }
-export interface ProgramsRepository { getData(includeArchived?: boolean): Promise<ProgramsData>; saveProgram(draft: ProgramDraft): Promise<Program>; saveProgramPass(programId: string, pass: ProgramPassDraft, products: ProgramProductDraft[], placeAfterPassId: string | null): Promise<ProgramPass>; reorderProgramPasses(programId: string, orderedPassIds: string[]): Promise<string[]>; deleteProgramPass(programId: string, passId: string): Promise<void>; deleteProgram(programId: string): Promise<Program> }
+export interface CropAssignmentChoice { id: string; farm_id: string; field_id: string; field_name: string; commodity_id: string; commodity_name: string; crop_year: number; planting_sequence: number; planting_date: string | null; planted_acres: number }
+export interface AssignedProgramProduct { id: string; farm_id: string; assigned_pass_id: string; sequence: number; product_name: string; rate_text: string; unit_text: string; estimated_cost_per_acre: number | null; notes: string | null; actual_product_name: string | null; actual_rate_text: string | null; actual_unit_text: string | null; actual_cost_per_acre: number | null }
+export interface ActualProgramProduct { id: string; actual_product_name: string; actual_rate_text: string; actual_unit_text: string; actual_cost_per_acre: number | null }
+export interface AssignedProgramPass { id: string; assignment_id: string; source_program_pass_id: string | null; source_revision: number; sequence: number; name: string; pass_type: ProgramPassType; activity_type: ProgramActivityType; timing_label: string | null; target_date: string | null; planting_offset_days: number | null; reminder_lead_days: number; notes: string | null; due_on: string | null; due_source: 'template_date' | 'planting_offset' | 'manual' | 'unscheduled'; is_field_override: boolean; status: AssignedPassStatus; applied_on: string | null; applied_acres: number | null; skipped_on: string | null; skip_reason: string | null; cancelled_at: string | null; cancel_reason: string | null; application_record_id: string | null; products: AssignedProgramProduct[]; pending?: boolean }
+export interface ProgramAssignment extends CropAssignmentChoice { assignment_id: string; program_id: string; program_name_snapshot: string; program_kind_snapshot: ProgramKind | null; assignment_status: 'active' | 'archived'; template_revision: number; current_template_revision: number; passes: AssignedProgramPass[]; pending?: boolean }
+export interface ProgramsData { programs: Program[]; assignments: ProgramAssignment[]; cropAssignments: CropAssignmentChoice[]; viewer: { user_id: string; role: FarmViewerRole } }
+export interface ProgramsRepository { getData(includeArchived?: boolean): Promise<ProgramsData>; saveProgram(draft: ProgramDraft): Promise<Program>; saveProgramPass(programId: string, pass: ProgramPassDraft, products: ProgramProductDraft[], placeAfterPassId: string | null): Promise<ProgramPass>; reorderProgramPasses(programId: string, orderedPassIds: string[]): Promise<string[]>; deleteProgramPass(programId: string, passId: string): Promise<void>; deleteProgram(programId: string): Promise<Program>; assignProgram(programId: string, cropAssignmentIds: string[]): Promise<ProgramAssignment[]>; refreshProgramAssignment(assignmentId: string): Promise<ProgramAssignment>; reassignProgramAssignment(assignmentId: string, newProgramId: string, reason: string): Promise<ProgramAssignment>; rescheduleProgramPass(assignedPassId: string, dueOn: string, timingLabel: string | null): Promise<AssignedProgramPass>; markProgramPassApplied(assignedPassId: string, appliedOn: string, appliedAcres: number, actualProducts: ActualProgramProduct[]): Promise<AssignedProgramPass>; skipProgramPass(assignedPassId: string, skippedOn: string, reason: string): Promise<AssignedProgramPass>; unassignProgram(assignmentId: string, reason: string): Promise<void> }
 
 export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const date = /^\d{4}-\d{2}-\d{2}$/
@@ -19,6 +25,7 @@ const text = (value: unknown, maximum: number, required = false) => typeof value
 const nullableText = (value: unknown, maximum: number) => value === null || text(value, maximum)
 export function roundDecimalHalfUp(value: number, places = 4) { if (!Number.isFinite(value)) return value; const factor = 10 ** places; const shifted = Number((Math.abs(value) * factor).toPrecision(15)); return Math.sign(value) * Math.floor(shifted + 0.5) / factor }
 export function canEditPrograms(role: FarmViewerRole) { return role === 'owner' || role === 'manager' || role === 'worker' }
+export function validDate(value: string) { if (!date.test(value)) return false; const parsed = new Date(`${value}T00:00:00.000Z`); return !Number.isNaN(parsed.getTime()) && `${parsed.getUTCFullYear()}-${String(parsed.getUTCMonth() + 1).padStart(2, '0')}-${String(parsed.getUTCDate()).padStart(2, '0')}` === value }
 export function validateProgramDraft(value: ProgramDraft | Record<string, unknown>): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value) || !exact(value, ['id', 'name', 'program_kind', 'commodity_id', 'crop_year', 'notes'])) return 'This program is incomplete. Please reopen it and try again.'
   const draft = value as ProgramDraft
@@ -38,7 +45,7 @@ export function validateProgramPassDraft(value: ProgramPassDraft | Record<string
   if (!['pre', 'post', 'fungicide', 'planter_fertility', 'custom'].includes(draft.pass_type)) return 'Choose a pass type.'
   if (!['spray', 'fertility', 'other'].includes(draft.activity_type)) return 'Choose what this pass does.'
   if (!nullableText(draft.timing_label, 160)) return 'Timing label must be 160 characters or less.'
-  if (draft.target_date !== null && (!date.test(draft.target_date) || Number.isNaN(Date.parse(`${draft.target_date}T00:00:00Z`)))) return 'Enter a valid target date.'
+  if (draft.target_date !== null && !validDate(draft.target_date)) return 'Enter a valid target date.'
   if (draft.target_date !== null && draft.planting_offset_days !== null) return 'Choose either a target date or days from planting, not both.'
   if (draft.planting_offset_days !== null && (!Number.isInteger(draft.planting_offset_days) || draft.planting_offset_days < -120 || draft.planting_offset_days > 365)) return 'Days from planting must be between -120 and 365.'
   if (!Number.isInteger(draft.reminder_lead_days) || draft.reminder_lead_days < 0 || draft.reminder_lead_days > 60) return 'Reminder lead time must be between 0 and 60 days.'
@@ -55,4 +62,5 @@ export function validateProgramProductDraft(value: ProgramProductDraft | Record<
   if (!nullableText(product.notes, 1000)) return 'Product notes must be 1,000 characters or less.'
   return null
 }
+export function validateActualProgramProducts(value: ActualProgramProduct[]): string | null { if (!Array.isArray(value) || new Set(value.map((p) => p.id)).size !== value.length || value.some((p) => !uuid.test(p.id) || !text(p.actual_product_name, 200, true) || !text(p.actual_rate_text, 80, true) || !text(p.actual_unit_text, 80, true) || p.actual_cost_per_acre !== null && (!Number.isFinite(p.actual_cost_per_acre) || p.actual_cost_per_acre < 0))) return 'Check every actual product name, rate, unit, and cost.'; return null }
 export function normalizeProgramProductDraft(product: ProgramProductDraft): ProgramProductDraft { return { ...product, product_name: product.product_name.trim(), rate_text: product.rate_text.trim(), unit_text: product.unit_text.trim(), notes: product.notes?.trim() || null, estimated_cost_per_acre: product.estimated_cost_per_acre === null ? null : roundDecimalHalfUp(product.estimated_cost_per_acre) } }
