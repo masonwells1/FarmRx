@@ -199,9 +199,23 @@ pulled Equipment/Tasks forward. Build order + status:
       today−5 with honest caption, not understated to today); 375px single-column form, no page
       overflow with a 400-char note. tsc+build+regression green firsthand. (Test data note: North
       Quarter now has location 40.11,-88.21 + planting_date 2026-05-01 — left in place, realistic.)
-- [ ] Feature C: Scouting notes with photos — walk a field, drop a GPS pin, attach photos
-      (Supabase Storage bucket, per-farm isolation), category (weed/disease/pest/other),
-      optional auto-create a follow-up task. Feeds the Tasks board.
+- [x] Feature C: Scouting notes with photos — BUILT + LIVE + BROWSER-PROVEN 2026-07-12.
+      Per-field scouting notes (category weed/disease/insect/other), GPS pin (reuses Feature A
+      geolocation), PHOTOS to a PRIVATE Supabase Storage bucket (farm-scoped RLS on the first
+      path segment; signed URLs), optional "add a follow-up task" that lands a card on the Tasks
+      board (source 'scouting'). 0020 applied (scouting_notes + scouting_photos + bucket +
+      storage RLS + save/delete RPCs + widened farm_tasks.source) + 0021 (bucket hardening:
+      private, 20MB, image MIME only) = 21 migrations. Gauntlet: 0020 RPCs behaviorally proven
+      (owner impersonation: note+board-task created, delete removed). Browser-proven happy path:
+      note+photo → uploaded to private bucket → signed-URL thumbnail → note/photo rows + storage
+      object all consistent (path {farm}/{field}/{note}/{uuid}) → UI delete removed rows AND the
+      storage file (0/0/0). Sol review found 3 P1s my happy path missed — photo-ONLY note and
+      GPS-tagged note each COMMITTED but the client falsely reported failure (empty-note→null
+      echo mismatch; unrounded phone GPS vs numeric(9,6) echo), and a failed Storage delete could
+      orphan files — ALL fixed by Terra + a durable delete-path + client MIME/size guard;
+      scouting suite 6→9 groups. Re-proved after fix: photo-only note saved (note=null), GPS note
+      saved (40.110538,-88.207312 — unrounded 40.11053789 rounded to 6dp, no false failure). tsc+
+      build+regression green firsthand. PARKED P2/P3 already fixed; remaining polish none.
 - [ ] Feature D: Harvest yield tracking — actual bushels per field/crop-year (crop_assignments
       already has harvested_bushels + expected columns), actual-vs-expected, feeds Profitability
       and builds the yield history crop insurance (APH)/FSA ask for.

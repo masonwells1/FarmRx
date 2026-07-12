@@ -1,0 +1,3 @@
+The migration draft passed all permitted static checks: 18/18 assertions passed, whitespace is clean, and SHA-256 is `C719EC62230317639E4127DEDD192E997E1BFC17CD3D4B27C56EF5AC3B71E9D7`.
+
+Actual PostgreSQL execution remains unverified. Running it would require a database or server, which the task explicitly prohibited. The orchestrator must prove application and RPC behavior during its review/apply stage. No additional files were changed.

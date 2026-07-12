@@ -10,7 +10,8 @@ import { InventoryPage } from './InventoryModule'
 import { EquipmentPage, TasksPage } from './EquipmentTasksModule'
 import { WeatherPage } from './WeatherModule'
 import { FieldLogPage } from './FieldLogModule'
-import { equipmentTasksRepository, fieldLogRepository, fieldsRepository, grainServices, inventoryRepository, replayEquipmentTasksQueue, replayFieldLocationQueue, replayFieldLogQueue, replayFieldsQueue, replayGrainQueue, replayInventoryQueue, replayProfitabilityQueue } from './data'
+import { ScoutingPage } from './ScoutingModule'
+import { equipmentTasksRepository, fieldLogRepository, fieldsRepository, grainServices, inventoryRepository, replayEquipmentTasksQueue, replayFieldLocationQueue, replayFieldLogQueue, replayFieldsQueue, replayGrainQueue, replayInventoryQueue, replayProfitabilityQueue, replayScoutingQueue, scoutingRepository } from './data'
 import { getSyncStatus, retrySavedChanges, subscribeSyncStatus } from './data/syncStatus'
 import type { EntityType } from './data/fields'
 import { farmerError } from './lib/farmerErrors'
@@ -24,6 +25,7 @@ const navigation = [
   { label: 'Tasks', path: '/tasks', icon: '✓' },
   { label: 'Weather', path: '/weather', icon: '☀' },
   { label: 'Field Log', path: '/field-log', icon: '≡' },
+  { label: 'Scouting', path: '/scouting', icon: '◉' },
 ]
 
 function AppLayout() {
@@ -71,6 +73,7 @@ function AppLayout() {
             <Route path="/tasks" element={<TasksPage repository={equipmentTasksRepository} />} />
             <Route path="/weather" element={<WeatherPage />} />
             <Route path="/field-log" element={<FieldLogPage fieldLogRepository={fieldLogRepository} fieldsRepository={fieldsRepository} />} />
+            <Route path="/scouting" element={<ScoutingPage scoutingRepository={scoutingRepository} fieldsRepository={fieldsRepository} />} />
             <Route path="*" element={<Navigate to="/fields" replace />} />
           </Routes>
         </div>
@@ -98,7 +101,7 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
     let active = true
     void findOnlyAccessibleFarm().then((farm) => {
       if (!active) return
-      if (farm) { setState('ready'); void (async () => { await replayFieldsQueue(); void replayGrainQueue(); void replayInventoryQueue(); void replayProfitabilityQueue(); void replayEquipmentTasksQueue(); await replayFieldLocationQueue(); await replayFieldLogQueue() })() }
+      if (farm) { setState('ready'); void (async () => { await replayFieldsQueue(); void replayGrainQueue(); void replayInventoryQueue(); void replayProfitabilityQueue(); void replayEquipmentTasksQueue(); await replayFieldLocationQueue(); await replayFieldLogQueue(); await replayScoutingQueue() })() }
       else if (user?.app_metadata.initial_farm_owner === true) setState('setup')
       else { setMessage('Crop RX needs to finish your farm setup.'); setState('blocked') }
     }).catch((error: unknown) => {

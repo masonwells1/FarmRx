@@ -1,0 +1,2 @@
+import type { ScoutingNoteDraft } from './scouting'
+export interface ScoutingDataGateway { loadNotes(farmId: string, fieldId?: string): Promise<unknown[]>; loadPhotos(farmId: string): Promise<unknown[]>; loadViewerRole(farmId: string, userId: string): Promise<unknown>; saveNote(input: { farmId: string; operationId: string; note: ScoutingNoteDraft }): Promise<unknown>; deleteNote(input: { farmId: string; noteId: string }): Promise<unknown> }

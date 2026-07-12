@@ -218,7 +218,54 @@ tbody tr:nth-child(even) td { background: var(--premix-bg); }
 .empty-state { width: min(100%, 560px); padding: 40px 28px; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); text-align: center; }
 .empty-state p { margin: 12px auto 26px; color: var(--matte-gray); }
 
+/* Scouting keeps field observations readable in bright light and usable with a phone camera. */
+.scouting-page, .scouting-list { display: grid; gap: 20px; }
+.scouting-card { overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); }
+.scouting-card-head { display: flex; align-items: start; justify-content: space-between; gap: 18px; padding: 20px; background: var(--light-green); }
+.scouting-card-head h2 { margin: 0; font-family: var(--brand-font); font-size: 25px; }
+.scouting-card-head p { margin: 4px 0 0; color: var(--matte-gray); }
+.scouting-timeline { margin-top: 20px; border-top: 1px solid var(--hairline); }
+.scouting-timeline h3 { margin: 0; padding: 14px 20px; background: var(--deep-green); color: var(--on-dark); font-family: var(--brand-font); font-size: 18px; }
+.scouting-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 18px 20px 0; padding: 18px; border: 1px solid var(--hairline); border-radius: 12px; background: var(--premix-bg); }
+.scouting-form h3, .scouting-wide, .scouting-form > div:last-child { grid-column: 1 / -1; }
+.scouting-form h3 { margin: 0; font-family: var(--brand-font); }
+.scouting-form label { display: grid; gap: 6px; color: var(--matte-gray); font-weight: 700; }
+.scouting-form textarea, .scouting-form input[type="date"], .scouting-form input[type="file"] { width: 100%; padding: 10px 12px; border: 2px solid var(--hairline); border-radius: 9px; color: var(--charcoal); background: var(--surface); }
+.scouting-form textarea { min-height: 112px; resize: vertical; }
+.scouting-form fieldset { margin: 0; padding: 0; border: 0; }
+.scouting-form legend { margin-bottom: 6px; color: var(--matte-gray); font-weight: 700; }
+.category-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.category-chips button { min-width: 92px; min-height: 48px; border: 2px solid var(--deep-green); border-radius: 99px; background: var(--surface); color: var(--deep-green); font-weight: 700; }
+.category-chips button.active { background: var(--deep-green); color: var(--on-dark); }
+.location-line, .scouting-form > div:last-child { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.location-line span { color: var(--matte-gray); }
+.scouting-form small { color: var(--matte-gray); font-weight: 500; }
+.task-check { display: flex !important; grid-template-columns: 28px 1fr; align-items: center; color: var(--charcoal) !important; }
+.task-check input { min-width: 24px; min-height: 24px; accent-color: var(--crx-green); }
+.photo-preview, .scouting-photos { display: flex; flex-wrap: wrap; gap: 10px; }
+.photo-preview img, .scouting-photos img { width: 92px; height: 92px; display: block; border-radius: 9px; object-fit: cover; }
+.scouting-photos button { min-width: 92px; min-height: 92px; padding: 0; overflow: hidden; border: 2px solid var(--hairline); border-radius: 10px; background: var(--surface); }
+.scouting-photos button:focus-visible { outline-offset: 2px; }
+.photo-loading { min-height: 48px; display: flex; align-items: center; color: var(--matte-gray); }
+.scouting-error { margin: 18px 20px 0; }
+.scouting-row { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 16px 20px; border-top: 1px solid var(--hairline); }
+.scouting-row:nth-child(even) { background: var(--premix-bg); }
+.scouting-row-main { min-width: 0; display: grid; gap: 10px; }
+.scouting-row-main p { margin: 0; overflow-wrap: anywhere; }
+.scouting-row-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--matte-gray); }
+.scouting-row-meta strong { color: var(--charcoal); }
+.category-chip { display: inline-flex; align-items: center; min-height: 32px; padding: 3px 10px; border-radius: 99px; background: var(--light-green); color: var(--deep-green); font-size: 16px; font-weight: 700; }
+.category-chip.disease, .category-chip.insect { background: var(--warn-bg); color: #604a22; }
+.photo-lightbox { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 24px; background: rgb(46 46 46 / 92%); }
+.photo-lightbox img { max-width: min(100%, 920px); max-height: calc(100vh - 120px); border-radius: 12px; object-fit: contain; }
+.photo-lightbox button { position: fixed; top: 18px; right: 18px; border: 2px solid var(--on-dark); border-radius: 9px; background: var(--surface); color: var(--deep-green); font-weight: 700; }
+
 @media (max-width: 767px) {
+  .scouting-card-head, .scouting-row { align-items: stretch; flex-direction: column; }
+  .scouting-card-head .primary-action { width: 100%; }
+  .scouting-form { grid-template-columns: 1fr; }
+  .field-log-row-actions { width: 100%; }
+  .field-log-row-actions button { flex: 1 1 0; }
   .field-log-form { grid-template-columns: 1fr; }
   .field-log-row { align-items: start; flex-direction: column; }
   .field-log-row-actions { width: 100%; }
