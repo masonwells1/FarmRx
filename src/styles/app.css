@@ -759,3 +759,6 @@ tbody tr:nth-child(even) td { background: var(--premix-bg); }
   .basis-entry { grid-template-columns: 1fr; padding: 0 16px 16px; }
   .basis-entry .secondary-action { width: 100%; }
 }
+
+.task-title-link { min-height: 48px; padding: 0; border: 0; background: transparent; color: var(--charcoal); font: inherit; font-size: 18px; font-weight: 700; text-align: left; text-decoration: underline; text-decoration-color: var(--crx-green); cursor: pointer; }
+.program-task .chip-row button, .program-task .task-actions button { min-height: 48px; }

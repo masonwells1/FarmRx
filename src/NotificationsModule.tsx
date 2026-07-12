@@ -1,10 +1,12 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import type { MarkReadResult, Notification, NotificationsRepository } from './data/notifications'
 import { vapidPublicKeyBytes } from './data/pushConfig'
 import { farmerError } from './lib/farmerErrors'
 
 type PushState = 'checking' | 'off' | 'on' | 'unsupported' | 'denied' | 'insecure'
+export type DueGenerationResult = 'generated' | 'skipped'
+const noDueItems = async (): Promise<DueGenerationResult> => 'skipped'
 const labels: Record<Notification['category'], string> = { spray: 'Spray', rain: 'Rain', scouting: 'Scouting', harvest: 'Harvest', service: 'Service', task: 'Task', general: 'Alert' }
 let notificationRevision = 0
 const notificationListeners = new Set<() => void>()
@@ -13,23 +15,34 @@ export function subscribeNotificationBell(listener: () => void) { notificationLi
 export function getNotificationBellRevision() { return notificationRevision }
 export function markReadUiAction(result: MarkReadResult, requestedCount: number) { return result.kind === 'pending' ? 'pending' : result.updatedCount === requestedCount ? 'confirmed' : 'reload' }
 export async function rollbackFailedPushSubscription(subscription: Pick<PushSubscription, 'unsubscribe'>) { try { await subscription.unsubscribe() } catch { /* The server save failed, so alerts are not represented as enabled. */ } }
+/** Start the initial read immediately, then make exactly one follow-up read when
+ * generation reports success. Callers supply the current-request guard so stale
+ * work cannot update an overlapping screen or an unmounted component. */
+export async function refreshNotificationsAfterDueGeneration<T>({ read, generateDueItems, onData, onReadError, onGenerated, isCurrent }: { read: () => Promise<T>; generateDueItems: () => Promise<DueGenerationResult>; onData: (data: T) => void; onReadError: (error: unknown) => void; onGenerated?: () => void; isCurrent: () => boolean }) {
+  const initialRead = read()
+  const generation = generateDueItems().catch((): DueGenerationResult => 'skipped')
+  try { const data = await initialRead; if (isCurrent()) onData(data) } catch (error) { if (isCurrent()) onReadError(error) }
+  if (await generation !== 'generated') return
+  if (isCurrent()) onGenerated?.()
+  try { const data = await read(); if (isCurrent()) onData(data) } catch (error) { if (isCurrent()) onReadError(error) }
+}
 function relativeTime(value: string) { const seconds = Math.max(0, Math.round((Date.now() - Date.parse(value)) / 1000)); if (seconds < 60) return 'Just now'; if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`; if (seconds < 86400) return `${Math.floor(seconds / 3600)} hr ago`; if (seconds < 604800) return `${Math.floor(seconds / 86400)} days ago`; return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(value)) }
 function securePushContext() { return window.isSecureContext || ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname) }
 function supported() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window }
 function pushSubscriptionInput(subscription: PushSubscription) { const p256dh = subscription.getKey('p256dh'); const auth = subscription.getKey('auth'); if (!p256dh || !auth) throw new Error('Phone alerts could not be set up. Please try again.'); return { endpoint: subscription.endpoint, p256dh: btoa(String.fromCharCode(...new Uint8Array(p256dh))), auth: btoa(String.fromCharCode(...new Uint8Array(auth))), userAgent: navigator.userAgent } }
 
-export function NotificationBell({ repository }: { repository: NotificationsRepository }) {
-  const navigate = useNavigate(); const location = useLocation(); const revision = useSyncExternalStore(subscribeNotificationBell, getNotificationBellRevision, getNotificationBellRevision); const [unread, setUnread] = useState(0)
-  const refresh = async () => { try { setUnread((await repository.getData()).unreadCount) } catch { /* The full page gives a retry state; navigation must remain available. */ } }
-  useEffect(() => { void refresh() }, [location.pathname, revision])
+export function NotificationBell({ repository, generateDueItems = noDueItems }: { repository: NotificationsRepository; generateDueItems?: () => Promise<DueGenerationResult> }) {
+  const navigate = useNavigate(); const location = useLocation(); const revision = useSyncExternalStore(subscribeNotificationBell, getNotificationBellRevision, getNotificationBellRevision); const [unread, setUnread] = useState(0); const mounted = useRef(true); const refreshVersion = useRef(0)
+  const refresh = async () => { const version = ++refreshVersion.current; await refreshNotificationsAfterDueGeneration({ read: () => repository.getData(), generateDueItems, onData: (data) => setUnread(data.unreadCount), onReadError: () => { /* The full page gives a retry state; navigation must remain available. */ }, isCurrent: () => mounted.current && version === refreshVersion.current }) }
+  useEffect(() => { mounted.current = true; void refresh(); return () => { mounted.current = false; refreshVersion.current += 1 } }, [location.pathname, revision])
   return <button className="alert-bell" type="button" onClick={() => navigate('/notifications')} aria-label={unread ? `${unread} unread alerts` : 'Alerts'}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16v-5a6 6 0 0 0-12 0v5l-2 2h16l-2-2Zm-8 4h4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>{unread > 0 && <b>{unread > 99 ? '99+' : unread}</b>}</button>
 }
 
-export function NotificationsPage({ repository }: { repository: NotificationsRepository }) {
-  const navigate = useNavigate(); const [notifications, setNotifications] = useState<Notification[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState<string | null>(null); const [busy, setBusy] = useState<string | null>(null); const [push, setPush] = useState<PushState>('checking'); const [pushMessage, setPushMessage] = useState<string | null>(null)
-  const reload = async () => { setLoading(true); try { const data = await repository.getData(); setNotifications(data.notifications); setError(null) } catch (caught) { setError(farmerError(caught, 'open your alerts')) } finally { setLoading(false) } }
+export function NotificationsPage({ repository, generateDueItems = noDueItems }: { repository: NotificationsRepository; generateDueItems?: () => Promise<DueGenerationResult> }) {
+  const navigate = useNavigate(); const [notifications, setNotifications] = useState<Notification[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState<string | null>(null); const [busy, setBusy] = useState<string | null>(null); const [push, setPush] = useState<PushState>('checking'); const [pushMessage, setPushMessage] = useState<string | null>(null); const mounted = useRef(true); const refreshVersion = useRef(0)
+  const reload = async () => { const version = ++refreshVersion.current; const isCurrent = () => mounted.current && version === refreshVersion.current; if (isCurrent()) setLoading(true); await refreshNotificationsAfterDueGeneration({ read: () => repository.getData(), generateDueItems, onData: (data) => { setNotifications(data.notifications); setError(null) }, onReadError: (caught) => setError(farmerError(caught, 'open your alerts')), onGenerated: invalidateNotificationBell, isCurrent }); if (isCurrent()) setLoading(false) }
   const checkPush = async () => { if (!securePushContext()) { setPush('insecure'); return }; if (!supported()) { setPush('unsupported'); return }; if (Notification.permission === 'denied') { setPush('denied'); return }; try { const registration = await navigator.serviceWorker.ready; setPush(await registration.pushManager.getSubscription() ? 'on' : 'off') } catch { setPush('unsupported') } }
-  useEffect(() => { void reload(); void checkPush() }, [])
+  useEffect(() => { mounted.current = true; void reload(); void checkPush(); return () => { mounted.current = false; refreshVersion.current += 1 } }, [])
   async function mark(ids: string[]) { if (!ids.length) return; setBusy(ids.length === 1 ? ids[0] : 'all'); try { const result = await repository.markRead(ids); const action = markReadUiAction(result, ids.length); if (action === 'confirmed') setNotifications((current) => current.map((notification) => ids.includes(notification.id) ? { ...notification, read_at: notification.read_at ?? new Date().toISOString() } : notification)); else if (action === 'reload') { await reload(); invalidateNotificationBell(); return } setError(null); invalidateNotificationBell() } catch (caught) { setError(farmerError(caught, 'mark this alert read')) } finally { setBusy(null) } }
   async function turnOn() { setBusy('push'); setPushMessage(null); let subscription: PushSubscription | null = null; try { if (!securePushContext()) { setPush('insecure'); return }; if (!supported()) { setPush('unsupported'); return }; const permission = await Notification.requestPermission(); if (permission !== 'granted') { setPush(permission === 'denied' ? 'denied' : 'off'); return }; const registration = await navigator.serviceWorker.ready; subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidPublicKeyBytes() }); await repository.savePushSubscription(pushSubscriptionInput(subscription)); setPush('on'); setPushMessage('Phone alerts are on for this device.') } catch (caught) { if (subscription) { await rollbackFailedPushSubscription(subscription); setPush('off') } else void checkPush(); setPushMessage(farmerError(caught, 'turn on phone alerts')) } finally { setBusy(null) } }
   async function turnOff() { setBusy('push'); setPushMessage(null); let subscription: PushSubscription | null = null; try { const registration = await navigator.serviceWorker.ready; subscription = await registration.pushManager.getSubscription(); if (!subscription) { setPush('off'); setPushMessage('Phone alerts are off for this device.'); return } const input = pushSubscriptionInput(subscription); await repository.deletePushSubscription(subscription.endpoint); try { if (!await subscription.unsubscribe()) throw new Error('The browser kept the subscription.') } catch { try { await repository.savePushSubscription(input); setPush('on'); setPushMessage('Farm Rx could not turn off phone alerts, so they remain on. Please try again.'); return } catch { await rollbackFailedPushSubscription(subscription); setPush('off'); setPushMessage('Farm Rx could not finish turning off phone alerts. Please try again.'); return } } setPush('off'); setPushMessage('Phone alerts are off for this device.') } catch (caught) { if (subscription) setPush('on'); else void checkPush(); setPushMessage(farmerError(caught, 'turn off phone alerts')) } finally { setBusy(null) } }

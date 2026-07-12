@@ -332,7 +332,23 @@ Module 3's existing delivery-event inbox hook.
         not the "Assign to 1 field" submit button); the assign flow was never broken. Sol's P1/P2/P3 were
         real + fixed regardless, so the fix round was legitimate. Lesson: confirm the RPC actually fired
         (network/root-cause) before declaring a code bug. Commit: (this).
-  - [ ] CHUNK 4 tasks+reminders · 5 weather+applied+cost · 6 polish.
+  - [x] CHUNK 4 due passes → tasks + reminders DONE + BROWSER-PROVEN 2026-07-12 (Terra build):
+        generate_due_program_items wired best-effort at farm-ready + Season-progress load + Notifications
+        refresh; a due Planned pass raises ONE farm_tasks card (source='program', title=program+pass+field)
+        + ONE deduped owner notification; Apply/Skip/Cancel close the card. Sol review: 1 P1 (editing a
+        program card on the Tasks board dropped its linkage → strict mapper then rejected the WHOLE board
+        = bricked) + 2 P2 (reconnect generated before queued Programs replay; notifications refresh raced
+        its own generated alert) + P3 tests. FIXES: Opus added DB HARD GUARD **migration 0025**
+        (farm_tasks_program_linkage_check: source='program' ⇒ both linkage cols NOT NULL — applied to TEST +
+        proven it rejects a bad row); Terra hid Edit/Delete on program cards (tap → /programs?pass=<id>),
+        ran a 2nd best-effort generate AFTER replayProgramsQueue on reconnect, and a follow-up
+        notification/bell refresh after generation (guarded). Regression: programDueItems 4 groups,
+        Notifications 10, Tasks 10. Opus firsthand: tsc + build + full regression green. BROWSER-PROVEN on
+        farm-rx TEST (then cleaned): due pass → exactly 1 board card + 1 notification; repeated generate =
+        still 1/1 (no spam); Apply → card done + pass applied; program card has NO Edit/Delete and taps
+        through to /programs?pass=550e824e…; DB guard rejects a linkage-less program task. 25 migrations
+        now (0024 programs + 0025 guard). Commit: (this).
+  - [ ] CHUNK 5 weather spray-light + planned-vs-actual cost · 6 polish.
       OPERATING MODEL (Mason 2026-07-12): **Opus = orchestrator** (plan/delegate/verify-in-browser/
       report). **Terra + Luna = the everyday workers** (most chunks; Terra modules/UI, Luna boilerplate/
       docs/mechanical). **Sol = complex/architectural work AND Opus's peer advisor** (equal-or-better —

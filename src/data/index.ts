@@ -11,6 +11,7 @@ import { createSupabaseScoutingServices } from './createSupabaseScoutingServices
 import { createSupabaseHarvestServices } from './createSupabaseHarvestServices'
 import { createSupabaseProgramsServices } from './createSupabaseProgramsServices'
 import { createSupabaseNotificationsServices } from './createSupabaseNotificationsServices'
+import { DueProgramItemsService, SupabaseDueProgramItemsGateway } from './programDueItems'
 import { SupabaseFieldsDataGateway } from './SupabaseFieldsDataGateway'
 import { SupabaseFieldsRepository } from './SupabaseFieldsRepository'
 import { createFieldLocationClient, SupabaseFieldLocationGateway } from './fieldLocation'
@@ -68,6 +69,9 @@ export const replayHarvestQueue = () => liveHarvest.replayHarvestQueue()
 const livePrograms = createSupabaseProgramsServices({ getFarmId: currentFarmId, getUserId: currentUserId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const programsRepository = livePrograms.programsRepository
 export const replayProgramsQueue = () => livePrograms.replayProgramsQueue()
+const dueProgramItems = new DueProgramItemsService({ gateway: new SupabaseDueProgramItemsGateway(), getFarmId: currentFarmId, createId: () => crypto.randomUUID() })
+/** Best-effort only: later refreshes safely retry if this scan cannot reach Supabase. */
+export const generateDueProgramItems = () => dueProgramItems.generate()
 const liveScouting = createSupabaseScoutingServices({ getFarmId: currentFarmId, getUserId: currentUserId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const scoutingRepository = liveScouting.scoutingRepository
 export const replayScoutingQueue = () => liveScouting.replayScoutingQueue()

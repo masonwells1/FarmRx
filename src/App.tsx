@@ -14,7 +14,8 @@ import { ScoutingPage } from './ScoutingModule'
 import { HarvestPage } from './HarvestModule'
 import { ProgramsPage } from './ProgramsModule'
 import { NotificationsPage, NotificationBell } from './NotificationsModule'
-import { equipmentTasksRepository, fieldLogRepository, fieldsRepository, grainServices, harvestRepository, inventoryRepository, notificationsRepository, programsRepository, replayEquipmentTasksQueue, replayFieldLocationQueue, replayFieldLogQueue, replayFieldsQueue, replayGrainQueue, replayHarvestQueue, replayInventoryQueue, replayNotificationsQueue, replayProfitabilityQueue, replayProgramsQueue, replayScoutingQueue, scoutingRepository } from './data'
+import { equipmentTasksRepository, fieldLogRepository, fieldsRepository, generateDueProgramItems, grainServices, harvestRepository, inventoryRepository, notificationsRepository, programsRepository, replayEquipmentTasksQueue, replayFieldLocationQueue, replayFieldLogQueue, replayFieldsQueue, replayGrainQueue, replayHarvestQueue, replayInventoryQueue, replayNotificationsQueue, replayProfitabilityQueue, replayProgramsQueue, replayScoutingQueue, scoutingRepository } from './data'
+import { replayProgramsThenGenerateDueItems } from './data/programDueItems'
 import { getSyncStatus, retrySavedChanges, subscribeSyncStatus } from './data/syncStatus'
 import type { EntityType } from './data/fields'
 import { farmerError } from './lib/farmerErrors'
@@ -62,7 +63,7 @@ function AppLayout() {
         <header className="topbar">
           <div className="product-name">Farm <span>Rx</span></div>
           {farmName && <div className="farm-summary">{farmName}</div>}
-          <div className="topbar-actions"><NotificationBell repository={notificationsRepository} /><button className="sign-out" type="button" onClick={handleSignOut} disabled={signingOut}>{signingOut ? 'Signing out…' : 'Sign out'}</button></div>
+          <div className="topbar-actions"><NotificationBell repository={notificationsRepository} generateDueItems={generateDueProgramItems} /><button className="sign-out" type="button" onClick={handleSignOut} disabled={signingOut}>{signingOut ? 'Signing out…' : 'Sign out'}</button></div>
         </header>
         {signOutError && <p className="auth-error" role="alert">{signOutError}</p>}
         <SyncNotice />
@@ -81,8 +82,8 @@ function AppLayout() {
             <Route path="/field-log" element={<FieldLogPage fieldLogRepository={fieldLogRepository} fieldsRepository={fieldsRepository} />} />
             <Route path="/scouting" element={<ScoutingPage scoutingRepository={scoutingRepository} fieldsRepository={fieldsRepository} />} />
             <Route path="/harvest" element={<HarvestPage harvestRepository={harvestRepository} />} />
-            <Route path="/programs" element={<ProgramsPage repository={programsRepository} />} />
-            <Route path="/notifications" element={<NotificationsPage repository={notificationsRepository} />} />
+            <Route path="/programs" element={<ProgramsPage repository={programsRepository} generateDueItems={generateDueProgramItems} />} />
+            <Route path="/notifications" element={<NotificationsPage repository={notificationsRepository} generateDueItems={generateDueProgramItems} />} />
             <Route path="*" element={<Navigate to="/fields" replace />} />
           </Routes>
         </div>
@@ -108,7 +109,7 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
   const [message, setMessage] = useState('')
   useEffect(() => {
     let active = true
-    const replayOnReconnect = () => { void (async () => { await replayFieldsQueue(); await replayProgramsQueue(); await replayHarvestQueue(); void replayGrainQueue(); void replayInventoryQueue(); void replayProfitabilityQueue(); void replayEquipmentTasksQueue(); await replayFieldLocationQueue(); await replayFieldLogQueue(); await replayScoutingQueue(); await replayNotificationsQueue() })() }
+    const replayOnReconnect = () => { void (async () => { await replayFieldsQueue(); await replayProgramsThenGenerateDueItems(replayProgramsQueue, generateDueProgramItems); await replayHarvestQueue(); void replayGrainQueue(); void replayInventoryQueue(); void replayProfitabilityQueue(); void replayEquipmentTasksQueue(); await replayFieldLocationQueue(); await replayFieldLogQueue(); await replayScoutingQueue(); await replayNotificationsQueue() })() }
     window.addEventListener('online', replayOnReconnect)
     void findOnlyAccessibleFarm().then((farm) => {
       if (!active) return

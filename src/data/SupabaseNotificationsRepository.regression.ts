@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { rollbackFailedPushSubscription, markReadUiAction, getNotificationBellRevision, invalidateNotificationBell, subscribeNotificationBell } from '../NotificationsModule'
+import { refreshNotificationsAfterDueGeneration, rollbackFailedPushSubscription, markReadUiAction, getNotificationBellRevision, invalidateNotificationBell, subscribeNotificationBell } from '../NotificationsModule'
 import { QueuedNotificationsRepository } from './QueuedNotificationsRepository'
 import type { NotificationsDataGateway } from './NotificationsDataGateway'
 import { NotificationsWriteQueue, notificationsWriteQueueKey, type NotificationsQueueEntryV1 } from './notificationsWriteQueue'
@@ -60,6 +60,8 @@ async function run() {
 
   // Group 9: the injectManifest service worker keeps the offline navigation intent and defensive push payload guards.
   const serviceWorker = readFileSync(new URL('../sw.ts', import.meta.url), 'utf8'); assert(serviceWorker.includes("new NavigationRoute(createHandlerBoundToURL('/index.html'))") && serviceWorker.includes('self.skipWaiting()') && serviceWorker.includes('clientsClaim()'), 'The service worker must serve cached index.html for offline navigation and activate promptly.'); assert(serviceWorker.includes('plainObject(parsed) ? parsed : {}') && serviceWorker.includes('notificationText(payload.title, 160') && serviceWorker.includes('notificationText(payload.body, 500'), 'Malformed push payloads must fall back safely and cap notification text.')
-  console.log('SupabaseNotificationsRepository regression passed (9 coverage groups)')
+  // Group 10: one refresh reads immediately, then shows an item it generated without a render-loop re-fire or stale update.
+  let generated = 0; let readsAfterGeneration = 0; let applied: string[] = []; let generatedBellSignals = 0; const stopGeneratedBell = subscribeNotificationBell(() => { generatedBellSignals += 1 }); await refreshNotificationsAfterDueGeneration({ read: async () => { readsAfterGeneration += 1; return generated ? ['new due alert'] : [] }, generateDueItems: async () => { generated += 1; return 'generated' }, onData: (data) => { applied = data }, onReadError: () => { throw new Error('The controlled read should not fail.') }, onGenerated: invalidateNotificationBell, isCurrent: () => true }); stopGeneratedBell(); assert(generated === 1 && readsAfterGeneration === 2 && applied.join(',') === 'new due alert' && generatedBellSignals === 1, 'A successful due scan must trigger exactly one follow-up alerts read and one bell refresh that include its new alert.'); let staleUpdates = 0; await refreshNotificationsAfterDueGeneration({ read: async () => ['ignored'], generateDueItems: async () => 'generated', onData: () => { staleUpdates += 1 }, onReadError: () => { staleUpdates += 1 }, isCurrent: () => false }); assert(staleUpdates === 0, 'An unmounted or superseded alerts refresh must not update state.')
+  console.log('SupabaseNotificationsRepository regression passed (10 coverage groups)')
 }
 void run()
