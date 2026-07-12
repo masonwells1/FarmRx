@@ -262,6 +262,50 @@ pulled Equipment/Tasks forward. Build order + status:
 Commits: A 7a9fe73 · B 982fec3 · C 7e219c4 · D 4029884 · E (this). 23 migrations (0018–0023) applied
 to farm-rx TEST project. NOTHING pushed or deployed. Phone-push live send + real-device pass await Mason.
 
+## MODULE 8 — PROGRAMS (planned application programs) — Mason directed 2026-07-12
+Farmer plans Pre/Post/Fungicide/Planter-fertility (+ custom) programs, assigns to the exact crop on
+each field, tracks Planned→Applied. Decisions locked with Mason 2026-07-12: **products FREE-TYPE now**
+(catalog match later — reserved nullable column, no migration needed to switch on); **future roadmap
+(design-for, DON'T build): CRX books an order → link/push into customer's Farm Rx account → they see
+"scheduled delivery" → when it leaves the warehouse it becomes their on-hand ("on the floor")** via
+Module 3's existing delivery-event inbox hook.
+- [x] DESIGN DONE (Sol, 2026-07-12): `docs/programs-design.md` — authoritative. Materialized per-field
+      pass snapshots (template edits never rewrite applied history); assigns to crop_assignment (not
+      field) so double-crop is safe; free-type never touches inventory; receipt-idempotent SECURITY
+      DEFINER RPCs (no SELECT..FOR UPDATE — 0017 lesson); wires into farm_tasks (source 'program'),
+      notifications (dedupe), weather spray-light, application_records (link, on-hand unchanged),
+      profitability cost view. 8 P1s + 10 P2s ranked with mitigations. 6-chunk build plan.
+      DECISION (Mason 2026-07-12): ALLOW MULTIPLE active programs per crop — driver: farmers run
+      different FERTILITY programs by soil productivity (lighter soil vs higher-productive ground),
+      often + a separate chemical program on the same crop. NO sub-field zones (Farm Rx has none) —
+      it's just differently-named/categorized programs assigned per field's crop. Sol doing Rev2 of
+      programs-design.md (multiple-per-crop: drop the one-per-crop unique, optional program category,
+      tracker groups by program, tasks/reminders name the program). Then build loop starts.
+- [~] BUILD LOOP (6 chunks, each: build → Sol review → browser-prove → local commit; migration 0024
+      applied to farm-rx TEST project only, additive): 1 schema+RPCs · 2 template builder+offline ·
+      3 assign+season tracker · 4 tasks+reminders · 5 weather+applied+cost · 6 polish+full regression.
+  - [x] CHUNK 1 schema+RPCs DONE + APPLIED + DB-PROVEN 2026-07-12 (0024_programs.sql, 24 migrations):
+        6 tables (RLS all 6) + 4 security-invoker views + 18 receipt-idempotent SECURITY DEFINER RPCs
+        + farm_tasks 'program' source + is_active retire column + collision-safe sync_open_program_task_due.
+        Sol built → adversarial Codex review (NO P1s; 3 P2s fixed: refresh product-retire, task date sync,
+        reschedule cycle collision) → Opus review → APPLY caught 3 more real bugs (constraint-name
+        collision due_source; 2 plpgsql multi-INTO record errors) → then a REAL cross-module bug: create
+        application_record as 'completed' violated Inventory's protect_application_history (must be draft;
+        draft→completed needs a product; free-type has none). FIX (Sol, Option A): create as honest DRAFT,
+        unposted, on-hand unchanged; apply-with-no-record + link-existing(non-voided,same farm+crop) paths.
+        BEHAVIORAL PROOF (worker/outsider impersonation, rows observed, then cleaned up): worker builds
+        program+pass+free-type products+assign ✓; idempotent replay no-dup ✓; MULTIPLE programs/crop=2 ✓;
+        double-crop independence (corn applied, soybean pass still planned) ✓; mark-applied write-scope
+        (crop row 160.00/2026-05-01/corn untouched) ✓; app record=draft, 0 products, on-hand unchanged ✓;
+        same-program-twice rejected ✓; cross-farm crop rejected ✓; outsider write rejected ✓; 12-cap trips ✓.
+        Security advisor clean for 0024 (no new lints beyond the accepted authenticated-definer pattern).
+  - [ ] CHUNK 2 template builder + offline · 3 assign+tracker · 4 tasks+reminders · 5 weather+applied+cost · 6 polish.
+      OPERATING MODEL (Mason 2026-07-12): **Opus = orchestrator** (plan/delegate/verify-in-browser/
+      report). **Terra + Luna = the everyday workers** (most chunks; Terra modules/UI, Luna boilerplate/
+      docs/mechanical). **Sol = complex/architectural work AND Opus's peer advisor** (equal-or-better —
+      consult Sol on hard calls, don't just delegate down). **DOUBLE REVIEW on every build: Codex
+      self-review (Sol adversarial) THEN Opus review** before anything is called done + browser-proven.
+
 ## Loop policy (Mason, 2026-07-11): keep working, never block on questions
 - The loop runs continuously and only surfaces questions that GENUINELY need Mason
   (business decisions, money, irreversible actions).
