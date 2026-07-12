@@ -58,7 +58,7 @@ const seedArrangements: Arrangement[] = [
 ]
 
 const crop = (fieldIndex: number, commodity_id: string, planted_acres: number, planting_sequence = 1, crop_year = currentYear, harvested_bushels: number | null = null): CropAssignment => ({
-  id: seedId(301 + fieldIndex * 10 + planting_sequence + (crop_year === currentYear ? 0 : 100)), farm_id: farm.id, field_id: seedFields[fieldIndex].id, crop_year, commodity_id, planted_acres, planting_sequence, variety: null, planting_date: null, harvest_date: null, harvested_bushels, expected_yield_per_acre: null, expected_price_per_bu: null, notes: null, created_at: farm.created_at, updated_at: farm.updated_at,
+  id: seedId(301 + fieldIndex * 10 + planting_sequence + (crop_year === currentYear ? 0 : 100)), farm_id: farm.id, field_id: seedFields[fieldIndex].id, crop_year, commodity_id, planted_acres, planting_sequence, variety: null, planting_date: null, harvest_date: null, harvested_bushels, expected_yield_per_acre: null, expected_price_per_bu: null, actual_price_per_bu: null, notes: null, created_at: farm.created_at, updated_at: farm.updated_at,
 })
 const seedAssignments: CropAssignment[] = [
   crop(0, 'corn_yellow', 422.5), crop(1, 'soybeans', 318), crop(2, 'corn_white', 280), crop(3, 'soybeans', 186.25), crop(4, 'corn_non_gmo', 155.5), crop(5, 'wheat', 50), crop(6, 'corn_yellow', 227.75), crop(7, 'soybeans', 40), crop(8, 'corn_yellow', 364), crop(9, 'wheat', 92), crop(9, 'soybeans_double_crop', 92, 2), crop(0, 'soybeans', 422.5, 1, currentYear - 1, 23238), crop(1, 'corn_yellow', 318, 1, currentYear - 1, 61056),
@@ -214,7 +214,7 @@ export class MockFieldsRepository implements FieldsRepository {
         const previous = assignment.id ? existingById.get(assignment.id) : undefined
         if (assignment.id && !previous) throw new Error('A crop record changed before it could be saved. Refresh the field and try again.')
         if (previous) preservedIds.add(previous.id)
-        return { ...assignment, id: previous?.id ?? newId(), farm_id: field.farm_id, field_id: field.id, expected_yield_per_acre: assignment.expected_yield_per_acre ?? null, expected_price_per_bu: assignment.expected_price_per_bu ?? null, created_at: previous?.created_at ?? timestamp, updated_at: timestamp }
+        return { ...assignment, id: previous?.id ?? newId(), farm_id: field.farm_id, field_id: field.id, expected_yield_per_acre: assignment.expected_yield_per_acre ?? null, expected_price_per_bu: assignment.expected_price_per_bu ?? null, actual_price_per_bu: previous?.actual_price_per_bu ?? null, created_at: previous?.created_at ?? timestamp, updated_at: timestamp }
       })
       data.crop_assignments = data.crop_assignments.filter((item) => item.field_id !== field.id || !years.has(item.crop_year) || preservedIds.has(item.id))
       data.crop_assignments.push(...replacements.filter((item) => !preservedIds.has(item.id)))

@@ -55,6 +55,8 @@ export interface CropAssignment {
   harvested_bushels: number | null
   expected_yield_per_acre: number | null
   expected_price_per_bu: number | null
+  /** Realized harvest price. Harvest entry owns this; it never replaces expected price. */
+  actual_price_per_bu: number | null
   notes: string | null
   created_at: string
   updated_at: string

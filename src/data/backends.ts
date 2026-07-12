@@ -6,6 +6,7 @@ export const moduleBackends = Object.freeze({
   equipment_tasks: 'supabase',
   fieldLog: 'supabase',
   scouting: 'supabase',
+  harvest: 'supabase',
 } as const satisfies {
   fields: 'supabase'
   grain: 'mock' | 'supabase'
@@ -14,4 +15,5 @@ export const moduleBackends = Object.freeze({
   equipment_tasks: 'mock' | 'supabase'
   fieldLog: 'supabase'
   scouting: 'supabase'
+  harvest: 'supabase'
 })

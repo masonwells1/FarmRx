@@ -184,6 +184,47 @@ tbody tr:nth-child(even) td { background: var(--premix-bg); }
 
 .empty-page { min-height: calc(100vh - 136px); display: grid; place-items: center; }
 .field-log-page { display: grid; gap: 20px; }
+
+/* Feature D: harvest records stay readable on a phone, including long crop names. */
+.harvest-page { display: grid; gap: 20px; min-width: 0; }
+.harvest-heading { align-items: end; }
+.harvest-year { display: grid; gap: 6px; min-width: 132px; color: var(--matte-gray); font-weight: 700; }
+.harvest-year select, .harvest-form input { min-height: 48px; border: 2px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); font: inherit; font-variant-numeric: tabular-nums; }
+.harvest-year select { padding: 8px 10px; }
+.harvest-list { display: grid; gap: 20px; }
+.harvest-card { overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); }
+.harvest-card-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 20px; background: var(--light-green); }
+.harvest-card-head h2 { margin: 0; color: var(--charcoal); font-family: var(--brand-font); font-size: 25px; }
+.harvest-card-head p, .harvest-card-head span { margin: 4px 0 0; color: var(--matte-gray); font-variant-numeric: tabular-nums; }
+.harvest-card-head span { font-weight: 700; }
+.harvest-crops { display: grid; }
+.harvest-crop { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; padding: 18px 20px; border-top: 1px solid var(--hairline); }
+.harvest-crop:nth-child(even) { background: var(--premix-bg); }
+.harvest-crop-main { min-width: 0; }
+.harvest-crop h3 { margin: 0; color: var(--deep-green); font-family: var(--brand-font); font-size: 22px; }
+.harvest-crop-main > p { margin: 5px 0 0; color: var(--matte-gray); font-variant-numeric: tabular-nums; }
+.harvest-enter { align-self: start; min-height: 48px; white-space: nowrap; }
+.harvest-results { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.harvest-results > span { display: grid; gap: 3px; padding: 10px; border-radius: 9px; background: var(--light-green); }
+.harvest-results small { color: var(--matte-gray); font-size: 18px; font-weight: 700; }
+.harvest-results strong { color: var(--deep-green); font-size: 18px; font-variant-numeric: tabular-nums; }
+.harvest-results .over-plan strong { color: var(--deep-green); }
+.harvest-results .under-plan { background: var(--warn-bg); }
+.harvest-results .under-plan strong { color: var(--warn-red); }
+.harvest-form { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 16px; border: 1px solid var(--hairline); border-radius: 12px; background: var(--surface); }
+.harvest-form h3, .harvest-form .form-error, .harvest-form > div { grid-column: 1 / -1; margin: 0; }
+.harvest-form h3 { color: var(--deep-green); font-family: var(--brand-font); font-size: 21px; }
+.harvest-form label { display: grid; gap: 6px; color: var(--matte-gray); font-weight: 700; }
+.harvest-form label span { font-weight: 400; }
+.harvest-form input { width: 100%; padding: 8px 10px; }
+.harvest-form > div { display: flex; flex-wrap: wrap; gap: 12px; }
+.yield-history { border-top: 1px solid var(--hairline); }
+.yield-history h3 { margin: 0; padding: 14px 20px; background: var(--deep-green); color: var(--on-dark); font-family: var(--brand-font); font-size: 18px; }
+.yield-history-strip { display: flex; flex-wrap: wrap; gap: 10px; padding: 16px 20px; }
+.yield-history-strip span { display: grid; gap: 3px; min-width: 142px; padding: 10px; border-radius: 9px; background: var(--premix-bg); }
+.yield-history-strip strong { color: var(--charcoal); font-size: 18px; }
+.yield-history-strip em { color: var(--deep-green); font-style: normal; font-weight: 700; font-variant-numeric: tabular-nums; }
+.yield-history .card-empty { margin: 0; padding: 16px 20px; }
 .field-log-list { display: grid; gap: 20px; }
 .field-log-card { overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); }
 .field-log-card-head { display: flex; align-items: start; justify-content: space-between; gap: 20px; padding: 20px; background: var(--light-green); }
@@ -567,6 +608,16 @@ tbody tr:nth-child(even) td { background: var(--premix-bg); }
   .field-edit { grid-template-columns: 1fr repeat(3, minmax(84px, 1fr)); }
 }
 @media (max-width: 767px) {
+  .harvest-heading { align-items: stretch; flex-direction: column; }
+  .harvest-year { width: 100%; }
+  .harvest-crop { grid-template-columns: 1fr; padding: 16px; }
+  .harvest-enter { width: 100%; }
+  .harvest-results, .harvest-form { grid-template-columns: 1fr; }
+  .harvest-results > span { min-width: 0; }
+  .harvest-form { padding: 14px; }
+  .yield-history h3, .yield-history-strip, .yield-history .card-empty { padding-right: 16px; padding-left: 16px; }
+  .yield-history-strip { display: grid; grid-template-columns: 1fr; }
+  .yield-history-strip span { min-width: 0; }
   .profitability-page { gap: 18px; }
   .budget-controls, .profitability-kpis, .cost-add-row, .field-edit, .arrangement-comparison > div { grid-template-columns: 1fr; }
   .profitability-kpi { min-height: 100px; }

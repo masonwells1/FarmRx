@@ -8,6 +8,7 @@ import { createSupabaseInventoryServices } from './createSupabaseInventoryServic
 import { createSupabaseEquipmentTasksServices } from './createSupabaseEquipmentTasksServices'
 import { createSupabaseFieldLogServices } from './createSupabaseFieldLogServices'
 import { createSupabaseScoutingServices } from './createSupabaseScoutingServices'
+import { createSupabaseHarvestServices } from './createSupabaseHarvestServices'
 import { SupabaseFieldsDataGateway } from './SupabaseFieldsDataGateway'
 import { SupabaseFieldsRepository } from './SupabaseFieldsRepository'
 import { createFieldLocationClient, SupabaseFieldLocationGateway } from './fieldLocation'
@@ -45,7 +46,7 @@ export const replayFieldsQueue = () => queuedFields.inspectAndReplay()
 export const fieldLocationClient = createFieldLocationClient({ gateway: new SupabaseFieldLocationGateway(), getContext: async () => ({ userId: await currentUserId(), farmId: await currentFarmId() }), projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), clock: () => new Date().toISOString(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const replayFieldLocationQueue = () => fieldLocationClient.replay()
 
-if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'supabase' || moduleBackends.inventory !== 'supabase' || moduleBackends.profitability !== 'supabase' || moduleBackends.equipment_tasks !== 'supabase' || moduleBackends.fieldLog !== 'supabase' || moduleBackends.scouting !== 'supabase') throw new Error('Farm Rx backend configuration is invalid.')
+if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'supabase' || moduleBackends.inventory !== 'supabase' || moduleBackends.profitability !== 'supabase' || moduleBackends.equipment_tasks !== 'supabase' || moduleBackends.fieldLog !== 'supabase' || moduleBackends.scouting !== 'supabase' || moduleBackends.harvest !== 'supabase') throw new Error('Farm Rx backend configuration is invalid.')
 const getContext = async () => ({ userId: await currentUserId(), farmId: await currentFarmId() })
 const liveProfitability = createSupabaseProfitabilityServices({ fieldsRepository, getFarmId: currentFarmId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const profitabilityRepository = liveProfitability.profitabilityRepository
@@ -59,6 +60,9 @@ export const replayEquipmentTasksQueue = () => liveEquipmentTasks.replayEquipmen
 const liveFieldLog = createSupabaseFieldLogServices({ getFarmId: currentFarmId, getUserId: currentUserId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const fieldLogRepository = liveFieldLog.fieldLogRepository
 export const replayFieldLogQueue = () => liveFieldLog.replayFieldLogQueue()
+const liveHarvest = createSupabaseHarvestServices({ fieldsRepository, getFarmId: currentFarmId, getUserId: currentUserId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
+export const harvestRepository = liveHarvest.harvestRepository
+export const replayHarvestQueue = () => liveHarvest.replayHarvestQueue()
 const liveScouting = createSupabaseScoutingServices({ getFarmId: currentFarmId, getUserId: currentUserId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const scoutingRepository = liveScouting.scoutingRepository
 export const replayScoutingQueue = () => liveScouting.replayScoutingQueue()

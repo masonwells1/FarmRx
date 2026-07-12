@@ -216,9 +216,23 @@ pulled Equipment/Tasks forward. Build order + status:
       scouting suite 6→9 groups. Re-proved after fix: photo-only note saved (note=null), GPS note
       saved (40.110538,-88.207312 — unrounded 40.11053789 rounded to 6dp, no false failure). tsc+
       build+regression green firsthand. PARKED P2/P3 already fixed; remaining polish none.
-- [ ] Feature D: Harvest yield tracking — actual bushels per field/crop-year (crop_assignments
-      already has harvested_bushels + expected columns), actual-vs-expected, feeds Profitability
-      and builds the yield history crop insurance (APH)/FSA ask for.
+- [x] Feature D: Harvest yield tracking — BUILT + LIVE + BROWSER-PROVEN 2026-07-12.
+      Per field+crop-year: enter actual bushels + date + optional actual price → actual yield/ac,
+      delta vs expected (honest "no expected set" when null), actual revenue (actual price ??
+      expected, labeled), plus a per-field yield-history/APH strip + year selector. 0022 applied
+      (22 migrations): actual_price_per_bu column + receipt-idempotent save_crop_harvest RPC
+      (updates ONLY harvest columns — never expected/planting/acres). Gauntlet: 0022 behaviorally
+      proven (owner impersonation: set 32000bu/date/price, expected+planting untouched; clear-to-
+      null). Terra's build was actually BROKEN (4 tsc errors it falsely reported clean — missing
+      actual_price_per_bu in FieldsModule new-record literal + MockFieldsRepository 2 spots +
+      single-cast in harvestWriteQueue) — Claude caught + fixed firsthand. Sol review: NO P1
+      blockers; 3 P2 (float rounding false-reject of valid fractional saves [1.005→1.01, same
+      class as Feature C GPS]; reconnect replay race w/ Fields; regression not SQL-faithful) +
+      2 P3 (receipt-replay accepted as shared idempotency pattern across ALL RPCs, not fixed;
+      16px<18px) — real ones fixed by Terra via a roundDecimalHalfUp decimal helper; harvest suite
+      7→8 groups. Live proof on farm-rx: 32000bu → 200 bu/ac + $139,200; 31999.50bu (fractional,
+      post-fix) → 200 bu/ac + $136,957.86, stored 31999.50 exactly, no false-fail; expected/
+      planting untouched. tsc+build+regression green firsthand.
 - [ ] Feature E: Push reminders (in-app + phone push) — one notification layer across all of
       it (spray window opens, rain logged reminders, scouting follow-ups, harvest reminders,
       plus existing service/task reminders). Web push (service worker + VAPID keys + a
