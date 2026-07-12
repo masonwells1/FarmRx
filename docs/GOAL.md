@@ -153,6 +153,46 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
       (DVIRs/IFTA/CDL) NOT built — needs Mason's explicit confirmation.
 - [ ] Module 7: machine data import (Deere/FieldView/AgFiniti) — last by design
 
+## CUSTOMER-VALUE BATCH (Mason directed 2026-07-12: "build a loop to build" these five)
+Daily-use, farmer-facing features. Decisions locked with Mason 2026-07-12:
+**weather feed = Open-Meteo (free, no key)**; **reminders = in-app + phone push only**
+(no email, no SMS — both declined for now). NOTE: the original handoff Part 7 listed
+"weather alerts" as out-of-scope; Mason has explicitly overridden that here, same as he
+pulled Equipment/Tasks forward. Build order + status:
+- [x] Feature A: Weather + spray windows — BUILT + LIVE + BROWSER-PROVEN 2026-07-12.
+      Field-level Open-Meteo forecast (free, no key) + green/yellow/red "Can I spray now?"
+      light per field, driven by wind bands / own-hour + look-ahead rain / heat / an
+      inversion heuristic (sunrise-sunset). Best-window-today, 12-hour strip, 7-day row.
+      Field location captured via phone GPS "use my location" + manual lat/long fallback.
+      0018 applied (18 migrations): fields.latitude/longitude/location_source + worker-safe
+      set_field_location RPC (owner/manager/worker; read_only+reps excluded). Product-agnostic
+      spray light (inventory catalog has NO environmental label limits — see
+      weather-inventory-findings.md; product refinement deferred). Design:
+      docs/weather-spray-design.md. Gauntlet: Sol review found 3 P1s regression missed
+      (own-hour rain probability ignored → could green-light a 90%-rain hour; empty/misaligned
+      forecast produced unsafe "best window: 10 PM"; location replay could delete a freshly
+      queued pin) + P2/P3 (envelope-deep cache validation → crash; storage-failure discarded
+      live data; concurrent field+location replay; impossible provenance shape; read_only
+      overconfident sync promise; 17px<18px) — ALL fixed by Terra + regression grown 4→6
+      groups. Live proof on farm-rx: set North Quarter to 40.1105,-88.2073 → set_field_location
+      wrote lat/long/source to Postgres (verified) → live forecast rendered (74°F, 8 mph NE,
+      "Good — wind in 3–10 mph range", best window ~4–9 PM, 12-hr strip, 7-day) → 375px no
+      page overflow (strips scroll internally) → 18px baseline confirmed. tsc+build+regression
+      green firsthand. PARKED follow-up: inventory "use current weather" pre-fill button (kept
+      out of first pass to keep review focused); GPS branch shares the proven manual save path.
+- [ ] Feature B: Rain gauge + field log — per-field rainfall entry, running season total,
+      growing-degree-days; simple timeline. Sits next to weather.
+- [ ] Feature C: Scouting notes with photos — walk a field, drop a GPS pin, attach photos
+      (Supabase Storage bucket, per-farm isolation), category (weed/disease/pest/other),
+      optional auto-create a follow-up task. Feeds the Tasks board.
+- [ ] Feature D: Harvest yield tracking — actual bushels per field/crop-year (crop_assignments
+      already has harvested_bushels + expected columns), actual-vs-expected, feeds Profitability
+      and builds the yield history crop insurance (APH)/FSA ask for.
+- [ ] Feature E: Push reminders (in-app + phone push) — one notification layer across all of
+      it (spray window opens, rain logged reminders, scouting follow-ups, harvest reminders,
+      plus existing service/task reminders). Web push (service worker + VAPID keys + a
+      notifications table + permission prompt). Built LAST — it references the others.
+
 ## Loop policy (Mason, 2026-07-11): keep working, never block on questions
 - The loop runs continuously and only surfaces questions that GENUINELY need Mason
   (business decisions, money, irreversible actions).

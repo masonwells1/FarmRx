@@ -32,6 +32,9 @@ export interface Field {
   fsa_farm_number: string | null
   fsa_tract_number: string | null
   soil_productivity_index: number | null
+  latitude: number | null
+  longitude: number | null
+  location_source: 'gps' | 'manual' | null
   is_active: boolean
   created_at: string
   updated_at: string

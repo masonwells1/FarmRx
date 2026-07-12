@@ -8,7 +8,8 @@ import { GrainPage } from './GrainModule'
 import { ProfitabilityPage } from './ProfitabilityModule'
 import { InventoryPage } from './InventoryModule'
 import { EquipmentPage, TasksPage } from './EquipmentTasksModule'
-import { equipmentTasksRepository, grainServices, inventoryRepository, replayEquipmentTasksQueue, replayFieldsQueue, replayGrainQueue, replayInventoryQueue, replayProfitabilityQueue } from './data'
+import { WeatherPage } from './WeatherModule'
+import { equipmentTasksRepository, grainServices, inventoryRepository, replayEquipmentTasksQueue, replayFieldLocationQueue, replayFieldsQueue, replayGrainQueue, replayInventoryQueue, replayProfitabilityQueue } from './data'
 import { getSyncStatus, retrySavedChanges, subscribeSyncStatus } from './data/syncStatus'
 import type { EntityType } from './data/fields'
 import { farmerError } from './lib/farmerErrors'
@@ -20,6 +21,7 @@ const navigation = [
   { label: 'Profitability', path: '/profitability', icon: '$' },
   { label: 'Equipment', path: '/equipment', icon: '◇' },
   { label: 'Tasks', path: '/tasks', icon: '✓' },
+  { label: 'Weather', path: '/weather', icon: '☀' },
 ]
 
 function AppLayout() {
@@ -65,6 +67,7 @@ function AppLayout() {
             <Route path="/profitability" element={<ProfitabilityPage />} />
             <Route path="/equipment" element={<EquipmentPage repository={equipmentTasksRepository} />} />
             <Route path="/tasks" element={<TasksPage repository={equipmentTasksRepository} />} />
+            <Route path="/weather" element={<WeatherPage />} />
             <Route path="*" element={<Navigate to="/fields" replace />} />
           </Routes>
         </div>
@@ -92,7 +95,7 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
     let active = true
     void findOnlyAccessibleFarm().then((farm) => {
       if (!active) return
-      if (farm) { setState('ready'); void replayFieldsQueue(); void replayGrainQueue(); void replayInventoryQueue(); void replayProfitabilityQueue(); void replayEquipmentTasksQueue() }
+      if (farm) { setState('ready'); void (async () => { await replayFieldsQueue(); void replayGrainQueue(); void replayInventoryQueue(); void replayProfitabilityQueue(); void replayEquipmentTasksQueue(); await replayFieldLocationQueue() })() }
       else if (user?.app_metadata.initial_farm_owner === true) setState('setup')
       else { setMessage('Crop RX needs to finish your farm setup.'); setState('blocked') }
     }).catch((error: unknown) => {
