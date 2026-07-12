@@ -1,0 +1,5 @@
+- Wrote [inventory-live-design.md](C:/FarmRx/docs/inventory-live-design.md).
+- Covers repository/gateway structure, strict mapping, farm binding, and write paths.
+- Uses database views as authoritative for on-hand and RUP completeness.
+- Defines isolated FIFO offline queue behavior, regression tests, and live checks.
+- Migration 0015 is required for two atomic receipt/application bundle RPCs and database-enforced conversion/cost-snapshot safeguards.

@@ -1,0 +1,3 @@
+The SQL draft is complete, but runtime/database verification remains intentionally unverified because the task prohibited DB operations and applying migration 0015.
+
+I only changed `supabase/migrations/0015_inventory_live_support.sql`. The listed `src/data/*` changes were pre-existing work outside the approved scope. Static checks confirmed balanced PL/pgSQL blocks and no unparenthesized SQL `CASE` expressions in conditions.

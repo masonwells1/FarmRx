@@ -108,7 +108,21 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
       findings/6 P1 incl gal→lb conversion hole + false compliance completeness → all
       fixed → Claude verified live: shelf w/ RUP badge + derived on-hand, receive 30 gal
       → 120→150 gal proven, honest low-stock nudges, 0 targets <48px, farm-isolation
-      guard proven fail-closed when farm id changed). REMAINING: live repository swap.
+      guard proven fail-closed when farm id changed). **LIVE SWAP DONE + BROWSER-PROVEN
+      2026-07-11 ~9PM**: Sol 0015 draft + Terra build (fake-gateway pattern) → Opus
+      adversarial review caught 2 P1 pre-ship (cancel-receipt always violated the
+      cancelled_by check → fixed with a server trigger in 0015; RUP token whitelist
+      mismatched the view vocabulary → screen crashed on any RUP row with unknown
+      REI/PHI → fixed to the exact 11-token set) + 2 P2 (startup replay wired in
+      App.tsx; regression suite rebuilt by Terra to drive every write end-to-end, 8
+      coverage groups). Browser verification then caught a 3rd runtime-only P1: creating
+      a NEW product live always failed (UI sends blank created_at/updated_at, strict
+      mapper rejected) → repository now stamps them. Live proof on farm-rx: received 50
+      gal restricted-use "Atrazine 4L Test" (+$4.25/gal cost), on-hand view 50→20 after
+      a 120-qt spray record (server converted qt→gal), compliance screen renders
+      rate-above-label-max + REI/PHI-unknown warnings (the old crash case), cancelled a
+      10-gal receipt with reason → cancelled_by recorded as the test user in Postgres.
+      0015 applied (15 migrations, verified). All four modules now LIVE.
 - [ ] Modules 5/6: Equipment & Tasks · Module 7: machine data
 
 ## Loop policy (Mason, 2026-07-11): keep working, never block on questions
@@ -138,7 +152,9 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
    project — do with next apply batch); P2 test-coverage additions from Opus re-review
    (canonical-confirmation rejection tests, MARS math-exclusion pure test, buyer dropdown
    filter). Profitability + Inventory live swaps follow the same pattern.
-2. Flex-formula upgrade — RESEARCHED 2026-07-11 (Mason asked for U of I research →
+2. [x] Flex-formula upgrade — BUILT + LIVE-PROVEN + committed (00ae13a) 2026-07-11; and
+   INVENTORY LIVE SWAP done + proven (see Module 3 entry above). Research trail below:
+   RESEARCHED 2026-07-11 (Mason asked for U of I research →
    docs/flex-lease-research.md, farmdoc sources cited): 4 published structures; recommended
    superset JSON schema {method, base_rent_per_acre, rate_pct, trigger_revenue_per_acre,
    base_price_per_bu, base_yield_per_acre, min_rent_per_acre?, max_rent_per_acre?,
@@ -148,14 +164,24 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
    saved rows of those types need Mason's confirmation before migration (default: keep
    readable, stop offering for new leases). BUILD after profitability swap: Fields
    arrangement editor + shared calc + regression; 0006 view alignment later.
-3. Customer onboarding path: admin-side account+farm creation flow (currently only the
-   test harness can provision).
+3. [~] Customer onboarding path — DESIGNED + SCRIPT BUILT 2026-07-11 (docs/
+   onboarding-design.md + scripts/provision-customer.mjs: Claude runs it locally with the
+   service-role key in an env var — never committed/shipped; creates a confirmed user
+   flagged initial_farm_owner → app shows "Set up your farm"). REMAINING: Mason's 2
+   dashboard toggles (see MASON ACTION ITEMS) + a real end-to-end provisioning run.
 4. Live-path manual test matrix from docs/foundation-design.md (multi-user permission
    checks: owner/manager/worker/granted employee/rep; offline replay on real signal drop).
 5. Real-device PWA pass (phone install, sunlight/gloves two-tap flows).
 6. Polish: neutral sign-out message; enable leaked-password protection (Supabase dashboard
    Auth toggle — 1 minute, flagged by security advisor).
 7. Ship gate prep: deploy needs Mason's explicit OK (never auto).
+
+## MASON ACTION ITEMS (2 minutes in the Supabase dashboard, farm-rx project — 2026-07-11)
+Both from the onboarding security review (docs/onboarding-design.md):
+1. Authentication → Sign In / Up → turn OFF "Allow new users to sign up" (today a stranger
+   with the app's public key could create an account and an empty junk farm; customer
+   accounts are created by our provisioning script instead — scripts/provision-customer.mjs).
+2. Authentication → Passwords → turn ON leaked-password protection (HaveIBeenPwned check).
 
 ## Pending decisions (parked, non-blocking — from competitor report, 2026-07-11)
 **RESOLVED 2026-07-11 by Mason's "Apply everything": former decisions #0 (grain 0004/0005),
