@@ -5,8 +5,10 @@ import { inventoryWriteQueueKey, InventoryWriteQueue, parseInventoryQueue, type 
 import { QueuedInventoryRepository } from './QueuedInventoryRepository'
 import { deriveProgramApplicationRecordCards } from '../InventoryModule'
 import { SupabaseInventoryRepository } from './SupabaseInventoryRepository'
+import { SupabaseInventoryDataGateway } from './SupabaseInventoryDataGateway'
 import { moduleBackends } from './backends'
 import type { StorageLike } from './writeQueue'
+import { supabase } from '../lib/supabaseClient'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const farm = uid(1); const actor = uid(2); const micro = '2026-07-11T23:35:28.807722+00:00'
@@ -63,7 +65,7 @@ class FakeGateway implements InventoryDataGateway {
     return structuredClone(this.mutate.cancel ? this.mutate.cancel(saved) : saved)
   }
   async insertAdjustment(farmId: string, input: AdjustmentWrite) {
-    this.calls.adjustment++; const saved = { ...input, farm_id: farmId, created_at: micro, created_by: actor }
+    this.calls.adjustment++; const saved = { ...input, farm_id: farmId, adjusted_at: `${input.adjusted_at}T00:00:00+00:00`, created_at: micro, created_by: actor }
     this.state.adjustments = [...this.state.adjustments.filter((item) => row(item).id !== input.id), saved]
     return structuredClone(this.mutate.adjustment ? this.mutate.adjustment(saved) : saved)
   }
@@ -84,6 +86,15 @@ function receiptWrite(id: string, lineId: string, productId = uid(501)): Receipt
 function applicationInput(id: string) { const fields = fieldsFor(farm); const assignment = fields.crop_assignments[0]; return { id, field_id: assignment.field_id, crop_assignment_id: assignment.id, status: 'completed' as const, application_date: '2026-07-11', start_time: '08:30', applied_acres: 10, target_pest: 'Waterhemp', applicator_name: 'A. Applicator', applicator_license_number: 'IL-123', wind_speed_mph: 8, wind_direction: 'NW', temperature_f: 75, relative_humidity_pct: 55, products: [{ id: uid(601), product_id: uid(501), rate: 1, rate_unit: 'gal' as const, rate_basis: 'acre' as const, total_quantity: 10, total_unit: 'gal' as const }, { id: uid(602), product_id: uid(502), rate: 2, rate_unit: 'lb' as const, rate_basis: 'each' as const, total_quantity: 5, total_unit: 'lb' as const }] } }
 
 async function run() {
+  const auth = supabase.auth as unknown as { getUser: () => Promise<unknown> }; const client = supabase as unknown as { from: (table: string) => unknown }; const originalGetUser = auth.getUser; const originalFrom = client.from
+  let insertedAdjustment: Record<string, unknown> | null = null
+  try {
+    auth.getUser = async () => ({ data: { user: { id: actor } }, error: null })
+    client.from = (table) => { assert(table === 'inventory_adjustments', 'Adjustment gateway must insert into the adjustment ledger.'); return { insert: (value: Record<string, unknown>) => { insertedAdjustment = value; return { select: () => ({ single: async () => ({ data: value, error: null }) }) } } } }
+    await new SupabaseInventoryDataGateway().insertAdjustment(farm, { id: uid(19), product_id: uid(501), adjustment_quantity_in_inventory_unit: -2, reason: 'correction', notes: 'Physical count', adjusted_at: '2026-07-11' })
+    const createdBy = (insertedAdjustment as Record<string, unknown> | null)?.created_by
+    assert(typeof createdBy === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(createdBy), 'Adjustment gateway inserts must include the signed-in user as created_by.')
+  } finally { auth.getUser = originalGetUser; client.from = originalFrom }
   const gateway = new FakeGateway(); const live = repo(gateway); const workspace = await live.getWorkspace()
   assert(workspace.products[0].created_at === micro && workspace.products[0].restricted_entry_interval_hours === 12, 'Inventory mapping must accept PostgREST numeric strings and microsecond offset timestamps.')
   assert(workspace.on_hand.every((item) => item.quantity === 0), 'On-hand must come from the authoritative view row, not a client ledger calculation.')
@@ -105,9 +116,10 @@ async function run() {
   const badCancel = new FakeGateway(); const badCancelRepo = repo(badCancel); await badCancelRepo.receiveReceipt({ id: uid(14), product_id: uid(501), quantity: 4, unit: 'gal', date: '2026-07-11', status: 'received', vendor_name: 'Acme Supply' }); badCancel.mutate.cancel = (saved) => ({ ...saved, cancellation_reason: 'Wrong reason' }); await rejects(() => badCancelRepo.cancelReceipt(uid(14), 'Damaged'), 'A wrong cancellation reason echo must be rejected.')
   const nullCancelledBy = new FakeGateway(); const nullCancelledByRepo = repo(nullCancelledBy); await nullCancelledByRepo.receiveReceipt({ id: uid(15), product_id: uid(501), quantity: 4, unit: 'gal', date: '2026-07-11', status: 'received', vendor_name: 'Acme Supply' }); nullCancelledBy.mutate.cancel = (saved) => ({ ...saved, cancelled_by: null }); await rejects(() => nullCancelledByRepo.cancelReceipt(uid(15), 'Damaged'), 'A cancelled receipt with null cancelled_by must fail the strict mapper.')
 
-  await live.addAdjustment({ id: uid(20), product_id: uid(501), quantity: -2, reason: 'correction', notes: 'Physical count', adjusted_at: micro })
-  assert(row(gateway.state.adjustments[0]).created_by === actor, 'Adjustment write must receive a canonical server row.')
-  const badAdjustment = new FakeGateway(); badAdjustment.mutate.adjustment = (saved) => ({ ...saved, notes: 'Wrong echo' }); await rejects(() => repo(badAdjustment).addAdjustment({ id: uid(21), product_id: uid(501), quantity: -2, reason: 'correction', notes: 'Physical count', adjusted_at: micro }), 'A wrong adjustment echo must be rejected.')
+  await live.addAdjustment({ id: uid(20), product_id: uid(501), quantity: -2, reason: 'correction', notes: 'Physical count', adjusted_at: '2026-07-11' })
+  assert(row(gateway.state.adjustments[0]).created_by === actor && row(gateway.state.adjustments[0]).adjusted_at === '2026-07-11T00:00:00+00:00', 'Adjustment save must accept the database timestamptz echo and retain its audit row.')
+  const badAdjustment = new FakeGateway(); badAdjustment.mutate.adjustment = (saved) => ({ ...saved, notes: 'Wrong echo' }); await rejects(() => repo(badAdjustment).addAdjustment({ id: uid(21), product_id: uid(501), quantity: -2, reason: 'correction', notes: 'Physical count', adjusted_at: '2026-07-11' }), 'A wrong adjustment echo must be rejected.')
+  await rejects(() => live.addAdjustment({ id: uid(22), product_id: uid(501), quantity: -2, reason: 'correction', notes: 'Physical count', adjusted_at: '2026-99-99' }), 'A malformed adjustment date must be rejected.')
 
   const app = applicationInput(uid(30)); await live.saveApplication(app)
   assert(gateway.calls.application === 1 && gateway.state.application_products.length === 2, 'A multi-product, mixed-rate-basis application must save end-to-end.')

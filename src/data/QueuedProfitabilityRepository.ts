@@ -35,7 +35,7 @@ function overlayRawCostLines(raw: BudgetCostLineWrite[], entries: ProfitabilityQ
 export class QueuedProfitabilityRepository implements ProfitabilityRepository {
   private workspace: ProfitabilityWorkspace | null = null
   private rawCostLineCache: BudgetCostLineWrite[] = []
-  constructor(private readonly writer: ProfitabilityRepository & ProfitabilityOperationWriter, private readonly dependencies: Dependencies) { if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() }); setModuleSyncRetryAction('profitability', () => { void this.replayCurrent() }) }
+  constructor(private readonly writer: ProfitabilityRepository & ProfitabilityOperationWriter, private readonly dependencies: Dependencies) { if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() }); setModuleSyncRetryAction('profitability', () => this.replayCurrent()) }
   private async contextAndQueue() { const context = await this.dependencies.getContext(); return { context, queue: new ProfitabilityWriteQueue(this.dependencies.storage, profitabilityWriteQueueKey(this.dependencies.projectRef, context.userId, context.farmId)) } }
   private async locked<T>(queue: ProfitabilityWriteQueue, task: (verify: () => void) => Promise<T>) { return serial(queue.key, () => crossTab(queue.key, this.dependencies.storage, this.dependencies.createId, task)) }
   async inspectAndReplay() { await this.replayCurrent() }

@@ -6,7 +6,7 @@ export type SyncState =
 
 type Module = 'fields' | 'grain' | 'profitability' | 'inventory' | 'equipment_tasks' | 'weather' | 'fieldLog' | 'scouting' | 'harvest' | 'programs' | 'notifications'
 const states: Record<Module, SyncState> = { fields: { kind: 'synced', pending: 0 }, grain: { kind: 'synced', pending: 0 }, profitability: { kind: 'synced', pending: 0 }, inventory: { kind: 'synced', pending: 0 }, equipment_tasks: { kind: 'synced', pending: 0 }, weather: { kind: 'synced', pending: 0 }, fieldLog: { kind: 'synced', pending: 0 }, scouting: { kind: 'synced', pending: 0 }, harvest: { kind: 'synced', pending: 0 }, programs: { kind: 'synced', pending: 0 }, notifications: { kind: 'synced', pending: 0 } }
-const retries: Partial<Record<Module, () => void>> = {}
+const retries: Partial<Record<Module, () => void | Promise<unknown>>> = {}
 const listeners = new Set<() => void>()
 function aggregate(): SyncState {
   const values = Object.values(states)
@@ -23,8 +23,8 @@ let snapshot: SyncState = aggregate()
 export function getSyncStatus() { return snapshot }
 export function subscribeSyncStatus(listener: () => void) { listeners.add(listener); return () => listeners.delete(listener) }
 export function setModuleSyncStatus(module: Module, next: SyncState) { states[module] = next; snapshot = aggregate(); listeners.forEach((listener) => listener()) }
-export function setModuleSyncRetryAction(module: Module, action: (() => void) | null) { if (action) retries[module] = action; else delete retries[module] }
+export function setModuleSyncRetryAction(module: Module, action: (() => void | Promise<unknown>) | null) { if (action) retries[module] = action; else delete retries[module] }
 /** Compatibility for non-queue callers; queues must identify their module. */
 export function setSyncStatus(next: SyncState) { setModuleSyncStatus('fields', next) }
-export function setSyncRetryAction(action: (() => void) | null) { setModuleSyncRetryAction('fields', action) }
-export function retrySavedChanges() { Object.values(retries).forEach((retry) => retry?.()) }
+export function setSyncRetryAction(action: (() => void | Promise<unknown>) | null) { setModuleSyncRetryAction('fields', action) }
+export async function retrySavedChanges() { await Promise.allSettled(Object.values(retries).map((retry) => Promise.resolve(retry?.()))) }

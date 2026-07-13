@@ -3,6 +3,7 @@ import type { AdjustmentWrite, ApplicationBundleWrite, CancelReceiptWrite, Inven
 
 function rows(data: unknown, error: { message: string } | null): unknown[] { if (error) throw error; if (!Array.isArray(data)) throw new Error('Farm Rx could not load the complete inventory workspace.'); return data }
 function row(data: unknown, error: { message: string } | null): unknown { if (error) throw error; if (!data || typeof data !== 'object') throw new Error('Farm Rx could not confirm the inventory save. Please try again.'); return data }
+async function currentUserId() { const { data, error } = await supabase.auth.getUser(); if (error || !data.user) throw new Error('Your sign-in ended. Please sign in again.'); return data.user.id }
 function productColumns(value: InventoryProductWrite & { farm_id: string }) { const { id, farm_id, product_kind, name, manufacturer, inventory_unit, epa_registration_number, is_restricted_use, signal_word, restricted_entry_interval_hours, preharvest_interval_hours, max_label_rate, max_label_rate_unit, max_label_rate_basis, commodity_id, variety_name, fertilizer_analysis, is_active } = value; return { id, farm_id, product_kind, name, manufacturer, inventory_unit, epa_registration_number, is_restricted_use, signal_word, restricted_entry_interval_hours, preharvest_interval_hours, max_label_rate, max_label_rate_unit, max_label_rate_basis, commodity_id, variety_name, fertilizer_analysis, is_active } }
 
 export class SupabaseInventoryDataGateway implements InventoryDataGateway {
@@ -29,6 +30,6 @@ export class SupabaseInventoryDataGateway implements InventoryDataGateway {
     const existing = await supabase.from('inventory_receipts').select('*').eq('farm_id', input.farmId).eq('id', input.id).maybeSingle()
     return row(existing.data, existing.error)
   }
-  async insertAdjustment(farmId: string, value: AdjustmentWrite) { const result = await supabase.from('inventory_adjustments').insert({ ...value, farm_id: farmId }).select('*').single(); return row(result.data, result.error) }
+  async insertAdjustment(farmId: string, value: AdjustmentWrite) { const created_by = await currentUserId(); const result = await supabase.from('inventory_adjustments').insert({ ...value, farm_id: farmId, created_by }).select('*').single(); return row(result.data, result.error) }
   async saveApplicationBundle(input: ApplicationBundleWrite) { const { data, error } = await supabase.rpc('save_inventory_application_bundle', { p_farm_id: input.farmId, p_application: input.application, p_products: input.products }); return row(data, error) }
 }

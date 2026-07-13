@@ -1,0 +1,68 @@
+
+> farm-rx@0.0.0 regression
+> tsx src/data/costOfCarry.regression.ts && tsx src/data/insuranceMath.regression.ts && tsx src/data/marketingAlerts.regression.ts && tsx src/data/firmOffers.regression.ts && tsx src/data/binLedger.regression.ts && tsx src/data/planningTools.regression.ts && tsx src/data/MockFieldsRepository.regression.ts && tsx src/data/MockGrainRepository.regression.ts && tsx src/data/SupabaseFieldsRepository.regression.ts && tsx src/data/SupabaseGrainRepository.regression.ts && tsx src/data/MockProfitabilityRepository.regression.ts && tsx src/data/SupabaseProfitabilityRepository.regression.ts && tsx src/data/MockInventoryRepository.regression.ts && tsx src/data/SupabaseInventoryRepository.regression.ts && tsx src/data/SupabaseEquipmentTasksRepository.regression.ts && tsx src/data/SupabaseFieldLogRepository.regression.ts && tsx src/data/SupabaseHarvestRepository.regression.ts && tsx src/data/SupabaseScoutingRepository.regression.ts && tsx src/data/SupabaseProgramsRepository.regression.ts && tsx src/data/programsChunk5.regression.ts && tsx src/data/programDueItems.regression.ts && tsx src/data/SupabaseNotificationsRepository.regression.ts && tsx src/data/weatherService.regression.ts
+
+ok monthly storage cost accumulates
+ok monthly carry total uses storage, interest, and trucking
+ok monthly net versus harvest is hand-computed
+ok flat storage is charged once after harvest
+ok flat storage is zero at harvest
+ok interest accrues $4.3675 at 7% for two months
+ok harvest row has all-zero carry baseline
+ok harvest row has all-zero storage baseline
+ok harvest row has all-zero interest baseline
+ok harvest row has all-zero trucking baseline
+ok best month finds strongest stored row
+ok verdict flips to store when carry clears
+ok store verdict keeps the winning month
+ok verdict stays harvest when no stored month clears carry
+costOfCarry regression: all checks passed
+insuranceMath regressions passed.
+Marketing alert regressions passed.
+Firm offer regressions passed.
+Bin ledger regressions passed.
+ok Plan A cash-rent profit (Excel D17 = -25.5)
+ok Plan B cash-rent profit (Excel D18 = 12.5)
+ok Plan A crop-share profit at exact 1/3 (Excel E17 shape)
+ok Plan A price cushion (Excel I10)
+ok Plan A yield cushion (Excel J10)
+ok Plan B price cushion (Excel I11)
+ok Plan B yield cushion (Excel J11)
+ok Plan A as-budgeted profit equals cash-rent profit when land line = rent
+ok Extra bu needed at $4.00 (Excel C14 = 9.5)
+ok Extra bu needed at $4.20 (Excel C32 = 9.0476)
+ok Verdict 9.5 bu corn (Excel D14 = Likely worth it)
+ok Verdict 6.33 bu corn (Excel D21 = Likely worth it)
+ok Verdict 5 bu corn = Easy YES
+ok Verdict 16 bu corn = Probably NO
+ok What-if +10 bu at $4.20 (Excel C34 = $4.00/ac)
+ok Bean extra bu at $11 (Excel C60 = 1.2727)
+ok Bean what-if +1.5 bu at $11 (Excel C62 = $2.50/ac)
+ok Verdict 1.4 bu beans (Excel D47 = Likely worth it)
+ok Verdict 1.0 bu beans (Excel D51 = Easy YES)
+ok planGroup keeps same year+commodity only
+ok roiPriceLadder centers on expected price
+ok roiPriceLadder low rung
+ok coach flags all six when only seed exists
+ok coach silent when full
+ok farmdoc 2026 corn non-land total = $833/ac
+ok farmdoc 2026 soybean non-land total = $511/ac
+planningTools regression: all checks passed
+MockFieldsRepository regressions passed.
+MockGrainRepository regressions passed.
+SupabaseFieldsRepository regressions passed.
+SupabaseGrainRepository regressions passed.
+MockProfitabilityRepository regressions passed.
+SupabaseProfitabilityRepository regressions passed.
+MockInventoryRepository regressions passed.
+SupabaseInventoryRepository regression passed (9 coverage groups)
+SupabaseEquipmentTasksRepository regression passed (10 coverage groups)
+SupabaseFieldLogRepository regression passed (7 coverage groups)
+SupabaseHarvestRepository regression passed (8 coverage groups)
+SupabaseScoutingRepository regression passed (9 coverage groups)
+SupabaseProgramsRepository regression passed (23 coverage groups)
+Programs Chunk 5 regression passed (4 coverage groups)
+programDueItems regression passed (4 coverage groups)
+SupabaseNotificationsRepository regression passed (10 coverage groups)
+Weather service regressions passed (8 coverage groups).
+EXIT_CODE=0

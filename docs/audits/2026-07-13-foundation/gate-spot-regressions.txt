@@ -1,0 +1,9 @@
+=== npx tsx src/data/MockGrainRepository.regression.ts ===
+MockGrainRepository regressions passed.
+EXIT_CODE=0
+=== npx tsx src/data/SupabaseEquipmentTasksRepository.regression.ts ===
+SupabaseEquipmentTasksRepository regression passed (10 coverage groups)
+EXIT_CODE=0
+=== npx tsx src/data/SupabaseProfitabilityRepository.regression.ts ===
+SupabaseProfitabilityRepository regressions passed.
+EXIT_CODE=0

@@ -1,0 +1,30 @@
+Ignoring 27 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/FarmRx"].hasTrustDialogAccepted: true in C:\Users\mason\.claude.json.
+I verified the claims in the code first — and the mismatch is actually worse than described: three surfaces disagree with each other. In `src/FieldsModule.tsx:19-23` the editor labels `landlord_labor_custom_pct` as "Labor" and `landlord_other_input_pct` as "Custom work"; in `src/ProfitabilityReport.tsx:111-115` the report labels the first "Labor & custom" but applies it only to the `labor` category, and labels the second "Other inputs" while applying it to the `custom` category; and the SQL view in `supabase/migrations/0006_module4_profitability.sql:457-461` applies `landlord_other_input_pct` to `other_cost`, not custom work. Here's my read of what's a defect versus a lease term.
+
+## Clear software defects (regardless of lease terms)
+
+1. **Silent reinterpretation of a stored column.** `landlord_labor_custom_pct` was defined as "labor + custom work"; applying it to labor only changes the meaning of numbers farmers already entered, with no migration or user confirmation. Any lease that shared custom work at that rate now computes a different landlord share than what the user set up. This is a data-integrity defect, full stop.
+2. **Internal inconsistency.** The field editor, the report row mapping, and the database view each assign these two percentages differently. At least two of the three are wrong at any given time.
+3. **Calling it a "settlement" with no net amount due.** A settlement's entire purpose is the balancing figure: who owes whom, how much. Showing landlord crop value and shared expenses but no net line means it's a worksheet, not a settlement — presenting it under the settlement label is a defect of framing even if every number is right.
+4. **Silent omission (as opposed to omission).** Leaving out indemnities, government payments, drying/storage/hauling, and taxes isn't itself wrong — but omitting them *without saying so* is, because a document titled "settlement" implies completeness. The reader can't tell "excluded by design" from "forgot."
+
+## Lease-specific — the software must not assume a standard
+
+There is no single Midwestern split; 50/50, 1/3–2/3, 60/40, and custom hybrids all exist, and the items below are individually negotiated:
+
+- **Crop insurance indemnities:** most commonly each party insures their own share and collects separately, so exclusion is a defensible default — but only if stated, especially since this app *does* share the premium (`landlord_crop_insurance_pct`).
+- **Government payments (ARC/PLC, ad hoc programs):** FSA typically pays each party its share directly per the farm record, so exclusion is again a common default — but some leases route these through settlement.
+- **Drying, storage, hauling:** genuinely negotiated (drying on the landlord's share is often the landlord's cost; hauling often the tenant's; storage varies) and these hit exactly at settlement time via elevator deductions, so a settlement ignoring them can be materially off.
+- **Real estate taxes:** conventionally the landlord's own expense outside the crop settlement; fine to exclude, say so.
+- **Lime/fall-applied fertilizer proration and other negotiated adjustments:** can't be modeled by fixed category percentages at all.
+
+## Minimum bar before the output may be called a "settlement"
+
+- **Fix the column semantics deliberately:** either restore the original combined meaning everywhere, or split it into `landlord_labor_pct` + `landlord_custom_pct` via a migration that makes an explicit, documented decision about existing values — never a silent reinterpretation. All three surfaces (editor, report, SQL view) must then agree, ideally enforced by a single shared mapping.
+- **A net line:** landlord revenue share, minus landlord expense share paid by the tenant, plus/minus adjustments, ending in "Net due **to/from** landlord: $X."
+- **A signed manual adjustments section** (label + amount) for the negotiated items above.
+- **An inclusions/exclusions statement printed on the face of the report:** e.g., "Not included: crop insurance indemnities, government program payments, drying/storage/hauling, real estate taxes — settle these per your written lease."
+- **Show the percentages actually used** on the report itself, and freeze/version them per crop year so editing the arrangement later doesn't silently rewrite a past settlement.
+- **No defaulted "standard" split** — percentages must be explicitly entered, and a prominent line stating this is an estimate from entered budget figures, and the written lease governs.
+
+Until the net line and the exclusions disclosure exist, the honest label is "settlement worksheet" or "landlord share estimate," not "settlement." I haven't changed any code — this was an assessment; say the word if you want me to plan the fix (the column-semantics repair is the one that needs a migration decision from you).

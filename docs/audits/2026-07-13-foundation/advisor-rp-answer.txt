@@ -1,0 +1,26 @@
+Ignoring 27 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/FarmRx"].hasTrustDialogAccepted: true in C:\Users\mason\.claude.json.
+Here are the audit answers, from standard RMA/extension practice — no code changes, just the assessment.
+
+**1) Is APH × coverage% × acres "safe to forward" physical bushels?**
+
+Directionally defensible, literally wrong. RP guarantees **revenue in dollars**, not bushels. The reason extension economists (farmdoc, ISU) do treat guaranteed bushels as a reasonable pre-harvest marketing benchmark is RP's harvest-price feature: if you come up short *and* futures rally, the indemnity is recalculated at the higher harvest price, which roughly funds buying out a futures-based forward contract. So the heuristic is legitimate — but only with these caveats, several of which bite this app specifically:
+
+- **Unit structure.** The guarantee applies per insurance unit. With enterprise units (the most common, because of the premium discount), one drowned-out field can fail while the whole unit still exceeds its guarantee → **zero indemnity**, yet the farmer forward-sold that field's bushels. Field-level "safe to forward" math silently assumes optional units.
+- **Basis and contract terms aren't covered.** Indemnity is futures-based; a buyout at the elevator happens at cash, plus any cancellation fees. Wide basis moves are uninsured.
+- **Premium contracts aren't covered.** Farm Rx treats white and non-GMO corn as separate commodities — correctly — but RP indemnifies at *yellow corn futures*. Forward-selling premium bushels against an RP guarantee leaves the premium exposed.
+- **Harvest price is capped** (typically 200% of projected), truncating protection in an extreme rally.
+- **Share matters.** A 50% crop-share farmer insures only their share; guaranteed bushels must use the farmer's share of production, which interacts with your landlord input-share feature.
+- **Indemnity nets out production-to-count**, quality adjustments, etc. — the app computes none of that, which is fine for a planning number but not for the word "safe."
+
+**2) Can 86–95% be computed as individual RP?**
+
+No. Individual RP tops out at **85%**. 86–95% exists only via **SCO/ECO, which are county-area plans**: they pay on *county* revenue outcomes, not the farm's. A farmer can have a total farm loss and collect nothing from ECO if the county did fine. So applying the individual APH formula at 90% doesn't just mislabel the product — it manufactures "guaranteed bushels" that have **no farm-level guarantee at all**. SCO/ECO cannot be folded into a farm-bushel number; they'd need separate county-based modeling, and for a planning tool the right answer is to exclude them.
+
+**3) Recommended wording and bounds**
+
+- **Bounds:** restrict the coverage input to **50–85% in 5% steps** (the actual RP levels). Delete 86–95% rather than warn about it — a warning next to a wrong number is still a wrong number.
+- **Label:** replace "Safe to forward" with something like **"Insurance-backed marketing benchmark (estimate)"** or "Bushels backed by your revenue guarantee." Avoid "safe" and "guaranteed bushels" as the remainder label.
+- **One-line caveat near the number**, plain English: *"RP guarantees revenue, not bushels. This estimate assumes optional/field-level units and futures-priced contracts; basis, premiums (white/non-GMO), and enterprise-unit averaging can reduce protection. Not insurance advice."*
+- Optionally let the user pick **unit structure** (enterprise vs. optional) later; if enterprise, compute the benchmark at the whole-crop level, not per field — that's the single biggest correctness gap after the 86–95% issue.
+
+**Bottom line:** the core formula is the standard, accepted heuristic and fine to keep at 50–85% with honest labeling; the 86–95% range as individual RP is factually wrong and should be removed, and "safe" should come out of the label.

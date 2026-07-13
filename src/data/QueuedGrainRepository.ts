@@ -14,7 +14,7 @@ async function crossTab<T>(key: string, storage: StorageLike, createId: () => st
 
 export class QueuedGrainRepository implements GrainRepository {
   private workspace: GrainWorkspace | null = null
-  constructor(private readonly writer: GrainRepository & GrainOperationWriter, private readonly dependencies: Dependencies) { if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() }); setModuleSyncRetryAction('grain', () => { void this.replayCurrent() }) }
+  constructor(private readonly writer: GrainRepository & GrainOperationWriter, private readonly dependencies: Dependencies) { if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() }); setModuleSyncRetryAction('grain', () => this.replayCurrent()) }
   private async contextAndQueue() { const context = await this.dependencies.getContext(); return { context, queue: new GrainWriteQueue(this.dependencies.storage, grainWriteQueueKey(this.dependencies.projectRef, context.userId, context.farmId)) } }
   private async locked<T>(queue: GrainWriteQueue, task: (verify: () => void) => Promise<T>) { return serial(queue.key, () => crossTab(queue.key, this.dependencies.storage, this.dependencies.createId, task)) }
   async inspectAndReplay() { await this.replayCurrent() }

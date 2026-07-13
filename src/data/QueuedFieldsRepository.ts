@@ -42,7 +42,7 @@ export class QueuedFieldsRepository implements FieldsRepository {
   private workspace: FieldsData | null = null
   constructor(private readonly writer: FieldsRepository & FieldsOperationWriter, private readonly dependencies: QueueDependencies) {
     if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() })
-    setModuleSyncRetryAction('fields', () => { void this.replayCurrent() })
+    setModuleSyncRetryAction('fields', () => this.replayCurrent())
   }
   private async contextAndQueue() { const context = await this.dependencies.getContext(); return { context, queue: new FieldsWriteQueue(this.dependencies.storage, writeQueueKey(this.dependencies.projectRef, context.userId, context.farmId)) } }
   private async locked<T>(queue: FieldsWriteQueue, task: (verify: () => void) => Promise<T>) { return serial(queue.key, () => crossTabLock(queue.key, this.dependencies.storage, this.dependencies.createId, task)) }

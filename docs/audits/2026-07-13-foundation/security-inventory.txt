@@ -1,0 +1,747 @@
+=== CREATE TABLE ===
+supabase/migrations\0004_module2_grain.sql:24:create table public.production_estimates (
+supabase/migrations\0004_module2_grain.sql:63:create table public.grain_contracts (
+supabase/migrations\0004_module2_grain.sql:103:create table public.marketing_plan_targets (
+supabase/migrations\0004_module2_grain.sql:136:create table public.insurance_units (
+supabase/migrations\0004_module2_grain.sql:164:create table public.grain_bins (
+supabase/migrations\0004_module2_grain.sql:180:create table public.bin_inventory (
+supabase/migrations\0004_module2_grain.sql:208:create table public.cash_bids (
+supabase/migrations\0004_module2_grain.sql:229:create table public.usda_report_dates (
+supabase/migrations\0006_module4_profitability.sql:29:create table public.crop_budgets (
+supabase/migrations\0006_module4_profitability.sql:74:create table public.budget_cost_lines (
+supabase/migrations\0006_module4_profitability.sql:102:create table public.profitability_matrix_steps (
+supabase/migrations\0006_module4_profitability.sql:123:create table public.budget_field_allocations (
+supabase/migrations\0001_module1_fields.sql:36:create table public.farms (
+supabase/migrations\0001_module1_fields.sql:47:create table public.farm_memberships (
+supabase/migrations\0001_module1_fields.sql:57:create table public.farm_rep_access (
+supabase/migrations\0001_module1_fields.sql:72:create table public.entities (
+supabase/migrations\0001_module1_fields.sql:84:create table public.fields (
+supabase/migrations\0001_module1_fields.sql:110:create table public.commodities (
+supabase/migrations\0001_module1_fields.sql:138:create table public.crop_assignments (
+supabase/migrations\0001_module1_fields.sql:163:create table public.arrangements (
+supabase/migrations\0016_equipment_tasks.sql:5:create table public.equipment (
+supabase/migrations\0016_equipment_tasks.sql:32:create table public.equipment_meter_readings (
+supabase/migrations\0016_equipment_tasks.sql:50:create table public.equipment_service_intervals (
+supabase/migrations\0016_equipment_tasks.sql:74:create table public.equipment_service_log (
+supabase/migrations\0016_equipment_tasks.sql:100:create table public.farm_tasks (
+supabase/migrations\0020_scouting.sql:16:create table public.scouting_notes (
+supabase/migrations\0020_scouting.sql:43:create table public.scouting_photos (
+supabase/migrations\0029_bin_upgrades.sql:22:create table public.bin_transactions (
+supabase/migrations\0019_field_log.sql:17:create table public.field_log_entries (
+supabase/migrations\0009_fields_live_support.sql:23:create table public.repository_write_receipts (
+supabase/migrations\0010_module3_inventory.sql:80:create table public.inventory_products (
+supabase/migrations\0010_module3_inventory.sql:151:create table public.inventory_receipts (
+supabase/migrations\0010_module3_inventory.sql:181:create table public.inventory_receipt_lines (
+supabase/migrations\0010_module3_inventory.sql:218:create table public.inventory_adjustments (
+supabase/migrations\0010_module3_inventory.sql:240:create table public.application_records (
+supabase/migrations\0010_module3_inventory.sql:316:create table public.application_products (
+supabase/migrations\0010_module3_inventory.sql:361:create table public.inventory_delivery_events (
+supabase/migrations\0027_marketing_alerts.sql:19:create table public.grain_alert_settings (
+supabase/migrations\0027_marketing_alerts.sql:57:create table public.marketing_alert_rules (
+supabase/migrations\0028_firm_offers.sql:21:create table public.firm_offers (
+supabase/migrations\0023_reminders.sql:15:create table public.notifications (
+supabase/migrations\0023_reminders.sql:45:create table public.push_subscriptions (
+supabase/migrations\0024_programs.sql:6:create table public.programs (
+supabase/migrations\0024_programs.sql:25:create table public.program_passes (
+supabase/migrations\0024_programs.sql:57:create table public.program_pass_products (
+supabase/migrations\0024_programs.sql:85:create table public.program_assignments (
+supabase/migrations\0024_programs.sql:123:create table public.assigned_program_passes (
+supabase/migrations\0024_programs.sql:207:create table public.assigned_program_pass_products (
+=== ENABLE RLS ===
+supabase/migrations\0029_bin_upgrades.sql:51:alter table public.bin_transactions enable row level security;
+supabase/migrations\0028_firm_offers.sql:82:alter table public.firm_offers enable row level security;
+supabase/migrations\0027_marketing_alerts.sql:127:alter table public.grain_alert_settings enable row level security;
+supabase/migrations\0027_marketing_alerts.sql:128:alter table public.marketing_alert_rules enable row level security;
+supabase/migrations\0024_programs.sql:722:    execute format('alter table public.%I enable row level security', v_table);
+supabase/migrations\0023_reminders.sql:56:alter table public.notifications enable row level security;
+supabase/migrations\0023_reminders.sql:57:alter table public.push_subscriptions enable row level security;
+supabase/migrations\0002_module1_rls.sql:135:alter table public.farms enable row level security;
+supabase/migrations\0002_module1_rls.sql:136:alter table public.farm_memberships enable row level security;
+supabase/migrations\0002_module1_rls.sql:137:alter table public.farm_rep_access enable row level security;
+supabase/migrations\0002_module1_rls.sql:138:alter table public.entities enable row level security;
+supabase/migrations\0002_module1_rls.sql:139:alter table public.fields enable row level security;
+supabase/migrations\0002_module1_rls.sql:140:alter table public.commodities enable row level security;
+supabase/migrations\0002_module1_rls.sql:141:alter table public.crop_assignments enable row level security;
+supabase/migrations\0002_module1_rls.sql:142:alter table public.arrangements enable row level security;
+supabase/migrations\0011_module3_rls.sql:14:alter table public.inventory_products enable row level security;
+supabase/migrations\0011_module3_rls.sql:15:alter table public.inventory_receipts enable row level security;
+supabase/migrations\0011_module3_rls.sql:16:alter table public.inventory_receipt_lines enable row level security;
+supabase/migrations\0011_module3_rls.sql:17:alter table public.inventory_adjustments enable row level security;
+supabase/migrations\0011_module3_rls.sql:18:alter table public.application_records enable row level security;
+supabase/migrations\0011_module3_rls.sql:19:alter table public.application_products enable row level security;
+supabase/migrations\0011_module3_rls.sql:20:alter table public.inventory_delivery_events enable row level security;
+supabase/migrations\0019_field_log.sql:64:alter table public.field_log_entries enable row level security;
+supabase/migrations\0020_scouting.sql:76:alter table public.scouting_notes enable row level security;
+supabase/migrations\0020_scouting.sql:77:alter table public.scouting_photos enable row level security;
+supabase/migrations\0005_module2_rls.sql:7:alter table public.production_estimates enable row level security;
+supabase/migrations\0005_module2_rls.sql:8:alter table public.grain_contracts enable row level security;
+supabase/migrations\0005_module2_rls.sql:9:alter table public.marketing_plan_targets enable row level security;
+supabase/migrations\0005_module2_rls.sql:10:alter table public.insurance_units enable row level security;
+supabase/migrations\0005_module2_rls.sql:11:alter table public.grain_bins enable row level security;
+supabase/migrations\0005_module2_rls.sql:12:alter table public.bin_inventory enable row level security;
+supabase/migrations\0005_module2_rls.sql:13:alter table public.cash_bids enable row level security;
+supabase/migrations\0005_module2_rls.sql:14:alter table public.usda_report_dates enable row level security;
+supabase/migrations\0009_fields_live_support.sql:36:alter table public.repository_write_receipts enable row level security;
+supabase/migrations\0016_equipment_tasks.sql:793:alter table public.equipment enable row level security;
+supabase/migrations\0016_equipment_tasks.sql:794:alter table public.equipment_meter_readings enable row level security;
+supabase/migrations\0016_equipment_tasks.sql:795:alter table public.equipment_service_intervals enable row level security;
+supabase/migrations\0016_equipment_tasks.sql:796:alter table public.equipment_service_log enable row level security;
+supabase/migrations\0016_equipment_tasks.sql:797:alter table public.farm_tasks enable row level security;
+supabase/migrations\0007_module4_rls.sql:5:alter table public.crop_budgets enable row level security;
+supabase/migrations\0007_module4_rls.sql:6:alter table public.budget_cost_lines enable row level security;
+supabase/migrations\0007_module4_rls.sql:7:alter table public.profitability_matrix_steps enable row level security;
+supabase/migrations\0007_module4_rls.sql:8:alter table public.budget_field_allocations enable row level security;
+=== POLICIES ===
+supabase/migrations\0029_bin_upgrades.sql:59:create policy bin_transactions_select
+supabase/migrations\0029_bin_upgrades.sql:70:create policy bin_transactions_insert
+supabase/migrations\0028_firm_offers.sql:88:create policy firm_offers_select
+supabase/migrations\0028_firm_offers.sql:102:create policy firm_offers_insert
+supabase/migrations\0028_firm_offers.sql:116:create policy firm_offers_update
+supabase/migrations\0028_firm_offers.sql:141:create policy firm_offers_delete
+supabase/migrations\0027_marketing_alerts.sql:136:create policy grain_alert_settings_select
+supabase/migrations\0027_marketing_alerts.sql:140:create policy grain_alert_settings_insert
+supabase/migrations\0027_marketing_alerts.sql:144:create policy grain_alert_settings_update
+supabase/migrations\0027_marketing_alerts.sql:149:create policy grain_alert_settings_delete
+supabase/migrations\0027_marketing_alerts.sql:153:create policy marketing_alert_rules_select
+supabase/migrations\0027_marketing_alerts.sql:167:create policy marketing_alert_rules_insert
+supabase/migrations\0027_marketing_alerts.sql:181:create policy marketing_alert_rules_update
+supabase/migrations\0027_marketing_alerts.sql:206:create policy marketing_alert_rules_delete
+supabase/migrations\0024_programs.sql:727:      'create policy %I_select on public.%I for select to authenticated using (public.can_access_farm(farm_id))',
+supabase/migrations\0024_programs.sql:731:      'create policy %I_update on public.%I for update to authenticated using (public.can_edit_farm(farm_id)) with check (public.can_edit_farm(farm_id))',
+supabase/migrations\0024_programs.sql:735:      'create policy %I_delete on public.%I for delete to authenticated using (public.can_edit_farm(farm_id))',
+supabase/migrations\0024_programs.sql:742:create policy programs_insert on public.programs
+supabase/migrations\0024_programs.sql:745:create policy program_passes_insert on public.program_passes
+supabase/migrations\0024_programs.sql:748:create policy program_pass_products_insert on public.program_pass_products
+supabase/migrations\0024_programs.sql:751:create policy program_assignments_insert on public.program_assignments
+supabase/migrations\0024_programs.sql:754:create policy assigned_program_passes_insert on public.assigned_program_passes
+supabase/migrations\0024_programs.sql:757:create policy assigned_program_pass_products_insert on public.assigned_program_pass_products
+supabase/migrations\0016_equipment_tasks.sql:815:create policy equipment_select
+supabase/migrations\0016_equipment_tasks.sql:819:create policy equipment_insert
+supabase/migrations\0016_equipment_tasks.sql:823:create policy equipment_update
+supabase/migrations\0016_equipment_tasks.sql:828:create policy equipment_delete
+supabase/migrations\0016_equipment_tasks.sql:832:create policy equipment_meter_readings_select
+supabase/migrations\0016_equipment_tasks.sql:836:create policy equipment_meter_readings_insert
+supabase/migrations\0016_equipment_tasks.sql:840:create policy equipment_meter_readings_delete
+supabase/migrations\0016_equipment_tasks.sql:844:create policy equipment_service_intervals_select
+supabase/migrations\0016_equipment_tasks.sql:848:create policy equipment_service_intervals_insert
+supabase/migrations\0016_equipment_tasks.sql:852:create policy equipment_service_intervals_update
+supabase/migrations\0016_equipment_tasks.sql:857:create policy equipment_service_intervals_delete
+supabase/migrations\0016_equipment_tasks.sql:861:create policy equipment_service_log_select
+supabase/migrations\0016_equipment_tasks.sql:865:create policy equipment_service_log_insert
+supabase/migrations\0016_equipment_tasks.sql:869:create policy equipment_service_log_delete
+supabase/migrations\0016_equipment_tasks.sql:873:create policy farm_tasks_select
+supabase/migrations\0016_equipment_tasks.sql:877:create policy farm_tasks_insert
+supabase/migrations\0016_equipment_tasks.sql:881:create policy farm_tasks_update
+supabase/migrations\0016_equipment_tasks.sql:886:create policy farm_tasks_delete
+supabase/migrations\0023_reminders.sql:71:create policy notifications_select
+supabase/migrations\0023_reminders.sql:78:create policy notifications_update
+supabase/migrations\0023_reminders.sql:89:create policy push_subscriptions_select
+supabase/migrations\0023_reminders.sql:93:create policy push_subscriptions_insert
+supabase/migrations\0023_reminders.sql:97:create policy push_subscriptions_update
+supabase/migrations\0023_reminders.sql:102:create policy push_subscriptions_delete
+supabase/migrations\0011_module3_rls.sql:48:create policy inventory_products_select
+supabase/migrations\0011_module3_rls.sql:52:create policy inventory_products_insert
+supabase/migrations\0011_module3_rls.sql:56:create policy inventory_products_update
+supabase/migrations\0011_module3_rls.sql:61:create policy inventory_products_delete
+supabase/migrations\0011_module3_rls.sql:65:create policy inventory_receipts_select
+supabase/migrations\0011_module3_rls.sql:69:create policy inventory_receipts_insert
+supabase/migrations\0011_module3_rls.sql:77:create policy inventory_receipts_update
+supabase/migrations\0011_module3_rls.sql:85:create policy inventory_receipts_delete
+supabase/migrations\0011_module3_rls.sql:92:create policy inventory_receipt_lines_select
+supabase/migrations\0011_module3_rls.sql:106:create policy inventory_receipt_lines_insert
+supabase/migrations\0011_module3_rls.sql:122:create policy inventory_receipt_lines_update
+supabase/migrations\0011_module3_rls.sql:147:create policy inventory_receipt_lines_delete
+supabase/migrations\0011_module3_rls.sql:159:create policy inventory_adjustments_select
+supabase/migrations\0011_module3_rls.sql:169:create policy inventory_adjustments_insert
+supabase/migrations\0011_module3_rls.sql:180:create policy application_records_select
+supabase/migrations\0011_module3_rls.sql:196:create policy application_records_insert
+supabase/migrations\0011_module3_rls.sql:224:create policy application_records_update
+supabase/migrations\0011_module3_rls.sql:263:create policy application_records_delete
+supabase/migrations\0011_module3_rls.sql:270:create policy application_products_select
+supabase/migrations\0011_module3_rls.sql:284:create policy application_products_insert
+supabase/migrations\0011_module3_rls.sql:300:create policy application_products_update
+supabase/migrations\0011_module3_rls.sql:325:create policy application_products_delete
+supabase/migrations\0011_module3_rls.sql:337:create policy inventory_delivery_events_select
+supabase/migrations\0002_module1_rls.sql:162:create policy farms_select
+supabase/migrations\0002_module1_rls.sql:166:create policy farms_insert
+supabase/migrations\0002_module1_rls.sql:172:create policy farms_update
+supabase/migrations\0002_module1_rls.sql:179:create policy farm_memberships_select
+supabase/migrations\0002_module1_rls.sql:183:create policy farm_memberships_insert
+supabase/migrations\0002_module1_rls.sql:187:create policy farm_memberships_update
+supabase/migrations\0002_module1_rls.sql:192:create policy farm_memberships_delete
+supabase/migrations\0002_module1_rls.sql:198:create policy farm_rep_access_select
+supabase/migrations\0002_module1_rls.sql:205:create policy farm_rep_access_insert
+supabase/migrations\0002_module1_rls.sql:212:create policy farm_rep_access_update
+supabase/migrations\0002_module1_rls.sql:217:create policy farm_rep_access_delete
+supabase/migrations\0002_module1_rls.sql:221:create policy entities_select
+supabase/migrations\0002_module1_rls.sql:225:create policy entities_insert
+supabase/migrations\0002_module1_rls.sql:229:create policy entities_update
+supabase/migrations\0002_module1_rls.sql:234:create policy entities_delete
+supabase/migrations\0002_module1_rls.sql:238:create policy fields_select
+supabase/migrations\0002_module1_rls.sql:250:create policy fields_insert
+supabase/migrations\0002_module1_rls.sql:262:create policy fields_update
+supabase/migrations\0002_module1_rls.sql:283:create policy fields_delete
+supabase/migrations\0002_module1_rls.sql:298:create policy commodities_select
+supabase/migrations\0002_module1_rls.sql:305:create policy crop_assignments_select
+supabase/migrations\0002_module1_rls.sql:317:create policy crop_assignments_insert
+supabase/migrations\0002_module1_rls.sql:329:create policy crop_assignments_update
+supabase/migrations\0002_module1_rls.sql:350:create policy crop_assignments_delete
+supabase/migrations\0002_module1_rls.sql:362:create policy arrangements_select
+supabase/migrations\0002_module1_rls.sql:374:create policy arrangements_insert
+supabase/migrations\0002_module1_rls.sql:386:create policy arrangements_update
+supabase/migrations\0002_module1_rls.sql:407:create policy arrangements_delete
+supabase/migrations\0002_module1_rls.sql:430:      create policy farm_files_select
+supabase/migrations\0002_module1_rls.sql:444:      create policy farm_files_insert
+supabase/migrations\0002_module1_rls.sql:458:      create policy farm_files_update
+supabase/migrations\0002_module1_rls.sql:481:      create policy farm_files_delete
+supabase/migrations\0007_module4_rls.sql:35:create policy crop_budgets_select
+supabase/migrations\0007_module4_rls.sql:49:create policy crop_budgets_insert
+supabase/migrations\0007_module4_rls.sql:63:create policy crop_budgets_update
+supabase/migrations\0007_module4_rls.sql:88:create policy crop_budgets_delete
+supabase/migrations\0007_module4_rls.sql:104:create policy budget_cost_lines_select
+supabase/migrations\0007_module4_rls.sql:114:create policy budget_cost_lines_insert
+supabase/migrations\0007_module4_rls.sql:124:create policy budget_cost_lines_update
+supabase/migrations\0007_module4_rls.sql:141:create policy budget_cost_lines_delete
+supabase/migrations\0007_module4_rls.sql:151:create policy profitability_matrix_steps_select
+supabase/migrations\0007_module4_rls.sql:161:create policy profitability_matrix_steps_insert
+supabase/migrations\0007_module4_rls.sql:171:create policy profitability_matrix_steps_update
+supabase/migrations\0007_module4_rls.sql:188:create policy profitability_matrix_steps_delete
+supabase/migrations\0007_module4_rls.sql:198:create policy budget_field_allocations_select
+supabase/migrations\0007_module4_rls.sql:213:create policy budget_field_allocations_insert
+supabase/migrations\0007_module4_rls.sql:228:create policy budget_field_allocations_update
+supabase/migrations\0007_module4_rls.sql:255:create policy budget_field_allocations_delete
+supabase/migrations\0019_field_log.sql:71:create policy field_log_entries_select
+supabase/migrations\0019_field_log.sql:75:create policy field_log_entries_insert
+supabase/migrations\0019_field_log.sql:82:create policy field_log_entries_update
+supabase/migrations\0019_field_log.sql:87:create policy field_log_entries_delete
+supabase/migrations\0005_module2_rls.sql:38:create policy production_estimates_select
+supabase/migrations\0005_module2_rls.sql:53:create policy production_estimates_insert
+supabase/migrations\0005_module2_rls.sql:68:create policy production_estimates_update
+supabase/migrations\0005_module2_rls.sql:95:create policy production_estimates_delete
+supabase/migrations\0005_module2_rls.sql:110:create policy grain_contracts_select
+supabase/migrations\0005_module2_rls.sql:124:create policy grain_contracts_insert
+supabase/migrations\0005_module2_rls.sql:138:create policy grain_contracts_update
+supabase/migrations\0005_module2_rls.sql:163:create policy grain_contracts_delete
+supabase/migrations\0005_module2_rls.sql:177:create policy marketing_plan_targets_select
+supabase/migrations\0005_module2_rls.sql:191:create policy marketing_plan_targets_insert
+supabase/migrations\0005_module2_rls.sql:205:create policy marketing_plan_targets_update
+supabase/migrations\0005_module2_rls.sql:230:create policy marketing_plan_targets_delete
+supabase/migrations\0005_module2_rls.sql:244:create policy insurance_units_select
+supabase/migrations\0005_module2_rls.sql:258:create policy insurance_units_insert
+supabase/migrations\0005_module2_rls.sql:272:create policy insurance_units_update
+supabase/migrations\0005_module2_rls.sql:297:create policy insurance_units_delete
+supabase/migrations\0005_module2_rls.sql:311:create policy grain_bins_select
+supabase/migrations\0005_module2_rls.sql:315:create policy grain_bins_insert
+supabase/migrations\0005_module2_rls.sql:319:create policy grain_bins_update
+supabase/migrations\0005_module2_rls.sql:324:create policy grain_bins_delete
+supabase/migrations\0005_module2_rls.sql:330:create policy bin_inventory_select
+supabase/migrations\0005_module2_rls.sql:342:create policy bin_inventory_insert
+supabase/migrations\0005_module2_rls.sql:354:create policy bin_inventory_update
+supabase/migrations\0005_module2_rls.sql:375:create policy bin_inventory_delete
+supabase/migrations\0005_module2_rls.sql:387:create policy cash_bids_select
+supabase/migrations\0005_module2_rls.sql:391:create policy cash_bids_insert
+supabase/migrations\0005_module2_rls.sql:395:create policy cash_bids_update
+supabase/migrations\0005_module2_rls.sql:400:create policy cash_bids_delete
+supabase/migrations\0005_module2_rls.sql:407:create policy usda_report_dates_select
+supabase/migrations\0020_scouting.sql:89:create policy scouting_notes_select
+supabase/migrations\0020_scouting.sql:93:create policy scouting_notes_insert
+supabase/migrations\0020_scouting.sql:100:create policy scouting_notes_update
+supabase/migrations\0020_scouting.sql:105:create policy scouting_notes_delete
+supabase/migrations\0020_scouting.sql:109:create policy scouting_photos_select
+supabase/migrations\0020_scouting.sql:113:create policy scouting_photos_insert
+supabase/migrations\0020_scouting.sql:120:create policy scouting_photos_update
+supabase/migrations\0020_scouting.sql:125:create policy scouting_photos_delete
+supabase/migrations\0020_scouting.sql:133:create policy scouting_photo_objects_select
+supabase/migrations\0020_scouting.sql:144:create policy scouting_photo_objects_insert
+supabase/migrations\0020_scouting.sql:155:create policy scouting_photo_objects_delete
+=== GRANTS/REVOKES ===
+supabase/migrations\0011_module3_rls.sql:12:-- toggle and their own current grant; reps receive no write policy.
+supabase/migrations\0011_module3_rls.sql:22:revoke all on table public.inventory_products from anon;
+supabase/migrations\0011_module3_rls.sql:23:revoke all on table public.inventory_receipts from anon;
+supabase/migrations\0011_module3_rls.sql:24:revoke all on table public.inventory_receipt_lines from anon;
+supabase/migrations\0011_module3_rls.sql:25:revoke all on table public.inventory_adjustments from anon;
+supabase/migrations\0011_module3_rls.sql:26:revoke all on table public.application_records from anon;
+supabase/migrations\0011_module3_rls.sql:27:revoke all on table public.application_products from anon;
+supabase/migrations\0011_module3_rls.sql:28:revoke all on table public.inventory_delivery_events from anon;
+supabase/migrations\0011_module3_rls.sql:29:revoke all on table public.effective_application_records from anon;
+supabase/migrations\0011_module3_rls.sql:30:revoke all on table public.inventory_on_hand from anon;
+supabase/migrations\0011_module3_rls.sql:31:revoke all on table public.application_cost_lines from anon;
+supabase/migrations\0011_module3_rls.sql:32:revoke all on table public.rup_application_completeness from anon;
+supabase/migrations\0011_module3_rls.sql:34:grant select, insert, update, delete on table public.inventory_products to authenticated;
+supabase/migrations\0011_module3_rls.sql:35:grant select, insert, update, delete on table public.inventory_receipts to authenticated;
+supabase/migrations\0011_module3_rls.sql:36:grant select, insert, update, delete on table public.inventory_receipt_lines to authenticated;
+supabase/migrations\0011_module3_rls.sql:37:grant select, insert on table public.inventory_adjustments to authenticated;
+supabase/migrations\0011_module3_rls.sql:38:grant select, insert, update, delete on table public.application_records to authenticated;
+supabase/migrations\0011_module3_rls.sql:39:grant select, insert, update, delete on table public.application_products to authenticated;
+supabase/migrations\0011_module3_rls.sql:42:grant select on table public.inventory_delivery_events to authenticated;
+supabase/migrations\0011_module3_rls.sql:43:grant select on table public.effective_application_records to authenticated;
+supabase/migrations\0011_module3_rls.sql:44:grant select on table public.inventory_on_hand to authenticated;
+supabase/migrations\0011_module3_rls.sql:45:grant select on table public.application_cost_lines to authenticated;
+supabase/migrations\0011_module3_rls.sql:46:grant select on table public.rup_application_completeness to authenticated;
+supabase/migrations\0011_module3_rls.sql:352:-- No UPDATE/DELETE grant or policy exists for inventory_adjustments: corrections
+supabase/migrations\0009_fields_live_support.sql:38:revoke all on table public.repository_write_receipts
+supabase/migrations\0009_fields_live_support.sql:138:revoke all on function public.bootstrap_first_farm(text, text, text)
+supabase/migrations\0009_fields_live_support.sql:140:grant execute on function public.bootstrap_first_farm(text, text, text)
+supabase/migrations\0009_fields_live_support.sql:665:revoke all on function public.save_field_bundle(uuid, uuid, jsonb)
+supabase/migrations\0009_fields_live_support.sql:667:grant execute on function public.save_field_bundle(uuid, uuid, jsonb)
+supabase/migrations\0008_employee_privacy.sql:17:-- AND this signed-in rep must have a current explicit grant.
+supabase/migrations\0008_employee_privacy.sql:42:revoke all on function public.can_read_private_financials(uuid)
+supabase/migrations\0008_employee_privacy.sql:44:grant execute on function public.can_read_private_financials(uuid)
+supabase/migrations\0008_employee_privacy.sql:196:-- access. Workers and read-only members cannot grant this flag to themselves.
+supabase/migrations\0020_scouting.sql:79:revoke all on table public.scouting_notes
+supabase/migrations\0020_scouting.sql:81:revoke all on table public.scouting_photos
+supabase/migrations\0020_scouting.sql:84:grant select, insert, update, delete on table public.scouting_notes
+supabase/migrations\0020_scouting.sql:86:grant select, insert, update, delete on table public.scouting_photos
+supabase/migrations\0020_scouting.sql:589:revoke all on function public.save_scouting_note(uuid, uuid, jsonb)
+supabase/migrations\0020_scouting.sql:591:revoke all on function public.delete_scouting_note(uuid, uuid)
+supabase/migrations\0020_scouting.sql:594:grant execute on function public.save_scouting_note(uuid, uuid, jsonb)
+supabase/migrations\0020_scouting.sql:596:grant execute on function public.delete_scouting_note(uuid, uuid)
+supabase/migrations\0007_module4_rls.sql:10:revoke all on table public.crop_budgets from anon;
+supabase/migrations\0007_module4_rls.sql:11:revoke all on table public.budget_cost_lines from anon;
+supabase/migrations\0007_module4_rls.sql:12:revoke all on table public.profitability_matrix_steps from anon;
+supabase/migrations\0007_module4_rls.sql:13:revoke all on table public.budget_field_allocations from anon;
+supabase/migrations\0007_module4_rls.sql:14:revoke all on table public.crop_budget_cost_totals from anon;
+supabase/migrations\0007_module4_rls.sql:15:revoke all on table public.crop_budget_analysis from anon;
+supabase/migrations\0007_module4_rls.sql:16:revoke all on table public.budget_cost_line_analysis from anon;
+supabase/migrations\0007_module4_rls.sql:17:revoke all on table public.profitability_matrix_cells from anon;
+supabase/migrations\0007_module4_rls.sql:18:revoke all on table public.arrangement_comparisons from anon;
+supabase/migrations\0007_module4_rls.sql:19:revoke all on table public.field_profitability from anon;
+supabase/migrations\0007_module4_rls.sql:21:grant select, insert, update, delete on table public.crop_budgets to authenticated;
+supabase/migrations\0007_module4_rls.sql:22:grant select, insert, update, delete on table public.budget_cost_lines to authenticated;
+supabase/migrations\0007_module4_rls.sql:23:grant select, insert, update, delete on table public.profitability_matrix_steps to authenticated;
+supabase/migrations\0007_module4_rls.sql:24:grant select, insert, update, delete on table public.budget_field_allocations to authenticated;
+supabase/migrations\0007_module4_rls.sql:25:grant select on table public.crop_budget_cost_totals to authenticated;
+supabase/migrations\0007_module4_rls.sql:26:grant select on table public.crop_budget_analysis to authenticated;
+supabase/migrations\0007_module4_rls.sql:27:grant select on table public.budget_cost_line_analysis to authenticated;
+supabase/migrations\0007_module4_rls.sql:28:grant select on table public.profitability_matrix_cells to authenticated;
+supabase/migrations\0007_module4_rls.sql:29:grant select on table public.arrangement_comparisons to authenticated;
+supabase/migrations\0007_module4_rls.sql:30:grant select on table public.field_profitability to authenticated;
+supabase/migrations\0007_module4_rls.sql:33:-- the farm share toggle and a current grant for this exact rep on every read.
+supabase/migrations\0029_bin_upgrades.sql:53:revoke all on table public.bin_transactions from anon;
+supabase/migrations\0029_bin_upgrades.sql:57:grant select, insert on table public.bin_transactions to authenticated;
+supabase/migrations\0019_field_log.sql:66:revoke all on table public.field_log_entries
+supabase/migrations\0019_field_log.sql:68:grant select, insert, update, delete on table public.field_log_entries
+supabase/migrations\0019_field_log.sql:343:revoke all on function public.save_field_log_entry(uuid, uuid, jsonb)
+supabase/migrations\0019_field_log.sql:345:revoke all on function public.delete_field_log_entry(uuid, uuid)
+supabase/migrations\0019_field_log.sql:348:grant execute on function public.save_field_log_entry(uuid, uuid, jsonb)
+supabase/migrations\0019_field_log.sql:350:grant execute on function public.delete_field_log_entry(uuid, uuid)
+supabase/migrations\0005_module2_rls.sql:16:revoke all on table public.production_estimates from anon;
+supabase/migrations\0005_module2_rls.sql:17:revoke all on table public.grain_contracts from anon;
+supabase/migrations\0005_module2_rls.sql:18:revoke all on table public.marketing_plan_targets from anon;
+supabase/migrations\0005_module2_rls.sql:19:revoke all on table public.insurance_units from anon;
+supabase/migrations\0005_module2_rls.sql:20:revoke all on table public.grain_bins from anon;
+supabase/migrations\0005_module2_rls.sql:21:revoke all on table public.bin_inventory from anon;
+supabase/migrations\0005_module2_rls.sql:22:revoke all on table public.cash_bids from anon;
+supabase/migrations\0005_module2_rls.sql:23:revoke all on table public.usda_report_dates from anon;
+supabase/migrations\0005_module2_rls.sql:24:revoke all on table public.insurance_unit_guarantees from anon;
+supabase/migrations\0005_module2_rls.sql:26:grant select, insert, update, delete on table public.production_estimates to authenticated;
+supabase/migrations\0005_module2_rls.sql:27:grant select, insert, update, delete on table public.grain_contracts to authenticated;
+supabase/migrations\0005_module2_rls.sql:28:grant select, insert, update, delete on table public.marketing_plan_targets to authenticated;
+supabase/migrations\0005_module2_rls.sql:29:grant select, insert, update, delete on table public.insurance_units to authenticated;
+supabase/migrations\0005_module2_rls.sql:30:grant select, insert, update, delete on table public.grain_bins to authenticated;
+supabase/migrations\0005_module2_rls.sql:31:grant select, insert, update, delete on table public.bin_inventory to authenticated;
+supabase/migrations\0005_module2_rls.sql:32:grant select, insert, update, delete on table public.cash_bids to authenticated;
+supabase/migrations\0005_module2_rls.sql:33:grant select on table public.usda_report_dates to authenticated;
+supabase/migrations\0005_module2_rls.sql:34:grant select on table public.insurance_unit_guarantees to authenticated;
+supabase/migrations\0005_module2_rls.sql:37:-- an enabled named-rep grant on every read. Reps receive no write policy.
+supabase/migrations\0005_module2_rls.sql:405:-- There is no authenticated write grant or write policy; trusted maintenance
+supabase/migrations\0028_firm_offers.sql:84:revoke all on table public.firm_offers from anon;
+supabase/migrations\0028_firm_offers.sql:86:grant select, insert, update, delete on table public.firm_offers to authenticated;
+supabase/migrations\0001_module1_fields.sql:326:    raise exception 'rep grant identity and audit fields cannot be changed';
+supabase/migrations\0024_programs.sql:491:revoke all on function public.sync_open_program_task_due(uuid, uuid, date, text)
+supabase/migrations\0024_programs.sql:723:    execute format('revoke all on table public.%I from public, anon, authenticated', v_table);
+supabase/migrations\0024_programs.sql:724:    execute format('grant select on table public.%I to authenticated', v_table);
+supabase/migrations\0024_programs.sql:761:revoke all on table
+supabase/migrations\0024_programs.sql:767:grant select on table
+supabase/migrations\0024_programs.sql:891:revoke all on function public.guard_program_assignment_active_cap() from public, anon, authenticated;
+supabase/migrations\0024_programs.sql:892:revoke all on function public.validate_assigned_program_application_link() from public, anon, authenticated;
+supabase/migrations\0024_programs.sql:893:revoke all on function public.program_assignment_graph(uuid, uuid) from public, anon, authenticated;
+supabase/migrations\0024_programs.sql:894:revoke all on function public.materialize_program_assignment(uuid, uuid, uuid, uuid) from public, anon, authenticated;
+supabase/migrations\0024_programs.sql:2113:revoke all on function public.save_program(uuid,uuid,jsonb) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2114:revoke all on function public.save_program_pass(uuid,uuid,uuid,jsonb,jsonb,uuid) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2115:revoke all on function public.reorder_program_passes(uuid,uuid,uuid,uuid[]) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2116:revoke all on function public.delete_program_pass(uuid,uuid,uuid,uuid) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2117:revoke all on function public.delete_program(uuid,uuid,uuid) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2118:revoke all on function public.assign_program(uuid,uuid,uuid,uuid[]) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2119:revoke all on function public.reassign_program_assignment(uuid,uuid,uuid,uuid,text) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2120:revoke all on function public.refresh_program_assignment(uuid,uuid,uuid) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2121:revoke all on function public.reschedule_program_pass(uuid,uuid,uuid,date,text) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2122:revoke all on function public.mark_program_pass_applied(uuid,uuid,uuid,date,numeric,jsonb,uuid,boolean) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2123:revoke all on function public.skip_program_pass(uuid,uuid,uuid,date,text) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2124:revoke all on function public.unassign_program(uuid,uuid,uuid,text) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2125:revoke all on function public.generate_due_program_items(uuid,uuid,date) from public,anon,authenticated;
+supabase/migrations\0024_programs.sql:2127:grant execute on function public.save_program(uuid,uuid,jsonb) to authenticated;
+supabase/migrations\0024_programs.sql:2128:grant execute on function public.save_program_pass(uuid,uuid,uuid,jsonb,jsonb,uuid) to authenticated;
+supabase/migrations\0024_programs.sql:2129:grant execute on function public.reorder_program_passes(uuid,uuid,uuid,uuid[]) to authenticated;
+supabase/migrations\0024_programs.sql:2130:grant execute on function public.delete_program_pass(uuid,uuid,uuid,uuid) to authenticated;
+supabase/migrations\0024_programs.sql:2131:grant execute on function public.delete_program(uuid,uuid,uuid) to authenticated;
+supabase/migrations\0024_programs.sql:2132:grant execute on function public.assign_program(uuid,uuid,uuid,uuid[]) to authenticated;
+supabase/migrations\0024_programs.sql:2133:grant execute on function public.reassign_program_assignment(uuid,uuid,uuid,uuid,text) to authenticated;
+supabase/migrations\0024_programs.sql:2134:grant execute on function public.refresh_program_assignment(uuid,uuid,uuid) to authenticated;
+supabase/migrations\0024_programs.sql:2135:grant execute on function public.reschedule_program_pass(uuid,uuid,uuid,date,text) to authenticated;
+supabase/migrations\0024_programs.sql:2136:grant execute on function public.mark_program_pass_applied(uuid,uuid,uuid,date,numeric,jsonb,uuid,boolean) to authenticated;
+supabase/migrations\0024_programs.sql:2137:grant execute on function public.skip_program_pass(uuid,uuid,uuid,date,text) to authenticated;
+supabase/migrations\0024_programs.sql:2138:grant execute on function public.unassign_program(uuid,uuid,uuid,text) to authenticated;
+supabase/migrations\0024_programs.sql:2139:grant execute on function public.generate_due_program_items(uuid,uuid,date) to authenticated;
+supabase/migrations\0002_module1_rls.sql:6:-- an enabled named-rep grant every time a policy is evaluated. A broad app
+supabase/migrations\0002_module1_rls.sql:118:revoke all on function public.is_active_farm_member(uuid) from public, anon;
+supabase/migrations\0002_module1_rls.sql:119:revoke all on function public.can_edit_farm(uuid) from public, anon;
+supabase/migrations\0002_module1_rls.sql:120:revoke all on function public.can_manage_farm(uuid) from public, anon;
+supabase/migrations\0002_module1_rls.sql:121:revoke all on function public.has_explicit_rep_access(uuid) from public, anon;
+supabase/migrations\0002_module1_rls.sql:122:revoke all on function public.can_access_farm(uuid) from public, anon;
+supabase/migrations\0002_module1_rls.sql:123:revoke all on function public.bootstrap_farm_owner_membership() from public, anon;
+supabase/migrations\0002_module1_rls.sql:125:grant execute on function public.is_active_farm_member(uuid) to authenticated;
+supabase/migrations\0002_module1_rls.sql:126:grant execute on function public.can_edit_farm(uuid) to authenticated;
+supabase/migrations\0002_module1_rls.sql:127:grant execute on function public.can_manage_farm(uuid) to authenticated;
+supabase/migrations\0002_module1_rls.sql:128:grant execute on function public.has_explicit_rep_access(uuid) to authenticated;
+supabase/migrations\0002_module1_rls.sql:129:grant execute on function public.can_access_farm(uuid) to authenticated;
+supabase/migrations\0002_module1_rls.sql:130:-- Trigger execution does not require a direct grant.
+supabase/migrations\0002_module1_rls.sql:144:revoke all on table public.farms from anon;
+supabase/migrations\0002_module1_rls.sql:145:revoke all on table public.farm_memberships from anon;
+supabase/migrations\0002_module1_rls.sql:146:revoke all on table public.farm_rep_access from anon;
+supabase/migrations\0002_module1_rls.sql:147:revoke all on table public.entities from anon;
+supabase/migrations\0002_module1_rls.sql:148:revoke all on table public.fields from anon;
+supabase/migrations\0002_module1_rls.sql:149:revoke all on table public.commodities from anon;
+supabase/migrations\0002_module1_rls.sql:150:revoke all on table public.crop_assignments from anon;
+supabase/migrations\0002_module1_rls.sql:151:revoke all on table public.arrangements from anon;
+supabase/migrations\0002_module1_rls.sql:153:grant select, insert, update on table public.farms to authenticated;
+supabase/migrations\0002_module1_rls.sql:154:grant select, insert, update, delete on table public.farm_memberships to authenticated;
+supabase/migrations\0002_module1_rls.sql:155:grant select, insert, update, delete on table public.farm_rep_access to authenticated;
+supabase/migrations\0002_module1_rls.sql:156:grant select, insert, update, delete on table public.entities to authenticated;
+supabase/migrations\0002_module1_rls.sql:157:grant select, insert, update, delete on table public.fields to authenticated;
+supabase/migrations\0002_module1_rls.sql:158:grant select on table public.commodities to authenticated;
+supabase/migrations\0002_module1_rls.sql:159:grant select, insert, update, delete on table public.crop_assignments to authenticated;
+supabase/migrations\0002_module1_rls.sql:160:grant select, insert, update, delete on table public.arrangements to authenticated;
+supabase/migrations\0002_module1_rls.sql:178:-- grant does not expose the member list.
+supabase/migrations\0002_module1_rls.sql:196:-- Farm managers can administer grants. A rep can see only their own grant
+supabase/migrations\0018_field_location.sql:80:revoke all on function public.set_field_location(uuid, uuid, numeric, numeric, text)
+supabase/migrations\0018_field_location.sql:82:grant execute on function public.set_field_location(uuid, uuid, numeric, numeric, text)
+supabase/migrations\0003_harden_bootstrap_function.sql:2:-- Triggers run as the table owner, so no caller EXECUTE grant is needed.
+supabase/migrations\0003_harden_bootstrap_function.sql:4:revoke all on function public.bootstrap_farm_owner_membership() from public, anon, authenticated;
+supabase/migrations\0023_reminders.sql:13:-- deliberate no-direct-INSERT grant. Owner-only delivery is the v1 choice.
+supabase/migrations\0023_reminders.sql:59:revoke all on table public.notifications
+supabase/migrations\0023_reminders.sql:61:revoke all on table public.push_subscriptions
+supabase/migrations\0023_reminders.sql:64:grant select on table public.notifications to authenticated;
+supabase/migrations\0023_reminders.sql:67:grant update (read_at) on table public.notifications to authenticated;
+supabase/migrations\0023_reminders.sql:68:grant select, insert, update, delete on table public.push_subscriptions
+supabase/migrations\0023_reminders.sql:302:revoke all on function public.create_notification(
+supabase/migrations\0023_reminders.sql:305:revoke all on function public.mark_notifications_read(uuid[])
+supabase/migrations\0023_reminders.sql:307:revoke all on function public.save_push_subscription(text, text, text, text)
+supabase/migrations\0023_reminders.sql:309:revoke all on function public.delete_push_subscription(text)
+supabase/migrations\0023_reminders.sql:312:grant execute on function public.create_notification(
+supabase/migrations\0023_reminders.sql:315:grant execute on function public.mark_notifications_read(uuid[])
+supabase/migrations\0023_reminders.sql:317:grant execute on function public.save_push_subscription(text, text, text, text)
+supabase/migrations\0023_reminders.sql:319:grant execute on function public.delete_push_subscription(text)
+supabase/migrations\0023_reminders.sql:501:revoke all on function public.generate_due_service_tasks(uuid)
+supabase/migrations\0023_reminders.sql:503:grant execute on function public.generate_due_service_tasks(uuid)
+supabase/migrations\0022_harvest.sql:174:revoke all on function public.save_crop_harvest(uuid, uuid, jsonb)
+supabase/migrations\0022_harvest.sql:176:grant execute on function public.save_crop_harvest(uuid, uuid, jsonb)
+supabase/migrations\0026_program_cost_known_lines.sql:146:revoke all on table
+supabase/migrations\0026_program_cost_known_lines.sql:150:grant select on table
+supabase/migrations\0014_flex_lease_methods.sql:643:revoke all on function public.save_field_bundle(uuid, uuid, jsonb)
+supabase/migrations\0014_flex_lease_methods.sql:645:grant execute on function public.save_field_bundle(uuid, uuid, jsonb)
+supabase/migrations\0017_service_log_rls_fix.sql:281:revoke all on function public.save_service_log_entry(uuid, jsonb, uuid)
+supabase/migrations\0017_service_log_rls_fix.sql:283:grant execute on function public.save_service_log_entry(uuid, jsonb, uuid) to authenticated;
+supabase/migrations\0015_inventory_live_support.sql:567:revoke all on function public.save_inventory_receipt_bundle(uuid, jsonb, jsonb)
+supabase/migrations\0015_inventory_live_support.sql:569:grant execute on function public.save_inventory_receipt_bundle(uuid, jsonb, jsonb)
+supabase/migrations\0015_inventory_live_support.sql:1051:revoke all on function public.save_inventory_application_bundle(uuid, jsonb, jsonb)
+supabase/migrations\0015_inventory_live_support.sql:1053:grant execute on function public.save_inventory_application_bundle(uuid, jsonb, jsonb)
+supabase/migrations\0013_profitability_live_support.sql:11:-- revoke from public/anon/authenticated then grant execute to authenticated;
+supabase/migrations\0013_profitability_live_support.sql:265:revoke all on function public.replace_profitability_matrix_steps(
+supabase/migrations\0013_profitability_live_support.sql:269:grant execute on function public.replace_profitability_matrix_steps(
+supabase/migrations\0013_profitability_live_support.sql:660:revoke all on function public.copy_crop_budget(
+supabase/migrations\0013_profitability_live_support.sql:664:grant execute on function public.copy_crop_budget(
+supabase/migrations\0012_grain_live_support.sql:333:revoke all on function public.replace_marketing_plan_targets(
+supabase/migrations\0012_grain_live_support.sql:337:grant execute on function public.replace_marketing_plan_targets(
+supabase/migrations\0016_equipment_tasks.sql:799:revoke all on table public.equipment from anon;
+supabase/migrations\0016_equipment_tasks.sql:800:revoke all on table public.equipment_meter_readings from anon;
+supabase/migrations\0016_equipment_tasks.sql:801:revoke all on table public.equipment_service_intervals from anon;
+supabase/migrations\0016_equipment_tasks.sql:802:revoke all on table public.equipment_service_log from anon;
+supabase/migrations\0016_equipment_tasks.sql:803:revoke all on table public.farm_tasks from anon;
+supabase/migrations\0016_equipment_tasks.sql:804:revoke all on table public.equipment_service_due from anon;
+supabase/migrations\0016_equipment_tasks.sql:805:revoke all on table public.farm_member_names from anon;
+supabase/migrations\0016_equipment_tasks.sql:807:grant select, insert, update, delete on table public.equipment to authenticated;
+supabase/migrations\0016_equipment_tasks.sql:808:grant select, insert, delete on table public.equipment_meter_readings to authenticated;
+supabase/migrations\0016_equipment_tasks.sql:809:grant select, insert, update, delete on table public.equipment_service_intervals to authenticated;
+supabase/migrations\0016_equipment_tasks.sql:810:grant select, insert, delete on table public.equipment_service_log to authenticated;
+supabase/migrations\0016_equipment_tasks.sql:811:grant select, insert, update, delete on table public.farm_tasks to authenticated;
+supabase/migrations\0016_equipment_tasks.sql:812:grant select on table public.equipment_service_due to authenticated;
+supabase/migrations\0016_equipment_tasks.sql:813:grant select on table public.farm_member_names to authenticated;
+supabase/migrations\0016_equipment_tasks.sql:890:revoke all on function public.stamp_farm_task_completion() from public, anon, authenticated;
+supabase/migrations\0016_equipment_tasks.sql:891:revoke all on function public.validate_farm_task_assignee() from public, anon, authenticated;
+supabase/migrations\0016_equipment_tasks.sql:892:revoke all on function public.stamp_service_interval_from_log() from public, anon, authenticated;
+supabase/migrations\0016_equipment_tasks.sql:893:revoke all on function public.get_member_display_name(uuid) from public, anon, authenticated;
+supabase/migrations\0016_equipment_tasks.sql:894:revoke all on function public.generate_due_service_tasks(uuid) from public, anon, authenticated;
+supabase/migrations\0016_equipment_tasks.sql:895:revoke all on function public.save_service_log_entry(uuid, jsonb, uuid)
+supabase/migrations\0016_equipment_tasks.sql:898:grant execute on function public.stamp_farm_task_completion() to authenticated;
+supabase/migrations\0016_equipment_tasks.sql:899:grant execute on function public.validate_farm_task_assignee() to authenticated;
+supabase/migrations\0016_equipment_tasks.sql:900:grant execute on function public.stamp_service_interval_from_log() to authenticated;
+supabase/migrations\0016_equipment_tasks.sql:901:grant execute on function public.get_member_display_name(uuid) to authenticated;
+supabase/migrations\0016_equipment_tasks.sql:902:grant execute on function public.generate_due_service_tasks(uuid) to authenticated;
+supabase/migrations\0016_equipment_tasks.sql:903:grant execute on function public.save_service_log_entry(uuid, jsonb, uuid) to authenticated;
+supabase/migrations\0027_marketing_alerts.sql:130:revoke all on table public.grain_alert_settings from anon;
+supabase/migrations\0027_marketing_alerts.sql:131:revoke all on table public.marketing_alert_rules from anon;
+supabase/migrations\0027_marketing_alerts.sql:133:grant select, insert, update, delete on table public.grain_alert_settings to authenticated;
+supabase/migrations\0027_marketing_alerts.sql:134:grant select, insert, update, delete on table public.marketing_alert_rules to authenticated;
+=== SECURITY DEFINER / SEARCH PATH ===
+supabase/migrations\0008_employee_privacy.sql:22:security definer
+supabase/migrations\0008_employee_privacy.sql:23:set search_path = public, pg_temp
+supabase/migrations\0007_module4_rls.sql:272:-- Rule 7: this migration defines no SECURITY DEFINER functions and reuses only
+supabase/migrations\0006_module4_profitability.sql:171:set search_path = public, pg_temp
+supabase/migrations\0006_module4_profitability.sql:268:set search_path = public, pg_temp
+supabase/migrations\0006_module4_profitability.sql:293:-- SECURITY DEFINER access helper.
+supabase/migrations\0006_module4_profitability.sql:298:set search_path = public, pg_temp
+supabase/migrations\0005_module2_rls.sql:416:-- Rule 7: Module 2 creates no SECURITY DEFINER functions and cannot bypass the
+supabase/migrations\0004_module2_grain.sql:297:set search_path = public, pg_temp
+supabase/migrations\0002_module1_rls.sql:12:security definer
+supabase/migrations\0002_module1_rls.sql:13:set search_path = public, pg_temp
+supabase/migrations\0002_module1_rls.sql:29:security definer
+supabase/migrations\0002_module1_rls.sql:30:set search_path = public, pg_temp
+supabase/migrations\0002_module1_rls.sql:47:security definer
+supabase/migrations\0002_module1_rls.sql:48:set search_path = public, pg_temp
+supabase/migrations\0002_module1_rls.sql:65:security definer
+supabase/migrations\0002_module1_rls.sql:66:set search_path = public, pg_temp
+supabase/migrations\0002_module1_rls.sql:86:security definer
+supabase/migrations\0002_module1_rls.sql:87:set search_path = public, pg_temp
+supabase/migrations\0002_module1_rls.sql:94:-- choose somebody else. All SECURITY DEFINER functions have a fixed search
+supabase/migrations\0002_module1_rls.sql:99:security definer
+supabase/migrations\0002_module1_rls.sql:100:set search_path = public, pg_temp
+supabase/migrations\0001_module1_fields.sql:269:set search_path = public, pg_temp
+supabase/migrations\0001_module1_fields.sql:280:set search_path = public, pg_temp
+supabase/migrations\0001_module1_fields.sql:293:set search_path = public, pg_temp
+supabase/migrations\0001_module1_fields.sql:307:set search_path = public, pg_temp
+supabase/migrations\0001_module1_fields.sql:320:set search_path = public, pg_temp
+supabase/migrations\0001_module1_fields.sql:335:set search_path = public, pg_temp
+supabase/migrations\0018_field_location.sql:4:-- The SECURITY DEFINER RPC uses a plain UPDATE with no SELECT ... FOR UPDATE:
+supabase/migrations\0018_field_location.sql:35:security definer
+supabase/migrations\0018_field_location.sql:36:set search_path = public, pg_temp
+supabase/migrations\0017_service_log_rls_fix.sql:11:-- in the SECURITY DEFINER trigger stamp_service_interval_from_log, which keeps
+supabase/migrations\0017_service_log_rls_fix.sql:22:set search_path = public, pg_temp
+supabase/migrations\0016_equipment_tasks.sql:164:set search_path = public, pg_temp
+supabase/migrations\0016_equipment_tasks.sql:199:security definer
+supabase/migrations\0016_equipment_tasks.sql:200:set search_path = public, pg_temp
+supabase/migrations\0016_equipment_tasks.sql:252:set search_path = public, pg_temp
+supabase/migrations\0016_equipment_tasks.sql:374:-- This narrowly scoped SECURITY DEFINER helper is the only auth.users access.
+supabase/migrations\0016_equipment_tasks.sql:382:security definer
+supabase/migrations\0016_equipment_tasks.sql:383:set search_path = public, auth, pg_temp
+supabase/migrations\0016_equipment_tasks.sql:422:set search_path = public, pg_temp
+supabase/migrations\0016_equipment_tasks.sql:531:set search_path = public, pg_temp
+supabase/migrations\0015_inventory_live_support.sql:13:set search_path = public, pg_temp
+supabase/migrations\0015_inventory_live_support.sql:88:set search_path = public, pg_temp
+supabase/migrations\0015_inventory_live_support.sql:110:set search_path = public, pg_temp
+supabase/migrations\0015_inventory_live_support.sql:214:set search_path = public, pg_temp
+supabase/migrations\0015_inventory_live_support.sql:580:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:3:-- All SECURITY DEFINER paths use fixed search paths, farm-scoped predicates,
+supabase/migrations\0024_programs.sql:277:security definer
+supabase/migrations\0024_programs.sql:278:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:321:security definer
+supabase/migrations\0024_programs.sql:322:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:409:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:778:security definer
+supabase/migrations\0024_programs.sql:779:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:798:security definer
+supabase/migrations\0024_programs.sql:799:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:903:security definer
+supabase/migrations\0024_programs.sql:904:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:1012:security definer
+supabase/migrations\0024_programs.sql:1013:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:1269:security definer
+supabase/migrations\0024_programs.sql:1270:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:1336:security definer
+supabase/migrations\0024_programs.sql:1337:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:1385:security definer
+supabase/migrations\0024_programs.sql:1386:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:1416:security definer
+supabase/migrations\0024_programs.sql:1417:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:1479:security definer
+supabase/migrations\0024_programs.sql:1480:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:1654:security definer
+supabase/migrations\0024_programs.sql:1655:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:1716:security definer
+supabase/migrations\0024_programs.sql:1717:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:1767:security definer
+supabase/migrations\0024_programs.sql:1768:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:1824:security definer
+supabase/migrations\0024_programs.sql:1825:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:1900:security definer
+supabase/migrations\0024_programs.sql:1901:set search_path = public, pg_temp
+supabase/migrations\0024_programs.sql:2042:security definer
+supabase/migrations\0024_programs.sql:2043:set search_path = public, pg_temp
+supabase/migrations\0022_harvest.sql:6:-- The SECURITY DEFINER RPC uses an advisory transaction lock and never uses
+supabase/migrations\0022_harvest.sql:27:security definer
+supabase/migrations\0022_harvest.sql:28:set search_path = public, pg_temp
+supabase/migrations\0022_harvest.sql:123:  -- SECURITY DEFINER bypasses RLS, so both the existence check and the write
+supabase/migrations\0019_field_log.sql:6:-- The RPCs are SECURITY DEFINER and use advisory transaction locks rather than
+supabase/migrations\0019_field_log.sql:98:security definer
+supabase/migrations\0019_field_log.sql:99:set search_path = public, pg_temp
+supabase/migrations\0019_field_log.sql:307:security definer
+supabase/migrations\0019_field_log.sql:308:set search_path = public, pg_temp
+supabase/migrations\0010_module3_inventory.sql:416:set search_path = public, pg_temp
+supabase/migrations\0010_module3_inventory.sql:438:set search_path = public, pg_temp
+supabase/migrations\0010_module3_inventory.sql:454:set search_path = public, pg_temp
+supabase/migrations\0010_module3_inventory.sql:470:set search_path = public, pg_temp
+supabase/migrations\0010_module3_inventory.sql:504:set search_path = public, pg_temp
+supabase/migrations\0010_module3_inventory.sql:553:set search_path = public, pg_temp
+supabase/migrations\0010_module3_inventory.sql:607:set search_path = public, pg_temp
+supabase/migrations\0010_module3_inventory.sql:628:set search_path = public, pg_temp
+supabase/migrations\0010_module3_inventory.sql:655:set search_path = public, pg_temp
+supabase/migrations\0010_module3_inventory.sql:722:set search_path = public, pg_temp
+supabase/migrations\0009_fields_live_support.sql:48:security definer
+supabase/migrations\0009_fields_live_support.sql:49:set search_path = public, pg_temp
+supabase/migrations\0009_fields_live_support.sql:150:security definer
+supabase/migrations\0009_fields_live_support.sql:151:set search_path = public, pg_temp
+supabase/migrations\0020_scouting.sql:7:-- The SECURITY DEFINER RPCs use advisory transaction locks and never use
+supabase/migrations\0020_scouting.sql:180:security definer
+supabase/migrations\0020_scouting.sql:181:set search_path = public, pg_temp
+supabase/migrations\0020_scouting.sql:546:security definer
+supabase/migrations\0020_scouting.sql:547:set search_path = public, pg_temp
+supabase/migrations\0012_grain_live_support.sql:2:-- The function is SECURITY DEFINER, so every authorization and tenant check is
+supabase/migrations\0012_grain_live_support.sql:15:security definer
+supabase/migrations\0012_grain_live_support.sql:16:set search_path = public, pg_temp
+supabase/migrations\0012_grain_live_support.sql:41:  -- SECURITY DEFINER rule: callers must independently have both ordinary edit
+supabase/migrations\0023_reminders.sql:6:-- The SECURITY DEFINER paths use fixed search paths, explicit authentication
+supabase/migrations\0023_reminders.sql:117:security definer
+supabase/migrations\0023_reminders.sql:118:set search_path = public, pg_temp
+supabase/migrations\0023_reminders.sql:195:security definer
+supabase/migrations\0023_reminders.sql:196:set search_path = public, pg_temp
+supabase/migrations\0023_reminders.sql:229:security definer
+supabase/migrations\0023_reminders.sql:230:set search_path = public, pg_temp
+supabase/migrations\0023_reminders.sql:278:security definer
+supabase/migrations\0023_reminders.sql:279:set search_path = public, pg_temp
+supabase/migrations\0023_reminders.sql:323:-- The only task-generator edits are SECURITY DEFINER plus the notification
+supabase/migrations\0023_reminders.sql:328:security definer
+supabase/migrations\0023_reminders.sql:329:set search_path = public, pg_temp
+supabase/migrations\0013_profitability_live_support.sql:7:-- Two SECURITY DEFINER functions, written to the exact standard of
+supabase/migrations\0013_profitability_live_support.sql:9:-- can_edit_farm AND can_read_private_financials checks; set search_path;
+supabase/migrations\0013_profitability_live_support.sql:45:security definer
+supabase/migrations\0013_profitability_live_support.sql:46:set search_path = public, pg_temp
+supabase/migrations\0013_profitability_live_support.sql:72:  -- SECURITY DEFINER rule: callers must independently have both ordinary edit
+supabase/migrations\0013_profitability_live_support.sql:297:security definer
+supabase/migrations\0013_profitability_live_support.sql:298:set search_path = public, pg_temp
+supabase/migrations\0014_flex_lease_methods.sql:8:-- This migration replaces the SECURITY DEFINER function with a byte-identical
+supabase/migrations\0014_flex_lease_methods.sql:21:security definer
+supabase/migrations\0014_flex_lease_methods.sql:22:set search_path = public, pg_temp
+supabase/migrations\0014_flex_lease_methods.sql:227:  -- this SECURITY DEFINER boundary with at least the same rules the client
+=== AUTH/STORAGE/EDGE ===
+supabase/functions\send-push\index.ts:6:// Security: verify_jwt is ON (only signed-in callers). The function then loads the
+supabase/functions\send-push\index.ts:20:  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+supabase/functions\send-push\index.ts:52:    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+src/auth\bootstrapFarm.ts:12:  const { data, error } = await supabase.rpc('bootstrap_first_farm', { p_farm_name: input.farmName.trim(), p_entity_name: input.entityName.trim(), p_entity_type: input.selectedEntityType })
+src/lib\farmerErrors.ts:6:  if (/sign-in ended|jwt|auth|unauthori[sz]ed|\b401\b/.test(message)) return 'Your sign-in ended. Please sign in again.'
+supabase/migrations\0013_profitability_live_support.sql:8:-- 0012_grain_live_support.sql: explicit auth.uid() check; explicit
+supabase/migrations\0013_profitability_live_support.sql:49:  v_caller uuid := auth.uid();
+supabase/migrations\0013_profitability_live_support.sql:301:  v_caller uuid := auth.uid();
+supabase/migrations\0013_profitability_live_support.sql:670:-- A migration-time self-test cannot truthfully exercise auth.uid(), the
+supabase/migrations\0013_profitability_live_support.sql:712:--   perform set_config('request.jwt.claim.sub', v_worker_id::text, true);
+supabase/migrations\0013_profitability_live_support.sql:727:--   perform set_config('request.jwt.claim.sub', v_owner_id::text, true);
+supabase/functions\deliver-grain-alert\index.ts:3:const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' }
+supabase/functions\deliver-grain-alert\index.ts:14:    const authorization = request.headers.get('Authorization')
+supabase/functions\deliver-grain-alert\index.ts:15:    if (!authorization) return json({ error: 'Sign in required.' }, 401)
+supabase/functions\deliver-grain-alert\index.ts:16:    const url = Deno.env.get('SUPABASE_URL')!; const anon = Deno.env.get('SUPABASE_ANON_KEY')!; const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+supabase/functions\deliver-grain-alert\index.ts:17:    const caller = createClient(url, anon, { global: { headers: { Authorization: authorization } } }); const admin = createClient(url, service)
+supabase/functions\deliver-grain-alert\index.ts:31:    const sent = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: Deno.env.get('GRAIN_ALERT_FROM') ?? 'Farm Rx <alerts@farmrx.app>', to: recipients, subject, text: message }) })
+supabase/migrations\0012_grain_live_support.sql:2:-- The function is SECURITY DEFINER, so every authorization and tenant check is
+supabase/migrations\0012_grain_live_support.sql:19:  v_caller uuid := auth.uid();
+supabase/migrations\0012_grain_live_support.sql:342:-- A migration-time self-test cannot truthfully exercise auth.uid(), membership
+supabase/migrations\0012_grain_live_support.sql:371:--   perform set_config('request.jwt.claim.sub', v_worker_id::text, true);
+supabase/migrations\0012_grain_live_support.sql:388:--   perform set_config('request.jwt.claim.sub', v_owner_id::text, true);
+supabase/migrations\0008_employee_privacy.sql:25:  select auth.uid() is not null
+supabase/migrations\0008_employee_privacy.sql:31:          and fm.user_id = auth.uid()
+supabase/migrations\0011_module3_rls.sql:73:  and created_by = auth.uid()
+supabase/migrations\0011_module3_rls.sql:82:  and (cancelled_by is null or cancelled_by = auth.uid())
+supabase/migrations\0011_module3_rls.sql:173:  and created_by = auth.uid()
+supabase/migrations\0011_module3_rls.sql:200:  and created_by = auth.uid()
+supabase/migrations\0011_module3_rls.sql:202:  and (voided_by is null or voided_by = auth.uid())
+supabase/migrations\0011_module3_rls.sql:241:  and (voided_by is null or voided_by = auth.uid())
+supabase/migrations\0002_module1_rls.sql:15:  select auth.uid() is not null
+supabase/migrations\0002_module1_rls.sql:20:        and fm.user_id = auth.uid()
+supabase/migrations\0002_module1_rls.sql:32:  select auth.uid() is not null
+supabase/migrations\0002_module1_rls.sql:37:        and fm.user_id = auth.uid()
+supabase/migrations\0002_module1_rls.sql:50:  select auth.uid() is not null
+supabase/migrations\0002_module1_rls.sql:55:        and fm.user_id = auth.uid()
+supabase/migrations\0002_module1_rls.sql:68:  select auth.uid() is not null
+supabase/migrations\0002_module1_rls.sql:76:        and fra.rep_user_id = auth.uid()
+supabase/migrations\0002_module1_rls.sql:93:-- Rule 7: bootstrap binds the owner identity to auth.uid(); callers cannot
+supabase/migrations\0002_module1_rls.sql:103:  if auth.uid() is null or new.created_by <> auth.uid() then
+supabase/migrations\0002_module1_rls.sql:108:  values (new.id, auth.uid(), 'owner', 'active');
+supabase/migrations\0002_module1_rls.sql:168:with check (auth.uid() is not null and created_by = auth.uid() and share_with_rep = false);
+supabase/migrations\0002_module1_rls.sql:202:  or rep_user_id = auth.uid()
+supabase/migrations\0002_module1_rls.sql:209:  and granted_by = auth.uid()
+supabase/migrations\0002_module1_rls.sql:424:-- when running inside Supabase, where storage.objects exists. No bucket is
+supabase/migrations\0002_module1_rls.sql:428:  if to_regclass('storage.objects') is not null then
+supabase/migrations\0002_module1_rls.sql:431:      on storage.objects for select to authenticated
+supabase/migrations\0002_module1_rls.sql:445:      on storage.objects for insert to authenticated
+supabase/migrations\0002_module1_rls.sql:459:      on storage.objects for update to authenticated
+supabase/migrations\0002_module1_rls.sql:482:      on storage.objects for delete to authenticated
+supabase/migrations\0009_fields_live_support.sql:52:  v_caller uuid := auth.uid();
+supabase/migrations\0009_fields_live_support.sql:154:  v_caller uuid := auth.uid();
+supabase/migrations\0020_scouting.sql:97:  and created_by = auth.uid()
+supabase/migrations\0020_scouting.sql:117:  and created_by = auth.uid()
+supabase/migrations\0020_scouting.sql:134:on storage.objects for select to authenticated
+supabase/migrations\0020_scouting.sql:145:on storage.objects for insert to authenticated
+supabase/migrations\0020_scouting.sql:156:on storage.objects for delete to authenticated
+supabase/migrations\0020_scouting.sql:184:  v_caller uuid := auth.uid();
+supabase/migrations\0020_scouting.sql:550:  v_caller uuid := auth.uid();
+supabase/migrations\0014_flex_lease_methods.sql:25:  v_caller uuid := auth.uid();
+supabase/migrations\0019_field_log.sql:79:  and created_by = auth.uid()
+supabase/migrations\0019_field_log.sql:102:  v_caller uuid := auth.uid();
+supabase/migrations\0019_field_log.sql:311:  v_caller uuid := auth.uid();
+supabase/migrations\0017_service_log_rls_fix.sql:25:  v_caller uuid := auth.uid();
+supabase/migrations\0024_programs.sql:744:with check (public.can_edit_farm(farm_id) and created_by = auth.uid());
+supabase/migrations\0024_programs.sql:747:with check (public.can_edit_farm(farm_id) and created_by = auth.uid());
+supabase/migrations\0024_programs.sql:750:with check (public.can_edit_farm(farm_id) and created_by = auth.uid());
+supabase/migrations\0024_programs.sql:753:with check (public.can_edit_farm(farm_id) and assigned_by = auth.uid());
+supabase/migrations\0024_programs.sql:756:with check (public.can_edit_farm(farm_id) and created_by = auth.uid());
+supabase/migrations\0024_programs.sql:759:with check (public.can_edit_farm(farm_id) and created_by = auth.uid());
+supabase/migrations\0024_programs.sql:907:  v_caller uuid := auth.uid();
+supabase/migrations\0024_programs.sql:1016:  v_caller uuid := auth.uid();
+supabase/migrations\0024_programs.sql:1273:  v_caller uuid := auth.uid();
+supabase/migrations\0024_programs.sql:1340:  v_caller uuid:=auth.uid(); v_receipt_user uuid; v_result jsonb; v_revision integer;
+supabase/migrations\0024_programs.sql:1389:  v_caller uuid:=auth.uid(); v_receipt_user uuid; v_result jsonb; v_program public.programs%rowtype;
+supabase/migrations\0024_programs.sql:1420:  v_caller uuid:=auth.uid();
+supabase/migrations\0024_programs.sql:1483:  v_caller uuid:=auth.uid(); v_receipt_user uuid; v_result jsonb;
+supabase/migrations\0024_programs.sql:1658:  v_caller uuid:=auth.uid(); v_receipt_user uuid; v_result jsonb;
+supabase/migrations\0024_programs.sql:1720:  v_caller uuid:=auth.uid(); v_receipt_user uuid; v_result jsonb;
+supabase/migrations\0024_programs.sql:1771:  v_caller uuid:=auth.uid(); v_receipt_user uuid; v_result jsonb;
+supabase/migrations\0024_programs.sql:1828:  v_caller uuid:=auth.uid(); v_receipt_user uuid; v_result jsonb;
+supabase/migrations\0024_programs.sql:1904:  v_caller uuid:=auth.uid(); v_receipt_user uuid; v_result jsonb;
+supabase/migrations\0024_programs.sql:2046:  v_caller uuid:=auth.uid(); v_receipt_user uuid; v_result jsonb;
+supabase/migrations\0018_field_location.sql:39:  v_caller uuid := auth.uid();
+supabase/migrations\0022_harvest.sql:31:  v_caller uuid := auth.uid();
+supabase/migrations\0023_reminders.sql:74:  user_id = auth.uid()
+supabase/migrations\0023_reminders.sql:81:  user_id = auth.uid()
+supabase/migrations\0023_reminders.sql:85:  user_id = auth.uid()
+supabase/migrations\0023_reminders.sql:91:using (user_id = auth.uid());
+supabase/migrations\0023_reminders.sql:95:with check (user_id = auth.uid());
+supabase/migrations\0023_reminders.sql:99:using (user_id = auth.uid())
+supabase/migrations\0023_reminders.sql:100:with check (user_id = auth.uid());
+supabase/migrations\0023_reminders.sql:104:using (user_id = auth.uid());
+supabase/migrations\0023_reminders.sql:121:  v_caller uuid := auth.uid();
+supabase/migrations\0023_reminders.sql:199:  v_caller uuid := auth.uid();
+supabase/migrations\0023_reminders.sql:233:  v_caller uuid := auth.uid();
+supabase/migrations\0023_reminders.sql:282:  v_caller uuid := auth.uid();
+supabase/migrations\0023_reminders.sql:332:  v_caller uuid := auth.uid();
+supabase/migrations\0015_inventory_live_support.sql:84:-- still verifies cancelled_by matches auth.uid() when a client sends its own.
+supabase/migrations\0015_inventory_live_support.sql:95:    new.cancelled_by := auth.uid();
+supabase/migrations\0015_inventory_live_support.sql:217:  v_caller uuid := auth.uid();
+supabase/migrations\0015_inventory_live_support.sql:583:  v_caller uuid := auth.uid();
+supabase/migrations\0016_equipment_tasks.sql:26:  created_by uuid not null default auth.uid() references auth.users(id) on delete restrict,
+supabase/migrations\0016_equipment_tasks.sql:40:  created_by uuid not null default auth.uid() references auth.users(id) on delete restrict,
+supabase/migrations\0016_equipment_tasks.sql:61:  created_by uuid not null default auth.uid() references auth.users(id) on delete restrict,
+supabase/migrations\0016_equipment_tasks.sql:86:  created_by uuid not null default auth.uid() references auth.users(id) on delete restrict,
+supabase/migrations\0016_equipment_tasks.sql:119:  created_by uuid not null default auth.uid() references auth.users(id) on delete restrict,
+supabase/migrations\0016_equipment_tasks.sql:169:      if auth.uid() is null then
+supabase/migrations\0016_equipment_tasks.sql:172:      new.completed_by := auth.uid();
+supabase/migrations\0016_equipment_tasks.sql:175:      if auth.uid() is null then
+supabase/migrations\0016_equipment_tasks.sql:178:      new.completed_by := auth.uid();
+supabase/migrations\0016_equipment_tasks.sql:209:  if auth.uid() is null or not exists (
+supabase/migrations\0016_equipment_tasks.sql:213:      and fm.user_id = auth.uid()
+supabase/migrations\0016_equipment_tasks.sql:388:    and auth.uid() is not null
+supabase/migrations\0016_equipment_tasks.sql:396:      where caller_membership.user_id = auth.uid()
+supabase/migrations\0016_equipment_tasks.sql:425:  v_caller uuid := auth.uid();
+supabase/migrations\0016_equipment_tasks.sql:534:  v_caller uuid := auth.uid();
+supabase/migrations\0016_equipment_tasks.sql:821:with check (public.can_manage_farm(farm_id) and created_by = auth.uid());
+supabase/migrations\0016_equipment_tasks.sql:838:with check (public.is_active_farm_member(farm_id) and created_by = auth.uid());
+supabase/migrations\0016_equipment_tasks.sql:850:with check (public.can_manage_farm(farm_id) and created_by = auth.uid());
+supabase/migrations\0016_equipment_tasks.sql:867:with check (public.is_active_farm_member(farm_id) and created_by = auth.uid());
+supabase/migrations\0016_equipment_tasks.sql:879:with check (public.is_active_farm_member(farm_id) and created_by = auth.uid());

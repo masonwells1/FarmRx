@@ -11,7 +11,7 @@ const blocked = 'Saved changes on this device need attention. Nothing was delete
 function replace<T extends { id: string }>(rows: T[], value: T) { return rows.some((row) => row.id === value.id) ? rows.map((row) => row.id === value.id ? value : row) : [...rows, value] }
 export class QueuedInventoryRepository implements InventoryRepository {
   private workspace: InventoryWorkspace | null = null
-  constructor(private readonly writer: InventoryRepository & InventoryOperationWriter, private readonly dependencies: Dependencies) { if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() }); setModuleSyncRetryAction('inventory', () => { void this.replayCurrent() }) }
+  constructor(private readonly writer: InventoryRepository & InventoryOperationWriter, private readonly dependencies: Dependencies) { if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() }); setModuleSyncRetryAction('inventory', () => this.replayCurrent()) }
   private async source() { const context = await this.dependencies.getContext(); return { context, queue: new InventoryWriteQueue(this.dependencies.storage, inventoryWriteQueueKey(this.dependencies.projectRef, context.userId, context.farmId)) } }
   async inspectAndReplay() { await this.replayCurrent() }
   private base(kind: InventoryQueueEntryV1['kind'], context: Context) { return { version: 1 as const, module: 'inventory' as const, kind, operationId: this.dependencies.createId(), userId: context.userId, farmId: context.farmId, enqueuedAt: this.dependencies.clock() } }

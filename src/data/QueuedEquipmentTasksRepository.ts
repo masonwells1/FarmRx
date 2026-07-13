@@ -8,7 +8,7 @@ type Context = { userId: string; farmId: string }; type D = { getContext: () => 
 const blocked = 'Saved changes on this device need attention. Nothing was deleted.'; const offline = 'Your saved entries are waiting on this device. Connect to load your farm.'
 export class QueuedEquipmentTasksRepository implements EquipmentTasksRepository {
   private workspace: EquipmentTasksWorkspace | null = null
-  constructor(private readonly writer: EquipmentTasksRepository & EquipmentTasksOperationWriter, private readonly d: D) { if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() }); setModuleSyncRetryAction('equipment_tasks', () => { void this.replayCurrent() }) }
+  constructor(private readonly writer: EquipmentTasksRepository & EquipmentTasksOperationWriter, private readonly d: D) { if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() }); setModuleSyncRetryAction('equipment_tasks', () => this.replayCurrent()) }
   private async source() { const context = await this.d.getContext(); return { context, queue: new EquipmentTasksWriteQueue(this.d.storage, equipmentTasksWriteQueueKey(this.d.projectRef, context.userId, context.farmId)) } }
   private base(kind: EquipmentTasksQueueEntryV1['kind'], c: Context) { return { version: 1 as const, module: 'equipment_tasks' as const, kind, operationId: this.d.createId(), userId: c.userId, farmId: c.farmId, enqueuedAt: this.d.clock() } }
   async inspectAndReplay() { await this.replayCurrent() }
