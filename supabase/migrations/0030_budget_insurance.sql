@@ -1,5 +1,5 @@
--- DRAFT ONLY — review before applying.
--- PostgreSQL 17 / Supabase. Do not apply without the human review gate.
+-- APPLIED to the farm-rx Supabase project 2026-07-13 with Mason's explicit OK.
+-- PostgreSQL 17 / Supabase.
 -- Depends on 0006 (crop_budgets), 0007 (profitability RLS), and 0008
 -- (can_read_private_financials). The existing crop_budgets RLS is unchanged.
 

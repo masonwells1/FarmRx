@@ -144,12 +144,16 @@ inbox), actuals-vs-budget living breakeven, farmdoc benchmark comparison, year-o
       on read) → Claude browser-proof (FPM example numbers reproduced: $4.37 harvest cash,
       Dec net −$0.04; verdict flips to "Store until Dec 2026" at +$0.15; year rollover,
       375px, 0 console errors) → pushed
-- [~] Chunk 2 schema drafts — drafted (Sol) + Claude-reviewed (additive-only ✓, append-only
-      ledger ✓, RLS tiers ✓, no FOR UPDATE ✓) → **AWAITING MASON: "apply the phase-2 schema"**
-- [ ] Chunk 3 Alerts — blocked on 0027 apply (+ Resend key for email leg)
-- [ ] Chunk 4 Firm Offers — blocked on 0028 apply
-- [ ] Chunk 5 Bins upgrade — blocked on 0029 apply
-- [ ] Chunk 6 Insurance calculator — blocked on 0030 apply
+- [x] Chunk 2 schema — APPLIED 2026-07-13 (Mason said "apply the phase-2 schema"): 0027-0030
+      applied to the farm-rx Supabase project in order, verified live (4 new tables w/ RLS
+      enabled + expected policy counts; append-only bin ledger has select+insert policies
+      only, matching the 0010/0011 house pattern; crop_budgets +4 rp_* cols; grain_bins
+      +moisture cols; security advisors show NO new findings; app loads clean against the
+      new schema on /profitability and /grain)
+- [ ] Chunk 3 Alerts — UNBLOCKED (Resend key still needed for the email leg; in-app works without)
+- [ ] Chunk 4 Firm Offers — UNBLOCKED
+- [ ] Chunk 5 Bins upgrade — UNBLOCKED
+- [ ] Chunk 6 Insurance calculator — UNBLOCKED
 - [x] Chunk 7 Overview upgrade — DONE 2026-07-13: Terra build (per-crop cards, whole-farm
       KPI strip, year picker, grouped collapsible expense categories) → Sol review (3 P1, all
       fixed: dual "before land" breakeven restored on cards; whole-farm totals now suppressed
