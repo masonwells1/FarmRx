@@ -457,10 +457,12 @@ Module 3's existing delivery-event inbox hook.
      Grain opens. TWO-PART RULE PROVEN both directions; sharing restored to OFF after.
    REMAINING from this item: offline replay on a real signal drop (needs the phone pass).
 5. Real-device PWA pass (phone install, sunlight/gloves two-tap flows) — MASON + Claude.
-6. Polish: neutral sign-out message; profitability privacy-denial message should match
-   grain's honest wording (P3, found in the worker test); Resend email key for the
-   deployed deliver-grain-alert function (it fails safe with a farmer-friendly error
-   until a RESEND_API_KEY secret is added — needs a Resend account, Mason decision).
+6. Polish — DONE 2026-07-12 (Fable, commit b5aa3d0, all browser-proven live): neutral
+   sign-out (deliberate sign-out no longer shows "Your sign-in ended"); profitability
+   privacy-denial now matches grain's honest wording; equipment service log auto-closes
+   leftover reminder task cards (parked P3 from Modules 5/6). STILL OPEN: Resend email
+   key for the deployed deliver-grain-alert function (it fails safe with a farmer-friendly
+   error until a RESEND_API_KEY secret is added — needs a Resend account, Mason decision).
    ALSO DONE 2026-07-12: deliver-grain-alert edge function DEPLOYED to farm-rx (ACTIVE,
    JWT required — unauthenticated probe returns 401; the earlier deploy agent hung and
    was killed).
