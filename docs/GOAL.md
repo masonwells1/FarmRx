@@ -105,6 +105,22 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
         plans A/B/C compared per arrangement w/ winner + Input ROI Analyzer + margin-of-safety
         cushions + progressive cost depth (farmdoc IL defaults, "default vs your number"
         badges). Evidence: docs/profitability-research-2026-07.md
+      · UPGRADE V1 BUILT + BROWSER-PROVEN LIVE 2026-07-12 (Fable, C:\ session, Mason said
+        "build it now"): plan-comparison card (sibling budgets same year+commodity, Best
+        badge per arrangement, price/yield cushions), Input ROI Analyzer (extra-bu ladder +
+        Excel verdict tiers + what-if, proven (95−89.5)×$4.50=$24.75/ac both directions),
+        "Start from 2026 U of I budget" (19 farmdoc central-IL lines; live KPIs reproduce
+        farmdoc's published $4.79/$3.46 corn breakevens exactly), per-line "U of I default"
+        badges (proven to clear on real edit 229→250), "what am I forgetting?" coach
+        (added 4 missing lines in one click, BE honestly moved $3.60→$4.85), dual breakeven
+        KPI (total vs before-land). Frontend-only — NO schema change (budget name = plan).
+        FIXED underlying bug: QueuedProfitabilityRepository raw-cache went stale on flushed
+        online writes → batch saveCostLine minted duplicate sort_order → DB 23505 (found
+        live in browser; cache now updated per save). New pure-math layer
+        src/data/planningTools.ts + planningTools.regression.ts (26 checks, every number
+        verbatim from Mason's Excel; wired into npm run regression, 18 suites green).
+        tsc -b clean, 0 console errors, 375px clean (no overflow/tiny text/small targets).
+        NOTE: farmtest password rotated — see docs/build-notes/verify-login.md. NOT pushed.
 - [ ] **SHIP GATE: Fields + Grain in front of real customers** ← the goal
 - [~] Module 3: Inventory & compliance — SCHEMA DRAFTED 2026-07-11 (0010+0011 by Sol,
       Claude spot-check-reviewed, NOT applied; explainer docs/schema-module3.md): farm

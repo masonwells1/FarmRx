@@ -83,7 +83,13 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
     const { context } = await this.contextAndQueue()
     if (!this.workspace) { try { await this.getWorkspace() } catch { /* offline with nothing cached yet is handled by mintCostLine below */ } }
     const raw = await this.effectiveRawCostLines()
-    await this.save({ ...this.queuedBase('saveCostLine', context), kind: 'saveCostLine', row: mintCostLine(value, raw) })
+    const minted = mintCostLine(value, raw)
+    await this.save({ ...this.queuedBase('saveCostLine', context), kind: 'saveCostLine', row: minted })
+    // Keep the raw cache current so back-to-back saves (coach "Add typical lines",
+    // university-budget seeding) mint distinct sort_orders: a flushed online write leaves
+    // the queue immediately, so without this the next mint reuses its sort_order and the
+    // database's unique (budget_id, sort_order) rejects it.
+    this.rawCostLineCache = this.rawCostLineCache.some((line) => line.id === minted.id) ? this.rawCostLineCache.map((line) => line.id === minted.id ? minted : line) : [...this.rawCostLineCache, minted]
   }
   async deleteCostLine(id: string) { const { context } = await this.contextAndQueue(); await this.save({ ...this.queuedBase('deleteCostLine', context), kind: 'deleteCostLine', id }) }
   async replaceMatrixSteps(budgetId: string, steps: ProfitabilityMatrixStep[]) { const { context } = await this.contextAndQueue(); await this.save({ ...this.queuedBase('replaceMatrixSteps', context), kind: 'replaceMatrixSteps', budgetId, steps: steps.map((step) => ({ ...step, budget_id: budgetId })) }) }
