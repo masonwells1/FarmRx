@@ -89,9 +89,13 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
       40%×$588 landlord-paid inputs = $136.48, matrix cell math, BU TO COVER, copy-budget,
       duplicate-allocation guard, budget-switch cell reset, 0 text <18px / 0 targets <48px,
       375px clean). Separate storage key; Fields data injected; flex formula stays UI shape
-      pending decision 6a. REMAINING: apply 0006/0007 (after grain), live repository swap,
-      branded PDF export. NOTE: page shows honest load error in dev until 0009 is applied
-      (it reads Fields live).
+      pending decision 6a. 0006/0007 APPLIED; LIVE SWAP DONE (commit 38154e8, 0013 applied,
+      browser-proven). BANKER PDF DONE 2026-07-12 (Fable): print-based "Banker report"
+      overlay on Profitability (preview → Save as PDF), farm name on top, KPIs, cost table
+      w/ green total bar, per-field table using equivalent rent, ℞ "Powered by Crop RX"
+      footer per docs/design/01-brand.md. Browser-proven live on farm-rx with farmtest:
+      5 cost lines written through UI ($647.75/ac), field allocated, report math exact
+      (breakeven $3.60/bu, 143.9 bu/ac, net $171.25/ac × 160 ac = $27,400). Module 4 COMPLETE.
       · ADOPT from competitor report: "BU TO COVER" column on every cost line (4.1) ·
         equivalent-cash-rent normalization in arrangement comparison (4.2) · breakeven-YIELD
         alongside breakeven-price (4.3) · "copy from another budget" (4.1) · our matrix stays
