@@ -8,7 +8,7 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import { getSyncStatus } from './syncStatus'
 import { isMarsBid, latestBasis } from './basisMath'
 import type { FieldsRepository } from './fields'
-import type { CashBid, GrainContract, GrainWorkspace, MarketingPlanTarget, ProductionEstimate } from './grain'
+import type { CashBid, GrainAlertSettings, GrainContract, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, ProductionEstimate } from './grain'
 import type { StorageLike } from './writeQueue'
 
 const stamp = '2026-07-11T00:00:00.000Z'; const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -24,7 +24,7 @@ function fixture() {
   const inventory = { id: uid(6), farm_id: farm, grain_bin_id: bin.id, crop_year: '2026', commodity_id: commodity, bushels: '600', committed_bushels: '100', measured_at: stamp, notes: null, created_at: stamp, updated_at: stamp }
   const bid = { id: uid(7), farm_id: farm, elevator: 'Iowa pilot [USDA MARS 2850]', commodity_id: commodity, bid_date: '2026-07-10', basis: '-0.2', cash_price: '4.3', delivery_start: null, delivery_end: null, notes: '[USDA MARS 2850]', created_at: stamp, updated_at: stamp }
   const report = { id: uid(8), report_name: 'WASDE', report_date: '2026-08-12', release_at: null, source_url: null, notes: null, created_at: stamp, updated_at: stamp }
-  return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], cash_bids: [bid], usda_report_dates: [report] } }
+  return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], cash_bids: [bid], usda_report_dates: [report], marketing_alert_rules: [], grain_alert_settings: null } }
 }
 /** Lets tests perturb what the "server" hands back, independent of what was sent, to prove the repository
  * confirms the canonical response rather than trusting its own request. Unset (null) by default so every
@@ -39,6 +39,9 @@ class FakeGateway implements GrainDataGateway {
   async upsertContract(_farm: string, row: GrainContract) { this.guard(); this.contractInputs.push(structuredClone(row)); const response = structuredClone(row); return this.mutate.contract ? this.mutate.contract(response) : response }
   async replaceMarketingPlan(input: ReplaceMarketingPlanInput) { this.guard(); this.planInputs.push(structuredClone(input)); const response = structuredClone(input.targets); return this.mutate.plan ? this.mutate.plan(response) : response }
   async upsertCashBid(_farm: string, row: CashBid) { this.guard(); this.bidInputs.push(structuredClone(row)); const response = structuredClone(row); return this.mutate.bid ? this.mutate.bid(response) : response }
+  async upsertMarketingAlertRule(_farm: string, row: MarketingAlertRule) { this.guard(); return structuredClone(row) }
+  async deleteMarketingAlertRule(_farm: string, _id: string) { this.guard() }
+  async upsertGrainAlertSettings(_farm: string, row: GrainAlertSettings) { this.guard(); return structuredClone(row) }
 }
 function repository(gateway: FakeGateway) { const fields = gateway.state.fields; const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fields), saveField: async () => { throw new Error('not used') } }; return new SupabaseGrainRepository({ gateway, fieldsRepository, getFarmId: async () => fields.farm.id, createId: () => uid(99), clock: () => stamp }) }
 async function run() {

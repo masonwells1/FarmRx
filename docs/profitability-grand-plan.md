@@ -150,7 +150,26 @@ inbox), actuals-vs-budget living breakeven, farmdoc benchmark comparison, year-o
       only, matching the 0010/0011 house pattern; crop_budgets +4 rp_* cols; grain_bins
       +moisture cols; security advisors show NO new findings; app loads clean against the
       new schema on /profitability and /grain)
-- [ ] Chunk 3 Alerts — UNBLOCKED (Resend key still needed for the email leg; in-app works without)
+- [x] Chunk 3 Alerts — DONE 2026-07-13: Terra build (Alerts tab: Price Target / % Marketed
+      Goal / Deadline templates, rules CRUD on 0027, break-even strip, check-on-open eval
+      wired into evaluateGrainAlerts, alert-emails settings, offline queue support) → Sol
+      review (4 P1 + 7 P2 + 1 P3) + 1 orchestrator finding, ALL 12 fixed by Terra: edge fn
+      accepts marketing_* kinds + sends to settings emails; Add basis got an optional cash
+      price field (price alerts were unfireable without it); deadline window bounded 0–7
+      days (yesterday no longer fires forever); deletes verify the deleted id (RLS zero-row
+      no longer fakes success); device-local day replaces UTC for today/suppression; fired
+      price message states the bid date; orphan-scope pct rules skipped + "Other alerts"
+      management list; scope labels include entity ("— whole farm"); queue validates rule
+      semantics; farmerError on all actions; Saved whisper clears on edit; "Currently X%
+      marketed" shown in goal form → Claude gates (tsc/regression/build all pass) →
+      browser-proof: $4.25 cash bid entered via the new field, $4.00 rule FIRED live
+      ("cash price is $4.25 (bid Jul 13)"); yesterday-deadline rule did NOT fire
+      (last_triggered_at stayed NULL); orphan rule shown under Other alerts, deleted via UI,
+      row gone from DB; email settings saved to grain_alert_settings (2 addresses); whisper
+      clear proven; 375px no overflow, 48px targets, 0 console errors → edge function v2
+      DEPLOYED to farm-rx project: logs show v1 rejected marketing alerts with 400, v2
+      accepts them and reaches the email step (503 only because Mason's Resend key is still
+      pending — in-app notice stays honest) → pushed
 - [ ] Chunk 4 Firm Offers — UNBLOCKED
 - [ ] Chunk 5 Bins upgrade — UNBLOCKED
 - [ ] Chunk 6 Insurance calculator — UNBLOCKED

@@ -20,5 +20,5 @@ export function regression_fieldsRemainAuthoritativeAfterGrainSave(grain: GrainD
   assert(!('fields' in result.grain), 'Grain payload contains a forbidden nested Fields copy.')
 }
 
-regression_fieldsRemainAuthoritativeAfterGrainSave({ production_estimates: [], grain_contracts: [], marketing_plan_targets: [], insurance_units: [], grain_bins: [], bin_inventory: [], cash_bids: [], usda_report_dates: [] })
+regression_fieldsRemainAuthoritativeAfterGrainSave({ production_estimates: [], grain_contracts: [], marketing_plan_targets: [], insurance_units: [], grain_bins: [], bin_inventory: [], cash_bids: [], usda_report_dates: [], marketing_alert_rules: [], grain_alert_settings: null })
 console.log('MockGrainRepository regressions passed.')

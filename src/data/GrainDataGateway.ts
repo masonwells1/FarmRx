@@ -1,4 +1,4 @@
-import type { CashBid, GrainContract, MarketingPlanTarget, PositionScope, ProductionEstimate } from './grain'
+import type { CashBid, GrainAlertSettings, GrainContract, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate } from './grain'
 
 /** The network boundary deliberately exposes untrusted rows only. */
 export interface GrainRowBundle {
@@ -10,6 +10,8 @@ export interface GrainRowBundle {
   bin_inventory: unknown[]
   cash_bids: unknown[]
   usda_report_dates: unknown[]
+  marketing_alert_rules: unknown[]
+  grain_alert_settings: unknown | null
 }
 
 export interface ReplaceMarketingPlanInput { farmId: string; scope: PositionScope; targets: MarketingPlanTarget[] }
@@ -19,4 +21,7 @@ export interface GrainDataGateway {
   upsertContract(farmId: string, row: GrainContract): Promise<unknown>
   replaceMarketingPlan(input: ReplaceMarketingPlanInput): Promise<unknown[]>
   upsertCashBid(farmId: string, row: CashBid): Promise<unknown>
+  upsertMarketingAlertRule(farmId: string, row: MarketingAlertRule): Promise<unknown>
+  deleteMarketingAlertRule(farmId: string, id: string): Promise<void>
+  upsertGrainAlertSettings(farmId: string, row: GrainAlertSettings): Promise<unknown>
 }

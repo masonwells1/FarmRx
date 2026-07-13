@@ -1,7 +1,8 @@
 import { supabase } from '../lib/supabaseClient'
 import type { GrainWorkspace } from './grain'
+import { evaluateMarketingAlertRules } from './marketingAlerts'
 
-export interface GrainAlert { key: string; kind: 'price_target' | 'target_deadline' | 'usda_report'; message: string; targetId?: string; reportId?: string; observationId?: string }
+export interface GrainAlert { key: string; kind: 'price_target' | 'target_deadline' | 'usda_report' | 'marketing_price_target' | 'marketing_pct_marketed_goal' | 'marketing_deadline'; message: string; targetId?: string; reportId?: string; observationId?: string; ruleId?: string }
 const day = (value: Date) => value.toISOString().slice(0, 10)
 const addDays = (value: string, count: number) => { const date = new Date(`${value}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + count); return day(date) }
 const businessDay = (value: string) => { const weekday = new Date(`${value}T00:00:00Z`).getUTCDay(); return weekday !== 0 && weekday !== 6 }
@@ -15,6 +16,7 @@ export function evaluateGrainAlerts(workspace: GrainWorkspace, now = new Date())
     if (target.deadline && (target.deadline === today || target.deadline === addDays(today, 7))) { const window = target.deadline === today ? 'due' : 'seven-days'; alerts.push({ key: `deadline:${target.id}:${target.deadline}:${window}`, kind: 'target_deadline', targetId: target.id, message: target.deadline === today ? `Marketing target deadline is today (${target.deadline}).` : `Marketing target deadline is in seven days (${target.deadline}).` }) }
   }
   for (const report of workspace.usda_report_dates) if (report.report_date === today || report.report_date === addDays(today, 7)) { const window = report.report_date === today ? 'due' : 'seven-days'; alerts.push({ key: `report:${report.id}:${report.report_date}:${window}`, kind: 'usda_report', reportId: report.id, message: report.report_date === today ? `${report.report_name} is scheduled today.` : `${report.report_name} is scheduled in seven days.` }) }
+  for (const item of evaluateMarketingAlertRules(workspace, now).alerts) alerts.push({ ...item, ruleId: item.ruleId })
   return alerts
 }
 function sentKey(userId: string, farmId: string) { return `farm-rx-grain-alert-sent:v1:${userId}:${farmId}` }
@@ -27,7 +29,7 @@ export async function requestOwnerAlertDelivery(alerts: GrainAlert[], farmId: st
   for (const alert of alerts.filter((item) => !sent.has(item.key))) {
     if (inFlight.has(alert.key)) continue
     inFlight.add(alert.key)
-    try { const { error: deliveryError } = await supabase.functions.invoke('deliver-grain-alert', { body: { alertKey: alert.key, kind: alert.kind, farmId, targetId: alert.targetId, reportId: alert.reportId, observationId: alert.observationId } }); if (deliveryError) failures.push(alert.key); else sent.add(alert.key) } finally { inFlight.delete(alert.key) }
+    try { const { error: deliveryError } = await supabase.functions.invoke('deliver-grain-alert', { body: { alertKey: alert.key, kind: alert.kind, farmId, targetId: alert.targetId, reportId: alert.reportId, observationId: alert.observationId, ruleId: alert.ruleId } }); if (deliveryError) failures.push(alert.key); else sent.add(alert.key) } finally { inFlight.delete(alert.key) }
   }
   try { localStorage.setItem(key, JSON.stringify([...sent])) } catch { /* delivery remains best effort and will be retried */ }
   return failures
