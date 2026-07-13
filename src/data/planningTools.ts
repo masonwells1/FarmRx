@@ -1,6 +1,6 @@
-import type { Arrangement } from './fields'
+import type { Arrangement, CropAssignment, Field } from './fields'
 import type { BudgetCostLine, CropBudget } from './profitability'
-import { equivalentCashRentForScenario, nonLandCostPerAcre, totalCostPerAcre } from './profitabilityCalculations'
+import { nonLandCostPerAcre, resolveFieldYearLand, totalCostPerAcre } from './profitabilityCalculations'
 
 /** Sibling budgets sharing a crop year + commodity are one comparison set of "plans". */
 export function planGroup(budgets: CropBudget[], budget: CropBudget) {
@@ -19,9 +19,11 @@ export function planCushions(budget: CropBudget, lines: BudgetCostLine[]) {
 /** Profit/acre for a plan under a specific land arrangement: the arrangement's equivalent
  * cash rent replaces any land lines in the budget, so land is never counted twice. */
 export function planProfitUnderArrangement(budget: CropBudget, lines: BudgetCostLine[], arrangement: Arrangement): number | null {
-  const rent = equivalentCashRentForScenario(arrangement, budget.expected_yield_per_acre, budget.expected_price_per_bushel, lines)
-  if (rent === null) return null
-  return budget.expected_yield_per_acre * budget.expected_price_per_bushel - nonLandCostPerAcre(lines) - rent
+  const field = { id: arrangement.field_id, total_acres: 1 } as Field
+  const assignment = { id: `planning-${budget.id}`, field_id: field.id, crop_year: budget.crop_year, planted_acres: 1, expected_yield_per_acre: budget.expected_yield_per_acre, expected_price_per_bu: budget.expected_price_per_bushel } as CropAssignment
+  const resolved = resolveFieldYearLand(field, [arrangement], [assignment], budget.crop_year, new Map([[assignment.id, lines]]))
+  if (resolved.status === 'blocked') return null
+  return budget.expected_yield_per_acre * budget.expected_price_per_bushel - nonLandCostPerAcre(lines) - resolved.rentPerFieldAcre
 }
 
 /** Profit/acre exactly as budgeted (the budget's own cost lines, including its land line). */

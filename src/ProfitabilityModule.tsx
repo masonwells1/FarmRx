@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { profitabilityRepository, programsRepository } from "./data";
-import { BankerReport, LandlordReport } from "./ProfitabilityReport";
+import { BankerReport, calculateReportFieldRows, LandlordReport } from "./ProfitabilityReport";
 import { SectionTabs } from "./SectionTabs";
 import type { Field } from "./data/fields";
 import type {
@@ -17,12 +17,10 @@ import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import {
   breakevenCellKeys,
   budgetAnalysis,
-  equivalentCashRentForScenario,
-  fieldAdjustedCostPerAcre,
-  latestArrangementForCropYear,
   matrixCells,
   matrixProfitPerAcre,
   nonLandCostPerAcre,
+  settlementArrangementForCropYear,
   totalCostPerAcre,
 } from "./data/profitabilityCalculations";
 import { revenueProtectionMath } from "./data/insuranceMath";
@@ -32,7 +30,6 @@ import {
   planCushions,
   planGroup,
   planProfitAsBudgeted,
-  planProfitUnderArrangement,
   roiPriceLadder,
   roiThresholdsForCommodity,
   roiVerdict,
@@ -535,6 +532,7 @@ export function ProfitabilityPage() {
               to see farm totals.
             </p>
           )}
+          {wholeFarm.blockedFields > 0 && <p className="university-note">{wholeFarm.blockedFields} field{wholeFarm.blockedFields === 1 ? '' : 's'} need attention before farm totals are complete.</p>}
           {wholeFarm.budgetCount >= 2 && !wholeFarm.overlap && (
             <section
               className="whole-farm-kpis"
@@ -890,11 +888,11 @@ function ReportsLauncher({
     const key = name.toLowerCase();
     if (
       name &&
-      latestArrangementForCropYear(
+      settlementArrangementForCropYear(
         workspace.fields.arrangements,
         arrangement.field_id,
         budget.crop_year,
-      )?.id === arrangement.id &&
+      ).status === "resolved" &&
       !namesByKey.has(key)
     )
       namesByKey.set(key, name);
@@ -1941,6 +1939,7 @@ function FieldAllocation({
             allocation,
           );
           if (!figures) return null;
+          if ('blockedReason' in figures) return <div className="allocated-field" key={allocation.id}><strong>{field.name}</strong><p className="report-note settlement-block">{figures.blockedReason}</p></div>;
           return (
             <div className="allocated-field" key={allocation.id}>
               <div className="field-edit">
@@ -2029,8 +2028,7 @@ function FieldAllocation({
                 field={field}
                 budget={budget}
                 costs={costs}
-                yieldPerAcre={figures.yieldPerAcre}
-                price={figures.price}
+                allocationId={allocation.id}
               />
             </div>
           );
@@ -2052,36 +2050,22 @@ function allocationFinancials(
   costs: BudgetCostLine[],
   allocation: BudgetFieldAllocation,
 ) {
-  const assignment = workspace.fields.crop_assignments.find(
-    (item) => item.id === allocation.crop_assignment_id,
-  );
-  const field =
-    assignment &&
-    workspace.fields.fields.find((item) => item.id === assignment.field_id);
-  if (!field) return null;
-  const yieldPerAcre =
-    allocation.expected_yield_override ?? budget.expected_yield_per_acre;
-  const price =
-    allocation.expected_price_override ?? budget.expected_price_per_bushel;
-  const costPerAcre = fieldAdjustedCostPerAcre(
-    costs,
-    allocationRent(workspace, field, budget, costs, yieldPerAcre, price),
-  );
-  const incomePerAcre = price * yieldPerAcre;
-  const profitPerAcre = matrixProfitPerAcre(price, yieldPerAcre, costPerAcre);
+  const row = calculateReportFieldRows(workspace, budget, costs).find((item) => item.allocationId === allocation.id);
+  if (!row || row.costPerAcre === null || row.netPerAcre === null) return row ? { blockedReason: row.blockedReason } : null;
+  const incomePerAcre = row.price * row.yieldPerAcre;
   return {
-    yieldPerAcre,
-    price,
-    costPerAcre,
+    yieldPerAcre: row.yieldPerAcre,
+    price: row.price,
+    costPerAcre: row.costPerAcre,
     incomePerAcre,
-    profitPerAcre,
-    incomeTotal: incomePerAcre * allocation.allocated_acres,
-    costTotal: costPerAcre * allocation.allocated_acres,
-    profitTotal: profitPerAcre * allocation.allocated_acres,
+    profitPerAcre: row.netPerAcre,
+    incomeTotal: incomePerAcre * row.acres,
+    costTotal: row.costPerAcre * row.acres,
+    profitTotal: row.netPerAcre * row.acres,
   };
 }
 
-function wholeFarmTotals(
+export function wholeFarmTotals(
   workspace: ProfitabilityWorkspace,
   budgets: CropBudget[],
 ) {
@@ -2092,8 +2076,10 @@ function wholeFarmTotals(
     costs: 0,
     profit: 0,
     overlap: false,
+    blockedFields: 0,
   };
   const assignmentBudget = new Map<string, string>();
+  const blockedFieldIds = new Set<string>();
   for (const budget of budgets) {
     const costs = workspace.cost_lines.filter(
       (line) => line.budget_id === budget.id,
@@ -2109,12 +2095,16 @@ function wholeFarmTotals(
         costs,
         allocation,
       );
-      if (!figures) continue;
-      hasValidAllocation = true;
       const claimedBy = assignmentBudget.get(allocation.crop_assignment_id);
       if (claimedBy !== undefined && claimedBy !== budget.id)
         totals.overlap = true;
       assignmentBudget.set(allocation.crop_assignment_id, budget.id);
+      if (!figures || 'blockedReason' in figures) {
+        const fieldId = workspace.fields.crop_assignments.find((assignment) => assignment.id === allocation.crop_assignment_id)?.field_id;
+        if (fieldId) blockedFieldIds.add(fieldId);
+        continue;
+      }
+      hasValidAllocation = true;
       totals.acres += allocation.allocated_acres;
       totals.income += figures.incomeTotal;
       totals.costs += figures.costTotal;
@@ -2122,26 +2112,10 @@ function wholeFarmTotals(
     }
     if (hasValidAllocation) totals.budgetCount += 1;
   }
+  totals.blockedFields = blockedFieldIds.size;
   return totals;
 }
 
-function allocationRent(
-  workspace: ProfitabilityWorkspace,
-  field: Field,
-  budget: CropBudget,
-  costs: BudgetCostLine[],
-  yieldPerAcre: number,
-  price: number,
-) {
-  const arrangement = latestArrangementForCropYear(
-    workspace.fields.arrangements,
-    field.id,
-    budget.crop_year,
-  );
-  return arrangement
-    ? equivalentCashRentForScenario(arrangement, yieldPerAcre, price, costs)
-    : null;
-}
 
 /** Mason's Excel "Breakeven Calculator" ported: sibling budgets (same crop year + commodity)
  * compared side by side, with a Best badge per land arrangement and margin-of-safety cushions. */
@@ -2174,28 +2148,21 @@ function PlanComparison({
     );
   const linesFor = (planId: string) =>
     workspace.cost_lines.filter((line) => line.budget_id === planId);
-  const assignments = workspace.fields.crop_assignments.filter(
-    (item) =>
-      item.crop_year === selected.crop_year &&
-      item.commodity_id === selected.commodity_id,
-  );
   const seen = new Set<string>();
-  const arrangementColumns = assignments.flatMap((assignment) => {
-    const field = workspace.fields.fields.find(
-      (item) => item.id === assignment.field_id,
-    );
+  const arrangementColumns = calculateReportFieldRows(workspace, selected, linesFor(selected.id)).flatMap((row) => {
+    const field = row.field;
     if (!field) return [];
-    const arrangement = latestArrangementForCropYear(
+    const resolution = settlementArrangementForCropYear(
       workspace.fields.arrangements,
       field.id,
       selected.crop_year,
     );
-    if (!arrangement || seen.has(arrangement.id)) return [];
-    seen.add(arrangement.id);
+    if (resolution.status !== 'resolved' || seen.has(field.id)) return [];
+    seen.add(field.id);
     return [
       {
-        arrangement,
-        label: `${arrangementLabels[arrangement.arrangement_type]} — ${field.name}`,
+        field,
+        label: `${arrangementLabels[resolution.arrangement.arrangement_type]} — ${field.name}`,
       },
     ];
   });
@@ -2203,11 +2170,10 @@ function PlanComparison({
     planProfitAsBudgeted(plan, linesFor(plan.id)),
   );
   const bestBudgeted = Math.max(...asBudgeted);
-  const arrangementProfits = plans.map((plan) =>
-    arrangementColumns.map((column) =>
-      planProfitUnderArrangement(plan, linesFor(plan.id), column.arrangement),
-    ),
-  );
+  const arrangementProfits = plans.map((plan) => {
+    const rows = calculateReportFieldRows(workspace, plan, linesFor(plan.id));
+    return arrangementColumns.map((column) => rows.filter((row) => row.field.id === column.field.id && row.netPerAcre !== null).map((row) => row.netPerAcre!).at(0) ?? null);
+  });
   const arrangementBest = arrangementColumns.map((_, columnIndex) => {
     const values = arrangementProfits
       .map((row) => row[columnIndex])
@@ -2225,7 +2191,7 @@ function PlanComparison({
           <h2 id="plan-compare-title">Which plan wins on your ground?</h2>
           <p>
             Same crop, different programs. The badge marks the best plan under
-            each land arrangement.
+            each resolved field agreement.
           </p>
         </div>
       </div>
@@ -2241,7 +2207,7 @@ function PlanComparison({
               <th className="numeric">Yield cushion</th>
               <th className="numeric">As budgeted</th>
               {arrangementColumns.map((column) => (
-                <th key={column.arrangement.id} className="numeric">
+                <th key={column.field.id} className="numeric">
                   {column.label}
                 </th>
               ))}
@@ -2300,7 +2266,7 @@ function PlanComparison({
                     const value = arrangementProfits[planIndex][columnIndex];
                     return (
                       <td
-                        key={column.arrangement.id}
+                        key={column.field.id}
                         className={`numeric${value !== null && value < 0 ? " negative" : ""}`}
                       >
                         {value === null
@@ -2570,39 +2536,36 @@ function ArrangementComparison({
   field,
   budget,
   costs,
-  yieldPerAcre,
-  price,
+  allocationId,
 }: {
   workspace: ProfitabilityWorkspace;
   field: Field;
   budget: CropBudget;
   costs: BudgetCostLine[];
-  yieldPerAcre: number;
-  price: number;
+  allocationId: string;
 }) {
-  const arrangement = latestArrangementForCropYear(
-    workspace.fields.arrangements,
-    field.id,
-    budget.crop_year,
-  );
+  const resolution = settlementArrangementForCropYear(workspace.fields.arrangements, field.id, budget.crop_year);
+  const row = calculateReportFieldRows(workspace, budget, costs).find((item) => item.allocationId === allocationId);
+  const arrangement = resolution.status === "resolved" ? resolution.arrangement : null;
+  const equivalentRent = row?.costPerAcre === null || !row ? null : row.costPerAcre - nonLandCostPerAcre(costs);
   const rows: Array<[keyof typeof arrangementLabels, number | null]> = [
     ["owned", 0],
     [
       "cash_rent",
       arrangement?.arrangement_type === "cash_rent"
-        ? equivalentCashRentForScenario(arrangement, yieldPerAcre, price, costs)
+        ? equivalentRent
         : null,
     ],
     [
       "flex_cash_rent",
       arrangement?.arrangement_type === "flex_cash_rent"
-        ? equivalentCashRentForScenario(arrangement, yieldPerAcre, price, costs)
+        ? equivalentRent
         : null,
     ],
     [
       "crop_share",
       arrangement?.arrangement_type === "crop_share"
-        ? equivalentCashRentForScenario(arrangement, yieldPerAcre, price, costs)
+        ? equivalentRent
         : null,
     ],
   ];
@@ -2610,8 +2573,7 @@ function ArrangementComparison({
     <details className="arrangement-comparison">
       <summary>Compare land arrangements in equivalent cash rent</summary>
       <p>
-        The newest agreement that overlaps this crop year is used. It replaces
-        the budget land line; it is not added on top.
+        {row?.blockedReason ?? "The one field-year agreement replaces the budget land line; it is not added on top."}
       </p>
       <div>
         {rows.map(([type, value]) => (

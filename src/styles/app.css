@@ -958,6 +958,12 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .banker-report .landlord-inputs th, .banker-report .landlord-inputs td { overflow-wrap: anywhere; }
 .banker-report .landlord-rent p { margin: 0; color: #1c1c1c; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .banker-report .landlord-empty { margin-top: 26px; }
+.banker-report.landlord-report-page, .banker-report.landlord-report-page p, .banker-report.landlord-report-page th, .banker-report.landlord-report-page td, .banker-report.landlord-report-page dt, .banker-report.landlord-report-page dd, .banker-report.landlord-report-page span { font-size: 18px; font-variant-numeric: tabular-nums; }
+.banker-report.landlord-report-page h3 { font-size: 20px; }
+.banker-report .settlement-block { padding: 12px; border: 2px solid var(--warn-red); color: var(--warn-red); font-weight: 800; }
+.banker-report .landlord-net { margin: 10px 0 0; padding: 12px; border: 2px solid var(--deep-green); color: var(--deep-green); font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.banker-report .landlord-disclosure { margin-top: 24px; padding: 14px; border: 1px solid #DDD9CF; color: #1c1c1c; font-size: 18px; font-variant-numeric: tabular-nums; }
+.banker-report .landlord-disclosure p { margin: 0; }.banker-report .landlord-disclosure p + p { margin-top: 10px; }
 @media (max-width: 767px) { .report-launcher { padding-right: 16px; padding-left: 16px; }.report-launcher-row { align-items: stretch; }.report-launcher-row .primary-action, .report-launcher-row .secondary-action { width: 100%; }.report-launcher-row p { flex-basis: 100%; }.banker-report .landlord-detail-grid { grid-template-columns: 1fr; }.banker-report .landlord-field-head { flex-direction: column; }.banker-report .landlord-field-head > span { white-space: normal; } }
 @media print {
   .banker-report.landlord-report-page, .banker-report.landlord-report-page p, .banker-report.landlord-report-page th, .banker-report.landlord-report-page td, .banker-report.landlord-report-page dt, .banker-report.landlord-report-page dd, .banker-report.landlord-report-page span { color: #000 !important; font-size: 18px !important; }

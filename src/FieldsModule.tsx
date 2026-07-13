@@ -26,7 +26,7 @@ import { farmerError } from "./lib/farmerErrors";
 import { createSubmitLock } from "./lib/submitLock";
 import {
   computeStructuredFlexRent,
-  equivalentCashRentForField,
+  fieldCardLand,
 } from "./data/profitabilityCalculations";
 import { structuredFlexFormulaError } from "./data/flexLeaseValidation";
 import { roundDecimalHalfUp } from "./data/decimal";
@@ -62,11 +62,11 @@ const inputShareFields: Array<{ key: InputShareKey; label: string }> = [
   { key: "landlord_fertilizer_pct", label: "Fertilizer" },
   { key: "landlord_chemical_pct", label: "Chemical" },
   { key: "landlord_fuel_pct", label: "Fuel" },
-  { key: "landlord_labor_custom_pct", label: "Labor" },
+  { key: "landlord_labor_custom_pct", label: "Labor & custom work" },
   { key: "landlord_crop_insurance_pct", label: "Crop insurance" },
   { key: "landlord_equipment_pct", label: "Equipment & repairs" },
   { key: "landlord_interest_pct", label: "Interest" },
-  { key: "landlord_other_input_pct", label: "Custom work" },
+  { key: "landlord_other_input_pct", label: "Other inputs" },
 ];
 const arrangementOptions: Array<{ value: LandArrangementType; label: string }> =
   [
@@ -158,14 +158,6 @@ function arrangementText(arrangement?: Arrangement) {
 }
 function cropPrice(assignment: CropAssignment) {
   return assignment.expected_price_per_bu ?? null;
-}
-/** Shared lease math for field detail and Profitability. Keep both screens in the same dollars-per-acre language. */
-export function fieldEquivalentRent(
-  field: Field,
-  assignments: CropAssignment[],
-  arrangement: Arrangement,
-) {
-  return equivalentCashRentForField(field, assignments, arrangement);
 }
 /** Plain-English description of a legacy per-unit formula (editor no longer offers these — read-only until the owner switches methods). */
 function legacyFlexDescription(formula: LegacyFlexBonusFormula) {
@@ -1335,7 +1327,9 @@ function AgreementCard({
     }
   };
 
-  const equivalent = fieldEquivalentRent(field, currentRows, arrangement);
+  // This tested seam must receive the whole arrangement history; split-year leases fail closed.
+  const fieldLand = fieldCardLand(field, currentRows, data.arrangements);
+  const equivalent = fieldLand.status === "resolved" ? fieldLand.rentPerFieldAcre : null;
   const needs =
     arrangement.arrangement_type === "flex_cash_rent" &&
     savedLegacyFormula?.type === "price"
@@ -1488,10 +1482,12 @@ function AgreementCard({
                         max="100"
                         step="0.1"
                         value={values.inputShares[key]}
+                        disabled={key === "landlord_other_input_pct"}
                         onChange={(event) =>
                           setInputShare(key, event.target.value)
                         }
                       />
+                      {key === "landlord_other_input_pct" && <small>Not used yet — budgets don't have an 'Other' cost category. Custom work is now shared under Labor & custom work.</small>}
                     </FormControl>
                   ))}
                 </div>
@@ -1529,7 +1525,7 @@ function AgreementCard({
                       ? "—"
                       : `${money.format(equivalent)}/ac`}
                   </b>
-                  {equivalent === null && ` · enter ${needs}`}
+                  {equivalent === null && ` · ${fieldLand.status === "blocked" ? fieldLand.reason : `enter ${needs}`}`}
                 </span>
                 {equivalent !== null &&
                   arrangement.arrangement_type !== "cash_rent" && (

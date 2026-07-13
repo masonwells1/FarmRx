@@ -1,6 +1,6 @@
 import type { Arrangement, CropAssignment, Field, FlexBonusFormula, StructuredFlexBonusFormula } from './fields'
 import { isLegacyFlexBonusFormula } from './fields'
-import type { BudgetCostLine, CropBudget, ProfitabilityMatrixStep } from './profitability'
+import type { BudgetCostLine, CostCategory, CropBudget, ProfitabilityMatrixStep } from './profitability'
 
 export type MatrixCell = { price: number; yield: number; profit: number }
 
@@ -17,18 +17,39 @@ export function budgetAnalysis(budget: Pick<CropBudget, 'expected_yield_per_acre
   }
 }
 
+/** `other` is deliberately a future-only bucket.  It must not widen the real budget enum. */
+type LandlordExpenseCategory = CostCategory | 'other'
+type LandlordExpenseBucket = readonly LandlordExpenseCategory[]
+
 export function landlordPaidInputCost(lines: BudgetCostLine[], arrangement: Arrangement) {
-  const share = (categories: BudgetCostLine['category'][], percent: number) => lines.filter((line) => categories.includes(line.category)).reduce((total, line) => total + line.amount_per_acre, 0) * percent / 100
+  const share = (categories: LandlordExpenseBucket, percent: number) => lines.filter((line) => categories.includes(line.category)).reduce((total, line) => total + line.amount_per_acre, 0) * percent / 100
   return share(['seed'], arrangement.landlord_seed_pct)
     + share(['fertilizer'], arrangement.landlord_fertilizer_pct)
     + share(['chemical'], arrangement.landlord_chemical_pct)
     + share(['fuel'], arrangement.landlord_fuel_pct)
-    + share(['labor'], arrangement.landlord_labor_custom_pct)
+    + share(['labor', 'custom'], arrangement.landlord_labor_custom_pct)
     + share(['crop_insurance'], arrangement.landlord_crop_insurance_pct)
     + share(['equipment_depreciation', 'repairs'], arrangement.landlord_equipment_pct)
     + share(['interest'], arrangement.landlord_interest_pct)
-    + share(['custom'], arrangement.landlord_other_input_pct)
+    // The current deployed budget-category enum has no `other` key. Keep this
+    // mapping here so the stored percentage is never silently applied to custom
+    // work; it will begin applying when `other` is introduced in a later schema
+    // change.
+    + share(['other'], arrangement.landlord_other_input_pct)
 }
+
+/** The one source of truth for crop-share expense buckets. */
+export const landlordExpenseBuckets: Record<'seed' | 'fertilizer' | 'chemical' | 'fuel' | 'labor_custom' | 'crop_insurance' | 'equipment' | 'interest' | 'other_input', LandlordExpenseBucket> = {
+  seed: ['seed'],
+  fertilizer: ['fertilizer'],
+  chemical: ['chemical'],
+  fuel: ['fuel'],
+  labor_custom: ['labor', 'custom'],
+  crop_insurance: ['crop_insurance'],
+  equipment: ['equipment_depreciation', 'repairs'],
+  interest: ['interest'],
+  other_input: ['other'],
+} as const
 
 function isFiniteNumber(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value) }
 function clampToBounds(value: number, min: number | null | undefined, max: number | null | undefined) {
@@ -79,48 +100,152 @@ export function computeFlexRent(formula: FlexBonusFormula, expectedYieldPerAcre:
   return computeStructuredFlexRent(formula, expectedYieldPerAcre, expectedPricePerBushel)
 }
 
-export function equivalentCashRentForScenario(arrangement: Arrangement, expectedYieldPerAcre: number, expectedPricePerBushel: number, lines: BudgetCostLine[]) {
-  if (arrangement.arrangement_type === 'owned') return 0
-  if (arrangement.arrangement_type === 'cash_rent') return arrangement.cash_rent_per_acre
-  if (arrangement.arrangement_type === 'crop_share') return expectedYieldPerAcre * expectedPricePerBushel * (arrangement.landlord_crop_pct ?? 0) / 100 - landlordPaidInputCost(lines, arrangement)
-  const formula = arrangement.flex_bonus_formula
-  if (!formula) return null
-  return computeFlexRent(formula, expectedYieldPerAcre, expectedPricePerBushel, arrangement.cash_rent_per_acre ?? 0)
-}
+export type SettlementArrangementResolution =
+  | { status: 'resolved'; arrangement: Arrangement; overlapping: Arrangement[] }
+  | { status: 'missing'; overlapping: Arrangement[] }
+  | { status: 'blocked'; overlapping: Arrangement[] }
 
-/** Used by Fields and Profitability so lease math cannot drift between screens. */
-export function equivalentCashRentForField(field: Field, assignments: CropAssignment[], arrangement: Arrangement, lines: BudgetCostLine[] = []) {
-  if (arrangement.arrangement_type === 'owned') return 0
-  if (arrangement.arrangement_type === 'cash_rent') return arrangement.cash_rent_per_acre
-  if (assignments.length === 0 || assignments.some((assignment) => assignment.expected_yield_per_acre === null || assignment.expected_price_per_bu === null)) return null
-  if (arrangement.arrangement_type === 'crop_share') return assignments.reduce((total, assignment) => total + assignment.planted_acres / field.total_acres * (equivalentCashRentForScenario(arrangement, assignment.expected_yield_per_acre!, assignment.expected_price_per_bu!, lines) ?? 0), 0)
-  const formula = arrangement.flex_bonus_formula
-  if (!formula) return null
-  // Legacy formulas keep a base rent on the arrangement row, counted once (not per crop); the
-  // structured schema carries its own base inside the formula, so the arrangement's placeholder
-  // cash_rent_per_acre (kept only to satisfy the live DB's not-null constraint) must not be
-  // added again — see SupabaseFieldsRepository / MockFieldsRepository save-time notes.
-  if (isLegacyFlexBonusFormula(formula)) {
-    const scenarioArrangement = { ...arrangement, cash_rent_per_acre: 0 }
-    let unresolved = false
-    const weighted = assignments.reduce((total, assignment) => {
-      const scenario = equivalentCashRentForScenario(scenarioArrangement, assignment.expected_yield_per_acre!, assignment.expected_price_per_bu!, lines)
-      if (scenario === null) unresolved = true
-      return total + assignment.planted_acres / field.total_acres * (scenario ?? 0)
-    }, 0)
-    if (unresolved) return null
-    return (arrangement.cash_rent_per_acre ?? 0) + weighted
-  }
-  // Structured formulas: blend the field's whole gross revenue per acre first (double-crop
-  // revenue stacks on the same acres), then apply the formula ONCE so base rent and
-  // min/max bounds are counted once for the field, matching how the lease is settled.
-  const revenuePerAcre = assignments.reduce((total, assignment) => total + assignment.planted_acres * assignment.expected_yield_per_acre! * assignment.expected_price_per_bu!, 0) / field.total_acres
-  return computeStructuredFlexRentFromRevenue(formula, revenuePerAcre)
-}
-
-export function latestArrangementForCropYear(arrangements: Arrangement[], fieldId: string, cropYear: number) {
+/**
+ * Settlement is annual. A lease history that has more than one agreement
+ * touching that year cannot be safely repriced without a written proration
+ * rule, so reports must stop instead of choosing the newest row.
+ */
+export function settlementArrangementForCropYear(arrangements: Arrangement[], fieldId: string, cropYear: number): SettlementArrangementResolution {
   const start = `${cropYear}-01-01`; const end = `${cropYear}-12-31`
-  return arrangements.filter((arrangement) => arrangement.field_id === fieldId && arrangement.effective_from <= end && (arrangement.effective_to === null || arrangement.effective_to >= start)).sort((left, right) => right.effective_from.localeCompare(left.effective_from) || right.id.localeCompare(left.id))[0] ?? null
+  const overlapping = arrangements
+    .filter((arrangement) => arrangement.field_id === fieldId && arrangement.effective_from <= end && (arrangement.effective_to === null || arrangement.effective_to >= start))
+    .sort((left, right) => left.effective_from.localeCompare(right.effective_from) || left.id.localeCompare(right.id))
+  if (overlapping.length === 1) return { status: 'resolved', arrangement: overlapping[0], overlapping }
+  if (overlapping.length === 0) return { status: 'missing', overlapping }
+  return { status: 'blocked', overlapping }
+}
+
+export type FieldYearLandAssignment = CropAssignment
+/**
+ * An allocation may replace an assignment's yield and/or price only when the
+ * allocation covers that entire planted crop.  Keeping the source allocation
+ * and its acres here makes that rule enforceable by the resolver rather than
+ * relying on every caller to remember it.
+ */
+export type FieldYearLandOverride = {
+  allocationId: string
+  cropAssignmentId: string
+  allocatedAcres: number
+  expectedYieldPerAcre?: number | null
+  expectedPricePerBushel?: number | null
+}
+/** Budget defaults are fallbacks, not allocation overrides. */
+export type FieldYearLandBudgetFallback = {
+  cropAssignmentId: string
+  expectedYieldPerAcre?: number | null
+  expectedPricePerBushel?: number | null
+}
+export type FieldYearLandResolverInputs = {
+  overrides?: readonly FieldYearLandOverride[]
+  budgetFallbacks?: readonly FieldYearLandBudgetFallback[]
+}
+export type FieldYearLandAllocation = {
+  cropAssignmentId: string
+  yieldPerAcre: number
+  pricePerBushel: number
+  revenue: number
+  rentTotal: number
+  rentPerAssignedAcre: number
+}
+export type FieldYearLandResolution =
+  | { status: 'resolved'; arrangement: Arrangement; rentPerFieldAcre: number; perAssignmentAllocation: FieldYearLandAllocation[] }
+  | { status: 'blocked'; reason: string }
+
+function budgetLinesForAssignment(budgetsByAssignment: ReadonlyMap<string, BudgetCostLine[] | undefined> | Record<string, BudgetCostLine[] | undefined>, assignmentId: string) {
+  if (budgetsByAssignment instanceof Map) return budgetsByAssignment.get(assignmentId)
+  return (budgetsByAssignment as Record<string, BudgetCostLine[] | undefined>)[assignmentId]
+}
+
+/**
+ * The only authority for field-year land money.  It deliberately fails closed:
+ * a lease is settled across the whole field-year, so an unknown sibling crop is
+ * never valued as $0 and a generic budget land line is never substituted.
+ */
+export function resolveFieldYearLand(
+  field: Field,
+  allArrangements: Arrangement[],
+  allAssignments: FieldYearLandAssignment[],
+  cropYear: number,
+  budgetsByAssignment: ReadonlyMap<string, BudgetCostLine[] | undefined> | Record<string, BudgetCostLine[] | undefined>,
+  inputs: FieldYearLandResolverInputs = {},
+): FieldYearLandResolution {
+  const arrangementResult = settlementArrangementForCropYear(allArrangements, field.id, cropYear)
+  if (arrangementResult.status === 'missing') return { status: 'blocked', reason: `No land agreement covers ${cropYear}. Add the field's agreement before using land costs.` }
+  if (arrangementResult.status === 'blocked') return { status: 'blocked', reason: `${cropYear} has more than one agreement. Settlement needs the lease's own split or proration rule before Farm Rx can show land costs.` }
+  const assignments = allAssignments.filter((assignment) => assignment.field_id === field.id && assignment.crop_year === cropYear)
+  if (!assignments.length) return { status: 'blocked', reason: `This field has no planting record for ${cropYear}.` }
+  if (!isFiniteNumber(field.total_acres) || field.total_acres <= 0) return { status: 'blocked', reason: 'This field needs more than zero total acres before Farm Rx can calculate land costs.' }
+  const assignmentsById = new Map(assignments.map((assignment) => [assignment.id, assignment]))
+  const overridesByAssignment = new Map<string, FieldYearLandOverride>()
+  for (const override of inputs.overrides ?? []) {
+    const assignment = assignmentsById.get(override.cropAssignmentId)
+    if (!assignment) return { status: 'blocked', reason: 'A land-cost override could not be matched to a crop on this field.' }
+    if (overridesByAssignment.has(assignment.id)) return { status: 'blocked', reason: 'This crop has more than one allocation override. Use one full field-crop allocation before calculating land costs.' }
+    if (!isFiniteNumber(override.allocatedAcres) || override.allocatedAcres < assignment.planted_acres) return { status: 'blocked', reason: 'This allocation covers only part of the crop with a yield or price override. Use one full field-crop allocation before calculating land costs.' }
+    if ((override.expectedYieldPerAcre !== undefined && override.expectedYieldPerAcre !== null && !isFiniteNumber(override.expectedYieldPerAcre)) || (override.expectedPricePerBushel !== undefined && override.expectedPricePerBushel !== null && !isFiniteNumber(override.expectedPricePerBushel))) return { status: 'blocked', reason: 'A land-cost yield or price override is not a valid number.' }
+    overridesByAssignment.set(assignment.id, override)
+  }
+  const fallbacksByAssignment = new Map((inputs.budgetFallbacks ?? []).map((fallback) => [fallback.cropAssignmentId, fallback]))
+  const priced = assignments.map((assignment) => ({
+    assignment,
+    yieldPerAcre: overridesByAssignment.get(assignment.id)?.expectedYieldPerAcre ?? fallbacksByAssignment.get(assignment.id)?.expectedYieldPerAcre ?? assignment.expected_yield_per_acre,
+    pricePerBushel: overridesByAssignment.get(assignment.id)?.expectedPricePerBushel ?? fallbacksByAssignment.get(assignment.id)?.expectedPricePerBushel ?? assignment.expected_price_per_bu,
+  }))
+  const missing = priced.filter((item) => !isFiniteNumber(item.yieldPerAcre) || !isFiniteNumber(item.pricePerBushel))
+  if (missing.length) return { status: 'blocked', reason: `Enter a yield and price for every crop on this field before Farm Rx can calculate this field's land cost.` }
+  if (priced.some(({ assignment }) => !isFiniteNumber(assignment.planted_acres) || assignment.planted_acres <= 0)) return { status: 'blocked', reason: 'Every crop on this field needs more than zero planted acres before Farm Rx can calculate land costs.' }
+  const arrangement = arrangementResult.arrangement
+  if (arrangement.arrangement_type === 'crop_share') {
+    const unbound = priced.find(({ assignment }) => budgetLinesForAssignment(budgetsByAssignment, assignment.id) === undefined)
+    if (unbound) return { status: 'blocked', reason: 'Allocate this field to a budget plan on the Budgets page, then reopen this report.' }
+    const perAssignmentAllocation = priced.map(({ assignment, yieldPerAcre, pricePerBushel }) => {
+      const revenue = assignment.planted_acres * yieldPerAcre! * pricePerBushel!
+      const rentTotal = revenue * (arrangement.landlord_crop_pct ?? 0) / 100 - landlordPaidInputCost(budgetLinesForAssignment(budgetsByAssignment, assignment.id)!, arrangement) * assignment.planted_acres
+      return { cropAssignmentId: assignment.id, yieldPerAcre: yieldPerAcre!, pricePerBushel: pricePerBushel!, revenue, rentTotal, rentPerAssignedAcre: rentTotal / assignment.planted_acres }
+    })
+    const totalRent = perAssignmentAllocation.reduce((total, item) => total + item.rentTotal, 0)
+    if (!Number.isFinite(totalRent) || perAssignmentAllocation.some((item) => !Number.isFinite(item.revenue) || !Number.isFinite(item.rentTotal) || !Number.isFinite(item.rentPerAssignedAcre) || !Number.isFinite(item.yieldPerAcre) || !Number.isFinite(item.pricePerBushel))) return { status: 'blocked', reason: 'Farm Rx found an invalid land-cost number. Check field acres, planted acres, yield, and price before continuing.' }
+    return { status: 'resolved', arrangement, rentPerFieldAcre: totalRent / field.total_acres, perAssignmentAllocation }
+  }
+  const revenueByAssignment = priced.map(({ assignment, yieldPerAcre, pricePerBushel }) => ({ assignment, yieldPerAcre: yieldPerAcre!, pricePerBushel: pricePerBushel!, revenue: assignment.planted_acres * yieldPerAcre! * pricePerBushel! }))
+  const totalRevenue = revenueByAssignment.reduce((total, item) => total + item.revenue, 0)
+  let rentPerFieldAcre: number | null
+  if (arrangement.arrangement_type === 'owned') rentPerFieldAcre = 0
+  else if (arrangement.arrangement_type === 'cash_rent') rentPerFieldAcre = arrangement.cash_rent_per_acre
+  else {
+    const formula = arrangement.flex_bonus_formula
+    rentPerFieldAcre = formula && !isLegacyFlexBonusFormula(formula)
+      ? computeStructuredFlexRentFromRevenue(formula, totalRevenue / field.total_acres)
+      : formula && isLegacyFlexBonusFormula(formula)
+        ? (arrangement.cash_rent_per_acre ?? 0) + revenueByAssignment.reduce((total, item) => {
+          const perCrop = computeFlexRent(formula, item.yieldPerAcre, item.pricePerBushel, 0)
+          return perCrop === null ? NaN : total + item.assignment.planted_acres / field.total_acres * perCrop
+        }, 0)
+        : null
+  }
+  if (rentPerFieldAcre === null || !Number.isFinite(rentPerFieldAcre)) return { status: 'blocked', reason: 'This flex-rent formula is incomplete. Complete it in Fields before using land costs.' }
+  const totalRent = rentPerFieldAcre * field.total_acres
+  const perAssignmentAllocation = revenueByAssignment.map(({ assignment, yieldPerAcre, pricePerBushel, revenue }) => {
+    const rentTotal = totalRevenue === 0 && totalRent > 0
+      ? totalRent * assignment.planted_acres / assignments.reduce((total, item) => total + item.planted_acres, 0)
+      : totalRevenue === 0 ? 0 : totalRent * revenue / totalRevenue
+    return { cropAssignmentId: assignment.id, yieldPerAcre, pricePerBushel, revenue, rentTotal, rentPerAssignedAcre: rentTotal / assignment.planted_acres }
+  })
+  if (!Number.isFinite(totalRent) || perAssignmentAllocation.some((item) => !Number.isFinite(item.revenue) || !Number.isFinite(item.rentTotal) || !Number.isFinite(item.rentPerAssignedAcre) || !Number.isFinite(item.yieldPerAcre) || !Number.isFinite(item.pricePerBushel))) return { status: 'blocked', reason: 'Farm Rx found an invalid land-cost number. Check field acres, planted acres, yield, and price before continuing.' }
+  return {
+    status: 'resolved', arrangement, rentPerFieldAcre,
+    perAssignmentAllocation,
+  }
+}
+
+/** Tested field-detail seam: it deliberately receives the full agreement history. */
+export function fieldCardLand(field: Field, currentRows: CropAssignment[], allArrangements: Arrangement[]) {
+  return resolveFieldYearLand(field, allArrangements, currentRows, currentRows[0]?.crop_year ?? new Date().getFullYear(), new Map())
 }
 
 export function matrixCells(prices: ProfitabilityMatrixStep[], yields: ProfitabilityMatrixStep[], costPerAcre: number): MatrixCell[] { return prices.flatMap((price) => yields.map((yieldStep) => ({ price: price.value, yield: yieldStep.value, profit: matrixProfitPerAcre(price.value, yieldStep.value, costPerAcre) }))) }
