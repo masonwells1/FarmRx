@@ -26,6 +26,8 @@ async function regression_roundTripCopyAndBytes() {
   const first = await repo.getWorkspace(); const corn = first.budgets.find((budget) => budget.commodity_id === 'corn_yellow')!; const seed = first.cost_lines.find((line) => line.budget_id === corn.id && line.category === 'seed')!
   await repo.saveCostLine({ ...seed, amount_per_acre: 121 })
   const saved = await repo.getWorkspace(); assert(saved.cost_lines.find((line) => line.id === seed.id)?.amount_per_acre === 121, 'Profitability cost line did not round-trip.')
+  await repo.saveBudget({ ...corn, rp_coverage_pct: 80, rp_aph_yield: 180, rp_projected_price: 4.62, rp_premium_per_acre: 28 })
+  const insuranceSaved = (await repo.getWorkspace()).budgets.find((budget) => budget.id === corn.id)!; assert(insuranceSaved.rp_coverage_pct === 80 && insuranceSaved.rp_aph_yield === 180 && insuranceSaved.rp_projected_price === 4.62 && insuranceSaved.rp_premium_per_acre === 28, 'Profitability insurance columns did not round-trip.')
   const copy: CropBudget = { ...corn, id: 'copied-budget', name: 'Corn copy', copied_from_budget_id: corn.id, created_at: '', updated_at: '' }
   await repo.copyBudget(corn.id, copy)
   const copied = await repo.getWorkspace(); const copiedSeed = copied.cost_lines.find((line) => line.budget_id === copy.id && line.category === 'seed')!; assert(copiedSeed && copiedSeed.id !== seed.id && copiedSeed.amount_per_acre === 121, 'Copy from budget did not deep-copy cost lines.')
@@ -63,6 +65,15 @@ async function regression_failClosedAndVerifiedWrite() {
   const seedStorage = new MemoryStorage(); const seedRepo = new MockProfitabilityRepository(fieldsRepository, { storage: seedStorage }); const seeded = await seedRepo.getWorkspace(); const valid = seedStorage.getItem(PROFITABILITY_STORAGE_KEY)!; const dropStorage = new DropWritesStorage(); MemoryStorage.prototype.setItem.call(dropStorage, PROFITABILITY_STORAGE_KEY, valid)
   const failingRepo = new MockProfitabilityRepository(fieldsRepository, { storage: dropStorage }); const line = seeded.cost_lines[0]
   await failingRepo.saveCostLine({ ...line, amount_per_acre: line.amount_per_acre + 1 }).then(() => { throw new Error('Unverified profitability write was accepted.') }, () => undefined)
+}
+
+async function regression_legacyInsuranceBudgetUpgrade() {
+  const storage = new MemoryStorage(); const repo = new MockProfitabilityRepository(fieldsRepository, { storage }); await repo.getWorkspace()
+  const legacy = JSON.parse(storage.getItem(PROFITABILITY_STORAGE_KEY)!) as { data: { budgets: Array<Record<string, unknown>> } }
+  for (const budget of legacy.data.budgets) { delete budget.rp_coverage_pct; delete budget.rp_aph_yield; delete budget.rp_projected_price; delete budget.rp_premium_per_acre }
+  storage.setItem(PROFITABILITY_STORAGE_KEY, JSON.stringify(legacy))
+  const upgraded = await repo.getWorkspace()
+  assert(upgraded.budgets.every((budget) => budget.rp_coverage_pct === null && budget.rp_aph_yield === null && budget.rp_projected_price === null && budget.rp_premium_per_acre === null), 'A legacy mock budget without insurance fields was not normalized before validation.')
 }
 
 /** Structured flex formula with every field defaulted to null except the ones the caller overrides — matches "store only the fields each method uses" (docs/flex-lease-research.md §3). */
@@ -115,5 +126,6 @@ await regression_roundTripCopyAndBytes()
 await regression_sharedCalculations()
 await regression_farmIsolationAndAllocationUniqueness()
 await regression_failClosedAndVerifiedWrite()
+await regression_legacyInsuranceBudgetUpgrade()
 await regression_flexLeaseMethods()
 console.log('MockProfitabilityRepository regressions passed.')

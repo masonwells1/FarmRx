@@ -2,6 +2,7 @@ import type { FieldsData } from './fields'
 import type { PositionScope } from './grain'
 import type { BudgetCostLineWrite } from './ProfitabilityDataGateway'
 import { defaultMatrixValues } from './profitabilityCalculations'
+import { validateRevenueProtectionInputs } from './insuranceMath'
 import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityWorkspace } from './profitability'
 import { ProfitabilityWriteQueue, type ProfitabilityQueueEntryV1, profitabilityWriteQueueKey } from './profitabilityWriteQueue'
 import { isTransportFailure } from './QueuedFieldsRepository'
@@ -73,12 +74,13 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
   async createBudget(value: CropBudget) {
     const { context } = await this.contextAndQueue()
     const normalized: CropBudget = { ...value, farm_id: context.farmId, copied_from_budget_id: null }
+    this.validateInsurance(normalized)
     const { priceValues, yieldValues } = defaultMatrixValues(normalized)
     const priceSteps: ProfitabilityMatrixStep[] = priceValues.map((amount, index) => ({ id: this.dependencies.createId(), budget_id: normalized.id, axis: 'price', value: amount, sort_order: index }))
     const yieldSteps: ProfitabilityMatrixStep[] = yieldValues.map((amount, index) => ({ id: this.dependencies.createId(), budget_id: normalized.id, axis: 'yield', value: amount, sort_order: index }))
     await this.save({ ...this.queuedBase('createBudget', context), kind: 'createBudget', row: normalized, priceSteps, yieldSteps })
   }
-  async saveBudget(value: CropBudget) { const { context } = await this.contextAndQueue(); await this.save({ ...this.queuedBase('saveBudget', context), kind: 'saveBudget', row: { ...value, farm_id: context.farmId } }) }
+  async saveBudget(value: CropBudget) { const { context } = await this.contextAndQueue(); const row = { ...value, farm_id: context.farmId }; this.validateInsurance(row); await this.save({ ...this.queuedBase('saveBudget', context), kind: 'saveBudget', row }) }
   async saveCostLine(value: BudgetCostLine) {
     const { context } = await this.contextAndQueue()
     if (!this.workspace) { try { await this.getWorkspace() } catch { /* offline with nothing cached yet is handled by mintCostLine below */ } }
@@ -102,9 +104,12 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
     const costLines: BudgetCostLineWrite[] = workspace.cost_lines.filter((line) => line.budget_id === sourceBudgetId).map((line, index) => ({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id, sort_order: index }))
     const matrixSteps: ProfitabilityMatrixStep[] = workspace.matrix_steps.filter((step) => step.budget_id === sourceBudgetId).map((step) => ({ ...structuredClone(step), id: this.dependencies.createId(), budget_id: copy.id }))
     const normalizedCopy: CropBudget = { ...copy, farm_id: context.farmId, copied_from_budget_id: sourceBudgetId }
+    this.validateInsurance(normalizedCopy)
     await this.save({ ...this.queuedBase('copyBudget', context), kind: 'copyBudget', sourceBudgetId, budget: normalizedCopy, costLines, matrixSteps })
   }
   async getBreakeven(scope: PositionScope, fields: FieldsData): Promise<number | null> { return this.writer.getBreakeven(scope, fields) }
+
+  private validateInsurance(budget: CropBudget) { const errors = validateRevenueProtectionInputs(budget); if (errors.length) throw new Error(errors[0]) }
 
   private overlay(workspace: ProfitabilityWorkspace, entries: ProfitabilityQueueEntryV1[]): ProfitabilityWorkspace {
     let next = structuredClone(workspace)

@@ -1,6 +1,7 @@
 import type { FieldsRepository } from './fields'
 import type { PositionScope } from './grain'
 import { defaultMatrixValues } from './profitabilityCalculations'
+import { validateRevenueProtectionInputs } from './insuranceMath'
 import type { BudgetCostLine, BudgetFieldAllocation, CostCategory, CropBudget, ProfitabilityData, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityRepositoryOptions, ProfitabilityWorkspace } from './profitability'
 
 export const PROFITABILITY_STORAGE_KEY = 'farm-rx-profitability-mock:v1'
@@ -16,13 +17,23 @@ type Envelope = { version: 1; farm_id: string; data: ProfitabilityData }
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 function assertId(value: unknown, message: string): asserts value is string { assert(typeof value === 'string' && value.length > 0, message) }
+function normalizeLegacyBudgets(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.budgets)) return value
+  return { ...value, budgets: value.budgets.map((budget) => isRecord(budget) ? {
+    ...budget,
+    rp_coverage_pct: Object.hasOwn(budget, 'rp_coverage_pct') ? budget.rp_coverage_pct : null,
+    rp_aph_yield: Object.hasOwn(budget, 'rp_aph_yield') ? budget.rp_aph_yield : null,
+    rp_projected_price: Object.hasOwn(budget, 'rp_projected_price') ? budget.rp_projected_price : null,
+    rp_premium_per_acre: Object.hasOwn(budget, 'rp_premium_per_acre') ? budget.rp_premium_per_acre : null,
+  } : budget) }
+}
 function assertData(value: unknown): asserts value is ProfitabilityData {
   assert(isRecord(value) && Array.isArray(value.budgets) && Array.isArray(value.cost_lines) && Array.isArray(value.matrix_steps) && Array.isArray(value.allocations), 'Saved profitability data is incomplete.')
   const budgetIds = new Set<string>()
   for (const budget of value.budgets) {
     assert(isRecord(budget), 'A saved budget is invalid.'); const id = budget.id; assertId(id, 'A saved budget ID is invalid.'); assert(!budgetIds.has(id), 'A saved budget is duplicated.'); budgetIds.add(id)
     assert(typeof budget.name === 'string' && budget.name.trim().length > 0, 'A saved budget name is invalid.'); assert(Number.isInteger(budget.crop_year), 'A saved crop year is invalid.'); assert(typeof budget.farm_id === 'string' && typeof budget.commodity_id === 'string', 'A saved budget scope is invalid.')
-    assert(isNumber(budget.expected_yield_per_acre) && budget.expected_yield_per_acre > 0 && isNumber(budget.expected_price_per_bushel) && budget.expected_price_per_bushel > 0, 'A saved budget yield or price is invalid.')
+    assert(isNumber(budget.expected_yield_per_acre) && budget.expected_yield_per_acre > 0 && isNumber(budget.expected_price_per_bushel) && budget.expected_price_per_bushel > 0 && validateRevenueProtectionInputs(budget as unknown as CropBudget).length === 0, 'A saved budget yield, price, or insurance input is invalid.')
   }
   const lineIds = new Set<string>()
   for (const line of value.cost_lines) { assert(isRecord(line), 'A saved cost line is invalid.'); const id = line.id; assertId(id, 'A saved cost line ID is invalid.'); assert(!lineIds.has(id), 'A saved cost line is duplicated.'); lineIds.add(id); assert(typeof line.budget_id === 'string' && budgetIds.has(line.budget_id), 'A saved cost line budget is invalid.'); assert(categories.has(line.category as CostCategory), 'A saved cost category is invalid.'); assert(typeof line.name === 'string' && line.name.trim().length > 0 && isNumber(line.amount_per_acre) && line.amount_per_acre >= 0, 'A saved cost line amount is invalid.') }
@@ -36,7 +47,7 @@ function makeSteps(budgetId: string, axis: 'price' | 'yield', values: number[]):
 function seedData(farmId: string): ProfitabilityData {
   const at = `${year}-01-01T00:00:00.000Z`
   const cornId = seedId(3001); const beanId = seedId(3002)
-  const budget = (id: string, name: string, commodity_id: string, expected_yield_per_acre: number, expected_price_per_bushel: number): CropBudget => ({ id, farm_id: farmId, crop_year: year, commodity_id, operating_entity_id: null, enterprise_label: null, name, expected_yield_per_acre, expected_price_per_bushel, copied_from_budget_id: null, created_at: at, updated_at: at })
+  const budget = (id: string, name: string, commodity_id: string, expected_yield_per_acre: number, expected_price_per_bushel: number): CropBudget => ({ id, farm_id: farmId, crop_year: year, commodity_id, operating_entity_id: null, enterprise_label: null, name, expected_yield_per_acre, expected_price_per_bushel, rp_coverage_pct: null, rp_aph_yield: null, rp_projected_price: null, rp_premium_per_acre: null, copied_from_budget_id: null, created_at: at, updated_at: at })
   const line = (id: number, budget_id: string, category: CostCategory, name: string, amount_per_acre: number): BudgetCostLine => ({ id: seedId(id), budget_id, category, name, amount_per_acre, created_at: at, updated_at: at })
   return {
     budgets: [budget(cornId, '2026 Yellow Corn', 'corn_yellow', 202, 4.6), budget(beanId, '2026 Soybeans', 'soybeans', 62, 10.4)],
@@ -54,7 +65,7 @@ export class MockProfitabilityRepository implements ProfitabilityRepository {
   private read(fieldsFarmId: string): ProfitabilityData {
     const raw = this.storage.getItem(PROFITABILITY_STORAGE_KEY)
     if (raw === null) { const data = seedData(fieldsFarmId); this.persist(fieldsFarmId, data); return data }
-    try { const envelope = JSON.parse(raw) as unknown; assert(isRecord(envelope) && envelope.version === VERSION && typeof envelope.farm_id === 'string' && isRecord(envelope.data), 'Saved profitability data has an unknown format.'); assert(envelope.farm_id === fieldsFarmId, 'Saved profitability data belongs to another farm.'); assertData(envelope.data); assert(envelope.data.budgets.every((budget) => budget.farm_id === fieldsFarmId), 'Saved profitability data belongs to another farm.'); return structuredClone(envelope.data) } catch (error) { throw new Error(error instanceof Error ? `Profitability data could not be opened safely: ${error.message}` : 'Profitability data could not be opened safely.') }
+    try { const envelope = JSON.parse(raw) as unknown; assert(isRecord(envelope) && envelope.version === VERSION && typeof envelope.farm_id === 'string' && isRecord(envelope.data), 'Saved profitability data has an unknown format.'); assert(envelope.farm_id === fieldsFarmId, 'Saved profitability data belongs to another farm.'); const data = normalizeLegacyBudgets(envelope.data); assertData(data); assert(data.budgets.every((budget) => budget.farm_id === fieldsFarmId), 'Saved profitability data belongs to another farm.'); return structuredClone(data) } catch (error) { throw new Error(error instanceof Error ? `Profitability data could not be opened safely: ${error.message}` : 'Profitability data could not be opened safely.') }
   }
   private persist(farmId: string, data: ProfitabilityData) {
     assertData(data)

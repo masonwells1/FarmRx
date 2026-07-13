@@ -206,7 +206,24 @@ inbox), actuals-vs-budget living breakeven, farmdoc benchmark comparison, year-o
       verified disabled+locked; future moisture date and pct-without-date both rejected
       with plain messages; 4 rapid submits → exactly 1 ledger row; 375px clean → gates
       (tsc/regression×22/build) pass → pushed
-- [ ] Chunk 6 Insurance calculator — UNBLOCKED
+- [x] Chunk 6 Insurance calculator — DONE 2026-07-13: Terra build (RP inputs card on 0030
+      cols, entered-number outputs, matrix shading, grain-overview safe-to-forward tie-in,
+      seam + queue) → Sol review (5 P1 + 4 P2) all fixed: outputs reworded as entered-number
+      arithmetic (never a policy promise) + unmissable 86–95% ECO/SCO county-based warning;
+      safe-to-forward aggregates ALL matching allocated budgets (was .find one) and no
+      longer caps by production before subtracting contracts; premium labeled reference-only
+      (never double-counted into risk); legacy offline queue entries without rp_* fields
+      normalized instead of stranded; the four fields share ONE draft with serialized
+      debounced saves (rapid tabbing had clobbered earlier fields — observed live pre-fix);
+      RMA placeholders restricted to exact corn_yellow/soybeans ids; legacy mock budgets
+      normalized; calculator text ≥18px + Claude added a NaN guard on numeric input parsing
+      → browser-proof (hand-verified): 80%/180 APH/$4.62 → 144 bu/ac floor, $665.28/ac
+      revenue floor, $106,444.80 · 160 ac, $207.47/ac cost gap; rapid four-field entry
+      persisted ALL FOUR to DB (the pre-fix race lost two); ECO warning rendered at 90%;
+      non-GMO corn placeholder no longer inherits the $4.62 RMA default; grain overview
+      "Safe to forward 18,040 bu — from entered coverage: 23,040 bu − 5,000 bu contracted"
+      verified against DB contracts; smallest calculator font 18px computed; 375px no
+      overflow → gates (tsc/regression×23/build) pass → pushed
 - [x] Chunk 7 Overview upgrade — DONE 2026-07-13: Terra build (per-crop cards, whole-farm
       KPI strip, year picker, grouped collapsible expense categories) → Sol review (3 P1, all
       fixed: dual "before land" breakeven restored on cards; whole-farm totals now suppressed

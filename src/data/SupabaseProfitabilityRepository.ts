@@ -2,6 +2,7 @@ import type { FieldsData, FieldsRepository } from './fields'
 import type { PositionScope } from './grain'
 import type { BudgetCostLineWrite, ProfitabilityDataGateway, ProfitabilityRowBundle } from './ProfitabilityDataGateway'
 import { defaultMatrixValues } from './profitabilityCalculations'
+import { validateRevenueProtectionInputs } from './insuranceMath'
 import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, MatrixAxis, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityWorkspace } from './profitability'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -22,8 +23,9 @@ function scope(row: Record<string, unknown>) { const operating_entity_id = requi
 function mapBudget(value: unknown): CropBudget {
   const row = object(value)
   const copied_from_budget_id = required(row, 'copied_from_budget_id')
-  const result: CropBudget = { id: id(required(row, 'id')), ...scope(row), name: text(required(row, 'name'), 160), expected_yield_per_acre: number(required(row, 'expected_yield_per_acre')), expected_price_per_bushel: number(required(row, 'expected_price_per_bushel')), copied_from_budget_id: copied_from_budget_id === null ? null : id(copied_from_budget_id), created_at: stamp(required(row, 'created_at')), updated_at: stamp(required(row, 'updated_at')) }
-  if (!result.name.trim() || result.expected_yield_per_acre <= 0 || result.expected_price_per_bushel <= 0) fail('Farm Rx found an invalid budget.')
+  const coverage = required(row, 'rp_coverage_pct'); const aph = required(row, 'rp_aph_yield'); const projectedPrice = required(row, 'rp_projected_price'); const premium = required(row, 'rp_premium_per_acre')
+  const result: CropBudget = { id: id(required(row, 'id')), ...scope(row), name: text(required(row, 'name'), 160), expected_yield_per_acre: number(required(row, 'expected_yield_per_acre')), expected_price_per_bushel: number(required(row, 'expected_price_per_bushel')), rp_coverage_pct: coverage === null ? null : number(coverage), rp_aph_yield: aph === null ? null : number(aph), rp_projected_price: projectedPrice === null ? null : number(projectedPrice), rp_premium_per_acre: premium === null ? null : number(premium), copied_from_budget_id: copied_from_budget_id === null ? null : id(copied_from_budget_id), created_at: stamp(required(row, 'created_at')), updated_at: stamp(required(row, 'updated_at')) }
+  if (!result.name.trim() || result.expected_yield_per_acre <= 0 || result.expected_price_per_bushel <= 0 || validateRevenueProtectionInputs(result).length) fail('Farm Rx found an invalid budget.')
   return result
 }
 function mapCostLine(value: unknown): BudgetCostLineWrite {
@@ -83,6 +85,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
   private validateBudget(value: CropBudget, farmId: string, fields: FieldsData) {
     if (value.farm_id !== farmId) fail('Farm Rx could not verify the farm for this budget.')
     if (!value.name.trim() || value.expected_yield_per_acre <= 0 || value.expected_price_per_bushel <= 0) fail('Farm Rx found an invalid budget.')
+    const rpErrors = validateRevenueProtectionInputs(value); if (rpErrors.length) fail(rpErrors[0])
     if (!fields.commodities.some((item) => item.id === value.commodity_id)) fail('Farm Rx could not verify this budget’s commodity.')
     if (value.operating_entity_id !== null && !fields.entities.some((item) => item.id === value.operating_entity_id && item.farm_id === farmId)) fail('Farm Rx could not verify this budget’s entity.')
   }

@@ -623,6 +623,18 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .budget-controls { display: grid; grid-template-columns: 1.3fr repeat(3, minmax(150px, 1fr)) auto; gap: 12px; align-items: end; padding: 18px; }
 .budget-controls label, .field-edit label { display: grid; gap: 5px; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
 .budget-controls input, .budget-controls select, .cost-add-row input, .cost-add-row select, .costs-card td input, .costs-card td select, .field-edit input, .matrix-controls input { width: 100%; min-height: 48px; padding: 8px 10px; border: 2px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); font: inherit; font-variant-numeric: tabular-nums; }
+.insurance-card { margin-top: 18px; padding: 18px; }
+.insurance-inputs, .insurance-results { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.insurance-inputs label { display: grid; gap: 5px; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
+.insurance-inputs input, .insurance-inputs select { width: 100%; min-height: 48px; padding: 8px 10px; border: 2px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); font: inherit; font-variant-numeric: tabular-nums; }
+.insurance-inputs small, .insurance-results small { color: var(--matte-gray); font-size: 18px; font-weight: 600; }
+.insurance-fact, .insurance-empty, .matrix-insurance-legend { margin: 14px 0 0; color: var(--matte-gray); font-size: 18px; line-height: 1.4; }
+.insurance-area-warning { margin: 14px 0 0; padding: 14px 16px; border: 3px solid var(--warn-red); border-radius: 10px; background: var(--warn-bg); color: var(--warn-red); font-size: 18px; font-weight: 800; line-height: 1.4; }
+.insurance-results { margin-top: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--hairline); border-left: 1px solid var(--hairline); }
+.insurance-results > div { display: grid; gap: 4px; min-height: 96px; padding: 12px; border-right: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); }
+.insurance-results span, .insurance-results small { color: var(--matte-gray); font-size: 18px; font-weight: 700; }
+.insurance-results strong { color: var(--charcoal); font-size: 18px; line-height: 1.25; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.below-insurance-floor button { box-shadow: inset 0 0 0 3px rgb(92 76 39 / 55%); }
 .profitability-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .profitability-kpi { display: grid; gap: 6px; min-height: 116px; align-content: center; padding: 18px; border-radius: var(--radius); background: var(--light-green); text-align: center; }
 .profitability-kpi strong { color: var(--deep-green); font-family: var(--brand-font); font-size: 25px; font-variant-numeric: tabular-nums; }
@@ -630,12 +642,12 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .profitability-kpi.alert { background: var(--warn-bg); }
 .profitability-kpi.alert strong { color: var(--warn-red); }
 .matrix-card .section-heading, .costs-card .section-heading, .allocation-card .section-heading { padding: 20px 20px 14px; }
-.matrix-controls { display: grid; grid-template-columns: auto repeat(3, 88px) auto repeat(3, 88px) auto; gap: 8px; align-items: center; padding: 0 20px 18px; border-bottom: 1px solid var(--hairline); color: var(--matte-gray); font-size: 16px; font-weight: 700; }
+.matrix-controls { display: grid; grid-template-columns: auto repeat(3, 88px) auto repeat(3, 88px) auto; gap: 8px; align-items: center; padding: 0 20px 18px; border-bottom: 1px solid var(--hairline); color: var(--matte-gray); font-size: 18px; font-weight: 700; }
 .matrix-controls input { min-height: 44px; }
 .matrix-controls .secondary-action { min-height: 48px; white-space: nowrap; }
 .matrix-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; padding: 18px 20px; }
 .profit-matrix { width: max-content; min-width: 720px; border-collapse: separate; border-spacing: 5px; font-variant-numeric: tabular-nums; }
-.profit-matrix th { padding: 8px 10px; color: var(--matte-gray); font-size: 16px; text-align: right; white-space: nowrap; }
+.profit-matrix th { padding: 8px 10px; color: var(--matte-gray); font-size: 18px; text-align: right; white-space: nowrap; }
 .profit-matrix thead th { text-align: center; }
 .profit-matrix td { padding: 0; border: 0; background: transparent; }
 .profit-matrix button { width: 100%; min-width: 104px; min-height: 52px; border: 2px solid transparent; border-radius: 8px; color: var(--charcoal); font-family: var(--ui-font); font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
@@ -687,6 +699,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 
 @media (max-width: 980px) {
   .budget-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .insurance-inputs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .matrix-controls { grid-template-columns: auto repeat(3, minmax(62px, 1fr)); }
   .matrix-controls > span:nth-of-type(2) { grid-column: 1; }
   .matrix-controls > button { grid-column: 1 / -1; }
@@ -705,6 +718,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
   .yield-history-strip span { min-width: 0; }
   .profitability-page { gap: 18px; }
   .budget-controls, .profitability-kpis, .cost-add-row, .field-edit, .arrangement-comparison > div { grid-template-columns: 1fr; }
+  .insurance-inputs, .insurance-results { grid-template-columns: 1fr; }
   .profitability-kpi { min-height: 100px; }
   .profitability-kpi strong { font-size: 27px; }
   .matrix-card .section-heading, .costs-card .section-heading, .allocation-card .section-heading, .matrix-scroll { padding-right: 16px; padding-left: 16px; }

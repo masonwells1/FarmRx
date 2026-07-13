@@ -1,5 +1,6 @@
 import type { BudgetCostLineWrite } from './ProfitabilityDataGateway'
 import type { BudgetFieldAllocation, CropBudget, ProfitabilityMatrixStep } from './profitability'
+import { validateRevenueProtectionInputs } from './insuranceMath'
 import type { StorageLike } from './writeQueue'
 
 export type ProfitabilityQueueEntryV1 =
@@ -23,10 +24,30 @@ const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(
 const stamp = (value: unknown) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) && !Number.isNaN(Date.parse(value))
 const nullableString = (value: unknown) => value === null || typeof value === 'string'
 function scopeFields(value: Record<string, unknown>): boolean { return isId(value.farm_id) && Number.isInteger(value.crop_year) && typeof value.commodity_id === 'string' && nullableString(value.operating_entity_id) && nullableString(value.enterprise_label) && (value.operating_entity_id === null || isId(value.operating_entity_id)) }
-function budget(value: unknown): value is CropBudget { return record(value) && exact(value, ['id', 'farm_id', 'crop_year', 'commodity_id', 'operating_entity_id', 'enterprise_label', 'name', 'expected_yield_per_acre', 'expected_price_per_bushel', 'copied_from_budget_id', 'created_at', 'updated_at']) && isId(value.id) && scopeFields(value) && typeof value.name === 'string' && value.name.trim().length > 0 && finite(value.expected_yield_per_acre) && finite(value.expected_price_per_bushel) && (value.copied_from_budget_id === null || isId(value.copied_from_budget_id)) && stamp(value.created_at) && stamp(value.updated_at) }
+function budget(value: unknown): value is CropBudget { return record(value) && exact(value, ['id', 'farm_id', 'crop_year', 'commodity_id', 'operating_entity_id', 'enterprise_label', 'name', 'expected_yield_per_acre', 'expected_price_per_bushel', 'rp_coverage_pct', 'rp_aph_yield', 'rp_projected_price', 'rp_premium_per_acre', 'copied_from_budget_id', 'created_at', 'updated_at']) && isId(value.id) && scopeFields(value) && typeof value.name === 'string' && value.name.trim().length > 0 && finite(value.expected_yield_per_acre) && finite(value.expected_price_per_bushel) && [value.rp_coverage_pct, value.rp_aph_yield, value.rp_projected_price, value.rp_premium_per_acre].every((item) => item === null || finite(item)) && validateRevenueProtectionInputs(value as unknown as CropBudget).length === 0 && (value.copied_from_budget_id === null || isId(value.copied_from_budget_id)) && stamp(value.created_at) && stamp(value.updated_at) }
 function costLine(value: unknown): value is BudgetCostLineWrite { return record(value) && exact(value, ['id', 'budget_id', 'category', 'name', 'amount_per_acre', 'sort_order', 'created_at', 'updated_at']) && isId(value.id) && isId(value.budget_id) && categories.has(String(value.category)) && typeof value.name === 'string' && value.name.trim().length > 0 && finite(value.amount_per_acre) && Number.isInteger(value.sort_order) && (value.sort_order as number) >= 0 && stamp(value.created_at) && stamp(value.updated_at) }
 function matrixStep(value: unknown): value is ProfitabilityMatrixStep { return record(value) && exact(value, ['id', 'budget_id', 'axis', 'value', 'sort_order']) && isId(value.id) && isId(value.budget_id) && (value.axis === 'price' || value.axis === 'yield') && finite(value.value) && (value.value as number) > 0 && Number.isInteger(value.sort_order) && (value.sort_order as number) >= 0 }
 function allocation(value: unknown): value is BudgetFieldAllocation { return record(value) && exact(value, ['id', 'budget_id', 'crop_assignment_id', 'allocated_acres', 'expected_yield_override', 'expected_price_override', 'created_at', 'updated_at']) && isId(value.id) && isId(value.budget_id) && isId(value.crop_assignment_id) && finite(value.allocated_acres) && (value.expected_yield_override === null || finite(value.expected_yield_override)) && (value.expected_price_override === null || finite(value.expected_price_override)) && stamp(value.created_at) && stamp(value.updated_at) }
+
+/** Insurance fields were added after v1 queue entries already existed on farmers' devices.
+ * Preserve the strict v1 envelope after filling only genuinely missing legacy fields. */
+function normalizeLegacyBudget(value: unknown): unknown {
+  if (!record(value)) return value
+  return {
+    ...value,
+    rp_coverage_pct: Object.hasOwn(value, 'rp_coverage_pct') ? value.rp_coverage_pct : null,
+    rp_aph_yield: Object.hasOwn(value, 'rp_aph_yield') ? value.rp_aph_yield : null,
+    rp_projected_price: Object.hasOwn(value, 'rp_projected_price') ? value.rp_projected_price : null,
+    rp_premium_per_acre: Object.hasOwn(value, 'rp_premium_per_acre') ? value.rp_premium_per_acre : null,
+  }
+}
+function normalizeLegacyEntry(value: unknown): unknown {
+  if (!record(value)) return value
+  if (value.kind === 'createBudget' || value.kind === 'saveBudget') return { ...value, row: normalizeLegacyBudget(value.row) }
+  if (value.kind === 'copyBudget') return { ...value, budget: normalizeLegacyBudget(value.budget) }
+  return value
+}
+function normalizeLegacyEnvelope(value: unknown): unknown { return record(value) && Array.isArray(value.entries) ? { ...value, entries: value.entries.map(normalizeLegacyEntry) } : value }
 
 function envelope(value: unknown): value is ProfitabilityQueueEnvelopeV1 { return record(value) && exact(value, ['version', 'entries']) && value.version === 1 && Array.isArray(value.entries) && value.entries.every(entry) }
 function entry(value: unknown): value is ProfitabilityQueueEntryV1 {
@@ -42,7 +63,7 @@ function entry(value: unknown): value is ProfitabilityQueueEntryV1 {
   if (value.kind === 'copyBudget') return exact(value, [...common, 'sourceBudgetId', 'budget', 'costLines', 'matrixSteps']) && isId(value.sourceBudgetId) && budget(value.budget) && Array.isArray(value.costLines) && value.costLines.every(costLine) && Array.isArray(value.matrixSteps) && value.matrixSteps.every(matrixStep)
   return false
 }
-export function parseProfitabilityQueue(serialized: string): ProfitabilityQueueEnvelopeV1 { let parsed: unknown; try { parsed = JSON.parse(serialized) } catch { throw new Error(blocked) }; if (!envelope(parsed)) throw new Error(blocked); return parsed }
+export function parseProfitabilityQueue(serialized: string): ProfitabilityQueueEnvelopeV1 { let parsed: unknown; try { parsed = normalizeLegacyEnvelope(JSON.parse(serialized)) } catch { throw new Error(blocked) }; if (!envelope(parsed)) throw new Error(blocked); return parsed }
 export class ProfitabilityWriteQueue {
   constructor(private readonly storage: StorageLike, readonly key: string) {}
   read(): ProfitabilityQueueEnvelopeV1 { const bytes = this.storage.getItem(this.key); return bytes === null ? { version: 1, entries: [] } : parseProfitabilityQueue(bytes) }

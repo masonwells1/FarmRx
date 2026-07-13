@@ -23,7 +23,7 @@ function fixture() {
   const farm = fields.farm.id
   const commodity = fields.commodities[0].id
   const assignment = fields.crop_assignments.find((item) => item.commodity_id === commodity)!
-  const budget = { id: uid(1), farm_id: farm, crop_year: assignment.crop_year, commodity_id: commodity, operating_entity_id: null, enterprise_label: null, name: 'Base', expected_yield_per_acre: '200', expected_price_per_bushel: 4.5, copied_from_budget_id: null, notes: null, created_at: microStamp, updated_at: stamp }
+  const budget = { id: uid(1), farm_id: farm, crop_year: assignment.crop_year, commodity_id: commodity, operating_entity_id: null, enterprise_label: null, name: 'Base', expected_yield_per_acre: '200', expected_price_per_bushel: 4.5, rp_coverage_pct: '80', rp_aph_yield: 180, rp_projected_price: '4.62', rp_premium_per_acre: 0, copied_from_budget_id: null, notes: null, created_at: microStamp, updated_at: stamp }
   const line1 = { id: uid(2), farm_id: farm, budget_id: budget.id, category: 'seed', label: 'Seed', amount_per_acre: '120', source_kind: 'manual', source_record_id: null, sort_order: 0, notes: null, created_at: stamp, updated_at: stamp }
   const line2 = { id: uid(3), farm_id: farm, budget_id: budget.id, category: 'fertilizer', label: 'Fertilizer', amount_per_acre: 150, source_kind: 'manual', source_record_id: null, sort_order: 1, notes: null, created_at: stamp, updated_at: stamp }
   const priceSteps = [3.8, 4.2, 4.6].map((value, index) => ({ id: uid(10 + index), farm_id: farm, budget_id: budget.id, axis: 'price', step_order: index, value, created_at: stamp, updated_at: stamp }))
@@ -67,8 +67,8 @@ class FakeGateway implements ProfitabilityDataGateway {
   }
   async copyBudget(input: CopyBudgetInput) {
     this.guard(); this.copyInputs.push(structuredClone(input))
-    const { id, farm_id: _f, crop_year, commodity_id, operating_entity_id, enterprise_label, name, expected_yield_per_acre, expected_price_per_bushel, copied_from_budget_id } = input.budget
-    const response = { id, farm_id: this.state.scope.farm_id, crop_year, commodity_id, operating_entity_id, enterprise_label, name, expected_yield_per_acre, expected_price_per_bushel, copied_from_budget_id, notes: null, created_at: stamp, updated_at: stamp }
+    const { id, farm_id: _f, crop_year, commodity_id, operating_entity_id, enterprise_label, name, expected_yield_per_acre, expected_price_per_bushel, rp_coverage_pct, rp_aph_yield, rp_projected_price, rp_premium_per_acre, copied_from_budget_id } = input.budget
+    const response = { id, farm_id: this.state.scope.farm_id, crop_year, commodity_id, operating_entity_id, enterprise_label, name, expected_yield_per_acre, expected_price_per_bushel, rp_coverage_pct, rp_aph_yield, rp_projected_price, rp_premium_per_acre, copied_from_budget_id, notes: null, created_at: stamp, updated_at: stamp }
     return this.mutate.copy ? this.mutate.copy(response) : response
   }
 }
@@ -83,7 +83,7 @@ function memoryStorage(): StorageLike & { values: Map<string, string> } { return
 async function run() {
   const gateway = new FakeGateway(); const repo = repository(gateway); const workspace = await repo.getWorkspace()
   // 1: strict mapping — numeric strings, microsecond+offset timestamps, label->name, step_order->sort_order round-trip.
-  assert(workspace.budgets.length === 1 && workspace.budgets[0].expected_yield_per_acre === 200 && workspace.budgets[0].created_at === microStamp, 'Budget mapping must coerce numeric strings and accept microsecond+offset timestamps.')
+  assert(workspace.budgets.length === 1 && workspace.budgets[0].expected_yield_per_acre === 200 && workspace.budgets[0].created_at === microStamp && workspace.budgets[0].rp_coverage_pct === 80 && workspace.budgets[0].rp_projected_price === 4.62, 'Budget mapping must round-trip RP columns, coerce numeric strings, and accept microsecond+offset timestamps.')
   assert(workspace.cost_lines.find((line) => line.id === uid(2))?.name === 'Seed' && workspace.cost_lines.find((line) => line.id === uid(2))?.amount_per_acre === 120, 'Cost line label->name mapping failed.')
   assert(workspace.matrix_steps.find((step) => step.id === uid(10))?.sort_order === 0, 'Matrix step_order->sort_order mapping failed.')
   assert(!('sort_order' in (workspace.cost_lines[0] as object)) || (workspace.cost_lines[0] as { sort_order?: unknown }).sort_order === undefined, 'Public cost lines must not leak the DB-only sort_order column.')
@@ -102,6 +102,8 @@ async function run() {
   const foreignBudget = structuredClone(gateway.state.bundle); (foreignBudget.budgets[0] as Record<string, unknown>).commodity_id = 'not-a-real-commodity'; gateway.state.bundle.budgets = foreignBudget.budgets; await rejects(() => repo.getWorkspace(), 'A budget with an unverifiable commodity must reject.'); gateway.state.bundle.budgets = fixture().bundle.budgets
   // 6: canonical-confirmation rejections — the repository must confirm the server's echoed rows, never trust its own request.
   const savedBudget = workspace.budgets[0]
+  await repo.saveBudget(savedBudget)
+  assert(gateway.budgetInputs.at(-1)?.rp_coverage_pct === 80 && gateway.budgetInputs.at(-1)?.rp_aph_yield === 180 && gateway.budgetInputs.at(-1)?.rp_projected_price === 4.62 && gateway.budgetInputs.at(-1)?.rp_premium_per_acre === 0, 'Saving a budget must preserve every RP column.')
   gateway.mutate.budget = (row) => ({ ...row, id: uid(500) })
   await rejects(() => repo.saveBudget(savedBudget), 'A budget response with a wrong id must reject.')
   gateway.mutate = {}
@@ -172,6 +174,14 @@ async function run() {
   assert(queueKey.startsWith('farm-rx-profitability-write-queue:v1:') && queueKey !== grainWriteQueueKey(supabaseConfig.projectRef, uid(10), gateway.state.scope.farm_id) && queueKey !== writeQueueKey(supabaseConfig.projectRef, uid(10), gateway.state.scope.farm_id), 'Profitability queue key must be isolated from Grain and Fields.')
   const storage = memoryStorage(); const queue = new ProfitabilityWriteQueue(storage, queueKey)
   const common = (kind: ProfitabilityQueueEntryV1['kind'], n: number) => ({ version: 1 as const, module: 'profitability' as const, kind, operationId: uid(800 + n), userId: uid(10), farmId: gateway.state.scope.farm_id, enqueuedAt: stamp })
+  // 16a: pre-insurance v1 entries normalize the four missing fields, then replay successfully.
+  const legacyRow = structuredClone(savedBudget) as unknown as Record<string, unknown>; delete legacyRow.rp_coverage_pct; delete legacyRow.rp_aph_yield; delete legacyRow.rp_projected_price; delete legacyRow.rp_premium_per_acre
+  const legacyStorage = memoryStorage(); legacyStorage.setItem(queueKey, JSON.stringify({ version: 1, entries: [{ ...common('saveBudget', 90), row: legacyRow }] }))
+  const parsedLegacy = parseProfitabilityQueue(legacyStorage.getItem(queueKey)!); const parsedLegacyRow = parsedLegacy.entries[0]?.kind === 'saveBudget' ? parsedLegacy.entries[0].row : null
+  assert(parsedLegacyRow?.rp_coverage_pct === null && parsedLegacyRow.rp_aph_yield === null && parsedLegacyRow.rp_projected_price === null && parsedLegacyRow.rp_premium_per_acre === null, 'A legacy queue entry was not normalized with null insurance fields.')
+  const legacyGateway = new FakeGateway(); const legacyReplay = new QueuedProfitabilityRepository(repository(legacyGateway), { getContext: async () => ({ userId: uid(10), farmId: gateway.state.scope.farm_id }), projectRef: supabaseConfig.projectRef, storage: legacyStorage, createId: () => uid(890), clock: () => stamp, isOffline: () => false })
+  await legacyReplay.inspectAndReplay()
+  assert(legacyGateway.budgetInputs.length === 1 && legacyGateway.budgetInputs[0]?.rp_coverage_pct === null && new ProfitabilityWriteQueue(legacyStorage, queueKey).read().entries.length === 0, 'A legacy queue entry without insurance fields did not replay.')
   const costLineWrite: BudgetCostLineWrite = { ...workspace.cost_lines[0], sort_order: 0 }
   const matrixSteps: ProfitabilityMatrixStep[] = validSteps
   const entries: ProfitabilityQueueEntryV1[] = [

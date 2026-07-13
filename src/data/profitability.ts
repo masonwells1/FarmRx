@@ -9,6 +9,10 @@ export interface CropBudget extends PositionScope {
   name: string
   expected_yield_per_acre: number
   expected_price_per_bushel: number
+  rp_coverage_pct: number | null
+  rp_aph_yield: number | null
+  rp_projected_price: number | null
+  rp_premium_per_acre: number | null
   copied_from_budget_id: string | null
   created_at: string
   updated_at: string
