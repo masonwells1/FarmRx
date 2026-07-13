@@ -96,6 +96,11 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
         equivalent-cash-rent normalization in arrangement comparison (4.2) · breakeven-YIELD
         alongside breakeven-price (4.3) · "copy from another budget" (4.1) · our matrix stays
         front-and-center + interactive + contour line (theirs is buried/static — beatable)
+      · UPGRADE SPEC LOCKED 2026-07-12 (owner-interviewed, C:\ session): docs/
+        profitability-upgrade-spec.md — V1 (build AFTER ship gate + live swap) = named input
+        plans A/B/C compared per arrangement w/ winner + Input ROI Analyzer + margin-of-safety
+        cushions + progressive cost depth (farmdoc IL defaults, "default vs your number"
+        badges). Evidence: docs/profitability-research-2026-07.md
 - [ ] **SHIP GATE: Fields + Grain in front of real customers** ← the goal
 - [~] Module 3: Inventory & compliance — SCHEMA DRAFTED 2026-07-11 (0010+0011 by Sol,
       Claude spot-check-reviewed, NOT applied; explainer docs/schema-module3.md): farm

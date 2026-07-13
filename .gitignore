@@ -6,3 +6,6 @@ dist/
 .npm-cache/
 .playwright-local/
 .agents/
+
+.vercel
+.env*
