@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { profitabilityRepository } from './data'
-import { BankerReport } from './ProfitabilityReport'
+import { profitabilityRepository, programsRepository } from './data'
+import { BankerReport, LandlordReport } from './ProfitabilityReport'
 import { SectionTabs } from './SectionTabs'
 import type { Field } from './data/fields'
 import type { BudgetCostLine, BudgetFieldAllocation, CostCategory, CropBudget, ProfitabilityMatrixStep, ProfitabilityWorkspace } from './data/profitability'
@@ -10,6 +10,7 @@ import { breakevenCellKeys, budgetAnalysis, equivalentCashRentForScenario, field
 import { extraBushelsToJustify, missingCoachCategories, planCushions, planGroup, planProfitAsBudgeted, planProfitUnderArrangement, roiPriceLadder, roiThresholdsForCommodity, roiVerdict, roiWhatIfPerAcre } from './data/planningTools'
 import { FARMDOC_2026, FARMDOC_SOURCE_NOTE, farmdocCropKind, farmdocTypicalLine, type FarmdocCropKind } from './data/farmdocDefaults'
 import type { Commodity } from './data/fields'
+import type { ProgramsData } from './data/programs'
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const whole = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
@@ -60,6 +61,10 @@ export function ProfitabilityPage() {
   const [saved, setSaved] = useState('')
   const [pickedCell, setPickedCell] = useState<{ price: number; yield: number } | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
+  const [landlordReportOpen, setLandlordReportOpen] = useState(false)
+  const [landlordName, setLandlordName] = useState('all')
+  const [programs, setPrograms] = useState<ProgramsData | null>(null)
+  const [applicationRecordsAvailable, setApplicationRecordsAvailable] = useState(true)
   const [newCost, setNewCost] = useState({ name: '', category: 'seed' as CostCategory, amount: '' })
   const [savingAllocation, setSavingAllocation] = useState(false)
   const [overviewYear, setOverviewYear] = useState<number | null>(null)
@@ -68,7 +73,7 @@ export function ProfitabilityPage() {
   const navigate = useNavigate()
   const rawTab = useLocation().pathname.split('/')[2] ?? ''
   const tabPath = ['budgets', 'plans', 'reports'].includes(rawTab) ? rawTab : ''
-  const refresh = async () => { try { const data = await profitabilityRepository.getWorkspace(); setWorkspace(data); setSelectedId((current) => data.budgets.some((budget) => budget.id === current) ? current : data.budgets[0]?.id ?? ''); setError('') } catch (caught) { setError(caught instanceof Error && caught.message.includes('private on this farm') ? caught.message : farmerError(caught, 'open profitability')) } }
+  const refresh = async () => { try { const [data, programResult] = await Promise.all([profitabilityRepository.getWorkspace(), programsRepository.getData().then((value) => ({ available: true as const, value })).catch(() => ({ available: false as const, value: null }))]); setWorkspace(data); setPrograms(programResult.value); setApplicationRecordsAvailable(programResult.available); setSelectedId((current) => data.budgets.some((budget) => budget.id === current) ? current : data.budgets[0]?.id ?? ''); setError('') } catch (caught) { setError(caught instanceof Error && caught.message.includes('private on this farm') ? caught.message : farmerError(caught, 'open profitability')) } }
   useEffect(() => { void refresh() }, [])
   useEffect(() => { const budget = workspace?.budgets.find((item) => item.id === selectedId); if (budget) setPickedCell({ price: budget.expected_price_per_bushel, yield: budget.expected_yield_per_acre }) }, [selectedId])
   useEffect(() => { const years = [...new Set(workspace?.budgets.map((item) => item.crop_year) ?? [])].sort((left, right) => right - left); setOverviewYear((current) => current !== null && years.includes(current) ? current : years[0] ?? null) }, [workspace])
@@ -96,6 +101,7 @@ export function ProfitabilityPage() {
     <div className="page-heading profitability-heading"><div><h1>Profitability</h1><p>Put the price and yield together before you make the call.</p></div><div className="profitability-heading-actions"><span className="saved-whisper" aria-live="polite">{saved}</span></div></div>
     <SectionTabs base="/profitability" tabs={PROFITABILITY_TABS} />
     {reportOpen && <BankerReport workspace={workspace} budget={budget} onClose={() => setReportOpen(false)} />}
+    {landlordReportOpen && <LandlordReport workspace={workspace} budget={budget} landlordName={landlordName} programs={programs} applicationRecordsAvailable={applicationRecordsAvailable} onClose={() => setLandlordReportOpen(false)} />}
     {error && <p className="profitability-error" role="alert">{error}</p>}
     {tabPath === 'budgets' && <BudgetControls workspace={workspace} budget={budget} selectedId={selectedId} onSelect={setSelectedId} onSave={(next) => save(() => profitabilityRepository.saveBudget(next))} onCreate={(next) => save(() => profitabilityRepository.createBudget(next)).then(() => setSelectedId(next.id))} onCopy={(sourceId, copy) => save(() => profitabilityRepository.copyBudget(sourceId, copy)).then(() => setSelectedId(copy.id))} cropKind={cropKind} onCreateUniversity={(kind) => commodity && createUniversityBudget(kind, commodity, budget.crop_year)} />}
     {tabPath === '' && <>
@@ -107,7 +113,7 @@ export function ProfitabilityPage() {
     <PlanComparison workspace={workspace} plans={plans} selected={budget} onSelect={setSelectedId} />
     {plans.length > 1 && <RoiAnalyzer workspace={workspace} plans={plans} cropKind={cropKind} commodityLabel={commodity?.name ?? 'this crop'} />}
     </>}
-    {tabPath === 'reports' && <section className="profitability-card reports-card"><div className="section-heading"><div><span className="eyebrow">Reports</span><h2>Share your numbers</h2><p>Print-ready pages built from the budget picked on Overview.</p></div></div><div className="report-launcher"><button className="primary-action" type="button" onClick={() => setReportOpen(true)}>Open banker report — {budget.name}</button><p className="university-note">Projected cost, break-even, and per-field numbers formatted for a lender meeting. The landlord report is next on the roadmap.</p></div></section>}
+    {tabPath === 'reports' && <ReportsLauncher workspace={workspace} budget={budget} landlordName={landlordName} onLandlordChange={setLandlordName} onOpenBanker={() => setReportOpen(true)} onOpenLandlord={() => setLandlordReportOpen(true)} />}
     {tabPath === '' && <section className="profitability-card matrix-card" aria-labelledby="matrix-title"><div className="section-heading"><div><span className="eyebrow">Profitability matrix</span><h2 id="matrix-title">See the whole picture</h2><p>Showing {budget.name}. Tap any square for the plain-English answer.</p></div></div><MatrixControls budget={budget} prices={prices} yields={yields} onSave={(priceSteps, yieldSteps) => save(() => profitabilityRepository.replaceMatrixSteps(budget.id, [...priceSteps, ...yieldSteps]))} onError={setError} /><ProfitabilityMatrix prices={prices} yields={yields} cost={costsPerAcre} selected={selected} onPick={setPickedCell} /><p className="matrix-answer" aria-live="polite">At {money.format(selected.price)}/bu and {whole.format(selected.yield)} bu/ac you {selectedProfit >= 0 ? 'make' : 'lose'} {money.format(Math.abs(selectedProfit))}/ac{selectedAcres > 0 ? `, ${money.format(Math.abs(selectedProfit) * selectedAcres)} on ${decimal.format(selectedAcres)} ac` : ''}.</p></section>}
     {tabPath === 'budgets' && <>
     <section className="profitability-card costs-card" aria-labelledby="cost-title"><div className="section-heading"><div><span className="eyebrow">Per-acre costs</span><h2 id="cost-title">What each bushel has to cover</h2><p>Add your seed cost to see bushels to cover.</p></div></div><div className="table-scroll"><table><thead><tr><th>Cost</th><th>Category</th><th className="numeric">$/ac</th><th className="numeric">BU TO COVER</th><th><span className="sr-only">Remove</span></th></tr></thead><CostLineGroups costs={costs} price={budget.expected_price_per_bushel} defaultsMap={defaultsMap} collapsed={collapsedCategories} onToggle={(category) => setCollapsedCategories((current) => { const next = new Set(current); if (next.has(category)) next.delete(category); else next.add(category); return next })} onSave={(next) => save(() => profitabilityRepository.saveCostLine(next))} onRemove={(id) => save(() => profitabilityRepository.deleteCostLine(id))} /></table></div><div className="cost-add-row"><input aria-label="New cost name" value={newCost.name} placeholder="Add a cost" onChange={(event) => setNewCost({ ...newCost, name: event.target.value })} /><select aria-label="New cost category" value={newCost.category} onChange={(event) => setNewCost({ ...newCost, category: event.target.value as CostCategory })}>{categories.map((category) => <option key={category.value} value={category.value}>{category.label}</option>)}</select><input aria-label="New cost dollars per acre" inputMode="decimal" value={newCost.amount} placeholder="$/ac" onChange={(event) => setNewCost({ ...newCost, amount: event.target.value })} /><button className="secondary-action" type="button" onClick={() => { const amount = numberValue(newCost.amount); if (!newCost.name.trim() || !Number.isFinite(amount) || amount < 0) { setError('Enter a cost name and a dollar amount per acre.'); return }; const at = new Date().toISOString(); void save(() => profitabilityRepository.saveCostLine({ id: crypto.randomUUID(), budget_id: budget.id, category: newCost.category, name: newCost.name.trim(), amount_per_acre: amount, created_at: at, updated_at: at })).then(() => setNewCost({ name: '', category: 'seed', amount: '' })) }}>Add cost</button></div><div className="total-bar"><span>Total cost / acre</span><strong>{money.format(costsPerAcre)}</strong></div>{costs.some((line) => defaultsMap[line.id] !== undefined) && <p className="university-note">{FARMDOC_SOURCE_NOTE}</p>}<CoachNudge budget={budget} costs={costs} cropKind={cropKind} onAdd={(lines) => save(async () => { for (const line of lines) await profitabilityRepository.saveCostLine(line) })} /></section>
@@ -118,6 +124,18 @@ export function ProfitabilityPage() {
 
 function WholeFarmKpi({ label, value, alert = false }: { label: string; value: string; alert?: boolean }) {
   return <div className={`whole-farm-kpi${alert ? ' alert' : ''}`}><span>{label}</span><strong>{value}</strong></div>
+}
+
+function ReportsLauncher({ workspace, budget, landlordName, onLandlordChange, onOpenBanker, onOpenLandlord }: { workspace: ProfitabilityWorkspace; budget: CropBudget; landlordName: string; onLandlordChange: (name: string) => void; onOpenBanker: () => void; onOpenLandlord: () => void }) {
+  const namesByKey = new Map<string, string>()
+  for (const arrangement of workspace.fields.arrangements) {
+    const name = arrangement.landlord_name?.trim() ?? ''
+    const key = name.toLowerCase()
+    if (name && latestArrangementForCropYear(workspace.fields.arrangements, arrangement.field_id, budget.crop_year)?.id === arrangement.id && !namesByKey.has(key)) namesByKey.set(key, name)
+  }
+  const landlords = [...namesByKey.values()].sort((left, right) => left.localeCompare(right))
+  useEffect(() => { if (landlordName !== 'all' && !namesByKey.has(landlordName.trim().toLowerCase())) onLandlordChange('all') }, [landlordName, landlords, onLandlordChange])
+  return <section className="profitability-card reports-card"><div className="section-heading"><div><span className="eyebrow">Reports</span><h2>Share your numbers</h2><p>Print-ready pages built from the budget picked on Overview.</p></div></div><div className="report-launcher"><div className="report-launcher-row"><button className="primary-action" type="button" onClick={onOpenBanker}>Open banker report — {budget.name}</button><p>Projected cost, break-even, and per-field numbers formatted for a lender meeting.</p></div><div className="report-launcher-row"><label>Landlord<select value={landlordName} onChange={(event) => onLandlordChange(event.target.value)} disabled={!landlords.length}><option value="all">All landlords</option>{landlords.map((name) => <option key={name} value={name}>{name}</option>)}</select></label><button className="primary-action" type="button" onClick={onOpenLandlord} disabled={!landlords.length}>Open landlord report</button><p>{landlords.length ? 'Planting, yield, applied inputs, and the crop-share settlement for each landlord field.' : `Add a landlord name to a ${budget.crop_year} field arrangement to print a settlement report.`}</p></div></div></section>
 }
 
 function OverviewBudgetCard({ budget, commodity, costs, allocatedAcres, selected, onSelect, onView }: { budget: CropBudget; commodity?: Commodity; costs: BudgetCostLine[]; allocatedAcres: number; selected: boolean; onSelect: () => void; onView: () => void }) {

@@ -167,4 +167,18 @@ inbox), actuals-vs-budget living breakeven, farmdoc benchmark comparison, year-o
       field detail page was broken for ALL fields (toDraft hardcoded is_new:false → DB
       correctly rejected; farmer saw "could not save records"); one-line fix proven live
       (South Creek corn record now persists to Supabase).
-- [ ] Chunk 8 Landlord report — no DB dependency
+- [x] Chunk 8 Landlord report — DONE 2026-07-13: Terra build (LandlordReport print pages,
+      launcher w/ landlord picker + "All landlords" = page per landlord) → Sol review (10
+      findings: 3 P1 incl. fractional-acre harvest undercounting crop value, settlement
+      requiring a budget even when actuals exist, inputs read only from Programs w/ a false
+      "no records" claim; 5 P2 incl. unlabeled budget choice, 12-15px green-on-white print,
+      stale landlord selection; 2 P3) → Terra fix round (all 10) → Claude browser-proof
+      (crop-share settlement hand-checked twice on the dev farm: projected path $34,627.50
+      crop value / $9,242.55 expenses; harvested path via real UI entry of 15,000 bu →
+      $33,750.00 = bushels×price exactly, yield 175.4 bu/ac labeled actual; honest inputs
+      wording; "Using budget:" label; print CSS forced 18px+ black-on-white w/ page break
+      per landlord; banker launcher restored to primary; 0 console errors) → pushed.
+      NOTE for a future chunk: there is NO UI yet to enter landlord input-share
+      percentages (landlord_seed_pct etc.) — the report shows them when present; test
+      values were set via SQL on the test farm. Test farm now has South Creek as a
+      crop-share field ("Test Landlord", 50/40/35) with 15,000 bu harvested corn.

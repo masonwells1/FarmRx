@@ -808,6 +808,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
   .banker-report { width: 100%; margin: 0; padding: 0; border-radius: 0; }
   .screen-only { display: none !important; }
   .banker-report .report-total-bar, .banker-report .report-kpis > div { break-inside: avoid; }
+  .landlord-report-page:not(:last-child) { break-after: page; }
 }
 
 /* Modern Farmstead restyle (docs/design, Mason 2026-07-12): soft depth + warm neutrals. */
@@ -859,7 +860,40 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .overview-picker label { display: grid; gap: 6px; font-weight: 700; }
 .overview-picker select { min-height: 48px; min-width: 240px; }
 .overview-scenario { color: var(--matte-gray); font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.report-launcher { display: grid; gap: 10px; padding: 0 20px 20px; justify-items: start; }
+.report-launcher { display: grid; gap: 16px; padding: 0 20px 20px; }
+.report-launcher-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; min-width: 0; }
+.report-launcher-row p { flex: 1 1 320px; margin: 0; color: var(--matte-gray); font-size: 18px; font-weight: 600; }
+.report-launcher-row label { display: grid; flex: 1 1 220px; gap: 6px; min-width: 0; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
+.report-launcher-row select { width: 100%; min-height: 48px; padding: 8px 10px; border: 2px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); font: inherit; font-size: 18px; font-variant-numeric: tabular-nums; }
+
+/* Landlord report: uses the banker-report print shell so on-screen review and PDF output stay identical. */
+.landlord-report-pages { display: grid; gap: 24px; }
+.banker-report .landlord-field { margin-top: 26px; break-inside: avoid; }
+.banker-report .landlord-field-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding-bottom: 8px; border-bottom: 1px solid #DDD9CF; }
+.banker-report .landlord-field h2 { margin: 0; color: #1c1c1c; font-size: 21px; }
+.banker-report .landlord-field-head p { margin: 3px 0 0; color: #4E4E4E; font-size: 14px; font-variant-numeric: tabular-nums; }
+.banker-report .landlord-field-head > span { padding: 3px 8px; border: 1px solid #DDD9CF; border-radius: 999px; color: #1c1c1c; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.banker-report .landlord-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 14px; }
+.banker-report .landlord-field h3 { margin: 0 0 7px; color: #1c1c1c; font-size: 14px; text-transform: uppercase; letter-spacing: .05em; }
+.banker-report .landlord-field dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin: 0; }
+.banker-report .landlord-field dl div { min-width: 0; }
+.banker-report .landlord-field dt { color: #4E4E4E; font-size: 12px; font-weight: 700; }
+.banker-report .landlord-field dd { margin: 1px 0 0; color: #1c1c1c; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.banker-report .landlord-planting + .landlord-planting { margin-top: 20px; padding-top: 20px; border-top: 1px solid #DDD9CF; }
+.banker-report .landlord-inputs, .banker-report .landlord-settlement, .banker-report .landlord-rent { margin-top: 18px; }
+.banker-report .landlord-inputs table { table-layout: fixed; }
+.banker-report .landlord-inputs th, .banker-report .landlord-inputs td { overflow-wrap: anywhere; }
+.banker-report .landlord-rent p { margin: 0; color: #1c1c1c; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.banker-report .landlord-empty { margin-top: 26px; }
+@media (max-width: 767px) { .report-launcher { padding-right: 16px; padding-left: 16px; }.report-launcher-row { align-items: stretch; }.report-launcher-row .primary-action, .report-launcher-row .secondary-action { width: 100%; }.report-launcher-row p { flex-basis: 100%; }.banker-report .landlord-detail-grid { grid-template-columns: 1fr; }.banker-report .landlord-field-head { flex-direction: column; }.banker-report .landlord-field-head > span { white-space: normal; } }
+@media print {
+  .banker-report.landlord-report-page, .banker-report.landlord-report-page p, .banker-report.landlord-report-page th, .banker-report.landlord-report-page td, .banker-report.landlord-report-page dt, .banker-report.landlord-report-page dd, .banker-report.landlord-report-page span { color: #000 !important; font-size: 18px !important; }
+  .banker-report.landlord-report-page h1 { color: #000 !important; font-size: 30px !important; }
+  .banker-report.landlord-report-page h2 { color: #000 !important; font-size: 24px !important; }
+  .banker-report.landlord-report-page h3 { color: #000 !important; font-size: 20px !important; }
+  .banker-report.landlord-report-page .report-total-bar, .banker-report.landlord-report-page .report-total-bar *, .banker-report.landlord-report-page .landlord-settlement, .banker-report.landlord-report-page .landlord-settlement * { background: #fff !important; color: #000 !important; }
+  .banker-report.landlord-report-page .report-total-bar { border: 1px solid #000; }
+}
 
 /* Grain cost of carry: manual-price calculator, kept readable from a truck cab. */
 .carry-settings { display: grid; grid-template-columns: 1.35fr repeat(3, minmax(150px, 1fr)); gap: 14px; align-items: end; padding: 0 20px 20px; }
