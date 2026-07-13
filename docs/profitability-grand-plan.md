@@ -170,7 +170,25 @@ inbox), actuals-vs-budget living breakeven, farmdoc benchmark comparison, year-o
       DEPLOYED to farm-rx project: logs show v1 rejected marketing alerts with 400, v2
       accepts them and reaches the email step (503 only because Mason's Resend key is still
       pending — in-app notice stays honest) → pushed
-- [ ] Chunk 4 Firm Offers — UNBLOCKED
+- [x] Chunk 4 Firm Offers — DONE 2026-07-13: Terra build (Firm offers tab on 0028: CRUD,
+      status groups Open/Filled/Expired/Canceled, display-only expiry via device-local day,
+      "Mark filled" one-tap flow prefilling the 15-second contract entry then linking
+      filled_contract_id, "pending, not sold" line on the overview position card, orphan
+      "Other firm offers" management list, full seam + queue support) → Sol review (2 P1 +
+      3 P2 + 2 P3, all fixed by Terra: fill submit lock + retained-contract retry; edit
+      preserves the offer's own scope; old local envelopes tolerate missing firm_offers;
+      no more invented Sep–Nov delivery dates (blank when no month, full range when month);
+      expires_on validated; table-driven fill-mapping regressions; canonical sameScope) →
+      Claude found the submit "lock" was state-only and STILL allowed re-entrancy (triple
+      submit created 3 contracts live) — fixed with a synchronous ref lock on both the
+      contract fill form and the firm-offer form → browser-proof: offer created via form
+      (DB row verified); overview showed "5,000 bu on firm offer — pending, not sold" with
+      Fully priced 0 bu, then after fill flipped to Fully priced 5,000 bu with no pending
+      line; fill created a real contract linked from the offer; DB-open offer past expiry
+      displayed as Expired with DB status untouched and excluded from pending; orphan 2025
+      offer edited while picker on 2026 kept crop_year 2025; 5 rapid submits after the ref
+      fix produced exactly 1 contract (was 3 before); 375px no overflow, 48px targets →
+      gates (tsc/regression×21/build) pass → pushed
 - [ ] Chunk 5 Bins upgrade — UNBLOCKED
 - [ ] Chunk 6 Insurance calculator — UNBLOCKED
 - [x] Chunk 7 Overview upgrade — DONE 2026-07-13: Terra build (per-crop cards, whole-farm

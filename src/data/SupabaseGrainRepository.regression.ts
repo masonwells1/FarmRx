@@ -8,7 +8,7 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import { getSyncStatus } from './syncStatus'
 import { isMarsBid, latestBasis } from './basisMath'
 import type { FieldsRepository } from './fields'
-import type { CashBid, GrainAlertSettings, GrainContract, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, ProductionEstimate } from './grain'
+import type { CashBid, FirmOffer, GrainAlertSettings, GrainContract, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, ProductionEstimate } from './grain'
 import type { StorageLike } from './writeQueue'
 
 const stamp = '2026-07-11T00:00:00.000Z'; const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -24,14 +24,14 @@ function fixture() {
   const inventory = { id: uid(6), farm_id: farm, grain_bin_id: bin.id, crop_year: '2026', commodity_id: commodity, bushels: '600', committed_bushels: '100', measured_at: stamp, notes: null, created_at: stamp, updated_at: stamp }
   const bid = { id: uid(7), farm_id: farm, elevator: 'Iowa pilot [USDA MARS 2850]', commodity_id: commodity, bid_date: '2026-07-10', basis: '-0.2', cash_price: '4.3', delivery_start: null, delivery_end: null, notes: '[USDA MARS 2850]', created_at: stamp, updated_at: stamp }
   const report = { id: uid(8), report_name: 'WASDE', report_date: '2026-08-12', release_at: null, source_url: null, notes: null, created_at: stamp, updated_at: stamp }
-  return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], cash_bids: [bid], usda_report_dates: [report], marketing_alert_rules: [], grain_alert_settings: null } }
+  return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], cash_bids: [bid], usda_report_dates: [report], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null } }
 }
 /** Lets tests perturb what the "server" hands back, independent of what was sent, to prove the repository
  * confirms the canonical response rather than trusting its own request. Unset (null) by default so every
  * existing test keeps its original round-trip behavior. */
 type ResponseMutators = { production?: (value: ProductionEstimate) => ProductionEstimate; contract?: (value: GrainContract) => GrainContract; plan?: (value: MarketingPlanTarget[]) => MarketingPlanTarget[]; bid?: (value: CashBid) => CashBid }
 class FakeGateway implements GrainDataGateway {
-  readonly state = fixture(); fail = false; productionInputs: ProductionEstimate[] = []; contractInputs: GrainContract[] = []; planInputs: ReplaceMarketingPlanInput[] = []; bidInputs: CashBid[] = []
+  readonly state = fixture(); fail = false; productionInputs: ProductionEstimate[] = []; contractInputs: GrainContract[] = []; planInputs: ReplaceMarketingPlanInput[] = []; bidInputs: CashBid[] = []; offerInputs: FirmOffer[] = []; deleteOfferIds: string[] = []
   mutate: ResponseMutators = {}; throwError: Error | null = null
   private guard() { if (this.throwError) throw this.throwError }
   async loadWorkspace(_farmId: string): Promise<GrainRowBundle> { if (this.fail) throw new Error('network timeout'); return structuredClone(this.state.bundle) }
@@ -41,6 +41,8 @@ class FakeGateway implements GrainDataGateway {
   async upsertCashBid(_farm: string, row: CashBid) { this.guard(); this.bidInputs.push(structuredClone(row)); const response = structuredClone(row); return this.mutate.bid ? this.mutate.bid(response) : response }
   async upsertMarketingAlertRule(_farm: string, row: MarketingAlertRule) { this.guard(); return structuredClone(row) }
   async deleteMarketingAlertRule(_farm: string, _id: string) { this.guard() }
+  async upsertFirmOffer(_farm: string, row: FirmOffer) { this.guard(); this.offerInputs.push(structuredClone(row)); return structuredClone(row) }
+  async deleteFirmOffer(_farm: string, id: string) { this.guard(); this.deleteOfferIds.push(id) }
   async upsertGrainAlertSettings(_farm: string, row: GrainAlertSettings) { this.guard(); return structuredClone(row) }
 }
 function repository(gateway: FakeGateway) { const fields = gateway.state.fields; const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fields), saveField: async () => { throw new Error('not used') } }; return new SupabaseGrainRepository({ gateway, fieldsRepository, getFarmId: async () => fields.farm.id, createId: () => uid(99), clock: () => stamp }) }
@@ -142,6 +144,14 @@ async function run() {
   const basisWorkspace: GrainWorkspace = { ...data, cash_bids: [marsRow, manualRow, olderManualRow] }
   assert(isMarsBid(marsRow) && !isMarsBid(manualRow) && !isMarsBid(olderManualRow), 'isMarsBid must classify MARS-tagged and manual rows correctly.')
   assert(latestBasis(basisWorkspace, gateway.state.scope) === manualRow.basis, 'latestBasis must use the latest manual bid and exclude the MARS feed row even when MARS is newest.')
+  // 21: firm offers use the same bound-farm save/delete gateway seam and reject an invalid DB-check shape first.
+  const offer: FirmOffer = { ...gateway.state.scope, id: uid(990), buyer: 'Buyer', offer_type: 'cash', bushels: 1000, price: 4.5, basis: null, contract_month: null, expires_on: null, delivery_location: null, notes: null, status: 'open', filled_contract_id: null, created_at: stamp, updated_at: stamp }
+  await repo.saveFirmOffer(offer)
+  assert(gateway.offerInputs.length === 1 && gateway.offerInputs[0].farm_id === data.fields.farm.id && gateway.offerInputs[0].id === offer.id, 'Firm-offer save must bind the active farm and preserve the client ID.')
+  await repo.deleteFirmOffer(offer.id)
+  assert(gateway.deleteOfferIds[0] === offer.id, 'Firm-offer delete must target the requested ID.')
+  await rejects(() => repo.saveFirmOffer({ ...offer, id: uid(991), price: null }), 'Cash firm offer without price must reject before the gateway.')
+  assert(gateway.offerInputs.length === 1, 'Invalid firm offer reached the gateway.')
   assert(moduleBackends.fields === 'supabase' && moduleBackends.grain === 'supabase', 'Release composition did not select live Fields and Grain.')
   console.log('SupabaseGrainRepository regressions passed.')
 }

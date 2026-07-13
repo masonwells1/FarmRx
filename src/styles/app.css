@@ -713,6 +713,23 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .grain-page .math-toggle button:disabled { cursor: not-allowed; opacity: .55; }
 .grain-page .position-stats strong { font-size: 20px; }
 .grain-page .position-foot { flex-wrap: wrap; }
+.grain-page .firm-offer-form, .grain-page .offer-fill-entry { margin: 16px 0; padding: 16px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--light-green); }
+.grain-page .firm-offer-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.grain-page .firm-offer-form h3, .grain-page .firm-offer-form .offer-note, .grain-page .firm-offer-form > div { grid-column: 1 / -1; margin: 0; }
+.grain-page .firm-offer-form label { display: grid; gap: 4px; font-size: 18px; color: var(--matte-gray); }
+.grain-page .firm-offer-form input, .grain-page .firm-offer-form select, .grain-page .firm-offer-form textarea { width: 100%; min-height: 48px; padding: 9px 10px; border: 2px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); font: inherit; }
+.grain-page .firm-offer-form textarea { min-height: 96px; resize: vertical; }
+.grain-page .offer-list { display: grid; gap: 10px; margin-top: 16px; }
+.grain-page .offer-list details { border-top: 1px solid var(--hairline); }
+.grain-page .offer-list summary { min-height: 48px; display: flex; align-items: center; cursor: pointer; font-size: 18px; font-weight: 700; }
+.grain-page .offer-row { display: flex; justify-content: space-between; gap: 16px; padding: 14px 0; border-top: 1px solid var(--hairline); }
+.grain-page .offer-row > div:first-child { display: grid; gap: 3px; min-width: 0; }
+.grain-page .offer-row span, .grain-page .offer-row small { color: var(--matte-gray); font-size: 18px; overflow-wrap: anywhere; }
+.grain-page .offer-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.grain-page .status-chip.open { background: var(--light-green); color: var(--deep-green); }
+.grain-page .status-chip.expired, .grain-page .status-chip.canceled { background: #f5e5e0; color: #8b2f22; }
+.grain-page .status-chip.filled { background: #e5edf8; color: #224b85; }
+.grain-page .pending-offer-line { margin: 12px 0 0; padding: 10px 12px; border-left: 4px solid var(--warn-red); background: #fff4df; font-size: 18px; font-variant-numeric: tabular-nums; }
 .grain-page .production-editor { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 12px; align-items: end; margin-top: 14px; }
 .grain-page .production-editor label { display: grid; gap: 5px; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
 .grain-page .production-editor strong { min-height: 48px; display: flex; align-items: center; color: var(--charcoal); }
@@ -737,6 +754,9 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 @media (max-width: 767px) {
   .grain-page .production-editor { grid-template-columns: 1fr; }
   .grain-page .contract-entry { grid-template-columns: 1fr; }
+  .grain-page .firm-offer-form { grid-template-columns: 1fr; }
+  .grain-page .offer-row { flex-direction: column; }
+  .grain-page .offer-actions { justify-content: flex-start; }
   .grain-page .contract-entry > label, .grain-page .contract-entry details { grid-column: auto; }
   .grain-page .report-grid { grid-template-columns: 1fr; max-height: 420px; padding: 0 16px; }
   .grain-page .basis-chart { width: calc(100% - 32px); margin: 0 16px; }
