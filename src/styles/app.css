@@ -860,3 +860,17 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .overview-picker select { min-height: 48px; min-width: 240px; }
 .overview-scenario { color: var(--matte-gray); font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .report-launcher { display: grid; gap: 10px; padding: 0 20px 20px; justify-items: start; }
+
+/* Grain cost of carry: manual-price calculator, kept readable from a truck cab. */
+.carry-settings { display: grid; grid-template-columns: 1.35fr repeat(3, minmax(150px, 1fr)); gap: 14px; align-items: end; padding: 0 20px 20px; }
+.carry-settings > label, .carry-crop-controls > label { display: grid; gap: 6px; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
+.carry-settings input, .carry-crop-controls input, .carry-crop-controls select, .carry-table input { width: 100%; min-height: 48px; padding: 8px 10px; border: 2px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); font: inherit; font-size: 18px; font-variant-numeric: tabular-nums; }
+.carry-toggle { display: grid; grid-template-columns: 1fr 1fr; min-height: 48px; overflow: hidden; border: 2px solid var(--hairline); border-radius: 10px; }
+.carry-toggle button { min-height: 48px; padding: 8px 12px; border: 0; border-left: 1px solid var(--hairline); background: var(--surface); color: var(--deep-green); font: inherit; font-size: 18px; font-weight: 800; }
+.carry-toggle button:first-child { border-left: 0; }.carry-toggle button.active { background: var(--deep-green); color: var(--on-dark); }
+.carry-crop-controls { display: grid; grid-template-columns: repeat(2, minmax(180px, 260px)); gap: 14px; padding: 0 20px 20px; }
+.carry-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 0 20px 20px; }
+.carry-kpis .stat-card { min-width: 0; }.carry-kpis .stat-label { font-size: 18px; }.carry-kpis .stat-value { min-height: 72px; font-size: 31px; overflow-wrap: anywhere; }.carry-kpis .negative { color: var(--warn-red); }.carry-kpis .carry-verdict { color: var(--deep-green); font-size: 27px; }
+.carry-table-scroll { border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); }.carry-table { min-width: 1280px; }.carry-table th, .carry-table td { padding: 12px 14px; font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }.carry-table thead th { font-size: 18px; }.carry-table tbody tr:nth-child(even) td, .carry-table tbody tr:nth-child(even) th { background: var(--cream); }.carry-table .harvest-row td, .carry-table .harvest-row th { background: var(--green-tint); }.carry-table tbody th { text-align: left; }.carry-table tbody th span { display: block; margin-top: 4px; color: var(--deep-green); font-size: 18px; font-weight: 700; }.carry-table .positive { color: var(--crx-green); font-weight: 800; }.carry-table .negative { color: var(--warn-red); font-weight: 800; }.carry-table input { min-width: 112px; text-align: right; }
+.carry-footer { margin: 0; padding: 18px 20px 20px; color: var(--charcoal); font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+@media (max-width: 767px) { .carry-settings, .carry-kpis { grid-template-columns: 1fr; padding-right: 16px; padding-left: 16px; }.carry-crop-controls { grid-template-columns: 1fr; padding-right: 16px; padding-left: 16px; }.carry-toggle { width: 100%; }.carry-kpis .stat-value { min-height: 0; font-size: 32px; }.carry-footer { padding-right: 16px; padding-left: 16px; } }

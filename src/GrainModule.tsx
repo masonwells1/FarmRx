@@ -7,12 +7,13 @@ import type { GrainContract, GrainContractType, GrainServices, GrainWorkspace, M
 import { sameScope, scopeOf } from './data/grain'
 import { evaluateGrainAlerts, requestOwnerAlertDelivery, type GrainAlert } from './data/grainAlerts'
 import { isMarsBid, latestBasis } from './data/basisMath'
+import { GrainCostOfCarry } from './GrainCostOfCarry'
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const bushels = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
 const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const contractLabels: Record<GrainContractType, string> = { cash_spot: 'Cash / spot', forward_cash: 'Forward cash', basis: 'Basis', hta: 'HTA' }
-const GRAIN_TABS = [{ slug: '', label: 'Overview' }, { slug: 'plan', label: 'Marketing plan' }, { slug: 'contracts', label: 'Contracts' }, { slug: 'storage', label: 'Bins & basis' }]
+const GRAIN_TABS = [{ slug: '', label: 'Overview' }, { slug: 'plan', label: 'Marketing plan' }, { slug: 'carry', label: 'Cost of carry' }, { slug: 'contracts', label: 'Contracts' }, { slug: 'storage', label: 'Bins & basis' }]
 type Template = 'balanced' | 'harvest' | 'storage' | 'conservative' | 'seasonal'
 const templates: Record<Template, { name: string; description: string; total: number; schedule: Array<[number, number]> }> = {
   balanced: { name: 'Balanced Seller', description: '60% planned; 40% deliberately unplanned.', total: 60, schedule: [[3, 10], [5, 10], [7, 10], [9, 15], [11, 15]] },
@@ -43,7 +44,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const [alerts, setAlerts] = useState<GrainAlert[]>([])
   const [deliveryNotice, setDeliveryNotice] = useState('')
   const rawTab = useLocation().pathname.split('/')[2] ?? ''
-  const tabPath = ['plan', 'contracts', 'storage'].includes(rawTab) ? rawTab : ''
+  const tabPath = ['plan', 'carry', 'contracts', 'storage'].includes(rawTab) ? rawTab : ''
   const refresh = async () => { try { const data = await services.grainRepository.getData(); const nextAlerts = evaluateGrainAlerts(data); setWorkspace(data); setAlerts(nextAlerts); void requestOwnerAlertDelivery(nextAlerts, data.fields.farm.id).then((failed) => setDeliveryNotice(failed.length ? 'An email notice could not be sent. Your in-app alert is still here.' : '')); setLoadError(''); setSelectedEstimateId((current) => data.production_estimates.some((estimate) => estimate.id === current) ? current : data.production_estimates[0]?.id ?? '') } catch (caught) { const message = caught instanceof Error && caught.message === 'GRAIN_PRIVATE_ACCESS_DENIED' ? 'Grain records are private on this farm. Ask the farm owner or manager if you need access.' : farmerError(caught, 'load your grain records'); setLoadError(message) } }
   useEffect(() => { void refresh() }, [])
   const whisper = () => setSavedAt(`Saved ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date())}`)
@@ -79,6 +80,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
       {planError && <p className="form-error grain-inline-error" role="alert">{planError}</p>}<PlanStatus estimate={selectedEstimate} workspace={workspace} /></section>
     <ActualVsPlan estimate={selectedEstimate} workspace={workspace} />
     </>}
+    {tabPath === 'carry' && <GrainCostOfCarry workspace={workspace} selectedEstimate={selectedEstimate} selectedEstimateId={selectedEstimateId} onSelectEstimate={setSelectedEstimateId} />}
     {tabPath === 'contracts' && <section className="grain-section contracts-card"><div className="section-heading"><div><span className="eyebrow">15-second entry</span><h2>Contracts</h2><p>Record a sale; the position updates from it.</p></div>{savedAt && <span className="saved-whisper" role="status">{savedAt}</span>}</div><ContractEntry workspace={workspace} scope={selectedScope} services={services} onSaved={async () => { whisper(); await refresh() }} /><div className="table-scroll"><table><thead><tr><th>Buyer</th><th>Commodity</th><th>Type</th><th className="align-right">Bushels</th><th className="align-right">Price</th><th>Delivery</th></tr></thead><tbody>{scopeRows(workspace.grain_contracts, selectedScope).map((contract) => <tr key={contract.id}><td><strong>{contract.buyer}</strong><small>{contract.contract_number ?? 'No contract #'}</small></td><td>{workspace.fields.commodities.find((commodity) => commodity.id === contract.commodity_id)?.name}</td><td>{contractLabels[contract.contract_type]}</td><td className="align-right numeric">{bushels.format(contract.bushels)}</td><td className="align-right numeric">{finalCashPrice(contract) === null ? (contract.contract_type === 'hta' ? 'Basis open' : 'Futures open') : money.format(finalCashPrice(contract)!)}</td><td>{contract.delivery_start?.slice(5).replace('-', '/') ?? '—'}</td></tr>)}</tbody></table></div></section>}
     {tabPath === 'storage' && <section className="grain-section storage-layout"><Bins workspace={workspace} /><Basis workspace={workspace} services={services} onSaved={async () => { whisper(); await refresh() }} /></section>}
     {tabPath === '' && <UsdaCalendar reports={workspace.usda_report_dates} />}

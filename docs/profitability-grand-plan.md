@@ -138,8 +138,14 @@ inbox), actuals-vs-budget living breakeven, farmdoc benchmark comparison, year-o
 
 ## Chunk status ledger (update as gates pass)
 
-- [ ] Chunk 1 Cost of Carry — build / review / browser-proof / pushed
-- [ ] Chunk 2 schema drafts — drafted / Claude-reviewed / **MASON OK** / applied
+- [x] Chunk 1 Cost of Carry — DONE 2026-07-13: Terra build → Sol review (2 P1 + 1 P2, all
+      fixed: harvest-month change now resets rows instead of silently relabeling typed
+      prices; carry settings localStorage now farm-namespaced; negative saved rates clamped
+      on read) → Claude browser-proof (FPM example numbers reproduced: $4.37 harvest cash,
+      Dec net −$0.04; verdict flips to "Store until Dec 2026" at +$0.15; year rollover,
+      375px, 0 console errors) → pushed
+- [~] Chunk 2 schema drafts — drafted (Sol) + Claude-reviewed (additive-only ✓, append-only
+      ledger ✓, RLS tiers ✓, no FOR UPDATE ✓) → **AWAITING MASON: "apply the phase-2 schema"**
 - [ ] Chunk 3 Alerts — blocked on 0027 apply (+ Resend key for email leg)
 - [ ] Chunk 4 Firm Offers — blocked on 0028 apply
 - [ ] Chunk 5 Bins upgrade — blocked on 0029 apply
