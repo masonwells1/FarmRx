@@ -7,7 +7,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { fieldsRepository, moduleYear } from "./data";
 import type {
   Arrangement,
@@ -30,6 +30,10 @@ import {
 } from "./data/profitabilityCalculations";
 import { structuredFlexFormulaError } from "./data/flexLeaseValidation";
 import { roundDecimalHalfUp } from "./data/decimal";
+import {
+  createFieldEditDraft,
+  type FieldEditPatch,
+} from "./data/fieldEditPatch";
 
 type SortKey = "name" | "entity" | "crop" | "arrangement" | "acres";
 type InputShareKey =
@@ -414,14 +418,17 @@ function useFieldsData() {
   const [error, setError] = useState("");
   const refresh = async () => {
     try {
-      setData(await fieldsRepository.getData());
+      const next = await fieldsRepository.getData();
+      setData(next);
       setError("");
+      return next;
     } catch (caught) {
       setError(farmerError(caught, "load your farm"));
+      throw caught;
     }
   };
   useEffect(() => {
-    void refresh();
+    void refresh().catch(() => undefined);
   }, []);
   return { data, error, refresh };
 }
@@ -764,7 +771,7 @@ function InlineAddRow({
   onSaved,
 }: {
   data: FieldsData;
-  onSaved: () => Promise<void>;
+  onSaved: () => Promise<unknown>;
 }) {
   const [name, setName] = useState("");
   const [acres, setAcres] = useState("");
@@ -821,8 +828,12 @@ function InlineAddRow({
       setAcres("");
       setCounty("");
       setError("");
-      setSaved("Saved");
-      await onSaved();
+      try {
+        await onSaved();
+        setSaved("Saved");
+      } catch {
+        setSaved("Saved. Couldn't refresh the page — pull to reload.");
+      }
       if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
       savedTimer.current = window.setTimeout(() => setSaved(""), 2500);
     } catch (reason) {
@@ -896,20 +907,44 @@ function InlineAddRow({
 export function FieldDetailPage() {
   const { data, error, refresh } = useFieldsData();
   const { id } = useParams();
+  const location = useLocation();
   const fieldLock = useRef(createSubmitLock());
+  const dataRef = useRef<FieldsData | null>(null);
+  const saveTail = useRef<Promise<void>>(Promise.resolve());
+  const [pageNotice] = useState(
+    () =>
+      (location.state as { fieldsNotice?: string } | null)?.fieldsNotice ?? "",
+  );
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
   if (!data) return <LoadingState message={error || undefined} />;
   const field = data.fields.find((item) => item.id === id);
   if (!field) return <NotFoundState />;
   const arrangement = currentArrangement(data.arrangements, field.id);
   if (!arrangement) return <NotFoundState />;
-  const save = async (draft: FieldDraft) => {
-    if (!fieldLock.current.acquire()) return;
-    try {
-      await fieldsRepository.saveField(draft);
-      await refresh();
-    } finally {
-      fieldLock.current.release();
-    }
+  const save = (patch: FieldEditPatch) => {
+    const queued = saveTail.current.then(async () => {
+      const latest = dataRef.current;
+      if (!latest) throw new Error("The field is still loading. Please try again.");
+      if (!fieldLock.current.acquire()) return;
+      try {
+        await fieldsRepository.saveField(
+          createFieldEditDraft(latest, field.id, patch),
+        );
+        try {
+          dataRef.current = await refresh();
+        } catch {
+          dataRef.current = null;
+          throw new Error("Saved. Couldn't refresh the page — reload to continue.");
+        }
+      } finally {
+        fieldLock.current.release();
+      }
+    });
+    // Keep the queue available after one rejected save while returning that error to its card.
+    saveTail.current = queued.catch(() => undefined);
+    return queued;
   };
   return (
     <section className="page detail-page">
@@ -930,10 +965,14 @@ export function FieldDetailPage() {
           </p>
         </div>
       </div>
+      {pageNotice && (
+        <p className="form-error" role="status">
+          {pageNotice}
+        </p>
+      )}
       <BasicsCard
         data={data}
         field={field}
-        arrangement={arrangement}
         onSave={save}
       />
       <AgreementCard
@@ -945,13 +984,11 @@ export function FieldDetailPage() {
       <YieldPriceCard
         data={data}
         field={field}
-        arrangement={arrangement}
         onSave={save}
       />
       <RecordsCard
         data={data}
         field={field}
-        arrangement={arrangement}
         onSave={save}
       />
     </section>
@@ -998,16 +1035,14 @@ function CardSave({ error, onSave }: { error: string; onSave: () => void }) {
 function BasicsCard({
   data,
   field,
-  arrangement,
   onSave,
 }: {
   data: FieldsData;
   field: Field;
-  arrangement: Arrangement;
-  onSave: (draft: FieldDraft) => Promise<void>;
+  onSave: (patch: FieldEditPatch) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
-  const [values, setValues] = useState({
+  const freshValues = () => ({
     name: field.name,
     acres: String(field.total_acres),
     county: field.county ?? "",
@@ -1015,6 +1050,7 @@ function BasicsCard({
     fsaFarm: field.fsa_farm_number ?? "",
     fsaTract: field.fsa_tract_number ?? "",
   });
+  const [values, setValues] = useState(freshValues);
   const [error, setError] = useState("");
   const submitLock = useRef(createSubmitLock());
   const save = async () => {
@@ -1025,16 +1061,16 @@ function BasicsCard({
     }
     if (!submitLock.current.acquire()) return;
     try {
-      await onSave(
-        toDraft(field, arrangement, [], {
+      await onSave({
+        field: {
           name: values.name.trim(),
           total_acres: acres,
           county: values.county.trim() || null,
           state: values.state.trim() || null,
           fsa_farm_number: values.fsaFarm.trim() || null,
           fsa_tract_number: values.fsaTract.trim() || null,
-        }),
-      );
+        },
+      });
       setEditing(false);
       setError("");
     } catch (reason) {
@@ -1048,6 +1084,7 @@ function BasicsCard({
       title="Basics"
       editing={editing}
       onEdit={() => {
+        if (!editing) setValues(freshValues());
         setEditing((value) => !value);
         setError("");
       }}
@@ -1146,7 +1183,7 @@ function AgreementCard({
   data: FieldsData;
   field: Field;
   arrangement: Arrangement;
-  onSave: (draft: FieldDraft) => Promise<void>;
+  onSave: (patch: FieldEditPatch) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const freshValues = () => ({
@@ -1270,13 +1307,8 @@ function AgreementCard({
     }
     if (!submitLock.current.acquire()) return;
     try {
-      await onSave(
-        toDraft(
-          field,
-          arrangement,
-          currentRows,
-          {},
-          {
+      await onSave({
+        arrangement: {
             arrangement_type: values.type,
             landlord_name: values.landlord.trim() || null,
             landlord_phone: values.phone.trim() || null,
@@ -1292,9 +1324,8 @@ function AgreementCard({
               values.type === "flex_cash_rent" ? flexFormula : null,
             landlord_crop_pct: values.type === "crop_share" ? share : null,
             ...(values.type === "crop_share" ? inputShares : zeroShares()),
-          },
-        ),
-      );
+        },
+      });
       setEditing(false);
       setError("");
     } catch (reason) {
@@ -1525,39 +1556,25 @@ function AgreementCard({
 function YieldPriceCard({
   data,
   field,
-  arrangement,
   onSave,
 }: {
   data: FieldsData;
   field: Field;
-  arrangement: Arrangement;
-  onSave: (draft: FieldDraft) => Promise<void>;
+  onSave: (patch: FieldEditPatch) => Promise<void>;
 }) {
   const rows = cropRows(data, field.id, moduleYear);
   const [editing, setEditing] = useState(false);
-  const [values, setValues] = useState(
+  const freshValues = () =>
     rows.map((row) => ({
       id: row.id,
       yield: row.expected_yield_per_acre?.toString() ?? "",
       price: row.expected_price_per_bu?.toString() ?? "",
-    })),
-  );
+    }));
+  const [values, setValues] = useState(freshValues);
   const [error, setError] = useState("");
   const submitLock = useRef(createSubmitLock());
-  useEffect(() => {
-    setValues((current) =>
-      rows.map(
-        (row) =>
-          current.find((item) => item.id === row.id) ?? {
-            id: row.id,
-            yield: row.expected_yield_per_acre?.toString() ?? "",
-            price: row.expected_price_per_bu?.toString() ?? "",
-          },
-      ),
-    );
-  }, [data, field.id]);
   const save = async () => {
-    const next = rows.map((row) => {
+    const changes = rows.map((row) => {
       const value = values.find((item) => item.id === row.id);
       return {
         ...row,
@@ -1568,7 +1585,7 @@ function YieldPriceCard({
       };
     });
     if (
-      next.some(
+      changes.some(
         (row) =>
           (row.expected_yield_per_acre !== null &&
             (!Number.isFinite(row.expected_yield_per_acre) ||
@@ -1585,7 +1602,13 @@ function YieldPriceCard({
     }
     if (!submitLock.current.acquire()) return;
     try {
-      await onSave(toDraft(field, arrangement, next));
+      await onSave({
+        cropAssignmentChanges: changes.map((row) => ({
+          id: row.id,
+          expected_yield_per_acre: row.expected_yield_per_acre,
+          expected_price_per_bu: row.expected_price_per_bu,
+        })),
+      });
       setEditing(false);
       setError("");
     } catch (reason) {
@@ -1599,6 +1622,7 @@ function YieldPriceCard({
       title="Yield & price"
       editing={editing}
       onEdit={() => {
+        if (!editing) setValues(freshValues());
         setEditing((value) => !value);
         setError("");
       }}
@@ -1679,43 +1703,32 @@ function YieldPriceCard({
 function RecordsCard({
   data,
   field,
-  arrangement,
   onSave,
 }: {
   data: FieldsData;
   field: Field;
-  arrangement: Arrangement;
-  onSave: (draft: FieldDraft) => Promise<void>;
+  onSave: (patch: FieldEditPatch) => Promise<void>;
 }) {
   const rows = cropRows(data, field.id);
   const [editing, setEditing] = useState(false);
-  const [values, setValues] = useState(
+  const freshValues = () =>
     rows.map((row) => ({
       ...row,
       acres: String(row.planted_acres),
       harvested: row.harvested_bushels?.toString() ?? "",
-    })),
-  );
-  const [newRecord, setNewRecord] = useState({
+    }));
+  const freshNewRecord = () => ({
     commodity: "",
     year: String(moduleYear),
     sequence: "1",
     acres: String(field.total_acres),
   });
+  const [values, setValues] = useState(freshValues);
+  const [newRecord, setNewRecord] = useState(freshNewRecord);
   const [error, setError] = useState("");
   const submitLock = useRef(createSubmitLock());
-  useEffect(() => {
-    if (!editing)
-      setValues(
-        rows.map((row) => ({
-          ...row,
-          acres: String(row.planted_acres),
-          harvested: row.harvested_bushels?.toString() ?? "",
-        })),
-      );
-  }, [data, editing, field.id]);
   const save = async () => {
-    const next = rows.map((row) => {
+    const changes = rows.map((row) => {
       const value = values.find((item) => item.id === row.id)!;
       return {
         ...row,
@@ -1724,11 +1737,8 @@ function RecordsCard({
           value.harvested === "" ? null : Number(value.harvested),
       };
     });
-    if (newRecord.commodity)
-      next.push({
-        id: "",
-        farm_id: data.farm.id,
-        field_id: field.id,
+    const additions = newRecord.commodity
+      ? [{
         crop_year: Number(newRecord.year),
         commodity_id: newRecord.commodity,
         planted_acres: Number(newRecord.acres),
@@ -1739,11 +1749,10 @@ function RecordsCard({
         harvested_bushels: null,
         expected_yield_per_acre: null,
         expected_price_per_bu: null,
-        actual_price_per_bu: null,
         notes: null,
-        created_at: "",
-        updated_at: "",
-      });
+      }]
+      : [];
+    const next = [...changes, ...additions];
     const unique = new Set(next.map(cropKey));
     if (unique.size !== next.length) {
       setError(
@@ -1773,15 +1782,17 @@ function RecordsCard({
     }
     if (!submitLock.current.acquire()) return;
     try {
-      await onSave(toDraft(field, arrangement, next));
+      await onSave({
+        cropAssignmentChanges: changes.map((row) => ({
+          id: row.id,
+          planted_acres: row.planted_acres,
+          harvested_bushels: row.harvested_bushels,
+        })),
+        newCropAssignments: additions,
+      });
       setEditing(false);
       setError("");
-      setNewRecord({
-        commodity: "",
-        year: String(moduleYear),
-        sequence: "1",
-        acres: String(field.total_acres),
-      });
+      setNewRecord(freshNewRecord());
     } catch (reason) {
       setError(farmerError(reason, "save records"));
     } finally {
@@ -1793,6 +1804,10 @@ function RecordsCard({
       title="Records"
       editing={editing}
       onEdit={() => {
+        if (!editing) {
+          setValues(freshValues());
+          setNewRecord(freshNewRecord());
+        }
         setEditing((value) => !value);
         setError("");
       }}
@@ -2013,8 +2028,17 @@ export function FieldFormPage() {
           existing ? cropRows(data, existing.id, moduleYear) : [],
         ),
       );
-      await refresh();
-      navigate(`/fields/${saved.id}`);
+      try {
+        await refresh();
+        navigate(`/fields/${saved.id}`);
+      } catch {
+        navigate(`/fields/${saved.id}`, {
+          state: {
+            fieldsNotice:
+              "Saved. Couldn't refresh the page — pull to reload.",
+          },
+        });
+      }
     } catch (reason) {
       setError(farmerError(reason, "save this field"));
     } finally {

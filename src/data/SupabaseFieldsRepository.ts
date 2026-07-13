@@ -2,8 +2,14 @@ import type { Arrangement, Commodity, CropAssignment, Entity, EntityType, Farm, 
 import type { FieldsDataGateway, SaveFieldBundleInput } from './FieldsDataGateway'
 import { structuredFlexFormulaError } from './flexLeaseValidation'
 
+export interface SavedFieldOperation {
+  field: Field
+  arrangement: Arrangement
+  cropAssignments: CropAssignment[]
+}
+
 export interface FieldsOperationWriter {
-  saveFieldOperation(draft: FieldDraft, operationId: string): Promise<Field>
+  saveFieldOperation(draft: FieldDraft, operationId: string): Promise<SavedFieldOperation>
 }
 
 type Clock = () => string
@@ -117,17 +123,17 @@ export class SupabaseFieldsRepository implements FieldsRepository, FieldsOperati
     return data
   }
 
-  async saveField(draft: FieldDraft): Promise<Field> { return this.saveFieldOperation(draft, this.dependencies.createId()) }
+  async saveField(draft: FieldDraft): Promise<Field> { return (await this.saveFieldOperation(draft, this.dependencies.createId())).field }
 
-  async saveFieldOperation(draft: FieldDraft, operationId: string): Promise<Field> {
+  async saveFieldOperation(draft: FieldDraft, operationId: string): Promise<SavedFieldOperation> {
     const normalized = normalizeFieldDraft(draft, this.dependencies.createId)
     const input: SaveFieldBundleInput = { farmId: await this.dependencies.getFarmId(), operationId, draft: normalized }
     const saved = await this.dependencies.gateway.saveFieldBundle(input)
     const field = mapField(saved.field)
     const arrangement = mapArrangement(saved.arrangement)
     const assignments = saved.cropAssignments.map(mapCropAssignment)
-    if (field.farm_id !== input.farmId || arrangement.farm_id !== input.farmId || arrangement.field_id !== field.id || assignments.some((item) => item.farm_id !== input.farmId || item.field_id !== field.id)) fail('Farm Rx could not confirm the field save. Please try again.')
+    if (field.farm_id !== input.farmId || arrangement.farm_id !== input.farmId || arrangement.field_id !== field.id || arrangement.effective_to !== null || assignments.some((item) => item.farm_id !== input.farmId || item.field_id !== field.id)) fail('Farm Rx could not confirm the field save. Please try again.')
     void this.dependencies.clock
-    return field
+    return { field, arrangement, cropAssignments: assignments }
   }
 }

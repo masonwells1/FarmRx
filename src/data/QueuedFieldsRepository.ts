@@ -1,5 +1,5 @@
 import type { Arrangement, CropAssignment, Field, FieldDraft, FieldsData, FieldsRepository } from './fields'
-import type { FieldsOperationWriter } from './SupabaseFieldsRepository'
+import type { FieldsOperationWriter, SavedFieldOperation } from './SupabaseFieldsRepository'
 import { normalizeFieldDraft } from './SupabaseFieldsRepository'
 import { setModuleSyncRetryAction, setModuleSyncStatus } from './syncStatus'
 import { FieldsWriteQueue, type FieldsQueueEntryV1, type StorageLike, writeQueueKey } from './writeQueue'
@@ -40,6 +40,8 @@ async function crossTabLock<T>(key: string, storage: StorageLike, createId: () =
 
 export class QueuedFieldsRepository implements FieldsRepository {
   private workspace: FieldsData | null = null
+  private workspaceIsCanonical = false
+  private receiptFieldIds = new Set<string>()
   constructor(private readonly writer: FieldsRepository & FieldsOperationWriter, private readonly dependencies: QueueDependencies) {
     if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() })
     setModuleSyncRetryAction('fields', () => this.replayCurrent())
@@ -48,8 +50,8 @@ export class QueuedFieldsRepository implements FieldsRepository {
   private async locked<T>(queue: FieldsWriteQueue, task: (verify: () => void) => Promise<T>) { return serial(queue.key, () => crossTabLock(queue.key, this.dependencies.storage, this.dependencies.createId, task)) }
   async inspectAndReplay() { await this.replayCurrent() }
   async getData(): Promise<FieldsData> {
-    try { await this.replayCurrent(); this.workspace = await this.writer.getData(); const { queue } = await this.contextAndQueue(); return this.locked(queue, () => Promise.resolve(this.overlayQueued(this.workspace!, queue.read().entries))) }
-    catch (error) { const { queue } = await this.contextAndQueue(); const entries = await this.locked(queue, () => Promise.resolve(queue.read().entries)); if (this.workspace && isTransportFailure(error, this.dependencies.isOffline())) return this.overlayQueued(this.workspace, entries); if (!this.workspace && entries.length && isTransportFailure(error, this.dependencies.isOffline())) throw new Error(offlineMessage); throw error }
+    try { await this.replayCurrent(); this.workspace = await this.writer.getData(); this.workspaceIsCanonical = true; this.receiptFieldIds.clear(); const { queue } = await this.contextAndQueue(); return this.locked(queue, () => Promise.resolve(this.overlayQueued(this.workspace!, queue.read().entries))) }
+    catch (error) { const { queue } = await this.contextAndQueue(); const entries = await this.locked(queue, () => Promise.resolve(queue.read().entries)); if (this.workspace && isTransportFailure(error, this.dependencies.isOffline())) { this.workspaceIsCanonical = false; return this.overlayQueued(this.workspace, entries) } if (!this.workspace && entries.length && isTransportFailure(error, this.dependencies.isOffline())) throw new Error(offlineMessage); throw error }
   }
   async saveField(draft: FieldDraft): Promise<Field> {
     const normalized = normalizeFieldDraft(draft, this.dependencies.createId); const operationId = this.dependencies.createId(); const { context, queue } = await this.contextAndQueue()
@@ -58,20 +60,41 @@ export class QueuedFieldsRepository implements FieldsRepository {
       verify(); const pending = queue.read().entries.length
       const enqueue = () => { verify(); const next = queue.append(entry); setModuleSyncStatus('fields', { kind: 'pending', pending: next.entries.length }); this.workspace = this.workspace ? this.overlayQueued(this.workspace, next.entries) : this.workspace; return this.queuedField(normalized) }
       if (pending > 0 || this.dependencies.isOffline()) return enqueue()
-      try { const field = await this.writer.saveFieldOperation(normalized, operationId); verify(); if (queue.read().entries.length) setModuleSyncStatus('fields', { kind: 'pending', pending: queue.read().entries.length }); else setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }); return field }
+      this.requireCanonicalBase(normalized.id)
+      try { const saved = await this.writer.saveFieldOperation(normalized, operationId); verify(); this.applySavedReceipt(normalized, saved); if (queue.read().entries.length) setModuleSyncStatus('fields', { kind: 'pending', pending: queue.read().entries.length }); else setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }); return saved.field }
       catch (error) { if (isTransportFailure(error, this.dependencies.isOffline())) return enqueue(); throw error }
     })
     void this.replayCurrent()
     return result
   }
-  private queuedField(draft: FieldDraft & { id: string }): Field { const existing = this.workspace?.fields.find((field) => field.id === draft.id); const timestamp = this.dependencies.clock(); return { id: draft.id, farm_id: existing?.farm_id ?? this.workspace?.farm.id ?? '', operating_entity_id: draft.operating_entity_id, name: draft.name, total_acres: draft.total_acres, county: draft.county, state: draft.state, legal_description: draft.legal_description, fsa_farm_number: draft.fsa_farm_number, fsa_tract_number: draft.fsa_tract_number, soil_productivity_index: draft.soil_productivity_index, latitude: existing?.latitude ?? null, longitude: existing?.longitude ?? null, location_source: existing?.location_source ?? null, is_active: existing?.is_active ?? true, created_at: existing?.created_at ?? timestamp, updated_at: timestamp } }
+  private requireCanonicalBase(fieldId: string) { if (!this.workspace || (!this.workspaceIsCanonical && !this.receiptFieldIds.has(fieldId))) throw new Error('Saved changes need a reload before another edit. Reload to continue.') }
+  private queuedField(draft: FieldDraft & { id: string }, workspace = this.workspace): Field { const existing = workspace?.fields.find((field) => field.id === draft.id); const timestamp = this.dependencies.clock(); return { id: draft.id, farm_id: existing?.farm_id ?? workspace?.farm.id ?? '', operating_entity_id: draft.operating_entity_id, name: draft.name, total_acres: draft.total_acres, county: draft.county, state: draft.state, legal_description: draft.legal_description, fsa_farm_number: draft.fsa_farm_number, fsa_tract_number: draft.fsa_tract_number, soil_productivity_index: draft.soil_productivity_index, latitude: existing?.latitude ?? null, longitude: existing?.longitude ?? null, location_source: existing?.location_source ?? null, is_active: existing?.is_active ?? true, created_at: existing?.created_at ?? timestamp, updated_at: timestamp } }
+  private dayBefore(date: string) { const value = new Date(`${date}T00:00:00Z`); value.setUTCDate(value.getUTCDate() - 1); return value.toISOString().slice(0, 10) }
+  private replaceCurrentArrangement(workspace: FieldsData, fieldId: string, replacement: Arrangement) {
+    workspace.arrangements = workspace.arrangements.flatMap((row) => {
+      if (row.field_id !== fieldId || row.effective_to !== null) return [row]
+      if (row.id === replacement.id) return []
+      if (row.effective_from < replacement.effective_from) return [{ ...row, effective_to: this.dayBefore(replacement.effective_from), updated_at: replacement.updated_at }]
+      return []
+    })
+    workspace.arrangements.push(replacement)
+  }
+  private applySavedReceipt(draft: FieldDraft & { id: string }, saved: SavedFieldOperation) {
+    if (!this.workspace) return
+    const next = structuredClone(this.workspace)
+    next.fields = next.fields.some((row) => row.id === saved.field.id) ? next.fields.map((row) => row.id === saved.field.id ? saved.field : row) : [...next.fields, saved.field]
+    this.replaceCurrentArrangement(next, saved.field.id, saved.arrangement)
+    if (draft.crop_assignments.length) { const years = new Set(draft.crop_assignments.map((row) => row.crop_year)); next.crop_assignments = [...next.crop_assignments.filter((row) => row.field_id !== saved.field.id || !years.has(row.crop_year)), ...saved.cropAssignments] }
+    this.workspace = next
+    this.receiptFieldIds.add(saved.field.id)
+  }
   private overlayQueued(workspace: FieldsData, entries: FieldsQueueEntryV1[]): FieldsData {
     let next = structuredClone(workspace)
     for (const entry of entries) {
-      const draft = entry.draft; const field = this.queuedField(draft); field.farm_id = next.farm.id
+      const draft = entry.draft; const field = this.queuedField(draft, next); field.farm_id = next.farm.id
       next.fields = next.fields.some((item) => item.id === field.id) ? next.fields.map((item) => item.id === field.id ? field : item) : [...next.fields, field]
-      const prior = next.arrangements.find((item) => item.field_id === field.id && item.effective_to === null); const arrangement = { ...(prior ?? { farm_id: next.farm.id, field_id: field.id, effective_to: null, created_at: entry.enqueuedAt, updated_at: entry.enqueuedAt }), ...draft.arrangement, farm_id: next.farm.id, field_id: field.id, effective_to: null, created_at: prior?.created_at ?? entry.enqueuedAt, updated_at: entry.enqueuedAt } as Arrangement
-      next.arrangements = next.arrangements.some((item) => item.id === arrangement.id) ? next.arrangements.map((item) => item.id === arrangement.id ? arrangement : item) : [...next.arrangements, arrangement]
+      const prior = next.arrangements.find((item) => item.field_id === field.id && item.effective_to === null); const arrangement = { ...(prior ?? { farm_id: next.farm.id, field_id: field.id, effective_to: null, created_at: entry.enqueuedAt, updated_at: entry.enqueuedAt }), ...draft.arrangement, farm_id: next.farm.id, field_id: field.id, effective_to: null, created_at: prior?.id === draft.arrangement.id ? prior.created_at : entry.enqueuedAt, updated_at: entry.enqueuedAt } as Arrangement
+      this.replaceCurrentArrangement(next, field.id, arrangement)
       if (draft.crop_assignments.length) { const years = new Set(draft.crop_assignments.map((item) => item.crop_year)); next.crop_assignments = next.crop_assignments.filter((item) => item.field_id !== field.id || !years.has(item.crop_year)); const crops = draft.crop_assignments.map((item) => ({ ...item, farm_id: next.farm.id, field_id: field.id, created_at: next.crop_assignments.find((old) => old.id === item.id)?.created_at ?? entry.enqueuedAt, updated_at: entry.enqueuedAt } as CropAssignment)); next.crop_assignments = [...next.crop_assignments, ...crops] }
     }
     return next
@@ -79,6 +102,6 @@ export class QueuedFieldsRepository implements FieldsRepository {
   async replayCurrent() {
     let contextAndQueue: Awaited<ReturnType<QueuedFieldsRepository['contextAndQueue']>>; try { contextAndQueue = await this.contextAndQueue() } catch { return }
     const { context, queue } = contextAndQueue
-    try { await this.locked(queue, async (verify) => { let envelope = queue.read(); if (!envelope.entries.length) { setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }); return }; if (this.dependencies.isOffline()) { setModuleSyncStatus('fields', { kind: 'pending', pending: envelope.entries.length }); return }; while (envelope.entries.length) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); setModuleSyncStatus('fields', { kind: 'syncing', pending: envelope.entries.length }); try { await this.writer.saveFieldOperation(head.draft, head.operationId); verify(); envelope = queue.removeConfirmedHead(head.operationId) } catch (error) { if (isTransportFailure(error, this.dependencies.isOffline())) { setModuleSyncStatus('fields', { kind: 'pending', pending: envelope.entries.length }); return }; setModuleSyncStatus('fields', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } }; setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }) }) } catch { setModuleSyncStatus('fields', { kind: 'blocked', pending: 0, message: blocked }) }
+    try { await this.locked(queue, async (verify) => { let envelope = queue.read(); if (!envelope.entries.length) { setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }); return }; if (this.dependencies.isOffline()) { setModuleSyncStatus('fields', { kind: 'pending', pending: envelope.entries.length }); return }; while (envelope.entries.length) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); setModuleSyncStatus('fields', { kind: 'syncing', pending: envelope.entries.length }); try { const saved = await this.writer.saveFieldOperation(head.draft, head.operationId); verify(); this.applySavedReceipt(head.draft, saved); envelope = queue.removeConfirmedHead(head.operationId) } catch (error) { if (isTransportFailure(error, this.dependencies.isOffline())) { setModuleSyncStatus('fields', { kind: 'pending', pending: envelope.entries.length }); return }; setModuleSyncStatus('fields', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } }; setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }) }) } catch { setModuleSyncStatus('fields', { kind: 'blocked', pending: 0, message: blocked }) }
   }
 }

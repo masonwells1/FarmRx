@@ -27,10 +27,25 @@ project, NO deploy — each needs Mason's explicit OK. Draft migrations go to
   saves with success message + in-place history update, triple-submit → 1 row,
   created_by = signed-in user, verified by direct SQL; all test rows cleaned (0 remain).
   Gates on final code: tsc PASS, 24/24 regression suites PASS, build PASS.
-- [ ] **Round 2 — Land money** (P0-02, P0-03, P0-04, P0-05, P0-06, P1-01): fresh-draft-on-open
-  for all Fields edit cards + focused patches; labor/custom column semantics decided +
-  migration DRAFT; structured flex computed once per field-year; agreement-period binding;
-  budget/entity binding; landlord output renamed worksheet w/ net due + exclusions statement.
+- [x] **Round 2a — Fields draft lifecycle** (P0-02) — DONE 2026-07-13. Fresh-draft-on-open
+  for Basics/Yield&Price/Records (AgreementCard pattern everywhere); new focused-patch
+  serializer `src/data/fieldEditPatch.ts` so a card save can't clobber sibling-card
+  fields; Sol FIXES-REQUIRED review (stale-cache base after failed refresh, offline
+  agreement overlay revert, false-failure duplicate-field bait, decorative regression)
+  — all 4 fixed: canonical-base guard ("reload to continue"), cache updated from save
+  receipt, offline overlay closes prior arrangement like the RPC, confirmed-write vs
+  reload-failure separated, regression rewritten to exercise the queued repo with
+  stale-refresh + offline Agreement→Basics scenarios. LIVE EVIDENCE: cancel/reopen shows
+  true saved value (junk discarded); two cards open at once, Basics rename saved then
+  Yield&Price saved from its pre-rename snapshot → rename SURVIVED (SQL-verified);
+  reopened editor showed the fresh renamed value. Test edits reverted (SQL-verified).
+  Gates: tsc PASS, 25 regression suites PASS, build PASS.
+- [ ] **Round 2b — Land money math** (P0-03, P0-04, P0-05, P0-06, P1-01): labor/custom
+  semantics restored to combined meaning everywhere (per audit + advisor recommendation;
+  Mason notified, no objection) + SQL-view fix as migration DRAFT (not applied);
+  structured flex computed once per field-year on combined revenue; agreement-period
+  binding; budget/entity binding; landlord output renamed worksheet w/ net due +
+  exclusions statement.
 - [ ] **Round 3 — Grain risk numbers** (P0-07, P0-08, P0-09, P0-10, P0-11): cash-target
   semantics; RP relabel + 50–85% bounds (delete 86–95%); subtract contracted+pending;
   atomic offer-fill RPC (migration DRAFT).
