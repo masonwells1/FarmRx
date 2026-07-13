@@ -77,9 +77,9 @@ function AppLayout() {
             <Route path="/fields/new" element={<FieldFormPage />} />
             <Route path="/fields/:id" element={<FieldDetailPage />} />
             <Route path="/fields/:id/edit" element={<FieldFormPage />} />
-            <Route path="/grain" element={<GrainPage services={grainServices} />} />
+            <Route path="/grain/*" element={<GrainPage services={grainServices} />} />
             <Route path="/inventory" element={<InventoryPage repository={inventoryRepository} />} />
-            <Route path="/profitability" element={<ProfitabilityPage />} />
+            <Route path="/profitability/*" element={<ProfitabilityPage />} />
             <Route path="/equipment" element={<EquipmentPage repository={equipmentTasksRepository} />} />
             <Route path="/tasks" element={<TasksPage repository={equipmentTasksRepository} />} />
             <Route path="/weather" element={<WeatherPage />} />

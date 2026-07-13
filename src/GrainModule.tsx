@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { useLocation } from 'react-router-dom'
 import { MarketQuoteSection } from './components/MarketQuote'
+import { SectionTabs } from './SectionTabs'
 import { farmerError } from './lib/farmerErrors'
 import type { GrainContract, GrainContractType, GrainServices, GrainWorkspace, MarketingPlanTarget, PositionScope, ProductionEstimate } from './data/grain'
 import { sameScope, scopeOf } from './data/grain'
@@ -10,6 +12,7 @@ const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD
 const bushels = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
 const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const contractLabels: Record<GrainContractType, string> = { cash_spot: 'Cash / spot', forward_cash: 'Forward cash', basis: 'Basis', hta: 'HTA' }
+const GRAIN_TABS = [{ slug: '', label: 'Overview' }, { slug: 'plan', label: 'Marketing plan' }, { slug: 'contracts', label: 'Contracts' }, { slug: 'storage', label: 'Bins & basis' }]
 type Template = 'balanced' | 'harvest' | 'storage' | 'conservative' | 'seasonal'
 const templates: Record<Template, { name: string; description: string; total: number; schedule: Array<[number, number]> }> = {
   balanced: { name: 'Balanced Seller', description: '60% planned; 40% deliberately unplanned.', total: 60, schedule: [[3, 10], [5, 10], [7, 10], [9, 15], [11, 15]] },
@@ -39,6 +42,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const [loadError, setLoadError] = useState('')
   const [alerts, setAlerts] = useState<GrainAlert[]>([])
   const [deliveryNotice, setDeliveryNotice] = useState('')
+  const rawTab = useLocation().pathname.split('/')[2] ?? ''
+  const tabPath = ['plan', 'contracts', 'storage'].includes(rawTab) ? rawTab : ''
   const refresh = async () => { try { const data = await services.grainRepository.getData(); const nextAlerts = evaluateGrainAlerts(data); setWorkspace(data); setAlerts(nextAlerts); void requestOwnerAlertDelivery(nextAlerts, data.fields.farm.id).then((failed) => setDeliveryNotice(failed.length ? 'An email notice could not be sent. Your in-app alert is still here.' : '')); setLoadError(''); setSelectedEstimateId((current) => data.production_estimates.some((estimate) => estimate.id === current) ? current : data.production_estimates[0]?.id ?? '') } catch (caught) { const message = caught instanceof Error && caught.message === 'GRAIN_PRIVATE_ACCESS_DENIED' ? 'Grain records are private on this farm. Ask the farm owner or manager if you need access.' : farmerError(caught, 'load your grain records'); setLoadError(message) } }
   useEffect(() => { void refresh() }, [])
   const whisper = () => setSavedAt(`Saved ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date())}`)
@@ -60,18 +65,23 @@ export function GrainPage({ services }: { services: GrainServices }) {
   }
   return <section className="page grain-page">
     <div className="page-heading grain-heading"><div><h1>Grain</h1><p>Your position, your targets, and nothing more. <span className="delayed-label">Market quotes are delayed.</span></p></div></div>
+    <SectionTabs base="/grain" tabs={GRAIN_TABS} />
+    {tabPath === '' && <>
     {alerts.length > 0 && <section className="grain-section" aria-label="Grain alerts"><div className="section-heading"><div><span className="eyebrow">Check-on-open alerts</span><h2>Items to review</h2><p>These are checked only when the farm owner opens Grain; they are not 24/7 monitoring.</p></div></div>{alerts.map((alert) => <p key={alert.key} role="status">{alert.message}</p>)}</section>}
     {deliveryNotice && <p className="form-error grain-inline-error" role="status">{deliveryNotice}</p>}
     <MarketQuoteSection />
     <section aria-label="Commodity positions" className="position-grid">{workspace.production_estimates.map((estimate) => <PositionCard key={estimate.id} estimate={estimate} workspace={workspace} services={services} onSaved={async () => { whisper(); await refresh() }} />)}</section>
+    </>}
+    {tabPath === 'plan' && <>
     <section className="grain-section plan-card"><div className="section-heading"><div><span className="eyebrow">Primary plan</span><h2>Monthly marketing plan</h2><p>Set coverage by month. A plan can intentionally leave bushels unplanned.</p></div><label className="commodity-picker"><span>Commodity</span><select value={selectedEstimate.id} onChange={(event) => setSelectedEstimateId(event.target.value)}>{workspace.production_estimates.map((estimate) => <option key={estimate.id} value={estimate.id}>{workspace.fields.commodities.find((commodity) => commodity.id === estimate.commodity_id)?.name}</option>)}</select></label></div>
       <div className="template-bar" aria-label="Marketing plan templates">{(Object.keys(templates) as Template[]).map((key) => <button key={key} type="button" className="template-button" onClick={() => void applyTemplate(key)}><strong>{templates[key].name}</strong><span>{templates[key].description}</span></button>)}</div>
       <div className="month-grid">{months.map((month, index) => { const number = index + 1; const target = scopeRows(workspace.marketing_plan_targets, selectedScope).find((item) => Number(item.target_month.slice(5, 7)) === number); return <button className={`month-cell${target ? ' planned' : ''}`} type="button" key={month} onClick={() => setEditingTarget({ month: number, target })}><span>{month}</span><strong>{target ? `${target.target_pct_of_production}%` : '—'}</strong><small>{target?.target_price === null || target?.target_price === undefined ? (target ? 'Add manual price' : 'No target set') : `Manual target ${money.format(target.target_price)}`}</small></button> })}</div>
       {planError && <p className="form-error grain-inline-error" role="alert">{planError}</p>}<PlanStatus estimate={selectedEstimate} workspace={workspace} /></section>
     <ActualVsPlan estimate={selectedEstimate} workspace={workspace} />
-    <section className="grain-section contracts-card"><div className="section-heading"><div><span className="eyebrow">15-second entry</span><h2>Contracts</h2><p>Record a sale; the position updates from it.</p></div>{savedAt && <span className="saved-whisper" role="status">{savedAt}</span>}</div><ContractEntry workspace={workspace} scope={selectedScope} services={services} onSaved={async () => { whisper(); await refresh() }} /><div className="table-scroll"><table><thead><tr><th>Buyer</th><th>Commodity</th><th>Type</th><th className="align-right">Bushels</th><th className="align-right">Price</th><th>Delivery</th></tr></thead><tbody>{scopeRows(workspace.grain_contracts, selectedScope).map((contract) => <tr key={contract.id}><td><strong>{contract.buyer}</strong><small>{contract.contract_number ?? 'No contract #'}</small></td><td>{workspace.fields.commodities.find((commodity) => commodity.id === contract.commodity_id)?.name}</td><td>{contractLabels[contract.contract_type]}</td><td className="align-right numeric">{bushels.format(contract.bushels)}</td><td className="align-right numeric">{finalCashPrice(contract) === null ? (contract.contract_type === 'hta' ? 'Basis open' : 'Futures open') : money.format(finalCashPrice(contract)!)}</td><td>{contract.delivery_start?.slice(5).replace('-', '/') ?? '—'}</td></tr>)}</tbody></table></div></section>
-    <section className="grain-section storage-layout"><Bins workspace={workspace} /><Basis workspace={workspace} services={services} onSaved={async () => { whisper(); await refresh() }} /></section>
-    <UsdaCalendar reports={workspace.usda_report_dates} />
+    </>}
+    {tabPath === 'contracts' && <section className="grain-section contracts-card"><div className="section-heading"><div><span className="eyebrow">15-second entry</span><h2>Contracts</h2><p>Record a sale; the position updates from it.</p></div>{savedAt && <span className="saved-whisper" role="status">{savedAt}</span>}</div><ContractEntry workspace={workspace} scope={selectedScope} services={services} onSaved={async () => { whisper(); await refresh() }} /><div className="table-scroll"><table><thead><tr><th>Buyer</th><th>Commodity</th><th>Type</th><th className="align-right">Bushels</th><th className="align-right">Price</th><th>Delivery</th></tr></thead><tbody>{scopeRows(workspace.grain_contracts, selectedScope).map((contract) => <tr key={contract.id}><td><strong>{contract.buyer}</strong><small>{contract.contract_number ?? 'No contract #'}</small></td><td>{workspace.fields.commodities.find((commodity) => commodity.id === contract.commodity_id)?.name}</td><td>{contractLabels[contract.contract_type]}</td><td className="align-right numeric">{bushels.format(contract.bushels)}</td><td className="align-right numeric">{finalCashPrice(contract) === null ? (contract.contract_type === 'hta' ? 'Basis open' : 'Futures open') : money.format(finalCashPrice(contract)!)}</td><td>{contract.delivery_start?.slice(5).replace('-', '/') ?? '—'}</td></tr>)}</tbody></table></div></section>}
+    {tabPath === 'storage' && <section className="grain-section storage-layout"><Bins workspace={workspace} /><Basis workspace={workspace} services={services} onSaved={async () => { whisper(); await refresh() }} /></section>}
+    {tabPath === '' && <UsdaCalendar reports={workspace.usda_report_dates} />}
     <aside className="compliance-note"><strong>For your records.</strong> Farm Rx shows your numbers and your targets. It does not give marketing advice. <span>Owner-only alerts are best-effort check-on-open notices, not 24/7 monitoring.</span></aside>
     {editingTarget && <TargetEditor month={editingTarget.month} commodity={selectedCommodityName} target={editingTarget.target} scope={selectedScope} services={services} workspace={workspace} onClose={() => { setEditingTarget(null); setPlanError('') }} onSave={saveTarget} />}
   </section>

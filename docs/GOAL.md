@@ -121,6 +121,21 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
         verbatim from Mason's Excel; wired into npm run regression, 18 suites green).
         tsc -b clean, 0 console errors, 375px clean (no overflow/tiny text/small targets).
         NOTE: farmtest password rotated — see docs/build-notes/verify-login.md. NOT pushed.
+      · SECTION-TAB RESTRUCTURE (PHASE 1) BUILT + BROWSER-PROVEN 2026-07-13 (Fable, C:\
+        session; Mason: pages too crowded, adopt Farm Profit Manager's sidebar-section +
+        header-tab pattern — hands-on FPM teardown in docs/competitor-fpm-marketing-teardown.md).
+        New SectionTabs component + sub-routes: Profitability = Overview (picker/KPIs/matrix) |
+        Budgets (editor/coach/allocation) | Compare plans (comparison + ROI) | Reports (banker);
+        Grain = Overview (alerts/quotes/positions/USDA) | Marketing plan (grid/templates/
+        actual-vs-plan) | Contracts | Bins & basis. Deep links work (/profitability/plans),
+        active states correct, content isolation verified per tab, mobile 375px clean
+        (tab bar self-scrolls, 50px targets), 0 console errors, tsc clean, 18 regressions.
+        MASON-APPROVED PHASE 2 QUEUE (owner interview 2026-07-13): marketing Alerts rules
+        (price target / % marketed goal / deadline; in-app + EMAIL, second address allowed —
+        supersedes decision #4's owner-only default), Firm Offers (feed projected position),
+        Cost of Carry verdict page (per decision #1 — now approved), FPM-grade bin upgrades
+        (fill %, moisture + last-checked, per-bin transactions), insurance calculator on
+        budgets (RP floor, Safe-to-Forward). Committed locally, not pushed.
 - [ ] **SHIP GATE: Fields + Grain in front of real customers** ← the goal
 - [~] Module 3: Inventory & compliance — SCHEMA DRAFTED 2026-07-11 (0010+0011 by Sol,
       Claude spot-check-reviewed, NOT applied; explainer docs/schema-module3.md): farm
