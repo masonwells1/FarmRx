@@ -150,5 +150,17 @@ inbox), actuals-vs-budget living breakeven, farmdoc benchmark comparison, year-o
 - [ ] Chunk 4 Firm Offers — blocked on 0028 apply
 - [ ] Chunk 5 Bins upgrade — blocked on 0029 apply
 - [ ] Chunk 6 Insurance calculator — blocked on 0030 apply
-- [ ] Chunk 7 Overview upgrade — no DB dependency
+- [x] Chunk 7 Overview upgrade — DONE 2026-07-13: Terra build (per-crop cards, whole-farm
+      KPI strip, year picker, grouped collapsible expense categories) → Sol review (3 P1, all
+      fixed: dual "before land" breakeven restored on cards; whole-farm totals now suppressed
+      with a plain note when two budgets allocate the same field (double-count guard); year
+      picker syncs the selected budget + selected card highlighted + matrix labeled with its
+      budget) → Claude browser-proof (card math hand-checked vs matrix; category collapse +
+      line move between groups proven live; whole-farm strip proven with 2 fields: $222,324.75
+      income / $11,107.75 profit hand-verified incl. owned-ground land replacement; overlap
+      note proven by allocating the same field twice then reverting; 375px no overflow, 0
+      console errors) → pushed. BONUS FIX shipped with this chunk: "Add crop record" on the
+      field detail page was broken for ALL fields (toDraft hardcoded is_new:false → DB
+      correctly rejected; farmer saw "could not save records"); one-line fix proven live
+      (South Creek corn record now persists to Supabase).
 - [ ] Chunk 8 Landlord report — no DB dependency
