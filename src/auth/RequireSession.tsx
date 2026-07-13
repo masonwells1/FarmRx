@@ -1,6 +1,6 @@
 import { useRef, type ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
-import { useAuth } from './AuthProvider'
+import { useAuth, wasIntentionalSignOut } from './AuthProvider'
 
 export function RequireSession({ children }: { children: ReactNode }) {
   const { phase } = useAuth()
@@ -12,5 +12,5 @@ export function RequireSession({ children }: { children: ReactNode }) {
     return <>{children}</>
   }
   const safePath = location.pathname.startsWith('/') && !location.pathname.startsWith('//') ? `${location.pathname}${location.search}${location.hash}` : '/fields'
-  return <Navigate to="/login" replace state={{ from: safePath, expired: wasSignedIn.current }} />
+  return <Navigate to="/login" replace state={{ from: safePath, expired: wasSignedIn.current && !wasIntentionalSignOut() }} />
 }
