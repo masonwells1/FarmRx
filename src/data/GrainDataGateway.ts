@@ -1,4 +1,4 @@
-import type { CashBid, FirmOffer, GrainAlertSettings, GrainContract, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate } from './grain'
+import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainContract, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate } from './grain'
 
 /** The network boundary deliberately exposes untrusted rows only. */
 export interface GrainRowBundle {
@@ -8,6 +8,7 @@ export interface GrainRowBundle {
   insurance_units: unknown[]
   grain_bins: unknown[]
   bin_inventory: unknown[]
+  bin_transactions: unknown[]
   cash_bids: unknown[]
   usda_report_dates: unknown[]
   marketing_alert_rules: unknown[]
@@ -26,5 +27,7 @@ export interface GrainDataGateway {
   deleteMarketingAlertRule(farmId: string, id: string): Promise<void>
   upsertFirmOffer(farmId: string, row: FirmOffer): Promise<unknown>
   deleteFirmOffer(farmId: string, id: string): Promise<void>
+  upsertGrainBin(farmId: string, row: GrainBin): Promise<unknown>
+  appendBinTransaction(farmId: string, row: BinTransaction): Promise<unknown>
   upsertGrainAlertSettings(farmId: string, row: GrainAlertSettings): Promise<unknown>
 }

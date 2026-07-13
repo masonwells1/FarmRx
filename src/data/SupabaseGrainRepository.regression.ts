@@ -8,7 +8,7 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import { getSyncStatus } from './syncStatus'
 import { isMarsBid, latestBasis } from './basisMath'
 import type { FieldsRepository } from './fields'
-import type { CashBid, FirmOffer, GrainAlertSettings, GrainContract, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, ProductionEstimate } from './grain'
+import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainContract, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, ProductionEstimate } from './grain'
 import type { StorageLike } from './writeQueue'
 
 const stamp = '2026-07-11T00:00:00.000Z'; const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -20,19 +20,19 @@ function fixture() {
   const contract = { ...base, id: uid(2), contract_type: 'forward_cash', buyer: 'Buyer', bushels: '100', futures_price: null, basis: null, cash_price: '4.50', delivery_start: '2026-09-01', delivery_end: '2026-10-01', contract_number: null, premium_cents_per_bu: '0', notes: null }
   const target = { ...base, id: uid(3), target_month: '2026-09-01', target_pct_of_production: '20', target_price: '5', breakeven_relative_pct: null, deadline: '2026-09-15', notes: null }
   const insurance = { ...base, id: uid(4), unit_name: 'Enterprise', insured_acres: '10', aph: '200', coverage_level_pct: '80', revenue_guarantee_per_acre: '500', guarantee_per_bu: '2.5', notes: null }
-  const bin = { id: uid(5), farm_id: farm, name: 'North', capacity_bu: '1000', location_type: 'on_farm', location_name: null, notes: null, created_at: stamp, updated_at: stamp }
+  const bin = { id: uid(5), farm_id: farm, name: 'North', capacity_bu: '1000', location_type: 'on_farm', location_name: null, notes: null, moisture_pct: '15', moisture_checked_on: '2026-07-10', created_at: stamp, updated_at: stamp }
   const inventory = { id: uid(6), farm_id: farm, grain_bin_id: bin.id, crop_year: '2026', commodity_id: commodity, bushels: '600', committed_bushels: '100', measured_at: stamp, notes: null, created_at: stamp, updated_at: stamp }
   const bid = { id: uid(7), farm_id: farm, elevator: 'Iowa pilot [USDA MARS 2850]', commodity_id: commodity, bid_date: '2026-07-10', basis: '-0.2', cash_price: '4.3', delivery_start: null, delivery_end: null, notes: '[USDA MARS 2850]', created_at: stamp, updated_at: stamp }
   const report = { id: uid(8), report_name: 'WASDE', report_date: '2026-08-12', release_at: null, source_url: null, notes: null, created_at: stamp, updated_at: stamp }
-  return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], cash_bids: [bid], usda_report_dates: [report], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null } }
+  return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], bin_transactions: [] as unknown[], cash_bids: [bid], usda_report_dates: [report], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null } }
 }
 /** Lets tests perturb what the "server" hands back, independent of what was sent, to prove the repository
  * confirms the canonical response rather than trusting its own request. Unset (null) by default so every
  * existing test keeps its original round-trip behavior. */
 type ResponseMutators = { production?: (value: ProductionEstimate) => ProductionEstimate; contract?: (value: GrainContract) => GrainContract; plan?: (value: MarketingPlanTarget[]) => MarketingPlanTarget[]; bid?: (value: CashBid) => CashBid }
 class FakeGateway implements GrainDataGateway {
-  readonly state = fixture(); fail = false; productionInputs: ProductionEstimate[] = []; contractInputs: GrainContract[] = []; planInputs: ReplaceMarketingPlanInput[] = []; bidInputs: CashBid[] = []; offerInputs: FirmOffer[] = []; deleteOfferIds: string[] = []
-  mutate: ResponseMutators = {}; throwError: Error | null = null
+  readonly state = fixture(); fail = false; productionInputs: ProductionEstimate[] = []; contractInputs: GrainContract[] = []; planInputs: ReplaceMarketingPlanInput[] = []; bidInputs: CashBid[] = []; offerInputs: FirmOffer[] = []; deleteOfferIds: string[] = []; binInputs: GrainBin[] = []; movementInputs: BinTransaction[] = []
+  mutate: ResponseMutators = {}; throwError: Error | null = null; movementError: Error | null = null
   private guard() { if (this.throwError) throw this.throwError }
   async loadWorkspace(_farmId: string): Promise<GrainRowBundle> { if (this.fail) throw new Error('network timeout'); return structuredClone(this.state.bundle) }
   async upsertProductionEstimate(_farm: string, row: ProductionEstimate) { this.guard(); this.productionInputs.push(structuredClone(row)); const response = structuredClone(row); return this.mutate.production ? this.mutate.production(response) : response }
@@ -43,6 +43,8 @@ class FakeGateway implements GrainDataGateway {
   async deleteMarketingAlertRule(_farm: string, _id: string) { this.guard() }
   async upsertFirmOffer(_farm: string, row: FirmOffer) { this.guard(); this.offerInputs.push(structuredClone(row)); return structuredClone(row) }
   async deleteFirmOffer(_farm: string, id: string) { this.guard(); this.deleteOfferIds.push(id) }
+  async upsertGrainBin(_farm: string, row: GrainBin) { this.guard(); this.binInputs.push(structuredClone(row)); return structuredClone(row) }
+  async appendBinTransaction(_farm: string, row: BinTransaction) { this.guard(); this.movementInputs.push(structuredClone(row)); if (this.movementError) throw this.movementError; if (!this.state.bundle.bin_transactions.some((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === row.id)) this.state.bundle.bin_transactions = [...this.state.bundle.bin_transactions, structuredClone(row)]; return structuredClone(row) }
   async upsertGrainAlertSettings(_farm: string, row: GrainAlertSettings) { this.guard(); return structuredClone(row) }
 }
 function repository(gateway: FakeGateway) { const fields = gateway.state.fields; const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fields), saveField: async () => { throw new Error('not used') } }; return new SupabaseGrainRepository({ gateway, fieldsRepository, getFarmId: async () => fields.farm.id, createId: () => uid(99), clock: () => stamp }) }
@@ -86,7 +88,35 @@ async function run() {
   const replayStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
   const replayGateway = new FakeGateway(); const replayRepo = repository(replayGateway); let online = false; const replay = new QueuedGrainRepository(replayRepo, { ...offlineDependencies, storage: replayStorage, isOffline: () => !online })
   await replay.saveContract({ ...data.grain_contracts[0], id: uid(60) }); await replay.saveCashBid({ ...data.cash_bids[0], id: uid(61) }); online = true; await replay.inspectAndReplay(); assert(replayGateway.contractInputs[0]?.id === uid(60) && replayGateway.bidInputs[0]?.id === uid(61), 'FIFO replay did not preserve operation order and IDs.')
-  // 16: canonical-confirmation rejections — the repository must confirm the server's echoed rows, never trust its own request.
+  // 16: offline bin writes overlay once, replay once, and leave no durable queue entry behind.
+  const binQueueKey = grainWriteQueueKey(supabaseConfig.projectRef, uid(10), data.fields.farm.id)
+  const offlineBinStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
+  const offlineBinGateway = new FakeGateway(); const offlineBinWriter = repository(offlineBinGateway); let binsOnline = false
+  const offlineBins = new QueuedGrainRepository(offlineBinWriter, { ...offlineDependencies, storage: offlineBinStorage, isOffline: () => !binsOnline })
+  const queuedMovement: BinTransaction = { id: uid(62), farm_id: data.fields.farm.id, grain_bin_id: data.grain_bins[0].id, direction: 'in', bushels: 25, commodity_id: data.fields.commodities[0].id, occurred_on: '2026-07-12', note: null, source_kind: 'manual entry', created_at: stamp }
+  await offlineBins.appendBinTransaction(queuedMovement)
+  const movementOverlay = await offlineBins.getData()
+  assert(movementOverlay.bin_transactions.filter((row) => row.id === queuedMovement.id).length === 1 && new GrainWriteQueue(offlineBinStorage, binQueueKey).read().entries.length === 1, 'An offline movement must appear exactly once in the overlay and queue.')
+  binsOnline = true; await offlineBins.inspectAndReplay()
+  assert(new GrainWriteQueue(offlineBinStorage, binQueueKey).read().entries.length === 0, 'A replayed movement must drain its queue entry.')
+  assert((await offlineBins.getData()).bin_transactions.filter((row) => row.id === queuedMovement.id).length === 1, 'A replayed movement must reload exactly once without duplication.')
+  binsOnline = false
+  const queuedBin: GrainBin = { ...data.grain_bins[0], id: uid(63), name: 'Queued bin' }
+  await offlineBins.upsertGrainBin(queuedBin)
+  assert((await offlineBins.getData()).grain_bins.filter((row) => row.id === queuedBin.id).length === 1 && new GrainWriteQueue(offlineBinStorage, binQueueKey).read().entries.length === 1, 'An offline bin upsert must overlay and queue once.')
+  binsOnline = true; await offlineBins.inspectAndReplay()
+  assert(offlineBinGateway.binInputs.some((row) => row.id === queuedBin.id) && new GrainWriteQueue(offlineBinStorage, binQueueKey).read().entries.length === 0, 'A queued bin upsert must replay and drain.')
+  // 17: a previously persisted movement can return 23505 after a lost response; reconcile its immutable fields and drain it.
+  const duplicateStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
+  const duplicateGateway = new FakeGateway(); const duplicateWriter = repository(duplicateGateway); let duplicateOnline = false
+  const duplicateReplay = new QueuedGrainRepository(duplicateWriter, { ...offlineDependencies, storage: duplicateStorage, isOffline: () => !duplicateOnline })
+  const lostResponseMovement: BinTransaction = { ...queuedMovement, id: uid(64), bushels: 30 }
+  duplicateGateway.state.bundle.bin_transactions = [structuredClone(lostResponseMovement)]
+  await duplicateReplay.appendBinTransaction(lostResponseMovement)
+  duplicateGateway.movementError = Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' })
+  duplicateOnline = true; await duplicateReplay.inspectAndReplay()
+  assert(new GrainWriteQueue(duplicateStorage, binQueueKey).read().entries.length === 0 && (await duplicateReplay.getData()).bin_transactions.filter((row) => row.id === lostResponseMovement.id).length === 1, 'A 23505 replay must confirm the matching persisted movement and drain without duplication.')
+  // 18: canonical-confirmation rejections — the repository must confirm the server's echoed rows, never trust its own request.
   const baseTarget = data.marketing_plan_targets[0]
   gateway.mutate.plan = (rows) => rows.map((row) => ({ ...row, id: uid(940) }))
   await rejects(() => repo.replaceMarketingPlanTargets(gateway.state.scope, [baseTarget]), 'A plan response with a wrong id must reject.')
@@ -152,6 +182,15 @@ async function run() {
   assert(gateway.deleteOfferIds[0] === offer.id, 'Firm-offer delete must target the requested ID.')
   await rejects(() => repo.saveFirmOffer({ ...offer, id: uid(991), price: null }), 'Cash firm offer without price must reject before the gateway.')
   assert(gateway.offerInputs.length === 1, 'Invalid firm offer reached the gateway.')
+  // 22: bins are mutable, but movements use the dedicated insert-only append seam.
+  const savedBin: GrainBin = data.grain_bins[0]
+  await repo.upsertGrainBin({ ...savedBin, moisture_pct: 15.5, moisture_checked_on: '2026-07-12' })
+  assert(gateway.binInputs.length === 1 && gateway.binInputs[0].farm_id === data.fields.farm.id && gateway.binInputs[0].moisture_pct === 15.5, 'Bin upsert must bind the active farm and preserve moisture fields.')
+  const movement: BinTransaction = { id: uid(992), farm_id: uid(88), grain_bin_id: savedBin.id, direction: 'in', bushels: 25, commodity_id: gateway.state.scope.commodity_id, occurred_on: '2026-07-12', note: 'Scale ticket', source_kind: 'manual entry', created_at: stamp }
+  await repo.appendBinTransaction(movement)
+  assert(gateway.movementInputs.length === 1 && gateway.movementInputs[0].farm_id === data.fields.farm.id && gateway.movementInputs[0].direction === 'in', 'Movement append must bind the active farm and use the insert-only gateway seam.')
+  await rejects(() => repo.appendBinTransaction({ ...movement, id: uid(993), bushels: 0 }), 'Zero-bushel movement must reject before the gateway.')
+  assert(gateway.movementInputs.length === 1, 'Invalid movement reached the gateway.')
   assert(moduleBackends.fields === 'supabase' && moduleBackends.grain === 'supabase', 'Release composition did not select live Fields and Grain.')
   console.log('SupabaseGrainRepository regressions passed.')
 }

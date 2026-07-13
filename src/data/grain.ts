@@ -8,6 +8,7 @@ export type MarketingAlertRuleType = 'price_target' | 'pct_marketed_goal' | 'dea
 export type MarketingAlertDirection = 'at_or_above' | 'at_or_below'
 export type FirmOfferType = 'cash' | 'basis' | 'hta'
 export type FirmOfferStatus = 'open' | 'filled' | 'expired' | 'canceled'
+export type BinTransactionDirection = 'in' | 'out'
 /** Matches the tiny rounding allowance enforced by the plan RPC. */
 export const MARKETING_PLAN_PERCENT_TOLERANCE = 100.000001
 
@@ -84,8 +85,10 @@ export interface InsuranceUnit extends PositionScope {
   updated_at: string
 }
 
-export interface GrainBin { id: string; farm_id: string; name: string; capacity_bu: number; location_type: GrainStorageLocationType; location_name: string | null; notes: string | null; created_at: string; updated_at: string }
+export interface GrainBin { id: string; farm_id: string; name: string; capacity_bu: number; location_type: GrainStorageLocationType; location_name: string | null; notes: string | null; moisture_pct: number | null; moisture_checked_on: string | null; created_at: string; updated_at: string }
 export interface BinInventory { id: string; farm_id: string; grain_bin_id: string; crop_year: number; commodity_id: string; bushels: number; committed_bushels: number; measured_at: string; notes: string | null; created_at: string; updated_at: string }
+/** Immutable record. Fixes are represented by a new movement in the other direction. */
+export interface BinTransaction { id: string; farm_id: string; grain_bin_id: string; direction: BinTransactionDirection; bushels: number; commodity_id: string; occurred_on: string; note: string | null; source_kind: string | null; created_at: string }
 export interface CashBid { id: string; farm_id: string; elevator: string; commodity_id: string; bid_date: string; basis: number; cash_price: number | null; delivery_start: string | null; delivery_end: string | null; notes: string | null; created_at: string; updated_at: string }
 export interface MarketingAlertRule extends PositionScope { id: string; rule_type: MarketingAlertRuleType; direction: MarketingAlertDirection | null; threshold: number | null; remind_on: string | null; message: string | null; active: boolean; last_triggered_at: string | null; created_at: string; updated_at: string }
 export interface FirmOffer extends PositionScope { id: string; buyer: string; offer_type: FirmOfferType; bushels: number; price: number | null; basis: number | null; contract_month: string | null; expires_on: string | null; delivery_location: string | null; notes: string | null; status: FirmOfferStatus; filled_contract_id: string | null; created_at: string; updated_at: string }
@@ -96,7 +99,7 @@ export interface UsdaReportDate { id: string; report_name: string; report_date: 
 
 export interface FuturesQuote { symbol: 'ZC' | 'ZS' | 'ZW'; contract: string; label: string; price: number; crop_year: number; new_crop: boolean; delayed: true; as_of: string }
 export interface MarketDataService { getQuotes(): Promise<FuturesQuote[]> }
-export interface GrainData { production_estimates: ProductionEstimate[]; grain_contracts: GrainContract[]; marketing_plan_targets: MarketingPlanTarget[]; insurance_units: InsuranceUnit[]; grain_bins: GrainBin[]; bin_inventory: BinInventory[]; cash_bids: CashBid[]; usda_report_dates: UsdaReportDate[]; marketing_alert_rules: MarketingAlertRule[]; firm_offers: FirmOffer[]; grain_alert_settings: GrainAlertSettings | null }
+export interface GrainData { production_estimates: ProductionEstimate[]; grain_contracts: GrainContract[]; marketing_plan_targets: MarketingPlanTarget[]; insurance_units: InsuranceUnit[]; grain_bins: GrainBin[]; bin_inventory: BinInventory[]; bin_transactions: BinTransaction[]; cash_bids: CashBid[]; usda_report_dates: UsdaReportDate[]; marketing_alert_rules: MarketingAlertRule[]; firm_offers: FirmOffer[]; grain_alert_settings: GrainAlertSettings | null }
 export interface GrainWorkspace extends GrainData { fields: FieldsData }
 export interface GrainRepository {
   getData(): Promise<GrainWorkspace>
@@ -109,6 +112,8 @@ export interface GrainRepository {
   deleteMarketingAlertRule(id: string): Promise<void>
   saveFirmOffer(offer: FirmOffer): Promise<void>
   deleteFirmOffer(id: string): Promise<void>
+  upsertGrainBin(bin: GrainBin): Promise<void>
+  appendBinTransaction(transaction: BinTransaction): Promise<void>
   saveGrainAlertSettings(settings: GrainAlertSettings): Promise<void>
 }
 export interface GrainServices { grainRepository: GrainRepository; marketDataService: MarketDataService; profitabilityRepository: ProfitabilityRepository; createGrainId: () => string }

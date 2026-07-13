@@ -189,7 +189,23 @@ inbox), actuals-vs-budget living breakeven, farmdoc benchmark comparison, year-o
       offer edited while picker on 2026 kept crop_year 2025; 5 rapid submits after the ref
       fix produced exactly 1 contract (was 3 before); 375px no overflow, 48px targets →
       gates (tsc/regression×21/build) pass → pushed
-- [ ] Chunk 5 Bins upgrade — UNBLOCKED
+- [x] Chunk 5 Bins upgrade — DONE 2026-07-13: Terra build (bin cards with fill bar +
+      IP crop badge + moisture flag, add/edit bin form, per-bin APPEND-ONLY movement
+      ledger on 0029 with plain-English "add an opposite movement" corrections, derived
+      on-hand = inventory + in − out clamped at 0 with honest note, seam + queue) → Sol
+      review (3 P1 + 3 P2 + 1 P3; Claude independently found P1#3 live first) all fixed:
+      queue replay reconciles 23505 duplicate-key so a lost response can't jam offline
+      saves forever; movement commodity locked to the bin's established crop; plan "in
+      bins" now derives from ALL bins incl. movement-only (was 0 while the card said
+      12,000); entity cards label the figure whole-farm; moisture both-or-neither +
+      future dates rejected + undated readings flagged; useRef submit locks on bin +
+      movement forms → browser-proof: bin created via form (DB verified 16.50%/2026-07-10,
+      "Moisture is over 15%" flag rendered); In 12,000 bu → fill bar 12,000/20,000 · 60%;
+      overdraw showed 0 bu + honest note then opposite-movement correction restored
+      12,000 with full history; plan flipped 0 → "12,000 bu in bins"; commodity selector
+      verified disabled+locked; future moisture date and pct-without-date both rejected
+      with plain messages; 4 rapid submits → exactly 1 ledger row; 375px clean → gates
+      (tsc/regression×22/build) pass → pushed
 - [ ] Chunk 6 Insurance calculator — UNBLOCKED
 - [x] Chunk 7 Overview upgrade — DONE 2026-07-13: Terra build (per-crop cards, whole-farm
       KPI strip, year picker, grouped collapsible expense categories) → Sol review (3 P1, all
