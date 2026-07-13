@@ -136,6 +136,12 @@ quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postg
         Cost of Carry verdict page (per decision #1 — now approved), FPM-grade bin upgrades
         (fill %, moisture + last-checked, per-bin transactions), insurance calculator on
         budgets (RP floor, Safe-to-Forward). Committed locally, not pushed.
+      · **PHASE 2 QUEUE COMPLETE 2026-07-13** — all 6 chunks (Cost of Carry, schema
+        0027-0030 applied w/ Mason's OK, marketing Alerts + email leg, Firm Offers, Bins
+        append-only ledger, Insurance calculator) built via Terra→Sol-review→fix→browser-
+        proof gate and PUSHED (Mason's standing OK for that loop; commits 5fc36df…d42f1b7).
+        Full per-chunk evidence: docs/profitability-grand-plan.md. Decisions #1/#3/#4
+        below are hereby RESOLVED (built). deliver-grain-alert edge fn v2 deployed.
 - [ ] **SHIP GATE: Fields + Grain in front of real customers** ← the goal
 - [~] Module 3: Inventory & compliance — SCHEMA DRAFTED 2026-07-11 (0010+0011 by Sol,
       Claude spot-check-reviewed, NOT applied; explainer docs/schema-module3.md): farm
@@ -476,11 +482,13 @@ Module 3's existing delivery-event inbox hook.
    saved rows of those types need Mason's confirmation before migration (default: keep
    readable, stop offering for new leases). BUILD after profitability swap: Fields
    arrangement editor + shared calc + regression; 0006 view alignment later.
-3. [~] Customer onboarding path — DESIGNED + SCRIPT BUILT 2026-07-11 (docs/
-   onboarding-design.md + scripts/provision-customer.mjs: Claude runs it locally with the
-   service-role key in an env var — never committed/shipped; creates a confirmed user
-   flagged initial_farm_owner → app shows "Set up your farm"). REMAINING: Mason's 2
-   dashboard toggles (see MASON ACTION ITEMS) + a real end-to-end provisioning run.
+3. [x] Customer onboarding path — DESIGNED + SCRIPT BUILT 2026-07-11; **END-TO-END
+   PROVEN 2026-07-13**: with public signups DISABLED, ran scripts/provision-customer.mjs
+   (service-role key fetched into env only) → confirmed user w/ initial_farm_owner
+   created → signed in via the real app with the one-time password → "Set up your farm"
+   rendered → farm created ("Provision Test Farm") → app landed on clean empty states.
+   Test user + farm fully deleted after (verified 0 rows). NOTE: farmtest verify password
+   rotated again — see docs/build-notes/verify-login.md.
 4. [x] Live-path multi-user test matrix — PROVEN IN BROWSER 2026-07-12 ~3:30AM against the
    live DB with real signups (created while public signups are still open — do NOT delete
    these test users when signups get disabled):
@@ -504,12 +512,18 @@ Module 3's existing delivery-event inbox hook.
    was killed).
 7. Ship gate prep: deploy needs Mason's explicit OK (never auto).
 
-## MASON ACTION ITEMS (2 minutes in the Supabase dashboard, farm-rx project — 2026-07-11)
+## MASON ACTION ITEMS — RESOLVED 2026-07-13
 Both from the onboarding security review (docs/onboarding-design.md):
-1. Authentication → Sign In / Up → turn OFF "Allow new users to sign up" (today a stranger
-   with the app's public key could create an account and an empty junk farm; customer
-   accounts are created by our provisioning script instead — scripts/provision-customer.mjs).
-2. Authentication → Passwords → turn ON leaked-password protection (HaveIBeenPwned check).
+1. [x] Public signups DISABLED 2026-07-13 (Mason asked Claude to do it; done via Supabase
+   Management API, verified by read-back + live sign-in still working). Customer accounts
+   now come only from scripts/provision-customer.mjs.
+2. [BLOCKED-BY-PLAN] Leaked-password protection is a Supabase PRO feature (API returned
+   402 "available on Pro Plans and up"); farm-rx is free tier. Revisit before real
+   customers (likely upgrading to Pro then anyway for backups).
+NEW (2026-07-13): Resend email key INSTALLED as deliver-grain-alert secret + test email
+PROVEN delivered to mason@croprxsolutions.com. Remaining: verify croprxsolutions.com at
+resend.com/domains (3 DNS records at Hostinger) so alerts can reach any address — needs
+Mason's go-ahead (touches live domain DNS).
 
 ## Pending decisions (parked, non-blocking — from competitor report, 2026-07-11)
 **RESOLVED 2026-07-11 by Mason's "Apply everything": former decisions #0 (grain 0004/0005),
