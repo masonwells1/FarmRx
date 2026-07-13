@@ -17,7 +17,26 @@ Customers have read this visual language for years. Use them verbatim.
 | `WARN_RED` | `#C62828` | Overdue, unpriced, below breakeven. Red = money/deadline problem, nothing else |
 | `WARN_BG` | `#FFF3E0` | Alert card fill |
 | `AMBER` | `#E8A33D` | "Heads up" state. If everything non-green is red, farmers tune red out |
-| `HAIRLINE` | `#E3E6E4` | Borders, dividers |
+| `HAIRLINE` | `#E5E2DA` | Borders, dividers (warm, matches cream) |
+
+### Neutrals adopted from CRX Manager (2026-07-12, Mason's decision)
+
+Farm Rx will become the CRX Manager customer portal, so it shares CRX Manager's neutrals:
+
+| Token | Hex | Use for |
+|---|---|---|
+| `NAV_DARK` | `#2E2E2E` | Sidebar/nav background (replaces the chrome-green sidebar) |
+| `NAV_HOVER` | `#3A3A3A` | Nav hover surfaces |
+| `CREAM` | `#F9F7F2` | Page background |
+| `CREAM_DARK` | `#F0EDE6` | Meter tracks, secondary fills, zebra alternative |
+| `GREEN_TINT` | `#F0FAF5` | Very light green wash (privacy strips, subtle selected states) |
+
+Sidebar recipe (from CRX Manager): inactive links `#9CA3AF` gray; hover white text on
+`rgb(255 255 255 / 5%)`; active = white text, `rgb(255 255 255 / 6%)` fill, a 3px
+`CRX_GREEN` bar on the left edge, and the icon turns green. Green stays special.
+
+Card shadows: `0 1px 2px rgba(0,0,0,.04), 0 1px 3px rgba(0,0,0,.05)` resting,
+`0 2px 4px rgba(0,0,0,.04), 0 8px 20px rgba(0,0,0,.07)` hover.
 
 Rules:
 - **One green family, used with restraint.** Green means "brand / good / active." If a whole
@@ -29,7 +48,9 @@ Rules:
 
 ## Type
 
-- **Headings + logo lockup:** Helvetica-style face (`Helvetica, Arial, sans-serif`). Matches the printed labels.
+- **Headings + logo lockup:** `Barlow Semi Condensed` (weights 500 to 700), Helvetica/Arial
+  fallback. Matches CRX Manager. Page titles may end in one light-weight `CRX_GREEN` accent
+  word (CRX Manager's split-heading pattern) — at most one per page.
 - **Body + ALL numbers:** Inter, with `font-variant-numeric: tabular-nums` so columns of
   bushels and dollars line up. (This overrides any skill guidance that bans Inter — brand rule.)
 - **Base size 18px.** Nothing the farmer must read is smaller than 16px.

@@ -2,10 +2,12 @@
 
 ## App shell
 
-- **Sidebar (desktop):** 262px, `CHROME_GREEN`. Farm identity top, nav middle,
-  "Powered by Crop RX" pinned bottom. Active nav item = solid `CRX_GREEN` pill.
+- **Sidebar (desktop):** 262px, `NAV_DARK` charcoal (CRX Manager family look). Farm
+  identity top, nav middle, "Powered by Crop RX" pinned bottom. Active nav item = white
+  text on a faint white wash with a 3px `CRX_GREEN` bar on the left edge and a green icon.
 - **Phone:** bottom tab bar with the 4-5 most-used modules + "More". Same 48px targets.
-- **Topbar:** white, 72px, page context left, sync status + alert bell right.
+- **Topbar:** sticky, cream at 82% opacity with backdrop blur, 72px, page context left,
+  sync status + alert bell right.
 - **Content area:** max-width 1320px, 32px padding (16-20px on phone).
 
 ## Dashboard ("Am I okay today?")

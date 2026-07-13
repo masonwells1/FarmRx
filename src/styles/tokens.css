@@ -4,15 +4,23 @@
   --charcoal: #2E2E2E;
   --matte-gray: #4E4E4E;
   --light-green: #E8F5EE;
+  --green-tint: #F0FAF5;
   --premix-bg: #F5F5F5;
   --warn-red: #C62828;
   --warn-bg: #FFF3E0;
   --chrome-green: #17513A;
   --amber: #E8A33D;
-  --hairline: #E3E6E4;
-  --surface: #FCFDFC;
+  --hairline: #E5E2DA;
+  --surface: #FFFFFF;
   --on-dark: #F8FCF9;
+  --nav-dark: #2E2E2E;
+  --nav-hover: #3A3A3A;
+  --nav-muted: #9CA3AF;
+  --cream: #F9F7F2;
+  --cream-dark: #F0EDE6;
   --radius: 16px;
-  --brand-font: Helvetica, Arial, sans-serif;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 4%), 0 1px 3px rgb(0 0 0 / 5%);
+  --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 4%), 0 8px 20px rgb(0 0 0 / 7%);
+  --brand-font: 'Barlow Semi Condensed', Helvetica, Arial, sans-serif;
   --ui-font: 'Inter', Helvetica, Arial, sans-serif;
 }

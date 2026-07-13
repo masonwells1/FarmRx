@@ -20,19 +20,23 @@ import { getSyncStatus, retrySavedChanges, subscribeSyncStatus } from './data/sy
 import type { EntityType } from './data/fields'
 import { farmerError } from './lib/farmerErrors'
 
+function NavGlyph({ d }: { d: string }) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
+}
+
 const navigation = [
-  { label: 'Fields', path: '/fields', icon: '▦' },
-  { label: 'Grain', path: '/grain', icon: '◒' },
-  { label: 'Inventory', path: '/inventory', icon: '□' },
-  { label: 'Profitability', path: '/profitability', icon: '$' },
-  { label: 'Equipment', path: '/equipment', icon: '◇' },
-  { label: 'Tasks', path: '/tasks', icon: '✓' },
-  { label: 'Weather', path: '/weather', icon: '☀' },
-  { label: 'Field Log', path: '/field-log', icon: '≡' },
-  { label: 'Scouting', path: '/scouting', icon: '◉' },
-  { label: 'Harvest', path: '/harvest', icon: '⌁' },
-  { label: 'Programs', path: '/programs', icon: '☷' },
-  { label: 'Alerts', path: '/notifications', icon: '♧' },
+  { label: 'Fields', path: '/fields', icon: <NavGlyph d="M4 4h16v16H4zM4 12h16M12 4v16" /> },
+  { label: 'Grain', path: '/grain', icon: <NavGlyph d="M3 20h18M6 20V8l6-4 6 4v12" /> },
+  { label: 'Inventory', path: '/inventory', icon: <NavGlyph d="M21 8v13H3V8M1 3h22v5H1zM10 12h4" /> },
+  { label: 'Profitability', path: '/profitability', icon: <NavGlyph d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /> },
+  { label: 'Equipment', path: '/equipment', icon: <NavGlyph d="M7 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM17 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM10 16h4M4 13V7h9l3 5h4v4" /> },
+  { label: 'Tasks', path: '/tasks', icon: <NavGlyph d="M9 11l3 3 8-8M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" /> },
+  { label: 'Weather', path: '/weather', icon: <NavGlyph d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z" /> },
+  { label: 'Field Log', path: '/field-log', icon: <NavGlyph d="M4 6h16M4 12h16M4 18h10" /> },
+  { label: 'Scouting', path: '/scouting', icon: <NavGlyph d="M12 21s7-5.1 7-11a7 7 0 1 0-14 0c0 5.9 7 11 7 11zM12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z" /> },
+  { label: 'Harvest', path: '/harvest', icon: <NavGlyph d="M12 3v6M12 9c-3 0-5 2-5 5v7h10v-7c0-3-2-5-5-5zM9 3c0 2 1 3 3 3s3-1 3-3" /> },
+  { label: 'Programs', path: '/programs', icon: <NavGlyph d="M8 4h12M8 12h12M8 20h12M4 4h.01M4 12h.01M4 20h.01" /> },
+  { label: 'Alerts', path: '/notifications', icon: <NavGlyph d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" /> },
 ]
 
 function AppLayout() {

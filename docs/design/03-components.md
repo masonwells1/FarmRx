@@ -19,16 +19,19 @@ winning option's spec replaces the "direction-dependent" notes after Mason picks
 ## Stat boxes (KPI cards)
 
 The signature tank-label element. Label on top, huge number, unit below.
-- Number: Helvetica face, bold, 34 to 44px, `tabular-nums`.
-- Direction-dependent: A uses the solid `DEEP_GREEN` label bar; B uses a quiet uppercase
-  gray label on a white card; C uses a heavy top border and charcoal label.
+- **Final spec (Modern Farmstead):** white card, 1px hairline border, a **6px colored top
+  border** (rotating `CRX_GREEN` / `AMBER` / `DEEP_GREEN` across a row — the Heritage accent
+  Mason picked), quiet uppercase gray label, left-aligned.
+- Number: Barlow Semi Condensed, bold, 42px, `tabular-nums`, charcoal.
 - A stat box may carry ONE state color (red/amber number) when the number itself is the alarm.
 
 ## Cards
 
-- Radius 16px (`--radius`), 1px `HAIRLINE` border.
-- Shadows are tinted green, never gray/black: `0 3px 10px rgb(23 81 58 / 6%)` scale.
-- Card headers: direction-dependent (A: green bar; B: plain bold text + hairline; C: block header).
+- Radius 16px (`--radius`), 1px `HAIRLINE` border, white surface on the cream page.
+- Shadows: CRX Manager's soft pair (`--shadow-card` resting, `--shadow-card-hover`).
+- **Card headers (final):** plain charcoal text (21px, weight 600) with a hairline
+  border-bottom. The old full-width green header bars are retired; green bars now appear
+  ONLY on the table total bar.
 - Don't nest cards inside cards. Group inner content with hairlines and spacing.
 
 ## Tables

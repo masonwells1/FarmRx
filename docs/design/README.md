@@ -34,5 +34,11 @@ only the styling differs:
 ## Decision log
 
 - **2026-07-12:** Guidelines folder created; three directions presented to Mason.
-- **Chosen direction:** _pending Mason's pick_ ← update this line when decided, then
-  restyle the app to match and fold the winning option's specifics into 03/04.
+- **2026-07-12 — CHOSEN: Modern Farmstead (B), merged with two things Mason picked:**
+  1. Heritage's (C) colored top borders on stat boxes.
+  2. CRX Manager's grays: charcoal `#2E2E2E` sidebar with the 3px green active bar,
+     cream `#F9F7F2` page background, Barlow Semi Condensed headings, soft card shadows.
+  See `examples/final-modern-farmstead.html` — that file is now the visual reference
+  for the app. Rationale: Farm Rx will become the CRX Manager customer portal, so the
+  two apps should look like siblings. This intentionally supersedes the handoff's
+  chrome-green sidebar (owner decision, 2026-07-12).
