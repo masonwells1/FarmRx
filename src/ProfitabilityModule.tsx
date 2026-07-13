@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { profitabilityRepository } from './data'
+import { BankerReport } from './ProfitabilityReport'
 import type { Field } from './data/fields'
 import type { BudgetCostLine, BudgetFieldAllocation, CostCategory, CropBudget, ProfitabilityMatrixStep, ProfitabilityWorkspace } from './data/profitability'
 import { farmerError } from './lib/farmerErrors'
@@ -35,6 +36,7 @@ export function ProfitabilityPage() {
   const [error, setError] = useState('')
   const [saved, setSaved] = useState('')
   const [pickedCell, setPickedCell] = useState<{ price: number; yield: number } | null>(null)
+  const [reportOpen, setReportOpen] = useState(false)
   const [newCost, setNewCost] = useState({ name: '', category: 'seed' as CostCategory, amount: '' })
   const [savingAllocation, setSavingAllocation] = useState(false)
   const allocationInFlight = useRef(false)
@@ -54,7 +56,8 @@ export function ProfitabilityPage() {
   const selectedAcres = workspace.allocations.filter((item) => item.budget_id === budget.id).reduce((sum, item) => sum + item.allocated_acres, 0)
   const analysis = budgetAnalysis(budget, costsPerAcre)
   return <section className="page profitability-page">
-    <div className="page-heading profitability-heading"><div><h1>Profitability</h1><p>Put the price and yield together before you make the call.</p></div><span className="saved-whisper" aria-live="polite">{saved}</span></div>
+    <div className="page-heading profitability-heading"><div><h1>Profitability</h1><p>Put the price and yield together before you make the call.</p></div><div className="profitability-heading-actions"><span className="saved-whisper" aria-live="polite">{saved}</span><button className="secondary-action" type="button" onClick={() => setReportOpen(true)}>Banker report</button></div></div>
+    {reportOpen && <BankerReport workspace={workspace} budget={budget} onClose={() => setReportOpen(false)} />}
     {error && <p className="profitability-error" role="alert">{error}</p>}
     <BudgetControls workspace={workspace} budget={budget} selectedId={selectedId} onSelect={setSelectedId} onSave={(next) => save(() => profitabilityRepository.saveBudget(next))} onCreate={(next) => save(() => profitabilityRepository.createBudget(next)).then(() => setSelectedId(next.id))} onCopy={(sourceId, copy) => save(() => profitabilityRepository.copyBudget(sourceId, copy)).then(() => setSelectedId(copy.id))} />
     <div className="profitability-kpis" aria-label="Budget results"><Kpi label="Cost / acre" value={money.format(costsPerAcre)} /><Kpi label="Break-even price" value={`${money.format(analysis.breakevenPricePerBushel)}/bu`} /><Kpi label="Break-even yield" value={`${decimal.format(analysis.breakevenYieldPerAcre)} bu/ac`} /><Kpi label="Expected profit / acre" value={money.format(analysis.expectedProfitPerAcre)} alert={analysis.expectedProfitPerAcre < 0} /></div>

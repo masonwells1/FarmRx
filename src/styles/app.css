@@ -773,6 +773,43 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .task-title-link { min-height: 48px; padding: 0; border: 0; background: transparent; color: var(--charcoal); font: inherit; font-size: 18px; font-weight: 700; text-align: left; text-decoration: underline; text-decoration-color: var(--crx-green); cursor: pointer; }
 .program-task .chip-row button, .program-task .task-actions button { min-height: 48px; }
 
+/* Banker report: on-screen preview overlay + clean print/PDF output. */
+.profitability-heading-actions { display: flex; align-items: center; gap: 14px; }
+.banker-report-layer { position: fixed; inset: 0; z-index: 40; overflow-y: auto; padding: 20px; background: rgb(46 46 46 / 55%); }
+.banker-report-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: min(100%, 860px); margin: 0 auto 14px; padding: 14px 18px; border-radius: 12px; background: var(--nav-dark); color: #fff; }
+.banker-report-toolbar p { margin: 0; font-size: 16px; }
+.banker-report-toolbar > div { display: flex; gap: 10px; }
+.banker-report-toolbar .secondary-action { border-color: #fff; color: #fff; background: transparent; }
+.banker-report { width: min(100%, 860px); margin: 0 auto 40px; padding: 44px 48px; border-radius: 4px; background: #fff; color: #1c1c1c; font-size: 15px; line-height: 1.45; }
+.banker-report .report-head { display: flex; align-items: start; justify-content: space-between; gap: 20px; padding-bottom: 16px; border-bottom: 3px solid var(--crx-green); }
+.banker-report h1 { font-size: 30px; letter-spacing: -.01em; }
+.banker-report .report-subject { margin: 6px 0 0; color: #4E4E4E; font-size: 16px; }
+.banker-report .report-date { margin: 4px 0 0; color: #4E4E4E; font-size: 14px; white-space: nowrap; }
+.banker-report .report-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 20px 0 10px; }
+.banker-report .report-kpis > div { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid #DDD9CF; border-top: 4px solid var(--crx-green); border-radius: 6px; }
+.banker-report .report-kpis span { color: #4E4E4E; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.banker-report .report-kpis strong { font-family: var(--brand-font); font-size: 22px; font-variant-numeric: tabular-nums; }
+.banker-report .report-assumption, .banker-report .report-note { margin: 0 0 8px; color: #4E4E4E; font-size: 14px; }
+.banker-report h2 { margin: 26px 0 10px; color: var(--deep-green); font-family: var(--brand-font); font-size: 19px; }
+.banker-report table { width: 100%; min-width: 0; border-collapse: collapse; }
+.banker-report th { padding: 7px 10px; border-bottom: 2px solid #1c1c1c; color: #4E4E4E; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-align: left; text-transform: uppercase; }
+.banker-report td { padding: 8px 10px; border-top: 1px solid #DDD9CF; font-size: 14px; font-variant-numeric: tabular-nums; }
+.banker-report .numeric { text-align: right; }
+.banker-report .negative { color: var(--warn-red); }
+.banker-report .report-total-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 8px; padding: 10px 12px; border-radius: 6px; background: var(--crx-green); color: #fff; font-weight: 700; font-variant-numeric: tabular-nums; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+.banker-report .report-total-bar .negative { color: #FFD7D7; }
+.banker-report .report-foot { display: flex; align-items: center; justify-content: end; gap: 8px; margin-top: 34px; padding-top: 12px; border-top: 1px solid #DDD9CF; color: #4E4E4E; font-size: 13px; }
+.banker-report .report-rx { color: var(--crx-green); font-family: var(--brand-font); font-size: 20px; font-weight: 700; }
+@media (max-width: 767px) { .banker-report { padding: 24px 18px; }.banker-report .report-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }.banker-report .report-head { flex-direction: column; }.banker-report-toolbar { flex-direction: column; align-items: stretch; text-align: center; }.profitability-heading-actions { width: 100%; }.profitability-heading-actions .secondary-action { flex: 1; } }
+@media print {
+  body * { visibility: hidden; }
+  .banker-report-layer { position: static; overflow: visible; padding: 0; background: none; }
+  .banker-report, .banker-report * { visibility: visible; }
+  .banker-report { width: 100%; margin: 0; padding: 0; border-radius: 0; }
+  .screen-only { display: none !important; }
+  .banker-report .report-total-bar, .banker-report .report-kpis > div { break-inside: avoid; }
+}
+
 /* Modern Farmstead restyle (docs/design, Mason 2026-07-12): soft depth + warm neutrals. */
 .detail-card, .harvest-card, .scouting-card, .field-log-card, .program-card, .pass-card,
 .position-card, .grain-section, .assignment-picker, .crop-tracker, .notification-row,
