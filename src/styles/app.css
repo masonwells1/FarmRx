@@ -207,6 +207,13 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .flex-preview { grid-column: 1 / -1; margin: 0; padding: 14px 16px; border-radius: 9px; background: var(--light-green); color: var(--deep-green); font-size: 18px; font-weight: 700; }
 .flex-legacy-note { grid-column: 1 / -1; display: grid; gap: 12px; justify-items: start; padding: 16px; border-radius: 9px; background: var(--warn-bg); }
 .flex-legacy-note p { margin: 0; color: var(--charcoal); font-size: 18px; }
+.input-shares { grid-column: 1 / -1; display: grid; gap: 16px; padding: 18px; border-radius: 12px; background: var(--cream); }
+.input-shares-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
+.input-shares-heading h3, .input-shares-heading p, .input-shares-heading small { margin: 0; }
+.input-shares-heading h3 { color: var(--deep-green); font-family: var(--brand-font); font-size: 20px; }
+.input-shares-heading p { color: var(--charcoal); font-size: 18px; font-weight: 700; }
+.input-shares-heading small { display: block; margin-top: 4px; color: var(--matte-gray); font-size: 18px; }
+.input-share-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .yield-list, .record-list { display: grid; padding: 0 20px; }
 .yield-list > div, .record-list > div { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 16px; align-items: center; min-height: 68px; padding: 10px 0; border-top: 1px solid var(--hairline); }
 .yield-list > div:first-child, .record-list > div:first-child { border-top: 0; }
@@ -546,6 +553,10 @@ tbody tr:nth-child(even) td { background: var(--cream); }
   .remove-crop { min-height: 48px; }
   .form-submit { width: 100%; }
   .card-form { grid-template-columns: 1fr; padding: 16px; }
+  .input-shares { padding: 16px; }
+  .input-shares-heading { align-items: stretch; flex-direction: column; }
+  .input-shares-heading .secondary-action { width: 100%; }
+  .input-share-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .yield-list, .record-list { padding: 0 16px; }
   .yield-list > div, .record-list > div, .assignment-edit-row { grid-template-columns: 1fr; gap: 6px; align-items: start; }
   .yield-list span, .record-list span { text-align: left; }

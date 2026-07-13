@@ -6,10 +6,22 @@ import { isLegacyFlexBonusFormula } from './data/fields'
 import { farmerError } from './lib/farmerErrors'
 import { computeStructuredFlexRent, equivalentCashRentForField } from './data/profitabilityCalculations'
 import { structuredFlexFormulaError } from './data/flexLeaseValidation'
+import { roundDecimalHalfUp } from './data/decimal'
 
 type SortKey = 'name' | 'entity' | 'crop' | 'arrangement' | 'acres'
 type InputShareKey = 'landlord_seed_pct' | 'landlord_fertilizer_pct' | 'landlord_chemical_pct' | 'landlord_fuel_pct' | 'landlord_labor_custom_pct' | 'landlord_crop_insurance_pct' | 'landlord_equipment_pct' | 'landlord_interest_pct' | 'landlord_other_input_pct'
 const inputShareKeys: InputShareKey[] = ['landlord_seed_pct', 'landlord_fertilizer_pct', 'landlord_chemical_pct', 'landlord_fuel_pct', 'landlord_labor_custom_pct', 'landlord_crop_insurance_pct', 'landlord_equipment_pct', 'landlord_interest_pct', 'landlord_other_input_pct']
+const inputShareFields: Array<{ key: InputShareKey; label: string }> = [
+  { key: 'landlord_seed_pct', label: 'Seed' },
+  { key: 'landlord_fertilizer_pct', label: 'Fertilizer' },
+  { key: 'landlord_chemical_pct', label: 'Chemical' },
+  { key: 'landlord_fuel_pct', label: 'Fuel' },
+  { key: 'landlord_labor_custom_pct', label: 'Labor' },
+  { key: 'landlord_crop_insurance_pct', label: 'Crop insurance' },
+  { key: 'landlord_equipment_pct', label: 'Equipment & repairs' },
+  { key: 'landlord_interest_pct', label: 'Interest' },
+  { key: 'landlord_other_input_pct', label: 'Custom work' },
+]
 const arrangementOptions: Array<{ value: LandArrangementType; label: string }> = [{ value: 'owned', label: 'Owned' }, { value: 'cash_rent', label: 'Cash rent' }, { value: 'flex_cash_rent', label: 'Flex cash rent' }, { value: 'crop_share', label: 'Crop share' }]
 const number = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -52,6 +64,7 @@ function legacyFlexDescription(formula: LegacyFlexBonusFormula) {
   return `plus ${number.format(formula.bonus_rate)}% of gross revenue above ${money.format(formula.trigger)}/ac`
 }
 function zeroShares() { return Object.fromEntries(inputShareKeys.map((key) => [key, 0])) as Record<InputShareKey, number> }
+function inputShareValues(arrangement: Arrangement) { return Object.fromEntries(inputShareKeys.map((key) => [key, String(arrangement[key])])) as Record<InputShareKey, string> }
 
 interface FlexEditValues { keepLegacy: boolean; method: SupportedFlexMethod; baseRent: string; ratePct: string; triggerRevenue: string; minRent: string; maxRent: string; priceSourceNote: string }
 /** Seeds the editor: a saved legacy formula opens read-only (keepLegacy) so it is never silently rewritten; a saved structured formula opens pre-filled; a fresh flex lease defaults to percent-of-revenue (farmdoc's most-used v1 structure). */
@@ -163,19 +176,24 @@ function BasicsCard({ data, field, arrangement, onSave }: { data: FieldsData; fi
 }
 function AgreementCard({ data, field, arrangement, onSave }: { data: FieldsData; field: Field; arrangement: Arrangement; onSave: (draft: FieldDraft) => Promise<void> }) {
   const [editing, setEditing] = useState(false)
-  const [values, setValues] = useState({ type: arrangement.arrangement_type, landlord: arrangement.landlord_name ?? '', phone: arrangement.landlord_phone ?? '', contactNotes: arrangement.landlord_contact_notes ?? '', rent: arrangement.cash_rent_per_acre?.toString() ?? '', share: arrangement.landlord_crop_pct?.toString() ?? '', effective: arrangement.effective_from, flex: flexEditValuesFromArrangement(arrangement) })
+  const freshValues = () => ({ type: arrangement.arrangement_type, landlord: arrangement.landlord_name ?? '', phone: arrangement.landlord_phone ?? '', contactNotes: arrangement.landlord_contact_notes ?? '', rent: arrangement.cash_rent_per_acre?.toString() ?? '', share: arrangement.landlord_crop_pct?.toString() ?? '', inputShares: inputShareValues(arrangement), effective: arrangement.effective_from, flex: flexEditValuesFromArrangement(arrangement) })
+  const [values, setValues] = useState(freshValues)
   const [error, setError] = useState('')
   const currentRows = cropRows(data, field.id, moduleYear)
   const previewCrop = currentRows[0]
   const setFlex = (patch: Partial<FlexEditValues>) => setValues((current) => ({ ...current, flex: { ...current.flex, ...patch } }))
+  const setInputShare = (key: InputShareKey, value: string) => setValues((current) => ({ ...current, inputShares: { ...current.inputShares, [key]: value } }))
+  const useCropShareForInputs = () => setValues((current) => ({ ...current, inputShares: Object.fromEntries(inputShareKeys.map((key) => [key, current.share])) as Record<InputShareKey, string> }))
   const savedLegacyFormula = arrangement.flex_bonus_formula && isLegacyFlexBonusFormula(arrangement.flex_bonus_formula) ? arrangement.flex_bonus_formula : null
 
   const save = async () => {
     const rent = values.rent === '' ? null : Number(values.rent)
     const share = values.share === '' ? null : Number(values.share)
+    const inputShares = Object.fromEntries(inputShareKeys.map((key) => [key, roundDecimalHalfUp(Number(values.inputShares[key]), 2)])) as Record<InputShareKey, number>
     if (values.type === 'cash_rent' && (rent === null || !Number.isFinite(rent) || rent < 0)) { setError('Enter a cash rent rate of zero or greater.'); return }
     if (values.type === 'flex_cash_rent' && values.flex.keepLegacy && (rent === null || !Number.isFinite(rent) || rent < 0)) { setError('Enter a base rent of zero or greater.'); return }
     if (values.type === 'crop_share' && (share === null || !Number.isFinite(share) || share <= 0 || share >= 100)) { setError('Enter a landlord crop share between 0 and 100.'); return }
+    if (values.type === 'crop_share' && inputShareKeys.some((key) => values.inputShares[key].trim() === '' || !Number.isFinite(inputShares[key]) || inputShares[key] < 0 || inputShares[key] > 100)) { setError('Enter each input share as a number from 0 to 100. Use 0 when the landlord does not pay that cost.'); return }
     let flexFormula: FlexBonusFormula | null = null
     let flexCashRent: number | null = rent
     if (values.type === 'flex_cash_rent') {
@@ -204,7 +222,7 @@ function AgreementCard({ data, field, arrangement, onSave }: { data: FieldsData;
         cash_rent_per_acre: values.type === 'cash_rent' ? rent : values.type === 'flex_cash_rent' ? flexCashRent : null,
         flex_bonus_formula: values.type === 'flex_cash_rent' ? flexFormula : null,
         landlord_crop_pct: values.type === 'crop_share' ? share : null,
-        ...(values.type === 'crop_share' ? {} : zeroShares()),
+        ...(values.type === 'crop_share' ? inputShares : zeroShares()),
       }))
       setEditing(false); setError('')
     } catch (reason) { setError(farmerError(reason, 'save agreement')) }
@@ -213,13 +231,13 @@ function AgreementCard({ data, field, arrangement, onSave }: { data: FieldsData;
   const equivalent = fieldEquivalentRent(field, currentRows, arrangement)
   const needs = arrangement.arrangement_type === 'flex_cash_rent' && savedLegacyFormula?.type === 'price' ? 'a manual planned price' : arrangement.arrangement_type === 'flex_cash_rent' && savedLegacyFormula?.type === 'yield' ? 'an expected yield' : 'an expected yield and a manual planned price'
 
-  return <Card title="Land agreement" editing={editing} onEdit={() => { setEditing((value) => !value); setError('') }}>{editing ? <div className="card-form">
+  return <Card title="Land agreement" editing={editing} onEdit={() => { if (!editing) setValues(freshValues()); setEditing((value) => !value); setError('') }}>{editing ? <div className="card-form">
     <FormControl label="Arrangement type"><select value={values.type} onChange={(event) => setValues({ ...values, type: event.target.value as LandArrangementType })}>{arrangementOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></FormControl>
     <FormControl label="Terms effective from"><input type="date" value={values.effective} onChange={(event) => setValues({ ...values, effective: event.target.value })} /></FormControl>
     {values.type !== 'owned' && <><FormControl label="Landlord name"><input value={values.landlord} onChange={(event) => setValues({ ...values, landlord: event.target.value })} /></FormControl><FormControl label="Landlord phone"><input type="tel" value={values.phone} onChange={(event) => setValues({ ...values, phone: event.target.value })} /></FormControl><FormControl label="Landlord contact notes"><textarea rows={2} value={values.contactNotes} onChange={(event) => setValues({ ...values, contactNotes: event.target.value })} /></FormControl></>}
     {(values.type === 'cash_rent' || (values.type === 'flex_cash_rent' && values.flex.keepLegacy)) && <FormControl label={values.type === 'flex_cash_rent' ? 'Base rent ($/ac)' : 'Cash rent ($/ac)'}><input type="number" min="0" step="0.01" value={values.rent} onChange={(event) => setValues({ ...values, rent: event.target.value })} /></FormControl>}
     {values.type === 'flex_cash_rent' && <FlexMethodFields values={values.flex} legacyFormula={savedLegacyFormula} onChange={setFlex} previewYield={previewCrop?.expected_yield_per_acre ?? null} previewPrice={previewCrop?.expected_price_per_bu ?? null} />}
-    {values.type === 'crop_share' && <FormControl label="Landlord crop share (%)"><input type="number" min="0.01" max="99.99" step="0.01" value={values.share} onChange={(event) => setValues({ ...values, share: event.target.value })} /></FormControl>}
+    {values.type === 'crop_share' && <><FormControl label="Landlord crop share (%)"><input className="numeric" type="number" min="0.01" max="99.99" step="0.01" value={values.share} onChange={(event) => setValues({ ...values, share: event.target.value })} /></FormControl><section className="input-shares" aria-labelledby="input-shares-heading"><div className="input-shares-heading"><div><h3 id="input-shares-heading">Input shares</h3><p>What share of each input cost does the landlord pay?</p><small>These percentages drive the Landlord report's crop-share settlement.</small></div><button type="button" className="secondary-action" onClick={useCropShareForInputs}>Same as crop share</button></div><div className="input-share-grid">{inputShareFields.map(({ key, label }) => <FormControl key={key} label={`${label} (%)`}><input className="numeric" type="number" min="0" max="100" step="0.1" value={values.inputShares[key]} onChange={(event) => setInputShare(key, event.target.value)} /></FormControl>)}</div></section></>}
     <CardSave error={error} onSave={() => void save()} />
   </div> : <><InfoGrid><Info label="Arrangement" value={arrangementText(arrangement)} /><Info label="Landlord" value={arrangement.landlord_name || '—'} /><Info label="Phone" value={arrangement.landlord_phone || '—'} /><Info label="Contact notes" value={arrangement.landlord_contact_notes || '—'} /></InfoGrid><div className="equivalent-rent"><strong>{arrangement.arrangement_type === 'cash_rent' ? 'Field cash rent' : 'Field equivalent cash rent'}</strong>{arrangement.arrangement_type === 'owned' ? <span>— · Owned ground has no rent estimate.</span> : currentRows.length === 0 ? <span>— · Assign a current-year crop to estimate rent.</span> : <><span><b className="numeric">{equivalent === null ? '—' : `${money.format(equivalent)}/ac`}</b>{equivalent === null && ` · enter ${needs}`}</span>{equivalent !== null && arrangement.arrangement_type !== 'cash_rent' && <small>Base rent is counted once; crop components are weighted by planted acres. Prices use the manual planned price.</small>}{arrangement.arrangement_type === 'flex_cash_rent' && savedLegacyFormula && <small>This lease uses Farm Rx's older per-unit bonus format: {legacyFlexDescription(savedLegacyFormula)}</small>}</>}</div></>}</Card>
 }

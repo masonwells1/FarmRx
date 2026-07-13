@@ -248,7 +248,16 @@ inbox), actuals-vs-budget living breakeven, farmdoc benchmark comparison, year-o
       $33,750.00 = bushels×price exactly, yield 175.4 bu/ac labeled actual; honest inputs
       wording; "Using budget:" label; print CSS forced 18px+ black-on-white w/ page break
       per landlord; banker launcher restored to primary; 0 console errors) → pushed.
-      NOTE for a future chunk: there is NO UI yet to enter landlord input-share
+      RESOLVED 2026-07-13: landlord input-share editor BUILT on the Fields Land-agreement
+      card (crop-share only): 9 labeled inputs matching the report's settlement buckets
+      exactly (Sol caught mislabeled buckets — "Labor & custom"→Labor only, Equipment→
+      Equipment & repairs, Other inputs→Custom work), "Same as crop share" one-tap copy,
+      0–100 validation, 2-dp rounding to match numeric(5,2) (33.333→33.33 proven in DB),
+      and a cancel-discards-edits fix Claude caught live (stale draft survived Cancel and
+      could silently save later — editor now re-initializes from the saved arrangement on
+      every open, proven: type 88→Cancel→reopen shows saved 40). Round-trip proven live:
+      chemical 30% saved via UI, verified in Postgres, other splits untouched. 375px clean.
+      Original note (for history): there was NO UI to enter landlord input-share
       percentages (landlord_seed_pct etc.) — the report shows them when present; test
       values were set via SQL on the test farm. Test farm now has South Creek as a
       crop-share field ("Test Landlord", 50/40/35) with 15,000 bu harvested corn.

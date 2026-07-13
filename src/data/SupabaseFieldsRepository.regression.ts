@@ -24,7 +24,7 @@ function draft(data: FieldsData, patch: Partial<FieldDraft> = {}): FieldDraft {
 }
 
 class FakeFieldsDataGateway implements FieldsDataGateway {
-  readonly data = fieldsSeedForRegression(); inputs: SaveFieldBundleInput[] = []; failLoad = false; failSave: Error | null = null; receipts = new Map<string, SavedFieldBundle>()
+  readonly data = fieldsSeedForRegression(); inputs: SaveFieldBundleInput[] = []; failLoad = false; failSave: Error | null = null; persistNextSave = false; receipts = new Map<string, SavedFieldBundle>()
   async loadWorkspace(_farmId: string): Promise<FieldsRowBundle> { if (this.failLoad) throw new Error('partial query failed'); return structuredClone(this.data) }
   async saveFieldBundle(input: SaveFieldBundleInput): Promise<SavedFieldBundle> {
     if (this.failSave) throw this.failSave
@@ -35,7 +35,13 @@ class FakeFieldsDataGateway implements FieldsDataGateway {
     const field: Field = { ...previous, id: input.draft.id!, farm_id: input.farmId, name: input.draft.name, operating_entity_id: input.draft.operating_entity_id, total_acres: input.draft.total_acres, county: input.draft.county, state: input.draft.state, legal_description: input.draft.legal_description, fsa_farm_number: input.draft.fsa_farm_number, fsa_tract_number: input.draft.fsa_tract_number, soil_productivity_index: input.draft.soil_productivity_index }
     const arrangement: Arrangement = { ...this.data.arrangements[0], ...input.draft.arrangement, id: (input.draft.arrangement as { id?: string }).id ?? this.data.arrangements[0].id, farm_id: input.farmId, field_id: field.id, effective_to: null }
     const cropAssignments: CropAssignment[] = input.draft.crop_assignments.map((row, index) => ({ ...this.data.crop_assignments[index], ...row, id: row.id!, farm_id: input.farmId, field_id: field.id, expected_yield_per_acre: row.expected_yield_per_acre ?? null, expected_price_per_bu: row.expected_price_per_bu ?? null }))
-    const result = { field, arrangement, cropAssignments }; this.receipts.set(input.operationId, structuredClone(result)); return result
+    const result = { field, arrangement, cropAssignments }
+    if (this.persistNextSave) {
+      this.data.fields = this.data.fields.map((row) => row.id === field.id ? field : row)
+      this.data.arrangements = this.data.arrangements.map((row) => row.field_id === field.id && row.effective_to === null ? arrangement : row)
+      this.data.crop_assignments = [...this.data.crop_assignments.filter((row) => row.field_id !== field.id), ...cropAssignments]
+    }
+    this.receipts.set(input.operationId, structuredClone(result)); return result
   }
 }
 
@@ -52,7 +58,7 @@ async function run() {
   // 3. live rejections never become mock/seed successes.
   gateway.failSave = new Error('permission denied'); await rejects(() => live.saveField(draft(data)), 'Remote failures must propagate.'); gateway.failSave = null
   // 4. every additive support-migration value survives the adapter mapping.
-  const rich = draft(data); rich.arrangement.landlord_phone = '618-555-0147'; rich.arrangement.landlord_contact_notes = 'Call after 6 PM.'; rich.crop_assignments[0].harvested_bushels = 0; rich.crop_assignments[0].expected_yield_per_acre = 205; rich.crop_assignments[0].expected_price_per_bu = 0; const richSaved = await live.saveField(rich); assert(richSaved.id === rich.id && gateway.inputs.at(-1)!.draft.arrangement.landlord_phone === '618-555-0147', 'Support-migration properties did not round trip.')
+  const rich = draft(data); rich.arrangement.landlord_phone = '618-555-0147'; rich.arrangement.landlord_contact_notes = 'Call after 6 PM.'; rich.arrangement.arrangement_type = 'crop_share'; rich.arrangement.landlord_crop_pct = 51.5; rich.arrangement.landlord_seed_pct = 41.25; rich.arrangement.landlord_fertilizer_pct = 32.5; rich.arrangement.landlord_chemical_pct = 28.75; rich.arrangement.landlord_fuel_pct = 15.1; rich.arrangement.landlord_labor_custom_pct = 12.5; rich.arrangement.landlord_crop_insurance_pct = 33.33; rich.arrangement.landlord_equipment_pct = 22.2; rich.arrangement.landlord_interest_pct = 47.75; rich.arrangement.landlord_other_input_pct = 9.9; rich.crop_assignments[0].harvested_bushels = 0; rich.crop_assignments[0].expected_yield_per_acre = 205; rich.crop_assignments[0].expected_price_per_bu = 0; gateway.persistNextSave = true; const richSaved = await live.saveField(rich); gateway.persistNextSave = false; const richPayload = gateway.inputs.at(-1)!.draft.arrangement; const reloadedShares = (await live.getData()).arrangements.find((row) => row.field_id === rich.id && row.effective_to === null)!; assert(richSaved.id === rich.id && richPayload.landlord_phone === '618-555-0147' && richPayload.landlord_crop_pct === 51.5 && richPayload.landlord_seed_pct === 41.25 && richPayload.landlord_fertilizer_pct === 32.5 && richPayload.landlord_chemical_pct === 28.75 && richPayload.landlord_fuel_pct === 15.1 && richPayload.landlord_labor_custom_pct === 12.5 && richPayload.landlord_crop_insurance_pct === 33.33 && richPayload.landlord_equipment_pct === 22.2 && richPayload.landlord_interest_pct === 47.75 && richPayload.landlord_other_input_pct === 9.9 && reloadedShares.landlord_crop_pct === 51.5 && reloadedShares.landlord_seed_pct === 41.25 && reloadedShares.landlord_fertilizer_pct === 32.5 && reloadedShares.landlord_chemical_pct === 28.75 && reloadedShares.landlord_fuel_pct === 15.1 && reloadedShares.landlord_labor_custom_pct === 12.5 && reloadedShares.landlord_crop_insurance_pct === 33.33 && reloadedShares.landlord_equipment_pct === 22.2 && reloadedShares.landlord_interest_pct === 47.75 && reloadedShares.landlord_other_input_pct === 9.9, 'Input-share values did not round trip through the Fields save and reload adapter path.')
   // 5. existing assignment IDs are sent unchanged; stale IDs and empty lists retain the stated contract.
   const preserved = draft(data); assert(preserved.crop_assignments[0].id === data.crop_assignments[0].id, 'Existing crop IDs were not preserved.'); const stale = draft(data); stale.crop_assignments[0].id = '00000000-0000-4000-8000-000000009999'; await rejects(() => live.saveField(stale), 'Stale crop IDs must reject.'); const empty = draft(data); empty.crop_assignments = []; await live.saveField(empty); assert(gateway.inputs.at(-1)!.draft.crop_assignments.length === 0, 'Empty crop arrays must mean no crop change.')
   // 6. arrangement dates/IDs are left explicit for the RPC to enforce atomically.
