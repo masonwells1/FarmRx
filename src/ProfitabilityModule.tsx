@@ -40,7 +40,7 @@ export function ProfitabilityPage() {
   const [newCost, setNewCost] = useState({ name: '', category: 'seed' as CostCategory, amount: '' })
   const [savingAllocation, setSavingAllocation] = useState(false)
   const allocationInFlight = useRef(false)
-  const refresh = async () => { try { const data = await profitabilityRepository.getWorkspace(); setWorkspace(data); setSelectedId((current) => data.budgets.some((budget) => budget.id === current) ? current : data.budgets[0]?.id ?? ''); setError('') } catch (caught) { setError(farmerError(caught, 'open profitability')) } }
+  const refresh = async () => { try { const data = await profitabilityRepository.getWorkspace(); setWorkspace(data); setSelectedId((current) => data.budgets.some((budget) => budget.id === current) ? current : data.budgets[0]?.id ?? ''); setError('') } catch (caught) { setError(caught instanceof Error && caught.message.includes('private on this farm') ? caught.message : farmerError(caught, 'open profitability')) } }
   useEffect(() => { void refresh() }, [])
   useEffect(() => { const budget = workspace?.budgets.find((item) => item.id === selectedId); if (budget) setPickedCell({ price: budget.expected_price_per_bushel, yield: budget.expected_yield_per_acre }) }, [selectedId])
   const save = async (work: () => Promise<void>) => { try { setError(''); await work(); await refresh(); setSaved('Saved'); window.setTimeout(() => setSaved(''), 1800) } catch (caught) { setError(farmerError(caught, 'save profitability')) } }

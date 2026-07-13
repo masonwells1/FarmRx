@@ -6,7 +6,7 @@ import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, MatrixAxis, Pro
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const categories = new Set(['seed', 'chemical', 'fertilizer', 'fuel', 'repairs', 'labor', 'land', 'crop_insurance', 'equipment_depreciation', 'interest', 'custom'])
-const PRIVACY_DENIED = "This farm's profitability is private. Ask the farm owner to turn on sharing with your Crop RX rep, or sign in as the owner."
+const PRIVACY_DENIED = 'Profitability records are private on this farm. Ask the farm owner or manager if you need access.'
 const fail = (message = 'Farm Rx found invalid profitability data. Please contact support.'): never => { throw new Error(message) }
 const object = (value: unknown): Record<string, unknown> => { if (!value || typeof value !== 'object' || Array.isArray(value)) fail(); return value as Record<string, unknown> }
 const required = (row: Record<string, unknown>, key: string) => { if (!Object.hasOwn(row, key)) fail(); return row[key] }

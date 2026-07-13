@@ -14,6 +14,14 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+// A deliberate "Sign out" and an expired session both land on /login; this flag
+// lets RequireSession tell them apart so we never scold a farmer who just left.
+// Read-only during render (React may render twice); cleared on the next sign-in.
+let intentionalSignOut = false
+export function markIntentionalSignOut() { intentionalSignOut = true }
+export function clearIntentionalSignOut() { intentionalSignOut = false }
+export function wasIntentionalSignOut() { return intentionalSignOut }
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<AuthPhase>('restoring')
   const [session, setSession] = useState<Session | null>(null)
@@ -47,12 +55,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async signIn(email, password) {
       const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
       if (error || !data.session) throw error ?? new Error('Farm Rx could not sign you in right now. Please try again.')
+      clearIntentionalSignOut()
       setSession(data.session)
       setPhase('signed_in')
     },
     async signOut() {
       const { error } = await supabase.auth.signOut({ scope: 'local' })
       if (error) throw error
+      markIntentionalSignOut()
       setSession(null)
       setPhase('signed_out')
     },
