@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option A · Tank Label Classic</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --crx-green:#28A26A; --deep-green:#218A5C; --chrome-green:#17513A;
+  --charcoal:#2E2E2E; --matte-gray:#4E4E4E; --light-green:#E8F5EE;
+  --premix-bg:#F5F5F5; --warn-red:#C62828; --warn-bg:#FFF3E0;
+  --amber:#E8A33D; --hairline:#E3E6E4; --surface:#FCFDFC;
+  --radius:16px;
+  --brand:Helvetica,Arial,sans-serif;
+  --ui:'Inter',Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--ui);font-size:18px;line-height:1.5;color:var(--charcoal);
+  background:var(--premix-bg);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+.shell{display:flex;min-height:100vh}
+
+/* ── Sidebar ── */
+.sidebar{width:262px;flex:0 0 262px;background:var(--chrome-green);color:#F8FCF9;
+  display:flex;flex-direction:column;padding:24px 14px 18px}
+.farm-lockup{padding:4px 12px 20px;margin-bottom:14px;border-bottom:1px solid rgb(255 255 255/16%)}
+.farm-name{font-family:var(--brand);font-weight:700;font-size:21px;line-height:1.2}
+.farm-sub{margin-top:3px;color:#9CCDB4;font-size:15px;letter-spacing:.05em;text-transform:uppercase}
+nav{flex:1}
+.nav-link{display:flex;align-items:center;gap:12px;min-height:48px;padding:11px 14px;
+  margin-bottom:3px;border-radius:10px;color:#CFE5D9;font-weight:500;text-decoration:none;
+  transition:background-color .18s ease-out}
+.nav-link:hover{background:rgb(255 255 255/8%);color:#fff}
+.nav-link.active{background:var(--crx-green);color:#fff;font-weight:700;
+  box-shadow:0 2px 8px rgb(0 0 0/18%)}
+.nav-link svg{width:22px;height:22px;flex:0 0 22px}
+.powered{padding:16px 8px 0;border-top:1px solid rgb(255 255 255/16%);text-align:center}
+.powered b{display:block;font-family:var(--brand);font-size:20px;letter-spacing:-.02em}
+.powered b span{color:var(--crx-green)}
+.powered small{display:block;margin-top:2px;color:#9CCDB4;font-size:13px;
+  letter-spacing:.1em;text-transform:uppercase}
+
+/* ── Main ── */
+.main{flex:1;min-width:0}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:20px;
+  min-height:72px;padding:14px 32px;background:var(--surface);
+  border-bottom:1px solid var(--hairline)}
+.topbar h2{font-family:var(--brand);font-size:22px}
+.topbar-right{display:flex;align-items:center;gap:14px}
+.sync{display:inline-flex;align-items:center;gap:8px;color:var(--deep-green);font-weight:700;font-size:16px}
+.sync svg{width:20px;height:20px}
+.bell{position:relative;width:48px;height:48px;display:grid;place-items:center;
+  border:1px solid var(--hairline);border-radius:10px;background:var(--surface);color:var(--deep-green)}
+.bell svg{width:24px;height:24px}
+.bell b{position:absolute;top:-7px;right:-7px;min-width:24px;height:24px;display:grid;
+  place-items:center;border-radius:99px;background:var(--warn-red);color:#fff;font-size:14px}
+.content{max-width:1180px;margin:0 auto;padding:32px}
+
+/* ── Page heading ── */
+.page-head{margin-bottom:24px}
+h1{font-family:var(--brand);font-size:32px;line-height:1.15}
+.page-head p{margin-top:5px;color:var(--matte-gray)}
+
+/* ── Alert ── */
+.alert{display:flex;align-items:center;justify-content:space-between;gap:18px;
+  padding:18px 22px;margin-bottom:24px;border-radius:var(--radius);
+  background:var(--warn-bg);border:1px solid #F0DDBC;border-left:6px solid var(--amber);
+  box-shadow:0 3px 10px rgb(23 81 58/5%)}
+.alert-title{font-weight:700}
+.alert p{margin-top:2px;color:var(--matte-gray);font-size:17px}
+.alert a{flex:0 0 auto;display:inline-flex;align-items:center;min-height:48px;padding:10px 18px;
+  border:2px solid var(--deep-green);border-radius:10px;color:var(--deep-green);
+  font-weight:700;text-decoration:none;background:var(--surface)}
+
+/* ── Stat boxes (tank label style, refined) ── */
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-bottom:28px}
+.stat{overflow:hidden;border-radius:var(--radius);background:var(--light-green);
+  text-align:center;box-shadow:0 3px 12px rgb(23 81 58/8%)}
+.stat-label{padding:10px 16px;background:var(--deep-green);color:#F8FCF9;
+  font-family:var(--brand);font-size:15px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.stat-value{padding:22px 16px 6px;color:var(--deep-green);font-family:var(--brand);
+  font-size:42px;font-weight:700;line-height:1}
+.stat-unit{display:block;padding:0 16px 20px;color:var(--matte-gray);font-size:16px;font-weight:600}
+
+/* ── Cards / table ── */
+.grid-2{display:grid;grid-template-columns:1.5fr 1fr;gap:20px;align-items:start}
+.card{overflow:hidden;border:1px solid var(--hairline);border-radius:var(--radius);
+  background:var(--surface);box-shadow:0 3px 10px rgb(23 81 58/5%)}
+.card-bar{padding:13px 22px;background:var(--deep-green);color:#F8FCF9;
+  font-family:var(--brand);font-size:16px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}
+table{width:100%;border-collapse:collapse}
+th{padding:12px 22px 8px;color:var(--matte-gray);font-size:14px;font-weight:700;
+  letter-spacing:.05em;text-transform:uppercase;text-align:left}
+td{padding:15px 22px;border-top:1px solid var(--hairline);font-size:18px}
+tbody tr:nth-child(even) td{background:var(--premix-bg)}
+.num{text-align:right}
+th.num{text-align:right}
+td b{font-weight:700}
+.up{color:var(--deep-green);font-weight:700}
+.down{color:var(--warn-red);font-weight:700}
+.total-bar{display:flex;align-items:center;justify-content:space-between;padding:15px 22px;
+  background:var(--crx-green);color:#fff;font-weight:700}
+
+/* ── Tasks ── */
+.task{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:15px 22px;border-top:1px solid var(--hairline)}
+.task:first-of-type{border-top:0}
+.task b{display:block}
+.task small{color:var(--matte-gray);font-size:16px}
+.due{flex:0 0 auto;display:inline-flex;align-items:center;min-height:32px;padding:3px 12px;
+  border-radius:99px;font-size:15px;font-weight:700}
+.due.today{background:var(--warn-bg);color:#8a5a12}
+.due.soon{background:var(--light-green);color:var(--deep-green)}
+.privacy{display:flex;align-items:center;gap:10px;padding:13px 22px;border-top:1px solid var(--hairline);
+  color:var(--deep-green);font-size:16px;font-weight:600;background:var(--light-green)}
+.privacy svg{width:20px;height:20px;flex:0 0 20px}
+@media (max-width:900px){.shell{flex-direction:column}.sidebar{width:100%;flex:none}
+ .stats,.grid-2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="farm-lockup">
+      <div class="farm-name">Wells Family Farms</div>
+      <div class="farm-sub">Hardin County, IA</div>
+    </div>
+    <nav>
+      <a class="nav-link active" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-8 9 8v9a2 2 0 0 1-2 2h-4v-7h-6v7H5a2 2 0 0 1-2-2z"/></svg>Dashboard</a>
+      <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h18M12 3v18"/></svg>Fields</a>
+      <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 20h18M6 20V8l6-4 6 4v12"/></svg>Grain</a>
+      <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H5v14h14v-4M14 4h6v6M20 4L9 15"/></svg>Programs</a>
+      <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8V21H3V8M1 3h22v5H1zM10 12h4"/></svg>Inventory</a>
+      <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7" cy="17" r="3"/><circle cx="17" cy="17" r="3"/><path d="M10 17h4M4 14V7h9l3 5h4v2"/></svg>Equipment</a>
+      <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>Tasks</a>
+    </nav>
+    <div class="powered">
+      <b>Crop <span>RX</span></b>
+      <small>Powered by Crop RX</small>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <h2>Dashboard</h2>
+      <div class="topbar-right">
+        <span class="sync"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>Saved</span>
+        <button class="bell" aria-label="Alerts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg><b>2</b></button>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="page-head">
+        <h1>Good morning, Mason</h1>
+        <p>Saturday, July 12 · 74° and clear with a light south wind</p>
+      </div>
+
+      <div class="alert">
+        <div>
+          <div class="alert-title">3,500 bu of corn is still unpriced past your July 10 target.</div>
+          <p>Cash bid at Heartland Co-op is $4.38 this morning.</p>
+        </div>
+        <a href="#">Review contracts</a>
+      </div>
+
+      <div class="stats">
+        <div class="stat">
+          <div class="stat-label">Acres in Crop</div>
+          <div class="stat-value">2,240</div>
+          <span class="stat-unit">across 14 fields</span>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Corn Sold</div>
+          <div class="stat-value">62%</div>
+          <span class="stat-unit">48,000 of 78,000 bu</span>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Est. Profit / Acre</div>
+          <div class="stat-value">$214</div>
+          <span class="stat-unit">corn, at today's bid</span>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-bar">Grain Position</div>
+          <table>
+            <thead><tr><th>Crop</th><th class="num">Contracted</th><th class="num">Open</th><th class="num">Today's Bid</th></tr></thead>
+            <tbody>
+              <tr><td><b>Corn</b></td><td class="num">48,000 bu</td><td class="num">30,000 bu</td><td class="num">$4.38 <span class="up">+0.06</span></td></tr>
+              <tr><td><b>White corn</b></td><td class="num">12,000 bu</td><td class="num">6,500 bu</td><td class="num">$4.92 <span class="up">+0.04</span></td></tr>
+              <tr><td><b>Soybeans</b></td><td class="num">15,000 bu</td><td class="num">28,000 bu</td><td class="num">$10.42 <span class="down">-0.03</span></td></tr>
+            </tbody>
+          </table>
+          <div class="total-bar"><span>Total open grain</span><span>64,500 bu</span></div>
+          <div class="privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Only you can see your grain numbers</div>
+        </div>
+
+        <div class="card">
+          <div class="card-bar">Today's Work</div>
+          <div class="task"><div><b>Service the sprayer</b><small>Hagie STS12 · 250 hr service</small></div><span class="due today">Due today</span></div>
+          <div class="task"><div><b>Fungicide pass, Creek Bottom</b><small>Program: Corn fungicide · 138 ac</small></div><span class="due soon">In 3 days</span></div>
+          <div class="task"><div><b>Haul corn to Heartland Co-op</b><small>2 contracts · 8,000 bu remaining</small></div><span class="due soon">Tuesday</span></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

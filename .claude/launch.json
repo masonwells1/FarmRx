@@ -5,7 +5,6 @@
       "name": "farm-rx-dev",
       "runtimeExecutable": "npm.cmd",
       "runtimeArgs": ["run", "dev"],
-      "cwd": "C:\\FarmRx",
       "port": 5173
     }
   ]
