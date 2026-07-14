@@ -21,7 +21,7 @@ import type {
   PositionScope,
   ProductionEstimate,
 } from "./data/grain";
-import { marketedPercent, sameScope, scopeOf } from "./data/grain";
+import { marketedPercent, sameScope, scopeKey, scopeOf } from "./data/grain";
 import {
   evaluateGrainAlerts,
   requestOwnerAlertDelivery,
@@ -48,6 +48,16 @@ import {
   validateFirmOffer,
 } from "./data/firmOffers";
 import { hasCompleteRevenueProtection } from "./data/insuranceMath";
+import {
+  calculateGrainPosition,
+  finalCashPrice,
+  hasUnsupportedSavedCoverage,
+  remainingMarketingCapacity,
+  saleLimitForScope,
+  saleLimitWarning,
+  unsupportedCoverageMessage,
+} from "./data/grainPosition";
+import { fillFirmOfferFallback, firmOfferContractId } from "./data/firmOfferFill";
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -156,13 +166,6 @@ const templates: Record<
   },
 };
 
-function finalCashPrice(contract: GrainContract): number | null {
-  const premium = contract.premium_cents_per_bu / 100;
-  if (contract.cash_price !== null) return contract.cash_price + premium;
-  if (contract.futures_price !== null && contract.basis !== null)
-    return contract.futures_price + contract.basis + premium;
-  return null;
-}
 function manualPlannedPrice(workspace: GrainWorkspace, scope: PositionScope) {
   const targets = scopeRows(workspace.marketing_plan_targets, scope).filter(
     (target): target is MarketingPlanTarget & { target_price: number } =>
@@ -179,24 +182,6 @@ function manualPlannedPrice(workspace: GrainWorkspace, scope: PositionScope) {
         0,
       ) / weightedBushels
     : null;
-}
-function expectedIpPremium(workspace: GrainWorkspace, scope: PositionScope) {
-  const commodity = workspace.fields.commodities.find(
-    (item) => item.id === scope.commodity_id,
-  );
-  if (!commodity?.traits.premium_eligible) return 0;
-  const premiums = workspace.grain_contracts.filter(
-    (contract) =>
-      sameScope(contract, scope) && contract.premium_cents_per_bu > 0,
-  );
-  return (
-    (premiums.length
-      ? premiums.reduce(
-          (sum, contract) => sum + contract.premium_cents_per_bu,
-          0,
-        ) / premiums.length
-      : 25) / 100
-  );
 }
 function activeProduction(estimate: ProductionEstimate) {
   return estimate.drives_math === "actual" && estimate.actual_bushels !== null
@@ -244,6 +229,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const [loadError, setLoadError] = useState("");
   const [alerts, setAlerts] = useState<GrainAlert[]>([]);
   const [deliveryNotice, setDeliveryNotice] = useState("");
+  // No existing per-scope settings field is suitable, so this farmer decision is
+  // intentionally limited to the open session instead of being hidden in another record.
+  const [saleLimits, setSaleLimits] = useState<Record<string, number | null>>({});
   const refreshWriteLock = useRef(createSubmitLock());
   const planLock = useRef(createSubmitLock());
   const rawTab = useLocation().pathname.split("/")[2] ?? "";
@@ -458,6 +446,10 @@ export function GrainPage({ services }: { services: GrainServices }) {
                 estimate={estimate}
                 workspace={workspace}
                 services={services}
+                saleLimit={saleLimitForScope(saleLimits, estimate)}
+                onSaleLimitChange={(limit) =>
+                  setSaleLimits((current) => ({ ...current, [scopeKey(scopeOf(estimate))]: limit }))
+                }
                 onSaved={async () => {
                   whisper();
                   await refresh();
@@ -536,9 +528,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
                       {target?.target_price === null ||
                       target?.target_price === undefined
                         ? target
-                          ? "Add manual price"
+                          ? "Add cash target"
                           : "No target set"
-                        : `Manual target ${money.format(target.target_price)}`}
+                          : `Cash target ${money.format(target.target_price)}`}
                     </small>
                   </button>
                 );
@@ -580,6 +572,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
           services={services}
           selectedEstimateId={selectedEstimateId}
           onSelectEstimate={setSelectedEstimateId}
+          saleLimits={saleLimits}
           onSaved={async () => {
             whisper();
             await refresh();
@@ -604,6 +597,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
             workspace={workspace}
             scope={selectedScope}
             services={services}
+            saleLimit={saleLimits[scopeKey(selectedScope)] ?? null}
             onSaved={async () => {
               whisper();
               await refresh();
@@ -836,7 +830,7 @@ function MarketingAlerts({
             type="button"
             onClick={() => start("price_target")}
           >
-            <strong>Price target</strong>
+            <strong>Cash price target</strong>
             <span>Tell me when {commodity.toLowerCase()} hits my number</span>
           </button>
           <button
@@ -992,21 +986,20 @@ function FirmOffers({
   services,
   selectedEstimateId,
   onSelectEstimate,
+  saleLimits,
   onSaved,
 }: {
   workspace: GrainWorkspace;
   services: GrainServices;
   selectedEstimateId: string;
   onSelectEstimate: (id: string) => void;
+  saleLimits: Record<string, number | null>;
   onSaved: () => Promise<void>;
 }) {
   const [editing, setEditing] = useState<FirmOffer | null>(null);
   const [adding, setAdding] = useState(false);
   const [filling, setFilling] = useState<FirmOffer | null>(null);
   const [fillSaving, setFillSaving] = useState(false);
-  const [createdFillContractIds, setCreatedFillContractIds] = useState<
-    Record<string, string>
-  >({});
   const [error, setError] = useState("");
   const offerLocks = useRef(createSubmitLockMap());
   const selected =
@@ -1078,58 +1071,29 @@ function FirmOffers({
     if (fillSaving || !offerLock.acquire()) return;
     setFillSaving(true);
     try {
-      const current = await services.grainRepository.getData();
-      const currentOffer = current.firm_offers.find(
-        (item) => item.id === offer.id,
-      );
-      if (
-        currentOffer?.status === "filled" ||
-        currentOffer?.filled_contract_id
-      ) {
-        setCreatedFillContractIds((ids) => {
-          const { [offer.id]: _used, ...remaining } = ids;
-          return remaining;
-        });
+      try {
+        await services.grainRepository.fillFirmOffer(offer, contract);
         setFilling(null);
-        setError(
-          "This firm offer is already marked filled. No second sale was created.",
-        );
+        setError("");
         await onSaved();
         return;
-      }
-      let contractId = createdFillContractIds[offer.id];
-      if (!contractId) {
-        try {
-          await services.grainRepository.saveContract(contract);
-        } catch (caught) {
-          const message = farmerError(caught, "record this sale");
-          setError(message);
-          throw new Error(message);
+      } catch (caught) {
+        if (!(caught instanceof Error) || caught.message !== "FIRM_OFFER_FILL_RPC_UNAVAILABLE") {
+          setError(farmerError(caught, "record this firm-offer sale"));
+          return;
         }
-        contractId = contract.id;
-        setCreatedFillContractIds((ids) => ({
-          ...ids,
-          [offer.id]: contractId!,
-        }));
       }
       try {
-        await services.grainRepository.saveFirmOffer({
-          ...offer,
-          status: "filled",
-          filled_contract_id: contractId,
-          updated_at: new Date().toISOString(),
-        });
-        setCreatedFillContractIds((ids) => {
-          const { [offer.id]: _used, ...remaining } = ids;
-          return remaining;
-        });
+        await fillFirmOfferFallback(
+          services.grainRepository,
+          offer,
+          { ...contract, id: await firmOfferContractId(offer) },
+        );
         setFilling(null);
         setError("");
         await onSaved();
       } catch (caught) {
-        setError(
-          `The sale WAS recorded under Contracts, but the offer could not be marked filled. “Mark filled” on it again will NOT create a second sale. ${farmerError(caught, "mark this offer filled")}`,
-        );
+        setError(farmerError(caught, "mark this offer filled"));
       }
     } finally {
       offerLock.release();
@@ -1179,6 +1143,8 @@ function FirmOffers({
           offer={editing}
           scope={editing ? scopeOf(editing) : scope}
           services={services}
+          workspace={workspace}
+          saleLimit={saleLimitForScope(saleLimits, editing ?? scope)}
           onCancel={() => {
             setAdding(false);
             setEditing(null);
@@ -1195,6 +1161,7 @@ function FirmOffers({
             workspace={workspace}
             scope={scopeOf(filling)}
             services={services}
+            saleLimit={saleLimitForScope(saleLimits, filling)}
             initialOffer={filling}
             isSaving={fillSaving}
             onFilled={(contract) => finishFill(contract, filling)}
@@ -1205,6 +1172,7 @@ function FirmOffers({
       <OfferList
         offers={offers}
         workspace={workspace}
+        saleLimits={saleLimits}
         onEdit={(offer) => {
           setEditing(offer);
           setAdding(false);
@@ -1229,6 +1197,7 @@ function FirmOffers({
           <OfferList
             offers={other}
             workspace={workspace}
+            saleLimits={saleLimits}
             onEdit={(offer) => {
               setEditing(offer);
               setAdding(false);
@@ -1251,6 +1220,7 @@ function FirmOffers({
 function OfferList({
   offers,
   workspace,
+  saleLimits,
   onEdit,
   onCancel,
   onDelete,
@@ -1258,6 +1228,7 @@ function OfferList({
 }: {
   offers: FirmOffer[];
   workspace: GrainWorkspace;
+  saleLimits: Record<string, number | null>;
   onEdit: (offer: FirmOffer) => void;
   onCancel: (offer: FirmOffer) => void;
   onDelete: (id: string) => void;
@@ -1292,6 +1263,7 @@ function OfferList({
                 offer.offer_type === "basis"
                   ? `${money.format(offer.basis ?? 0)}/bu basis`
                   : `${money.format(offer.price ?? 0)}/bu`;
+              const offerSaleLimit = saleLimitForScope(saleLimits, offer);
               return (
                 <article className="offer-row" key={offer.id}>
                   <div>
@@ -1318,6 +1290,7 @@ function OfferList({
                       {offer.expires_on ? ` · expires ${offer.expires_on}` : ""}
                     </small>
                     {offer.notes && <small>{offer.notes}</small>}
+                    <small>{offerSaleLimit === null ? "Set your own sale limit for this crop before treating it as a limit." : `Your sale limit: ${bushels.format(offerSaleLimit)} bu.`}</small>
                   </div>
                   <div className="offer-actions">
                     <span className={`status-chip ${displayed}`}>
@@ -1370,12 +1343,16 @@ function FirmOfferForm({
   offer,
   scope,
   services,
+  workspace,
+  saleLimit,
   onCancel,
   onSave,
 }: {
   offer: FirmOffer | null;
   scope: PositionScope;
   services: GrainServices;
+  workspace: GrainWorkspace;
+  saleLimit: number | null;
   onCancel: () => void;
   onSave: (offer: FirmOffer) => Promise<void>;
 }) {
@@ -1439,6 +1416,9 @@ function FirmOfferForm({
       : type === "hta"
         ? "Futures $/bu"
         : "Cash $/bu";
+  const contracted = scopeRows(workspace.grain_contracts, scope).reduce((sum, item) => sum + item.bushels, 0);
+  const otherPending = pendingFirmOfferBushels(workspace, scope) - (offer?.status === "open" ? offer.bushels : 0);
+  const saleLimitMessage = saleLimitWarning(saleLimit, contracted, otherPending, Number(amount), "save");
   return (
     <form className="firm-offer-form" onSubmit={(event) => void submit(event)}>
       <h3>{offer ? "Edit firm offer" : "New firm offer"}</h3>
@@ -1527,6 +1507,11 @@ function FirmOfferForm({
           {error}
         </p>
       )}
+      {saleLimitMessage && (
+        <p className="form-error" role="alert">
+          {saleLimitMessage}
+        </p>
+      )}
       <div>
         <button className="primary-action" type="submit" disabled={saving}>
           {saving ? "Saving…" : "Save firm offer"}
@@ -1613,7 +1598,7 @@ function AlertRuleForm({
         <h3>
           {rule
             ? "Edit alert"
-            : `New ${type === "price_target" ? "price target" : type === "pct_marketed_goal" ? "% marketed goal" : "deadline"}`}
+            : `New ${type === "price_target" ? "cash price target" : type === "pct_marketed_goal" ? "% marketed goal" : "deadline"}`}
         </h3>
         <p>
           {scope.crop_year} {commodity}
@@ -1636,7 +1621,7 @@ function AlertRuleForm({
             </select>
           </label>
           <label>
-            Price target $/bu
+            Cash price target ($/bu)
             <input
               required
               type="number"
@@ -1925,11 +1910,15 @@ function PositionCard({
   estimate,
   workspace,
   services,
+  saleLimit,
+  onSaleLimitChange,
   onSaved,
 }: {
   estimate: ProductionEstimate;
   workspace: GrainWorkspace;
   services: GrainServices;
+  saleLimit: number | null;
+  onSaleLimitChange: (limit: number | null) => void;
   onSaved: () => Promise<void>;
 }) {
   const [aph, setAph] = useState(String(estimate.aph_yield));
@@ -1939,9 +1928,10 @@ function PositionCard({
   const [error, setError] = useState("");
   const submitLock = useRef(createSubmitLock());
   const [breakeven, setBreakeven] = useState<number | null>(null);
-  const [rpSafeToForward, setRpSafeToForward] = useState<
+  const [rpMarketingEstimate, setRpMarketingEstimate] = useState<
     { bushels: number; guaranteedBushels: number } | { ambiguous: true } | null
   >(null);
+  const [savedCoverageBlocked, setSavedCoverageBlocked] = useState(false);
   const scope = scopeOf(estimate);
   useEffect(() => {
     void services.profitabilityRepository
@@ -1961,67 +1951,15 @@ function PositionCard({
   )!;
   const production = activeProduction(estimate);
   const contracts = scopeRows(workspace.grain_contracts, scope);
-  const finalContracts = contracts.filter(
-    (contract) => finalCashPrice(contract) !== null,
-  );
-  const basisOpen = contracts.filter(
-    (contract) =>
-      contract.contract_type === "hta" && finalCashPrice(contract) === null,
-  );
-  const futuresOpen = contracts.filter(
-    (contract) =>
-      contract.contract_type === "basis" && finalCashPrice(contract) === null,
-  );
   const basis = latestBasis(workspace, scope);
-  const premium = expectedIpPremium(workspace, scope);
   const plannedPrice = manualPlannedPrice(workspace, scope);
-  const plannedCash =
-    plannedPrice === null ? null : plannedPrice + basis + premium;
-  const finalBushels = finalContracts.reduce(
-    (sum, contract) => sum + contract.bushels,
-    0,
-  );
-  const partiallyPricedBushels = [...basisOpen, ...futuresOpen].reduce(
-    (sum, contract) => sum + contract.bushels,
-    0,
-  );
-  const outrightOpen = Math.max(
-    0,
-    production - finalBushels - partiallyPricedBushels,
-  );
-  const finalRevenue = finalContracts.reduce(
-    (sum, contract) => sum + contract.bushels * (finalCashPrice(contract) ?? 0),
-    0,
-  );
-  const partialRevenue =
-    basisOpen.reduce(
-      (sum, contract) =>
-        sum +
-        contract.bushels *
-          ((contract.futures_price ?? 0) +
-            basis +
-            contract.premium_cents_per_bu / 100),
-      0,
-    ) +
-    (plannedPrice === null
-      ? 0
-      : futuresOpen.reduce(
-          (sum, contract) =>
-            sum +
-            contract.bushels *
-              (plannedPrice +
-                (contract.basis ?? 0) +
-                contract.premium_cents_per_bu / 100),
-          0,
-        ));
-  const plannedRevenue =
-    plannedCash === null
-      ? null
-      : finalRevenue + partialRevenue + outrightOpen * plannedCash;
+  // Cash targets are all-in; no inferred premium is added to target revenue.
+  const position = calculateGrainPosition(production, contracts, basis, plannedPrice);
+  const { basisOpen, futuresOpen, finalBushels, partiallyPricedBushels, outrightOpen, finalRevenue, plannedRevenue } = position;
   const average = finalBushels ? finalRevenue / finalBushels : null;
   const pricedPct = production ? (finalBushels / production) * 100 : 0;
   const insurance = scopeRows(workspace.insurance_units, scope);
-  const insuranceUnitSafeToForward = insurance.reduce(
+  const insuranceUnitEstimate = insurance.reduce(
     (sum, unit) =>
       sum + (unit.insured_acres * unit.aph * unit.coverage_level_pct) / 100,
     0,
@@ -2050,13 +1988,18 @@ function PositionCard({
   );
   useEffect(() => {
     let active = true;
-    setRpSafeToForward(null);
+    setRpMarketingEstimate(null);
+    setSavedCoverageBlocked(hasUnsupportedSavedCoverage(insurance, []));
     void services.profitabilityRepository
       .getWorkspace()
       .then((profitability) => {
         const matchingBudgets = profitability.budgets.filter((item) =>
           sameScope(item, scope),
         );
+        if (hasUnsupportedSavedCoverage(insurance, matchingBudgets.map((budget) => budget.rp_coverage_pct))) {
+          if (active) setSavedCoverageBlocked(true);
+          return;
+        }
         const allocationOwners = new Map<string, string>();
         let ambiguous = false;
         for (const budget of matchingBudgets)
@@ -2086,12 +2029,12 @@ function PositionCard({
         }
         if (!active || !hasAllocation) return;
         if (ambiguous) {
-          setRpSafeToForward({ ambiguous: true });
+          setRpMarketingEstimate({ ambiguous: true });
           return;
         }
-        setRpSafeToForward({
+        setRpMarketingEstimate({
           guaranteedBushels,
-          bushels: Math.max(0, guaranteedBushels - contractedBushels),
+          bushels: guaranteedBushels,
         });
       })
       .catch(() => {
@@ -2110,17 +2053,21 @@ function PositionCard({
     contractedBushels,
   ]);
   const rpAmbiguous =
-    rpSafeToForward !== null && "ambiguous" in rpSafeToForward;
+    rpMarketingEstimate !== null && "ambiguous" in rpMarketingEstimate;
   const rpBushels =
-    rpSafeToForward !== null && !rpAmbiguous ? rpSafeToForward.bushels : null;
-  const safeToForward = rpBushels ?? insuranceUnitSafeToForward;
-  const safeToForwardNote = rpAmbiguous
-    ? "RP figure not shown: a field is allocated to more than one budget; using insurance units."
-    : rpSafeToForward !== null && !rpAmbiguous
-      ? `from entered coverage: ${bushels.format(rpSafeToForward.guaranteedBushels)} bu − ${bushels.format(contractedBushels)} bu contracted`
+    rpMarketingEstimate !== null && !rpAmbiguous ? rpMarketingEstimate.bushels : null;
+  const insuranceEstimate = savedCoverageBlocked ? null : rpBushels ?? insuranceUnitEstimate;
+  const remainingEstimate = insuranceEstimate === null ? null : remainingMarketingCapacity(insuranceEstimate, contractedBushels, pendingOffers);
+  const remainingSaleLimit = saleLimit === null ? null : Math.max(0, saleLimit - contractedBushels - pendingOffers);
+  const estimateNote = savedCoverageBlocked
+    ? unsupportedCoverageMessage
+    : rpAmbiguous
+    ? "RP estimate not shown: a field is allocated to more than one budget; using insurance units."
+    : rpMarketingEstimate !== null && !rpAmbiguous
+      ? `From entered coverage: ${bushels.format(rpMarketingEstimate.guaranteedBushels)} bu.`
       : minRevenue === null
-        ? "no insurance unit"
-        : `${money.format(minRevenue)}/ac min. rev.`;
+        ? "No insurance unit."
+        : `${money.format(minRevenue)}/ac minimum revenue.`;
   const saveProduction = async (drives_math = estimate.drives_math) => {
     if (!submitLock.current.acquire()) return;
     const parsedAph = Number(aph);
@@ -2188,8 +2135,8 @@ function PositionCard({
         )}{" "}
         bu futures open. {bushels.format(outrightOpen)} bu unpriced
         {plannedPrice === null
-          ? ". Add a manual target price to estimate it."
-          : ` using your manual plan price of ${money.format(plannedPrice)}.`}
+          ? ". Add a cash price target to estimate it."
+          : ` using your cash price target of ${money.format(plannedPrice)}.`}
       </p>
       <div className="position-stats">
         <Metric
@@ -2207,15 +2154,41 @@ function PositionCard({
           value={plannedRevenue === null ? "—" : money.format(plannedRevenue)}
           note={
             plannedRevenue === null
-              ? "add a manual price"
-              : "manual plan estimate"
+              ? "add a cash price target"
+              : "cash-target plan estimate"
           }
         />
         <Metric
-          label="Safe to forward"
-          value={`${bushels.format(safeToForward)} bu`}
-          note={safeToForwardNote}
+          label="Insurance-backed marketing estimate"
+          value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`}
+          note={estimateNote}
         />
+      </div>
+      <p className="insurance-limit-note">
+        Revenue Protection pays money, not bushels — enterprise averaging, basis,
+        premiums, and your share can leave you exposed.
+      </p>
+      <div className="production-editor sale-limit-editor">
+        <label>
+          Your sale limit (bushels)
+          <input
+            type="number"
+            min="0"
+            step="1"
+            inputMode="numeric"
+            value={saleLimit ?? ""}
+            onChange={(event) => {
+              const value = event.target.value.trim();
+              onSaleLimitChange(value === "" ? null : Number(value));
+            }}
+          />
+          <small>Used only in this open session; it is your limit, not an insurance guarantee.</small>
+        </label>
+        <Metric label="Insurance estimate guarantee" value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`} note={estimateNote} />
+        <Metric label="Already contracted" value={`${bushels.format(contractedBushels)} bu`} note="Signed contracts" />
+        <Metric label="Pending offers" value={`${bushels.format(pendingOffers)} bu`} note="Open firm offers; not sold yet" />
+        <Metric label="Insurance estimate remaining" value={remainingEstimate === null ? "Blocked" : `${bushels.format(remainingEstimate)} bu`} note={savedCoverageBlocked ? unsupportedCoverageMessage : "Guarantee − contracted − pending; never below zero"} />
+        <Metric label="Your sale limit remaining" value={remainingSaleLimit === null ? "Set your own sale limit" : `${bushels.format(remainingSaleLimit)} bu`} note={saleLimit === null ? "Set your own sale limit to plan sales." : `${bushels.format(saleLimit)} limit − contracted − pending`} />
       </div>
       {pendingOffers > 0 && (
         <p className="pending-offer-line">
@@ -2273,10 +2246,10 @@ function PositionCard({
         </span>
         <span>
           {plannedPrice === null ? (
-            "No manual plan price yet"
+            "No cash price target yet"
           ) : (
             <>
-              Manual plan price <strong>{money.format(plannedPrice)}</strong>
+              Cash price target <strong>{money.format(plannedPrice)}</strong>
             </>
           )}
           {insuranceFloor !== null && (
@@ -2458,6 +2431,7 @@ function ContractEntry({
   initialOffer,
   onFilled,
   isSaving = false,
+  saleLimit,
 }: {
   workspace: GrainWorkspace;
   scope: PositionScope;
@@ -2466,6 +2440,7 @@ function ContractEntry({
   initialOffer?: FirmOffer;
   onFilled?: (contract: GrainContract) => Promise<void>;
   isSaving?: boolean;
+  saleLimit: number | null;
 }) {
   const buyers = [
     ...new Set([
@@ -2504,6 +2479,11 @@ function ContractEntry({
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(createSubmitLock());
+  const contracted = scopeRows(workspace.grain_contracts, scope).reduce((sum, item) => sum + item.bushels, 0);
+  const pending = pendingFirmOfferBushels(workspace, scope);
+  const proposedBushels = Number(bushelCount);
+  const pendingBeforeProposal = pending - (initialOffer ? initialOffer.bushels : 0);
+  const saleLimitMessage = saleLimitWarning(saleLimit, contracted, pendingBeforeProposal, proposedBushels, "record");
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (isSaving || submitting || !submitLock.current.acquire()) return;
@@ -2658,6 +2638,11 @@ function ContractEntry({
       {error && (
         <p className="form-error grain-inline-error" role="alert">
           {error}
+        </p>
+      )}
+      {saleLimitMessage && (
+        <p className="form-error grain-inline-error" role="alert">
+          {saleLimitMessage}
         </p>
       )}
       <button
@@ -3526,7 +3511,7 @@ function TargetEditor({
           />
         </label>
         <label>
-          Target price $/bu <small>optional</small>
+          Cash price target ($/bu) <small>optional; all-in cash price, including any premiums</small>
           <input
             type="number"
             min="0"

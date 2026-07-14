@@ -1416,7 +1416,7 @@ function InsuranceCalculator({
             }
           >
             <option value="">Choose coverage</option>
-            {[50, 55, 60, 65, 70, 75, 80, 85, 90, 95].map((coverage) => (
+            {[50, 55, 60, 65, 70, 75, 80, 85].map((coverage) => (
               <option key={coverage} value={coverage}>
                 {coverage}%
               </option>
@@ -1467,9 +1467,8 @@ function InsuranceCalculator({
       </div>
       {draft.rp_coverage_pct !== null && draft.rp_coverage_pct > 85 && (
         <p className="insurance-area-warning" role="alert">
-          Important: 86%–95% coverage is typically ECO/SCO area-based coverage.
-          Payouts depend on county results, and this per-farm arithmetic does
-          not represent that coverage.
+          Coverage above 85% is a county SCO/ECO product Farm Rx doesn't model
+          yet — set 50–85% individual coverage.
         </p>
       )}
       {draft.rp_premium_per_acre !== null && (
@@ -1520,14 +1519,14 @@ function InsuranceCalculator({
             </small>
           </div>
           <div>
-            <span>Coverage arithmetic before contracts</span>
+            <span>Insurance-backed marketing estimate</span>
             <strong>
-              {insurance.safeToForwardBushels === null
+              {insurance.insuranceBackedMarketingEstimateBushels === null
                 ? "Allocate acres to calculate"
-                : `${whole.format(insurance.safeToForwardBushels)} bu`}
+                : `${whole.format(insurance.insuranceBackedMarketingEstimateBushels)} bu`}
             </strong>
             <small>
-              {insurance.safeToForwardBushels === null
+              {insurance.insuranceBackedMarketingEstimateBushels === null
                 ? "Add a field allocation first."
                 : `From your entered coverage: ${decimal.format(insurance.bushelGuaranteePerAcre)} bu/ac × ${decimal.format(allocatedAcres)} ac.`}
             </small>

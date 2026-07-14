@@ -764,6 +764,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .grain-page .math-toggle button:disabled { cursor: not-allowed; opacity: .55; }
 .grain-page .position-stats strong { font-size: 20px; }
 .grain-page .position-foot { flex-wrap: wrap; }
+.grain-page .sale-limit-editor small { font-size: 18px; }
 .grain-page .firm-offer-form, .grain-page .offer-fill-entry { margin: 16px 0; padding: 16px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--light-green); }
 .grain-page .firm-offer-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .grain-page .firm-offer-form h3, .grain-page .firm-offer-form .offer-note, .grain-page .firm-offer-form > div { grid-column: 1 / -1; margin: 0; }

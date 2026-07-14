@@ -7,6 +7,7 @@ import { moduleBackends } from './backends'
 import { supabaseConfig } from '../lib/supabaseConfig'
 import { getSyncStatus } from './syncStatus'
 import { isMarsBid, latestBasis } from './basisMath'
+import { farmerError } from '../lib/farmerErrors'
 import type { FieldsRepository } from './fields'
 import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainContract, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, ProductionEstimate } from './grain'
 import type { StorageLike } from './writeQueue'
@@ -31,8 +32,8 @@ function fixture() {
  * existing test keeps its original round-trip behavior. */
 type ResponseMutators = { production?: (value: ProductionEstimate) => ProductionEstimate; contract?: (value: GrainContract) => GrainContract; plan?: (value: MarketingPlanTarget[]) => MarketingPlanTarget[]; bid?: (value: CashBid) => CashBid }
 class FakeGateway implements GrainDataGateway {
-  readonly state = fixture(); fail = false; productionInputs: ProductionEstimate[] = []; contractInputs: GrainContract[] = []; planInputs: ReplaceMarketingPlanInput[] = []; bidInputs: CashBid[] = []; offerInputs: FirmOffer[] = []; deleteOfferIds: string[] = []; binInputs: GrainBin[] = []; movementInputs: BinTransaction[] = []
-  mutate: ResponseMutators = {}; throwError: Error | null = null; movementError: Error | null = null
+  readonly state = fixture(); fail = false; productionInputs: ProductionEstimate[] = []; contractInputs: GrainContract[] = []; planInputs: ReplaceMarketingPlanInput[] = []; bidInputs: CashBid[] = []; offerInputs: FirmOffer[] = []; fillInputs: Array<{ farmId: string; offerId: string; contract: GrainContract }> = []; deleteOfferIds: string[] = []; binInputs: GrainBin[] = []; movementInputs: BinTransaction[] = []
+  mutate: ResponseMutators = {}; throwError: Error | null = null; movementError: Error | null = null; fillError: Error | null = null; fillResponse: { contract: GrainContract; offer: FirmOffer } | null = null
   private guard() { if (this.throwError) throw this.throwError }
   async loadWorkspace(_farmId: string): Promise<GrainRowBundle> { if (this.fail) throw new Error('network timeout'); return structuredClone(this.state.bundle) }
   async upsertProductionEstimate(_farm: string, row: ProductionEstimate) { this.guard(); this.productionInputs.push(structuredClone(row)); const response = structuredClone(row); return this.mutate.production ? this.mutate.production(response) : response }
@@ -42,6 +43,7 @@ class FakeGateway implements GrainDataGateway {
   async upsertMarketingAlertRule(_farm: string, row: MarketingAlertRule) { this.guard(); return structuredClone(row) }
   async deleteMarketingAlertRule(_farm: string, _id: string) { this.guard() }
   async upsertFirmOffer(_farm: string, row: FirmOffer) { this.guard(); this.offerInputs.push(structuredClone(row)); return structuredClone(row) }
+  async fillFirmOffer(farmId: string, offerId: string, row: GrainContract) { this.fillInputs.push({ farmId, offerId, contract: structuredClone(row) }); if (this.fillResponse) return structuredClone(this.fillResponse); throw this.fillError ?? Object.assign(new Error('function public.fill_firm_offer(uuid,jsonb) does not exist'), { code: '42883' }) }
   async deleteFirmOffer(_farm: string, id: string) { this.guard(); this.deleteOfferIds.push(id) }
   async upsertGrainBin(_farm: string, row: GrainBin) { this.guard(); this.binInputs.push(structuredClone(row)); return structuredClone(row) }
   async appendBinTransaction(_farm: string, row: BinTransaction) { this.guard(); this.movementInputs.push(structuredClone(row)); if (this.movementError) throw this.movementError; if (!this.state.bundle.bin_transactions.some((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === row.id)) this.state.bundle.bin_transactions = [...this.state.bundle.bin_transactions, structuredClone(row)]; return structuredClone(row) }
@@ -176,8 +178,25 @@ async function run() {
   assert(latestBasis(basisWorkspace, gateway.state.scope) === manualRow.basis, 'latestBasis must use the latest manual bid and exclude the MARS feed row even when MARS is newest.')
   // 21: firm offers use the same bound-farm save/delete gateway seam and reject an invalid DB-check shape first.
   const offer: FirmOffer = { ...gateway.state.scope, id: uid(990), buyer: 'Buyer', offer_type: 'cash', bushels: 1000, price: 4.5, basis: null, contract_month: null, expires_on: null, delivery_location: null, notes: null, status: 'open', filled_contract_id: null, created_at: stamp, updated_at: stamp }
+  let offlineFillMessage = ''
+  try { await queued.fillFirmOffer(offer, { ...data.grain_contracts[0], id: uid(994) }) } catch (error) { offlineFillMessage = error instanceof Error ? error.message : '' }
+  assert(offlineFillMessage === 'Connect to the internet before filling this offer.' && farmerError(new Error(offlineFillMessage), 'record this firm-offer sale') === offlineFillMessage, 'Offline firm-offer fills must preserve the farmer-facing connection message.')
   await repo.saveFirmOffer(offer)
   assert(gateway.offerInputs.length === 1 && gateway.offerInputs[0].farm_id === data.fields.farm.id && gateway.offerInputs[0].id === offer.id, 'Firm-offer save must bind the active farm and preserve the client ID.')
+  const rpcContract = { ...data.grain_contracts[0], id: uid(995) }
+  gateway.fillResponse = { contract: rpcContract, offer: { ...offer, status: 'filled', filled_contract_id: rpcContract.id } }
+  const fallbackContractWrites = gateway.contractInputs.length; const fallbackOfferWrites = gateway.offerInputs.length
+  const rpcFilled = await repo.fillFirmOffer(offer, rpcContract)
+  assert(rpcFilled.contract.id === rpcContract.id && rpcFilled.offer.filled_contract_id === rpcContract.id && gateway.fillInputs.length === 1 && gateway.fillInputs[0].farmId === data.fields.farm.id && gateway.contractInputs.length === fallbackContractWrites && gateway.offerInputs.length === fallbackOfferWrites, 'A successful fill_firm_offer RPC must return its contract and offer without any fallback writes.')
+  gateway.fillResponse = null
+  let missingRpc = ''
+  try { await repo.fillFirmOffer(offer, { ...data.grain_contracts[0], id: uid(995) }) } catch (error) { missingRpc = error instanceof Error ? error.message : '' }
+  assert(missingRpc === 'FIRM_OFFER_FILL_RPC_UNAVAILABLE', 'Only the specific absent fill_firm_offer RPC error may activate the safe two-write fallback.')
+  gateway.fillError = Object.assign(new Error('function public.fill_firm_offer(uuid,jsonb) does not exist'), { code: '500' })
+  let serverFailure = ''
+  try { await repo.fillFirmOffer(offer, { ...data.grain_contracts[0], id: uid(996) }) } catch (error) { serverFailure = error instanceof Error ? error.message : '' }
+  assert(serverFailure !== 'FIRM_OFFER_FILL_RPC_UNAVAILABLE', 'A code-500 error with matching text must not activate the fallback.')
+  gateway.fillError = null
   await repo.deleteFirmOffer(offer.id)
   assert(gateway.deleteOfferIds[0] === offer.id, 'Firm-offer delete must target the requested ID.')
   await rejects(() => repo.saveFirmOffer({ ...offer, id: uid(991), price: null }), 'Cash firm offer without price must reject before the gateway.')

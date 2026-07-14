@@ -112,9 +112,51 @@ project, NO deploy — each needs Mason's explicit OK. Draft migrations go to
   Final gates on the closed tree: tsc PASS, all 25 regression suites PASS, build PASS.
   NOTE for the later apply decision: 0031 replaces BOTH arrangement_comparisons and
   field_profitability; validated apply-clean 0001→0031 on vanilla Postgres 16.
-- [ ] **Round 3 — Grain risk numbers** (P0-07, P0-08, P0-09, P0-10, P0-11): cash-target
-  semantics; RP relabel + 50–85% bounds (delete 86–95%); subtract contracted+pending;
-  atomic offer-fill RPC (migration DRAFT).
+- [x] **Round 3 — Grain risk numbers** (P0-07, P0-08, P0-09, P0-10, P0-11) — DONE
+  2026-07-13: cash-target semantics; RP relabel + 50–85% bounds (delete 86–95%);
+  subtract contracted+pending; atomic offer-fill RPC (migration DRAFT 0032).
+  STATUS 2026-07-13: Terra build done; gates PASS under Claude's run. Claude ran the
+  disposable-DB validation Terra skipped: 0001..0032 apply clean on postgres:16;
+  fill_firm_offer idempotency PROVEN (double call → same contract id, exactly 1 row,
+  offer filled+linked) + wrong-farm caller rejected; expired-offer probe truncated
+  (flagged to Sol; Sol confirmed the RPC expiry branch by analysis, with a timezone
+  nuance). LIVE PROOF: Grain card shows "Insurance-backed marketing estimate" + the
+  pays-money-not-bushels note; guarantee 23,040 bu verified = 180 APH × 80% × 160 ac;
+  remaining 18,040 = guarantee − 5,000 contracted − 0 pending; typed a 20,000 sale
+  limit live → "Your sale limit remaining: 15,000 bu"; console clean.
+  Sol review: FIXES-REQUIRED — 10 findings (4 P1: fallback duplicates contract after
+  reload (React-memory-only dedupe); Grain silently substitutes legacy insurance_units
+  for invalid saved 90% RP; cash target double-counts inferred IP premium ($57,500 vs
+  $55,000); fallback fills expired offers + RPC/UI calendar mismatch. 4 P2: sale limit
+  leaks across scopes in Other offers; cross-farm FK idempotency-slot theft; missing-RPC
+  detection precedence bug; regressions helper-only. 2 P3: offline message discarded;
+  18px/footer wording). Also refuted 10 concerns incl. basis-re-add gone and RLS/viewer
+  protection correct. Fix round r3-fixes dispatched (deterministic contract-id = offer
+  UUID; block-not-substitute; all-in cash target; farm-local expiry; keyed limits;
+  composite FK; disposable-DB re-validation REQUIRED with expiry + FK probes).
+  FIX ROUND 1 DONE: Terra's log this time contains REAL disposable-DB execution
+  traces (MIGRATIONS_APPLIED=32, CROSS_FARM_FK_REJECTED, EXPIRED_OFFER_REJECTED).
+  Sol verification: 8/10 FIXED (blocked-not-substituted 90% proven in runtime path;
+  all-in target with actual-contract premium preserved via focused probe; ±1-day
+  clamp unabusable; keyed limits; composite FK; RPC detection; offline message; 18px).
+  NOT-FIXED: contract-id reuse of raw offer UUID adoptable by an unrelated contract
+  (Sol demoed 2025 soybean contract filling a 2026 corn offer) + regression depth;
+  2 new P2s (partial-success message misleading; mock expiry UTC).
+  FIX ROUND 2 DONE + CLOSED 2026-07-13: contract ID now SHA-256-derived
+  (farm-rx:firm-offer-fill namespace, collision impossible) + scope-checked adoption
+  with hard farmer-readable stop; partial success surfaces "Your sale was recorded
+  as a contract... Do not enter this contract again." (asserted through the same
+  farmerError path the UI uses); mock expiry uses localCalendarDay; regressions
+  rebuilt (fresh-repository reload simulation → exactly 1 contract; RPC-success
+  path; raw-UUID collision NOT adopted; hashed-ID scope mismatch → exact error;
+  message constants shared UI↔test). Claude verified the regression file directly
+  in lieu of a 4th Sol round (4 surgical items, all structurally visible). LIVE:
+  Grain invariants held after refactor (estimate 23,040 / remaining 18,040),
+  console clean. Gates on closed tree: tsc PASS, 25 suites PASS, build PASS.
+  NOTE for the later apply decision: 0032 = insurance_units + crop_budgets 50–85
+  NOT VALID constraints, grain_contracts.firm_offer_id + composite FK + unique
+  index, fill_firm_offer RPC (p_local_date ±1-day clamp); validated apply-clean
+  0001→0032 on vanilla Postgres 16 twice (mine + Terra's logged run).
 - [ ] **Round 4 — Bin/contract truth** (P1-04, P1-05, P1-06, P1-07, P1-09): capacity/
   nonnegative/commodity/year enforcement RPC (migration DRAFT); ledger baseline semantics;
   price-leg finalization + delivery quantities; Harvest→Grain reconciliation view.

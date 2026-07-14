@@ -1,5 +1,6 @@
-import { evaluateMarketingAlertRules, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
-import type { GrainWorkspace, MarketingAlertRule } from './grain'
+import { cashTargetRevenue, evaluateMarketingAlertRules, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
+import { scopeKey, scopeOf, type FirmOffer, type GrainWorkspace, type InsuranceUnit, type MarketingAlertRule } from './grain'
+import { calculateGrainPosition, hasUnsupportedSavedCoverage, remainingMarketingCapacity, saleLimitForScope, saleLimitWarning, unsupportedCoverageMessage } from './grainPosition'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const stamp = '2026-07-13T12:00:00.000Z'
@@ -31,4 +32,18 @@ result = evaluateMarketingAlertRules({ ...workspace, marketing_alert_rules: [{ .
 assert(result.firedRuleIds.length === 0, 'A percent-marketed rule fired without a matching production estimate.')
 assert(validateMarketingAlertRule({ ...price, direction: null }).length > 0 && validateMarketingAlertRule({ ...marketed, direction: 'at_or_above' }).length > 0 && validateMarketingAlertRule({ ...deadline, threshold: 1 }).length > 0, 'Per-type database constraint mirror accepted an invalid shape.')
 assert(validateAlertEmails(['farmer@example.com', 'advisor@example.com']).length === 0 && validateAlertEmails([' bad@example.com']).length > 0 && validateAlertEmails(['a@b.co', 'c@d.co', 'e@f.co', 'g@h.co']).length > 0, 'Email validation did not mirror the applied settings constraints.')
+assert(cashTargetRevenue(10_000, 4.80) === 48_000, 'A $4.80 cash target with a separate -$0.20 basis must value 10,000 open bushels at $48,000, not $46,000.')
+// P0-07: the live Grain position helper treats the cash target as all-in.
+assert(calculateGrainPosition(10_000, [], -0.20, 4.80).plannedRevenue === 48_000, 'P0-07: Grain position must not subtract basis from a $4.80 cash target.')
+assert(calculateGrainPosition(10_000, [], -0.20, 5.50).plannedRevenue === 55_000, 'Cash target regression: $5.50 × 10,000 open bu must be $55,000, not $57,500.')
+// P0-08 and P0-09: the same runtime helpers power sale-limit wording and remaining capacity.
+const scopedOffer: FirmOffer = { id: uid(50), ...scope, buyer: 'Local elevator', offer_type: 'cash', bushels: 200, price: 4.8, basis: null, contract_month: null, expires_on: null, delivery_location: null, notes: null, status: 'open', filled_contract_id: null, created_at: stamp, updated_at: stamp }
+const workspaceWithOffer: GrainWorkspace = { ...workspace, firm_offers: [scopedOffer] }
+const saleLimits = { [scopeKey(scopeOf(workspaceWithOffer.firm_offers[0]))]: 1_000, [scopeKey({ ...scope, commodity_id: 'soybeans' })]: 90 }
+assert(saleLimitWarning(saleLimitForScope(saleLimits, scopeOf(workspaceWithOffer.firm_offers[0])), 800, 100, 200, 'save') === 'This would put contracts and pending offers above your 1,000 bu sale limit. You can still save it if that is intentional.', 'P0-08: the UI scope helper must resolve the keyed sale limit through scopeOf(offer).')
+assert(saleLimitWarning(saleLimitForScope(saleLimits, { ...scope, commodity_id: 'wheat' }), 10_000, 10_000, 10_000, 'record') === null, 'P0-08: a scope without a limit must show the set-your-own-limit state, not another crop limit.')
+assert(remainingMarketingCapacity(1_600, 1_500, 200) === 0, 'P0-09: remaining insurance capacity must clamp at zero at runtime.')
+// P0-10: a saved 90% legacy insurance row or matching budget blocks Grain instead of falling back.
+assert(hasUnsupportedSavedCoverage([{ coverage_level_pct: 90 } as InsuranceUnit], []) && unsupportedCoverageMessage === "Coverage above 85% is a county SCO/ECO product Farm Rx doesn't model yet — set 50–85% individual coverage.", 'P0-10: saved legacy 90% insurance coverage must block the Grain estimate with the exact SCO/ECO message rendered by the UI.')
+assert(hasUnsupportedSavedCoverage([], [90]), 'P0-10: matching 90% profitability coverage must block instead of falling back to legacy insurance units.')
 console.log('Marketing alert regressions passed.')

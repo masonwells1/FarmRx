@@ -14,13 +14,12 @@ export interface RevenueProtectionMath {
   investmentAtRiskPct: number | null
   costsFullyCovered: boolean
   guaranteedBushels: number | null
-  safeToForwardBushels: number | null
-  safeToForwardLimitedByProduction: boolean
+  insuranceBackedMarketingEstimateBushels: number | null
 }
 
 export function validateRevenueProtectionInputs(value: RevenueProtectionInputs): string[] {
   const errors: string[] = []
-  if (value.rp_coverage_pct !== null && (!Number.isFinite(value.rp_coverage_pct) || value.rp_coverage_pct < 50 || value.rp_coverage_pct > 95)) errors.push('Coverage must be between 50% and 95%.')
+  if (value.rp_coverage_pct !== null && (!Number.isFinite(value.rp_coverage_pct) || value.rp_coverage_pct < 50 || value.rp_coverage_pct > 85 || value.rp_coverage_pct % 5 !== 0)) errors.push('Individual Revenue Protection coverage must be 50% to 85% in 5% steps. Coverage above 85% is a county SCO/ECO product Farm Rx does not model yet.')
   if (value.rp_aph_yield !== null && (!Number.isFinite(value.rp_aph_yield) || value.rp_aph_yield <= 0)) errors.push('APH yield must be greater than 0 bu/ac.')
   if (value.rp_projected_price !== null && (!Number.isFinite(value.rp_projected_price) || value.rp_projected_price <= 0)) errors.push('Projected price must be greater than $0.00/bu.')
   if (value.rp_premium_per_acre !== null && (!Number.isFinite(value.rp_premium_per_acre) || value.rp_premium_per_acre < 0)) errors.push('Premium must be $0.00/ac or more.')
@@ -41,6 +40,5 @@ export function revenueProtectionMath(value: RevenueProtectionInputs, totalCostP
   const guaranteedBushels = hasAcres ? bushelGuaranteePerAcre * allocatedAcres : null
   const costsFullyCovered = minimumRevenueGuaranteePerAcre >= totalCostPerAcre
   const dollarsAtRiskPerAcre = Math.max(0, totalCostPerAcre - minimumRevenueGuaranteePerAcre)
-  const safeToForwardBushels = guaranteedBushels
-  return { bushelGuaranteePerAcre, minimumRevenueGuaranteePerAcre, incomeGuarantee: hasAcres ? minimumRevenueGuaranteePerAcre * allocatedAcres! : null, dollarsAtRiskPerAcre, investmentAtRiskPct: costsFullyCovered || totalCostPerAcre === 0 ? null : dollarsAtRiskPerAcre / totalCostPerAcre * 100, costsFullyCovered, guaranteedBushels, safeToForwardBushels, safeToForwardLimitedByProduction: false }
+  return { bushelGuaranteePerAcre, minimumRevenueGuaranteePerAcre, incomeGuarantee: hasAcres ? minimumRevenueGuaranteePerAcre * allocatedAcres! : null, dollarsAtRiskPerAcre, investmentAtRiskPct: costsFullyCovered || totalCostPerAcre === 0 ? null : dollarsAtRiskPerAcre / totalCostPerAcre * 100, costsFullyCovered, guaranteedBushels, insuranceBackedMarketingEstimateBushels: guaranteedBushels }
 }

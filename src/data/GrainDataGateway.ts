@@ -26,6 +26,7 @@ export interface GrainDataGateway {
   upsertMarketingAlertRule(farmId: string, row: MarketingAlertRule): Promise<unknown>
   deleteMarketingAlertRule(farmId: string, id: string): Promise<void>
   upsertFirmOffer(farmId: string, row: FirmOffer): Promise<unknown>
+  fillFirmOffer(farmId: string, offerId: string, contract: GrainContract): Promise<unknown>
   deleteFirmOffer(farmId: string, id: string): Promise<void>
   upsertGrainBin(farmId: string, row: GrainBin): Promise<unknown>
   appendBinTransaction(farmId: string, row: BinTransaction): Promise<unknown>

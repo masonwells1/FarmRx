@@ -2,6 +2,8 @@ import type { FirmOffer, GrainWorkspace } from './grain'
 import { displayFirmOfferStatus, offerToContract, pendingFirmOfferBushels, validateFirmOffer } from './firmOffers'
 import { GrainWriteQueue } from './grainWriteQueue'
 import type { StorageLike } from './writeQueue'
+import { fillFirmOfferFallback, firmOfferContractId } from './firmOfferFill'
+import { farmerError, firmOfferFillPartialSuccessMessage } from '../lib/farmerErrors'
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 const stamp = '2026-07-13T12:00:00.000Z'; const farm = '00000000-0000-4000-8000-000000000001'; const id = '00000000-0000-4000-8000-000000000002'
@@ -41,4 +43,34 @@ const queuedOffer = queue.read().entries[0]
 assert(queuedOffer?.kind === 'saveFirmOffer' && queuedOffer.row.id === base.id && queuedOffer.row.expires_on === base.expires_on, 'A valid firm-offer save must survive queue serialization for replay.')
 queue.removeConfirmedHead(queuedOffer.operationId)
 assert(queue.read().entries.length === 0, 'A confirmed firm-offer replay must remove only its queue entry.')
+
+// P0-11: the component's fallback helper must survive a reload after the
+// contract write succeeds but the offer update loses its response.
+let fallbackWorkspace: GrainWorkspace = { ...workspace, firm_offers: [{ ...base }], grain_contracts: [] }
+let failMarkFilledOnce = true
+const fallbackRepository = () => ({
+  async getData() { return structuredClone(fallbackWorkspace) },
+  async saveContract(contract: ReturnType<typeof offerToContract>) { fallbackWorkspace = { ...fallbackWorkspace, grain_contracts: [...fallbackWorkspace.grain_contracts.filter((row) => row.id !== contract.id), contract] } },
+  async saveFirmOffer(offer: FirmOffer) { if (failMarkFilledOnce) { failMarkFilledOnce = false; throw new Error('offer update lost after contract write') }; fallbackWorkspace = { ...fallbackWorkspace, firm_offers: fallbackWorkspace.firm_offers.map((row) => row.id === offer.id ? offer : row) } },
+})
+const fallbackDraft = offerToContract(base, contractId, stamp)
+const deterministicContractId = await firmOfferContractId(base)
+let partialFailure: unknown = null
+try { await fillFirmOfferFallback(fallbackRepository(), base, fallbackDraft, new Date('2026-07-13T12:00:00')) } catch (error) { partialFailure = error }
+assert(partialFailure !== null && farmerError(partialFailure, 'mark this offer filled') === 'Your sale was recorded as a contract. The offer could not be marked filled — reload the page. Do not enter this contract again.' && farmerError(partialFailure, 'mark this offer filled') === firmOfferFillPartialSuccessMessage && fallbackWorkspace.grain_contracts.length === 1 && fallbackWorkspace.grain_contracts[0].id === deterministicContractId && fallbackWorkspace.firm_offers[0].status === 'open', 'P0-11 setup must create exactly one deterministic contract and preserve the recorded-sale warning after the lost offer update.')
+// Simulate RELOAD with a completely fresh repository closure over the same persisted arrays.
+await fillFirmOfferFallback(fallbackRepository(), base, fallbackDraft, new Date('2026-07-13T12:00:00'))
+assert(fallbackWorkspace.grain_contracts.length === 1 && (fallbackWorkspace.firm_offers[0] as FirmOffer).status === 'filled' && fallbackWorkspace.firm_offers[0].filled_contract_id === deterministicContractId, 'P0-11 reload retry must reconcile exactly one contract and fill the offer.')
+let expiredRejected = false
+try { await fillFirmOfferFallback({ ...fallbackRepository(), async getData() { return { ...fallbackWorkspace, firm_offers: [{ ...base, expires_on: '2026-07-12' }], grain_contracts: [] } } }, { ...base, expires_on: '2026-07-12' }, fallbackDraft, new Date('2026-07-13T12:00:00')) } catch { expiredRejected = true }
+assert(expiredRejected, 'Fallback must reject an offer expired before the app local calendar day.')
+// P1: an ordinary contract using the raw offer UUID is unrelated to the hashed fallback UUID.
+let collisionWorkspace: GrainWorkspace = { ...workspace, firm_offers: [{ ...base }], grain_contracts: [{ ...fallbackDraft, id: base.id, crop_year: 2025, commodity_id: 'soybeans' }] }
+const collisionRepository = () => ({ async getData() { return structuredClone(collisionWorkspace) }, async saveContract(contract: ReturnType<typeof offerToContract>) { collisionWorkspace = { ...collisionWorkspace, grain_contracts: [...collisionWorkspace.grain_contracts, contract] } }, async saveFirmOffer(offer: FirmOffer) { collisionWorkspace = { ...collisionWorkspace, firm_offers: collisionWorkspace.firm_offers.map((row) => row.id === offer.id ? offer : row) } } })
+const collisionFill = await fillFirmOfferFallback(collisionRepository(), base, fallbackDraft, new Date('2026-07-13T12:00:00'))
+assert(collisionFill.contract.id === deterministicContractId && collisionFill.contract.id !== base.id && collisionWorkspace.grain_contracts.length === 2, 'A pre-existing ordinary contract using the offer UUID must not be adopted as the fallback contract.')
+collisionWorkspace = { ...workspace, firm_offers: [{ ...base }], grain_contracts: [{ ...fallbackDraft, id: deterministicContractId, crop_year: 2025, commodity_id: 'soybeans' }] }
+let scopeMismatch = ''
+try { await fillFirmOfferFallback(collisionRepository(), base, fallbackDraft, new Date('2026-07-13T12:00:00')) } catch (error) { scopeMismatch = error instanceof Error ? error.message : '' }
+assert(scopeMismatch === 'A different contract already uses this record — review your contracts before filling this offer.', 'A hashed fallback ID with a mismatched farm, crop year, or commodity must stop instead of being adopted.')
 console.log('Firm offer regressions passed.')

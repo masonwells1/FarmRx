@@ -73,6 +73,21 @@ export class SupabaseGrainRepository implements GrainRepository, GrainOperationW
   async deleteMarketingAlertRule(id: string) { await this.deleteMarketingAlertRuleOperation(id) }
   async deleteMarketingAlertRuleOperation(id: string) { if (!uuid.test(id)) fail('Farm Rx could not remove this marketing alert rule.'); const farmId = await this.dependencies.getFarmId(); await this.dependencies.gateway.deleteMarketingAlertRule(farmId, id) }
   async saveFirmOffer(value: FirmOffer) { await this.saveFirmOfferOperation(value) }
+  async fillFirmOffer(value: FirmOffer, proposedContract: GrainContract) {
+    const farmId = await this.dependencies.getFarmId(); const fields = await this.fields(); const offerValue = { ...value, farm_id: farmId }; const contractValue = { ...proposedContract, farm_id: farmId }
+    this.validateScope(offerValue, farmId, fields); this.validateScope(contractValue, farmId, fields)
+    if (!uuid.test(offerValue.id) || !uuid.test(contractValue.id) || validateFirmOffer(offerValue).length || validateGrainContract(contractValue, new Set(fields.commodities.map((item) => item.id))).length) fail('Farm Rx could not record this firm-offer sale.')
+    try {
+      const response = object(await this.dependencies.gateway.fillFirmOffer(farmId, offerValue.id, contractValue)); const savedContract = contract(required(response, 'contract')); const savedOffer = offer(required(response, 'offer'))
+      if (!sameScope(savedContract, offerValue) || savedOffer.id !== offerValue.id || savedOffer.status !== 'filled' || savedOffer.filled_contract_id !== savedContract.id) fail('Farm Rx could not confirm the firm offer was filled.')
+      return { contract: savedContract, offer: savedOffer }
+    } catch (error) {
+      const candidate = error as { code?: unknown; message?: unknown }
+      const message = typeof candidate?.message === 'string' ? candidate.message : ''
+      if ((candidate?.code === '42883' || candidate?.code === 'PGRST202') && /(?:function .*fill_firm_offer.*does not exist|could not find the function .*fill_firm_offer)/i.test(message)) throw new Error('FIRM_OFFER_FILL_RPC_UNAVAILABLE')
+      throw error
+    }
+  }
   async saveFirmOfferOperation(value: FirmOffer): Promise<FirmOffer> { const farmId = await this.dependencies.getFarmId(); const fields = await this.fields(); const normalized = { ...value, farm_id: farmId, buyer: value.buyer.trim(), contract_month: value.contract_month?.trim() || null, delivery_location: value.delivery_location?.trim() || null, notes: value.notes?.trim() || null }; this.validateScope(normalized, farmId, fields); if (!uuid.test(normalized.id) || validateFirmOffer(normalized).length) fail('Farm Rx could not save this firm offer.'); const saved = offer(await this.dependencies.gateway.upsertFirmOffer(farmId, normalized)); privateRow(saved, farmId, fields); if (saved.id !== normalized.id || !sameScope(saved, normalized) || validateFirmOffer(saved).length) fail('Farm Rx could not confirm the firm offer saved.'); return saved }
   async deleteFirmOffer(id: string) { await this.deleteFirmOfferOperation(id) }
   async deleteFirmOfferOperation(id: string) { if (!uuid.test(id)) fail('Farm Rx could not remove this firm offer.'); const farmId = await this.dependencies.getFarmId(); await this.dependencies.gateway.deleteFirmOffer(farmId, id) }

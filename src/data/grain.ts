@@ -92,6 +92,7 @@ export interface BinTransaction { id: string; farm_id: string; grain_bin_id: str
 export interface CashBid { id: string; farm_id: string; elevator: string; commodity_id: string; bid_date: string; basis: number; cash_price: number | null; delivery_start: string | null; delivery_end: string | null; notes: string | null; created_at: string; updated_at: string }
 export interface MarketingAlertRule extends PositionScope { id: string; rule_type: MarketingAlertRuleType; direction: MarketingAlertDirection | null; threshold: number | null; remind_on: string | null; message: string | null; active: boolean; last_triggered_at: string | null; created_at: string; updated_at: string }
 export interface FirmOffer extends PositionScope { id: string; buyer: string; offer_type: FirmOfferType; bushels: number; price: number | null; basis: number | null; contract_month: string | null; expires_on: string | null; delivery_location: string | null; notes: string | null; status: FirmOfferStatus; filled_contract_id: string | null; created_at: string; updated_at: string }
+export interface FirmOfferFill { contract: GrainContract; offer: FirmOffer }
 export interface GrainAlertSettings { farm_id: string; alert_emails: string[]; updated_at: string }
 
 /** Mirrors public.usda_report_dates in 0004_module2_grain.sql. */
@@ -111,6 +112,7 @@ export interface GrainRepository {
   saveMarketingAlertRule(rule: MarketingAlertRule): Promise<void>
   deleteMarketingAlertRule(id: string): Promise<void>
   saveFirmOffer(offer: FirmOffer): Promise<void>
+  fillFirmOffer(offer: FirmOffer, contract: GrainContract): Promise<FirmOfferFill>
   deleteFirmOffer(id: string): Promise<void>
   upsertGrainBin(bin: GrainBin): Promise<void>
   appendBinTransaction(transaction: BinTransaction): Promise<void>

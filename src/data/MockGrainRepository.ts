@@ -1,13 +1,14 @@
 import type { FieldsRepository } from './fields'
 import type { BinTransaction, CashBid, FirmOffer, FuturesQuote, GrainAlertSettings, GrainBin, GrainContract, GrainData, GrainRepository, GrainWorkspace, MarketDataService, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaReportDate } from './grain'
 import { sameScope, scopeOf, validateGrainContract } from './grain'
-import { validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
+import { localCalendarDay, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { validateFirmOffer } from './firmOffers'
 import { validateBinTransaction, validateGrainBin } from './binLedger'
 
 const STORAGE_KEY = 'farm-rx-local-data'
 const STORAGE_VERSION = 2
 const now = () => new Date().toISOString()
+export const mockFirmOfferIsExpired = (offer: FirmOffer, at = new Date()) => offer.expires_on !== null && offer.expires_on < localCalendarDay(at)
 export const createGrainId = () => crypto.randomUUID()
 const seedId = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 const year = new Date().getFullYear()
@@ -75,6 +76,11 @@ export class MockGrainRepository implements GrainRepository {
   async saveMarketingAlertRule(rule: MarketingAlertRule) { if (validateMarketingAlertRule(rule).length) throw new Error('Enter a complete alert rule with the right price, percent, or date.'); const workspace = await load(this.fieldsRepository); const rows = workspace.marketing_alert_rules.some((row) => row.id === rule.id) ? workspace.marketing_alert_rules.map((row) => row.id === rule.id ? { ...rule, updated_at: now() } : row) : [...workspace.marketing_alert_rules, rule]; persist({ ...grainSlice(workspace), marketing_alert_rules: rows }); }
   async deleteMarketingAlertRule(id: string) { const workspace = await load(this.fieldsRepository); persist({ ...grainSlice(workspace), marketing_alert_rules: workspace.marketing_alert_rules.filter((rule) => rule.id !== id) }); }
   async saveFirmOffer(offer: FirmOffer) { if (validateFirmOffer(offer).length) throw new Error('Enter a complete firm offer with the right price or basis.'); const workspace = await load(this.fieldsRepository); const rows = workspace.firm_offers.some((row) => row.id === offer.id) ? workspace.firm_offers.map((row) => row.id === offer.id ? { ...offer, updated_at: now() } : row) : [...workspace.firm_offers, offer]; persist({ ...grainSlice(workspace), firm_offers: rows }); }
+  async fillFirmOffer(offer: FirmOffer, contract: GrainContract) { const workspace = await load(this.fieldsRepository); const current = workspace.firm_offers.find((row) => row.id === offer.id); if (!current) throw new Error('This firm offer is no longer available. Reload before trying again.'); if (current.status === 'filled' && current.filled_contract_id) { const existing = workspace.grain_contracts.find((row) => row.id === current.filled_contract_id); if (existing) return { contract: existing, offer: current }; throw new Error('This firm offer is marked filled but its contract cannot be found. Reload before retrying.'); }
+    if (current.status !== 'open' || mockFirmOfferIsExpired(current)) throw new Error('This firm offer is no longer open. Reload before trying again.');
+    if (validateGrainContract(contract, new Set(workspace.fields.commodities.map((commodity) => commodity.id))).length) throw new Error('Farm Rx could not record this grain contract.');
+    const savedOffer = { ...current, status: 'filled' as const, filled_contract_id: contract.id, updated_at: now() }; persist({ ...grainSlice(workspace), grain_contracts: [...workspace.grain_contracts.filter((row) => row.id !== contract.id), contract], firm_offers: workspace.firm_offers.map((row) => row.id === current.id ? savedOffer : row) }); return { contract, offer: savedOffer }
+  }
   async deleteFirmOffer(id: string) { const workspace = await load(this.fieldsRepository); persist({ ...grainSlice(workspace), firm_offers: workspace.firm_offers.filter((offer) => offer.id !== id) }); }
   async upsertGrainBin(bin: GrainBin) { if (validateGrainBin(bin).length) throw new Error('Check the bin name, capacity, and moisture reading.'); const workspace = await load(this.fieldsRepository); const rows = workspace.grain_bins.some((row) => row.id === bin.id) ? workspace.grain_bins.map((row) => row.id === bin.id ? { ...bin, updated_at: now() } : row) : [...workspace.grain_bins, bin]; persist({ ...grainSlice(workspace), grain_bins: rows }); }
   async appendBinTransaction(transaction: BinTransaction) { if (validateBinTransaction(transaction).length) throw new Error('Check the direction, bushels, and movement date.'); const workspace = await load(this.fieldsRepository); if (!workspace.grain_bins.some((bin) => bin.id === transaction.grain_bin_id) || !workspace.fields.commodities.some((commodity) => commodity.id === transaction.commodity_id)) throw new Error('Choose a bin and commodity from this farm.'); if (workspace.bin_transactions.some((row) => row.id === transaction.id)) throw new Error('This movement is already recorded.'); persist({ ...grainSlice(workspace), bin_transactions: [...workspace.bin_transactions, transaction] }); }

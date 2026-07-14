@@ -12,6 +12,8 @@ const money = (value: number) => `$${value.toFixed(2)}`
 const bidDate = (value: string) => new Date(`${value}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 
 const simpleEmail = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/
+/** A marketing-plan target is a cash price target; basis is already included. */
+export function cashTargetRevenue(openBushels: number, cashTarget: number, separatePremiumPerBushel = 0): number { return openBushels * (cashTarget + separatePremiumPerBushel) }
 export function validateAlertEmails(emails: string[]): string[] { if (emails.length > 3) return ['Use no more than three email addresses.']; if (emails.some((email) => email !== email.trim() || !simpleEmail.test(email))) return ['Enter complete email addresses, with no extra spaces.']; return [] }
 /** Mirrors marketing_alert_rules_fields_by_type exactly before any client write. */
 export function validateMarketingAlertRule(value: MarketingAlertRule): string[] { const errors: string[] = []; if (!Number.isInteger(value.crop_year) || value.crop_year < 1900 || value.crop_year > 2200) errors.push('Choose a valid crop year.'); if (!value.commodity_id.trim()) errors.push('Choose a commodity.'); if (value.message !== null && (value.message.trim().length < 1 || value.message.trim().length > 1000)) errors.push('Note must be 1 to 1,000 characters when present.'); if (value.rule_type === 'price_target') { if (!['at_or_above', 'at_or_below'].includes(value.direction ?? '')) errors.push('Choose when the price should trigger.'); if (value.threshold === null || !Number.isFinite(value.threshold) || value.threshold <= 0 || value.threshold > 1000) errors.push('Price target must be above $0 and no more than $1,000.'); if (value.remind_on !== null) errors.push('A price target cannot have a reminder date.') } else if (value.rule_type === 'pct_marketed_goal') { if (value.direction !== null) errors.push('A marketed goal does not use a price direction.'); if (value.threshold === null || !Number.isFinite(value.threshold) || value.threshold <= 0 || value.threshold > 100) errors.push('Marketed goal must be above 0% and no more than 100%.'); if (value.remind_on !== null) errors.push('A marketed goal cannot have a reminder date.') } else if (value.rule_type === 'deadline') { if (value.direction !== null || value.threshold !== null || value.remind_on === null) errors.push('A deadline needs only a reminder date.') } else errors.push('Choose an alert type.'); return errors }
@@ -48,7 +50,7 @@ export function evaluateMarketingAlertRules(workspace: GrainWorkspace, now = new
 }
 
 export function ruleSentence(rule: MarketingAlertRule, commodity: string): string {
-  if (rule.rule_type === 'price_target') return `Tell me when ${rule.crop_year} ${commodity} cash price is ${rule.direction === 'at_or_above' ? 'at or above' : 'at or below'} ${money(rule.threshold ?? 0)}.`
+  if (rule.rule_type === 'price_target') return `Tell me when ${rule.crop_year} ${commodity} cash price target is ${rule.direction === 'at_or_above' ? 'at or above' : 'at or below'} ${money(rule.threshold ?? 0)}.`
   if (rule.rule_type === 'pct_marketed_goal') return `Remind me when ${rule.crop_year} ${commodity} is below ${rule.threshold ?? 0}% marketed.`
   return `Remind me about ${rule.crop_year} ${commodity} on ${rule.remind_on ?? 'the selected date'}.`
 }

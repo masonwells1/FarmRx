@@ -1,5 +1,6 @@
 import type { GrainData } from './grain'
-import { MockGrainRepository, readGrain, writeGrainEnvelope } from './MockGrainRepository'
+import { MockGrainRepository, mockFirmOfferIsExpired, readGrain, writeGrainEnvelope } from './MockGrainRepository'
+import type { FirmOffer } from './grain'
 
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message) }
 
@@ -26,4 +27,5 @@ const oldGrain = { production_estimates: [{ id: 'kept-estimate' }], grain_contra
 const migratedOldGrain = readGrain(oldGrain)
 assert(migratedOldGrain?.production_estimates[0]?.id === 'kept-estimate' && migratedOldGrain.grain_contracts[0]?.id === 'kept-contract' && migratedOldGrain.firm_offers.length === 0, 'An older local Grain envelope without firm_offers must retain its existing data and add an empty offer list.')
 assert(typeof MockGrainRepository.prototype.upsertGrainBin === 'function' && typeof MockGrainRepository.prototype.appendBinTransaction === 'function', 'Mock grain repository must expose the bin and append-only movement seam.')
+assert(!mockFirmOfferIsExpired({ expires_on: '2026-07-13' } as FirmOffer, new Date(2026, 6, 13, 23, 30)) && mockFirmOfferIsExpired({ expires_on: '2026-07-13' } as FirmOffer, new Date(2026, 6, 14, 0, 1)), 'Mock firm-offer expiry must use the device-local calendar day, including at 11:30 PM.')
 console.log('MockGrainRepository regressions passed.')

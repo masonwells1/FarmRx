@@ -36,6 +36,7 @@ export class QueuedGrainRepository implements GrainRepository {
   async saveMarketingAlertRule(value: MarketingAlertRule) { const { context } = await this.contextAndQueue(); await this.save(this.queued('saveMarketingAlertRule', value, context)) }
   async deleteMarketingAlertRule(id: string) { const { context } = await this.contextAndQueue(); await this.save(this.queued('deleteMarketingAlertRule', id, context)) }
   async saveFirmOffer(value: FirmOffer) { const { context } = await this.contextAndQueue(); await this.save(this.queued('saveFirmOffer', value, context)) }
+  async fillFirmOffer(offer: FirmOffer, contract: GrainContract) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before filling this offer.'); return this.writer.fillFirmOffer(offer, contract) }
   async deleteFirmOffer(id: string) { const { context } = await this.contextAndQueue(); await this.save(this.queued('deleteFirmOffer', id, context)) }
   async upsertGrainBin(value: GrainBin) { const { context } = await this.contextAndQueue(); await this.save(this.queued('upsertGrainBin', value, context)) }
   async appendBinTransaction(value: BinTransaction) { const { context } = await this.contextAndQueue(); await this.save(this.queued('appendBinTransaction', value, context)) }

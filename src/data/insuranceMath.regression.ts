@@ -10,10 +10,11 @@ assert(worked.minimumRevenueGuaranteePerAcre === 665.28, `Expected $665.28/ac, g
 assert(worked.incomeGuarantee === 66_528, `Expected $66,528 income guarantee, got ${worked.incomeGuarantee}.`)
 assert(Math.abs(worked.dollarsAtRiskPerAcre - 84.72) < .000001, `Expected $84.72/ac at risk, got ${worked.dollarsAtRiskPerAcre}.`)
 assert(Math.abs((worked.investmentAtRiskPct ?? 0) - 11.296) < .000001, `Expected 11.296% at risk, got ${worked.investmentAtRiskPct}.`)
-assert(worked.guaranteedBushels === 14_400 && worked.safeToForwardBushels === 14_400, 'Guaranteed bushels should be the entered-coverage result.')
+assert(worked.guaranteedBushels === 14_400 && worked.insuranceBackedMarketingEstimateBushels === 14_400, 'Insurance-backed marketing estimate should be the entered-coverage result.')
 
 assert(validateRevenueProtectionInputs({ ...cornRp, rp_coverage_pct: 50 }).length === 0, '50% coverage must be valid.')
-assert(validateRevenueProtectionInputs({ ...cornRp, rp_coverage_pct: 95 }).length === 0, '95% coverage must be valid.')
+assert(validateRevenueProtectionInputs({ ...cornRp, rp_coverage_pct: 85 }).length === 0, '85% coverage must be valid.')
+assert(validateRevenueProtectionInputs({ ...cornRp, rp_coverage_pct: 95 }).length === 1, '95% county SCO/ECO coverage must be blocked as individual RP.')
 assert(validateRevenueProtectionInputs({ ...cornRp, rp_coverage_pct: 49 }).length === 1, '49% coverage must be rejected.')
 assert(validateRevenueProtectionInputs({ ...cornRp, rp_coverage_pct: 96 }).length === 1, '96% coverage must be rejected.')
 
@@ -21,7 +22,7 @@ const blank = { rp_coverage_pct: null, rp_aph_yield: null, rp_projected_price: n
 assert(!hasCompleteRevenueProtection(blank), 'Blank insurance fields must not be treated as a defaulted policy.')
 assert(revenueProtectionMath(blank, 750, 100) === null, 'Blank insurance fields must not invent RMA defaults in math.')
 const contractedCase = revenueProtectionMath(cornRp, 750, 100, 12_000)
-assert(contractedCase?.safeToForwardBushels === 14_400, 'Production must not cap the entered coverage arithmetic.')
-assert(Math.max(0, (contractedCase?.safeToForwardBushels ?? 0) - 2_000) === 12_400, '14,400 guaranteed bu minus 2,000 contracted bu must leave 12,400 bu.')
+assert(contractedCase?.insuranceBackedMarketingEstimateBushels === 14_400, 'Production must not cap the entered coverage arithmetic.')
+assert(Math.max(0, 1_600 - 1_500 - 200) === 0, '1,600 guarantee minus 1,500 contracted and 200 pending must clamp remaining at zero.')
 
 console.log('insuranceMath regressions passed.')
