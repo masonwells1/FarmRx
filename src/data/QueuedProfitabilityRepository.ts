@@ -3,12 +3,15 @@ import type { PositionScope } from './grain'
 import type { BudgetCostLineWrite } from './ProfitabilityDataGateway'
 import { defaultMatrixValues } from './profitabilityCalculations'
 import { validateRevenueProtectionInputs } from './insuranceMath'
-import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityWorkspace } from './profitability'
+import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, InsuranceBudgetPatch, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityWorkspace } from './profitability'
 import { ProfitabilityWriteQueue, type ProfitabilityQueueEntryV1, profitabilityWriteQueueKey } from './profitabilityWriteQueue'
 import { isTransportFailure } from './QueuedFieldsRepository'
 import type { ProfitabilityOperationWriter } from './SupabaseProfitabilityRepository'
 import { setModuleSyncRetryAction, setModuleSyncStatus } from './syncStatus'
+import { readNeedsAttention } from './needsAttentionStore'
 import type { StorageLike } from './writeQueue'
+import { setSaveReceipt } from '../lib/saveReceipt'
+import { SAVE_DURABILITY_UPDATE_MESSAGE } from './saveDurability'
 
 type Context = { userId: string; farmId: string }
 type Dependencies = { getContext: () => Promise<Context>; projectRef: string; storage: StorageLike; createId: () => string; clock: () => string; isOffline: () => boolean }
@@ -37,8 +40,11 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
   private rawCostLineCache: BudgetCostLineWrite[] = []
   constructor(private readonly writer: ProfitabilityRepository & ProfitabilityOperationWriter, private readonly dependencies: Dependencies) { if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() }); setModuleSyncRetryAction('profitability', () => this.replayCurrent()) }
   private async contextAndQueue() { const context = await this.dependencies.getContext(); return { context, queue: new ProfitabilityWriteQueue(this.dependencies.storage, profitabilityWriteQueueKey(this.dependencies.projectRef, context.userId, context.farmId)) } }
+  async getNeedsAttentionQueueKey() { return (await this.contextAndQueue()).queue.key }
+  async getInsuranceDraftContext() { const { context } = await this.contextAndQueue(); return { projectRef: this.dependencies.projectRef, ...context } }
   private async locked<T>(queue: ProfitabilityWriteQueue, task: (verify: () => void) => Promise<T>) { return serial(queue.key, () => crossTab(queue.key, this.dependencies.storage, this.dependencies.createId, task)) }
   async inspectAndReplay() { await this.replayCurrent() }
+  async getSaveDurabilityCapability() { return this.writer.getSaveDurabilityCapability() }
   async getWorkspace(): Promise<ProfitabilityWorkspace> {
     try {
       await this.replayCurrent()
@@ -63,13 +69,15 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
       case 'saveBudget': return this.writer.saveBudgetOperation(entry.row)
       case 'saveCostLine': return this.writer.saveCostLineOperation(entry.row)
       case 'deleteCostLine': return this.writer.deleteCostLineOperation(entry.id)
-      case 'replaceMatrixSteps': return this.writer.replaceMatrixStepsOperation(entry.budgetId, entry.steps)
+      case 'replaceMatrixSteps': if ('legacyUnknownSnapshot' in entry) throw new Error('LEGACY_MATRIX_UNKNOWN_SNAPSHOT'); return this.writer.replaceMatrixStepsOperation(entry.budgetId, entry.steps, entry.expectedSteps)
       case 'saveAllocation': return this.writer.saveAllocationOperation(entry.row)
       case 'deleteAllocation': return this.writer.deleteAllocationOperation(entry.id)
       case 'copyBudget': return this.writer.copyBudgetOperation(entry.sourceBudgetId, entry.budget, entry.costLines, entry.matrixSteps)
     }
   }
-  private async save(entry: ProfitabilityQueueEntryV1) { const { queue } = await this.contextAndQueue(); await this.locked(queue, async (verify) => { verify(); const enqueue = () => { verify(); const next = queue.append(entry); setModuleSyncStatus('profitability', { kind: 'pending', pending: next.entries.length }); if (this.workspace) this.workspace = this.overlay(this.workspace, next.entries) }; if (queue.read().entries.length || this.dependencies.isOffline()) return enqueue(); try { await this.write(entry); verify(); const pending = queue.read().entries.length; setModuleSyncStatus('profitability', pending ? { kind: 'pending', pending } : { kind: 'synced', pending: 0 }) } catch (error) { if (isTransportFailure(error, this.dependencies.isOffline())) return enqueue(); throw error } }); void this.replayCurrent() }
+  private syncOrParked(queue: ProfitabilityWriteQueue) { const parked = readNeedsAttention(this.dependencies.storage, queue.key).length; setModuleSyncStatus('profitability', parked ? { kind: 'blocked', pending: parked, message: `${parked} saves need attention.` } : { kind: 'synced', pending: 0 }) }
+  private receiptId(entry: ProfitabilityQueueEntryV1) { if (entry.kind === 'createBudget' || entry.kind === 'saveBudget') return entry.row.id; if (entry.kind === 'copyBudget') return entry.budget.id; if (entry.kind === 'saveCostLine' || entry.kind === 'saveAllocation') return entry.row.id; return entry.kind === 'replaceMatrixSteps' ? entry.budgetId : entry.id }
+  private async save(entry: ProfitabilityQueueEntryV1): Promise<'saved' | 'queued offline'> { const { queue } = await this.contextAndQueue(); const receiptId = this.receiptId(entry); setSaveReceipt(receiptId, 'saving'); const disposition = await this.locked(queue, async (verify) => { verify(); const enqueue = () => { verify(); const next = queue.append(entry); setModuleSyncStatus('profitability', { kind: 'pending', pending: next.entries.length }); if (this.workspace) this.workspace = this.overlay(this.workspace, next.entries); setSaveReceipt(receiptId, 'queued offline'); return 'queued offline' as const }; if (queue.read().entries.length || this.dependencies.isOffline()) return enqueue(); try { await this.write(entry); verify(); this.syncOrParked(queue); setSaveReceipt(receiptId, 'saved'); return 'saved' as const } catch (error) { if (isTransportFailure(error, this.dependencies.isOffline())) return enqueue(); setSaveReceipt(receiptId, 'needs attention'); throw error } }); void this.replayCurrent(); return disposition }
 
   async createBudget(value: CropBudget) {
     const { context } = await this.contextAndQueue()
@@ -78,25 +86,28 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
     const { priceValues, yieldValues } = defaultMatrixValues(normalized)
     const priceSteps: ProfitabilityMatrixStep[] = priceValues.map((amount, index) => ({ id: this.dependencies.createId(), budget_id: normalized.id, axis: 'price', value: amount, sort_order: index }))
     const yieldSteps: ProfitabilityMatrixStep[] = yieldValues.map((amount, index) => ({ id: this.dependencies.createId(), budget_id: normalized.id, axis: 'yield', value: amount, sort_order: index }))
-    await this.save({ ...this.queuedBase('createBudget', context), kind: 'createBudget', row: normalized, priceSteps, yieldSteps })
+    return this.save({ ...this.queuedBase('createBudget', context), kind: 'createBudget', row: normalized, priceSteps, yieldSteps })
   }
-  async saveBudget(value: CropBudget) { const { context } = await this.contextAndQueue(); const row = { ...value, farm_id: context.farmId }; this.validateInsurance(row); await this.save({ ...this.queuedBase('saveBudget', context), kind: 'saveBudget', row }) }
+  async saveBudget(value: CropBudget) { const { context } = await this.contextAndQueue(); const row = { ...value, farm_id: context.farmId }; this.validateInsurance(row); return this.save({ ...this.queuedBase('saveBudget', context), kind: 'saveBudget', row }) }
+  /** Insurance uses a focused SQL UPDATE, so a delayed card cannot replay stale price/yield values. */
+  async saveBudgetInsurance(budgetId: string, patch: InsuranceBudgetPatch) { if (this.dependencies.isOffline()) throw new Error('Insurance changes need a connection before they can be confirmed.'); await this.writer.saveBudgetInsuranceOperation(budgetId, patch); return 'saved' as const }
   async saveCostLine(value: BudgetCostLine) {
     const { context } = await this.contextAndQueue()
     if (!this.workspace) { try { await this.getWorkspace() } catch { /* offline with nothing cached yet is handled by mintCostLine below */ } }
     const raw = await this.effectiveRawCostLines()
     const minted = mintCostLine(value, raw)
-    await this.save({ ...this.queuedBase('saveCostLine', context), kind: 'saveCostLine', row: minted })
+    const disposition = await this.save({ ...this.queuedBase('saveCostLine', context), kind: 'saveCostLine', row: minted })
     // Keep the raw cache current so back-to-back saves (coach "Add typical lines",
     // university-budget seeding) mint distinct sort_orders: a flushed online write leaves
     // the queue immediately, so without this the next mint reuses its sort_order and the
     // database's unique (budget_id, sort_order) rejects it.
     this.rawCostLineCache = this.rawCostLineCache.some((line) => line.id === minted.id) ? this.rawCostLineCache.map((line) => line.id === minted.id ? minted : line) : [...this.rawCostLineCache, minted]
+    return disposition
   }
-  async deleteCostLine(id: string) { const { context } = await this.contextAndQueue(); await this.save({ ...this.queuedBase('deleteCostLine', context), kind: 'deleteCostLine', id }) }
-  async replaceMatrixSteps(budgetId: string, steps: ProfitabilityMatrixStep[]) { const { context } = await this.contextAndQueue(); await this.save({ ...this.queuedBase('replaceMatrixSteps', context), kind: 'replaceMatrixSteps', budgetId, steps: steps.map((step) => ({ ...step, budget_id: budgetId })) }) }
-  async saveAllocation(value: BudgetFieldAllocation) { const { context } = await this.contextAndQueue(); await this.save({ ...this.queuedBase('saveAllocation', context), kind: 'saveAllocation', row: value }) }
-  async deleteAllocation(id: string) { const { context } = await this.contextAndQueue(); await this.save({ ...this.queuedBase('deleteAllocation', context), kind: 'deleteAllocation', id }) }
+  async deleteCostLine(id: string) { const { context } = await this.contextAndQueue(); return this.save({ ...this.queuedBase('deleteCostLine', context), kind: 'deleteCostLine', id }) }
+  async replaceMatrixSteps(budgetId: string, steps: ProfitabilityMatrixStep[]) { const { context } = await this.contextAndQueue(); const workspace = await this.currentWorkspace(); const expectedSteps = workspace.matrix_steps.filter((step) => step.budget_id === budgetId); return this.save({ ...this.queuedBase('replaceMatrixSteps', context), kind: 'replaceMatrixSteps', budgetId, steps: steps.map((step) => ({ ...step, budget_id: budgetId })), expectedSteps }) }
+  async saveAllocation(value: BudgetFieldAllocation) { const { context } = await this.contextAndQueue(); return this.save({ ...this.queuedBase('saveAllocation', context), kind: 'saveAllocation', row: value }) }
+  async deleteAllocation(id: string) { const { context } = await this.contextAndQueue(); return this.save({ ...this.queuedBase('deleteAllocation', context), kind: 'deleteAllocation', id }) }
   async copyBudget(sourceBudgetId: string, copy: CropBudget) {
     const { context } = await this.contextAndQueue()
     const workspace = await this.currentWorkspace()
@@ -105,7 +116,7 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
     const matrixSteps: ProfitabilityMatrixStep[] = workspace.matrix_steps.filter((step) => step.budget_id === sourceBudgetId).map((step) => ({ ...structuredClone(step), id: this.dependencies.createId(), budget_id: copy.id }))
     const normalizedCopy: CropBudget = { ...copy, farm_id: context.farmId, copied_from_budget_id: sourceBudgetId }
     this.validateInsurance(normalizedCopy)
-    await this.save({ ...this.queuedBase('copyBudget', context), kind: 'copyBudget', sourceBudgetId, budget: normalizedCopy, costLines, matrixSteps })
+    return this.save({ ...this.queuedBase('copyBudget', context), kind: 'copyBudget', sourceBudgetId, budget: normalizedCopy, costLines, matrixSteps })
   }
   async getBreakeven(scope: PositionScope, fields: FieldsData): Promise<number | null> { return this.writer.getBreakeven(scope, fields) }
 
@@ -132,7 +143,7 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
     try {
       await this.locked(queue, async (verify) => {
         let envelope = queue.read()
-        if (!envelope.entries.length) { setModuleSyncStatus('profitability', { kind: 'synced', pending: 0 }); return }
+        if (!envelope.entries.length) { const parked = readNeedsAttention(this.dependencies.storage, queue.key).length; setModuleSyncStatus('profitability', parked ? { kind: 'blocked', pending: parked, message: `${parked} saves need attention.` } : { kind: 'synced', pending: 0 }); return }
         if (this.dependencies.isOffline()) { setModuleSyncStatus('profitability', { kind: 'pending', pending: envelope.entries.length }); return }
         while (envelope.entries.length) {
           const head = envelope.entries[0]
@@ -141,10 +152,11 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
           try { await this.write(head); verify(); envelope = queue.removeConfirmedHead(head.operationId) }
           catch (error) {
             if (isTransportFailure(error, this.dependencies.isOffline())) { setModuleSyncStatus('profitability', { kind: 'pending', pending: envelope.entries.length }); return }
-            setModuleSyncStatus('profitability', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return
+            const updateRequired = error instanceof Error && error.message === SAVE_DURABILITY_UPDATE_MESSAGE
+            envelope = queue.parkHead(head.operationId, updateRequired ? SAVE_DURABILITY_UPDATE_MESSAGE : ('legacyUnknownSnapshot' in head ? 'This older matrix save needs attention because its original matrix snapshot is unknown. Review it after the database update.' : 'This save needs attention before it can be retried.'), updateRequired ? 'database_update_required' : undefined); continue
           }
         }
-        setModuleSyncStatus('profitability', { kind: 'synced', pending: 0 })
+        const parked = readNeedsAttention(this.dependencies.storage, queue.key).length; setModuleSyncStatus('profitability', parked ? { kind: 'blocked', pending: parked, message: `${parked} saves need attention.` } : { kind: 'synced', pending: 0 })
       })
     } catch { setModuleSyncStatus('profitability', { kind: 'blocked', pending: 0, message: blocked }) }
   }

@@ -14,6 +14,10 @@ import type {
 } from "./data/profitability";
 import { farmerError } from "./lib/farmerErrors";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
+import { SaveReceipt } from "./components/SaveReceipt";
+import { NeedsAttentionList } from "./components/NeedsAttentionList";
+import { insurancePendingDraftKey, restoreInsurancePendingDraft, settleInsurancePendingDraft, writeInsurancePendingDraft } from './data/insurancePendingDraft';
+import { setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import {
   breakevenCellKeys,
   budgetAnalysis,
@@ -44,6 +48,7 @@ import {
 } from "./data/farmdocDefaults";
 import type { Commodity } from "./data/fields";
 import type { ProgramsData } from "./data/programs";
+import { SAVE_DURABILITY_UPDATE_MESSAGE } from "./data/saveDurability";
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -208,9 +213,12 @@ export function ProfitabilityPage() {
   const [workspace, setWorkspace] = useState<ProfitabilityWorkspace | null>(
     null,
   );
+  const [durabilityAvailable, setDurabilityAvailable] = useState(false);
+  const [attentionQueueKey, setAttentionQueueKey] = useState<string | null>(null);
+  const [insuranceDraftContext, setInsuranceDraftContext] = useState<{ projectRef: string; userId: string; farmId: string } | null>(null);
   const [selectedId, setSelectedId] = useState("");
   const [error, setError] = useState("");
-  const [saved, setSaved] = useState("");
+  const receipt = useSaveReceipt(selectedId || null);
   const [pickedCell, setPickedCell] = useState<{
     price: number;
     yield: number;
@@ -240,16 +248,22 @@ export function ProfitabilityPage() {
     : "";
   const refresh = async () => {
     try {
-      const [data, programResult] = await Promise.all([
+      const [data, programResult, durable, queueKey, draftContext] = await Promise.all([
         profitabilityRepository.getWorkspace(),
         programsRepository
           .getData()
           .then((value) => ({ available: true as const, value }))
           .catch(() => ({ available: false as const, value: null })),
+        profitabilityRepository.getSaveDurabilityCapability().catch(() => false),
+        profitabilityRepository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null),
+        profitabilityRepository.getInsuranceDraftContext?.().catch(() => null) ?? Promise.resolve(null),
       ]);
       setWorkspace(data);
       setPrograms(programResult.value);
       setApplicationRecordsAvailable(programResult.available);
+      setDurabilityAvailable(durable);
+      setAttentionQueueKey(queueKey);
+      setInsuranceDraftContext(draftContext);
       setSelectedId((current) =>
         data.budgets.some((budget) => budget.id === current)
           ? current
@@ -286,17 +300,18 @@ export function ProfitabilityPage() {
         : (years[0] ?? null),
     );
   }, [workspace]);
-  const save = async (key: string, work: () => Promise<void>): Promise<boolean> => {
+  const save = async (key: string, work: () => Promise<void | "saved" | "queued offline">): Promise<boolean> => {
     const writeLock = writeLocks.current.get(key);
     if (!writeLock.acquire()) return false;
     try {
       setError("");
-      await work();
+      setSaveReceipt(key, "saving");
+      const disposition = await work();
       await refresh();
-      setSaved("Saved");
-      window.setTimeout(() => setSaved(""), 1800);
+      setSaveReceipt(key, disposition === "queued offline" ? "queued offline" : "saved");
       return true;
     } catch (caught) {
+      setSaveReceipt(key, "needs attention");
       setError(farmerError(caught, "save profitability"));
       return false;
     } finally {
@@ -335,7 +350,7 @@ export function ProfitabilityPage() {
         <button
           className="primary-action"
           type="button"
-          disabled={!commodity}
+          disabled={!commodity || !durabilityAvailable}
           onClick={() => {
             if (!commodity) {
               setError("Add a crop in Fields before starting a budget.");
@@ -367,6 +382,7 @@ export function ProfitabilityPage() {
         >
           Create first budget
         </button>
+        {!durabilityAvailable && <p className="durability-update-message">{SAVE_DURABILITY_UPDATE_MESSAGE}</p>}
         {(() => {
           const starter = workspace.fields.commodities
             .map((item) => ({
@@ -379,6 +395,7 @@ export function ProfitabilityPage() {
             <button
               className="secondary-action"
               type="button"
+              disabled={!durabilityAvailable}
               onClick={() => {
                 const created = universityBudget(
                   workspace.fields.farm.id,
@@ -459,11 +476,10 @@ export function ProfitabilityPage() {
           <p>Put the price and yield together before you make the call.</p>
         </div>
         <div className="profitability-heading-actions">
-          <span className="saved-whisper" aria-live="polite">
-            {saved}
-          </span>
+          <SaveReceipt state={receipt} />
         </div>
       </div>
+      <NeedsAttentionList module="profitability" queueKey={attentionQueueKey} onChanged={refresh} />
       <SectionTabs base="/profitability" tabs={PROFITABILITY_TABS} />
       {reportOpen && (
         <BankerReport
@@ -507,6 +523,7 @@ export function ProfitabilityPage() {
                 profitabilityRepository.copyBudget(sourceId, copy),
               ).then((saved) => saved && setSelectedId(copy.id))
             }
+            durabilityAvailable={durabilityAvailable}
             cropKind={cropKind}
             onCreateUniversity={(kind) =>
               commodity &&
@@ -517,9 +534,8 @@ export function ProfitabilityPage() {
             workspace={workspace}
             budget={budget}
             costs={costs}
-            onSave={async (next) => {
-              await save(next.id, () => profitabilityRepository.saveBudget(next));
-            }}
+            draftContext={insuranceDraftContext}
+            onSave={(next) => save(budget.id, () => profitabilityRepository.saveBudgetInsurance(budget.id, next))}
           />
         </>
       )}
@@ -677,6 +693,7 @@ export function ProfitabilityPage() {
               )
             }
             onError={setError}
+            durabilityAvailable={durabilityAvailable}
           />
           <ProfitabilityMatrix
             prices={prices}
@@ -1163,6 +1180,7 @@ function BudgetControls({
   onCopy,
   cropKind,
   onCreateUniversity,
+  durabilityAvailable,
 }: {
   workspace: ProfitabilityWorkspace;
   budget: CropBudget;
@@ -1173,6 +1191,7 @@ function BudgetControls({
   onCopy: (sourceId: string, copy: CropBudget) => void;
   cropKind: FarmdocCropKind | null;
   onCreateUniversity: (kind: FarmdocCropKind) => void;
+  durabilityAvailable: boolean;
 }) {
   const [copyFrom, setCopyFrom] = useState("");
   const update = (patch: Partial<CropBudget>) =>
@@ -1255,6 +1274,7 @@ function BudgetControls({
       <button
         className="secondary-action"
         type="button"
+        disabled={!durabilityAvailable}
         onClick={() => {
           const at = new Date().toISOString();
           onCreate({
@@ -1273,6 +1293,7 @@ function BudgetControls({
         <button
           className="secondary-action"
           type="button"
+          disabled={!durabilityAvailable}
           onClick={() => onCreateUniversity(cropKind)}
         >
           Start from 2026 U of I budget
@@ -1297,7 +1318,7 @@ function BudgetControls({
       <button
         className="secondary-action"
         type="button"
-        disabled={!copyFrom}
+        disabled={!copyFrom || !durabilityAvailable}
         onClick={() => {
           const source = workspace.budgets.find((item) => item.id === copyFrom);
           if (!source) return;
@@ -1314,6 +1335,7 @@ function BudgetControls({
       >
         Copy budget
       </button>
+      {!durabilityAvailable && <p className="durability-update-message">{SAVE_DURABILITY_UPDATE_MESSAGE}</p>}
     </section>
   );
 }
@@ -1322,12 +1344,14 @@ function InsuranceCalculator({
   workspace,
   budget,
   costs,
+  draftContext,
   onSave,
 }: {
   workspace: ProfitabilityWorkspace;
   budget: CropBudget;
   costs: BudgetCostLine[];
-  onSave: (budget: CropBudget) => Promise<void>;
+  draftContext: { projectRef: string; userId: string; farmId: string } | null;
+  onSave: (patch: Pick<CropBudget, "rp_coverage_pct" | "rp_aph_yield" | "rp_projected_price" | "rp_premium_per_acre">) => Promise<boolean>;
 }) {
   const commodity = workspace.fields.commodities.find(
     (item) => item.id === budget.commodity_id,
@@ -1354,12 +1378,29 @@ function InsuranceCalculator({
   });
   const [draft, setDraft] = useState(insuranceFields);
   const draftRef = useRef(draft);
+  const pendingKey = insurancePendingDraftKey(budget.id);
   const saveTimer = useRef<number | null>(null);
   const saveChain = useRef(Promise.resolve());
+  const revision = useRef(0);
+  const dirty = useRef(false);
+  const pending = useRef<{ budgetId: string; revision: number; patch: typeof draft } | null>(null);
+  const flush = () => {
+    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    const payload = pending.current;
+    if (!payload || payload.budgetId !== budget.id) return;
+    saveChain.current = saveChain.current.catch(() => undefined).then(async () => {
+      const saved = await onSave(payload.patch);
+      const isCurrentRevision = pending.current?.budgetId === payload.budgetId && pending.current.revision === payload.revision;
+      settleInsurancePendingDraft(window.localStorage, payload.budgetId, saved, isCurrentRevision);
+      if (saved && isCurrentRevision) {
+        dirty.current = false;
+      }
+    });
+  };
   useEffect(() => {
     const next = insuranceFields();
-    draftRef.current = next;
-    setDraft(next);
+    if (!dirty.current || pending.current?.budgetId !== budget.id) { dirty.current = false; draftRef.current = next; setDraft(next); }
   }, [
     budget.id,
     budget.rp_coverage_pct,
@@ -1367,23 +1408,26 @@ function InsuranceCalculator({
     budget.rp_projected_price,
     budget.rp_premium_per_acre,
   ]);
-  useEffect(
-    () => () => {
-      if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
-    },
-    [],
-  );
+  useEffect(() => () => { if (saveTimer.current !== null) flush(); }, [budget.id]);
+  useEffect(() => {
+    try {
+      const patch = restoreInsurancePendingDraft(window.localStorage, draftContext, budget.id);
+      if (!patch) return;
+      revision.current += 1; dirty.current = true; draftRef.current = patch; pending.current = { budgetId: budget.id, revision: revision.current, patch }; setDraft(patch); flush();
+    } catch { try { window.localStorage.removeItem(pendingKey); } catch { /* unavailable storage leaves no usable draft */ } }
+  }, [budget.id, draftContext?.projectRef, draftContext?.userId, draftContext?.farmId]);
   const update = (patch: Partial<typeof draft>) => {
     const next = { ...draftRef.current, ...patch };
     draftRef.current = next;
+    dirty.current = true;
+    revision.current += 1;
+    pending.current = { budgetId: budget.id, revision: revision.current, patch: next };
     setDraft(next);
+    try { if (draftContext) writeInsurancePendingDraft(window.localStorage, draftContext, budget.id, next); } catch { /* save call still reports the real outcome */ }
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
       saveTimer.current = null;
-      const row = { ...budget, ...next };
-      saveChain.current = saveChain.current
-        .catch(() => undefined)
-        .then(() => onSave(row));
+      flush();
     }, 350);
   };
   const nullableNumber = (value: string) => {
@@ -1549,6 +1593,7 @@ function MatrixControls({
   yields,
   onSave,
   onError,
+  durabilityAvailable,
 }: {
   budget: CropBudget;
   prices: ProfitabilityMatrixStep[];
@@ -1558,6 +1603,7 @@ function MatrixControls({
     yieldSteps: ProfitabilityMatrixStep[],
   ) => void;
   onError: (message: string) => void;
+  durabilityAvailable: boolean;
 }) {
   const [values, setValues] = useState(() => ({
     pMin: prices[0]?.value ?? 3,
@@ -1634,6 +1680,7 @@ function MatrixControls({
       <button
         className="secondary-action"
         type="button"
+        disabled={!durabilityAvailable}
         onClick={() => {
           try {
             onError("");
@@ -1664,6 +1711,7 @@ function MatrixControls({
       >
         Update matrix
       </button>
+      {!durabilityAvailable && <p className="durability-update-message">{SAVE_DURABILITY_UPDATE_MESSAGE}</p>}
     </div>
   );
 }

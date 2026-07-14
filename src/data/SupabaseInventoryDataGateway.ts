@@ -30,6 +30,6 @@ export class SupabaseInventoryDataGateway implements InventoryDataGateway {
     const existing = await supabase.from('inventory_receipts').select('*').eq('farm_id', input.farmId).eq('id', input.id).maybeSingle()
     return row(existing.data, existing.error)
   }
-  async insertAdjustment(farmId: string, value: AdjustmentWrite) { const created_by = await currentUserId(); const result = await supabase.from('inventory_adjustments').insert({ ...value, farm_id: farmId, created_by }).select('*').single(); return row(result.data, result.error) }
+  async insertAdjustment(farmId: string, value: AdjustmentWrite) { const existing = await supabase.from('inventory_adjustments').select('*').eq('farm_id', farmId).eq('id', value.id).maybeSingle(); if (existing.error) throw existing.error; if (existing.data) return row(existing.data, null); const created_by = await currentUserId(); const result = await supabase.from('inventory_adjustments').insert({ ...value, farm_id: farmId, created_by }).select('*').single(); return row(result.data, result.error) }
   async saveApplicationBundle(input: ApplicationBundleWrite) { const { data, error } = await supabase.rpc('save_inventory_application_bundle', { p_farm_id: input.farmId, p_application: input.application, p_products: input.products }); return row(data, error) }
 }

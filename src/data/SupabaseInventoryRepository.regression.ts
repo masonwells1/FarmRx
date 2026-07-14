@@ -9,6 +9,7 @@ import { SupabaseInventoryDataGateway } from './SupabaseInventoryDataGateway'
 import { moduleBackends } from './backends'
 import type { StorageLike } from './writeQueue'
 import { supabase } from '../lib/supabaseClient'
+import { readNeedsAttention } from './needsAttentionStore'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const farm = uid(1); const actor = uid(2); const micro = '2026-07-11T23:35:28.807722+00:00'
@@ -90,7 +91,7 @@ async function run() {
   let insertedAdjustment: Record<string, unknown> | null = null
   try {
     auth.getUser = async () => ({ data: { user: { id: actor } }, error: null })
-    client.from = (table) => { assert(table === 'inventory_adjustments', 'Adjustment gateway must insert into the adjustment ledger.'); return { insert: (value: Record<string, unknown>) => { insertedAdjustment = value; return { select: () => ({ single: async () => ({ data: value, error: null }) }) } } } }
+    client.from = (table) => { assert(table === 'inventory_adjustments', 'Adjustment gateway must insert into the adjustment ledger.'); const query = { eq: () => query, maybeSingle: async () => ({ data: null, error: null }) }; return { select: () => query, insert: (value: Record<string, unknown>) => { insertedAdjustment = value; return { select: () => ({ single: async () => ({ data: value, error: null }) }) } } } }
     await new SupabaseInventoryDataGateway().insertAdjustment(farm, { id: uid(19), product_id: uid(501), adjustment_quantity_in_inventory_unit: -2, reason: 'correction', notes: 'Physical count', adjusted_at: '2026-07-11' })
     const createdBy = (insertedAdjustment as Record<string, unknown> | null)?.created_by
     assert(typeof createdBy === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(createdBy), 'Adjustment gateway inserts must include the signed-in user as created_by.')
@@ -142,9 +143,10 @@ async function run() {
   const queuedReceipt = (operationId: string): InventoryQueueEntryV1 => ({ ...base, operationId, kind: 'saveReceiptBundle', write: receiptWrite(uid(50), uid(51)) })
   const queued = new QueuedInventoryRepository(replayLive, { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'project', storage: store, createId: () => uid(99), clock: () => micro, isOffline: () => false })
   assert(typeof queued.inspectAndReplay === 'function', 'The exported startup replay function must exist.')
+  assert(await queued.getNeedsAttentionQueueKey() === key, 'Inventory attention discovery must use only the exact current user and farm queue key.')
   queue.append(queuedReceipt(uid(52))); await queued.inspectAndReplay(); assert(queue.read().entries.length === 0 && replayGateway.calls.load === 0, 'Startup replay must drain an entry without a workspace load.')
   queue.append(queuedReceipt(uid(53))); await queued.inspectAndReplay(); assert(queue.read().entries.length === 0 && replayGateway.calls.receipt === 2, 'An idempotent second replay with the exact canonical echo must be accepted.')
-  replayGateway.mutate.receipt = (reply) => ({ ...reply, lines: reply.lines.map((line) => ({ ...line, entered_quantity: 7, quantity_in_inventory_unit: 7 })) }); queue.append(queuedReceipt(uid(54))); const callsBeforeConflict = replayGateway.calls.receipt; await queued.inspectAndReplay(); assert(replayGateway.calls.receipt === callsBeforeConflict + 1 && queue.read().entries.length === 1, 'A conflicting replay echo must be blocked after one attempt, not retried forever.')
+  replayGateway.mutate.receipt = (reply) => ({ ...reply, lines: reply.lines.map((line) => ({ ...line, entered_quantity: 7, quantity_in_inventory_unit: 7 })) }); const conflictingReceipt = queuedReceipt(uid(54)); queue.append(conflictingReceipt); const callsBeforeConflict = replayGateway.calls.receipt; await queued.inspectAndReplay(); const receiptConflictParked = readNeedsAttention(store, key); assert(replayGateway.calls.receipt === callsBeforeConflict + 1 && queue.read().entries.length === 0 && receiptConflictParked.length === 1 && receiptConflictParked[0]?.id === conflictingReceipt.operationId, 'A conflicting receipt replay must drain the queue and park exactly one needs-attention record for that operation.')
 
   const entries: InventoryQueueEntryV1[] = [
     { ...base, operationId: uid(60), kind: 'saveProduct', row: { ...product(uid(700), 'gal'), farm_id: farm } as InventoryProductWrite },
@@ -153,8 +155,8 @@ async function run() {
     { ...base, operationId: uid(63), kind: 'addAdjustment', row: { id: uid(64), product_id: uid(501), adjustment_quantity_in_inventory_unit: -1, reason: 'correction', notes: 'count', adjusted_at: micro } },
     { ...base, operationId: uid(65), kind: 'saveApplicationBundle', write: { farmId: farm, application: { id: uid(66), field_id: fieldsFor(farm).fields[0].id, crop_assignment_id: fieldsFor(farm).crop_assignments[0].id, status: 'draft', application_date: '2026-07-11', start_time: null, end_time: null, applied_acres: 1, target_pest: null, applicator_user_id: null, applicator_name_snapshot: null, applicator_license_number_snapshot: null, applicator_license_state_snapshot: null, wind_speed_mph: null, wind_direction: null, temperature_f: null, relative_humidity_pct: null, corrects_application_id: null, correction_reason: null, completed_at: null, notes: null }, products: [{ id: uid(67), product_id: uid(501), rate: 1, rate_unit: 'gal', rate_basis: 'acre', total_quantity: 1, total_unit: 'gal', inventory_units_per_total_unit: null, lot_number_snapshot: null, notes: null }] } },
   ]
-  const parserStore = memory(); const parserQueue = new InventoryWriteQueue(parserStore, key); entries.forEach((entry) => parserQueue.append(entry))
-  assert(parserQueue.read().entries.length === 5 && key.startsWith('farm-rx-inventory-write-queue:v1:'), 'All five fully-shaped inventory queue entries must round-trip on an isolated versioned key.')
+  const parserStore = memory(); const parserQueue = new InventoryWriteQueue(parserStore, key); entries.forEach((entry) => parserQueue.append(entry)); parserQueue.append(entries[0]!)
+  assert(parserQueue.read().entries.length === 5 && key.startsWith('farm-rx-inventory-write-queue:v1:'), 'Appending the same Inventory operationId twice must retain exactly one queue entry.')
   await rejects(async () => { parseInventoryQueue('{"version":2,"entries":[]}') }, 'Unknown queue versions must fail closed.')
   parserStore.setItem(key, '{bad'); await rejects(async () => { parserQueue.read() }, 'Corrupt inventory queue bytes must fail closed and remain untouched.')
   assert(moduleBackends.inventory === 'supabase', 'The backend manifest must select the live inventory repository.')

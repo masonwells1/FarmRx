@@ -12,6 +12,9 @@ import type {
 } from "./data/equipmentTasks";
 import { farmerError } from "./lib/farmerErrors";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
+import { SaveReceipt } from "./components/SaveReceipt";
+import { useSaveReceipt } from "./lib/saveReceipt";
+import { NeedsAttentionList } from "./components/NeedsAttentionList";
 const today = () => new Date().toISOString().slice(0, 10);
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -39,10 +42,13 @@ function useWorkspace(repository: EquipmentTasksRepository) {
   );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [attentionQueueKey, setAttentionQueueKey] = useState<string | null>(null);
   const reload = async () => {
     setLoading(true);
     try {
-      setWorkspace(await repository.getWorkspace());
+      const [next, queueKey] = await Promise.all([repository.getWorkspace(), repository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)]);
+      setWorkspace(next);
+      setAttentionQueueKey(queueKey);
       setError(null);
     } catch (e) {
       setError(farmerError(e, "load equipment and tasks"));
@@ -53,7 +59,7 @@ function useWorkspace(repository: EquipmentTasksRepository) {
   useEffect(() => {
     void reload();
   }, [repository]);
-  return { workspace, error, loading, reload };
+  return { workspace, error, loading, reload, attentionQueueKey };
 }
 function Notice({ error }: { error: string | null }) {
   return error ? (
@@ -67,9 +73,11 @@ export function EquipmentPage({
 }: {
   repository: EquipmentTasksRepository;
 }) {
-  const { workspace, error, loading, reload } = useWorkspace(repository);
+  const { workspace, error, loading, reload, attentionQueueKey } = useWorkspace(repository);
   const [selected, setSelected] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [lastReceiptId, setLastReceiptId] = useState<string | null>(null);
+  const receipt = useSaveReceipt(lastReceiptId);
   if (loading && !workspace)
     return (
       <section className="page equipment-page">
@@ -105,6 +113,8 @@ export function EquipmentPage({
         )}
       </header>
       <Notice error={error} />
+      <SaveReceipt state={receipt} />
+      <NeedsAttentionList module="equipment_tasks" queueKey={attentionQueueKey} onChanged={reload} />
       {adding && canManage && (
         <EquipmentForm
           repository={repository}
@@ -121,7 +131,8 @@ export function EquipmentPage({
           repository={repository}
           workspace={workspace}
           equipment={current}
-          close={() => {
+          close={(receiptId) => {
+            if (receiptId) setLastReceiptId(receiptId);
             setSelected(null);
             void reload();
           }}
@@ -372,7 +383,7 @@ function EquipmentDetail({
   repository: EquipmentTasksRepository;
   workspace: EquipmentTasksWorkspace;
   equipment: Equipment;
-  close: () => void;
+  close: (receiptId?: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -398,15 +409,16 @@ function EquipmentDetail({
     if (!equipmentLock.current.acquire()) return;
     const f = new FormData(e.currentTarget);
     try {
+      const id = crypto.randomUUID();
       await repository.addMeterReading({
-        id: crypto.randomUUID(),
+        id,
         equipment_id: equipment.id,
         reading: Number(f.get("reading")),
         read_on: String(f.get("date")),
         source: "manual",
         notes: null,
       });
-      close();
+      close(id);
     } catch (caught) {
       setError(farmerError(caught, "save this meter reading"));
     } finally {
@@ -547,7 +559,7 @@ function EquipmentDetail({
     <section className="equipment-detail">
       <div className="detail-heading">
         <h2>{equipment.name}</h2>
-        <button onClick={close}>Back to machines</button>
+        <button onClick={() => close()}>Back to machines</button>
       </div>
       <Notice error={error} />
       {editing ? (
@@ -735,10 +747,12 @@ export function TasksPage({
 }: {
   repository: EquipmentTasksRepository;
 }) {
-  const { workspace, error, loading, reload } = useWorkspace(repository);
+  const { workspace, error, loading, reload, attentionQueueKey } = useWorkspace(repository);
   const [filter, setFilter] = useState<TaskBoardFilter>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<FarmTask | null>(null);
+  const [lastReceiptId, setLastReceiptId] = useState<string | null>(null);
+  const receipt = useSaveReceipt(lastReceiptId);
   if (loading && !workspace)
     return (
       <section className="page tasks-page">
@@ -771,6 +785,8 @@ export function TasksPage({
         </button>
       </header>
       <Notice error={error} />
+      <SaveReceipt state={receipt} />
+      <NeedsAttentionList module="equipment_tasks" queueKey={attentionQueueKey} onChanged={reload} />
       <Kpis
         tasks={workspace.tasks}
         currentId={currentId}
@@ -782,7 +798,8 @@ export function TasksPage({
           repository={repository}
           workspace={workspace}
           task={editing}
-          done={() => {
+          done={(receiptId) => {
+            setLastReceiptId(receiptId);
             setAdding(false);
             setEditing(null);
             void reload();
@@ -1056,10 +1073,12 @@ function TaskForm({
   repository: EquipmentTasksRepository;
   workspace: EquipmentTasksWorkspace;
   task: FarmTask | null;
-  done: () => void;
+  done: (receiptId: string) => void;
   cancel: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [lastSaveId, setLastSaveId] = useState<string | null>(null);
+  const receipt = useSaveReceipt(lastSaveId);
   const [priority, setPriority] = useState<TaskPriority>(
     task?.priority ?? "normal",
   );
@@ -1069,8 +1088,10 @@ function TaskForm({
     if (!submitLock.current.acquire()) return;
     const f = new FormData(e.currentTarget);
     try {
+      const id = task?.id ?? crypto.randomUUID();
+      setLastSaveId(id);
       await repository.saveTask({
-        id: task?.id ?? crypto.randomUUID(),
+        id,
         title: String(f.get("title")).trim(),
         details: String(f.get("details")).trim() || null,
         status: task?.status ?? "todo",
@@ -1085,7 +1106,7 @@ function TaskForm({
         program_assigned_pass_id: task?.program_assigned_pass_id ?? null,
         program_cycle_key: task?.program_cycle_key ?? null,
       });
-      done();
+      done(id);
     } catch (caught) {
       setError(farmerError(caught, "save this task"));
     } finally {
@@ -1154,6 +1175,7 @@ function TaskForm({
         </select>
       </label>
       <Notice error={error} />
+      <SaveReceipt state={receipt} />
       <div>
         <button className="primary-action">Save task</button>
         <button type="button" onClick={cancel}>

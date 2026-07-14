@@ -2,13 +2,16 @@ import type { BudgetCostLineWrite } from './ProfitabilityDataGateway'
 import type { BudgetFieldAllocation, CropBudget, ProfitabilityMatrixStep } from './profitability'
 import { validateRevenueProtectionInputs } from './insuranceMath'
 import type { StorageLike } from './writeQueue'
+import { appendNeedsAttention } from './needsAttentionStore'
+import { LEGACY_MATRIX_PARK_MESSAGE } from './saveDurability'
 
 export type ProfitabilityQueueEntryV1 =
   | { version: 1; module: 'profitability'; kind: 'createBudget'; operationId: string; userId: string; farmId: string; enqueuedAt: string; row: CropBudget; priceSteps: ProfitabilityMatrixStep[]; yieldSteps: ProfitabilityMatrixStep[] }
   | { version: 1; module: 'profitability'; kind: 'saveBudget'; operationId: string; userId: string; farmId: string; enqueuedAt: string; row: CropBudget }
   | { version: 1; module: 'profitability'; kind: 'saveCostLine'; operationId: string; userId: string; farmId: string; enqueuedAt: string; row: BudgetCostLineWrite }
   | { version: 1; module: 'profitability'; kind: 'deleteCostLine'; operationId: string; userId: string; farmId: string; enqueuedAt: string; id: string }
-  | { version: 1; module: 'profitability'; kind: 'replaceMatrixSteps'; operationId: string; userId: string; farmId: string; enqueuedAt: string; budgetId: string; steps: ProfitabilityMatrixStep[] }
+  | { version: 1; module: 'profitability'; kind: 'replaceMatrixSteps'; operationId: string; userId: string; farmId: string; enqueuedAt: string; budgetId: string; steps: ProfitabilityMatrixStep[]; expectedSteps: ProfitabilityMatrixStep[] }
+  | { version: 1; module: 'profitability'; kind: 'replaceMatrixSteps'; operationId: string; userId: string; farmId: string; enqueuedAt: string; budgetId: string; steps: ProfitabilityMatrixStep[]; legacyUnknownSnapshot: true }
   | { version: 1; module: 'profitability'; kind: 'saveAllocation'; operationId: string; userId: string; farmId: string; enqueuedAt: string; row: BudgetFieldAllocation }
   | { version: 1; module: 'profitability'; kind: 'deleteAllocation'; operationId: string; userId: string; farmId: string; enqueuedAt: string; id: string }
   | { version: 1; module: 'profitability'; kind: 'copyBudget'; operationId: string; userId: string; farmId: string; enqueuedAt: string; sourceBudgetId: string; budget: CropBudget; costLines: BudgetCostLineWrite[]; matrixSteps: ProfitabilityMatrixStep[] }
@@ -45,6 +48,7 @@ function normalizeLegacyEntry(value: unknown): unknown {
   if (!record(value)) return value
   if (value.kind === 'createBudget' || value.kind === 'saveBudget') return { ...value, row: normalizeLegacyBudget(value.row) }
   if (value.kind === 'copyBudget') return { ...value, budget: normalizeLegacyBudget(value.budget) }
+  if (value.kind === 'replaceMatrixSteps' && !Object.hasOwn(value, 'expectedSteps')) return { ...value, legacyUnknownSnapshot: true }
   return value
 }
 function normalizeLegacyEnvelope(value: unknown): unknown { return record(value) && Array.isArray(value.entries) ? { ...value, entries: value.entries.map(normalizeLegacyEntry) } : value }
@@ -57,7 +61,7 @@ function entry(value: unknown): value is ProfitabilityQueueEntryV1 {
   if (value.kind === 'saveBudget') return exact(value, [...common, 'row']) && budget(value.row)
   if (value.kind === 'saveCostLine') return exact(value, [...common, 'row']) && costLine(value.row)
   if (value.kind === 'deleteCostLine') return exact(value, [...common, 'id']) && isId(value.id)
-  if (value.kind === 'replaceMatrixSteps') return exact(value, [...common, 'budgetId', 'steps']) && isId(value.budgetId) && Array.isArray(value.steps) && value.steps.every(matrixStep)
+  if (value.kind === 'replaceMatrixSteps') return (exact(value, [...common, 'budgetId', 'steps', 'expectedSteps']) && isId(value.budgetId) && Array.isArray(value.steps) && value.steps.every(matrixStep) && Array.isArray(value.expectedSteps) && value.expectedSteps.every(matrixStep)) || (exact(value, [...common, 'budgetId', 'steps', 'legacyUnknownSnapshot']) && isId(value.budgetId) && Array.isArray(value.steps) && value.steps.every(matrixStep) && value.legacyUnknownSnapshot === true)
   if (value.kind === 'saveAllocation') return exact(value, [...common, 'row']) && allocation(value.row)
   if (value.kind === 'deleteAllocation') return exact(value, [...common, 'id']) && isId(value.id)
   if (value.kind === 'copyBudget') return exact(value, [...common, 'sourceBudgetId', 'budget', 'costLines', 'matrixSteps']) && isId(value.sourceBudgetId) && budget(value.budget) && Array.isArray(value.costLines) && value.costLines.every(costLine) && Array.isArray(value.matrixSteps) && value.matrixSteps.every(matrixStep)
@@ -68,7 +72,8 @@ export class ProfitabilityWriteQueue {
   constructor(private readonly storage: StorageLike, readonly key: string) {}
   read(): ProfitabilityQueueEnvelopeV1 { const bytes = this.storage.getItem(this.key); return bytes === null ? { version: 1, entries: [] } : parseProfitabilityQueue(bytes) }
   private persist(next: ProfitabilityQueueEnvelopeV1) { const serialized = JSON.stringify(next); parseProfitabilityQueue(serialized); this.storage.setItem(this.key, serialized); const actual = this.storage.getItem(this.key); if (actual !== serialized) throw new Error('This entry could not be saved on this device. Keep this screen open and try again.'); parseProfitabilityQueue(actual) }
-  append(value: ProfitabilityQueueEntryV1) { const next = { version: 1 as const, entries: [...this.read().entries, value] }; this.persist(next); return next }
+  append(value: ProfitabilityQueueEntryV1) { const current = this.read(); const next = { version: 1 as const, entries: current.entries.some((entry) => entry.operationId === value.operationId) ? current.entries : [...current.entries, value] }; this.persist(next); return next }
   removeConfirmedHead(operationId: string) { const current = this.read(); if (current.entries[0]?.operationId !== operationId) throw new Error(blocked); const next = { version: 1 as const, entries: current.entries.slice(1) }; this.persist(next); return next }
+  parkHead(operationId: string, message = LEGACY_MATRIX_PARK_MESSAGE, reason?: import('./needsAttentionStore').NeedsAttentionReason) { const current = this.read(); const head = current.entries[0]; if (!head || head.operationId !== operationId) throw new Error(blocked); appendNeedsAttention(this.storage, this.key, { id: head.operationId, module: 'profitability', createdAt: head.enqueuedAt, message, entry: head, ...(reason ? { reason } : {}) }); const next = { version: 1 as const, entries: current.entries.slice(1) }; this.persist(next); return next }
 }
 export const profitabilityWriteQueueKey = (projectRef: string, userId: string, farmId: string) => `farm-rx-profitability-write-queue:v1:${projectRef}:${userId}:${farmId}`

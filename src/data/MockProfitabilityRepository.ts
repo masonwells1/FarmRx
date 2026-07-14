@@ -1,8 +1,9 @@
 import type { FieldsRepository } from './fields'
+import { insuranceColumns } from './SupabaseProfitabilityDataGateway'
 import type { PositionScope } from './grain'
 import { defaultMatrixValues } from './profitabilityCalculations'
 import { validateRevenueProtectionInputs } from './insuranceMath'
-import type { BudgetCostLine, BudgetFieldAllocation, CostCategory, CropBudget, ProfitabilityData, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityRepositoryOptions, ProfitabilityWorkspace } from './profitability'
+import type { BudgetCostLine, BudgetFieldAllocation, CostCategory, CropBudget, InsuranceBudgetPatch, ProfitabilityData, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityRepositoryOptions, ProfitabilityWorkspace } from './profitability'
 
 export const PROFITABILITY_STORAGE_KEY = 'farm-rx-profitability-mock:v1'
 const VERSION = 1
@@ -77,9 +78,11 @@ export class MockProfitabilityRepository implements ProfitabilityRepository {
     try { const checked = JSON.parse(saved) as unknown; assert(isRecord(checked) && checked.version === VERSION && checked.farm_id === farmId && isRecord(checked.data), 'Saved profitability data has an unknown format.'); assertData(checked.data) } catch { throw new Error('Farm Rx could not verify this profitability save. Nothing else was changed.') }
   }
   private async data() { const fields = await this.fieldsRepository.getData(); return { fields, data: this.read(fields.farm.id) } }
+  async getSaveDurabilityCapability() { return true }
   async getWorkspace(): Promise<ProfitabilityWorkspace> { const { fields, data } = await this.data(); return { ...structuredClone(data), fields } }
   async createBudget(budget: CropBudget) { const { fields, data } = await this.data(); assert(budget.farm_id === fields.farm.id && !data.budgets.some((item) => item.id === budget.id), 'That budget could not be created. Refresh and try again.'); const at = this.clock(); const { priceValues, yieldValues } = defaultMatrixValues(budget); this.persist(fields.farm.id, { ...data, budgets: [...data.budgets, { ...budget, created_at: at, updated_at: at }], matrix_steps: [...data.matrix_steps, ...makeSteps(budget.id, 'price', priceValues).map((step) => ({ ...step, id: this.createId() })), ...makeSteps(budget.id, 'yield', yieldValues).map((step) => ({ ...step, id: this.createId() }))] }) }
   async saveBudget(budget: CropBudget) { const { fields, data } = await this.data(); assert(budget.farm_id === fields.farm.id, 'Budget belongs to another farm.'); const budgets = data.budgets.some((item) => item.id === budget.id) ? data.budgets.map((item) => item.id === budget.id ? { ...budget, updated_at: this.clock() } : item) : [...data.budgets, { ...budget, created_at: this.clock(), updated_at: this.clock() }]; this.persist(fields.farm.id, { ...data, budgets }) }
+  async saveBudgetInsurance(budgetId: string, patch: InsuranceBudgetPatch) { insuranceColumns(patch); const { fields, data } = await this.data(); assert(data.budgets.some((item) => item.id === budgetId), 'That budget changed before its insurance details could be saved.'); this.persist(fields.farm.id, { ...data, budgets: data.budgets.map((item) => item.id === budgetId ? { ...item, ...patch, updated_at: this.clock() } : item) }) }
   async saveCostLine(line: BudgetCostLine) { const { fields, data } = await this.data(); const rows = data.cost_lines.some((item) => item.id === line.id) ? data.cost_lines.map((item) => item.id === line.id ? { ...line, updated_at: this.clock() } : item) : [...data.cost_lines, { ...line, created_at: this.clock(), updated_at: this.clock() }]; this.persist(fields.farm.id, { ...data, cost_lines: rows }) }
   async deleteCostLine(id: string) { const { fields, data } = await this.data(); assert(data.cost_lines.some((item) => item.id === id), 'That cost line changed before it could be removed. Refresh and try again.'); this.persist(fields.farm.id, { ...data, cost_lines: data.cost_lines.filter((item) => item.id !== id) }) }
   async replaceMatrixSteps(budgetId: string, steps: ProfitabilityMatrixStep[]) { const { fields, data } = await this.data(); assert(data.budgets.some((item) => item.id === budgetId), 'That budget changed before the matrix could be saved.'); assert(steps.length > 1 && steps.every((item) => item.budget_id === budgetId), 'Enter at least two price steps and two yield steps.'); this.persist(fields.farm.id, { ...data, matrix_steps: [...data.matrix_steps.filter((item) => item.budget_id !== budgetId), ...structuredClone(steps)] }) }

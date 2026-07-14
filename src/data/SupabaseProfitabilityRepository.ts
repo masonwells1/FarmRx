@@ -3,7 +3,8 @@ import type { PositionScope } from './grain'
 import type { BudgetCostLineWrite, ProfitabilityDataGateway, ProfitabilityRowBundle } from './ProfitabilityDataGateway'
 import { defaultMatrixValues } from './profitabilityCalculations'
 import { validateRevenueProtectionInputs } from './insuranceMath'
-import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, MatrixAxis, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityWorkspace } from './profitability'
+import { insuranceColumns } from './SupabaseProfitabilityDataGateway'
+import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, InsuranceBudgetPatch, MatrixAxis, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityWorkspace } from './profitability'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const categories = new Set(['seed', 'chemical', 'fertilizer', 'fuel', 'repairs', 'labor', 'land', 'crop_insurance', 'equipment_depreciation', 'interest', 'custom'])
@@ -63,9 +64,10 @@ function mintCostLine(value: BudgetCostLine, siblings: BudgetCostLineWrite[]): B
 export interface ProfitabilityOperationWriter {
   createBudgetOperation(value: CropBudget, priceSteps: ProfitabilityMatrixStep[], yieldSteps: ProfitabilityMatrixStep[]): Promise<{ budget: CropBudget; steps: ProfitabilityMatrixStep[] }>
   saveBudgetOperation(value: CropBudget): Promise<CropBudget>
+  saveBudgetInsuranceOperation(budgetId: string, patch: InsuranceBudgetPatch): Promise<CropBudget>
   saveCostLineOperation(value: BudgetCostLineWrite): Promise<BudgetCostLine>
   deleteCostLineOperation(id: string): Promise<string>
-  replaceMatrixStepsOperation(budgetId: string, steps: ProfitabilityMatrixStep[]): Promise<ProfitabilityMatrixStep[]>
+  replaceMatrixStepsOperation(budgetId: string, steps: ProfitabilityMatrixStep[], expectedSteps?: ProfitabilityMatrixStep[] | null): Promise<ProfitabilityMatrixStep[]>
   saveAllocationOperation(value: BudgetFieldAllocation): Promise<BudgetFieldAllocation>
   deleteAllocationOperation(id: string): Promise<string>
   copyBudgetOperation(sourceBudgetId: string, budget: CropBudget, costLines: BudgetCostLineWrite[], matrixSteps: ProfitabilityMatrixStep[]): Promise<CropBudget>
@@ -76,6 +78,7 @@ export interface ProfitabilityOperationWriter {
 export class SupabaseProfitabilityRepository implements ProfitabilityRepository, ProfitabilityOperationWriter {
   constructor(private readonly dependencies: { gateway: ProfitabilityDataGateway; fieldsRepository: FieldsRepository; getFarmId: () => Promise<string>; createId: () => string; clock: () => string }) {}
   private async fields() { return this.dependencies.fieldsRepository.getData() }
+  async getSaveDurabilityCapability() { return this.dependencies.gateway.getSaveDurabilityCapability ? this.dependencies.gateway.getSaveDurabilityCapability() : false }
   private async loadRaw(farmId: string) {
     let bundle: ProfitabilityRowBundle
     try { bundle = await this.dependencies.gateway.loadWorkspace(farmId) }
@@ -150,13 +153,30 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     await this.createBudgetOperation(normalized, priceSteps, yieldSteps)
   }
   async createBudgetOperation(value: CropBudget, priceSteps: ProfitabilityMatrixStep[], yieldSteps: ProfitabilityMatrixStep[]) {
-    const savedBudget = await this.saveBudgetOperation(value)
-    const steps = [...priceSteps, ...yieldSteps].map((step) => ({ ...step, budget_id: savedBudget.id }))
-    const savedSteps = await this.replaceMatrixStepsOperation(savedBudget.id, steps)
+    const farmId = await this.dependencies.getFarmId(); const fields = await this.fields()
+    const normalized: CropBudget = { ...value, farm_id: farmId, copied_from_budget_id: null }
+    this.validateBudget(normalized, farmId, fields)
+    const steps = [...priceSteps, ...yieldSteps].map((step) => ({ ...step, budget_id: normalized.id }))
+    this.validateMatrix(steps)
+    const savedBudget = mapBudget(await this.dependencies.gateway.createBudgetWithMatrix({ farmId, budget: normalized, matrixSteps: steps }))
+    const savedSteps = steps
+    if (savedBudget.id !== normalized.id || savedBudget.farm_id !== farmId) fail('Farm Rx could not confirm this budget saved.')
     return { budget: savedBudget, steps: savedSteps }
   }
 
   async saveBudget(value: CropBudget) { await this.saveBudgetOperation(value) }
+  async saveBudgetInsurance(budgetId: string, patch: InsuranceBudgetPatch) { await this.saveBudgetInsuranceOperation(budgetId, patch) }
+  async saveBudgetInsuranceOperation(budgetId: string, patch: InsuranceBudgetPatch): Promise<CropBudget> {
+    insuranceColumns(patch)
+    const farmId = await this.dependencies.getFarmId(); const fields = await this.fields()
+    if (!uuid.test(budgetId)) fail('Farm Rx could not save this insurance detail.')
+    const current = (await this.loadRaw(farmId)).budgets.find((item) => item.id === budgetId)
+    if (!current) fail('That budget changed before its insurance details could be saved.')
+    const next = { ...(current as CropBudget), ...patch }; this.validateBudget(next, farmId, fields)
+    const saved = mapBudget(await this.dependencies.gateway.patchBudgetInsurance(farmId, budgetId, patch))
+    if (saved.id !== budgetId || saved.farm_id !== farmId || Object.keys(patch).some((key) => saved[key as keyof CropBudget] !== patch[key as keyof InsuranceBudgetPatch])) fail('Farm Rx could not confirm the insurance save.')
+    return saved
+  }
   async saveBudgetOperation(value: CropBudget): Promise<CropBudget> {
     const farmId = await this.dependencies.getFarmId(); const fields = await this.fields()
     const normalized: CropBudget = { ...value, farm_id: farmId }
@@ -195,13 +215,13 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     return deletedId as string
   }
 
-  async replaceMatrixSteps(budgetId: string, steps: ProfitabilityMatrixStep[]) { await this.replaceMatrixStepsOperation(budgetId, steps) }
-  async replaceMatrixStepsOperation(budgetId: string, steps: ProfitabilityMatrixStep[]): Promise<ProfitabilityMatrixStep[]> {
+  async replaceMatrixSteps(budgetId: string, steps: ProfitabilityMatrixStep[]) { const raw = await this.loadRaw(await this.dependencies.getFarmId()); await this.replaceMatrixStepsOperation(budgetId, steps, raw.matrix_steps.filter((step) => step.budget_id === budgetId)) }
+  async replaceMatrixStepsOperation(budgetId: string, steps: ProfitabilityMatrixStep[], expectedSteps?: ProfitabilityMatrixStep[] | null): Promise<ProfitabilityMatrixStep[]> {
     const farmId = await this.dependencies.getFarmId()
     if (!uuid.test(budgetId)) fail('Farm Rx could not save this matrix.')
     const normalized = steps.map((step) => ({ ...step, budget_id: budgetId }))
     this.validateMatrix(normalized)
-    const savedAll = (await this.dependencies.gateway.replaceMatrixSteps({ farmId, budgetId, steps: normalized })).map(mapMatrixStep)
+    const savedAll = (await this.dependencies.gateway.replaceMatrixSteps({ farmId, budgetId, steps: normalized, expectedSteps })).map(mapMatrixStep)
     const saved = savedAll.filter((step) => step.budget_id === budgetId)
     this.validateMatrix(saved)
     const key = (step: ProfitabilityMatrixStep) => `${step.id}|${step.axis}|${step.sort_order}|${step.value}`

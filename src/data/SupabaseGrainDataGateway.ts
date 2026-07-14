@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabaseClient'
 import { localCalendarDay } from './marketingAlerts'
 import type { GrainDataGateway, GrainRowBundle, ReplaceMarketingPlanInput } from './GrainDataGateway'
 import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainContract, GrainContractDelivery, MarketingAlertRule, ProductionEstimate } from './grain'
+import { DELETE_PERMISSION_MESSAGE } from './saveDurability'
 
 function rows(data: unknown, error: { message: string } | null): unknown[] { if (error) throw error; if (!Array.isArray(data)) throw new Error('Farm Rx could not load the complete grain workspace.'); return data }
 function row(data: unknown, error: { message: string } | null): unknown { if (error) throw error; if (!data || typeof data !== 'object') throw new Error('Farm Rx could not confirm the grain save. Please try again.'); return data }
@@ -13,6 +14,7 @@ function offerColumns(value: FirmOffer) { const { id, farm_id, crop_year, commod
 function binColumns(value: GrainBin) { const { id, farm_id, name, capacity_bu, location_type, location_name, notes, moisture_pct, moisture_checked_on } = value; return { id, farm_id, name, capacity_bu, location_type, location_name, notes, moisture_pct, moisture_checked_on } }
 function binTransactionColumns(value: BinTransaction) { const { id, farm_id, grain_bin_id, direction, bushels, commodity_id, occurred_on, note, source_kind } = value; return { id, farm_id, grain_bin_id, direction, bushels, commodity_id, occurred_on, note, source_kind } }
 function contractDeliveryColumns(value: GrainContractDelivery) { const { id, farm_id, grain_contract_id, bushels, delivered_on, note } = value; return { id, farm_id, grain_contract_id, bushels, delivered_on, note } }
+async function confirmDelete(table: 'marketing_alert_rules' | 'firm_offers', farmId: string, id: string) { const deleted = await supabase.from(table).delete().eq('farm_id', farmId).eq('id', id).select('id'); if (deleted.error) throw deleted.error; if (Array.isArray(deleted.data) && deleted.data.some((row) => row.id === id)) return; const existing = await supabase.from(table).select('id').eq('farm_id', farmId).eq('id', id).maybeSingle(); if (existing.error) throw existing.error; if (!existing.data) return; throw new Error(DELETE_PERMISSION_MESSAGE) }
 
 export class SupabaseGrainDataGateway implements GrainDataGateway {
   async loadWorkspace(farmId: string): Promise<GrainRowBundle> {
@@ -51,10 +53,10 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
   }
   async upsertCashBid(farmId: string, value: CashBid) { const result = await supabase.from('cash_bids').upsert({ ...bidColumns(value), farm_id: farmId }, { onConflict: 'id' }).select('*').single(); return row(result.data, result.error) }
   async upsertMarketingAlertRule(farmId: string, value: MarketingAlertRule) { const result = await supabase.from('marketing_alert_rules').upsert({ ...alertRuleColumns(value), farm_id: farmId }, { onConflict: 'id' }).select('*').single(); return row(result.data, result.error) }
-  async deleteMarketingAlertRule(farmId: string, id: string) { const result = await supabase.from('marketing_alert_rules').delete().eq('farm_id', farmId).eq('id', id).select('id'); if (result.error) throw result.error; if (!Array.isArray(result.data) || !result.data.some((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === id)) throw new Error('Farm Rx could not delete this alert rule. You may not have permission.') }
+  async deleteMarketingAlertRule(farmId: string, id: string) { return confirmDelete('marketing_alert_rules', farmId, id) }
   async upsertFirmOffer(farmId: string, value: FirmOffer) { const result = await supabase.from('firm_offers').upsert({ ...offerColumns(value), farm_id: farmId }, { onConflict: 'id' }).select('*').single(); return row(result.data, result.error) }
   async fillFirmOffer(_farmId: string, offerId: string, value: GrainContract) { const { data, error } = await supabase.rpc('fill_firm_offer', { p_offer_id: offerId, p_contract: contractColumns(value), p_local_date: localCalendarDay(new Date()) }); if (error) throw error; return row(data, null) }
-  async deleteFirmOffer(farmId: string, id: string) { const result = await supabase.from('firm_offers').delete().eq('farm_id', farmId).eq('id', id).select('id'); if (result.error) throw result.error; if (!Array.isArray(result.data) || !result.data.some((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === id)) throw new Error('Farm Rx could not delete this firm offer. You may not have permission.') }
+  async deleteFirmOffer(farmId: string, id: string) { return confirmDelete('firm_offers', farmId, id) }
   async upsertGrainBin(farmId: string, value: GrainBin) { const result = await supabase.from('grain_bins').upsert({ ...binColumns(value), farm_id: farmId }, { onConflict: 'id' }).select('*').single(); return row(result.data, result.error) }
   async appendBinTransactionRpc(farmId: string, value: BinTransaction) { const { data, error } = await supabase.rpc('append_bin_movement', { p_farm_id: farmId, p_transaction: binTransactionColumns(value) }); if (error) throw error; return row(data, null) }
   async appendContractDeliveryRpc(farmId: string, value: GrainContractDelivery, allowOverdelivery: boolean) { const { data, error } = await supabase.rpc('record_grain_contract_delivery', { p_farm_id: farmId, p_delivery: { ...contractDeliveryColumns(value), allow_overdelivery: allowOverdelivery } }); if (error) throw error; return row(data, null) }

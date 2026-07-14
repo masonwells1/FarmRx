@@ -55,17 +55,25 @@ export interface ProfitabilityData {
 }
 
 export interface ProfitabilityWorkspace extends ProfitabilityData { fields: FieldsData }
+export type InsuranceBudgetPatch = Pick<CropBudget, 'rp_coverage_pct' | 'rp_aph_yield' | 'rp_projected_price' | 'rp_premium_per_acre'>
+export type ProfitabilitySaveDisposition = 'saved' | 'queued offline'
 
 export interface ProfitabilityRepository {
   getWorkspace(): Promise<ProfitabilityWorkspace>
-  createBudget(budget: CropBudget): Promise<void>
-  saveBudget(budget: CropBudget): Promise<void>
-  saveCostLine(line: BudgetCostLine): Promise<void>
-  deleteCostLine(id: string): Promise<void>
-  replaceMatrixSteps(budgetId: string, steps: ProfitabilityMatrixStep[]): Promise<void>
-  saveAllocation(allocation: BudgetFieldAllocation): Promise<void>
-  deleteAllocation(id: string): Promise<void>
-  copyBudget(sourceBudgetId: string, copy: CropBudget): Promise<void>
+  /** Exact device queue for the current signed-in farm; never a prefix scan. */
+  getNeedsAttentionQueueKey?(): Promise<string>
+  getInsuranceDraftContext?(): Promise<{ projectRef: string; userId: string; farmId: string }>
+  /** True only when the 0034 atomic durability RPCs are available. */
+  getSaveDurabilityCapability(): Promise<boolean>
+  createBudget(budget: CropBudget): Promise<void | ProfitabilitySaveDisposition>
+  saveBudget(budget: CropBudget): Promise<void | ProfitabilitySaveDisposition>
+  saveBudgetInsurance(budgetId: string, patch: InsuranceBudgetPatch): Promise<void | ProfitabilitySaveDisposition>
+  saveCostLine(line: BudgetCostLine): Promise<void | ProfitabilitySaveDisposition>
+  deleteCostLine(id: string): Promise<void | ProfitabilitySaveDisposition>
+  replaceMatrixSteps(budgetId: string, steps: ProfitabilityMatrixStep[]): Promise<void | ProfitabilitySaveDisposition>
+  saveAllocation(allocation: BudgetFieldAllocation): Promise<void | ProfitabilitySaveDisposition>
+  deleteAllocation(id: string): Promise<void | ProfitabilitySaveDisposition>
+  copyBudget(sourceBudgetId: string, copy: CropBudget): Promise<void | ProfitabilitySaveDisposition>
   getBreakeven(scope: PositionScope, fields: FieldsData): Promise<number | null>
 }
 

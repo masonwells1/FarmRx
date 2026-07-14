@@ -1,5 +1,6 @@
 import type { AdjustmentWrite, ApplicationBundleWrite, CancelReceiptWrite, InventoryProductWrite, ReceiptBundleWrite } from './InventoryDataGateway'
 import type { StorageLike } from './writeQueue'
+import { appendNeedsAttention } from './needsAttentionStore'
 
 export type InventoryQueueEntryV1 =
   | { version: 1; module: 'inventory'; kind: 'saveProduct'; operationId: string; userId: string; farmId: string; enqueuedAt: string; row: InventoryProductWrite }
@@ -31,7 +32,8 @@ export class InventoryWriteQueue {
   constructor(private readonly storage: StorageLike, readonly key: string) {}
   read(): InventoryQueueEnvelopeV1 { const raw = this.storage.getItem(this.key); return raw === null ? { version: 1, entries: [] } : parseInventoryQueue(raw) }
   private persist(next: InventoryQueueEnvelopeV1) { const serialized = JSON.stringify(next); parseInventoryQueue(serialized); this.storage.setItem(this.key, serialized); const actual = this.storage.getItem(this.key); if (actual !== serialized) throw new Error('This entry could not be saved on this device. Keep this screen open and try again.'); parseInventoryQueue(actual) }
-  append(entry: InventoryQueueEntryV1) { const next = { version: 1 as const, entries: [...this.read().entries, entry] }; this.persist(next); return next }
+  append(entry: InventoryQueueEntryV1) { const current = this.read(); const next = { version: 1 as const, entries: current.entries.some((item) => item.operationId === entry.operationId) ? current.entries : [...current.entries, entry] }; this.persist(next); return next }
   removeConfirmedHead(operationId: string) { const current = this.read(); if (current.entries[0]?.operationId !== operationId) throw new Error(blocked); const next = { version: 1 as const, entries: current.entries.slice(1) }; this.persist(next); return next }
+  parkHead(operationId: string) { const current = this.read(); const head = current.entries[0]; if (!head || head.operationId !== operationId) throw new Error(blocked); appendNeedsAttention(this.storage, this.key, { id: head.operationId, module: 'inventory', createdAt: head.enqueuedAt, message: 'This save needs attention before it can be retried.', entry: head }); const next = { version: 1 as const, entries: current.entries.slice(1) }; this.persist(next); return next }
 }
 export const inventoryWriteQueueKey = (projectRef: string, userId: string, farmId: string) => `farm-rx-inventory-write-queue:v1:${projectRef}:${userId}:${farmId}`

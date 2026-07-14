@@ -207,8 +207,88 @@ project, NO deploy — each needs Mason's explicit OK. Draft migrations go to
   RPCs (idempotent, locked, capacity/rotation/baseline-aware) + bin_transactions
   direct-INSERT revocation + pricing-column protection; re-runnable proof =
   scripts/verify-0033-disposable.ps1 (run it once more right before applying).
-- [ ] **Round 5 — Save durability** (P1-02, P1-11, P1-12, P2-13): insurance patch/revision
+- [x] **Round 5 — Save durability** (P1-02, P1-11, P1-12, P2-13): insurance patch/revision
   flow; queue receipts/idempotent deletes; matrix conflict token; per-record receipts.
+  STATUS 2026-07-14: Terra build landed (23 modified + 4 new files incl. DRAFT 0034 +
+  verify-0034-disposable.ps1, script run personally → PASS; gates 0/0/0). Sol adversarial
+  review verdict: **FIXES-REQUIRED — 5 P1 + 3 P2** (scratchpad out-sol-review-r5.md):
+  (1) insurance patch not runtime-whitelisted; (2) debounce cross-budget bleed +
+  refresh-discards-newer-edit races; (3) create/copy bypass CAS, create partially
+  commits pre-0034 (another dishonest-gating control); (4) legacy queued matrix
+  entries (expectedSteps:[]) wedge the FIFO — no profitability parkHead; (5) deletes
+  report saved on zero-row RLS deletes; (6) R5-LIVE-01 confirmed + receipts/parks not
+  durable, not actionable, modules say synced while parked; (7) 0034 lock-order
+  deadlock vs 3-arg advisory lock; (8) required behavioral regressions absent (fakes
+  don't enforce CAS / simulate lost-response). Fix round dispatched to Terra
+  (task buna3qng3, prompt-terra-repair-r5-fixes.md) covering all 8 + R5-LIVE-01.
+  FIX ROUND 1 landed: data layer verified good by Claude (runtime whitelist rejects
+  extra keys; deletes use delete().select('id') + re-read, DELETE_PERMISSION_MESSAGE;
+  atomic create_crop_budget_with_matrix + copy_crop_budget_durable, advisory-lock-first
+  in all three 0034 RPCs; legacy matrix entries parked to durable read-back-verified
+  needsAttentionStore; debounce keyed {budgetId, revision}). Claude re-ran the
+  extended verify-0034-disposable.ps1 personally → PASS (behavioral: create/copy
+  replay idempotency + different-content conflicts + CAS mismatch raise). Gates
+  0/0/0 on Claude's run. REMAINING GAPS (Sol #6/#8) → FIX ROUND 2 dispatched
+  (task bc4c139cr, prompt-terra-repair-r5-fixes2.md): inv/grain/equip still say
+  synced while parked; no farmer retry/dismiss surface; Update-matrix + create/copy
+  controls not capability-disabled pre-0034 (R5-LIVE-01 proper); duplicate Saved
+  whisper; task receipt hidden by done() unmount; missing behavioral regressions.
+  FIX ROUND 2 landed + Claude-verified in code AND LIVE 2026-07-14: all synced
+  statuses route through syncOrParked (parked count → "N saves need attention");
+  NeedsAttentionList component (retry re-enqueues, legacy/pre-0034 rows show
+  "Update needed" no-Retry, two-step dismiss); create/copy/matrix controls
+  capability-disabled via one non-mutating RPC probe/session; whisper removed;
+  task receipts survive form close (lastReceiptId); saveDurability.regression.ts
+  added to chain (27 suites). Gates by Claude: tsc 0, regression 0, build 0.
+  LIVE PROOF (real app, pre-0034): Update matrix DISABLED + honest message;
+  injected legacy-format queued matrix entry → parked durably on reload (queue
+  0, no wedge), list rendered "Profitability matrix"/"Update needed", banner
+  "1 saved change needs attention. Nothing was deleted.", park survived 2nd
+  reload, two-step Dismiss cleared it durably → "All changes synced." Console
+  clean. R5-LIVE-01 CLOSED (pending Sol confirm). Sol RE-REVIEW verdict:
+  FIXES-REQUIRED — originals 4/5/7 CLOSED (legacy parking, deletes, lock order);
+  NEW: [P1] failed insurance save still deletes the only durable draft (onSave
+  drops the boolean); [P1] copy replay ignores cost-line changes; [P1]
+  NeedsAttentionList scans wrong equipment key (equipment parks invisible) AND
+  prefix-scans ALL farms/users on the device (cross-farm leak/dismiss); [P2]
+  capability probe fails OPEN on transport errors + caches rejections into
+  workspace load; [P2] profitability offline receipt says saved + synced without
+  consulting parks; [P2] pre-0034 parks offer Retry forever; [P2] insurance
+  pending drafts lack owner/budget envelope; [P2] regression gaps; [P3]
+  park/retry not idempotent (duplicate records/entries). FIX ROUND 3 dispatched
+  (task bwpd407hr, prompt-terra-repair-r5-fixes3.md) covering all 9.
+  FIX ROUND 3 landed + Claude-verified all 9 in code (draft removed only on
+  saved===true; copy replay compares canonicalized cost lines; exact queueKey
+  prop from getNeedsAttentionQueueKey — no prefix scan; probe fail-closed
+  (null | 42501/P0001+matching raise) + rejection not cached; typed save
+  disposition; 'database_update_required' park reason = non-retryable; strict
+  6-key draft envelope; upsert-by-id store + Retry busy guard). Claude added
+  the missing idempotent-append-by-operationId to grain+inventory queues
+  (Terra covered only profitability+equipment). Gates by Claude: 0/0/0;
+  verify-0034 script (now with cost-line conflict probe) run personally →
+  PASS. LIVE re-proof post-fix3: legacy entry parked (queue 0), "Update
+  needed" + NO Retry, honest banner, matrix disabled + message, dismiss →
+  synced, console clean. Sol VERIFICATION verdict: FIXES-REQUIRED **test-only**
+  — all 9 functional findings CLOSED, NO new code defects; only regression
+  coverage gaps remain (queue-append dedup ×4, inventory conflict full outcome,
+  insurance draft retention/envelope rejection, dispositions/retry-suppression/
+  busy guard, profitability queue-key assertion, probe edge cases). TEST-ONLY
+  round dispatched (task b5ceos97c, prompt-terra-repair-r5-tests.md); round
+  closes when those tests land + gates pass.
+  CLOSED 2026-07-14: test-only round landed (insurancePendingDraft.ts helper seam +
+  assertions for queue dedup, inventory conflict full outcome incl. park record id,
+  draft retention/envelope rejection ×6 shapes, probe edges incl. wrong-sentinel
+  rejection + cache-reset re-probe, profitability exact queue key, retry busy guard).
+  Final gates by Claude: tsc 0, 27 suites 0, build 0. Final live proof: profitability
+  loads (4 budgets), matrix still capability-disabled, insurance card live edit
+  APH 180→183 persisted to the real DB (SQL-verified) through the new focused-patch
+  path, reverted to 180 (SQL-verified), console clean. Round 5 evidence trail above;
+  Sol verdicts: FIXES-REQUIRED → FIXES-REQUIRED → test-only → coverage landed.
+  NOTE for the later apply decision: DRAFT 0034 = replace_profitability_matrix_steps
+  CAS overload + create_crop_budget_with_matrix + copy_crop_budget_durable (all
+  advisory-lock-first, idempotent same-content replay, conflict on drift);
+  re-runnable proof = scripts/verify-0034-disposable.ps1 (run once more right
+  before applying, after 0031-0033).
 - [ ] **Round 6 — Operational integrations** (P1-10, P1-13, P1-14, P1-15, P1-16, P2-02):
   stale-weather fail-safe; server due scheduler + push delivery + send-push caller check
   (edge function redeploy = Mason gate); Program-task authority; service-log reversal.
@@ -249,6 +329,12 @@ project, NO deploy — each needs Mason's explicit OK. Draft migrations go to
   Fix direction: bind settlement budgets through the existing budget_field_allocations
   (the farmer's explicit budget↔field-crop link) instead of an unusable entity equality.
 
+- **R5-LIVE-01 (P2):** pre-0034, the "Update matrix" button is ENABLED; clicking it
+  fails (RPC missing) and parks a needs-attention receipt saying "Reopen it to
+  review" — which cannot succeed until 0034 applies. Same shape as R4-LIVE-01:
+  the control must be capability-disabled with the honest update message. (Positive
+  live evidence: the new receipt marker rendered and the queue did NOT wedge —
+  "All changes synced" held with the entry parked.) Found live 2026-07-14.
 - **R4-LIVE-01 (P2):** with 0033 NOT applied, "Record delivery" fails with the generic
   "could not record this delivery right now. Please try again." — misleading: retrying
   can never work until the migration applies. Terra's report claimed an honest

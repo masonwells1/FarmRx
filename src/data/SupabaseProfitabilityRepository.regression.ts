@@ -3,11 +3,15 @@ import type { BudgetCostLineWrite, CopyBudgetInput, ProfitabilityDataGateway, Pr
 import { ProfitabilityWriteQueue, type ProfitabilityQueueEntryV1, parseProfitabilityQueue, profitabilityWriteQueueKey } from './profitabilityWriteQueue'
 import { QueuedProfitabilityRepository } from './QueuedProfitabilityRepository'
 import { SupabaseProfitabilityRepository } from './SupabaseProfitabilityRepository'
+import { InvalidInsurancePatchError, SupabaseProfitabilityDataGateway, durabilityCapabilityFromProbe } from './SupabaseProfitabilityDataGateway'
 import { grainWriteQueueKey } from './grainWriteQueue'
 import { writeQueueKey } from './writeQueue'
 import { moduleBackends } from './backends'
 import { supabaseConfig } from '../lib/supabaseConfig'
+import { supabase } from '../lib/supabaseClient'
 import { getSyncStatus } from './syncStatus'
+import { readNeedsAttention } from './needsAttentionStore'
+import { getSaveReceipt } from '../lib/saveReceipt'
 import type { FieldsRepository } from './fields'
 import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, ProfitabilityMatrixStep } from './profitability'
 import type { StorageLike } from './writeQueue'
@@ -37,13 +41,18 @@ class FakeGateway implements ProfitabilityDataGateway {
   readonly state = fixture(); fail = false; throwError: Error | null = null; mutate: Mutators = {}
   budgetInputs: CropBudget[] = []; costLineInputs: BudgetCostLineWrite[] = []; deletedCostLineIds: string[] = []
   allocationInputs: BudgetFieldAllocation[] = []; deletedAllocationIds: string[] = []
-  matrixInputs: ReplaceMatrixStepsInput[] = []; copyInputs: CopyBudgetInput[] = []
+  matrixInputs: ReplaceMatrixStepsInput[] = []; copyInputs: CopyBudgetInput[] = []; insuranceCalls = 0
   private guard() { if (this.throwError) throw this.throwError }
   async loadWorkspace(_farmId: string): Promise<ProfitabilityRowBundle> { if (this.fail) throw new Error('network timeout'); return structuredClone(this.state.bundle) }
   async upsertBudget(_farmId: string, row: CropBudget) {
     this.guard(); this.budgetInputs.push(structuredClone(row))
     const response = { ...structuredClone(row), notes: null } as unknown as Record<string, unknown>
     return this.mutate.budget ? this.mutate.budget(response) : response
+  }
+  async patchBudgetInsurance(_farmId: string, budgetId: string, patch: import('./profitability').InsuranceBudgetPatch) {
+    this.guard(); this.insuranceCalls++; const current = this.state.bundle.budgets.find((item) => item.id === budgetId) as Record<string, unknown> | undefined
+    if (!current) throw new Error('missing budget')
+    return { ...current, ...patch }
   }
   async upsertCostLine(_farmId: string, row: BudgetCostLineWrite) {
     this.guard(); this.costLineInputs.push(structuredClone(row))
@@ -61,9 +70,17 @@ class FakeGateway implements ProfitabilityDataGateway {
   async deleteAllocation(_farmId: string, id: string) { this.guard(); this.deletedAllocationIds.push(id); return this.mutate.deleteEcho ? this.mutate.deleteEcho(id) : id }
   async replaceMatrixSteps(input: ReplaceMatrixStepsInput) {
     this.guard(); this.matrixInputs.push(structuredClone(input))
+    const key = (step: ProfitabilityMatrixStep) => `${step.id}|${step.axis}|${step.sort_order}|${step.value}`
+    const current = (this.state.bundle.matrix_steps as unknown as ProfitabilityMatrixStep[]).filter((step) => step.budget_id === input.budgetId)
+    if (input.expectedSteps !== undefined && input.expectedSteps !== null && current.map(key).sort().join('|') !== input.expectedSteps.map(key).sort().join('|')) throw new Error('MATRIX_CHANGED_ON_ANOTHER_DEVICE')
     if (input.steps.length === 0) return []
+    this.state.bundle.matrix_steps = [...this.state.bundle.matrix_steps.filter((step) => step.budget_id !== input.budgetId), ...input.steps.map((step) => ({ id: step.id, farm_id: this.state.scope.farm_id, budget_id: step.budget_id, axis: step.axis, step_order: step.sort_order, value: step.value, created_at: stamp, updated_at: stamp }))]
     const response = input.steps.map((step) => ({ id: step.id, farm_id: this.state.scope.farm_id, budget_id: step.budget_id, axis: step.axis, step_order: step.sort_order, value: step.value, created_at: stamp, updated_at: stamp }))
     return this.mutate.matrix ? this.mutate.matrix(response) : response
+  }
+  async createBudgetWithMatrix(input: { farmId: string; budget: CropBudget; matrixSteps: ProfitabilityMatrixStep[] }) {
+    this.guard(); this.budgetInputs.push(structuredClone(input.budget)); this.matrixInputs.push({ farmId: input.farmId, budgetId: input.budget.id, steps: structuredClone(input.matrixSteps), expectedSteps: null })
+    return { ...input.budget, farm_id: this.state.scope.farm_id, notes: null }
   }
   async copyBudget(input: CopyBudgetInput) {
     this.guard(); this.copyInputs.push(structuredClone(input))
@@ -81,6 +98,14 @@ function repository(gateway: FakeGateway) {
 function memoryStorage(): StorageLike & { values: Map<string, string> } { return { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } } }
 
 async function run() {
+  assert(durabilityCapabilityFromProbe(null) === true, 'A successful durability probe must enable the capability.')
+  assert(durabilityCapabilityFromProbe({ code: undefined, message: 'fetch failed' }) === false, 'An unknown/transport durability probe error must fail closed.')
+  assert(durabilityCapabilityFromProbe({ code: 'P0001', message: 'authentication is required' }) === true, 'The RPC authentication sentinel must prove the durability capability.')
+  assert(durabilityCapabilityFromProbe({ code: '42501', message: 'unexpected permission text' }) === false && durabilityCapabilityFromProbe({ code: 'P0001', message: 'unexpected permission text' }) === false, 'Non-sentinel 42501/P0001 durability probe messages must fail closed.')
+  assert(durabilityCapabilityFromProbe({ message: 'authentication is required' }) === false && durabilityCapabilityFromProbe({ code: 'unknown', message: 'permission to edit this farm' }) === false, 'Unknown or absent durability probe codes must fail closed.')
+  assert(durabilityCapabilityFromProbe({ code: '42501', message: 'Authentication is required.' }) === true && durabilityCapabilityFromProbe({ code: 'P0001', message: 'permission to edit this farm' }) === true, 'Both recognized durability probe codes must require and accept their matching sentinel messages.')
+  const probeClient = supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<{ error: { code?: unknown; message?: unknown } | null }> }; const originalRpc = probeClient.rpc; let probeCalls = 0
+  try { probeClient.rpc = async () => { probeCalls += 1; if (probeCalls === 1) throw new Error('network reset'); return { error: { code: '42501', message: 'authentication is required' } } }; const probeGateway = new SupabaseProfitabilityDataGateway(); assert(await probeGateway.getSaveDurabilityCapability() === false && await probeGateway.getSaveDurabilityCapability() === true && probeCalls === 2, 'A rejected durability probe must resolve false and clear its cache so the next call re-probes.') } finally { probeClient.rpc = originalRpc }
   const gateway = new FakeGateway(); const repo = repository(gateway); const workspace = await repo.getWorkspace()
   // 1: strict mapping — numeric strings, microsecond+offset timestamps, label->name, step_order->sort_order round-trip.
   assert(workspace.budgets.length === 1 && workspace.budgets[0].expected_yield_per_acre === 200 && workspace.budgets[0].created_at === microStamp && workspace.budgets[0].rp_coverage_pct === 80 && workspace.budgets[0].rp_projected_price === 4.62, 'Budget mapping must round-trip RP columns, coerce numeric strings, and accept microsecond+offset timestamps.')
@@ -102,6 +127,10 @@ async function run() {
   const foreignBudget = structuredClone(gateway.state.bundle); (foreignBudget.budgets[0] as Record<string, unknown>).commodity_id = 'not-a-real-commodity'; gateway.state.bundle.budgets = foreignBudget.budgets; await rejects(() => repo.getWorkspace(), 'A budget with an unverifiable commodity must reject.'); gateway.state.bundle.budgets = fixture().bundle.budgets
   // 6: canonical-confirmation rejections — the repository must confirm the server's echoed rows, never trust its own request.
   const savedBudget = workspace.budgets[0]
+  let insuranceError: unknown = null
+  const insuranceCallsBefore = gateway.insuranceCalls
+  try { await repo.saveBudgetInsurance(savedBudget.id, { rp_coverage_pct: 80, expected_price_per_bushel: 5 } as unknown as import('./profitability').InsuranceBudgetPatch) } catch (error) { insuranceError = error }
+  assert(insuranceError instanceof InvalidInsurancePatchError && gateway.insuranceCalls === insuranceCallsBefore, 'An insurance patch with an extra key must throw InvalidInsurancePatchError before reaching the fake gateway.')
   await repo.saveBudget(savedBudget)
   assert(gateway.budgetInputs.at(-1)?.rp_coverage_pct === 80 && gateway.budgetInputs.at(-1)?.rp_aph_yield === 180 && gateway.budgetInputs.at(-1)?.rp_projected_price === 4.62 && gateway.budgetInputs.at(-1)?.rp_premium_per_acre === 0, 'Saving a budget must preserve every RP column.')
   gateway.mutate.budget = (row) => ({ ...row, id: uid(500) })
@@ -156,6 +185,7 @@ async function run() {
   const first = await repo.replaceMatrixStepsOperation(savedBudget.id, validSteps)
   const second = await repo.replaceMatrixStepsOperation(savedBudget.id, validSteps)
   assert(first.length === second.length && first.length === validSteps.length, 'Replaying the identical matrix desired-state must be idempotent.')
+  await rejects(() => repo.replaceMatrixStepsOperation(savedBudget.id, validSteps, validSteps.map((step, index) => index === 0 ? { ...step, value: step.value + 1 } : step)), 'The fake gateway must enforce the expected matrix snapshot with MATRIX_CHANGED_ON_ANOTHER_DEVICE.')
   // 13: deep-copy integrity — new ids for the budget and every child, re-parented, no shared references.
   const sourceLine = workspace.cost_lines.find((line) => line.budget_id === savedBudget.id)!
   await repo.copyBudget(savedBudget.id, { ...savedBudget, id: uid(720), name: 'Deep copy', copied_from_budget_id: null })
@@ -189,13 +219,14 @@ async function run() {
     { ...common('saveBudget', 2), kind: 'saveBudget', row: savedBudget },
     { ...common('saveCostLine', 3), kind: 'saveCostLine', row: costLineWrite },
     { ...common('deleteCostLine', 4), kind: 'deleteCostLine', id: uid(2) },
-    { ...common('replaceMatrixSteps', 5), kind: 'replaceMatrixSteps', budgetId: savedBudget.id, steps: matrixSteps },
+    { ...common('replaceMatrixSteps', 5), kind: 'replaceMatrixSteps', budgetId: savedBudget.id, steps: matrixSteps, expectedSteps: matrixSteps },
     { ...common('saveAllocation', 6), kind: 'saveAllocation', row: workspace.allocations[0] },
     { ...common('deleteAllocation', 7), kind: 'deleteAllocation', id: uid(30) },
     { ...common('copyBudget', 8), kind: 'copyBudget', sourceBudgetId: savedBudget.id, budget: { ...savedBudget, id: uid(731), copied_from_budget_id: savedBudget.id }, costLines: [costLineWrite], matrixSteps },
   ]
   for (const item of entries) queue.append(item)
-  assert(queue.read().entries.length === 8, 'Every Profitability queue entry kind must round-trip.')
+  queue.append(entries[0]!)
+  assert(queue.read().entries.length === 8, 'Appending the same Profitability operationId twice must retain exactly one queue entry.')
   const bytesBefore = storage.getItem(queueKey)
   await rejects(async () => { parseProfitabilityQueue(JSON.stringify({ version: 1, entries: [{ ...common('saveBudget', 9), kind: 'saveBudget', row: { ...savedBudget, extra: true } }] })) }, 'Queue accepted an extra row field.')
   assert(storage.getItem(queueKey) === bytesBefore, 'Invalid bytes replaced a valid queue.')
@@ -206,11 +237,13 @@ async function run() {
   const offlineDependencies = { getContext: async () => ({ userId: uid(10), farmId: gateway.state.scope.farm_id }), projectRef: supabaseConfig.projectRef, storage: offlineStorage, createId: (() => { let n = 200; return () => uid(n++) })(), clock: () => stamp, isOffline: () => true }
   const queuedGateway = new FakeGateway(); const queuedWriter = repository(queuedGateway); const queued = new QueuedProfitabilityRepository(queuedWriter, offlineDependencies)
   const newAllocation: BudgetFieldAllocation = { id: uid(740), budget_id: savedBudget.id, crop_assignment_id: assignment.id, allocated_acres: 10, expected_yield_override: null, expected_price_override: null, created_at: stamp, updated_at: stamp }
-  await queued.saveAllocation(newAllocation)
+  const offlineDisposition = await queued.saveAllocation(newAllocation)
   const overlaid = await queued.getWorkspace()
-  assert(overlaid.allocations.some((row) => row.id === uid(740)), 'Queued allocation was not optimistically overlaid.')
+  assert(offlineDisposition === 'queued offline' && getSaveReceipt(uid(740)) === 'queued offline' && overlaid.allocations.some((row) => row.id === uid(740)), 'An offline profitability write must return queued offline and transition its receipt to Queued offline.')
   const otherKey = profitabilityWriteQueueKey(supabaseConfig.projectRef, uid(11), gateway.state.scope.farm_id)
-  assert(otherKey !== queueKey && offlineStorage.getItem(otherKey) === null, 'Queue context isolation failed.')
+  const exactQueueKey = `farm-rx-profitability-write-queue:v1:${supabaseConfig.projectRef}:${uid(10)}:${gateway.state.scope.farm_id}`
+  const otherFarm = uid(12); const alternateContext = new QueuedProfitabilityRepository(queuedWriter, { ...offlineDependencies, getContext: async () => ({ userId: uid(11), farmId: otherFarm }) })
+  assert(await queued.getNeedsAttentionQueueKey() === exactQueueKey && await alternateContext.getNeedsAttentionQueueKey() === `farm-rx-profitability-write-queue:v1:${supabaseConfig.projectRef}:${uid(11)}:${otherFarm}` && otherKey !== queueKey && offlineStorage.getItem(otherKey) === null, 'QueuedProfitabilityRepository must return exactly its project, user, and farm-scoped needs-attention queue key.')
   // 18: FIFO replay preserves operation order and ids.
   const replayGateway = new FakeGateway(); const replayWriter = repository(replayGateway); let online = false
   const replayStorage = memoryStorage()
@@ -221,7 +254,18 @@ async function run() {
   await replay.inspectAndReplay()
   assert(replayGateway.budgetInputs[0]?.id === uid(750) && replayGateway.deletedAllocationIds[0] === uid(30), 'FIFO replay did not preserve operation order and ids.')
   assert(getSyncStatus().kind !== 'blocked', 'A clean FIFO replay must not classify as blocked.')
-  // 19: canonical-confirmation failure during replay must retain the queue head and classify as blocked, not silently confirmed away.
+  // 19: the queued matrix keeps its enqueue-time snapshot; a different server matrix parks instead of overwriting it.
+  const casGateway = new FakeGateway(); const casStorage = memoryStorage(); let casOnline = false
+  const casKey = profitabilityWriteQueueKey(supabaseConfig.projectRef, uid(10), gateway.state.scope.farm_id)
+  const casRepo = new QueuedProfitabilityRepository(repository(casGateway), { ...offlineDependencies, storage: casStorage, isOffline: () => !casOnline })
+  const casSteps = (await casRepo.getWorkspace()).matrix_steps.filter((step) => step.budget_id === savedBudget.id).map((step, index) => ({ ...step, value: step.value + (index < 3 ? .1 : 1) }))
+  await casRepo.replaceMatrixSteps(savedBudget.id, casSteps)
+  const queuedCas = new ProfitabilityWriteQueue(casStorage, casKey).read().entries[0] as Extract<ProfitabilityQueueEntryV1, { kind: 'replaceMatrixSteps' }>
+  assert(!('legacyUnknownSnapshot' in queuedCas) && queuedCas.expectedSteps.length === 6, 'A queued matrix replay must retain the enqueue-time expected snapshot.')
+  ;(casGateway.state.bundle.matrix_steps[0] as Record<string, unknown>).value = 9.99
+  casOnline = true; await casRepo.inspectAndReplay()
+  { const status = getSyncStatus(); assert(new ProfitabilityWriteQueue(casStorage, casKey).read().entries.length === 0 && readNeedsAttention(casStorage, casKey).length === 1 && status.kind === 'blocked' && status.message === '1 saves need attention.', 'A changed server matrix must park the queued CAS replay instead of replacing it.') }
+  // 20: canonical-confirmation failure is durably parked before the head is removed.
   const retentionGateway = new FakeGateway(); const retentionWriter = repository(retentionGateway); let retentionOnline = false
   const retentionStorage = memoryStorage()
   const retentionKey = profitabilityWriteQueueKey(supabaseConfig.projectRef, uid(10), gateway.state.scope.farm_id)
@@ -232,7 +276,7 @@ async function run() {
   retentionOnline = true
   await retentionRepo.inspectAndReplay()
   const afterWrongIdReplay = new ProfitabilityWriteQueue(retentionStorage, retentionKey).read().entries
-  assert(afterWrongIdReplay.length === 1, 'A canonical-confirmation rejection during replay must retain the queue head.')
+  assert(afterWrongIdReplay.length === 0 && readNeedsAttention(retentionStorage, retentionKey).length === 1, 'A canonical-confirmation rejection during replay must be durably parked before the queue advances.')
   assert(getSyncStatus().kind === 'blocked', 'A canonical-confirmation rejection during replay must classify as blocked, not synced.')
   // 20: a permission-shaped (403) gateway error must classify as blocked, not be retried as a transport failure.
   const permissionGateway = new FakeGateway(); const permissionWriter = repository(permissionGateway); let permissionOnline = false
@@ -244,7 +288,7 @@ async function run() {
   permissionGateway.throwError = Object.assign(new Error('permission denied for table budget_field_allocations'), { status: 403 })
   permissionOnline = true
   await permissionRepo.inspectAndReplay()
-  assert(new ProfitabilityWriteQueue(permissionStorage, permissionKey).read().entries.length === 1, 'A 403/permission-shaped gateway error must retain the queue head — it is not transport-retryable.')
+  assert(new ProfitabilityWriteQueue(permissionStorage, permissionKey).read().entries.length === 0 && readNeedsAttention(permissionStorage, permissionKey).length === 1, 'A 403/permission-shaped gateway error must be durably parked — it is not transport-retryable.')
   assert(getSyncStatus().kind === 'blocked', 'A 403/permission-shaped gateway error must classify as blocked.')
   // 21: a corrupt on-device queue envelope fails closed with the calm sentinel rather than losing or corrupting data.
   const corruptStorage = memoryStorage(); const corruptKey = profitabilityWriteQueueKey(supabaseConfig.projectRef, uid(10), gateway.state.scope.farm_id)

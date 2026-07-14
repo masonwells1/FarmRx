@@ -6,6 +6,7 @@ import { SupabaseGrainRepository } from './SupabaseGrainRepository'
 import { moduleBackends } from './backends'
 import { supabaseConfig } from '../lib/supabaseConfig'
 import { getSyncStatus } from './syncStatus'
+import { readNeedsAttention } from './needsAttentionStore'
 import { isMarsBid, latestBasis } from './basisMath'
 import { farmerError } from '../lib/farmerErrors'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from './binLedger'
@@ -78,16 +79,18 @@ async function run() {
   const queue = new GrainWriteQueue(memory, queueKey)
   const productionRow = data.production_estimates[0]; const contractRow = data.grain_contracts[0]; const targetRow = data.marketing_plan_targets[0]; const bidRow = data.cash_bids[0]
   const common = (kind: 'saveProductionEstimate' | 'saveContract' | 'replaceMarketingPlan' | 'saveCashBid', n: number) => ({ version: 1 as const, module: 'grain' as const, kind, operationId: uid(100 + n), userId: uid(10), farmId: data.fields.farm.id, enqueuedAt: stamp })
-  queue.append({ ...common('saveProductionEstimate', 1), kind: 'saveProductionEstimate', row: productionRow })
+  const productionEntry = { ...common('saveProductionEstimate', 1), kind: 'saveProductionEstimate' as const, row: productionRow }; queue.append(productionEntry)
   queue.append({ ...common('saveContract', 2), kind: 'saveContract', row: contractRow })
   queue.append({ ...common('replaceMarketingPlan', 3), kind: 'replaceMarketingPlan', scope: gateway.state.scope, targets: [targetRow] })
   queue.append({ ...common('saveCashBid', 4), kind: 'saveCashBid', row: bidRow })
-  assert(queue.read().entries.length === 4, 'Every Grain queue entry kind must round-trip.')
+  queue.append(productionEntry)
+  assert(queue.read().entries.length === 4, 'Appending the same Grain operationId twice must retain exactly one queue entry.')
   const beforeBad = memory.getItem(queueKey); await rejects(async () => { parseGrainQueue(JSON.stringify({ version: 1, entries: [{ ...common('saveContract', 5), kind: 'saveContract', row: { ...contractRow, extra: true } }] })) }, 'Queue accepted an extra row field.'); assert(memory.getItem(queueKey) === beforeBad, 'Invalid bytes replaced a valid queue.')
   // 13-15: the real queued repository keeps context keys isolated, overlays FIFO writes, and replays confirmed heads only.
   const overlayStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
   const offlineDependencies = { getContext: async () => ({ userId: uid(10), farmId: data.fields.farm.id }), projectRef: supabaseConfig.projectRef, storage: overlayStorage, createId: (() => { let n = 200; return () => uid(n++) })(), clock: () => stamp, isOffline: () => true }
   const queued = new QueuedGrainRepository(repo, offlineDependencies)
+  assert(await queued.getNeedsAttentionQueueKey() === queueKey, 'Grain attention discovery must use only the exact current user and farm queue key.')
   await queued.saveCashBid({ ...bidRow, id: uid(50) }); const overlaid = await queued.getData(); assert(overlaid.cash_bids.some((row) => row.id === uid(50)), 'Queued cash bid was not optimistically overlaid.')
   const other = grainWriteQueueKey(supabaseConfig.projectRef, uid(11), data.fields.farm.id); assert(other !== queueKey && memory.getItem(other) === null, 'Queue context isolation failed.')
   const replayStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
@@ -123,7 +126,7 @@ async function run() {
   gateway.mutate.plan = (rows) => [...rows, ...rows]
   await rejects(() => repo.replaceMarketingPlanTargets(gateway.state.scope, [baseTarget]), 'A duplicated plan response (repeated rows) must reject.')
   gateway.mutate = {}
-  // 17: when replay's canonical confirmation fails, the queued head must be retained, not confirmed away.
+  // 17: a poisoned replay is parked locally and later FIFO entries are not wedged.
   const retentionStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
   const retentionGateway = new FakeGateway(); const retentionWriter = repository(retentionGateway)
   let retentionOnline = false
@@ -135,8 +138,9 @@ async function run() {
   retentionOnline = true
   await retentionRepo.inspectAndReplay()
   const afterWrongIdReplay = new GrainWriteQueue(retentionStorage, retentionKey).read().entries
-  assert(afterWrongIdReplay.length === 1 && afterWrongIdReplay[0].kind === 'saveContract' && afterWrongIdReplay[0].row.id === uid(950), 'A canonical-confirmation rejection during replay must retain the queue head.')
-  assert(getSyncStatus().kind === 'blocked', 'A canonical-confirmation rejection during replay must classify as blocked, not synced.')
+  assert(afterWrongIdReplay.length === 0, 'A canonical-confirmation rejection must not wedge the live FIFO queue.')
+  assert((readNeedsAttention(retentionStorage, retentionKey)[0]?.entry as { row: { id: string } }).row.id === uid(950), 'A canonical-confirmation rejection must be retained in the needs-attention receipt store.')
+  { const status = getSyncStatus(); assert(status.kind === 'blocked' && status.pending === 1 && status.message === '1 saves need attention.', 'A parked operation must be shown as one save needing attention, not synced.') }
   // 18: a permission-shaped (403) gateway error must classify as blocked, not be retried as a transport failure.
   const permissionStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
   const permissionGateway = new FakeGateway(); const permissionWriter = repository(permissionGateway)
@@ -149,8 +153,9 @@ async function run() {
   permissionOnline = true
   await permissionRepo.inspectAndReplay()
   const afterForbiddenReplay = new GrainWriteQueue(permissionStorage, permissionKey).read().entries
-  assert(afterForbiddenReplay.length === 1 && afterForbiddenReplay[0].kind === 'saveCashBid' && afterForbiddenReplay[0].row.id === uid(960), 'A 403/permission-shaped gateway error must retain the queue head — it is not transport-retryable.')
-  assert(getSyncStatus().kind === 'blocked', 'A 403/permission-shaped gateway error must classify as blocked.')
+  assert(afterForbiddenReplay.length === 0, 'A non-transport failure must be parked instead of blocking later saves.')
+  assert((readNeedsAttention(permissionStorage, permissionKey)[0]?.entry as { row: { id: string } }).row.id === uid(960), 'A 403/permission-shaped failure must remain available for farmer review.')
+  { const status = getSyncStatus(); assert(status.kind === 'blocked' && status.pending === 1 && status.message === '1 saves need attention.', 'A parked failure must be shown as one save needing attention, not synced.') }
   // 19: plan validation must reject over-100% totals and duplicate months before ever reaching the gateway.
   const planCallsBeforeValidation = gateway.planInputs.length
   const overTotalTargets: MarketingPlanTarget[] = [{ ...baseTarget, id: uid(970), target_month: '2026-09-01', target_pct_of_production: 60 }, { ...baseTarget, id: uid(971), target_month: '2026-10-01', target_pct_of_production: 45 }]

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "react-router-dom";
+import { NeedsAttentionList } from "./components/NeedsAttentionList";
 import { MarketQuoteSection } from "./components/MarketQuote";
 import { SectionTabs } from "./SectionTabs";
 import { farmerError } from "./lib/farmerErrors";
@@ -245,6 +246,7 @@ function binPosition(workspace: GrainWorkspace, bin: GrainBin) {
 
 export function GrainPage({ services }: { services: GrainServices }) {
   const [workspace, setWorkspace] = useState<GrainWorkspace | null>(null);
+  const [attentionQueueKey, setAttentionQueueKey] = useState<string | null>(null);
   const [selectedEstimateId, setSelectedEstimateId] = useState("");
   const [editingTarget, setEditingTarget] = useState<{
     month: number;
@@ -273,7 +275,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
     : "";
   const refresh = async () => {
     try {
-      const data = await services.grainRepository.getData();
+      const [data, queueKey] = await Promise.all([services.grainRepository.getData(), services.grainRepository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)]);
+      setAttentionQueueKey(queueKey);
       const ruleEvaluation = evaluateMarketingAlertRules(data);
       const nextAlerts = evaluateGrainAlerts(data);
       setWorkspace(data);
@@ -437,6 +440,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
           </p>
         </div>
       </div>
+      <NeedsAttentionList module="grain" queueKey={attentionQueueKey} onChanged={refresh} />
       <SectionTabs base="/grain" tabs={GRAIN_TABS} />
       {tabPath === "" && (
         <>

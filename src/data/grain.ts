@@ -106,6 +106,7 @@ export interface GrainData { production_estimates: ProductionEstimate[]; grain_c
 export interface GrainWorkspace extends GrainData { fields: FieldsData }
 export interface GrainRepository {
   getData(): Promise<GrainWorkspace>
+  getNeedsAttentionQueueKey?(): Promise<string>
   saveProductionEstimate(estimate: ProductionEstimate): Promise<void>
   saveContract(contract: GrainContract): Promise<void>
   finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number): Promise<void>
