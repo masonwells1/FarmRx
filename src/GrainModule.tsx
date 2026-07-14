@@ -26,6 +26,7 @@ import type {
 import { marketedPercent, sameScope, scopeKey, scopeOf } from "./data/grain";
 import {
   evaluateGrainAlerts,
+  recordMarketingAlertTransitions,
   requestOwnerAlertDelivery,
   type GrainAlert,
 } from "./data/grainAlerts";
@@ -281,31 +282,29 @@ export function GrainPage({ services }: { services: GrainServices }) {
       const nextAlerts = evaluateGrainAlerts(data);
       setWorkspace(data);
       setAlerts(nextAlerts);
-      if (ruleEvaluation.firedRuleIds.length) {
-        if (!refreshWriteLock.current.acquire()) return;
-        const stamp = new Date().toISOString();
-        void Promise.all(
-          ruleEvaluation.firedRuleIds.map((id) => {
-            const rule = data.marketing_alert_rules.find(
-              (item) => item.id === id,
-            );
-            return rule
-              ? services.grainRepository.saveMarketingAlertRule({
-                  ...rule,
-                  last_triggered_at: stamp,
-                  updated_at: stamp,
-                })
-              : Promise.resolve();
-          }),
-        ).finally(() => refreshWriteLock.current.release());
-      }
-      void requestOwnerAlertDelivery(nextAlerts, data.fields.farm.id).then(
+      void recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions).then((transitioned) => {
+        if (transitioned !== null) return requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId || transitioned.has(alert.ruleId)), data.fields.farm.id);
+        // Pre-0035: retain current behavior, but one synchronous refresh lock
+        // prevents a refresh burst from double-writing the same rule state.
+        if (ruleEvaluation.firedRuleIds.length && refreshWriteLock.current.acquire()) {
+          const stamp = new Date().toISOString();
+          void Promise.all(ruleEvaluation.firedRuleIds.map((id) => {
+            const rule = data.marketing_alert_rules.find((item) => item.id === id);
+            return rule ? services.grainRepository.saveMarketingAlertRule({ ...rule, last_triggered_at: stamp, updated_at: stamp }) : Promise.resolve();
+          })).finally(() => refreshWriteLock.current.release());
+        }
+        return requestOwnerAlertDelivery(nextAlerts, data.fields.farm.id);
+      }).then(
         (failed) =>
           setDeliveryNotice(
             failed.length
               ? "An email notice could not be sent. Your in-app alert is still here."
               : "",
           ),
+      ).catch(() =>
+        setDeliveryNotice(
+          "An email notice could not be sent. Your in-app alert is still here.",
+        ),
       );
       setLoadError("");
       setSelectedEstimateId((current) =>

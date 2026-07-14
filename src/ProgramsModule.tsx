@@ -23,7 +23,7 @@ import {
 } from "./data/programs";
 import { farmerError } from "./lib/farmerErrors";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
-import { evaluateSprayWindow, weatherService } from "./data/weatherService";
+import { evaluateSprayWindow, isActionablyFresh, weatherService } from "./data/weatherService";
 const emptyProgram = (): ProgramDraft => ({
   id: null,
   name: "",
@@ -1144,6 +1144,15 @@ function SprayLight({
     void weatherService
       .fetchForecast(assignment.latitude, assignment.longitude)
       .then((bundle) => {
+        const fresh = isActionablyFresh(bundle);
+        if (!fresh) {
+          if (live)
+            setState({
+              level: "caution",
+              text: `Weather data is not fresh enough for a spray recommendation — refresh before spraying. Checked ${displayTime(bundle.fetched_at)}.`,
+            });
+          return;
+        }
         const day =
           bundle.daily.find(
             (item) => item.date === bundle.current.time.slice(0, 10),
@@ -1157,7 +1166,7 @@ function SprayLight({
         if (live)
           setState({
             level: verdict.level,
-            text: `${verdict.reasons[0] ?? "Current conditions need attention."} ${bundle.stale ? "Showing the last forecast. Reconnect for the latest. " : ""}Checked ${displayTime(bundle.fetched_at)}.`,
+            text: `${verdict.reasons[0] ?? "Current conditions need attention."} Checked ${displayTime(bundle.fetched_at)}.`,
           });
       })
       .catch(() => {

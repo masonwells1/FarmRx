@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabaseClient'
 import type { GrainWorkspace } from './grain'
 import { evaluateMarketingAlertRules } from './marketingAlerts'
+import { getOperationalIntegrityCapability } from './operationalIntegrityCapability'
 
 export interface GrainAlert { key: string; kind: 'price_target' | 'target_deadline' | 'usda_report' | 'marketing_price_target' | 'marketing_pct_marketed_goal' | 'marketing_deadline'; message: string; targetId?: string; reportId?: string; observationId?: string; ruleId?: string }
 const day = (value: Date) => value.toISOString().slice(0, 10)
@@ -33,5 +34,19 @@ export async function requestOwnerAlertDelivery(alerts: GrainAlert[], farmId: st
   }
   try { localStorage.setItem(key, JSON.stringify([...sent])) } catch { /* delivery remains best effort and will be retried */ }
   return failures
+}
+/** 0035 records false/true state atomically. A missing draft RPC intentionally
+ * returns null so the caller can retain the pre-update guarded behavior. */
+export async function recordMarketingAlertTransitions(farmId: string, conditions: Array<{ ruleId: string; met: boolean }>): Promise<Set<string> | null> {
+  if (!await getOperationalIntegrityCapability()) return null
+  const fired = new Set<string>()
+  for (const condition of conditions) {
+    const { data, error } = await supabase.rpc('record_marketing_alert_transition', { p_farm_id: farmId, p_rule_id: condition.ruleId, p_condition_true: condition.met })
+    // A transient per-rule failure must not discard transitions already
+    // recorded server-side: skip the rule; its state is retried next refresh.
+    if (error) { if (error.code === '42883' || error.code === 'PGRST202') return null; continue }
+    if (data && typeof data === 'object' && (data as { fired?: unknown }).fired === true) fired.add(condition.ruleId)
+  }
+  return fired
 }
 const inFlight = new Set<string>()

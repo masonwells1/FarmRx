@@ -12,6 +12,7 @@ import type {
 } from "./data/equipmentTasks";
 import { farmerError } from "./lib/farmerErrors";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
+import { OPERATIONAL_INTEGRITY_UPDATE_MESSAGE } from "./data/operationalIntegrityCapability";
 import { SaveReceipt } from "./components/SaveReceipt";
 import { useSaveReceipt } from "./lib/saveReceipt";
 import { NeedsAttentionList } from "./components/NeedsAttentionList";
@@ -387,7 +388,9 @@ function EquipmentDetail({
 }) {
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [operationalIntegrityReady, setOperationalIntegrityReady] = useState(false);
   const equipmentLock = useRef(createSubmitLock());
+  useEffect(() => { void (repository.getOperationalIntegrityCapability?.() ?? Promise.resolve(false)).then(setOperationalIntegrityReady).catch(() => setOperationalIntegrityReady(false)); }, [repository]);
   const canManage =
     workspace.viewer.role === "owner" || workspace.viewer.role === "manager";
   const readings = workspace.meter_readings
@@ -696,15 +699,19 @@ function EquipmentDetail({
               </span>
               <strong>{x.cost === null ? "—" : money.format(x.cost)}</strong>
               {canManage && (
-                <button
-                  className="danger-action"
-                  onClick={() => {
-                    if (window.confirm("Delete this service entry?"))
-                      void removeServiceLog(x.id);
-                  }}
-                >
-                  Delete
-                </button>
+                <>
+                  <button
+                    className="danger-action"
+                    disabled={!operationalIntegrityReady}
+                    onClick={() => {
+                      if (window.confirm("Delete this service entry?"))
+                        void removeServiceLog(x.id);
+                    }}
+                  >
+                    Delete
+                  </button>
+                  {!operationalIntegrityReady && <p className="form-error">{OPERATIONAL_INTEGRITY_UPDATE_MESSAGE}</p>}
+                </>
               )}
             </div>
           ))
@@ -999,6 +1006,9 @@ function TaskColumn({
                 </small>
               )}
               <div className="task-actions">
+                {programCard.trackerOwned ? (
+                  <p className="task-program-managed">Managed by its Program — update it there. {programHref && <button className="text-action" onClick={() => navigate(programHref)}>Open Program</button>}</p>
+                ) : <>
                 {task.status === "todo" && (
                   <button onClick={() => void move(task, "doing")}>
                     Start
@@ -1031,6 +1041,7 @@ function TaskColumn({
                     Delete
                   </button>
                 )}
+                </>}
               </div>
             </article>
           );

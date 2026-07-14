@@ -289,9 +289,60 @@ project, NO deploy — each needs Mason's explicit OK. Draft migrations go to
   advisory-lock-first, idempotent same-content replay, conflict on drift);
   re-runnable proof = scripts/verify-0034-disposable.ps1 (run once more right
   before applying, after 0031-0033).
-- [ ] **Round 6 — Operational integrations** (P1-10, P1-13, P1-14, P1-15, P1-16, P2-02):
+- [x] **Round 6 — Operational integrations** (P1-10, P1-13, P1-14, P1-15, P1-16, P2-02):
   stale-weather fail-safe; server due scheduler + push delivery + send-push caller check
   (edge function redeploy = Mason gate); Program-task authority; service-log reversal.
+  STATUS 2026-07-14: Terra build landed (DRAFT 0035 push_deliveries queue + due
+  generation + program-task trigger backstop + service-log reversal RPC + alert
+  transition states; send-push ownership check + queue consumption in edge SOURCE;
+  weather 2h staleness cap; capability gating). Claude verified: gates 0/0/0,
+  verify-0035-disposable.ps1 run personally → PASS (behavioral probes incl.
+  dedupe ×2, trigger reject/allow, reversal provenance); LIVE: weather fresh
+  path renders, Truck 7 service-history Deletes DISABLED + honest message
+  pre-0035. Not live-exercisable: stale-weather render (fetch module-bound),
+  program-managed card (no program task in test farm) — flagged to review.
+  **CODEX QUOTA EXHAUSTED mid-round (resets Jul 19 2:03 PM or Mason buys
+  credits at chatgpt.com/codex/settings/usage).** Adversarial review switched
+  to a Claude subagent (same charter, prompt-sol-review-r6.md); fixes
+  implemented by Claude directly while quota is out.
+  CLAUDE-SUBAGENT REVIEW verdict: FIXES-REQUIRED — 2 P1 (0035's
+  service_log_meter_readings + alert_rule_states had NO RLS → cross-tenant
+  REST exposure once applied; program-task backstop trigger broke template
+  refresh/reschedule flows that close cards without a status change), P2s:
+  claim_push_deliveries double-claim confirmed (no claimed_at filter on
+  pending), dedupe key mismatch vs 0024 (would double every reminder),
+  alert-chain unhandled rejection loses emails, Programs pass card rendered
+  spray verdicts from stale weather (P1-10 half-fix), alert-transition RPC
+  missing farm-scope pin, send-push caller path left queue rows pending
+  (guaranteed later duplicate). ALL FIXED by Claude in the working tree:
+  RLS+revoke both tables; trigger arms on ANY pass write; claim adds
+  claimed_at backoff + attempts<10 cap; dedupe key now 'program:<pass>:due:'
+  matching 0024 exactly; per-rule error tolerance + .catch → farmer notice;
+  shared exported isActionablyFresh() gate now used by Weather AND Programs
+  (regression group 9: stale/over-age never actionable); farm-scope check +
+  cross-farm probe; send-push finishes the queued row on caller sends; "1
+  hour old" grammar. verify-0035 script extended: RLS assertions, dual
+  generator (0024+0035) → ONE notification, claim/backoff double-claim probe,
+  cross-farm rejection. Accepted gaps (documented, not fixed): render-layer
+  regression for the program-managed card (DB trigger + disposable probe are
+  the guards; no component-test infra), multi-owner farms notify lowest-uuid
+  owner only (matches 0024), per-instance push rate limiter.
+  **DEPLOYMENT ORDER (for Mason's batched approval): apply 0035 BEFORE
+  deploying the edge functions — deliver-grain-alert hard-depends on
+  alert_rule_states; deploying it first would 409 every marketing alert.**
+  RE-REVIEW (same subagent): all 9 findings CLOSED + proven (it re-ran gates
+  AND the disposable script itself); ONE new P2 (NEW-1: failure recorded on a
+  never-claimed push row left claimed_at NULL → permanently unretryable, and
+  a non-owner 403 path could trigger it on a victim's queued push). FIXED by
+  Claude: finish_push_delivery stamps claimed_at on failure; send-push caller
+  path no longer records failures (server sweep only); verify script gained
+  the failed-unclaimed→retryable probe. Final gates 0/0/0; script PASS
+  (dual-generator dedupe visible: 0024 generator created 0 notifications
+  after 0035's). LIVE: weather fresh path, Truck 7 disabled deletes + honest
+  message, grain/programs pages clean (console errors = stale HMR noise from
+  mid-edit states; fresh reload adds none). P3 notes accepted: attempts-cap
+  rows abandoned silently (revisit if push volume grows); at-most-once alert
+  email on commit-then-lost-response. CLOSED 2026-07-14.
 - [ ] **Round 7 — P2/P3 sweep** (remaining P2s, P3s): farm timezone, photo cleanup outbox,
   finite/decimal validators, dropped-column tests, 18px/48px compliance, offline-delete
   honesty, filled-offer archival.

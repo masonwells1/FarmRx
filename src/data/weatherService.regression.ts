@@ -1,7 +1,7 @@
 import { createFieldLocationClient, mapFieldLocationEcho, type FieldLocationGateway } from './fieldLocation'
 import { fieldsSeedForRegression } from './MockFieldsRepository'
 import { mapField } from './SupabaseFieldsRepository'
-import { bestWindowToday, compassLabel, createWeatherService, evaluateSprayWindow, growingDegreeDays, hasContinuousDailyHistory, latestSafeArchiveDate, weatherCacheKey, weatherHistoryCacheKey } from './weatherService'
+import { bestWindowToday, compassLabel, createWeatherService, evaluateSprayWindow, growingDegreeDays, hasContinuousDailyHistory, isActionablyFresh, latestSafeArchiveDate, sprayJudgmentMaxAgeMs, weatherCacheKey, weatherHistoryCacheKey } from './weatherService'
 import type { WeatherSample } from './weather'
 
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message) }
@@ -50,6 +50,7 @@ async function run() {
   const misaligned = clone(payload); misaligned.hourly.wind_speed_10m = [6, 7]; await unavailable(misaligned, 'Misaligned hourly arrays must not produce a spray verdict.')
   const emptyCurrent = clone(payload); emptyCurrent.current = {} as typeof emptyCurrent.current; await unavailable(emptyCurrent, 'An empty current forecast must not produce a spray verdict.')
   const staleStorage = new Storage(); let staleNow = new Date('2026-07-12T15:00:00Z'); const live = createWeatherService({ storage: staleStorage, clock: () => staleNow, fetch: async () => response(payload) }); await live.fetchForecast(38, -88); staleNow = new Date(staleNow.getTime() + 31 * 60 * 1000); const stale = await createWeatherService({ storage: staleStorage, clock: () => staleNow, fetch: async () => response(emptyHourly) }).fetchForecast(38, -88); assert(stale.stale, 'A valid stale cache must be used when a new forecast is incomplete.')
+  staleNow = new Date(staleNow.getTime() + sprayJudgmentMaxAgeMs); await rejects(() => createWeatherService({ storage: staleStorage, clock: () => staleNow, fetch: async () => response(emptyHourly) }).fetchForecast(38, -88), 'A forecast older than the two-hour spray-judgment ceiling must never be served after a failed refresh.')
 
   // Group 4: corrupt cache bodies are ignored and storage is best-effort.
   const cacheStorage = new Storage(); const cacheKey = weatherCacheKey(38, -88); cacheStorage.setItem(cacheKey, JSON.stringify({ version: 1, fetched_at: '2026-07-12T15:00:00.000Z', bundle: {} })); let cacheCalls = 0; const cacheService = createWeatherService({ storage: cacheStorage, clock: () => new Date('2026-07-12T15:01:00Z'), fetch: async () => { cacheCalls += 1; return response(payload) } }); const cacheLive = await cacheService.fetchForecast(38, -88); assert(cacheCalls === 1 && cacheLive.current.time === payload.current.time, 'A corrupt cache body must be ignored instead of served.')
@@ -94,6 +95,11 @@ async function run() {
   assert(growingDegreeDays([{ date: '2026-05-03', temperature_max_f: 40, temperature_min_f: 20 }, { date: '2026-05-04', temperature_max_f: 70, temperature_min_f: 50 }]) === 10, 'Negative daily values must clamp before summing.')
   assert(growingDegreeDays([{ date: '2026-05-05', temperature_max_f: 53, temperature_min_f: 50 }]) === 2, 'Fractional daily GDD must round the final farmer-facing total.')
   assert(growingDegreeDays([]) === 0, 'An empty history range must have zero GDD.')
-  console.log('Weather service regressions passed (8 coverage groups).')
+  // Group 9: the ONE shared actionability gate — a stale or over-age bundle can never be actionable.
+  const gateNow = Date.parse('2026-07-14T12:00:00Z')
+  assert(isActionablyFresh({ stale: false, fetched_at: '2026-07-14T11:00:00Z' }, gateNow) === true, 'A fresh in-cap bundle is actionable.')
+  assert(isActionablyFresh({ stale: true, fetched_at: '2026-07-14T11:59:00Z' }, gateNow) === false, 'A stale-flagged bundle is never actionable, no matter how recent.')
+  assert(isActionablyFresh({ stale: false, fetched_at: '2026-07-14T09:59:00Z' }, gateNow) === false, 'A bundle older than the spray-judgment cap is never actionable.')
+  console.log('Weather service regressions passed (9 coverage groups).')
 }
 void run()

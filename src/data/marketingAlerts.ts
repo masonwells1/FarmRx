@@ -2,7 +2,7 @@ import { isMarsBid } from './basisMath'
 import { marketedPercent, sameScope, type CashBid, type GrainWorkspace, type MarketingAlertRule } from './grain'
 
 export type MarketingAlertEvent = { ruleId: string; key: string; kind: 'marketing_price_target' | 'marketing_pct_marketed_goal' | 'marketing_deadline'; message: string }
-export type MarketingAlertEvaluation = { alerts: MarketingAlertEvent[]; firedRuleIds: string[] }
+export type MarketingAlertEvaluation = { alerts: MarketingAlertEvent[]; firedRuleIds: string[]; conditions: Array<{ ruleId: string; met: boolean }> }
 
 /** The farmer's device calendar, not UTC, is the alert-day authority. */
 export const localCalendarDay = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
@@ -29,9 +29,9 @@ function hasProductionEstimate(workspace: GrainWorkspace, rule: MarketingAlertRu
 
 /** Check-on-open evaluator only. It deliberately does not provide background monitoring. */
 export function evaluateMarketingAlertRules(workspace: GrainWorkspace, now = new Date()): MarketingAlertEvaluation {
-  const today = localCalendarDay(now); const alerts: MarketingAlertEvent[] = []; const firedRuleIds: string[] = []
+  const today = localCalendarDay(now); const alerts: MarketingAlertEvent[] = []; const firedRuleIds: string[] = []; const conditions: Array<{ ruleId: string; met: boolean }> = []
   for (const rule of workspace.marketing_alert_rules) {
-    if (!rule.active || hasFiredToday(rule, today) || validateMarketingAlertRule(rule).length) continue
+    if (!rule.active || validateMarketingAlertRule(rule).length) continue
     const commodity = commodityName(workspace, rule); let message: string | null = null; let kind: MarketingAlertEvent['kind'] = 'marketing_price_target'
     if (rule.rule_type === 'price_target' && rule.threshold !== null && rule.direction !== null) {
       const bid = latestManualCashBid(workspace, rule.commodity_id); const price = bid?.cash_price ?? null
@@ -44,9 +44,10 @@ export function evaluateMarketingAlertRules(workspace: GrainWorkspace, now = new
       kind = 'marketing_deadline'
       message = difference === 0 ? `${rule.crop_year} ${commodity} reminder is today.` : `${rule.crop_year} ${commodity} reminder is in ${difference} day${difference === 1 ? '' : 's'}.`
     }
-    if (message) { alerts.push({ ruleId: rule.id, key: `marketing-rule:${rule.id}:${today}`, kind, message }); firedRuleIds.push(rule.id) }
+    const met = message !== null; conditions.push({ ruleId: rule.id, met });
+    if (message && !hasFiredToday(rule, today)) { alerts.push({ ruleId: rule.id, key: `marketing-rule:${rule.id}:${today}`, kind, message }); firedRuleIds.push(rule.id) }
   }
-  return { alerts, firedRuleIds }
+  return { alerts, firedRuleIds, conditions }
 }
 
 export function ruleSentence(rule: MarketingAlertRule, commodity: string): string {

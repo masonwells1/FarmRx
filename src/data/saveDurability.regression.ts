@@ -1,3 +1,4 @@
+import { operationalIntegrityCapabilityFromProbe } from './operationalIntegrityCapability'
 import { dismissNeedsAttention, readNeedsAttention, appendNeedsAttention } from './needsAttentionStore'
 import { getSaveReceipt, setSaveReceipt } from '../lib/saveReceipt'
 import { cannotRetry } from '../components/NeedsAttentionList'
@@ -48,4 +49,10 @@ setSaveReceipt('save', 'needs attention'); assert(getSaveReceipt('save') === 'ne
 setSaveReceipt('save', 'saved'); assert(getSaveReceipt('save') === 'saved', 'A saved receipt is visible before it clears.')
 await new Promise((resolve) => setTimeout(resolve, 1850))
 assert(getSaveReceipt('save') === null, 'A saved receipt clears after its confirmation window.')
+// The 0035 capability classifier must fail closed exactly like 0034's.
+assert(operationalIntegrityCapabilityFromProbe(null) === true, 'A successful 0035 probe proves the capability.')
+assert(operationalIntegrityCapabilityFromProbe({ code: undefined, message: 'fetch failed' }) === false, 'A transport 0035 probe error must fail closed.')
+assert(operationalIntegrityCapabilityFromProbe({ code: 'PGRST202', message: 'not found' }) === false, 'A missing 0035 RPC means the capability is absent.')
+assert(operationalIntegrityCapabilityFromProbe({ code: 'P0001', message: 'authentication is required' }) === true && operationalIntegrityCapabilityFromProbe({ code: '42501', message: 'you do not have permission to edit this farm' }) === true, 'The 0035 auth sentinels prove the RPC exists.')
+assert(operationalIntegrityCapabilityFromProbe({ code: 'P0001', message: 'some other raise' }) === false, 'A non-sentinel P0001 must fail closed.')
 console.log('save durability receipts and needs-attention regressions passed.')
