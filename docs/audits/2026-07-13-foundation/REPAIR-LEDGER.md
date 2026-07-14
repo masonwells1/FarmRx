@@ -424,6 +424,41 @@ customer onboarding, decide these IN ORDER:
 5. **Codex credits**: quota resets Jul 19 ~2 PM; buying credits sooner is
    optional — the Claude-subagent loop handled rounds 6-8 well.
 
+## SHIP CHECKLIST EXECUTED 2026-07-14 (Mason approved all 3 steps in order)
+1. [x] **Drafts 0031-0035 APPLIED** to the farm-rx test project
+   (agvsozfbstpekuqxpqjr). All three verify scripts re-run immediately before
+   (3× PASS). Applied in filename order via the management API; list_migrations
+   confirms all 35. Supabase security advisors after apply: 0 errors; the three
+   INFO "RLS enabled, no policy" rows on push_deliveries /
+   service_log_meter_readings / alert_rule_states are the intentional deny-all
+   design (RPC-only access). Pre-existing WARNs unchanged (security-definer
+   pattern + leaked-password-protection setting — future housekeeping).
+2. [x] **Edge functions deployed AFTER 0035**: deliver-grain-alert v4 (server
+   re-evaluation + alert_rule_states check) and send-push v1 (first deploy —
+   ownership check, queue consumption, caller-path safety), both ACTIVE with
+   JWT verification on.
+3. [x] **Pushed**: all 9 repair commits (cd0f9ef..bb8c400) → main on
+   github.com/masonwells1/FarmRx.
+4. POST-APPLY LIVE PROOFS (Claude, real app + SQL ground truth):
+   - Capability probes flipped on a fresh session: Update matrix ENABLED,
+     create/copy enabled, grain movement/delivery/finalize controls enabled,
+     service-log Deletes enabled; zero "arrives with the next database
+     update" messages anywhere.
+   - Matrix save through the new CAS RPC: price range 3.78-5.58 → 6 steps in
+     the DB (SQL), then reverted to 3.78-5.22 → 5 steps (SQL). An off-step
+     value (5.30) was correctly rejected client-side before any write.
+   - Service-log reversal (P1-15's exact scenario): deleted the 2026-07-13
+     "Oil change" log via the UI → SQL shows the log gone AND the interval's
+     last_done_on rolled back 2026-07-13 → 2026-07-12 (the remaining log).
+   - Landlord views (0031) queryable: 2 rows, 0 blocked.
+   - Console clean on all fresh loads (buffered HMR errors predate the dev
+     server restart).
+   STILL FOR THE PHONE-IN-HAND PASS (needs Mason/real accounts): two-farm
+   RLS + role matrix, PWA install/offline on a real phone, real push
+   delivery (needs VAPID keys + a subscribed phone; send-push returns 503
+   until those secrets are set), Resend domain verification for alert
+   emails, and the §7 item-1 signup-disabled check before REAL customers.
+
 ## New findings discovered during repair (not in the original audit)
 - **R1-LIVE-01 (P1):** Inventory "Count adjustment" can NEVER save: the form sends a
   date-only `adjusted_at` (`today()` → `YYYY-MM-DD`) but
