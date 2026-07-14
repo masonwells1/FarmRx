@@ -22,7 +22,7 @@ export function regression_fieldsRemainAuthoritativeAfterGrainSave(grain: GrainD
   assert(Array.isArray(result.grain.firm_offers), 'Mock grain persistence must retain the firm-offer slice.')
 }
 
-regression_fieldsRemainAuthoritativeAfterGrainSave({ production_estimates: [], grain_contracts: [], marketing_plan_targets: [], insurance_units: [], grain_bins: [], bin_inventory: [], bin_transactions: [], cash_bids: [], usda_report_dates: [], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null })
+regression_fieldsRemainAuthoritativeAfterGrainSave({ production_estimates: [], grain_contracts: [], grain_contract_deliveries: [], marketing_plan_targets: [], insurance_units: [], grain_bins: [], bin_inventory: [], bin_transactions: [], cash_bids: [], usda_report_dates: [], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null })
 const oldGrain = { production_estimates: [{ id: 'kept-estimate' }], grain_contracts: [{ id: 'kept-contract' }], marketing_plan_targets: [], insurance_units: [], grain_bins: [], bin_inventory: [], cash_bids: [], marketing_alert_rules: [] }
 const migratedOldGrain = readGrain(oldGrain)
 assert(migratedOldGrain?.production_estimates[0]?.id === 'kept-estimate' && migratedOldGrain.grain_contracts[0]?.id === 'kept-contract' && migratedOldGrain.firm_offers.length === 0, 'An older local Grain envelope without firm_offers must retain its existing data and add an empty offer list.')

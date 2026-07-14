@@ -59,6 +59,8 @@ export interface GrainContract extends PositionScope {
   created_at: string
   updated_at: string
 }
+export interface GrainContractDelivery { id: string; farm_id: string; grain_contract_id: string; bushels: number; delivered_on: string; note: string | null; created_at: string; allow_overdelivery?: boolean }
+export interface GrainCapabilities { bin_movements: boolean; contract_price_finalization: boolean; contract_deliveries: boolean }
 
 export interface MarketingPlanTarget extends PositionScope {
   id: string
@@ -100,12 +102,14 @@ export interface UsdaReportDate { id: string; report_name: string; report_date: 
 
 export interface FuturesQuote { symbol: 'ZC' | 'ZS' | 'ZW'; contract: string; label: string; price: number; crop_year: number; new_crop: boolean; delayed: true; as_of: string }
 export interface MarketDataService { getQuotes(): Promise<FuturesQuote[]> }
-export interface GrainData { production_estimates: ProductionEstimate[]; grain_contracts: GrainContract[]; marketing_plan_targets: MarketingPlanTarget[]; insurance_units: InsuranceUnit[]; grain_bins: GrainBin[]; bin_inventory: BinInventory[]; bin_transactions: BinTransaction[]; cash_bids: CashBid[]; usda_report_dates: UsdaReportDate[]; marketing_alert_rules: MarketingAlertRule[]; firm_offers: FirmOffer[]; grain_alert_settings: GrainAlertSettings | null }
+export interface GrainData { production_estimates: ProductionEstimate[]; grain_contracts: GrainContract[]; grain_contract_deliveries: GrainContractDelivery[]; marketing_plan_targets: MarketingPlanTarget[]; insurance_units: InsuranceUnit[]; grain_bins: GrainBin[]; bin_inventory: BinInventory[]; bin_transactions: BinTransaction[]; cash_bids: CashBid[]; usda_report_dates: UsdaReportDate[]; marketing_alert_rules: MarketingAlertRule[]; firm_offers: FirmOffer[]; grain_alert_settings: GrainAlertSettings | null; capabilities?: GrainCapabilities }
 export interface GrainWorkspace extends GrainData { fields: FieldsData }
 export interface GrainRepository {
   getData(): Promise<GrainWorkspace>
   saveProductionEstimate(estimate: ProductionEstimate): Promise<void>
   saveContract(contract: GrainContract): Promise<void>
+  finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number): Promise<void>
+  recordContractDelivery(delivery: GrainContractDelivery): Promise<void>
   saveMarketingPlanTarget(target: MarketingPlanTarget): Promise<void>
   replaceMarketingPlanTargets(scope: PositionScope, targets: MarketingPlanTarget[]): Promise<void>
   saveCashBid(bid: CashBid): Promise<void>

@@ -1,4 +1,5 @@
 import { FIRM_OFFER_FILL_PARTIAL_SUCCESS } from '../data/firmOfferFill'
+import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from '../data/binLedger'
 
 export const firmOfferFillPartialSuccessMessage = 'Your sale was recorded as a contract. The offer could not be marked filled — reload the page. Do not enter this contract again.'
 
@@ -7,6 +8,11 @@ function details(error: unknown) { const values: string[] = []; const seen = new
 export function farmerError(error: unknown, action = 'save this field') {
   const message = details(error)
   if (message.includes(FIRM_OFFER_FILL_PARTIAL_SUCCESS.toLowerCase())) return firmOfferFillPartialSuccessMessage
+  if (/delivery tracking arrives with the next database update/.test(message)) return 'Delivery tracking arrives with the next database update.'
+  if (/bin movements arrive with the next database update/.test(message)) return 'Bin movements arrive with the next database update.'
+  if (/price finalization arrives with the next database update/.test(message)) return 'Price finalization arrives with the next database update.'
+  if (/movement date must be after the latest bin baseline|dated on or before the bin's baseline/.test(message)) return PRE_BASELINE_BIN_MOVEMENT_MESSAGE
+  if (/connect to the internet before recording a delivery/.test(message)) return 'Connect to the internet before recording a delivery.'
   if (/connect to the internet before filling this offer|firm offer must be filled while connected/.test(message)) return 'Connect to the internet before filling this offer.'
   if (/network|fetch|timeout|connection|econn/.test(message)) return 'We could not reach Farm Rx. Check your signal and try again.'
   if (/sign-in ended|jwt|auth|unauthori[sz]ed|\b401\b/.test(message)) return 'Your sign-in ended. Please sign in again.'

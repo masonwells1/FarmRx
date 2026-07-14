@@ -8,6 +8,7 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import { getSyncStatus } from './syncStatus'
 import { isMarsBid, latestBasis } from './basisMath'
 import { farmerError } from '../lib/farmerErrors'
+import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from './binLedger'
 import type { FieldsRepository } from './fields'
 import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainContract, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, ProductionEstimate } from './grain'
 import type { StorageLike } from './writeQueue'
@@ -25,14 +26,14 @@ function fixture() {
   const inventory = { id: uid(6), farm_id: farm, grain_bin_id: bin.id, crop_year: '2026', commodity_id: commodity, bushels: '600', committed_bushels: '100', measured_at: stamp, notes: null, created_at: stamp, updated_at: stamp }
   const bid = { id: uid(7), farm_id: farm, elevator: 'Iowa pilot [USDA MARS 2850]', commodity_id: commodity, bid_date: '2026-07-10', basis: '-0.2', cash_price: '4.3', delivery_start: null, delivery_end: null, notes: '[USDA MARS 2850]', created_at: stamp, updated_at: stamp }
   const report = { id: uid(8), report_name: 'WASDE', report_date: '2026-08-12', release_at: null, source_url: null, notes: null, created_at: stamp, updated_at: stamp }
-  return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], bin_transactions: [] as unknown[], cash_bids: [bid], usda_report_dates: [report], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null } }
+  return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], grain_contract_deliveries: [], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], bin_transactions: [] as unknown[], cash_bids: [bid], usda_report_dates: [report], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null } }
 }
 /** Lets tests perturb what the "server" hands back, independent of what was sent, to prove the repository
  * confirms the canonical response rather than trusting its own request. Unset (null) by default so every
  * existing test keeps its original round-trip behavior. */
 type ResponseMutators = { production?: (value: ProductionEstimate) => ProductionEstimate; contract?: (value: GrainContract) => GrainContract; plan?: (value: MarketingPlanTarget[]) => MarketingPlanTarget[]; bid?: (value: CashBid) => CashBid }
 class FakeGateway implements GrainDataGateway {
-  readonly state = fixture(); fail = false; productionInputs: ProductionEstimate[] = []; contractInputs: GrainContract[] = []; planInputs: ReplaceMarketingPlanInput[] = []; bidInputs: CashBid[] = []; offerInputs: FirmOffer[] = []; fillInputs: Array<{ farmId: string; offerId: string; contract: GrainContract }> = []; deleteOfferIds: string[] = []; binInputs: GrainBin[] = []; movementInputs: BinTransaction[] = []
+  readonly state: { fields: ReturnType<typeof fixture>['fields']; scope: ReturnType<typeof fixture>['scope']; bundle: GrainRowBundle } = fixture(); fail = false; productionInputs: ProductionEstimate[] = []; contractInputs: GrainContract[] = []; planInputs: ReplaceMarketingPlanInput[] = []; bidInputs: CashBid[] = []; offerInputs: FirmOffer[] = []; fillInputs: Array<{ farmId: string; offerId: string; contract: GrainContract }> = []; deleteOfferIds: string[] = []; binInputs: GrainBin[] = []; movementInputs: BinTransaction[] = []
   mutate: ResponseMutators = {}; throwError: Error | null = null; movementError: Error | null = null; fillError: Error | null = null; fillResponse: { contract: GrainContract; offer: FirmOffer } | null = null
   private guard() { if (this.throwError) throw this.throwError }
   async loadWorkspace(_farmId: string): Promise<GrainRowBundle> { if (this.fail) throw new Error('network timeout'); return structuredClone(this.state.bundle) }
@@ -46,7 +47,9 @@ class FakeGateway implements GrainDataGateway {
   async fillFirmOffer(farmId: string, offerId: string, row: GrainContract) { this.fillInputs.push({ farmId, offerId, contract: structuredClone(row) }); if (this.fillResponse) return structuredClone(this.fillResponse); throw this.fillError ?? Object.assign(new Error('function public.fill_firm_offer(uuid,jsonb) does not exist'), { code: '42883' }) }
   async deleteFirmOffer(_farm: string, id: string) { this.guard(); this.deleteOfferIds.push(id) }
   async upsertGrainBin(_farm: string, row: GrainBin) { this.guard(); this.binInputs.push(structuredClone(row)); return structuredClone(row) }
-  async appendBinTransaction(_farm: string, row: BinTransaction) { this.guard(); this.movementInputs.push(structuredClone(row)); if (this.movementError) throw this.movementError; if (!this.state.bundle.bin_transactions.some((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === row.id)) this.state.bundle.bin_transactions = [...this.state.bundle.bin_transactions, structuredClone(row)]; return structuredClone(row) }
+  async appendBinTransactionRpc(_farm: string, row: BinTransaction) { this.guard(); this.movementInputs.push(structuredClone(row)); if (this.movementError) throw this.movementError; const existing = this.state.bundle.bin_transactions.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === row.id) as BinTransaction | undefined; if (existing) { if (existing.farm_id === row.farm_id && existing.grain_bin_id === row.grain_bin_id && existing.direction === row.direction && existing.bushels === row.bushels && existing.commodity_id === row.commodity_id && existing.occurred_on === row.occurred_on && existing.note === row.note && existing.source_kind === row.source_kind) return structuredClone(existing); throw new Error('Movement id was already used with different content.') } this.state.bundle.bin_transactions = [...this.state.bundle.bin_transactions, structuredClone(row)]; return structuredClone(row) }
+  async appendContractDeliveryRpc(_farm: string, row: { id: string; farm_id: string; grain_contract_id: string; bushels: number; delivered_on: string; note: string | null }, _allow: boolean) { const existing = this.state.bundle.grain_contract_deliveries.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === row.id) as typeof row | undefined; if (existing) { if (existing.farm_id === row.farm_id && existing.grain_contract_id === row.grain_contract_id && existing.bushels === row.bushels && existing.delivered_on === row.delivered_on && existing.note === row.note) return structuredClone(existing); throw new Error('Delivery id was already used with different content.') } this.state.bundle.grain_contract_deliveries = [...this.state.bundle.grain_contract_deliveries, structuredClone(row)]; return structuredClone(row) }
+  async finalizeContractPriceLegRpc(_farm: string, contractId: string, leg: 'futures_price' | 'basis', value: number) { const raw = this.state.bundle.grain_contracts.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId) as Record<string, unknown> | undefined; if (!raw) throw new Error('missing contract'); if (raw[leg] !== null) throw new Error('already finalized'); const future = leg === 'futures_price' ? value : Number(raw.futures_price); const basis = leg === 'basis' ? value : Number(raw.basis); const saved = { ...raw, futures_price: future, basis, cash_price: future + basis + Number(raw.premium_cents_per_bu) / 100, updated_at: stamp }; this.state.bundle.grain_contracts = this.state.bundle.grain_contracts.map((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId ? saved : item); return structuredClone(saved) }
   async upsertGrainAlertSettings(_farm: string, row: GrainAlertSettings) { this.guard(); return structuredClone(row) }
 }
 function repository(gateway: FakeGateway) { const fields = gateway.state.fields; const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fields), saveField: async () => { throw new Error('not used') } }; return new SupabaseGrainRepository({ gateway, fieldsRepository, getFarmId: async () => fields.farm.id, createId: () => uid(99), clock: () => stamp }) }
@@ -56,8 +59,8 @@ async function run() {
   assert(data.production_estimates.length === 1 && data.grain_bins.length === 1 && data.usda_report_dates.length === 1 && data.grain_contracts[0].cash_price === 4.5, 'All Grain result sets must map numeric strings exactly.')
   const acres = gateway.state.fields.crop_assignments.filter((row) => row.crop_year === 2026 && row.commodity_id === data.production_estimates[0].commodity_id).reduce((sum, row) => sum + row.planted_acres, 0); assert(data.production_estimates[0].planted_acres === acres && data.production_estimates[0].expected_bushels === acres * 200, 'Production was not reconciled from injected Fields.')
   gateway.fail = true; await rejects(() => repo.getData(), 'Partial gateway failure must reject.'); gateway.fail = false
-  const bad = structuredClone(gateway.state.bundle); bad.grain_contracts[0].contract_type = 'mystery'; gateway.state.bundle.grain_contracts = bad.grain_contracts; await rejects(() => repo.getData(), 'Unknown enum must fail closed.'); gateway.state.bundle.grain_contracts = fixture().bundle.grain_contracts
-  gateway.state.bundle.bin_inventory[0].farm_id = uid(55); await rejects(() => repo.getData(), 'Cross-farm private rows must reject.'); gateway.state.bundle.bin_inventory[0].farm_id = gateway.state.fields.farm.id
+  const bad = structuredClone(gateway.state.bundle) as { grain_contracts: Array<Record<string, unknown>> }; bad.grain_contracts[0].contract_type = 'mystery'; gateway.state.bundle.grain_contracts = bad.grain_contracts; await rejects(() => repo.getData(), 'Unknown enum must fail closed.'); gateway.state.bundle.grain_contracts = fixture().bundle.grain_contracts
+  const firstInventory = gateway.state.bundle.bin_inventory[0] as Record<string, unknown>; firstInventory.farm_id = uid(55); await rejects(() => repo.getData(), 'Cross-farm private rows must reject.'); firstInventory.farm_id = gateway.state.fields.farm.id
   // 6-10: all persistence shapes bind the farm and preserve client IDs.
   const production = data.production_estimates[0]; await repo.saveProductionEstimate({ ...production, farm_id: uid(88), planted_acres: 1, expected_bushels: 1 }); assert(gateway.productionInputs[0].farm_id === data.fields.farm.id && gateway.productionInputs[0].id === production.id && gateway.productionInputs[0].expected_bushels === acres * production.aph_yield, 'Production save did not bind farm and derived totals.')
   await repo.saveContract(data.grain_contracts[0]); assert(gateway.contractInputs[0].id === data.grain_contracts[0].id, 'Contract upsert lost its stable id.')
@@ -90,34 +93,21 @@ async function run() {
   const replayStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
   const replayGateway = new FakeGateway(); const replayRepo = repository(replayGateway); let online = false; const replay = new QueuedGrainRepository(replayRepo, { ...offlineDependencies, storage: replayStorage, isOffline: () => !online })
   await replay.saveContract({ ...data.grain_contracts[0], id: uid(60) }); await replay.saveCashBid({ ...data.cash_bids[0], id: uid(61) }); online = true; await replay.inspectAndReplay(); assert(replayGateway.contractInputs[0]?.id === uid(60) && replayGateway.bidInputs[0]?.id === uid(61), 'FIFO replay did not preserve operation order and IDs.')
-  // 16: offline bin writes overlay once, replay once, and leave no durable queue entry behind.
+  // 16: movements must never enter the offline queue; capacity needs the locked RPC.
   const binQueueKey = grainWriteQueueKey(supabaseConfig.projectRef, uid(10), data.fields.farm.id)
   const offlineBinStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
   const offlineBinGateway = new FakeGateway(); const offlineBinWriter = repository(offlineBinGateway); let binsOnline = false
   const offlineBins = new QueuedGrainRepository(offlineBinWriter, { ...offlineDependencies, storage: offlineBinStorage, isOffline: () => !binsOnline })
   const queuedMovement: BinTransaction = { id: uid(62), farm_id: data.fields.farm.id, grain_bin_id: data.grain_bins[0].id, direction: 'in', bushels: 25, commodity_id: data.fields.commodities[0].id, occurred_on: '2026-07-12', note: null, source_kind: 'manual entry', created_at: stamp }
-  await offlineBins.appendBinTransaction(queuedMovement)
-  const movementOverlay = await offlineBins.getData()
-  assert(movementOverlay.bin_transactions.filter((row) => row.id === queuedMovement.id).length === 1 && new GrainWriteQueue(offlineBinStorage, binQueueKey).read().entries.length === 1, 'An offline movement must appear exactly once in the overlay and queue.')
-  binsOnline = true; await offlineBins.inspectAndReplay()
-  assert(new GrainWriteQueue(offlineBinStorage, binQueueKey).read().entries.length === 0, 'A replayed movement must drain its queue entry.')
-  assert((await offlineBins.getData()).bin_transactions.filter((row) => row.id === queuedMovement.id).length === 1, 'A replayed movement must reload exactly once without duplication.')
+  let offlineMovementMessage = ''
+  try { await offlineBins.appendBinTransaction(queuedMovement) } catch (error) { offlineMovementMessage = error instanceof Error ? error.message : '' }
+  assert(offlineMovementMessage === 'Bin movements need a connection.' && new GrainWriteQueue(offlineBinStorage, binQueueKey).read().entries.length === 0, 'Offline movements must be refused and never queued.')
   binsOnline = false
   const queuedBin: GrainBin = { ...data.grain_bins[0], id: uid(63), name: 'Queued bin' }
   await offlineBins.upsertGrainBin(queuedBin)
   assert((await offlineBins.getData()).grain_bins.filter((row) => row.id === queuedBin.id).length === 1 && new GrainWriteQueue(offlineBinStorage, binQueueKey).read().entries.length === 1, 'An offline bin upsert must overlay and queue once.')
   binsOnline = true; await offlineBins.inspectAndReplay()
   assert(offlineBinGateway.binInputs.some((row) => row.id === queuedBin.id) && new GrainWriteQueue(offlineBinStorage, binQueueKey).read().entries.length === 0, 'A queued bin upsert must replay and drain.')
-  // 17: a previously persisted movement can return 23505 after a lost response; reconcile its immutable fields and drain it.
-  const duplicateStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
-  const duplicateGateway = new FakeGateway(); const duplicateWriter = repository(duplicateGateway); let duplicateOnline = false
-  const duplicateReplay = new QueuedGrainRepository(duplicateWriter, { ...offlineDependencies, storage: duplicateStorage, isOffline: () => !duplicateOnline })
-  const lostResponseMovement: BinTransaction = { ...queuedMovement, id: uid(64), bushels: 30 }
-  duplicateGateway.state.bundle.bin_transactions = [structuredClone(lostResponseMovement)]
-  await duplicateReplay.appendBinTransaction(lostResponseMovement)
-  duplicateGateway.movementError = Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' })
-  duplicateOnline = true; await duplicateReplay.inspectAndReplay()
-  assert(new GrainWriteQueue(duplicateStorage, binQueueKey).read().entries.length === 0 && (await duplicateReplay.getData()).bin_transactions.filter((row) => row.id === lostResponseMovement.id).length === 1, 'A 23505 replay must confirm the matching persisted movement and drain without duplication.')
   // 18: canonical-confirmation rejections — the repository must confirm the server's echoed rows, never trust its own request.
   const baseTarget = data.marketing_plan_targets[0]
   gateway.mutate.plan = (rows) => rows.map((row) => ({ ...row, id: uid(940) }))
@@ -208,8 +198,29 @@ async function run() {
   const movement: BinTransaction = { id: uid(992), farm_id: uid(88), grain_bin_id: savedBin.id, direction: 'in', bushels: 25, commodity_id: gateway.state.scope.commodity_id, occurred_on: '2026-07-12', note: 'Scale ticket', source_kind: 'manual entry', created_at: stamp }
   await repo.appendBinTransaction(movement)
   assert(gateway.movementInputs.length === 1 && gateway.movementInputs[0].farm_id === data.fields.farm.id && gateway.movementInputs[0].direction === 'in', 'Movement append must bind the active farm and use the insert-only gateway seam.')
+  await repo.appendBinTransaction(movement)
+  assert((await repo.getData()).bin_transactions.filter((row) => row.id === movement.id).length === 1, 'Same movement UUID must replay idempotently.')
+  await rejects(() => repo.appendBinTransaction({ ...movement, bushels: 26 }), 'A reused movement UUID with changed content must reject.')
   await rejects(() => repo.appendBinTransaction({ ...movement, id: uid(993), bushels: 0 }), 'Zero-bushel movement must reject before the gateway.')
-  assert(gateway.movementInputs.length === 1, 'Invalid movement reached the gateway.')
+  assert(gateway.movementInputs.filter(() => true).length === 3, 'Invalid movement reached the gateway.')
+  // 23: capability errors fail closed with the exact farmer message; no direct-table fallback remains.
+  const absentMovementGateway = new FakeGateway(); Object.defineProperty(absentMovementGateway, 'appendBinTransactionRpc', { value: undefined }); let absentMovement = ''
+  try { await repository(absentMovementGateway).appendBinTransaction({ ...movement, id: uid(994) }) } catch (error) { absentMovement = error instanceof Error ? error.message : '' }
+  assert(absentMovement === 'Bin movements arrive with the next database update.' && absentMovementGateway.movementInputs.length === 0 && farmerError(new Error(absentMovement), 'add this movement') === absentMovement, 'Absent movement RPC must disable the unsafe fallback with the exact message.')
+  const absentDeliveryGateway = new FakeGateway(); Object.defineProperty(absentDeliveryGateway, 'appendContractDeliveryRpc', { value: undefined }); let absentDelivery = ''
+  try { await repository(absentDeliveryGateway).recordContractDelivery({ id: uid(995), farm_id: data.fields.farm.id, grain_contract_id: data.grain_contracts[0].id, bushels: 1, delivered_on: '2026-07-12', note: null, created_at: stamp }) } catch (error) { absentDelivery = error instanceof Error ? error.message : '' }
+  assert(absentDelivery === 'Delivery tracking arrives with the next database update.' && farmerError(new Error(absentDelivery), 'record this delivery') === absentDelivery, 'Missing delivery table/RPC must never leak a retryable generic error.')
+  const absentFinalGateway = new FakeGateway(); Object.defineProperty(absentFinalGateway, 'finalizeContractPriceLegRpc', { value: undefined }); let absentFinal = ''
+  try { await repository(absentFinalGateway).finalizeContractPriceLeg(data.grain_contracts[0].id, 'basis', -0.2) } catch (error) { absentFinal = error instanceof Error ? error.message : '' }
+  assert(absentFinal === 'Price finalization arrives with the next database update.', 'Missing CAS RPC must disable price finalization.')
+  // 24: an RPC-capable fake proves signed basis, blank/invalid guards, CAS, and exact replay behavior.
+  const casGateway = new FakeGateway(); const rawHta = casGateway.state.bundle.grain_contracts[0] as Record<string, unknown>; rawHta.contract_type = 'hta'; rawHta.futures_price = '5'; rawHta.basis = null; rawHta.cash_price = null
+  const casRepo = repository(casGateway); await casRepo.finalizeContractPriceLeg(String(rawHta.id), 'basis', -0.2); assert((casGateway.state.bundle.grain_contracts[0] as Record<string, unknown>).cash_price === 4.8, 'CAS finalization must preserve a negative basis and compute cash price atomically.')
+  await rejects(() => casRepo.finalizeContractPriceLeg(String(rawHta.id), 'basis', -0.2), 'CAS must reject an already-finalized leg.')
+  await rejects(() => casRepo.finalizeContractPriceLeg(String(rawHta.id), 'futures_price', 0), 'Blank/zero futures finalization must reject before the RPC.')
+  const deliveryRepo = repository(new FakeGateway()); const deliveryRow = { id: uid(996), farm_id: data.fields.farm.id, grain_contract_id: data.grain_contracts[0].id, bushels: 25, delivered_on: '2026-07-12', note: null, created_at: stamp }; await deliveryRepo.recordContractDelivery(deliveryRow); await deliveryRepo.recordContractDelivery(deliveryRow); assert((await deliveryRepo.getData()).grain_contract_deliveries.filter((row) => row.id === deliveryRow.id).length === 1, 'Same delivery UUID must replay idempotently.')
+  await rejects(() => deliveryRepo.recordContractDelivery({ ...deliveryRow, bushels: 26 }), 'A reused delivery UUID with changed content must reject.')
+  const baselineGateway = new FakeGateway(); const baselineRepo = repository(baselineGateway); const baselineMovement = { ...movement, id: uid(997), occurred_on: '2026-07-11' }; let preBaselineMessage = ''; try { await baselineRepo.appendBinTransaction(baselineMovement) } catch (error) { preBaselineMessage = error instanceof Error ? error.message : '' }; assert(preBaselineMessage === PRE_BASELINE_BIN_MOVEMENT_MESSAGE && baselineGateway.movementInputs.length === 0, 'Repository must return the shared pre-baseline message before its RPC.')
   assert(moduleBackends.fields === 'supabase' && moduleBackends.grain === 'supabase', 'Release composition did not select live Fields and Grain.')
   console.log('SupabaseGrainRepository regressions passed.')
 }

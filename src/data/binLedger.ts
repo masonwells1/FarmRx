@@ -4,6 +4,8 @@ import type { BinInventory, BinTransaction, GrainBin } from './grain'
 const calendarDate = /^\d{4}-\d{2}-\d{2}$/
 const validDate = (value: string) => calendarDate.test(value) && new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value
 
+export const PRE_BASELINE_BIN_MOVEMENT_MESSAGE = "This movement is dated on or before the bin's baseline — use a date after the baseline."
+
 export function validateGrainBin(value: GrainBin): string[] {
   const errors: string[] = []
   if (!value.name.trim() || value.name.trim().length > 160) errors.push('Bin name is required and must be 160 characters or fewer.')
@@ -27,28 +29,45 @@ export function validateBinTransaction(value: BinTransaction): string[] {
   return errors
 }
 
+/** A baseline replaces only its own commodity's history through its measured day. */
+export function isBinTransactionSuperseded(inventory: BinInventory | undefined, transaction: BinTransaction) {
+  return !!inventory && transaction.commodity_id === inventory.commodity_id && transaction.occurred_on <= inventory.measured_at.slice(0, 10)
+}
+
 export function deriveBinOnHand(inventory: BinInventory | undefined, transactions: BinTransaction[]) {
+  const baselineDate = inventory?.measured_at.slice(0, 10) ?? null
+  // A measurement is a dated baseline, not another receipt. Earlier (and same-day)
+  // movements are already represented in that measurement and must not be re-added.
+  const movementsSinceBaseline = transactions.filter((transaction) => !isBinTransactionSuperseded(inventory, transaction))
   const recordedInventory = inventory?.bushels ?? 0
-  const movementDelta = transactions.reduce((sum, transaction) => sum + (transaction.direction === 'in' ? transaction.bushels : -transaction.bushels), 0)
+  const movementDelta = movementsSinceBaseline.reduce((sum, transaction) => sum + (transaction.direction === 'in' ? transaction.bushels : -transaction.bushels), 0)
   const rawOnHand = recordedInventory + movementDelta
-  return { recordedInventory, movementDelta, rawOnHand, onHand: Math.max(0, rawOnHand), exceedsRecordedInventory: rawOnHand < 0 }
+  return { recordedInventory, baselineDate, movementsSinceBaseline, movementDelta, rawOnHand, onHand: rawOnHand, exceedsRecordedInventory: rawOnHand < 0 }
 }
 
 /** A bin has one established commodity: inventory takes precedence, then its first ledger movement. */
 export function deriveBinPosition(inventory: BinInventory | undefined, transactions: BinTransaction[]) {
-  const commodityId = inventory?.commodity_id ?? transactions[0]?.commodity_id ?? null
-  const matchingTransactions = commodityId === null ? [] : transactions.filter((transaction) => transaction.commodity_id === commodityId)
-  const mismatchedTransactions = commodityId === null ? [] : transactions.filter((transaction) => transaction.commodity_id !== commodityId)
-  return { commodityId, matchingTransactions, mismatchedTransactions, ...deriveBinOnHand(inventory, matchingTransactions) }
+  const commodityIds = new Set(transactions.map((transaction) => transaction.commodity_id))
+  if (inventory) commodityIds.add(inventory.commodity_id)
+  const lots = [...commodityIds].sort().map((commodityId) => {
+    const lotInventory = inventory?.commodity_id === commodityId ? inventory : undefined
+    const lotTransactions = transactions.filter((transaction) => transaction.commodity_id === commodityId)
+    return { commodityId, inventory: lotInventory, transactions: lotTransactions, ...deriveBinOnHand(lotInventory, lotTransactions) }
+  })
+  return { lots, transactions }
 }
 
-/** Inventory is crop-year scoped; movement-only bins represent the current physical commodity balance. */
-export function deriveCommodityBinTotal(bins: GrainBin[], inventories: BinInventory[], transactions: BinTransaction[], commodityId: string, cropYear: number) {
+/** Lots with a nonzero balance are the only commodities a bin can currently hold. */
+export function activeBinCommodityIds(inventory: BinInventory | undefined, transactions: BinTransaction[]) {
+  return deriveBinPosition(inventory, transactions).lots.filter((lot) => Math.abs(lot.onHand) > 0.000001).map((lot) => lot.commodityId)
+}
+
+/** Bins are physical whole-farm inventory, not entity or crop-year scoped. */
+export function deriveCommodityBinTotal(bins: GrainBin[], inventories: BinInventory[], transactions: BinTransaction[], commodityId: string, _cropYear?: number) {
   return bins.reduce((total, bin) => {
     const inventory = inventories.find((item) => item.grain_bin_id === bin.id)
     const position = deriveBinPosition(inventory, transactions.filter((item) => item.grain_bin_id === bin.id))
-    if (position.commodityId !== commodityId || (inventory && inventory.crop_year !== cropYear)) return total
-    return total + position.onHand
+    return total + position.lots.filter((lot) => lot.commodityId === commodityId).reduce((sum, lot) => sum + lot.onHand, 0)
   }, 0)
 }
 

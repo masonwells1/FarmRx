@@ -1,4 +1,4 @@
-import { deriveBinOnHand, deriveBinPosition, deriveCommodityBinTotal, moistureStatus, validateBinTransaction, validateGrainBin } from './binLedger'
+import { deriveBinOnHand, deriveBinPosition, deriveCommodityBinTotal, isBinTransactionSuperseded, moistureStatus, validateBinTransaction, validateGrainBin } from './binLedger'
 import { GrainWriteQueue, parseGrainQueue } from './grainWriteQueue'
 import type { BinInventory, BinTransaction, GrainBin, GrainRepository } from './grain'
 import type { StorageLike } from './writeQueue'
@@ -8,15 +8,21 @@ const stamp = '2026-07-13T12:00:00.000Z'
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 async function rejects(action: () => Promise<unknown>, message: string) { let rejected = false; try { await action() } catch { rejected = true }; assert(rejected, message) }
 const bin: GrainBin = { id: uid(1), farm_id: uid(2), name: 'North', capacity_bu: 1_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: 15, moisture_checked_on: '2026-06-13', created_at: stamp, updated_at: stamp }
-const inventory: BinInventory = { id: uid(3), farm_id: bin.farm_id, grain_bin_id: bin.id, crop_year: 2026, commodity_id: 'corn', bushels: 100, committed_bushels: 0, measured_at: stamp, notes: null, created_at: stamp, updated_at: stamp }
+const inventory: BinInventory = { id: uid(3), farm_id: bin.farm_id, grain_bin_id: bin.id, crop_year: 2026, commodity_id: 'corn', bushels: 100, committed_bushels: 0, measured_at: '2026-01-15T12:00:00.000Z', notes: null, created_at: stamp, updated_at: stamp }
 const movement = (n: number, direction: BinTransaction['direction'], bushels: number): BinTransaction => ({ id: uid(10 + n), farm_id: bin.farm_id, grain_bin_id: bin.id, direction, bushels, commodity_id: 'corn', occurred_on: '2026-07-13', note: null, source_kind: 'manual entry', created_at: stamp })
 const balanced = deriveBinOnHand(inventory, [movement(1, 'in', 30), movement(2, 'out', 20)])
 assert(balanced.rawOnHand === 110 && balanced.onHand === 110, 'On-hand must be recorded inventory plus in minus out.')
 const belowZero = deriveBinOnHand(inventory, [movement(3, 'out', 200)])
-assert(belowZero.rawOnHand === -100 && belowZero.onHand === 0 && belowZero.exceedsRecordedInventory, 'On-hand must clamp at zero and retain the honest overdrawn signal.')
+assert(belowZero.rawOnHand === -100 && belowZero.onHand === -100 && belowZero.exceedsRecordedInventory, 'On-hand must show an impossible negative balance instead of hiding it.')
 const soybeanMovement = { ...movement(9, 'in', 500), commodity_id: 'soybeans' }
 const commoditySafe = deriveBinPosition(inventory, [movement(1, 'in', 30), soybeanMovement])
-assert(commoditySafe.onHand === 130 && commoditySafe.mismatchedTransactions.length === 1, 'A movement for a different commodity must be excluded from the established bin balance.')
+assert(commoditySafe.lots.length === 2 && commoditySafe.lots.find((lot) => lot.commodityId === 'corn')?.onHand === 130 && commoditySafe.lots.find((lot) => lot.commodityId === 'soybeans')?.onHand === 500, 'Mixed commodity history must remain separate lots.')
+const datedInventory = { ...inventory, bushels: 4_000, measured_at: '2026-01-15T12:00:00.000Z' }
+const beforeBaseline = { ...movement(11, 'in', 1_000), occurred_on: '2026-01-10' }
+const afterBaseline = { ...movement(12, 'in', 1_200), occurred_on: '2026-01-20' }
+assert(deriveBinOnHand(datedInventory, [beforeBaseline, afterBaseline]).onHand === 5_200, 'A dated measurement must supersede earlier receipts and count only later movements.')
+const otherCommodityBeforeBaseline = { ...beforeBaseline, commodity_id: 'soybeans' }
+assert(!isBinTransactionSuperseded(datedInventory, otherCommodityBeforeBaseline) && isBinTransactionSuperseded(datedInventory, beforeBaseline) && deriveBinOnHand(datedInventory, [otherCommodityBeforeBaseline]).onHand === 5_000, 'Only the baseline commodity is superseded; other commodity history must still count.')
 const movementOnlyBin: GrainBin = { ...bin, id: uid(40), name: 'South' }
 const movementOnly = { ...movement(10, 'in', 12_000), grain_bin_id: movementOnlyBin.id }
 assert(deriveCommodityBinTotal([bin, movementOnlyBin], [inventory], [movementOnly], 'corn', 2026) === 12_100, 'Commodity rollup must include a movement-only bin using its ledger balance.')

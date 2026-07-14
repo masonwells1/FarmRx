@@ -157,9 +157,56 @@ project, NO deploy — each needs Mason's explicit OK. Draft migrations go to
   NOT VALID constraints, grain_contracts.firm_offer_id + composite FK + unique
   index, fill_firm_offer RPC (p_local_date ±1-day clamp); validated apply-clean
   0001→0032 on vanilla Postgres 16 twice (mine + Terra's logged run).
-- [ ] **Round 4 — Bin/contract truth** (P1-04, P1-05, P1-06, P1-07, P1-09): capacity/
-  nonnegative/commodity/year enforcement RPC (migration DRAFT); ledger baseline semantics;
-  price-leg finalization + delivery quantities; Harvest→Grain reconciliation view.
+- [x] **Round 4 — Bin/contract truth** (P1-04, P1-05, P1-06, P1-07, P1-09) — DONE
+  2026-07-13/14: capacity/
+  nonnegative/commodity/year enforcement RPC (migration DRAFT 0033); ledger baseline
+  semantics; price-leg finalization + delivery quantities; Harvest→Grain reconciliation.
+  STATUS 2026-07-13: Terra build done incl. REAL disposable-DB probes in its log
+  (over-capacity/negative/wrong-commodity rejected, valid accepted); gates PASS under
+  Claude's run. LIVE PROOF: reconciliation section live (harvest 15,000 / not-entered /
+  bins 12,500 — 12,500 hand-verified vs raw movements +12,000−15,000+15,000+500); bins
+  tab honest un-clamped 12,500/20,000·63%; Delivered/remaining column live (0/5,000);
+  R4-LIVE-01 found by actually submitting a delivery (see New findings).
+  Sol review: FIXES-REQUIRED — 7 P1 + 3 P2 (racy/bypassable movement fallback → disable
+  + revoke direct inserts; pre-baseline movements saved-but-invisible; bins frozen
+  against commodity rotation; price-leg finalization not immutable (negative basis
+  rejected, blank→$0, stale-tab overwrite) → CAS RPC; delivery gating dishonest +
+  replay-unsafe (== R4-LIVE-01); reconciliation compares mismatched scopes; "Use
+  harvest total" saves the STALE value via React closure; baseline auditability;
+  lifecycle/decimals; regression gaps). Refuted: RPC race-free, definer-safe-but-only-
+  as-sole-writer, no numeric clamping, 18px OK. Fix round r4-fixes dispatched
+  (fail-closed-honestly principle; disposable-DB re-validation with rotation/CAS/
+  replay/revoked-insert probes REQUIRED).
+  FIX ROUND 1 DONE + LIVE-PROVEN: R4-LIVE-01 fixed ("Tracking arrives with the next
+  database update", Record disabled — proven live); "Use harvest total" clicked live →
+  SQL-verified saved 15,000 (harvest total, not stale; reverted); scope-honest
+  reconciliation label live. Sol verification 2: deliveries/scope/harvest-copy FIXED;
+  3 NEW P1s (cross-bin join erases baselines from RPC math; CAS bypassable via direct
+  authenticated UPDATE while a leg is null; movement retry double-insert) + partials.
+  FIX ROUND 2 DONE: cross-bin scoping fixed; pricing columns locked by trigger +
+  transaction-local flag (set_config unreachable via PostgREST — Sol verified w/ doc
+  cite); movement same-id idempotency; capabilities unified from one detection, all
+  three UIs fail closed w/ honest messages (proven live: Add movement disabled + note);
+  direct writer deleted; NEW checked-in scripts/verify-0033-disposable.ps1 (Claude
+  re-ran it personally: PASS). Sol verification 3: cross-bin/pricing/UUID/writer-
+  removal/fractional/offline FIXED; 1 last P1 reproduced (same-bin pre-baseline
+  OTHER-commodity movements omitted from RPC capacity → 1,500-bu bin accepted more;
+  display math was right) + P2 lock-order idempotency, P2 string-check regressions,
+  P3 stale mid-session capabilities, P3 pre-baseline message.
+  FIX ROUND 3 DONE + CLOSED 2026-07-14: RPC supersedes only the baseline commodity
+  (mirrors isBinTransactionSuperseded); same-id lookup after lock + unique-violation
+  replay handler; behavioral regressions (harvest override, supersession labels,
+  fractional, rotation options, reconciliation copy); "Reload the app after the
+  update." appended; shared pre-baseline message constant. Claude re-ran the updated
+  script personally: same-bin probe REJECTED for capacity + soybean lot active 500.00
+  bu + both replays same-row + "PROBE disposable migration suite: PASS". Gates on
+  closed tree: tsc PASS, 26 suites PASS, build PASS. Live: Grain overview invariants
+  held (23,040/18,040, reconciliation + scope label), console clean.
+  NOTE for the later apply decision: 0033 = deliveries table + immutable price-leg
+  trigger + finalize_contract_price_leg CAS RPC + append_bin_movement/record_delivery
+  RPCs (idempotent, locked, capacity/rotation/baseline-aware) + bin_transactions
+  direct-INSERT revocation + pricing-column protection; re-runnable proof =
+  scripts/verify-0033-disposable.ps1 (run it once more right before applying).
 - [ ] **Round 5 — Save durability** (P1-02, P1-11, P1-12, P2-13): insurance patch/revision
   flow; queue receipts/idempotent deletes; matrix conflict token; per-record receipts.
 - [ ] **Round 6 — Operational integrations** (P1-10, P1-13, P1-14, P1-15, P1-16, P2-02):
@@ -201,6 +248,13 @@ project, NO deploy — each needs Mason's explicit OK. Draft migrations go to
   worksheet shows "no budget plan matches" with no farmer remedy. Found live 2026-07-13.
   Fix direction: bind settlement budgets through the existing budget_field_allocations
   (the farmer's explicit budget↔field-crop link) instead of an unusable entity equality.
+
+- **R4-LIVE-01 (P2):** with 0033 NOT applied, "Record delivery" fails with the generic
+  "could not record this delivery right now. Please try again." — misleading: retrying
+  can never work until the migration applies. Terra's report claimed an honest
+  needs-update message; live proof 2026-07-13 shows the generic one. Fix round: detect
+  the missing table/RPC (42P01/42883/PGRST202) and say "Delivery tracking arrives with
+  the next database update" (and same for Set futures/basis if schema-gated).
 
 ## Queued Mason decisions
 - Apply drafted migrations to the farm-rx Supabase project (batched; will list exact files).

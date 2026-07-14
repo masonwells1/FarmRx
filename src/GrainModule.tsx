@@ -6,6 +6,7 @@ import { farmerError } from "./lib/farmerErrors";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type {
   BinTransaction,
+  BinInventory,
   FirmOffer,
   FirmOfferStatus,
   FirmOfferType,
@@ -34,7 +35,9 @@ import {
 import { localCalendarDay } from "./data/marketingAlerts";
 import {
   deriveBinPosition,
+  activeBinCommodityIds,
   deriveCommodityBinTotal,
+  isBinTransactionSuperseded,
   moistureStatus,
   validateBinTransaction,
   validateGrainBin,
@@ -66,6 +69,25 @@ const money = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 const bushels = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const preciseBushels = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const displayBushels = (value: number) => Number.isInteger(value) ? bushels.format(value) : preciseBushels.format(value);
+export const HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY = "Harvest-minus-bins is not shown because bins cover the whole farm and all years.";
+
+/** Pure view data so every ledger label uses the same baseline supersession rule as bin math. */
+export function buildBinLedgerRow(inventory: BinInventory | undefined, item: BinTransaction) {
+  return { label: `${item.direction === "in" ? "In" : "Out"} · ${displayBushels(item.bushels)} bu`, superseded: isBinTransactionSuperseded(inventory, item) };
+}
+
+/** Keeps the harvest-total action from accidentally saving a stale text-input value. */
+export function buildProductionSaveInput(estimate: ProductionEstimate, aphValue: string, actualValue: string, drives_math = estimate.drives_math, actualOverride?: number): ProductionEstimate {
+  return { ...estimate, aph_yield: Number(aphValue), actual_bushels: actualOverride ?? (actualValue.trim() === "" ? null : Number(actualValue)), drives_math };
+}
+
+/** A bin with active lots may only offer those commodities; an empty bin offers every commodity. */
+export function movementCommodityOptions<T extends { id: string }>(commodities: T[], inventory: BinInventory | undefined, transactions: BinTransaction[]) {
+  const activeCommodityIds = activeBinCommodityIds(inventory, transactions);
+  return activeCommodityIds.length ? commodities.filter((item) => activeCommodityIds.includes(item.id)) : commodities;
+}
 const months = [
   "Jan",
   "Feb",
@@ -210,10 +232,14 @@ function binPosition(workspace: GrainWorkspace, bin: GrainBin) {
   const transactions = workspace.bin_transactions.filter(
     (item) => item.grain_bin_id === bin.id,
   );
+  const derived = deriveBinPosition(inventory, transactions);
+  const primary = derived.lots[0];
   return {
     inventory,
-    transactions,
-    ...deriveBinPosition(inventory, transactions),
+    ...derived,
+    commodityId: primary?.commodityId ?? null,
+    onHand: derived.lots.reduce((sum, lot) => sum + lot.onHand, 0),
+    exceedsRecordedInventory: derived.lots.some((lot) => lot.onHand < 0),
   };
 }
 
@@ -613,11 +639,15 @@ export function GrainPage({ services }: { services: GrainServices }) {
                   <th className="align-right">Bushels</th>
                   <th className="align-right">Price</th>
                   <th>Delivery</th>
+                  <th className="align-right">Delivered / remaining</th>
                 </tr>
               </thead>
               <tbody>
                 {scopeRows(workspace.grain_contracts, selectedScope).map(
-                  (contract) => (
+                  (contract) => {
+                    const delivered = workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((sum, item) => sum + item.bushels, 0);
+                    const remaining = contract.bushels - delivered;
+                    return (
                     <tr key={contract.id}>
                       <td>
                         <strong>{contract.buyer}</strong>
@@ -648,8 +678,10 @@ export function GrainPage({ services }: { services: GrainServices }) {
                         {contract.delivery_start?.slice(5).replace("-", "/") ??
                           "—"}
                       </td>
+                      <td className="align-right numeric">{workspace.capabilities?.contract_deliveries ? <><strong>{preciseBushels.format(delivered)} / {preciseBushels.format(Math.max(0, remaining))} bu</strong>{remaining < 0 && <small className="negative-text">Over-delivered by {preciseBushels.format(-remaining)} bu</small>}</> : <strong>Tracking arrives with the next database update</strong>}<ContractActions contract={contract} workspace={workspace} services={services} onSaved={async () => { whisper(); await refresh(); }} /></td>
                     </tr>
-                  ),
+                    );
+                  },
                 )}
               </tbody>
             </table>
@@ -1986,6 +2018,8 @@ function PositionCard({
     (sum, contract) => sum + contract.bushels,
     0,
   );
+  const harvestActual = workspace.fields.crop_assignments.filter((assignment) => assignment.crop_year === scope.crop_year && assignment.commodity_id === scope.commodity_id && (scope.operating_entity_id === null || workspace.fields.fields.some((field) => field.id === assignment.field_id && field.operating_entity_id === scope.operating_entity_id))).reduce((sum, assignment) => sum + (assignment.harvested_bushels ?? 0), 0);
+  const binBalance = deriveCommodityBinTotal(workspace.grain_bins, workspace.bin_inventory, workspace.bin_transactions, scope.commodity_id);
   useEffect(() => {
     let active = true;
     setRpMarketingEstimate(null);
@@ -2068,17 +2102,10 @@ function PositionCard({
       : minRevenue === null
         ? "No insurance unit."
         : `${money.format(minRevenue)}/ac minimum revenue.`;
-  const saveProduction = async (drives_math = estimate.drives_math) => {
+  const saveProduction = async (drives_math = estimate.drives_math, actualOverride?: number) => {
     if (!submitLock.current.acquire()) return;
-    const parsedAph = Number(aph);
-    const parsedActual = actual.trim() === "" ? null : Number(actual);
     try {
-      await services.grainRepository.saveProductionEstimate({
-        ...estimate,
-        aph_yield: parsedAph,
-        actual_bushels: parsedActual,
-        drives_math,
-      });
+      await services.grainRepository.saveProductionEstimate(buildProductionSaveInput(estimate, aph, actual, drives_math, actualOverride));
       setError("");
       await onSaved();
     } catch (exception) {
@@ -2138,6 +2165,7 @@ function PositionCard({
           ? ". Add a cash price target to estimate it."
           : ` using your cash price target of ${money.format(plannedPrice)}.`}
       </p>
+      <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p><button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { if (window.confirm("Use the harvest total as Grain actual? This changes Grain actual only; it does not change bins.")) { setActual(String(harvestActual)); void saveProduction("actual", harvestActual); } }}>Use harvest total as Grain actual</button></section>
       <div className="position-stats">
         <Metric
           label="Fully priced"
@@ -2660,6 +2688,14 @@ function ContractEntry({
   );
 }
 
+function ContractActions({ contract, workspace, services, onSaved }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; onSaved: () => Promise<void> }) {
+  const [price, setPrice] = useState(""); const [delivery, setDelivery] = useState(""); const [message, setMessage] = useState(""); const [saving, setSaving] = useState(false); const lock = useRef(createSubmitLock()); const deliveryId = useRef<string | null>(null);
+  const missingLeg = contract.contract_type === "basis" ? "futures_price" : contract.contract_type === "hta" ? "basis" : null;
+  const finalize = async () => { if (!missingLeg || !lock.current.acquire()) return; setSaving(true); try { if (price.trim() === "") throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const value = Number(price); if (!Number.isFinite(value) || (missingLeg === "futures_price" && value <= 0)) throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const shown = `${missingLeg === "basis" && value < 0 ? "-" : ""}$${Math.abs(value).toFixed(2)}/bu`; if (!window.confirm(`Set ${missingLeg === "basis" ? "basis" : "futures price"} to ${shown}? This cannot be changed afterward.`)) return; await services.grainRepository.finalizeContractPriceLeg(contract.id, missingLeg, value); setMessage("Price leg set. Add a contract note for any correction."); await onSaved() } catch (error) { setMessage(farmerError(error, "set this price")) } finally { lock.current.release(); setSaving(false) } };
+  const record = async () => { if (!lock.current.acquire()) return; setSaving(true); try { const value = Number(delivery); if (!Number.isFinite(value) || value <= 0) throw new Error("Enter delivered bushels."); const delivered = workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((sum, item) => sum + item.bushels, 0); const excess = delivered + value - contract.bushels; const allow_overdelivery = excess > 0 && window.confirm(`This is ${preciseBushels.format(excess)} bu more than the contract. Record anyway?`); if (excess > 0 && !allow_overdelivery) return; deliveryId.current ??= services.createGrainId(); await services.grainRepository.recordContractDelivery({ id: deliveryId.current, farm_id: workspace.fields.farm.id, grain_contract_id: contract.id, bushels: value, delivered_on: localCalendarDay(new Date()), note: null, created_at: new Date().toISOString(), allow_overdelivery }); deliveryId.current = null; setDelivery(""); setMessage("Delivery recorded."); await onSaved() } catch (error) { setMessage(farmerError(error, "record this delivery")) } finally { lock.current.release(); setSaving(false) } };
+  return <div className="contract-actions">{missingLeg && contract[missingLeg] === null && <label>{missingLeg === "basis" ? "Set basis $/bu" : "Set futures price $/bu"}<input type="number" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_price_finalization} onClick={() => void finalize()}>{missingLeg === "basis" ? "Set basis" : "Set futures price"}</button>{!workspace.capabilities?.contract_price_finalization && <small>Price finalization arrives with the next database update. Reload the app after the update.</small>}</label>}<label>Delivered bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={delivery} onChange={(event) => setDelivery(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_deliveries} onClick={() => void record()}>Record delivery</button>{!workspace.capabilities?.contract_deliveries && <small>Tracking arrives with the next database update. Reload the app after the update.</small>}</label>{message && <small>{message}</small>}</div>
+}
+
 function Bins({
   workspace,
   services,
@@ -2702,10 +2738,7 @@ function Bins({
         <div>
           <span className="eyebrow">Storage</span>
           <h2>Grain bins</h2>
-          <p>
-            Recorded inventory plus matching ledger movements gives the on-hand
-            total below.
-          </p>
+          <p>A dated measurement is the baseline; only later movements change it.</p>
         </div>
         <button
           className="primary-action"
@@ -2733,9 +2766,6 @@ function Bins({
       <div className="bin-list">
         {workspace.grain_bins.map((bin) => {
           const position = binPosition(workspace, bin);
-          const commodity = workspace.fields.commodities.find(
-            (item) => item.id === position.commodityId,
-          );
           const moisture = moistureStatus(bin);
           const moistureText =
             bin.moisture_pct === null
@@ -2745,7 +2775,7 @@ function Bins({
               : bin.moisture_checked_on === null
                 ? `${bin.moisture_pct.toFixed(2)}% · date missing`
                 : `${bin.moisture_pct.toFixed(2)}% · checked ${new Date(`${bin.moisture_checked_on}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
-          const fill = Math.min(100, (position.onHand / bin.capacity_bu) * 100);
+          const fill = (position.onHand / bin.capacity_bu) * 100;
           return (
             <article className="bin-card" key={bin.id}>
               <div className="bin-row">
@@ -2768,14 +2798,10 @@ function Bins({
                 </button>
               </div>
               <div className="bin-card-meta">
-                {commodity ? (
-                  <span
-                    className={`commodity-badge ${commodity.traits.identity_preserved ? "ip" : ""}`}
-                  >
-                    {commodity.traits.identity_preserved ? "IP · " : ""}
-                    {commodity.name}
-                  </span>
-                ) : (
+                {position.lots.length ? position.lots.map((lot) => {
+                  const commodity = workspace.fields.commodities.find((item) => item.id === lot.commodityId);
+                  return <span key={lot.commodityId} className={`commodity-badge ${commodity?.traits.identity_preserved ? "ip" : ""}`}>{commodity?.traits.identity_preserved ? "IP · " : ""}{commodity?.name ?? lot.commodityId} · {displayBushels(lot.onHand)} bu</span>
+                }) : (
                   <span className="commodity-badge">No commodity recorded</span>
                 )}
                 <span
@@ -2791,51 +2817,40 @@ function Bins({
                   {moisture.message}
                 </p>
               )}
-              {position.mismatchedTransactions.length > 0 && (
-                <p className="bin-warning" role="status">
-                  {position.mismatchedTransactions.length} movement
-                  {position.mismatchedTransactions.length === 1 ? "" : "s"} for
-                  a different commodity{" "}
-                  {position.mismatchedTransactions.length === 1 ? "is" : "are"}{" "}
-                  excluded from on-hand.
-                </p>
-              )}
+               {position.lots.map((lot) => lot.inventory && <p className="bin-reconciliation" key={`${lot.commodityId}-baseline`}>Current baseline · {new Date(`${lot.baselineDate}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: {bushels.format(lot.recordedInventory)} bu + {lot.movementsSinceBaseline.length} movements since = {bushels.format(lot.onHand)} bu.</p>)}
               <div className="bin-fill">
                 <div>
                   <strong className="numeric">
-                    {bushels.format(position.onHand)} bu
+                       {displayBushels(position.onHand)} bu
                   </strong>
                   <span className="numeric">
                     {" "}
-                    / {bushels.format(bin.capacity_bu)} bu · {fill.toFixed(0)}%
+                     / {displayBushels(bin.capacity_bu)} bu · {fill.toFixed(0)}%
                   </span>
                 </div>
                 <span
                   aria-label={`${fill.toFixed(0)} percent full`}
-                  style={{ width: `${fill}%` }}
+                  style={{ width: `${Math.min(100, Math.max(0, fill))}%` }}
                 />
               </div>
               {position.exceedsRecordedInventory && (
                 <p className="bin-warning" role="status">
-                  Movements exceed recorded inventory. On-hand is shown as 0 bu.
+                  This bin shows a negative grain balance — review its history.
                 </p>
               )}
+              {position.onHand > bin.capacity_bu && <p className="bin-warning" role="status">This bin shows more grain than it holds — review its history.</p>}
               {position.inventory && (
                 <div className="bin-balance">
-                  <span>
+                         <span>
                     <strong className="numeric">
-                      {bushels.format(position.inventory.committed_bushels)}
+                      {displayBushels(position.inventory.committed_bushels)}
                     </strong>{" "}
                     committed
                   </span>
                   <span>
                     <strong className="numeric">
-                      {bushels.format(
-                        Math.max(
-                          0,
-                          position.onHand -
-                            position.inventory.committed_bushels,
-                        ),
+                      {displayBushels(
+                        position.onHand - position.inventory.committed_bushels,
                       )}
                     </strong>{" "}
                     free
@@ -2859,8 +2874,9 @@ function Bins({
                 />
                 {position.transactions.length ? (
                   <div className="movement-list">
-                    {position.transactions.map((item) => (
-                      <div key={item.id}>
+                    {position.transactions.map((item) => {
+                      const ledgerRow = buildBinLedgerRow(position.inventory, item);
+                      return <div key={item.id}>
                         <strong
                           className={
                             item.direction === "in"
@@ -2868,8 +2884,7 @@ function Bins({
                               : "movement-out"
                           }
                         >
-                          {item.direction === "in" ? "In" : "Out"} ·{" "}
-                          {bushels.format(item.bushels)} bu
+                          {ledgerRow.label}
                         </strong>
                         <span>
                           {new Date(
@@ -2878,11 +2893,11 @@ function Bins({
                             month: "short",
                             day: "numeric",
                           })}{" "}
-                          · {item.source_kind ?? "Manual entry"}
+                            · {workspace.fields.commodities.find((commodity) => commodity.id === item.commodity_id)?.name ?? item.commodity_id} · {item.source_kind ?? "Manual entry"}{ledgerRow.superseded ? " · superseded by baseline" : ""}
                         </span>
                         {item.note && <small>{item.note}</small>}
-                      </div>
-                    ))}
+                      </div>;
+                    })}
                   </div>
                 ) : (
                   <p>No movements recorded yet.</p>
@@ -3069,25 +3084,28 @@ function MovementForm({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const submitLock = useRef(createSubmitLock());
-  const establishedCommodity = workspace.fields.commodities.find(
-    (item) => item.id === commodityId,
-  );
+  const movementId = useRef<string | null>(null);
+  const inventory = workspace.bin_inventory.find((item) => item.grain_bin_id === bin.id);
+  const baselineDate = inventory?.measured_at.slice(0, 10) ?? null;
+  const minimumOccurredOn = baselineDate ? new Date(`${baselineDate}T00:00:00.000Z`).getTime() + 86_400_000 : null;
+  const minimumOccurredOnDate = minimumOccurredOn === null ? undefined : new Date(minimumOccurredOn).toISOString().slice(0, 10);
+  const prior = workspace.bin_transactions.filter((item) => item.grain_bin_id === bin.id);
+  const activeCommodityIds = activeBinCommodityIds(inventory, prior);
+  const allowedCommodities = movementCommodityOptions(workspace.fields.commodities, inventory, prior);
   useEffect(() => {
-    if (commodityId) setCommodity(commodityId);
-  }, [commodityId]);
+    if (activeCommodityIds.length) setCommodity(activeCommodityIds[0]);
+  }, [commodityId, activeCommodityIds.join("|")]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!submitLock.current.acquire()) return;
     setSaving(true);
     try {
-      if (commodityId && commodity !== commodityId) {
-        setError(
-          `This bin holds ${establishedCommodity?.name ?? commodityId}. Empty it before storing a different crop, or add a movement for that crop.`,
-        );
+      if (activeCommodityIds.length && !activeCommodityIds.includes(commodity)) {
+        setError("This bin still holds another commodity. Empty its active lot before storing a different crop.");
         return;
       }
       const transaction: BinTransaction = {
-        id: services.createGrainId(),
+        id: movementId.current ?? (movementId.current = services.createGrainId()),
         farm_id: workspace.fields.farm.id,
         grain_bin_id: bin.id,
         direction,
@@ -3105,6 +3123,7 @@ function MovementForm({
       }
       try {
         await onSave(transaction);
+        movementId.current = null;
         setBushelsValue("");
         setNote("");
         setError("");
@@ -3150,10 +3169,9 @@ function MovementForm({
         Commodity
         <select
           value={commodity}
-          disabled={!!commodityId}
           onChange={(event) => setCommodity(event.target.value)}
         >
-          {workspace.fields.commodities.map((item) => (
+          {allowedCommodities.map((item) => (
             <option key={item.id} value={item.id}>
               {item.name}
             </option>
@@ -3165,6 +3183,7 @@ function MovementForm({
         <input
           required
           type="date"
+          min={minimumOccurredOnDate}
           value={occurredOn}
           onChange={(event) => setOccurredOn(event.target.value)}
         />
@@ -3182,7 +3201,8 @@ function MovementForm({
           {error}
         </p>
       )}
-      <button className="secondary-action" type="submit" disabled={saving}>
+      {!workspace.capabilities?.bin_movements && <p className="form-error">Bin movements arrive with the next database update. Reload the app after the update.</p>}
+      <button className="secondary-action" type="submit" disabled={saving || !workspace.capabilities?.bin_movements}>
         {saving ? "Saving…" : "Add movement"}
       </button>
     </form>

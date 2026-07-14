@@ -1,4 +1,4 @@
-import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainContract, GrainRepository, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate } from './grain'
+import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainContract, GrainContractDelivery, GrainRepository, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate } from './grain'
 import { sameScope } from './grain'
 import type { GrainOperationWriter } from './SupabaseGrainRepository'
 import { isTransportFailure } from './QueuedFieldsRepository'
@@ -32,6 +32,8 @@ export class QueuedGrainRepository implements GrainRepository {
   private async save(entry: GrainQueueEntryV1) { const { queue } = await this.contextAndQueue(); await this.locked(queue, async (verify) => { verify(); const enqueue = () => { verify(); const next = queue.append(entry); setModuleSyncStatus('grain', { kind: 'pending', pending: next.entries.length }); if (this.workspace) this.workspace = this.overlay(this.workspace, next.entries) }; if (queue.read().entries.length || this.dependencies.isOffline()) return enqueue(); try { await this.write(entry); verify(); const pending = queue.read().entries.length; setModuleSyncStatus('grain', pending ? { kind: 'pending', pending } : { kind: 'synced', pending: 0 }) } catch (error) { if (isTransportFailure(error, this.dependencies.isOffline())) return enqueue(); throw error } }); void this.replayCurrent() }
   async saveProductionEstimate(value: ProductionEstimate) { const { context } = await this.contextAndQueue(); await this.save(this.queued('saveProductionEstimate', value, context)) }
   async saveContract(value: GrainContract) { const { context } = await this.contextAndQueue(); await this.save(this.queued('saveContract', value, context)) }
+  async finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number) { if (this.dependencies.isOffline()) throw new Error('Price finalization needs a connection.'); await this.writer.finalizeContractPriceLeg(contractId, leg, value) }
+  async recordContractDelivery(value: GrainContractDelivery) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before recording a delivery.'); await this.writer.recordContractDelivery(value) }
   async saveCashBid(value: CashBid) { const { context } = await this.contextAndQueue(); await this.save(this.queued('saveCashBid', value, context)) }
   async saveMarketingAlertRule(value: MarketingAlertRule) { const { context } = await this.contextAndQueue(); await this.save(this.queued('saveMarketingAlertRule', value, context)) }
   async deleteMarketingAlertRule(id: string) { const { context } = await this.contextAndQueue(); await this.save(this.queued('deleteMarketingAlertRule', id, context)) }
@@ -39,7 +41,7 @@ export class QueuedGrainRepository implements GrainRepository {
   async fillFirmOffer(offer: FirmOffer, contract: GrainContract) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before filling this offer.'); return this.writer.fillFirmOffer(offer, contract) }
   async deleteFirmOffer(id: string) { const { context } = await this.contextAndQueue(); await this.save(this.queued('deleteFirmOffer', id, context)) }
   async upsertGrainBin(value: GrainBin) { const { context } = await this.contextAndQueue(); await this.save(this.queued('upsertGrainBin', value, context)) }
-  async appendBinTransaction(value: BinTransaction) { const { context } = await this.contextAndQueue(); await this.save(this.queued('appendBinTransaction', value, context)) }
+  async appendBinTransaction(value: BinTransaction) { if (this.dependencies.isOffline()) throw new Error('Bin movements need a connection.'); await this.writer.appendBinTransaction(value) }
   async saveGrainAlertSettings(value: GrainAlertSettings) { const { context } = await this.contextAndQueue(); await this.save(this.queued('saveGrainAlertSettings', value, context)) }
   private async workspaceForPlan() { if (this.workspace) return this.workspace; this.workspace = await this.writer.getData(); return this.workspace }
   async saveMarketingPlanTarget(value: MarketingPlanTarget) { const { context, queue } = await this.contextAndQueue(); const current = this.workspace ? await this.locked(queue, () => Promise.resolve(this.overlay(this.workspace!, queue.read().entries))) : await this.workspaceForPlan(); const row = { ...value, farm_id: context.farmId }; const targets = current.marketing_plan_targets.filter((item) => !sameScope(item, row) || item.id !== row.id).concat(row); await this.save(this.queued('replaceMarketingPlan', { scope: row, targets: targets.filter((item) => sameScope(item, row)) }, context)) }
