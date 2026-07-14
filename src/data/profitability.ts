@@ -18,12 +18,19 @@ export interface CropBudget extends PositionScope {
   updated_at: string
 }
 
+export type CostLineSourceKind = 'manual' | 'inventory' | 'equipment'
+/** Audit P2-14: a cost line sourced from Inventory or Equipment records is DB-valid and
+ * must load; it just cannot be edited by hand here without severing its source link. */
+export const SOURCED_COST_LINE_EDIT_MESSAGE = 'This cost line comes from your Inventory or Equipment records, so it cannot be edited by hand here. Remove it if you no longer want it in this budget.'
+
 export interface BudgetCostLine {
   id: string
   budget_id: string
   category: CostCategory
   name: string
   amount_per_acre: number
+  /** Missing means 'manual' (every line the app itself writes today). */
+  source_kind?: CostLineSourceKind
   created_at: string
   updated_at: string
 }

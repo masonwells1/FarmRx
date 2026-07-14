@@ -11,12 +11,13 @@ import type {
   TaskStatus,
 } from "./data/equipmentTasks";
 import { farmerError } from "./lib/farmerErrors";
+import { farmLocalCalendarDate } from "./data/farmDates";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import { OPERATIONAL_INTEGRITY_UPDATE_MESSAGE } from "./data/operationalIntegrityCapability";
 import { SaveReceipt } from "./components/SaveReceipt";
 import { useSaveReceipt } from "./lib/saveReceipt";
 import { NeedsAttentionList } from "./components/NeedsAttentionList";
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => farmLocalCalendarDate();
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",

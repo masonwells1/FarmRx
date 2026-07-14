@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabaseClient'
 import type { GrainWorkspace } from './grain'
 import { evaluateMarketingAlertRules } from './marketingAlerts'
 import { getOperationalIntegrityCapability } from './operationalIntegrityCapability'
+import { farmLocalCalendarDate } from './farmDates'
 
 export interface GrainAlert { key: string; kind: 'price_target' | 'target_deadline' | 'usda_report' | 'marketing_price_target' | 'marketing_pct_marketed_goal' | 'marketing_deadline'; message: string; targetId?: string; reportId?: string; observationId?: string; ruleId?: string }
 const day = (value: Date) => value.toISOString().slice(0, 10)
@@ -11,7 +12,7 @@ const observationFresh = (bidDate: string, now: Date) => businessDay(bidDate) &&
 
 /** Client v1 is intentionally check-on-open, not background monitoring. */
 export function evaluateGrainAlerts(workspace: GrainWorkspace, now = new Date()): GrainAlert[] {
-  const today = day(now); const alerts: GrainAlert[] = []
+  const today = farmLocalCalendarDate(now); const alerts: GrainAlert[] = []
   for (const target of workspace.marketing_plan_targets) {
     if (target.target_price !== null) { const candidates = workspace.cash_bids.filter((bid) => bid.commodity_id === target.commodity_id && bid.cash_price !== null && observationFresh(bid.bid_date, now)); const highest = candidates.sort((left, right) => (right.cash_price! - left.cash_price!) || right.bid_date.localeCompare(left.bid_date))[0]; if (highest && highest.cash_price! >= target.target_price) alerts.push({ key: `price:${target.id}:${target.target_price}:${highest.id}`, kind: 'price_target', targetId: target.id, observationId: highest.id, message: `Cash price target reached for ${target.commodity_id}: ${highest.cash_price!.toFixed(2)}.` }) }
     if (target.deadline && (target.deadline === today || target.deadline === addDays(today, 7))) { const window = target.deadline === today ? 'due' : 'seven-days'; alerts.push({ key: `deadline:${target.id}:${target.deadline}:${window}`, kind: 'target_deadline', targetId: target.id, message: target.deadline === today ? `Marketing target deadline is today (${target.deadline}).` : `Marketing target deadline is in seven days (${target.deadline}).` }) }

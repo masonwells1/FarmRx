@@ -1,3 +1,18 @@
+/** Audit P2-04: the shared finite/scale contract for every number headed to a
+ * `numeric(precision, scale)` column. Rounds deterministically (half away from zero,
+ * matching PostgreSQL) so the database echo equals what was sent, and fails closed
+ * with a plain-English message on non-finite or too-large input instead of letting
+ * the database round or reject it later. */
+export function boundedDecimal(value: number, contract: { precision: number; scale: number; label: string }): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`Enter a real number for ${contract.label}.`)
+  const rounded = roundDecimalHalfUp(value, contract.scale)
+  if (Math.abs(rounded) >= 10 ** (contract.precision - contract.scale)) throw new Error(`${contract.label} is too large to save. Check the number and try again.`)
+  return rounded
+}
+export function nullableBoundedDecimal(value: number | null, contract: { precision: number; scale: number; label: string }): number | null {
+  return value === null ? null : boundedDecimal(value, contract)
+}
+
 /** PostgreSQL numeric-style decimal rounding: ties round away from zero. */
 function plainDecimal(value: number) {
   const [coefficient, exponentPart] = Math.abs(value).toString().toLowerCase().split('e')

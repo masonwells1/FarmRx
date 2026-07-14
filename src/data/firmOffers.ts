@@ -50,9 +50,21 @@ export function pendingFirmOfferBushels(workspace: GrainWorkspace, scope?: Posit
   return workspace.firm_offers.filter((offer) => displayFirmOfferStatus(offer, now) === 'open' && (!scope || sameScope(offer, scope))).reduce((total, offer) => total + offer.bushels, 0)
 }
 
+/** A filled offer is the audit trail that links a sale to its contract; it must never be deletable (audit P3-01). */
+export const FILLED_OFFER_DELETE_MESSAGE = 'A filled offer is kept for your records because it is linked to a contract. It cannot be deleted.'
+
+/** Audit P2-03: a cash offer whose delivery window starts after the fill day is a
+ * forward commitment, not a spot sale — record it as `forward_cash` so the contract
+ * list does not hide an obligation to deliver later. */
+export function cashOfferContractType(contractMonth: string | null, fillCalendarDay: string): 'cash_spot' | 'forward_cash' {
+  const window = deliveryWindow(contractMonth)
+  return window.start !== null && window.start > fillCalendarDay ? 'forward_cash' : 'cash_spot'
+}
+
 export function offerToContract(offer: FirmOffer, id: string, timestamp: string): GrainContract {
   const delivery = deliveryWindow(offer.contract_month)
   const locationNote = offer.delivery_location ? `Delivery location: ${offer.delivery_location}` : null
   const note = [locationNote, offer.notes].filter((item): item is string => !!item).join('\n') || null
-  return { id, farm_id: offer.farm_id, crop_year: offer.crop_year, commodity_id: offer.commodity_id, operating_entity_id: offer.operating_entity_id, enterprise_label: offer.enterprise_label, contract_type: offer.offer_type === 'cash' ? 'cash_spot' : offer.offer_type, buyer: offer.buyer, bushels: offer.bushels, cash_price: offer.offer_type === 'cash' ? offer.price : null, futures_price: offer.offer_type === 'hta' ? offer.price : null, basis: offer.offer_type === 'basis' ? offer.basis : null, delivery_start: delivery.start, delivery_end: delivery.end, contract_number: null, premium_cents_per_bu: 0, notes: note, created_at: timestamp, updated_at: timestamp }
+  const fillDay = localCalendarDay(Number.isNaN(Date.parse(timestamp)) ? new Date() : new Date(timestamp))
+  return { id, farm_id: offer.farm_id, crop_year: offer.crop_year, commodity_id: offer.commodity_id, operating_entity_id: offer.operating_entity_id, enterprise_label: offer.enterprise_label, contract_type: offer.offer_type === 'cash' ? cashOfferContractType(offer.contract_month, fillDay) : offer.offer_type, buyer: offer.buyer, bushels: offer.bushels, cash_price: offer.offer_type === 'cash' ? offer.price : null, futures_price: offer.offer_type === 'hta' ? offer.price : null, basis: offer.offer_type === 'basis' ? offer.basis : null, delivery_start: delivery.start, delivery_end: delivery.end, contract_number: null, premium_cents_per_bu: 0, notes: note, created_at: timestamp, updated_at: timestamp }
 }

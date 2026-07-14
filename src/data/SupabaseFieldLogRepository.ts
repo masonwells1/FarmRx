@@ -34,5 +34,5 @@ export class SupabaseFieldLogRepository implements FieldLogRepository {
     if (!uuid.test(operationId) || validateFieldLogDraft(draft) !== null) fail()
     const farmId = await this.d.getFarmId(); return mapFieldLogEntry(await this.d.gateway.saveEntry({ farmId, operationId, entry: draft }), { farmId, entry: draft })
   }
-  async deleteEntry(idValue: string) { if (!uuid.test(idValue)) fail(); const farmId = await this.d.getFarmId(); mapFieldLogDeleteEcho(await this.d.gateway.deleteEntry({ farmId, entryId: idValue }), { id: idValue }) }
+  async deleteEntry(idValue: string) { if (!uuid.test(idValue)) fail(); const farmId = await this.d.getFarmId(); mapFieldLogDeleteEcho(await this.d.gateway.deleteEntry({ farmId, entryId: idValue }), { id: idValue }); return { id: idValue, deleted: true as const } }
 }

@@ -1,11 +1,12 @@
 import { isMarsBid } from './basisMath'
+import { farmLocalCalendarDate } from './farmDates'
 import { marketedPercent, sameScope, type CashBid, type GrainWorkspace, type MarketingAlertRule } from './grain'
 
 export type MarketingAlertEvent = { ruleId: string; key: string; kind: 'marketing_price_target' | 'marketing_pct_marketed_goal' | 'marketing_deadline'; message: string }
 export type MarketingAlertEvaluation = { alerts: MarketingAlertEvent[]; firedRuleIds: string[]; conditions: Array<{ ruleId: string; met: boolean }> }
 
-/** The farmer's device calendar, not UTC, is the alert-day authority. */
-export const localCalendarDay = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+/** The farmer's device calendar, not UTC, is the alert-day authority (canonical helper: farmDates.ts). */
+export const localCalendarDay = (value: Date) => farmLocalCalendarDate(value)
 const dateAtUtc = (value: string) => new Date(`${value}T00:00:00.000Z`)
 const dayDifference = (left: string, right: string) => Math.round((dateAtUtc(left).getTime() - dateAtUtc(right).getTime()) / 86_400_000)
 const money = (value: number) => `$${value.toFixed(2)}`

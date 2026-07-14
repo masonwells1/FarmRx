@@ -6,7 +6,9 @@ export interface ScoutingNote { id: string; farm_id: string; field_id: string; o
 export interface ScoutingNoteDraft { id?: string; field_id: string; observed_on: string; category: ScoutingCategory; note: string; latitude: number | null; longitude: number | null; photos: Array<{ id?: string; storage_path: string }>; create_task: boolean }
 export interface ScoutingData { notes: ScoutingNote[]; viewer: { user_id: string; role: FarmViewerRole } }
 export interface ScoutingDeleteReceipt { id: string; deleted: true; storage_paths: string[]; pending?: boolean }
-export interface ScoutingRepository { getData(fieldId?: string): Promise<ScoutingData>; saveNote(draft: ScoutingNoteDraft): Promise<ScoutingNote>; deleteNote(id: string, storagePaths?: string[]): Promise<ScoutingDeleteReceipt> }
+/** Audit P2-10: an offline delete succeeded on this device — it must never read as a failure. */
+export const SCOUTING_OFFLINE_DELETE_MESSAGE = 'Deleted on this device. It will finish syncing when you reconnect.'
+export interface ScoutingRepository { getData(fieldId?: string): Promise<ScoutingData>; saveNote(draft: ScoutingNoteDraft): Promise<ScoutingNote>; deleteNote(id: string, storagePaths?: string[]): Promise<ScoutingDeleteReceipt>; /** Audit P2-09: park photo paths whose bucket removal failed for durable retry. */ recordPhotoCleanup?(farmId: string, paths: string[]): void }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const isoDate = /^\d{4}-\d{2}-\d{2}$/

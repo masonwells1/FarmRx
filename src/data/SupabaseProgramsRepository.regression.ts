@@ -25,7 +25,7 @@ class FakeGateway implements ProgramsDataGateway {
   async loadPrograms(farmId: string, includeArchived: boolean) { return structuredClone(this.programs.filter((row) => row.farm_id === farmId && (includeArchived || !row.is_archived))) }
   async loadPasses(farmId: string, programIds: string[]) { return structuredClone(this.passes.filter((row) => row.farm_id === farmId && programIds.includes(row.program_id) && !row.is_archived).sort((a, b) => a.sequence - b.sequence)) }
   async loadProducts(farmId: string, passIds: string[]) { return structuredClone(this.products.filter((row) => row.farm_id === farmId && passIds.includes(row.program_pass_id) && !row.is_archived).sort((a, b) => a.sequence - b.sequence)) }
-  async loadAssignments(farmId: string, includeArchived: boolean) { return structuredClone(this.assignments.filter((row) => row.farm_id === farmId && (includeArchived || row.assignment_status === 'active'))) }
+  async loadAssignments(farmId: string) { return structuredClone(this.assignments.filter((row) => row.farm_id === farmId)) }
   async loadCropAssignments(farmId: string) { return structuredClone(this.cropAssignments.filter((row) => row.farm_id === farmId)) }
   async loadApplicationRecords(farmId: string) { return structuredClone(this.applicationRecords.filter((row) => row.farm_id === farmId)) }
   async loadAssignmentCosts(farmId: string) { return structuredClone(this.assignmentCosts.filter((row) => row.farm_id === farmId)) }

@@ -108,8 +108,25 @@ export function evaluateSprayWindow(sample: WeatherSample, ctx: SprayContext): S
   const level = parts.reduce<SprayLevel>((worst, part) => rank[part.level] > rank[worst] ? part.level : worst, 'good')
   return { level, reasons: parts.filter((part) => part.level === level).map((part) => part.reason) }
 }
-export function bestWindowToday(hours: WeatherSample[], ctx: SprayContext): SprayWindow | null { const remaining = hours.filter((hour) => at(hour.time) >= at(ctx.now) && daylight(hour.time, ctx.sunrise, ctx.sunset)); let best: WeatherSample[] = []; let run: WeatherSample[] = []; for (const hour of remaining) { if (evaluateSprayWindow(hour, ctx).level === 'good') run.push(hour); else { if (run.length > best.length) best = run; run = [] } } if (run.length > best.length) best = run; if (!best.length) return null; const end = new Date(at(best.at(-1)!.time) + 3600000).toISOString(); return { start: best[0].time, end, hours: best.length, label: `Best window today: ~${formatHour(best[0].time)}–${formatHour(end)}` } }
+export function bestWindowToday(hours: WeatherSample[], ctx: SprayContext): SprayWindow | null { const remaining = hours.filter((hour) => at(hour.time) >= at(ctx.now) && daylight(hour.time, ctx.sunrise, ctx.sunset)); let best: WeatherSample[] = []; let run: WeatherSample[] = []; for (const hour of remaining) { if (evaluateSprayWindow(hour, ctx).level === 'good') run.push(hour); else { if (run.length > best.length) best = run; run = [] } } if (run.length > best.length) best = run; if (!best.length) return null; const end = hourAfter(best.at(-1)!.time); return { start: best[0].time, end, hours: best.length, label: `Best window today: ~${formatHour(best[0].time)}–${formatHour(end)}` } }
 export function compassLabel(degrees: number) { const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']; return directions[Math.round((((degrees % 360) + 360) % 360) / 45) % 8] }
 export function formatF(value: number) { return `${Math.round(value)}°F` }
 export function formatMph(value: number) { return `${Math.round(value)} mph` }
-export function formatHour(value: string) { return new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(new Date(value)) }
+const naiveTime = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
+/** Audit P2-07: Open-Meteo (timezone=auto) returns the FIELD's wall-clock time with no UTC
+ * offset. Displayed hours must show that wall clock unchanged even when the farmer's browser
+ * is in another time zone, so naive strings are pinned to UTC for formatting instead of being
+ * re-interpreted in the browser's zone. Offset-bearing strings keep real-instant handling. */
+export function fieldWallClockDate(value: string): Date {
+  const match = naiveTime.exec(value)
+  if (!match) return new Date(value)
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]), Number(match[6] ?? '0')))
+}
+export function formatHour(value: string) { return new Intl.DateTimeFormat(undefined, naiveTime.test(value) ? { hour: 'numeric', timeZone: 'UTC' } : { hour: 'numeric' }).format(fieldWallClockDate(value)) }
+/** One hour later, staying in the field's wall-clock notation for naive inputs. */
+export function hourAfter(value: string): string {
+  if (!naiveTime.test(value)) return new Date(at(value) + 3600000).toISOString()
+  const date = fieldWallClockDate(value); date.setUTCHours(date.getUTCHours() + 1)
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`
+}

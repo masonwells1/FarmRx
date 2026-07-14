@@ -10,6 +10,7 @@ import { readNeedsAttention } from './needsAttentionStore'
 import { isMarsBid, latestBasis } from './basisMath'
 import { farmerError } from '../lib/farmerErrors'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from './binLedger'
+import { FILLED_OFFER_DELETE_MESSAGE } from './firmOffers'
 import type { FieldsRepository } from './fields'
 import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainContract, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, ProductionEstimate } from './grain'
 import type { StorageLike } from './writeQueue'
@@ -194,6 +195,13 @@ async function run() {
   gateway.fillError = null
   await repo.deleteFirmOffer(offer.id)
   assert(gateway.deleteOfferIds[0] === offer.id, 'Firm-offer delete must target the requested ID.')
+  // Audit P3-01: a filled offer is offer-to-contract history and can never be deleted.
+  const filledOffer: FirmOffer = { ...offer, id: uid(997), status: 'filled', filled_contract_id: uid(2) }
+  ;(gateway.state.bundle.firm_offers as unknown[]).push(structuredClone(filledOffer))
+  let filledDeleteMessage = ''
+  try { await repo.deleteFirmOffer(filledOffer.id) } catch (error) { filledDeleteMessage = error instanceof Error ? error.message : '' }
+  assert(filledDeleteMessage === FILLED_OFFER_DELETE_MESSAGE && !gateway.deleteOfferIds.includes(filledOffer.id), 'Deleting a filled offer must stop with the shared farmer message before any gateway delete.')
+  ;(gateway.state.bundle.firm_offers as unknown[]).pop()
   await rejects(() => repo.saveFirmOffer({ ...offer, id: uid(991), price: null }), 'Cash firm offer without price must reject before the gateway.')
   assert(gateway.offerInputs.length === 1, 'Invalid firm offer reached the gateway.')
   // 22: bins are mutable, but movements use the dedicated insert-only append seam.

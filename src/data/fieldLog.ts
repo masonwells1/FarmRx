@@ -30,10 +30,14 @@ export interface FieldLogData {
   viewer: { user_id: string; role: FarmViewerRole }
 }
 
+export interface FieldLogDeleteReceipt { id: string; deleted: true; pending?: boolean }
+/** Audit P2-10: an offline delete succeeded on this device — it must never read as a failure. */
+export const FIELD_LOG_OFFLINE_DELETE_MESSAGE = 'Deleted on this device. It will finish syncing when you reconnect.'
+
 export interface FieldLogRepository {
   getData(fieldId?: string): Promise<FieldLogData>
   saveEntry(draft: FieldLogEntryDraft): Promise<FieldLogEntry>
-  deleteEntry(id: string): Promise<void>
+  deleteEntry(id: string): Promise<FieldLogDeleteReceipt>
 }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i

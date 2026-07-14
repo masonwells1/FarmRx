@@ -1821,6 +1821,38 @@ function CostLine({
   onSave: (line: BudgetCostLine) => void;
   onRemove: () => void;
 }) {
+  // Audit P2-14: a line sourced from Inventory/Equipment records loads and totals
+  // normally but is not hand-editable — editing would sever its source link.
+  if (line.source_kind !== undefined && line.source_kind !== "manual") {
+    return (
+      <tr>
+        <td>
+          {line.name}
+          <span className="default-badge">
+            From your {line.source_kind === "inventory" ? "Inventory" : "Equipment"} records
+          </span>
+        </td>
+        <td>
+          {categories.find((category) => category.value === line.category)
+            ?.label ?? line.category}
+        </td>
+        <td className="numeric">{money.format(line.amount_per_acre)}</td>
+        <td className="numeric">
+          {decimal.format(line.amount_per_acre / price)} bu
+        </td>
+        <td>
+          <button
+            className="remove-cost"
+            type="button"
+            aria-label={`Remove ${line.name}`}
+            onClick={onRemove}
+          >
+            Remove
+          </button>
+        </td>
+      </tr>
+    );
+  }
   return (
     <tr>
       <td>

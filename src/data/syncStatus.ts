@@ -11,8 +11,10 @@ const listeners = new Set<() => void>()
 function aggregate(): SyncState {
   const values = Object.values(states)
   const pending = values.reduce((total, value) => total + value.pending, 0)
-  const blocked = values.find((value) => value.kind === 'blocked')
-  if (blocked) return { kind: 'blocked', pending, message: blocked.message }
+  // Audit P3-02: every blocked module's message is surfaced, not just the first —
+  // a farmer with two stuck modules must not discover the second only after fixing the first.
+  const blockedMessages = [...new Set(values.filter((value): value is Extract<SyncState, { kind: 'blocked' }> => value.kind === 'blocked').map((value) => value.message))]
+  if (blockedMessages.length) return { kind: 'blocked', pending, message: blockedMessages.join(' ') }
   if (values.some((value) => value.kind === 'syncing')) return { kind: 'syncing', pending }
   if (pending) return { kind: 'pending', pending }
   return { kind: 'synced', pending: 0 }

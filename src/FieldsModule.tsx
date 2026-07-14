@@ -23,6 +23,7 @@ import type {
 } from "./data/fields";
 import { isLegacyFlexBonusFormula } from "./data/fields";
 import { farmerError } from "./lib/farmerErrors";
+import { farmLocalCalendarDate } from "./data/farmDates";
 import { createSubmitLock } from "./lib/submitLock";
 import {
   computeStructuredFlexRent,
@@ -82,7 +83,7 @@ const money = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
-const today = new Date().toISOString().slice(0, 10);
+const today = () => farmLocalCalendarDate();
 
 function formatAcres(acres: number) {
   return `${number.format(acres)} ac`;
@@ -807,7 +808,7 @@ function InlineAddRow({
           landlord_name: null,
           landlord_phone: null,
           landlord_contact_notes: null,
-          effective_from: today,
+          effective_from: today(),
           cash_rent_per_acre: null,
           flex_bonus_formula: null,
           landlord_crop_pct: null,
@@ -1305,7 +1306,7 @@ function AgreementCard({
             landlord_name: values.landlord.trim() || null,
             landlord_phone: values.phone.trim() || null,
             landlord_contact_notes: values.contactNotes.trim() || null,
-            effective_from: values.effective || today,
+            effective_from: values.effective || today(),
             cash_rent_per_acre:
               values.type === "cash_rent"
                 ? rent
@@ -2002,7 +2003,7 @@ export function FieldFormPage() {
       landlord_name: null,
       landlord_phone: null,
       landlord_contact_notes: null,
-      effective_from: today,
+      effective_from: today(),
       effective_to: null,
       cash_rent_per_acre: null,
       flex_bonus_formula: null,

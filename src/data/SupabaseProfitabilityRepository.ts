@@ -1,10 +1,12 @@
+import { boundedDecimal, nullableBoundedDecimal } from './decimal'
 import type { FieldsData, FieldsRepository } from './fields'
 import type { PositionScope } from './grain'
 import type { BudgetCostLineWrite, ProfitabilityDataGateway, ProfitabilityRowBundle } from './ProfitabilityDataGateway'
 import { defaultMatrixValues } from './profitabilityCalculations'
 import { validateRevenueProtectionInputs } from './insuranceMath'
 import { insuranceColumns } from './SupabaseProfitabilityDataGateway'
-import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, InsuranceBudgetPatch, MatrixAxis, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityWorkspace } from './profitability'
+import { SOURCED_COST_LINE_EDIT_MESSAGE } from './profitability'
+import type { BudgetCostLine, BudgetFieldAllocation, CostLineSourceKind, CropBudget, InsuranceBudgetPatch, MatrixAxis, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityWorkspace } from './profitability'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const categories = new Set(['seed', 'chemical', 'fertilizer', 'fuel', 'repairs', 'labor', 'land', 'crop_insurance', 'equipment_depreciation', 'interest', 'custom'])
@@ -29,12 +31,17 @@ function mapBudget(value: unknown): CropBudget {
   if (!result.name.trim() || result.expected_yield_per_acre <= 0 || result.expected_price_per_bushel <= 0 || validateRevenueProtectionInputs(result).length) fail('Farm Rx found an invalid budget.')
   return result
 }
+const costLineSourceKinds = new Set<CostLineSourceKind>(['manual', 'inventory', 'equipment'])
 function mapCostLine(value: unknown): BudgetCostLineWrite {
   const row = object(value)
   const category = text(required(row, 'category'))
   if (!categories.has(category)) fail('Farm Rx found an unknown cost category.')
-  if (text(required(row, 'source_kind')) !== 'manual' || required(row, 'source_record_id') !== null) fail('Farm Rx only supports manually entered cost lines today.')
-  const result: BudgetCostLineWrite = { id: id(required(row, 'id')), budget_id: id(required(row, 'budget_id')), category: category as BudgetCostLine['category'], name: text(required(row, 'label'), 160), amount_per_acre: number(required(row, 'amount_per_acre')), sort_order: integer(required(row, 'sort_order'), 0, 32_767), created_at: stamp(required(row, 'created_at')), updated_at: stamp(required(row, 'updated_at')) }
+  // Audit P2-14: inventory/equipment source rows are DB-valid and must load; the same
+  // consistency the database enforces (manual ⇔ no source record) is checked here.
+  const source_kind = text(required(row, 'source_kind')) as CostLineSourceKind
+  const source_record_id = required(row, 'source_record_id')
+  if (!costLineSourceKinds.has(source_kind) || (source_kind === 'manual') !== (source_record_id === null)) fail('Farm Rx found a cost line with an unknown source.')
+  const result: BudgetCostLineWrite = { id: id(required(row, 'id')), budget_id: id(required(row, 'budget_id')), category: category as BudgetCostLine['category'], name: text(required(row, 'label'), 160), amount_per_acre: number(required(row, 'amount_per_acre')), source_kind, sort_order: integer(required(row, 'sort_order'), 0, 32_767), created_at: stamp(required(row, 'created_at')), updated_at: stamp(required(row, 'updated_at')) }
   if (!result.name.trim() || result.amount_per_acre < 0) fail('Farm Rx found an invalid cost line.')
   return result
 }
@@ -58,6 +65,50 @@ function mintCostLine(value: BudgetCostLine, siblings: BudgetCostLineWrite[]): B
   if (existing) return { ...value, sort_order: existing.sort_order }
   const budgetSiblings = siblings.filter((line) => line.budget_id === value.budget_id)
   return { ...value, sort_order: budgetSiblings.length ? Math.max(...budgetSiblings.map((line) => line.sort_order)) + 1 : 0 }
+}
+
+/** Write shape for the offline queue and gateway: exactly the manual-entry columns (audit P2-14). */
+export function manualCostLineWrite(line: BudgetCostLineWrite): BudgetCostLineWrite {
+  const { id, budget_id, category, name, amount_per_acre, sort_order, created_at, updated_at } = line
+  return { id, budget_id, category, name, amount_per_acre, sort_order, created_at, updated_at }
+}
+
+/** numeric(precision, scale) column contracts from migrations 0006 and 0030 (audit P2-04).
+ * Every profitability number is rounded deterministically to the database scale BEFORE it
+ * is sent or queued, so the saved echo always equals what was sent, and non-finite or
+ * oversized input fails with a plain-English message instead of a database error. */
+export function normalizeBudgetDecimals(value: CropBudget): CropBudget {
+  return {
+    ...value,
+    expected_yield_per_acre: boundedDecimal(value.expected_yield_per_acre, { precision: 12, scale: 4, label: 'the expected yield' }),
+    expected_price_per_bushel: boundedDecimal(value.expected_price_per_bushel, { precision: 12, scale: 6, label: 'the expected price' }),
+    rp_coverage_pct: nullableBoundedDecimal(value.rp_coverage_pct, { precision: 5, scale: 2, label: 'the coverage percent' }),
+    rp_aph_yield: nullableBoundedDecimal(value.rp_aph_yield, { precision: 12, scale: 4, label: 'the APH yield' }),
+    rp_projected_price: nullableBoundedDecimal(value.rp_projected_price, { precision: 12, scale: 6, label: 'the projected price' }),
+    rp_premium_per_acre: nullableBoundedDecimal(value.rp_premium_per_acre, { precision: 14, scale: 4, label: 'the premium per acre' }),
+  }
+}
+export function normalizeInsurancePatchDecimals(patch: InsuranceBudgetPatch): InsuranceBudgetPatch {
+  return {
+    rp_coverage_pct: nullableBoundedDecimal(patch.rp_coverage_pct, { precision: 5, scale: 2, label: 'the coverage percent' }),
+    rp_aph_yield: nullableBoundedDecimal(patch.rp_aph_yield, { precision: 12, scale: 4, label: 'the APH yield' }),
+    rp_projected_price: nullableBoundedDecimal(patch.rp_projected_price, { precision: 12, scale: 6, label: 'the projected price' }),
+    rp_premium_per_acre: nullableBoundedDecimal(patch.rp_premium_per_acre, { precision: 14, scale: 4, label: 'the premium per acre' }),
+  }
+}
+export function normalizeMatrixStepDecimals(step: ProfitabilityMatrixStep): ProfitabilityMatrixStep {
+  return { ...step, value: boundedDecimal(step.value, { precision: 14, scale: 6, label: 'a matrix step' }) }
+}
+export function normalizeCostLineDecimals(line: BudgetCostLineWrite): BudgetCostLineWrite {
+  return { ...line, amount_per_acre: boundedDecimal(line.amount_per_acre, { precision: 14, scale: 4, label: 'the cost per acre' }) }
+}
+export function normalizeAllocationDecimals(value: BudgetFieldAllocation): BudgetFieldAllocation {
+  return {
+    ...value,
+    allocated_acres: boundedDecimal(value.allocated_acres, { precision: 12, scale: 2, label: 'the allocated acres' }),
+    expected_yield_override: nullableBoundedDecimal(value.expected_yield_override, { precision: 12, scale: 4, label: 'the yield override' }),
+    expected_price_override: nullableBoundedDecimal(value.expected_price_override, { precision: 12, scale: 6, label: 'the price override' }),
+  }
 }
 
 /** Trusted, pre-resolved write operations used directly by the live repository and replayed by the offline queue. */
@@ -154,9 +205,9 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
   }
   async createBudgetOperation(value: CropBudget, priceSteps: ProfitabilityMatrixStep[], yieldSteps: ProfitabilityMatrixStep[]) {
     const farmId = await this.dependencies.getFarmId(); const fields = await this.fields()
-    const normalized: CropBudget = { ...value, farm_id: farmId, copied_from_budget_id: null }
+    const normalized: CropBudget = normalizeBudgetDecimals({ ...value, farm_id: farmId, copied_from_budget_id: null })
     this.validateBudget(normalized, farmId, fields)
-    const steps = [...priceSteps, ...yieldSteps].map((step) => ({ ...step, budget_id: normalized.id }))
+    const steps = [...priceSteps, ...yieldSteps].map((step) => normalizeMatrixStepDecimals({ ...step, budget_id: normalized.id }))
     this.validateMatrix(steps)
     const savedBudget = mapBudget(await this.dependencies.gateway.createBudgetWithMatrix({ farmId, budget: normalized, matrixSteps: steps }))
     const savedSteps = steps
@@ -168,18 +219,19 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
   async saveBudgetInsurance(budgetId: string, patch: InsuranceBudgetPatch) { await this.saveBudgetInsuranceOperation(budgetId, patch) }
   async saveBudgetInsuranceOperation(budgetId: string, patch: InsuranceBudgetPatch): Promise<CropBudget> {
     insuranceColumns(patch)
+    const normalizedPatch = normalizeInsurancePatchDecimals(patch)
     const farmId = await this.dependencies.getFarmId(); const fields = await this.fields()
     if (!uuid.test(budgetId)) fail('Farm Rx could not save this insurance detail.')
     const current = (await this.loadRaw(farmId)).budgets.find((item) => item.id === budgetId)
     if (!current) fail('That budget changed before its insurance details could be saved.')
-    const next = { ...(current as CropBudget), ...patch }; this.validateBudget(next, farmId, fields)
-    const saved = mapBudget(await this.dependencies.gateway.patchBudgetInsurance(farmId, budgetId, patch))
-    if (saved.id !== budgetId || saved.farm_id !== farmId || Object.keys(patch).some((key) => saved[key as keyof CropBudget] !== patch[key as keyof InsuranceBudgetPatch])) fail('Farm Rx could not confirm the insurance save.')
+    const next = { ...(current as CropBudget), ...normalizedPatch }; this.validateBudget(next, farmId, fields)
+    const saved = mapBudget(await this.dependencies.gateway.patchBudgetInsurance(farmId, budgetId, normalizedPatch))
+    if (saved.id !== budgetId || saved.farm_id !== farmId || Object.keys(normalizedPatch).some((key) => saved[key as keyof CropBudget] !== normalizedPatch[key as keyof InsuranceBudgetPatch])) fail('Farm Rx could not confirm the insurance save.')
     return saved
   }
   async saveBudgetOperation(value: CropBudget): Promise<CropBudget> {
     const farmId = await this.dependencies.getFarmId(); const fields = await this.fields()
-    const normalized: CropBudget = { ...value, farm_id: farmId }
+    const normalized: CropBudget = normalizeBudgetDecimals({ ...value, farm_id: farmId })
     this.validateBudget(normalized, farmId, fields)
     const raw = await this.loadRaw(farmId)
     const existing = raw.budgets.find((item) => item.id === normalized.id)
@@ -194,13 +246,19 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     const farmId = await this.dependencies.getFarmId()
     const raw = await this.loadRaw(farmId)
     if (!raw.budgets.some((item) => item.id === value.budget_id)) fail('That budget changed before this cost line could be saved. Refresh and try again.')
-    await this.saveCostLineOperation(mintCostLine(value, raw.cost_lines))
+    const existing = raw.cost_lines.find((line) => line.id === value.id)
+    if (existing && existing.source_kind !== undefined && existing.source_kind !== 'manual') fail(SOURCED_COST_LINE_EDIT_MESSAGE)
+    await this.saveCostLineOperation(manualCostLineWrite(mintCostLine(value, raw.cost_lines)))
   }
   async saveCostLineOperation(value: BudgetCostLineWrite): Promise<BudgetCostLine> {
     const farmId = await this.dependencies.getFarmId()
-    if (!uuid.test(value.id) || !uuid.test(value.budget_id) || !value.name.trim() || value.amount_per_acre < 0 || !Number.isInteger(value.sort_order) || value.sort_order < 0) fail('Farm Rx could not save this cost line.')
-    const saved = mapCostLine(await this.dependencies.gateway.upsertCostLine(farmId, value))
-    if (saved.id !== value.id || saved.budget_id !== value.budget_id || saved.name !== value.name || saved.amount_per_acre !== value.amount_per_acre) fail('Farm Rx could not confirm this cost line saved.')
+    const raw = await this.loadRaw(farmId)
+    const existing = raw.cost_lines.find((line) => line.id === value.id)
+    if (existing && existing.source_kind !== undefined && existing.source_kind !== 'manual') fail(SOURCED_COST_LINE_EDIT_MESSAGE)
+    const normalized = normalizeCostLineDecimals(manualCostLineWrite(value))
+    if (!uuid.test(normalized.id) || !uuid.test(normalized.budget_id) || !normalized.name.trim() || normalized.amount_per_acre < 0 || !Number.isInteger(normalized.sort_order) || normalized.sort_order < 0) fail('Farm Rx could not save this cost line.')
+    const saved = mapCostLine(await this.dependencies.gateway.upsertCostLine(farmId, normalized))
+    if (saved.id !== normalized.id || saved.budget_id !== normalized.budget_id || saved.name !== normalized.name || saved.amount_per_acre !== normalized.amount_per_acre) fail('Farm Rx could not confirm this cost line saved.')
     const { sort_order: _sortOrder, ...publicLine } = saved
     return publicLine
   }
@@ -219,7 +277,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
   async replaceMatrixStepsOperation(budgetId: string, steps: ProfitabilityMatrixStep[], expectedSteps?: ProfitabilityMatrixStep[] | null): Promise<ProfitabilityMatrixStep[]> {
     const farmId = await this.dependencies.getFarmId()
     if (!uuid.test(budgetId)) fail('Farm Rx could not save this matrix.')
-    const normalized = steps.map((step) => ({ ...step, budget_id: budgetId }))
+    const normalized = steps.map((step) => normalizeMatrixStepDecimals({ ...step, budget_id: budgetId }))
     this.validateMatrix(normalized)
     const savedAll = (await this.dependencies.gateway.replaceMatrixSteps({ farmId, budgetId, steps: normalized, expectedSteps })).map(mapMatrixStep)
     const saved = savedAll.filter((step) => step.budget_id === budgetId)
@@ -239,11 +297,12 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     const confirmedBudget = budgetRow as NonNullable<typeof budgetRow>
     const assignment = assignmentRow as NonNullable<typeof assignmentRow>
     if (assignment.crop_year !== confirmedBudget.crop_year || assignment.commodity_id !== confirmedBudget.commodity_id) fail('That field crop does not match this budget.')
-    if (!uuid.test(value.id) || value.allocated_acres <= 0) fail('Farm Rx could not save this field allocation.')
-    if (value.allocated_acres > assignment.planted_acres) fail('Allocated acres cannot be more than planted acres.')
-    if (raw.allocations.some((item) => item.id !== value.id && item.budget_id === value.budget_id && item.crop_assignment_id === value.crop_assignment_id)) fail('That field is already allocated to this budget.')
-    const saved = mapAllocation(await this.dependencies.gateway.upsertAllocation(farmId, value))
-    if (saved.id !== value.id || saved.budget_id !== value.budget_id || saved.crop_assignment_id !== value.crop_assignment_id || saved.allocated_acres !== value.allocated_acres) fail('Farm Rx could not confirm this field allocation saved.')
+    const normalized = normalizeAllocationDecimals(value)
+    if (!uuid.test(normalized.id) || normalized.allocated_acres <= 0) fail('Farm Rx could not save this field allocation.')
+    if (normalized.allocated_acres > assignment.planted_acres) fail('Allocated acres cannot be more than planted acres.')
+    if (raw.allocations.some((item) => item.id !== normalized.id && item.budget_id === normalized.budget_id && item.crop_assignment_id === normalized.crop_assignment_id)) fail('That field is already allocated to this budget.')
+    const saved = mapAllocation(await this.dependencies.gateway.upsertAllocation(farmId, normalized))
+    if (saved.id !== normalized.id || saved.budget_id !== normalized.budget_id || saved.crop_assignment_id !== normalized.crop_assignment_id || saved.allocated_acres !== normalized.allocated_acres) fail('Farm Rx could not confirm this field allocation saved.')
     return saved
   }
 
@@ -261,19 +320,21 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     const raw = await this.loadRaw(farmId)
     const source = raw.budgets.find((item) => item.id === sourceBudgetId)
     if (!source || copy.farm_id !== farmId) fail('Choose a budget from this farm to copy.')
-    const costLines: BudgetCostLineWrite[] = raw.cost_lines.filter((line) => line.budget_id === sourceBudgetId).map((line) => ({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id }))
+    const costLines: BudgetCostLineWrite[] = raw.cost_lines.filter((line) => line.budget_id === sourceBudgetId).map((line) => manualCostLineWrite({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id }))
     const matrixSteps: ProfitabilityMatrixStep[] = raw.matrix_steps.filter((step) => step.budget_id === sourceBudgetId).map((step) => ({ ...structuredClone(step), id: this.dependencies.createId(), budget_id: copy.id }))
     await this.copyBudgetOperation(sourceBudgetId, { ...copy, copied_from_budget_id: sourceBudgetId }, costLines, matrixSteps)
   }
   async copyBudgetOperation(sourceBudgetId: string, value: CropBudget, costLines: BudgetCostLineWrite[], matrixSteps: ProfitabilityMatrixStep[]): Promise<CropBudget> {
     const farmId = await this.dependencies.getFarmId(); const fields = await this.fields()
-    const normalized: CropBudget = { ...value, farm_id: farmId, copied_from_budget_id: sourceBudgetId }
+    const normalized: CropBudget = normalizeBudgetDecimals({ ...value, farm_id: farmId, copied_from_budget_id: sourceBudgetId })
     this.validateBudget(normalized, farmId, fields)
     if (!uuid.test(sourceBudgetId) || normalized.id === sourceBudgetId) fail('Farm Rx could not copy this budget.')
-    for (const line of costLines) if (line.budget_id !== normalized.id) fail('Farm Rx could not copy this budget.')
-    for (const step of matrixSteps) if (step.budget_id !== normalized.id) fail('Farm Rx could not copy this budget.')
-    this.validateMatrix(matrixSteps)
-    const saved = mapBudget(await this.dependencies.gateway.copyBudget({ farmId, sourceId: sourceBudgetId, budget: normalized, costLines, matrixSteps }))
+    const normalizedLines = costLines.map((line) => normalizeCostLineDecimals(manualCostLineWrite(line)))
+    const normalizedSteps = matrixSteps.map(normalizeMatrixStepDecimals)
+    for (const line of normalizedLines) if (line.budget_id !== normalized.id) fail('Farm Rx could not copy this budget.')
+    for (const step of normalizedSteps) if (step.budget_id !== normalized.id) fail('Farm Rx could not copy this budget.')
+    this.validateMatrix(normalizedSteps)
+    const saved = mapBudget(await this.dependencies.gateway.copyBudget({ farmId, sourceId: sourceBudgetId, budget: normalized, costLines: normalizedLines, matrixSteps: normalizedSteps }))
     if (saved.id !== normalized.id || saved.copied_from_budget_id !== sourceBudgetId || saved.farm_id !== farmId || saved.crop_year !== normalized.crop_year || saved.commodity_id !== normalized.commodity_id || saved.operating_entity_id !== normalized.operating_entity_id || saved.enterprise_label !== normalized.enterprise_label) fail('Farm Rx could not confirm this budget was copied.')
     return saved
   }

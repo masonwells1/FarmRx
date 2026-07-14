@@ -1,11 +1,12 @@
 import { supabase } from '../lib/supabaseClient'
+import { farmLocalCalendarDate } from './farmDates'
 
 export interface DueProgramItemsGateway {
   generateDueProgramItems(input: { farmId: string; operationId: string; localDate: string }): Promise<unknown>
 }
 
 export function localCalendarDate(now = new Date()) {
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  return farmLocalCalendarDate(now)
 }
 
 /** Replay first: an offline assignment or reschedule cannot have a due item until

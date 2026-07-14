@@ -5,6 +5,7 @@ import {
   roundDecimalHalfUp,
   validateActualProgramProducts,
   validateProgramDraft,
+  programApplyConfirmation,
   validateProgramPassDraft,
   validateProgramProductDraft,
   type ActualProgramProduct,
@@ -22,6 +23,7 @@ import {
   type ProgramsRepository,
 } from "./data/programs";
 import { farmerError } from "./lib/farmerErrors";
+import { farmLocalCalendarDate } from "./data/farmDates";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import { evaluateSprayWindow, isActionablyFresh, weatherService } from "./data/weatherService";
 const emptyProgram = (): ProgramDraft => ({
@@ -1536,7 +1538,7 @@ function TrackerPass({
     null,
   );
   const [saving, setSaving] = useState(false);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = farmLocalCalendarDate();
   const [date, setDate] = useState(today);
   const [acres, setAcres] = useState(String(assignment.planted_acres));
   const [reason, setReason] = useState("");
@@ -1748,12 +1750,15 @@ function TrackerPass({
               <option value="create">Create a new draft record</option>
             </select>
           </label>
-          {recordChoice !== "none" && (
-            <p className="panel-note wide">
-              Products are free-typed — not matched to inventory; on-hand was
-              not changed.
-            </p>
-          )}
+          <p className="panel-note wide" role="status">
+            {programApplyConfirmation(
+              recordChoice === "none"
+                ? "none"
+                : recordChoice === "create"
+                  ? "create"
+                  : "link",
+            )}
+          </p>
           {actuals.map((product, index) => (
             <div className="actual-product" key={product.id}>
               <label>

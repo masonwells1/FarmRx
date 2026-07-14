@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { AdjustmentReason, ApplicationInput, ApplicationProduct, ApplicationRecord, InventoryProduct, InventoryProductKind, InventoryRepository, InventoryUnit, InventoryWorkspace, RateBasis, ReceiptInput } from './data/inventory'
 import type { CropAssignment } from './data/fields'
 import { conversionFactor } from './data/inventory'
+import { farmLocalCalendarDate } from './data/farmDates'
 import { farmerError } from './lib/farmerErrors'
 import { createSubmitLock, createSubmitLockMap } from './lib/submitLock'
 import { SaveReceipt } from './components/SaveReceipt'
@@ -12,7 +13,7 @@ const units: InventoryUnit[] = ['gal', 'qt', 'pt', 'fl_oz', 'l', 'ml', 'lb', 'oz
 const kinds: InventoryProductKind[] = ['chemical', 'seed', 'fertilizer', 'biological', 'adjuvant', 'other']
 const labels: Record<string, string> = { physical_count: 'Count', damage_or_loss: 'Loss', return_to_vendor: 'Return', transfer_in: 'Transfer in', transfer_out: 'Transfer out', correction: 'Correction', chemical: 'Chemical', seed: 'Seed', fertilizer: 'Fertilizer', biological: 'Biological', adjuvant: 'Adjuvant', other: 'Other' }
 const whole = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
-const today = () => new Date().toISOString().slice(0, 10)
+const today = () => farmLocalCalendarDate()
 const value = (form: FormData, name: string) => String(form.get(name) ?? '')
 const number = (form: FormData, name: string) => Number(value(form, name))
 const blankNumber = (form: FormData, name: string) => value(form, name) === '' ? null : number(form, name)

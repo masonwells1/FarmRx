@@ -1,7 +1,7 @@
 import { isTransportFailure } from './QueuedFieldsRepository'
 import { FieldLogWriteQueue, fieldLogWriteQueueKey, type FieldLogQueueEntryV1 } from './fieldLogWriteQueue'
 import { setModuleSyncRetryAction, setModuleSyncStatus } from './syncStatus'
-import { validateFieldLogDraft, type FieldLogEntry, type FieldLogEntryDraft, type FieldLogRepository } from './fieldLog'
+import { validateFieldLogDraft, type FieldLogDeleteReceipt, type FieldLogEntry, type FieldLogEntryDraft, type FieldLogRepository } from './fieldLog'
 import type { StorageLike } from './writeQueue'
 import type { SupabaseFieldLogRepository } from './SupabaseFieldLogRepository'
 
@@ -20,8 +20,8 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
   private locked<T>(storageKey: string, task: (verify: () => void) => Promise<T>) { return serial(storageKey, () => crossTabLock(storageKey, this.d.storage, this.d.createId, task)) }
   async getData(fieldId?: string) { return this.live.getData(fieldId) }
   private base<K extends FieldLogQueueEntryV1['kind']>(kind: K, context: Context) { return { version: 1 as const, module: 'fieldLog' as const, kind, operationId: this.d.createId(), userId: context.userId, farmId: context.farmId, enqueuedAt: this.d.clock() } }
-  private async write(entry: FieldLogQueueEntryV1): Promise<FieldLogEntry | void> { if (entry.kind === 'saveEntry') return this.live.saveEntryOperation(entry.draft, entry.operationId); return this.live.deleteEntry(entry.entryId) }
-  private async save(entry: FieldLogQueueEntryV1): Promise<FieldLogEntry | void> {
+  private async write(entry: FieldLogQueueEntryV1): Promise<FieldLogEntry | FieldLogDeleteReceipt> { if (entry.kind === 'saveEntry') return this.live.saveEntryOperation(entry.draft, entry.operationId); return this.live.deleteEntry(entry.entryId) }
+  private async save(entry: FieldLogQueueEntryV1): Promise<FieldLogEntry | FieldLogDeleteReceipt | void> {
     const source = await this.source(); const { context, queue } = source; if (entry.userId !== context.userId || entry.farmId !== context.farmId) throw new Error(blocked)
     return this.locked(queue.key, async (verify) => { verify(); if (this.d.isOffline() || queue.read().entries.length) { const next = queue.append(entry); setModuleSyncStatus('fieldLog', { kind: 'pending', pending: next.entries.length }); void this.inspectAndReplay(); return }
       try { const result = await this.write(entry); verify(); setModuleSyncStatus('fieldLog', { kind: 'synced', pending: 0 }); return result } catch (error) { if (!isTransportFailure(error, this.d.isOffline())) throw error; verify(); const next = queue.append(entry); setModuleSyncStatus('fieldLog', { kind: 'pending', pending: next.entries.length }); void this.inspectAndReplay(); return } })
@@ -29,9 +29,9 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
   async saveEntry(draft: FieldLogEntryDraft) {
     const validation = validateFieldLogDraft(draft); if (validation) throw new Error(validation)
     const { context } = await this.source(); const entry = { ...this.base('saveEntry', context), draft: { ...draft, id: draft.id ?? this.d.createId() } } as Extract<FieldLogQueueEntryV1, { kind: 'saveEntry' }>
-    const result = await this.save(entry); return result ?? pendingEntry(entry, context)
+    const result = await this.save(entry); return (result as FieldLogEntry | undefined) ?? pendingEntry(entry, context)
   }
-  async deleteEntry(entryId: string) { const { context } = await this.source(); await this.save({ ...this.base('deleteEntry', context), entryId } as FieldLogQueueEntryV1) }
+  async deleteEntry(entryId: string): Promise<FieldLogDeleteReceipt> { const { context } = await this.source(); const result = await this.save({ ...this.base('deleteEntry', context), entryId } as FieldLogQueueEntryV1); return (result as FieldLogDeleteReceipt | undefined) ?? { id: entryId, deleted: true, pending: true } }
   async inspectAndReplay() {
     let source: Awaited<ReturnType<QueuedFieldLogRepository['source']>>; try { source = await this.source() } catch { return }
     const { context, queue } = source

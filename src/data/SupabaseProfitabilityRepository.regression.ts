@@ -2,7 +2,7 @@ import { fieldsSeedForRegression } from './MockFieldsRepository'
 import type { BudgetCostLineWrite, CopyBudgetInput, ProfitabilityDataGateway, ProfitabilityRowBundle, ReplaceMatrixStepsInput } from './ProfitabilityDataGateway'
 import { ProfitabilityWriteQueue, type ProfitabilityQueueEntryV1, parseProfitabilityQueue, profitabilityWriteQueueKey } from './profitabilityWriteQueue'
 import { QueuedProfitabilityRepository } from './QueuedProfitabilityRepository'
-import { SupabaseProfitabilityRepository } from './SupabaseProfitabilityRepository'
+import { manualCostLineWrite, SupabaseProfitabilityRepository } from './SupabaseProfitabilityRepository'
 import { InvalidInsurancePatchError, SupabaseProfitabilityDataGateway, durabilityCapabilityFromProbe } from './SupabaseProfitabilityDataGateway'
 import { grainWriteQueueKey } from './grainWriteQueue'
 import { writeQueueKey } from './writeQueue'
@@ -212,7 +212,7 @@ async function run() {
   const legacyGateway = new FakeGateway(); const legacyReplay = new QueuedProfitabilityRepository(repository(legacyGateway), { getContext: async () => ({ userId: uid(10), farmId: gateway.state.scope.farm_id }), projectRef: supabaseConfig.projectRef, storage: legacyStorage, createId: () => uid(890), clock: () => stamp, isOffline: () => false })
   await legacyReplay.inspectAndReplay()
   assert(legacyGateway.budgetInputs.length === 1 && legacyGateway.budgetInputs[0]?.rp_coverage_pct === null && new ProfitabilityWriteQueue(legacyStorage, queueKey).read().entries.length === 0, 'A legacy queue entry without insurance fields did not replay.')
-  const costLineWrite: BudgetCostLineWrite = { ...workspace.cost_lines[0], sort_order: 0 }
+  const costLineWrite: BudgetCostLineWrite = manualCostLineWrite({ ...workspace.cost_lines[0], sort_order: 0 })
   const matrixSteps: ProfitabilityMatrixStep[] = validSteps
   const entries: ProfitabilityQueueEntryV1[] = [
     { ...common('createBudget', 1), kind: 'createBudget', row: savedBudget, priceSteps: matrixSteps.filter((s) => s.axis === 'price'), yieldSteps: matrixSteps.filter((s) => s.axis === 'yield') },

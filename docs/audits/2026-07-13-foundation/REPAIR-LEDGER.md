@@ -343,9 +343,37 @@ project, NO deploy — each needs Mason's explicit OK. Draft migrations go to
   mid-edit states; fresh reload adds none). P3 notes accepted: attempts-cap
   rows abandoned silently (revisit if push volume grows); at-most-once alert
   email on commit-then-lost-response. CLOSED 2026-07-14.
-- [ ] **Round 7 — P2/P3 sweep** (remaining P2s, P3s): farm timezone, photo cleanup outbox,
+- [x] **Round 7 — P2/P3 sweep** (remaining P2s, P3s): farm timezone, photo cleanup outbox,
   finite/decimal validators, dropped-column tests, 18px/48px compliance, offline-delete
   honesty, filled-offer archival.
+  CLOSED 2026-07-14 (Claude-subagent builder + Claude-subagent adversarial review,
+  Codex quota still out). 13 audit rows FIXED client-side (P2-03..12, P2-14, P2-15,
+  P3-01, P3-02 — no migration needed), 3 confirmed ALREADY-COVERED (P2-01 r3,
+  P2-02 r6 partial, P2-13 r5). New: farmDates.ts (ONE local-date helper, 8 call
+  sites), scoutingCleanupOutbox.ts (durable photo-cleanup), decimal bounding to
+  exact column scales, strictRow dropped-column sentinels, field wall-clock hours,
+  offline-delete tombstones + honest message, sourced cost lines read-only,
+  program apply confirmations, filled offers archival, CSS 18px floor (1 documented
+  SVG exemption) + 48px targets, roundSevenSweep.regression.ts (11 groups; 28
+  suites total). REVIEW verdict FIXES-REQUIRED → Claude fixed all: [P2] grain
+  alerts' "today" was still UTC (deadline/USDA alerts fired a day early evening);
+  [P2] cleanup outbox could discard paths the bucket never deleted (RLS-silent
+  remove) + cross-farm drain → remover now returns CONFIRMED paths, drain is
+  farm-scoped and trims only confirmed (new regression probes); ride-alongs:
+  retention-failure warn, Fields module-load today constant → function, sourced
+  guard on the replay seam, filled-offer park message passthrough. Gates verified
+  with real exit codes: tsc 0, 28 suites 0, build 0. LIVE: filled offer shows
+  "Kept for your records — linked to a contract." with NO Delete; body font 18px
+  computed; zero visible sub-48px buttons on Grain; Fields/Grain/Programs render
+  clean after hard reload (HMR ReferenceErrors during the edit burst were
+  transform artifacts — full reload clean, tsc+build prove imports).
+  ACCEPTED/DEFERRED (revisit round 8+ or with a future migration): tombstones are
+  component-state (queued-delete overlay would be better; re-delete is idempotent
+  so cosmetic); legacy target_deadline/usda_report alert kinds still lack
+  server-side re-eval + cross-device repeat guard (P2-02 partial; edge redeploy
+  is Mason-gated); server-side harvest date bound; DB filled-offer delete
+  prohibition; stored per-farm IANA timezone; storage orphan reconciliation sweep;
+  render-layer component tests (no infra).
 - [ ] **Round 8 — Re-verify**: full gates, re-audit (Sol, same charter scoped to fixes),
   live browser pass per FOUNDATION-AUDIT §7, then ship-checklist unfreeze.
 

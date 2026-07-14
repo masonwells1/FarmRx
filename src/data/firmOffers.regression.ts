@@ -1,5 +1,5 @@
 import type { FirmOffer, GrainWorkspace } from './grain'
-import { displayFirmOfferStatus, offerToContract, pendingFirmOfferBushels, validateFirmOffer } from './firmOffers'
+import { cashOfferContractType, displayFirmOfferStatus, offerToContract, pendingFirmOfferBushels, validateFirmOffer } from './firmOffers'
 import { GrainWriteQueue } from './grainWriteQueue'
 import type { StorageLike } from './writeQueue'
 import { fillFirmOfferFallback, firmOfferContractId } from './firmOfferFill'
@@ -25,12 +25,16 @@ assert(displayFirmOfferStatus({ ...base, expires_on: '2026-07-12' }, new Date('2
 const workspace = { firm_offers: [base, { ...base, id: '00000000-0000-4000-8000-000000000003', bushels: 5000, status: 'filled', filled_contract_id: id }, { ...base, id: '00000000-0000-4000-8000-000000000004', bushels: 3000, expires_on: '2026-07-12' }, { ...base, id: '00000000-0000-4000-8000-000000000005', bushels: 2000, status: 'canceled' }] } as GrainWorkspace
 assert(pendingFirmOfferBushels(workspace, base, new Date('2026-07-13T12:00:00')) === 12000, 'Pending math must exclude filled, expired, and canceled offer bushels.')
 const contractId = '00000000-0000-4000-8000-000000000010'
-const fillCases: Array<{ name: string; offer: FirmOffer; contractType: 'cash_spot' | 'basis' | 'hta'; cash: number | null; futures: number | null; basis: number | null; start: string | null; end: string | null }> = [
-  { name: 'cash month', offer: { ...base, offer_type: 'cash', price: 4.5, basis: null, contract_month: '2026-12' }, contractType: 'cash_spot', cash: 4.5, futures: null, basis: null, start: '2026-12-01', end: '2026-12-31' },
+const fillCases: Array<{ name: string; offer: FirmOffer; contractType: 'cash_spot' | 'forward_cash' | 'basis' | 'hta'; cash: number | null; futures: number | null; basis: number | null; start: string | null; end: string | null }> = [
+  // Audit P2-03: a cash offer delivering in a FUTURE window is a forward commitment.
+  { name: 'cash future month', offer: { ...base, offer_type: 'cash', price: 4.5, basis: null, contract_month: '2026-12' }, contractType: 'forward_cash', cash: 4.5, futures: null, basis: null, start: '2026-12-01', end: '2026-12-31' },
+  { name: 'cash current month', offer: { ...base, offer_type: 'cash', price: 4.5, basis: null, contract_month: '2026-07' }, contractType: 'cash_spot', cash: 4.5, futures: null, basis: null, start: '2026-07-01', end: '2026-07-31' },
+  { name: 'cash past month', offer: { ...base, offer_type: 'cash', price: 4.5, basis: null, contract_month: '2026-01' }, contractType: 'cash_spot', cash: 4.5, futures: null, basis: null, start: '2026-01-01', end: '2026-01-31' },
   { name: 'basis month', offer: { ...base, offer_type: 'basis', price: null, basis: -0.18, contract_month: '2026-02' }, contractType: 'basis', cash: null, futures: null, basis: -0.18, start: '2026-02-01', end: '2026-02-28' },
   { name: 'hta month', offer: { ...base, offer_type: 'hta', price: 4.72, basis: null, contract_month: '2028-02' }, contractType: 'hta', cash: null, futures: 4.72, basis: null, start: '2028-02-01', end: '2028-02-29' },
   { name: 'blank month', offer: { ...base, contract_month: null }, contractType: 'cash_spot', cash: 4.5, futures: null, basis: null, start: null, end: null },
 ]
+assert(cashOfferContractType('2027-03', '2026-07-13') === 'forward_cash' && cashOfferContractType('2026-07', '2026-07-13') === 'cash_spot' && cashOfferContractType(null, '2026-07-13') === 'cash_spot' && cashOfferContractType('not-a-month', '2026-07-13') === 'cash_spot', 'Cash offer contract typing must follow the delivery window against the fill day.')
 for (const testCase of fillCases) {
   const contract = offerToContract(testCase.offer, contractId, stamp)
   assert(contract.contract_type === testCase.contractType && contract.cash_price === testCase.cash && contract.futures_price === testCase.futures && contract.basis === testCase.basis && contract.delivery_start === testCase.start && contract.delivery_end === testCase.end && contract.bushels === 12000 && contract.buyer === 'Local elevator' && contract.notes?.includes('Main elevator'), `Fill mapping failed for ${testCase.name}.`)

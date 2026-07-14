@@ -29,6 +29,14 @@ const text = (value: unknown, maximum: number, required = false) => typeof value
 const nullableText = (value: unknown, maximum: number) => value === null || text(value, maximum)
 export function roundDecimalHalfUp(value: number, places = 4) { if (!Number.isFinite(value)) return value; const factor = 10 ** places; const shifted = Number((Math.abs(value) * factor).toPrecision(15)); return Math.sign(value) * Math.floor(shifted + 0.5) / factor }
 export function canEditPrograms(role: FarmViewerRole) { return role === 'owner' || role === 'manager' || role === 'worker' }
+/** Audit P2-15: at the moment of confirming a pass, the farmer must see exactly what the
+ * save does and does not do — program progress is never a spray record or an on-hand change. */
+export type ProgramApplyRecordChoice = 'none' | 'create' | 'link'
+export function programApplyConfirmation(choice: ProgramApplyRecordChoice): string {
+  if (choice === 'none') return 'Progress only: this marks the pass done in your program plan. It does NOT create a spray/application record and does NOT change inventory on hand.'
+  if (choice === 'create') return 'This marks the pass done AND creates a new draft application record. Inventory on hand still does not change — products here are free-typed, not matched to your shelf.'
+  return 'This marks the pass done and links it to the application record you chose. Inventory on hand does not change here.'
+}
 export function validDate(value: string) { if (!date.test(value)) return false; const parsed = new Date(`${value}T00:00:00.000Z`); return !Number.isNaN(parsed.getTime()) && `${parsed.getUTCFullYear()}-${String(parsed.getUTCMonth() + 1).padStart(2, '0')}-${String(parsed.getUTCDate()).padStart(2, '0')}` === value }
 export function validateProgramDraft(value: ProgramDraft | Record<string, unknown>): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value) || !exact(value, ['id', 'name', 'program_kind', 'commodity_id', 'crop_year', 'notes'])) return 'This program is incomplete. Please reopen it and try again.'

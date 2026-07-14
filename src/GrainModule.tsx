@@ -35,6 +35,7 @@ import {
   ruleSentence,
 } from "./data/marketingAlerts";
 import { localCalendarDay } from "./data/marketingAlerts";
+import { farmLocalCalendarDate } from "./data/farmDates";
 import {
   deriveBinPosition,
   activeBinCommodityIds,
@@ -1356,13 +1357,19 @@ function OfferList({
                         </button>
                       </>
                     )}
-                    <button
-                      className="text-action danger-action"
-                      type="button"
-                      onClick={() => void onDelete(offer.id)}
-                    >
-                      Delete
-                    </button>
+                    {displayed === "filled" ? (
+                      <small className="offer-kept-note">
+                        Kept for your records — linked to a contract.
+                      </small>
+                    ) : (
+                      <button
+                        className="text-action danger-action"
+                        type="button"
+                        onClick={() => void onDelete(offer.id)}
+                      >
+                        Delete
+                      </button>
+                    )}
                   </div>
                 </article>
               );
@@ -3245,7 +3252,7 @@ function Basis({
         farm_id: workspace.fields.farm.id,
         elevator,
         commodity_id: commodity,
-        bid_date: new Date().toISOString().slice(0, 10),
+        bid_date: farmLocalCalendarDate(),
         basis: Number(basis),
         cash_price: parsedCashPrice,
         delivery_start: null,

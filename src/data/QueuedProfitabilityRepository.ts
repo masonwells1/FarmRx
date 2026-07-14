@@ -3,10 +3,10 @@ import type { PositionScope } from './grain'
 import type { BudgetCostLineWrite } from './ProfitabilityDataGateway'
 import { defaultMatrixValues } from './profitabilityCalculations'
 import { validateRevenueProtectionInputs } from './insuranceMath'
-import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, InsuranceBudgetPatch, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityWorkspace } from './profitability'
+import { SOURCED_COST_LINE_EDIT_MESSAGE, type BudgetCostLine, type BudgetFieldAllocation, type CropBudget, type InsuranceBudgetPatch, type ProfitabilityMatrixStep, type ProfitabilityRepository, type ProfitabilityWorkspace } from './profitability'
 import { ProfitabilityWriteQueue, type ProfitabilityQueueEntryV1, profitabilityWriteQueueKey } from './profitabilityWriteQueue'
 import { isTransportFailure } from './QueuedFieldsRepository'
-import type { ProfitabilityOperationWriter } from './SupabaseProfitabilityRepository'
+import { manualCostLineWrite, type ProfitabilityOperationWriter } from './SupabaseProfitabilityRepository'
 import { setModuleSyncRetryAction, setModuleSyncStatus } from './syncStatus'
 import { readNeedsAttention } from './needsAttentionStore'
 import type { StorageLike } from './writeQueue'
@@ -95,7 +95,9 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
     const { context } = await this.contextAndQueue()
     if (!this.workspace) { try { await this.getWorkspace() } catch { /* offline with nothing cached yet is handled by mintCostLine below */ } }
     const raw = await this.effectiveRawCostLines()
-    const minted = mintCostLine(value, raw)
+    const existing = raw.find((line) => line.id === value.id)
+    if (existing && existing.source_kind !== undefined && existing.source_kind !== 'manual') throw new Error(SOURCED_COST_LINE_EDIT_MESSAGE)
+    const minted = manualCostLineWrite(mintCostLine(value, raw))
     const disposition = await this.save({ ...this.queuedBase('saveCostLine', context), kind: 'saveCostLine', row: minted })
     // Keep the raw cache current so back-to-back saves (coach "Add typical lines",
     // university-budget seeding) mint distinct sort_orders: a flushed online write leaves
@@ -112,7 +114,7 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
     const { context } = await this.contextAndQueue()
     const workspace = await this.currentWorkspace()
     if (!workspace.budgets.some((item) => item.id === sourceBudgetId)) throw new Error('Choose a budget from this farm to copy.')
-    const costLines: BudgetCostLineWrite[] = workspace.cost_lines.filter((line) => line.budget_id === sourceBudgetId).map((line, index) => ({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id, sort_order: index }))
+    const costLines: BudgetCostLineWrite[] = workspace.cost_lines.filter((line) => line.budget_id === sourceBudgetId).map((line, index) => manualCostLineWrite({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id, sort_order: index }))
     const matrixSteps: ProfitabilityMatrixStep[] = workspace.matrix_steps.filter((step) => step.budget_id === sourceBudgetId).map((step) => ({ ...structuredClone(step), id: this.dependencies.createId(), budget_id: copy.id }))
     const normalizedCopy: CropBudget = { ...copy, farm_id: context.farmId, copied_from_budget_id: sourceBudgetId }
     this.validateInsurance(normalizedCopy)
