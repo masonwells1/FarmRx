@@ -374,8 +374,55 @@ project, NO deploy — each needs Mason's explicit OK. Draft migrations go to
   is Mason-gated); server-side harvest date bound; DB filled-offer delete
   prohibition; stored per-farm IANA timezone; storage orphan reconciliation sweep;
   render-layer component tests (no infra).
-- [ ] **Round 8 — Re-verify**: full gates, re-audit (Sol, same charter scoped to fixes),
+- [x] **Round 8 — Re-verify**: full gates, re-audit (Sol, same charter scoped to fixes),
   live browser pass per FOUNDATION-AUDIT §7, then ship-checklist unfreeze.
+  CLOSED 2026-07-14. (A) Gates on the final tree by Claude in ONE run: tsc 0,
+  28 regression suites 0, build 0, AND all three disposable proofs PASS
+  (verify-0033/0034/0035: each applies migrations 0001..N to a fresh Postgres
+  and runs behavioral probes). (B) Cumulative RE-AUDIT (Claude subagent, full
+  closure sweep of all 44 audit rows + 5 live findings): verdict
+  **READY-FOR-OWNER-DECISION** — 11/11 P0 closed+verified in source; 14/16 P1
+  ledger-closed, the other 2 fixed in code but previously undocumented:
+  · P1-08 (quote selection/server re-eval): CLOSED by Round 6's alert work
+    (basisMath MARS exclusion + transition RPC + deliver-grain-alert full
+    server recompute). Residual (delivery-location scoping of quote
+    eligibility) → backlog.
+  · P1-03 (plan comparison mixes whole-farm/other-entity plans): MITIGATED —
+    "Best" badges are allocation-bound via calculateReportFieldRows so a plan
+    can never win on ground it doesn't serve (the audit's concrete harm);
+    residual (comparison set not entity-scoped) re-rated P2 → backlog.
+  NO cross-round regressions (locks intact ×70 uses; land math intact; offer
+  fill dedupe unaffected by contract-type fix; 3 capability probes coherent).
+  Draft sequence 0031-0035 conflict-free; ONE apply note: copying a legacy
+  86-95% RP budget post-apply fails with a raw check-constraint error (safe,
+  ugly — backlog). (C) Pre-apply LIVE pass by Claude: triple-click Save →
+  EXACTLY 1 row (SQL) then UI delete → 0 rows (SQL); stale-weather + gating +
+  receipts + filled-offer archival proven live earlier this round-set; 18px
+  body + no sub-48px buttons computed live; R1-LIVE-03 (NaN errors) — no
+  candidate source in code (re-audit regex sweep), not reproduced in ANY
+  fresh load since Round 2a → resolved/transient. Deferred backlog (14 items,
+  none P0/P1 — worst modes are duplicate/missed notifications or ugly-but-safe
+  errors) consolidated in the re-audit report (out-file in session scratchpad;
+  key items also listed per-round above).
+
+## SHIP CHECKLIST — Mason's decisions (nothing below happens without your OK)
+The repair pass is COMPLETE: 8/8 rounds, all committed locally. To unfreeze
+customer onboarding, decide these IN ORDER:
+1. **Apply the 5 draft database updates** (0031 landlord views, 0032 grain
+   risk, 0033 bin/contract truth, 0034 save durability, 0035 operational
+   integrity) to the farm-rx test project — I re-run the three verify scripts
+   immediately before, then apply in filename order. Note: legacy RP budgets
+   above 85% coverage will refuse to copy afterwards (safe, known).
+2. **Redeploy the two edge functions** (send-push, deliver-grain-alert) —
+   ONLY AFTER 0035 is applied, or marketing alert emails break in between.
+3. **Push the local commits** (7 round commits, cd0f9ef..b311957) to GitHub.
+4. **Post-apply verification** (I do this once 1-2 are done): re-run the live
+   browser pass on the now-enabled features (bin movements, deliveries, price
+   finalization, matrix saves, service-log reversal, program due generation),
+   plus the §7 items needing real accounts/phone (two-farm RLS pass, PWA
+   phone pass, real push delivery) before REAL customers.
+5. **Codex credits**: quota resets Jul 19 ~2 PM; buying credits sooner is
+   optional — the Claude-subagent loop handled rounds 6-8 well.
 
 ## New findings discovered during repair (not in the original audit)
 - **R1-LIVE-01 (P1):** Inventory "Count adjustment" can NEVER save: the form sends a
