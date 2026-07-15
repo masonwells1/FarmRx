@@ -5,13 +5,15 @@
 **Source audit:** `docs/audits/2026-07-15-sol-foundation-review/`
 **Scope:** SOL-FND-001 through SOL-FND-009
 **Plan review:** completed once by Claude Fable at low effort; corrections incorporated; no further Claude/Fable calls
-**Execution status:** FINALIZATION — Phases 0-6 and the final full local release gate are complete; branch and draft PR publication remain
+**Execution status:** COMPLETE — final full local release gate passed; branch pushed; draft PR #1 opened; stopped before live actions
 
 ## Outcome
 
 Repair all nine foundation findings on one non-production branch, prove each repair through the real application path, open a draft pull request, and stop. The loop is autonomous inside that boundary: it diagnoses failures, makes scoped fixes, reruns proof, and advances only when the current gate is green.
 
 The loop must stop before any live Supabase migration, production setting change, deployment, live-data write, merge to `main`, or production-branch push. Those actions require a new explicit approval from Mason.
+
+**Publication:** `codex/farmrx-foundation-repair`, draft PR <https://github.com/masonwells1/FarmRx/pull/1>
 
 ## Fixed operating decisions
 

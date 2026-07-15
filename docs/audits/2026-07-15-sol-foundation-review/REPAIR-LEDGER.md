@@ -16,7 +16,7 @@
 | 4 — browser isolation/headers | COMPLETE; deployed-header proof remains | SOL-FND-005 |
 | 5 — canonical scheduled alerts | COMPLETE; Edge/scheduler/device activation remains | SOL-FND-006, SOL-FND-008 |
 | 6 — mobile navigation | COMPLETE | SOL-FND-009 |
-| 7 — reconciliation/release gate/PR | IN PROGRESS — final full gate green; branch publication pending | all |
+| 7 — reconciliation/release gate/PR | COMPLETE — final full gate green; branch pushed; draft PR #1 opened | all |
 
 ## Phase 0 evidence
 
@@ -127,3 +127,10 @@ Not attempted during this loop: linked/live migrations, Auth/security settings, 
 ## Residual release risk
 
 The branch has no known BLOCKER/P0/P1 code defect from the July 15 finding set. It remains **CONDITIONALLY SOLID** because the new migrations/functions/headers are not deployed, Edge runtime bundling was locally blocked, and physical offline/push/live-role proof requires separate authority and hardware.
+
+## Publication record
+
+- implementation commit: `3edab12` (`Harden Farm Rx foundation workflows`)
+- branch: `codex/farmrx-foundation-repair`
+- draft PR: <https://github.com/masonwells1/FarmRx/pull/1>
+- stopped before migration apply, Supabase settings/data changes, deploy, customer delivery, merge, or `main`/production push

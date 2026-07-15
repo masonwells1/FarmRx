@@ -103,3 +103,9 @@ The adversarial diff review strengthened 0036 child-set comparison and split the
 ## Deliberate stop boundary
 
 Not performed: linked migration apply, live data write, Supabase setting change, Edge/web deployment, secret configuration, real email/push, merge, `main` push, or production-branch push.
+
+## Publication
+
+- committed implementation and proof as `3edab12` (`Harden Farm Rx foundation workflows`)
+- pushed only `codex/farmrx-foundation-repair`
+- opened exactly one draft PR: <https://github.com/masonwells1/FarmRx/pull/1>
