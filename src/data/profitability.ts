@@ -74,7 +74,7 @@ export interface ProfitabilityRepository {
   getSaveDurabilityCapability(): Promise<boolean>
   createBudget(budget: CropBudget): Promise<void | ProfitabilitySaveDisposition>
   saveBudget(budget: CropBudget): Promise<void | ProfitabilitySaveDisposition>
-  saveBudgetInsurance(budgetId: string, patch: InsuranceBudgetPatch): Promise<void | ProfitabilitySaveDisposition>
+  saveBudgetInsurance(budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt?: string | null): Promise<void | ProfitabilitySaveDisposition>
   saveCostLine(line: BudgetCostLine): Promise<void | ProfitabilitySaveDisposition>
   deleteCostLine(id: string): Promise<void | ProfitabilitySaveDisposition>
   replaceMatrixSteps(budgetId: string, steps: ProfitabilityMatrixStep[]): Promise<void | ProfitabilitySaveDisposition>

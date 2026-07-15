@@ -9,7 +9,7 @@ export type CancelReceiptWrite = { farmId: string; id: string; reason: string; c
 export type AdjustmentWrite = { id: string; product_id: string; adjustment_quantity_in_inventory_unit: number; reason: AdjustmentInput['reason']; notes: string; adjusted_at: string }
 export interface InventoryDataGateway {
   loadWorkspace(farmId: string): Promise<InventoryRowBundle>
-  upsertProduct(farmId: string, row: InventoryProductWrite): Promise<unknown>
+  upsertProduct(farmId: string, row: InventoryProductWrite, expectedUpdatedAt?: string | null): Promise<unknown>
   saveReceiptBundle(input: ReceiptBundleWrite): Promise<unknown>
   cancelReceipt(input: CancelReceiptWrite): Promise<unknown>
   insertAdjustment(farmId: string, row: AdjustmentWrite): Promise<unknown>

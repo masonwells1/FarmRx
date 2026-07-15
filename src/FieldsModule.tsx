@@ -436,6 +436,11 @@ function toDraft(
   const nextArrangement = { ...arrangement, ...arrangementPatch };
   return {
     id: field.id,
+    expected_versions: field.updated_at && arrangement.updated_at ? {
+      field_updated_at: field.updated_at,
+      arrangement: { id: arrangement.id, updated_at: arrangement.updated_at },
+      crop_assignments: assignments.map((item) => ({ id: item.id, updated_at: item.updated_at })),
+    } : null,
     name: nextField.name,
     operating_entity_id: nextField.operating_entity_id,
     total_acres: nextField.total_acres,

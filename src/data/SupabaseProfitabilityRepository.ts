@@ -115,7 +115,7 @@ export function normalizeAllocationDecimals(value: BudgetFieldAllocation): Budge
 export interface ProfitabilityOperationWriter {
   createBudgetOperation(value: CropBudget, priceSteps: ProfitabilityMatrixStep[], yieldSteps: ProfitabilityMatrixStep[]): Promise<{ budget: CropBudget; steps: ProfitabilityMatrixStep[] }>
   saveBudgetOperation(value: CropBudget): Promise<CropBudget>
-  saveBudgetInsuranceOperation(budgetId: string, patch: InsuranceBudgetPatch): Promise<CropBudget>
+  saveBudgetInsuranceOperation(budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt?: string | null): Promise<CropBudget>
   saveCostLineOperation(value: BudgetCostLineWrite): Promise<BudgetCostLine>
   deleteCostLineOperation(id: string): Promise<string>
   replaceMatrixStepsOperation(budgetId: string, steps: ProfitabilityMatrixStep[], expectedSteps?: ProfitabilityMatrixStep[] | null): Promise<ProfitabilityMatrixStep[]>
@@ -216,8 +216,8 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
   }
 
   async saveBudget(value: CropBudget) { await this.saveBudgetOperation(value) }
-  async saveBudgetInsurance(budgetId: string, patch: InsuranceBudgetPatch) { await this.saveBudgetInsuranceOperation(budgetId, patch) }
-  async saveBudgetInsuranceOperation(budgetId: string, patch: InsuranceBudgetPatch): Promise<CropBudget> {
+  async saveBudgetInsurance(budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt?: string | null) { await this.saveBudgetInsuranceOperation(budgetId, patch, expectedUpdatedAt) }
+  async saveBudgetInsuranceOperation(budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt?: string | null): Promise<CropBudget> {
     insuranceColumns(patch)
     const normalizedPatch = normalizeInsurancePatchDecimals(patch)
     const farmId = await this.dependencies.getFarmId(); const fields = await this.fields()
@@ -225,7 +225,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     const current = (await this.loadRaw(farmId)).budgets.find((item) => item.id === budgetId)
     if (!current) fail('That budget changed before its insurance details could be saved.')
     const next = { ...(current as CropBudget), ...normalizedPatch }; this.validateBudget(next, farmId, fields)
-    const saved = mapBudget(await this.dependencies.gateway.patchBudgetInsurance(farmId, budgetId, normalizedPatch))
+    const saved = mapBudget(await this.dependencies.gateway.patchBudgetInsurance(farmId, budgetId, normalizedPatch, expectedUpdatedAt ?? current!.updated_at))
     if (saved.id !== budgetId || saved.farm_id !== farmId || Object.keys(normalizedPatch).some((key) => saved[key as keyof CropBudget] !== normalizedPatch[key as keyof InsuranceBudgetPatch])) fail('Farm Rx could not confirm the insurance save.')
     return saved
   }

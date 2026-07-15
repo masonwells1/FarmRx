@@ -19,7 +19,7 @@ export interface ProfitabilityDataGateway {
   getSaveDurabilityCapability?(): Promise<boolean>
   loadWorkspace(farmId: string): Promise<ProfitabilityRowBundle>
   upsertBudget(farmId: string, row: CropBudget): Promise<unknown>
-  patchBudgetInsurance(farmId: string, budgetId: string, patch: InsuranceBudgetPatch): Promise<unknown>
+  patchBudgetInsurance(farmId: string, budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt?: string | null): Promise<unknown>
   upsertCostLine(farmId: string, row: BudgetCostLineWrite): Promise<unknown>
   deleteCostLine(farmId: string, id: string): Promise<unknown>
   upsertAllocation(farmId: string, row: BudgetFieldAllocation): Promise<unknown>

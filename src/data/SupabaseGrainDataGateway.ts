@@ -3,6 +3,7 @@ import { localCalendarDay } from './marketingAlerts'
 import type { GrainDataGateway, GrainRowBundle, ReplaceMarketingPlanInput } from './GrainDataGateway'
 import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainContract, GrainContractDelivery, MarketingAlertRule, ProductionEstimate } from './grain'
 import { DELETE_PERMISSION_MESSAGE } from './saveDurability'
+import { optimisticSave } from './optimisticSave'
 
 function rows(data: unknown, error: { message: string } | null): unknown[] { if (error) throw error; if (!Array.isArray(data)) throw new Error('Farm Rx could not load the complete grain workspace.'); return data }
 function row(data: unknown, error: { message: string } | null): unknown { if (error) throw error; if (!data || typeof data !== 'object') throw new Error('Farm Rx could not confirm the grain save. Please try again.'); return data }
@@ -44,22 +45,22 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
     const post0033 = !deliveriesUnavailable
     return { production_estimates: rows(production_estimates.data, production_estimates.error), grain_contracts: rows(grain_contracts.data, grain_contracts.error), grain_contract_deliveries: deliveriesUnavailable ? [] : rows(grain_contract_deliveries.data, grain_contract_deliveries.error), marketing_plan_targets: rows(marketing_plan_targets.data, marketing_plan_targets.error), insurance_units: rows(insurance_units.data, insurance_units.error), grain_bins: rows(grain_bins.data, grain_bins.error), bin_inventory: rows(bin_inventory.data, bin_inventory.error), bin_transactions: rows(bin_transactions.data, bin_transactions.error), cash_bids: rows(cash_bids.data, cash_bids.error), usda_report_dates: rows(usda_report_dates.data, usda_report_dates.error), marketing_alert_rules: rows(marketing_alert_rules.data, marketing_alert_rules.error), firm_offers: rows(firm_offers.data, firm_offers.error), grain_alert_settings: grain_alert_settings.data, capabilities: { bin_movements: post0033, contract_price_finalization: post0033, contract_deliveries: post0033 } }
   }
-  async upsertProductionEstimate(farmId: string, value: ProductionEstimate) { const result = await supabase.from('production_estimates').upsert({ ...productionColumns(value), farm_id: farmId }, { onConflict: 'id' }).select('*').single(); return row(result.data, result.error) }
-  async upsertContract(farmId: string, value: GrainContract) { const result = await supabase.from('grain_contracts').upsert({ ...contractColumns(value), farm_id: farmId }, { onConflict: 'id' }).select('*').single(); return row(result.data, result.error) }
+  async upsertProductionEstimate(farmId: string, value: ProductionEstimate) { return optimisticSave('production_estimates', farmId, value.id, { ...productionColumns(value), farm_id: farmId }, value.updated_at) }
+  async upsertContract(farmId: string, value: GrainContract) { return optimisticSave('grain_contracts', farmId, value.id, { ...contractColumns(value), farm_id: farmId }, value.updated_at) }
   async replaceMarketingPlan(input: ReplaceMarketingPlanInput) {
     const { scope, targets, farmId } = input
     const { data, error } = await supabase.rpc('replace_marketing_plan_targets', { p_farm_id: farmId, p_crop_year: scope.crop_year, p_commodity_id: scope.commodity_id, p_operating_entity_id: scope.operating_entity_id, p_enterprise_label: scope.enterprise_label, p_targets: targets.map(({ created_at: _created, updated_at: _updated, ...target }) => target) })
     return rows(data, error)
   }
-  async upsertCashBid(farmId: string, value: CashBid) { const result = await supabase.from('cash_bids').upsert({ ...bidColumns(value), farm_id: farmId }, { onConflict: 'id' }).select('*').single(); return row(result.data, result.error) }
-  async upsertMarketingAlertRule(farmId: string, value: MarketingAlertRule) { const result = await supabase.from('marketing_alert_rules').upsert({ ...alertRuleColumns(value), farm_id: farmId }, { onConflict: 'id' }).select('*').single(); return row(result.data, result.error) }
+  async upsertCashBid(farmId: string, value: CashBid) { return optimisticSave('cash_bids', farmId, value.id, { ...bidColumns(value), farm_id: farmId }, value.updated_at) }
+  async upsertMarketingAlertRule(farmId: string, value: MarketingAlertRule) { return optimisticSave('marketing_alert_rules', farmId, value.id, { ...alertRuleColumns(value), farm_id: farmId }, value.updated_at) }
   async deleteMarketingAlertRule(farmId: string, id: string) { return confirmDelete('marketing_alert_rules', farmId, id) }
-  async upsertFirmOffer(farmId: string, value: FirmOffer) { const result = await supabase.from('firm_offers').upsert({ ...offerColumns(value), farm_id: farmId }, { onConflict: 'id' }).select('*').single(); return row(result.data, result.error) }
+  async upsertFirmOffer(farmId: string, value: FirmOffer) { return optimisticSave('firm_offers', farmId, value.id, { ...offerColumns(value), farm_id: farmId }, value.updated_at) }
   async fillFirmOffer(_farmId: string, offerId: string, value: GrainContract) { const { data, error } = await supabase.rpc('fill_firm_offer', { p_offer_id: offerId, p_contract: contractColumns(value), p_local_date: localCalendarDay(new Date()) }); if (error) throw error; return row(data, null) }
   async deleteFirmOffer(farmId: string, id: string) { return confirmDelete('firm_offers', farmId, id) }
-  async upsertGrainBin(farmId: string, value: GrainBin) { const result = await supabase.from('grain_bins').upsert({ ...binColumns(value), farm_id: farmId }, { onConflict: 'id' }).select('*').single(); return row(result.data, result.error) }
+  async upsertGrainBin(farmId: string, value: GrainBin) { return optimisticSave('grain_bins', farmId, value.id, { ...binColumns(value), farm_id: farmId }, value.updated_at) }
   async appendBinTransactionRpc(farmId: string, value: BinTransaction) { const { data, error } = await supabase.rpc('append_bin_movement', { p_farm_id: farmId, p_transaction: binTransactionColumns(value) }); if (error) throw error; return row(data, null) }
   async appendContractDeliveryRpc(farmId: string, value: GrainContractDelivery, allowOverdelivery: boolean) { const { data, error } = await supabase.rpc('record_grain_contract_delivery', { p_farm_id: farmId, p_delivery: { ...contractDeliveryColumns(value), allow_overdelivery: allowOverdelivery } }); if (error) throw error; return row(data, null) }
   async finalizeContractPriceLegRpc(farmId: string, contractId: string, leg: 'futures_price' | 'basis', value: number) { const { data, error } = await supabase.rpc('finalize_contract_price_leg', { p_farm_id: farmId, p_contract_id: contractId, p_leg: leg, p_value: value }); if (error) throw error; return row(data, null) }
-  async upsertGrainAlertSettings(farmId: string, value: GrainAlertSettings) { const result = await supabase.from('grain_alert_settings').upsert({ farm_id: farmId, alert_emails: value.alert_emails }, { onConflict: 'farm_id' }).select('*').single(); return row(result.data, result.error) }
+  async upsertGrainAlertSettings(farmId: string, value: GrainAlertSettings) { return optimisticSave('grain_alert_settings', farmId, farmId, { farm_id: farmId, alert_emails: value.alert_emails }, value.updated_at, 'farm_id') }
 }

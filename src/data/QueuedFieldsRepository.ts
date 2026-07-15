@@ -3,11 +3,11 @@ import type { FieldsOperationWriter, SavedFieldOperation } from './SupabaseField
 import { normalizeFieldDraft } from './SupabaseFieldsRepository'
 import { setModuleSyncRetryAction, setModuleSyncStatus } from './syncStatus'
 import { FieldsWriteQueue, type FieldsQueueEntryV1, type StorageLike, writeQueueKey } from './writeQueue'
+import { operationalCacheMaxAgeMs, readWorkspaceCache, writeWorkspaceCache } from './workspaceCache'
+import { queueTransaction } from './queueTransaction'
 
 type Context = { userId: string; farmId: string }
 type QueueDependencies = { getContext: () => Promise<Context>; projectRef: string; storage: StorageLike; createId: () => string; clock: () => string; isOffline: () => boolean }
-const processLocks = new Map<string, Promise<void>>()
-const leaseTtl = 6_000
 const blocked = 'Saved changes on this device need attention. Nothing was deleted.'
 const offlineMessage = 'Your saved entries are waiting on this device. Connect to load your farm.'
 
@@ -21,23 +21,6 @@ export function isTransportFailure(error: unknown, offline: boolean) {
   if (/permission|rls|jwt|auth|unauthori[sz]ed|forbidden|validation|duplicate|conflict|malformed|invalid|23505|23503|22p02|42p01/.test(text) || /\b(400|401|403|409|422)\b/.test(text)) return false
   return /network|fetch|timeout|timed out|connection reset|failed to send|unknown commit|econn|socket|\b(0|408|502|503|504)\b/.test(text)
 }
-async function serial<T>(key: string, task: () => Promise<T>): Promise<T> { const previous = processLocks.get(key) ?? Promise.resolve(); let release!: () => void; const next = new Promise<void>((resolve) => { release = resolve }); processLocks.set(key, previous.then(() => next)); await previous; try { return await task() } finally { release(); if (processLocks.get(key) === next) processLocks.delete(key) } }
-
-async function crossTabLock<T>(key: string, storage: StorageLike, createId: () => string, task: (verify: () => void) => Promise<T>): Promise<T> {
-  const lockName = `farm-rx-fields:${key}`
-  if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(lockName, async () => task(() => undefined))
-  const leaseKey = `${key}:lease`; const token = createId(); let lease = ''
-  const owns = () => storage.getItem(leaseKey) === lease
-  const renew = () => { if (!owns()) throw new Error(blocked); lease = JSON.stringify({ token, expiresAt: Date.now() + leaseTtl }); storage.setItem(leaseKey, lease); if (!owns()) throw new Error(blocked) }
-  const existing = storage.getItem(leaseKey)
-  try {
-    if (existing) { const parsed = JSON.parse(existing) as { expiresAt?: unknown }; if (typeof parsed.expiresAt === 'number' && parsed.expiresAt > Date.now()) throw new Error(blocked) }
-    lease = JSON.stringify({ token, expiresAt: Date.now() + leaseTtl }); storage.setItem(leaseKey, lease); if (!owns()) throw new Error(blocked)
-    const timer = setInterval(() => { try { renew() } catch { /* the next guarded mutation fails closed */ } }, Math.floor(leaseTtl / 3))
-    try { return await task(renew) } finally { clearInterval(timer); if (owns()) storage.removeItem(leaseKey) }
-  } catch (error) { throw error instanceof Error ? error : new Error(blocked) }
-}
-
 export class QueuedFieldsRepository implements FieldsRepository {
   private workspace: FieldsData | null = null
   private workspaceIsCanonical = false
@@ -47,11 +30,13 @@ export class QueuedFieldsRepository implements FieldsRepository {
     setModuleSyncRetryAction('fields', () => this.replayCurrent())
   }
   private async contextAndQueue() { const context = await this.dependencies.getContext(); return { context, queue: new FieldsWriteQueue(this.dependencies.storage, writeQueueKey(this.dependencies.projectRef, context.userId, context.farmId)) } }
-  private async locked<T>(queue: FieldsWriteQueue, task: (verify: () => void) => Promise<T>) { return serial(queue.key, () => crossTabLock(queue.key, this.dependencies.storage, this.dependencies.createId, task)) }
+  private async locked<T>(queue: FieldsWriteQueue, task: (verify: () => void) => Promise<T>) { return queueTransaction(queue.key, this.dependencies.storage, this.dependencies.createId, task) }
   async inspectAndReplay() { await this.replayCurrent() }
   async getData(): Promise<FieldsData> {
-    try { await this.replayCurrent(); this.workspace = await this.writer.getData(); this.workspaceIsCanonical = true; this.receiptFieldIds.clear(); const { queue } = await this.contextAndQueue(); return this.locked(queue, () => Promise.resolve(this.overlayQueued(this.workspace!, queue.read().entries))) }
-    catch (error) { const { queue } = await this.contextAndQueue(); const entries = await this.locked(queue, () => Promise.resolve(queue.read().entries)); if (this.workspace && isTransportFailure(error, this.dependencies.isOffline())) { this.workspaceIsCanonical = false; return this.overlayQueued(this.workspace, entries) } if (!this.workspace && entries.length && isTransportFailure(error, this.dependencies.isOffline())) throw new Error(offlineMessage); throw error }
+    const { context, queue } = await this.contextAndQueue()
+    const cacheScope = { projectRef: this.dependencies.projectRef, ...context, module: 'fields' }
+    try { await this.replayCurrent(); this.workspace = await this.writer.getData(); this.workspaceIsCanonical = true; this.receiptFieldIds.clear(); await writeWorkspaceCache(cacheScope, this.workspace); return this.locked(queue, () => Promise.resolve(this.overlayQueued(this.workspace!, queue.read().entries))) }
+    catch (error) { const entries = await this.locked(queue, () => Promise.resolve(queue.read().entries)); if (!this.workspace && isTransportFailure(error, this.dependencies.isOffline())) { const cached = await readWorkspaceCache<FieldsData>(cacheScope, operationalCacheMaxAgeMs); if (cached) { this.workspace = cached.data; this.workspaceIsCanonical = false } } if (this.workspace && isTransportFailure(error, this.dependencies.isOffline())) { this.workspaceIsCanonical = false; return this.overlayQueued(this.workspace, entries) } if (!this.workspace && entries.length && isTransportFailure(error, this.dependencies.isOffline())) throw new Error(offlineMessage); throw error }
   }
   async saveField(draft: FieldDraft): Promise<Field> {
     const normalized = normalizeFieldDraft(draft, this.dependencies.createId); const operationId = this.dependencies.createId(); const { context, queue } = await this.contextAndQueue()
@@ -88,6 +73,8 @@ export class QueuedFieldsRepository implements FieldsRepository {
     this.workspace = next
     this.receiptFieldIds.add(saved.field.id)
   }
+  private expectedVersions(saved: SavedFieldOperation): NonNullable<FieldDraft['expected_versions']> { return { field_updated_at: saved.field.updated_at, arrangement: { id: saved.arrangement.id, updated_at: saved.arrangement.updated_at }, crop_assignments: saved.cropAssignments.map((row) => ({ id: row.id, updated_at: row.updated_at })) } }
+  private rebaseExpected(original: FieldDraft['expected_versions'], chained: NonNullable<FieldDraft['expected_versions']>): NonNullable<FieldDraft['expected_versions']> { const changed = new Map(chained.crop_assignments.map((row) => [row.id, row])); return { ...chained, crop_assignments: (original?.crop_assignments ?? []).map((row) => changed.get(row.id) ?? row) } }
   private overlayQueued(workspace: FieldsData, entries: FieldsQueueEntryV1[]): FieldsData {
     let next = structuredClone(workspace)
     for (const entry of entries) {
@@ -102,6 +89,6 @@ export class QueuedFieldsRepository implements FieldsRepository {
   async replayCurrent() {
     let contextAndQueue: Awaited<ReturnType<QueuedFieldsRepository['contextAndQueue']>>; try { contextAndQueue = await this.contextAndQueue() } catch { return }
     const { context, queue } = contextAndQueue
-    try { await this.locked(queue, async (verify) => { let envelope = queue.read(); if (!envelope.entries.length) { setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }); return }; if (this.dependencies.isOffline()) { setModuleSyncStatus('fields', { kind: 'pending', pending: envelope.entries.length }); return }; while (envelope.entries.length) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); setModuleSyncStatus('fields', { kind: 'syncing', pending: envelope.entries.length }); try { const saved = await this.writer.saveFieldOperation(head.draft, head.operationId); verify(); this.applySavedReceipt(head.draft, saved); envelope = queue.removeConfirmedHead(head.operationId) } catch (error) { if (isTransportFailure(error, this.dependencies.isOffline())) { setModuleSyncStatus('fields', { kind: 'pending', pending: envelope.entries.length }); return }; setModuleSyncStatus('fields', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } }; setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }) }) } catch { setModuleSyncStatus('fields', { kind: 'blocked', pending: 0, message: blocked }) }
+    try { await this.locked(queue, async (verify) => { let envelope = queue.read(); if (!envelope.entries.length) { setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }); return }; if (this.dependencies.isOffline()) { setModuleSyncStatus('fields', { kind: 'pending', pending: envelope.entries.length }); return }; const versions = new Map<string, NonNullable<FieldDraft['expected_versions']>>(); while (envelope.entries.length) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); setModuleSyncStatus('fields', { kind: 'syncing', pending: envelope.entries.length }); try { const chained = versions.get(head.draft.id); const sent = chained ? { ...head.draft, expected_versions: this.rebaseExpected(head.draft.expected_versions, chained) } : head.draft; const saved = await this.writer.saveFieldOperation(sent, head.operationId); versions.set(head.draft.id, this.expectedVersions(saved)); verify(); this.applySavedReceipt(head.draft, saved); envelope = queue.removeConfirmedHead(head.operationId) } catch (error) { if (isTransportFailure(error, this.dependencies.isOffline())) { setModuleSyncStatus('fields', { kind: 'pending', pending: envelope.entries.length }); return }; setModuleSyncStatus('fields', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } }; setModuleSyncStatus('fields', { kind: 'synced', pending: 0 }) }) } catch { setModuleSyncStatus('fields', { kind: 'blocked', pending: 0, message: blocked }) }
   }
 }

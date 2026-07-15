@@ -1,0 +1,29 @@
+name: Scheduled alert sweep
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: farm-rx-scheduled-alert-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Invoke the server-owned alert evaluator
+        env:
+          SCHEDULER_URL: ${{ secrets.FARM_RX_SCHEDULER_URL }}
+          SCHEDULER_KEY: ${{ secrets.FARM_RX_SCHEDULER_SECRET }}
+          SUPABASE_ANON_KEY: ${{ secrets.FARM_RX_SUPABASE_ANON_KEY }}
+        run: |
+          test -n "$SCHEDULER_URL" && test -n "$SCHEDULER_KEY" && test -n "$SUPABASE_ANON_KEY"
+          curl --fail-with-body --retry 2 --retry-all-errors \
+            --header "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            --header "apikey: $SUPABASE_ANON_KEY" \
+            --header "x-scheduler-key: $SCHEDULER_KEY" \
+            --header "content-type: application/json" \
+            --request POST --data '{}' "$SCHEDULER_URL"

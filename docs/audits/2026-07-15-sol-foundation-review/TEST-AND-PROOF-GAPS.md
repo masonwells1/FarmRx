@@ -1,59 +1,57 @@
 # Test and Proof Gaps
 
-## What the current green gates actually prove
+## What the branch gate proves
 
-- **Forced TypeScript:** the project and references type-check from a forced rebuild.
-- **28 regression scripts:** substantial pure/business-math coverage plus repository mapping, validation, operation-ID replay, queue parsing, durability helpers, weather freshness, submit locks, and targeted prior repairs.
-- **Production build:** React/Vite/PWA compiles; the service worker is generated and precaches the shell. The main JavaScript bundle is large (1,093.15 kB, 287.59 kB gzip), but the build succeeds.
-- **Disposable databases:** all 35 migrations apply on fresh Postgres; 0033-0035 behavioral probes pass when run in isolation.
-- **Fresh role matrix:** database helper/RLS behavior matches the documented manager/worker/read-only/rep/stranger model.
-- **Authenticated browser smoke:** every major route loaded with HTTP 200 and no visible page alert.
-- **Dependency audit:** `npm audit` reported zero known vulnerabilities, including dev dependencies.
+`npm run verify:foundation` currently proves:
 
-## Where the current tests create false confidence
+1. forced TypeScript project build;
+2. all configured business/repository regressions, including optimistic saves, alert freshness, scheduler weather logic, and queue contention;
+3. production Vite/PWA build;
+4. dependency audit at high severity;
+5. static route, queue, RLS, cache, CSP, frame-hash, and scheduler invariants;
+6. four controlled mutations that each make the guard fail;
+7. every migration from 0001 through 0037 applied from zero in disposable PostgreSQL;
+8. 0033 Grain ledger/finalization/delivery behavior;
+9. 0034 Profitability durability behavior;
+10. 0035 Program/task/push/service integrity;
+11. 0036 two-session optimistic concurrency and lost-response replay;
+12. 0037 app-closed Program/marketing/spray evaluation and delivery-row dedupe;
+13. manager/worker/read-only/rep-off/rep-on/stranger RLS behavior;
+14. 22 production-build Playwright tests across desktop and phone.
 
-`npm run regression` sounds end-to-end but is not. It invokes TypeScript scripts directly. Supabase repository suites inject fake gateways; they do not start Supabase, authenticate, cross PostgREST, exercise RLS, invoke a deployed Edge Function, upload a photo, or render React. There is no Vitest/Jest/React Testing Library/Playwright dependency, no `.github` CI workflow, and no local Supabase config/reset command.
+The browser suite crosses real React, service worker, IndexedDB, localStorage, routing, repository composition, multi-page concurrency, and hostile iframe boundaries. The database suites cross real PostgreSQL constraints, functions, locks, grants, RLS helpers, and transaction behavior.
 
-Concrete counterexample from this review: TypeScript, all 28 regressions, and build passed, while a real authenticated online-load/offline-reload failed and a normal 390px mobile viewport showed overlapping navigation.
+## Attack-scenario status
 
-## Missing proof by attack scenario
-
-| Scenario | Current proof | Gap |
+| Scenario | Current proof | Residual gap |
 |---|---|---|
-| Double click / double submit | Submit-lock regression and many handler locks | No built-browser double-tap matrix across every write control |
-| Two tabs editing one record | Some queues use Web Locks/leases | No real two-tab test; four queue families lack cross-tab locking; no row-version conflicts for many records |
-| Stale save after another update | Profitability matrix expected-snapshot probe | Fields, Grain mutable rows, budget/cost/allocation, equipment/tasks, and several RPC aggregates are not covered |
-| Offline create/edit/delete then reconnect | Fake repository/queue scripts | Real deployed reload fails; no close/reopen/IndexedDB/context proof; no mobile-device replay proof |
-| Request commits but response is missed | Operation IDs and focused durability tests; strong 0033/0034 RPCs | Not exercised through a real transport for every write/delete; edge email remains best-effort |
-| Retry after partial failure | Queue parking/needs-attention tests | No two-tab replay, browser crash, storage quota, or Edge Function partial-delivery drill |
-| Wrong farm/user/role | Static RLS plus fresh disposable role matrix | No current live two-account/two-farm/revocation/storage pass |
-| Null/negative/zero/precision/large values | Good math/validation/check-constraint coverage; 0033 negative/capacity probes | No property/fuzz tests across every form/RPC; very large browser input/display not broadly checked |
-| Deleted parent with dependents | FK review, append-only/correction patterns, service reversal probe | No full deletion matrix covering every table/view/storage object and UI recovery |
-| Missing migration/schema drift | Fresh application of local 0001-0035 | Live migration registry blocked because checkout is not linked; no CI drift comparison |
-| Tests green while repository path is broken | Demonstrated by this audit | Release pipeline lacks real browser, database, edge, and live-smoke gates |
+| Double click / submit | Submit-lock regression and handler locks | No exhaustive browser double-tap test for every write button |
+| Two tabs editing/queueing | Two-page notification append; 40 concurrent queue transactions | Browser stale-editor UI is represented by disposable DB sessions rather than two signed-in UI pages |
+| Stale save after update | Field/Harvest independent sessions; direct conditional Equipment update; full child-set addition attack | Migration 0036 not applied/live; delete-specific expected versions are not generalized to every ordinary delete |
+| Offline create/edit/delete/reconnect | Offline cached reopen and field create/reload; repository queue projections for modules | Installed iOS/Android, storage quota/eviction, and browser-crash timing; no browser delete/reconnect scenario for every module |
+| Request succeeds/browser misses response | Field/Harvest operation receipts and direct-row identical-state reconciliation | Not transport-injected through every individual repository path |
+| Retry after partial failure | Queue park/retry tests; scheduler and Program replay dedupe; push claim/backoff | Real Edge/email/push provider partial failure not run |
+| Wrong farm/user/role | Fresh disposable role matrix and two-farm browser isolation | Real live accounts and revoked offline grant timing |
+| Null/negative/zero/precision/large | Existing validation, database checks, planning/insurance/bin/inventory regressions | No property-based/fuzz suite across every form |
+| Deleted parent/dependents | FKs, receipt/ledger patterns, service reversal, full-field child-set stale guard | No exhaustive UI deletion matrix for every table/storage object |
+| Migration/schema drift | Fresh local 0001-0037 apply | Linked migration registry and deployed signatures are unavailable |
+| Tests green while path broken | Four controlled mutations plus built-browser/database gates | Edge runtime compilation is not in the local gate because Deno/local Supabase stack is unavailable |
 
-## Live/current-state proof still needed
+## Remaining live/device proof
 
-1. Link or provide a safe read-only Supabase management path, then compare live migration versions, function signatures, RLS policies, bucket configuration, security advisors, Auth settings, scheduled functions, and Edge Function versions to Git.
-2. Prove signup is disabled or intentionally controlled; prove password/leaked-password settings appropriate for the plan.
-3. Use two farms and at least owner, manager, worker, read-only, rep, revoked rep, and stranger accounts in a live read-only isolation matrix.
-4. Install the PWA on real iOS and Android devices; open modules online, force close, go offline, reopen, create/edit/delete, reconnect, and inspect exact canonical rows.
-5. Subscribe a real device, close the app, generate a due Program/marketing transition, and prove one push delivery plus monitored failure/retry behavior.
-6. Send a Grain email to a production-domain recipient and verify authentication/domain readiness without exposing provider secrets.
-7. Exercise scouting photo upload, cross-farm path rejection, offline note behavior, deletion, and cleanup retry against a disposable or dedicated test farm.
+1. Compare linked migration versions, RPC signatures, policies, bucket rules, Auth settings, security advisors, scheduled functions, Edge versions, and web deployment to Git.
+2. Apply 0036-0037 in a non-production environment and rerun the session/RLS attacks through PostgREST.
+3. Bundle and invoke `scheduled-alert-sweep` in the Supabase Edge runtime; verify its secret rejection, service-role path, weather failure isolation, push drain, logs, and retry.
+4. Deploy preview web headers and verify both `/grain` and `/market-quote-frame.html` responses. Confirm the parent `script-src` contains no TradingView and the frame bootstrap hash matches.
+5. Install on physical iOS/Android devices; force-close and reopen offline; create/edit/delete; reconnect; test storage pressure/eviction and revoked access.
+6. Receive one real push with the app closed and one controlled Grain email; verify provider failure visibility without exposing secrets.
+7. Exercise scouting photo upload, offline note behavior, cross-farm path rejection, delete, and cleanup retry in a disposable/test farm.
 
-## Recommended release gate
+## Explicit command limitations recorded
 
-Before feature work resumes, make one command/CI workflow run:
+- `deno --version`: command unavailable.
+- `supabase functions serve scheduled-alert-sweep`: `supabase start is not running.`
+- The attempted variant containing `--no-verify-jwt` was blocked by the workstation safety hook and was not bypassed.
+- `vercel build`: `No project settings found locally. Run pull to retrieve them, or re-run with --yes to pull automatically.` The loop did not pull project settings or environment data.
 
-1. forced TypeScript;
-2. current fast regressions;
-3. production build;
-4. fresh Supabase migration reset plus RLS/role tests;
-5. disposable 0033, 0034, and 0035 suites;
-6. Playwright desktop/mobile route smoke;
-7. offline reload/write/replay and two-tab queue tests;
-8. two-session stale-write conflict tests;
-9. production read-only health/schema-drift smoke.
-
-Do not make a live write, deployment, or migration part of the ordinary audit command.
+These do not invalidate the passing database/browser proof, but they prevent calling the scheduler or headers production-ready.

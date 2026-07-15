@@ -8,11 +8,13 @@ export interface HarvestDraft {
   harvested_bushels: number | null
   harvest_date: string | null
   actual_price_per_bu: number | null
+  expected_updated_at?: string | null
 }
 
 export interface HarvestRecord extends HarvestDraft {
   id: string
   farm_id: string
+  updated_at: string
   pending?: boolean
 }
 
@@ -39,8 +41,9 @@ export function harvestMaximumDate(now = new Date()) {
 export const HARVEST_FUTURE_DATE_MESSAGE = 'The harvest date cannot be more than one day in the future.'
 
 export function validateHarvestDraft(draft: HarvestDraft | Record<string, unknown>, now = new Date()): string | null {
-  if (!draft || typeof draft !== 'object' || Array.isArray(draft) || Object.keys(draft).length !== exactKeys.length || !exactKeys.every((key) => Object.hasOwn(draft, key))) return 'This harvest entry is incomplete. Please reopen the form and try again.'
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft) || ![exactKeys.length, exactKeys.length + 1].includes(Object.keys(draft).length) || !exactKeys.every((key) => Object.hasOwn(draft, key)) || Object.keys(draft).some((key) => ![...exactKeys, 'expected_updated_at'].includes(key as typeof exactKeys[number] | 'expected_updated_at'))) return 'This harvest entry is incomplete. Please reopen the form and try again.'
   const row = draft as HarvestDraft
+  if (Object.hasOwn(row, 'expected_updated_at') && row.expected_updated_at !== null && (typeof row.expected_updated_at !== 'string' || Number.isNaN(Date.parse(row.expected_updated_at)))) return 'This harvest entry is based on an invalid saved version. Reload and try again.'
   if (!uuid.test(row.crop_assignment_id)) return 'This crop record is invalid. Please reopen the form and try again.'
   if (row.harvested_bushels !== null && (!Number.isFinite(row.harvested_bushels) || row.harvested_bushels < 0)) return 'Harvested bushels must be zero or greater.'
   if (row.actual_price_per_bu !== null && (!Number.isFinite(row.actual_price_per_bu) || row.actual_price_per_bu < 0)) return 'Actual price per bushel must be zero or greater.'

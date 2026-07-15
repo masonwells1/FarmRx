@@ -10,13 +10,14 @@ const object = (value: unknown) => { if (!value || typeof value !== 'object' || 
 const id = (value: unknown) => typeof value === 'string' && uuid.test(value) ? value : fail()
 const nullableNumber = (value: unknown) => value === null ? null : typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'string' && value.trim() && Number.isFinite(Number(value)) ? Number(value) : fail()
 const nullableDate = (value: unknown): string | null => { if (value === null) return null; if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) return fail(); return value }
+const timestamp = (value: unknown) => typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : fail()
 const sameDecimal = (left: number | null, right: number | null, places: number) => left === null || right === null ? left === right : roundDecimalHalfUp(left, places) === roundDecimalHalfUp(right, places)
 const canonicalDraft = (draft: HarvestDraft): HarvestDraft => ({ ...draft, harvested_bushels: roundDecimalHalfUp(draft.harvested_bushels, 2), actual_price_per_bu: roundDecimalHalfUp(draft.actual_price_per_bu, 6) })
 
 export function mapHarvestRecord(value: unknown, expected?: { farmId: string; draft: HarvestDraft }): HarvestRecord {
   const row = object(value)
   if (!Object.hasOwn(row, 'actual_price_per_bu')) fail()
-  const result: HarvestRecord = { id: id(row.id), farm_id: id(row.farm_id), crop_assignment_id: id(row.id), harvested_bushels: nullableNumber(row.harvested_bushels), harvest_date: nullableDate(row.harvest_date), actual_price_per_bu: nullableNumber(row.actual_price_per_bu) }
+  const result: HarvestRecord = { id: id(row.id), farm_id: id(row.farm_id), crop_assignment_id: id(row.id), harvested_bushels: nullableNumber(row.harvested_bushels), harvest_date: nullableDate(row.harvest_date), actual_price_per_bu: nullableNumber(row.actual_price_per_bu), updated_at: timestamp(row.updated_at) }
   if (expected && (result.id !== expected.draft.crop_assignment_id || result.crop_assignment_id !== expected.draft.crop_assignment_id || result.farm_id !== expected.farmId || !sameDecimal(result.harvested_bushels, expected.draft.harvested_bushels, 2) || result.harvest_date !== expected.draft.harvest_date || !sameDecimal(result.actual_price_per_bu, expected.draft.actual_price_per_bu, 6))) fail()
   return result
 }

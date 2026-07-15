@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabaseClient'
+import { clearFarmAccess } from './farmContext'
 
 export type AuthPhase = 'restoring' | 'signed_out' | 'signed_in'
 
@@ -60,6 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setPhase('signed_in')
     },
     async signOut() {
+      if (session?.user.id) await clearFarmAccess(session.user.id)
       const { error } = await supabase.auth.signOut({ scope: 'local' })
       if (error) throw error
       markIntentionalSignOut()

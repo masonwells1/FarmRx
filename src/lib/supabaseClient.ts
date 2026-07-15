@@ -6,7 +6,7 @@ if (hostname !== `${supabaseConfig.projectRef}.supabase.co`) {
   throw new Error('Farm Rx is not connected to its expected data service.')
 }
 
-export const supabase = createClient(
+const client = createClient(
   supabaseConfig.url,
   supabaseConfig.publishableKey,
   {
@@ -18,3 +18,13 @@ export const supabase = createClient(
     },
   },
 )
+
+// PostgREST retries failed reads for roughly seven seconds by default. That is
+// useful for an online-only app, but it prevents Farm Rx from promptly falling
+// back to a verified IndexedDB workspace when the connection disappears.
+// supabase-js does not currently expose this PostgREST setting in createClient.
+const rest = (client as unknown as { rest?: { retry?: boolean } }).rest
+if (!rest) throw new Error('Farm Rx could not configure its data service.')
+rest.retry = false
+
+export const supabase = client

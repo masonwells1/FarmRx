@@ -1,128 +1,105 @@
 # Command Log
 
-**Date:** 2026-07-15  
-**Working directory:** `C:\FarmRx`  
-**Mode:** Review only. No app/config/migration/test/dependency changes; no commit, push, deploy, migration, Supabase setting change, or manual form submission. Important exception: normal authenticated page loads automatically invoked the app's idempotent due-item and alert-transition RPCs, so live test-farm bookkeeping may have been updated even though no write action was intentionally taken.
+**Date:** 2026-07-15
+**Working directory:** `C:\FarmRx`
+**Branch:** `codex/farmrx-foundation-repair`
+**Authority used:** local edits/checks, disposable Docker databases, browser tests, one non-production branch push and draft PR. No live migration, setting/data change, deployment, merge, main/production push, customer email, or customer push.
 
-## Repository baseline
+## Original audit baseline
 
-- `git status --short --branch`
-  - Start: `## main...origin/main`, clean.
-  - End before final artifact write: only `docs/audits/2026-07-15-sol-foundation-review/` untracked.
-- `git log -1 --format=...`
-  - `d6b746d` — `Ship checklist executed: 0031-0035 applied, edge functions deployed, pushed` (2026-07-14 06:40:26 -0500).
-- Source inventory:
-  - 35 migrations, `0001_module1_fields.sql` through `0035_operational_integrity.sql`.
-  - Two Edge Functions: `deliver-grain-alert` and `send-push`.
-  - 28 regression scripts in `npm run regression`.
+| Command | Result |
+|---|---|
+| `npx tsc -b --force` | PASS, exit 0 |
+| `npm run regression` | PASS, 28 configured TypeScript scripts |
+| `npm run build` | PASS; PWA worker generated; large-chunk warning preserved |
+| `npm audit` | PASS, zero known vulnerabilities |
+| `scripts/verify-0033-disposable.ps1` attempts 1-2 | FAIL: `FATAL: the database system is shutting down`; `Disposable psql failed.` |
+| `scripts/verify-0034-disposable.ps1` | PASS |
+| `scripts/verify-0035-disposable.ps1` | PASS |
 
-## Required verification
+The disposable readiness scripts were repaired to wait for the final PostgreSQL PID 1 server. 0033 then passed.
 
-### `npx tsc -b --force`
+## Repair-loop failures retained
 
-- **Exit:** 0
-- **Output:** none
-- **Result:** PASS
+| Phase / command | Exact failure summary | Resolution |
+|---|---|---|
+| First authenticated browser group | three tests timed out; trace showed `Minified React error #185` | stable external-store snapshot |
+| Physical offline reopen | remained on `Loading fields...`; PostgREST retry backoff after `ERR_INTERNET_DISCONNECTED` | disabled hidden read retry so verified IndexedDB fallback is prompt |
+| Offline Add field | `Farm Rx could not save this field right now` | blank placeholder IDs normalized to UUIDs; regression added |
+| Phase 2 regression | `Farmer-facing text below the 18px contract: ".farm-switcher..."` | all new farmer-facing text raised to 18px |
+| 0036 disposable attempt 1 | duplicate farm membership from bootstrap trigger | seed changed to `ON CONFLICT` |
+| 0036 disposable attempt 2 | Session A harvest used the pre-field-save crop timestamp | harvest snapshot refreshed after the field proof |
+| 0037 disposable attempt 1 | `INSERT has more target columns than expressions` for Fields seed | operating entity value added |
+| First TradingView focused browser test | Delayed quotes absent because fixture had no production estimate | production estimate added to the production-shaped fixture |
+| Second TradingView focused browser test | unexpected `operational_integrity_capability_probe` and `/auth/v1/user` requests | explicit fixture responses added; no wildcard hidden |
+| Focused queue command | `tsx: The term 'tsx' is not recognized` | rerun correctly as `npx tsx ...`; PASS |
+| Edge local serve | `supabase start is not running.` | retained as release proof gap; no local stack/config fabricated |
+| Edge serve variant | workstation hook blocked `--no-verify-jwt` | not bypassed |
+| `vercel build` | `No project settings found locally. Run pull to retrieve them, or re-run with --yes to pull automatically.` | retained; no settings/env pull performed |
 
-### `npm run regression`
+No failing product test was weakened, skipped, deleted, or reclassified to obtain green.
 
-- **Exit:** 0
-- **Elapsed:** approximately 13.4 seconds
-- **Result:** PASS — all 28 configured scripts completed.
-- Covered groups included cost of carry, insurance math, marketing alerts, firm offers, bin ledger, Grain repair/planning, Mock and Supabase-named repository suites, Programs/due items, notifications, weather, submit locks, save durability, and the round-seven sweep.
+## Focused repair proof
 
-### `npm run build`
+- `scripts/verify-0036-disposable.ps1` -> `PROBE 0036 optimistic concurrency: PASS`.
+  - legacy Field/Harvest RPC grants revoked;
+  - Session A save wins;
+  - Session B stale save receives `PT409/FARM_RX_STALE_WRITE`;
+  - missed-response retry returns the prior receipt;
+  - direct conditional update preserves Session A;
+  - stale full-field bundle cannot erase a later crop assignment.
+- `scripts/verify-0037-disposable.ps1` -> `PROBE 0037 scheduled alert foundation: PASS`.
+  - two intended marketing events, one Program event;
+  - stale bid suppressed;
+  - entity-scoped 10% result not contaminated by opposite entity;
+  - second sweep creates zero duplicates;
+  - spray false/false/true/true creates exactly one event;
+  - each notification creates one push-delivery row;
+  - scheduler functions are service-role-only.
+- `node scripts/foundation-static-guards.mjs` -> PASS.
+- `node scripts/verify-foundation-mutations.mjs` -> PASS; route, queue lock, Field RLS scope, and private-cache user scope mutations all detected.
+- Focused TradingView/security Playwright -> 4/4 PASS on desktop and phone after the dedicated frame/CSP split.
+- Focused mobile Playwright -> 6/6 PASS across projects and security checks.
 
-- **Exit:** 0
-- **Elapsed:** approximately 8.5 seconds
-- **Result:** PASS
-- Vite transformed 201 modules.
-- Main JavaScript: 1,093.15 kB, 287.59 kB gzip.
-- CSS: 120.10 kB, 19.19 kB gzip.
-- PWA worker generated; precache: 7 entries / 1,186.11 KiB.
-- Warning preserved: some chunks exceed 500 kB after minification.
+## Final complete foundation gate
 
-## Deeper local database proof
+Command:
 
-### `scripts/verify-0033-disposable.ps1`
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-foundation.ps1
+```
 
-- **Exit:** 0
-- **Result:** PASS
-- Proved same-bin/cross-bin commodity handling, capacity and negative-balance rejection, sequential replay idempotency, direct ledger insert revocation, immutable/finalized price legs, crop rotation after emptying, contract-delivery replay, and over-delivery rejection.
+Result: **PASS**
 
-### `scripts/verify-0034-disposable.ps1`
+| Gate | Final result |
+|---|---|
+| `npx tsc -b --force` | PASS |
+| `npm run regression` | PASS, including optimistic-save, scheduler logic, and queue transaction scripts |
+| `npm run build` | PASS; 206 modules; main JS 1,112.08 kB / 292.85 kB gzip; warning preserved |
+| PWA worker | PASS; 8 precache entries / 1,207.42 KiB |
+| `npm audit --audit-level=high` | PASS, zero vulnerabilities |
+| Static foundation guards | PASS |
+| Controlled mutation drill | PASS, 4/4 detected |
+| Disposable 0033 | PASS |
+| Disposable 0034 | PASS |
+| Disposable 0035 | PASS |
+| Disposable 0036 | PASS |
+| Disposable 0037 | PASS |
+| Fresh RLS role matrix | PASS |
+| `npm run test:e2e` | PASS, 22/22 |
+| Combined command | `Farm Rx foundation gate: PASS` |
 
-- First parallel attempt: **Exit 1** with exact summary `Disposable postgres:16 did not become ready.`
-- Isolated rerun: **Exit 0**, `PROBE disposable migration suite: PASS`.
-- Interpretation: temporary Docker startup contention, not a product failure.
+The adversarial diff review strengthened 0036 child-set comparison and split the market frame CSP from the authenticated parent. Focused TypeScript, queue, 0036, static/mutation, and 4/4 browser security proofs passed. The complete foundation gate was then rerun before commit and finished with `Farm Rx foundation gate: PASS`.
 
-### `scripts/verify-0035-disposable.ps1`
+## Scope and secret checks
 
-- **Exit:** 0
-- **Result:** PASS
-- Proved Program due-notification dedupe, push-delivery queue creation and claim backoff, retryability, RLS enabled on internal tables, Program-owned task status protection, service-log meter reversal, alert transition uniqueness, and cross-farm alert rejection.
+- `git diff --check`: PASS; only line-ending warnings were emitted.
+- Secret-like scan across every changed/untracked file: zero credential candidates. One deliberately fake refresh-token marker in the Playwright fixture was classified as test data by filename, key, length, and test marker without printing its value.
+- `npm audit --audit-level=high`: zero vulnerabilities.
+- Supabase changelog refresh: HTTP 200. The April 2026 Data API exposure change was checked against the new RPCs/tables; migrations 0036-0037 explicitly revoke/grant callable surfaces, and the private scheduler table has all Data API roles revoked.
+- No `.env` file was read into artifacts, changed, staged, or committed.
+- Official configuration references consulted: TradingView widget documentation and Vercel `vercel.json` source/negative-lookahead documentation.
 
-### Fresh role/RLS matrix against all migrations
+## Deliberate stop boundary
 
-- Two harness attempts failed before product assertions:
-  1. temp probe table lacked an `authenticated` insert grant (`permission denied for table probe_results`);
-  2. a temporary Postgres container shut down during bootstrap.
-- Simplified isolated rerun: **Exit 0**, `PROBE RLS role matrix: PASS`.
-- Observed matrix:
-
-| Actor | Access | Edit | Manage | Private financials | Visible farms |
-|---|---:|---:|---:|---:|---:|
-| manager | true | true | true | true | 1 |
-| worker default | true | true | false | false | 1 |
-| read-only | true | false | false | false | 1 |
-| rep, farm toggle off | false | false | false | false | 0 |
-| rep, toggle + explicit grant | true | false | false | true | 1 |
-| stranger | false | false | false | false | 0 |
-
-## Supabase/live-state inspection
-
-- `supabase --version` -> `2.106.0`.
-- `supabase migration list --linked` -> **blocked** with exact summary: `Cannot find project ref. Have you run supabase link?`
-- No `supabase/config.toml` exists in this checkout.
-- Therefore live migration registry, advisors, Auth settings, schedules, and secrets were not claimed as verified.
-- Authenticated browser traffic successfully read the live module tables/RPCs, including 0035 capability/transition paths. Page load automatically called `generate_due_program_items` and `record_marketing_alert_transition`; these are idempotent application behavior but may update due/alert bookkeeping. No form was submitted and no manual live mutation was attempted.
-
-## Deployment and HTTP headers
-
-- `vercel inspect` reported production Ready for `https://farm-rx.vercel.app`.
-- `Invoke-WebRequest -Method Head https://farm-rx.vercel.app/grain`:
-  - HTTP 200;
-  - HSTS present: `max-age=63072000; includeSubDomains; preload`;
-  - no CSP;
-  - no X-Frame-Options;
-  - no Referrer-Policy;
-  - no Permissions-Policy;
-  - no X-Content-Type-Options.
-
-## Browser/PWA review
-
-Used the Playwright review workflow against deployed production with the documented verification account. Credentials were not written to audit files; the session was signed out after review.
-
-- Anonymous `/fields` -> `/login`: PASS.
-- Authenticated route smoke: Fields, Grain, Inventory, Profitability, Equipment, Tasks, Weather, Field Log, Scouting, Harvest, Programs, and Alerts all returned HTTP 200, rendered the expected H1, and had no visible `[role=alert]` page error.
-- Grain displayed real scoped farm data, manual Harvest-to-Grain reconciliation, check-on-open alerts, and six TradingView widget frames.
-- PWA inspection:
-  - manifest: `/manifest.webmanifest`;
-  - Service Worker supported and controlling via `/sw.js`;
-  - manifest display mode: standalone.
-- **Offline proof:** load Fields online -> set browser offline -> reload.
-  - Shell loaded.
-  - Farm UI failed with: `We could not reach Farm Rx. Check your signal and try again.`
-- **Mobile proof:** 390x844 screenshot showed all twelve bottom-nav destinations compressed with overlapping labels/icons.
-- Login page console noise: missing `/favicon.ico` returned 404. This was not elevated above polish.
-
-## Static/security analysis
-
-- `npm audit --omit=dev --audit-level=moderate` -> exit 0, `found 0 vulnerabilities`.
-- `npm audit --audit-level=moderate` -> exit 0, `found 0 vulnerabilities`.
-- Static traces covered every repository composition, local queue, gateway, major RPC, RLS helper/policy family, Edge Function, service worker, storage bucket, and cross-module dependency.
-
-## Artifact integrity
-
-- A sensitive-pattern scan of the audit directory found no password, Bearer token, or Supabase auth-storage value.
-- No existing source, migration, config, dependency, environment, test, or documentation file was modified.
+Not performed: linked migration apply, live data write, Supabase setting change, Edge/web deployment, secret configuration, real email/push, merge, `main` push, or production-branch push.

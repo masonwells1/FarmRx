@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabaseClient'
 import type { AdjustmentWrite, ApplicationBundleWrite, CancelReceiptWrite, InventoryDataGateway, InventoryProductWrite, InventoryRowBundle, ReceiptBundleWrite } from './InventoryDataGateway'
+import { optimisticSave } from './optimisticSave'
 
 function rows(data: unknown, error: { message: string } | null): unknown[] { if (error) throw error; if (!Array.isArray(data)) throw new Error('Farm Rx could not load the complete inventory workspace.'); return data }
 function row(data: unknown, error: { message: string } | null): unknown { if (error) throw error; if (!data || typeof data !== 'object') throw new Error('Farm Rx could not confirm the inventory save. Please try again.'); return data }
@@ -21,7 +22,7 @@ export class SupabaseInventoryDataGateway implements InventoryDataGateway {
     ])
     return { products: rows(products.data, products.error), receipts: rows(receipts.data, receipts.error), receipt_lines: rows(receipt_lines.data, receipt_lines.error), adjustments: rows(adjustments.data, adjustments.error), applications: rows(applications.data, applications.error), application_products: rows(application_products.data, application_products.error), program_application_products: rows(program_application_products.data, program_application_products.error), on_hand: rows(on_hand.data, on_hand.error), rup_completeness: rows(rup_completeness.data, rup_completeness.error) }
   }
-  async upsertProduct(farmId: string, value: InventoryProductWrite) { const result = await supabase.from('inventory_products').upsert(productColumns({ ...value, farm_id: farmId }), { onConflict: 'id' }).select('*').single(); return row(result.data, result.error) }
+  async upsertProduct(farmId: string, value: InventoryProductWrite, expectedUpdatedAt?: string | null) { return optimisticSave('inventory_products', farmId, value.id, productColumns({ ...value, farm_id: farmId }), expectedUpdatedAt) }
   async saveReceiptBundle(input: ReceiptBundleWrite) { const { data, error } = await supabase.rpc('save_inventory_receipt_bundle', { p_farm_id: input.farmId, p_receipt: input.receipt, p_lines: input.lines }); return row(data, error) }
   async cancelReceipt(input: CancelReceiptWrite) {
     const update = await supabase.from('inventory_receipts').update({ status: 'cancelled', cancellation_reason: input.reason, cancelled_at: input.cancelledAt }).eq('farm_id', input.farmId).eq('id', input.id).eq('status', 'received').select('*').maybeSingle()

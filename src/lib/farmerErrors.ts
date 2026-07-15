@@ -7,6 +7,7 @@ function details(error: unknown) { const values: string[] = []; const seen = new
 /** Fixed UI taxonomy: technical adapter/database text never reaches a farmer. */
 export function farmerError(error: unknown, action = 'save this field') {
   const message = details(error)
+  if (message.includes('farm_rx_stale_write')) return 'This record changed in another tab or device. Reload before saving again.'
   if (message.includes(FIRM_OFFER_FILL_PARTIAL_SUCCESS.toLowerCase())) return firmOfferFillPartialSuccessMessage
   if (/delivery tracking arrives with the next database update/.test(message)) return 'Delivery tracking arrives with the next database update.'
   if (/bin movements arrive with the next database update/.test(message)) return 'Bin movements arrive with the next database update.'
@@ -14,6 +15,7 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (/movement date must be after the latest bin baseline|dated on or before the bin's baseline/.test(message)) return PRE_BASELINE_BIN_MOVEMENT_MESSAGE
   if (/connect to the internet before recording a delivery/.test(message)) return 'Connect to the internet before recording a delivery.'
   if (/connect to the internet before filling this offer|firm offer must be filled while connected/.test(message)) return 'Connect to the internet before filling this offer.'
+  if (/offline copy is too old/.test(message)) return 'This offline copy is too old to show safely. Connect to update it.'
   if (/network|fetch|timeout|connection|econn/.test(message)) return 'We could not reach Farm Rx. Check your signal and try again.'
   if (/sign-in ended|jwt|auth|unauthori[sz]ed|\b401\b/.test(message)) return 'Your sign-in ended. Please sign in again.'
   if (/permission|rls|forbidden|\b403\b/.test(message)) return 'You do not have permission to make that change.'

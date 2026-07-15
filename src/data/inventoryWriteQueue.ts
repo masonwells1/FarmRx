@@ -1,9 +1,11 @@
-import type { AdjustmentWrite, ApplicationBundleWrite, CancelReceiptWrite, InventoryProductWrite, ReceiptBundleWrite } from './InventoryDataGateway'
+import type { AdjustmentWrite, ApplicationBundleWrite, CancelReceiptWrite, ReceiptBundleWrite } from './InventoryDataGateway'
+import type { InventoryProduct } from './inventory'
+type InventoryQueuedProduct = Omit<InventoryProduct, 'created_at' | 'updated_at'> & Partial<Pick<InventoryProduct, 'created_at' | 'updated_at'>>
 import type { StorageLike } from './writeQueue'
 import { appendNeedsAttention } from './needsAttentionStore'
 
 export type InventoryQueueEntryV1 =
-  | { version: 1; module: 'inventory'; kind: 'saveProduct'; operationId: string; userId: string; farmId: string; enqueuedAt: string; row: InventoryProductWrite }
+  | { version: 1; module: 'inventory'; kind: 'saveProduct'; operationId: string; userId: string; farmId: string; enqueuedAt: string; row: InventoryQueuedProduct }
   | { version: 1; module: 'inventory'; kind: 'saveReceiptBundle'; operationId: string; userId: string; farmId: string; enqueuedAt: string; write: ReceiptBundleWrite }
   | { version: 1; module: 'inventory'; kind: 'cancelReceipt'; operationId: string; userId: string; farmId: string; enqueuedAt: string; write: CancelReceiptWrite }
   | { version: 1; module: 'inventory'; kind: 'addAdjustment'; operationId: string; userId: string; farmId: string; enqueuedAt: string; row: AdjustmentWrite }

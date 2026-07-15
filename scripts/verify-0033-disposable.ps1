@@ -18,7 +18,7 @@ try {
   docker run --rm -d --name $name -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=farmrx_disposable postgres:16 | Out-Null
   $ready = $false
   for ($attempt = 0; $attempt -lt 30; $attempt++) {
-    if ((docker exec $name pg_isready -U postgres -d farmrx_disposable 2>$null) -match 'accepting connections') { $ready = $true; break }
+    if ((docker exec $name sh -c 'grep -qx postgres /proc/1/comm && pg_isready -U postgres -d farmrx_disposable' 2>$null) -match 'accepting connections') { $ready = $true; break }
     Start-Sleep -Milliseconds 500
   }
   if (!$ready) { throw 'Disposable postgres:16 did not become ready.' }

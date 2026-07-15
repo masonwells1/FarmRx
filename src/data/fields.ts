@@ -161,6 +161,11 @@ export interface FieldsData {
 
 export interface FieldDraft {
   id?: string
+  expected_versions?: {
+    field_updated_at: string
+    arrangement: { id: string; updated_at: string }
+    crop_assignments: Array<{ id: string; updated_at: string }>
+  } | null
   name: string
   operating_entity_id: string
   total_acres: number

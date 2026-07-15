@@ -11,7 +11,7 @@ export class SupabaseHarvestDataGateway implements HarvestDataGateway {
   }
   async saveHarvest(input: { farmId: string; operationId: string; entry: HarvestDraft }) {
     const entry = { crop_assignment_id: input.entry.crop_assignment_id, harvested_bushels: input.entry.harvested_bushels, harvest_date: input.entry.harvest_date, actual_price_per_bu: input.entry.actual_price_per_bu }
-    const result = await supabase.rpc('save_crop_harvest', { p_farm_id: input.farmId, p_operation_id: input.operationId, p_entry: entry })
+    const result = await supabase.rpc('save_crop_harvest_versioned', { p_farm_id: input.farmId, p_operation_id: input.operationId, p_expected_updated_at: input.entry.expected_updated_at ?? null, p_entry: entry })
     return row(result.data, result.error)
   }
 }

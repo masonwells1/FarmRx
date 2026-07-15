@@ -101,6 +101,14 @@ export function createFieldEditDraft(
   const nextArrangement = { ...arrangement, ...patch.arrangement };
   return {
     id: field.id,
+    expected_versions: {
+      field_updated_at: field.updated_at,
+      arrangement: { id: arrangement.id, updated_at: arrangement.updated_at },
+      crop_assignments: crop_assignments.flatMap((draft) => {
+        const source = 'id' in draft && draft.id ? allRows.find((row) => row.id === draft.id) : undefined;
+        return source ? [{ id: source.id, updated_at: source.updated_at }] : [];
+      }),
+    },
     name: nextField.name,
     operating_entity_id: nextField.operating_entity_id,
     total_acres: nextField.total_acres,
