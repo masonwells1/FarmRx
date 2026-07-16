@@ -1,4 +1,4 @@
-import { localDateFromForecast, parseScheduledWeatherResponse, scheduledSprayIsGood, type ScheduledWeatherObservation } from './scheduledAlertLogic'
+import { localDateFromForecast, parseScheduledWeatherResponse, scheduledSprayIsGood, type ScheduledWeatherObservation } from './scheduledAlertLogic.ts'
 
 export interface ScheduledWeatherField {
   id: string
