@@ -14,12 +14,14 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
+import type { User } from "@supabase/supabase-js";
 import { useAuth } from "./auth/AuthProvider";
 import {
   bootstrapInitialOwnerFarm,
 } from "./auth/bootstrapFarm";
 import { FarmAccessProvider, useFarmAccess } from "./auth/FarmAccessContext";
 import { hasPendingFarmWork, loadFarmAccess, selectFarm, type FarmAccess } from "./auth/farmContext";
+import { RevokedFarmRecovery } from './components/RevokedFarmRecovery';
 import { createSubmitLock } from "./lib/submitLock";
 import { RequireSession } from "./auth/RequireSession";
 import { FieldDetailPage, FieldFormPage, FieldsPage } from "./FieldsModule";
@@ -165,7 +167,7 @@ const mobilePrimaryNavigation = navigation.filter((item) => mobilePrimaryPaths.h
 const mobileMoreNavigation = navigation.filter((item) => !mobilePrimaryPaths.has(item.path));
 
 function AppLayout() {
-  const { signOut } = useAuth();
+  const { signOut, user } = useAuth();
   const { farms, activeFarm, source, chooseFarm } = useFarmAccess();
   const navigate = useNavigate();
   const [signingOut, setSigningOut] = useState(false);
@@ -241,6 +243,7 @@ function AppLayout() {
         <SyncNotice />
         <OfflineDataNotice />
         <div className="content-area">
+          <RevokedFarmRecovery userId={user?.id ?? null} />
           <Routes>
             <Route path="/fields" element={<FieldsPage />} />
             <Route path="/fields/new" element={<FieldFormPage />} />
@@ -369,6 +372,16 @@ function OfflineDataNotice() {
 
 function FarmAccessGate({ children }: { children: ReactNode }) {
   const { user } = useAuth();
+  if (!user)
+    return (
+      <main className="login-page">
+        <p className="opening-farm">Opening your farm…</p>
+      </main>
+    );
+  return <FarmAccessGateForUser key={user.id} user={user}>{children}</FarmAccessGateForUser>;
+}
+
+function FarmAccessGateForUser({ children, user }: { children: ReactNode; user: User }) {
   const [state, setState] = useState<
     "checking" | "choose" | "ready" | "setup" | "blocked"
   >("checking");
@@ -376,29 +389,36 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
   const [message, setMessage] = useState("");
   useEffect(() => {
     let active = true;
+    const acceptValidatedAccess = async (latest: FarmAccess) => {
+      if (!active) return;
+      if (latest.userId !== user.id) throw new Error("Farm access validation no longer matches the signed-in account.");
+      setAccess(latest);
+      if (!latest.selectedFarmId) {
+        if (latest.farms.length) setState("choose");
+        else if (user?.app_metadata.initial_farm_owner === true) setState("setup");
+        else { setMessage("Crop RX needs to finish your farm setup."); setState("blocked"); }
+        return;
+      }
+      setState("ready");
+      await replayFieldsQueue();
+      await replayProgramsThenGenerateDueItems(
+        replayProgramsQueue,
+        generateDueProgramItems,
+      );
+      await replayHarvestQueue();
+      void replayGrainQueue();
+      void replayInventoryQueue();
+      void replayProfitabilityQueue();
+      void replayEquipmentTasksQueue();
+      await replayFieldLocationQueue();
+      await replayFieldLogQueue();
+      await replayScoutingQueue();
+      await replayNotificationsQueue();
+    };
     const replayOnReconnect = async () => {
       if (!user) return;
-      try {
-        const latest = await loadFarmAccess(user.id, true);
-        if (!active) return;
-        setAccess(latest);
-        if (!latest.selectedFarmId) { setState(latest.farms.length ? "choose" : user.app_metadata.initial_farm_owner === true ? "setup" : "blocked"); return; }
-        setState("ready");
-        await replayFieldsQueue();
-        await replayProgramsThenGenerateDueItems(
-          replayProgramsQueue,
-          generateDueProgramItems,
-        );
-        await replayHarvestQueue();
-        void replayGrainQueue();
-        void replayInventoryQueue();
-        void replayProfitabilityQueue();
-        void replayEquipmentTasksQueue();
-        await replayFieldLocationQueue();
-        await replayFieldLogQueue();
-        await replayScoutingQueue();
-        await replayNotificationsQueue();
-      } catch (error) {
+      try { await acceptValidatedAccess(await loadFarmAccess(user.id, true)); }
+      catch (error) {
         if (!active) return;
         setMessage(farmerError(error, "open your farm"));
         setState("blocked");
@@ -407,21 +427,7 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
     const reconnect = () => { void replayOnReconnect() };
     window.addEventListener("online", reconnect);
     if (user) void loadFarmAccess(user.id, true)
-      .then((latest) => {
-        if (!active) return;
-        setAccess(latest);
-        if (latest.selectedFarmId) {
-          setState("ready");
-          void replayOnReconnect();
-        } else if (latest.farms.length > 1) {
-          setState("choose");
-        } else if (user?.app_metadata.initial_farm_owner === true)
-          setState("setup");
-        else {
-          setMessage("Crop RX needs to finish your farm setup.");
-          setState("blocked");
-        }
-      })
+      .then(acceptValidatedAccess)
       .catch((error: unknown) => {
         if (!active) return;
         setMessage(farmerError(error, "open your farm"));
@@ -438,19 +444,25 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
         <p className="opening-farm">Opening your farm…</p>
       </main>
     );
-  if (state === "setup" && user)
+  if (state === "setup")
     return <InitialFarmSetup onComplete={async () => { const latest = await loadFarmAccess(user.id, true); setAccess(latest); setState(latest.selectedFarmId ? "ready" : "choose"); }} />;
-  if (state === "choose" && user && access)
-    return <main className="login-page"><section className="login-panel farm-choice" aria-labelledby="farm-choice-title"><h1 id="farm-choice-title">Choose a farm</h1><p>Your records and saved offline work stay separated by farm.</p><div className="farm-choice-list">{access.farms.map((farm) => <button className="primary-action" type="button" key={farm.id} onClick={() => { void selectFarm(user.id, farm.id).then(() => window.location.assign('/fields')).catch((error) => { setMessage(farmerError(error, 'open this farm')); setState('blocked') }) }}>{farm.name}</button>)}</div></section></main>;
+  if (state === "choose" && access?.userId === user.id)
+    return <main className="login-page"><section className="login-panel farm-choice" aria-labelledby="farm-choice-title"><h1 id="farm-choice-title">Choose a farm</h1><p>Your records and saved offline work stay separated by farm.</p><div className="farm-choice-list">{access.farms.map((farm) => <button className="primary-action" type="button" key={farm.id} onClick={() => { void selectFarm(user.id, farm.id).then(() => window.location.assign('/fields')).catch((error) => { setMessage(farmerError(error, 'open this farm')); setState('blocked') }) }}>{farm.name}</button>)}</div><RevokedFarmRecovery userId={user.id} /></section></main>;
   if (state === "blocked")
     return (
       <main className="login-page">
         <section className="login-panel">
           <p className="opening-farm">{message}</p>
+          <RevokedFarmRecovery userId={user.id} />
         </section>
       </main>
     );
-  if (!user || !access?.selectedFarmId) return null;
+  if (access?.userId !== user.id || !access.selectedFarmId)
+    return (
+      <main className="login-page">
+        <p className="opening-farm">Opening your farm…</p>
+      </main>
+    );
   const activeFarm = access.farms.find((farm) => farm.id === access.selectedFarmId);
   if (!activeFarm) return null;
   const chooseFarm = async (farmId: string) => {

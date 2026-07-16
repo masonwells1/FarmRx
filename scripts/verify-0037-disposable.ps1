@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $name = "farmrx-0037-$PID"
 $root = Split-Path -Parent $PSScriptRoot
 $passed = $false
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker CLI is required for the disposable 0037 proof but is not available on PATH.' }
 
 function Invoke-Probe([string]$sql, [string]$failure) {
   $sql | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable
@@ -9,20 +10,23 @@ function Invoke-Probe([string]$sql, [string]$failure) {
 }
 
 try {
-  docker run --rm -d --name $name -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=farmrx_disposable postgres:16 | Out-Null
+  docker run --rm -d --name $name -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=farmrx_disposable postgres:17 | Out-Null
   $ready = $false
   for ($i = 0; $i -lt 30; $i++) {
     if ((docker exec $name sh -c 'grep -qx postgres /proc/1/comm && pg_isready -U postgres -d farmrx_disposable' 2>$null) -match 'accepting connections') { $ready = $true; break }
     Start-Sleep -Milliseconds 500
   }
-  if (!$ready) { throw 'Disposable postgres:16 did not become ready.' }
+  if (!$ready) { throw 'Disposable postgres:17 did not become ready.' }
 
-  Invoke-Probe "create role anon nologin; create role authenticated nologin; create role service_role nologin; create schema auth; create table auth.users (id uuid primary key, email text); create function auth.uid() returns uuid language sql stable as `$`$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid `$`$; create schema storage; create table storage.buckets (id text primary key, name text not null, public boolean not null default false, file_size_limit bigint, allowed_mime_types text[]); create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text not null, name text not null, owner uuid); alter table storage.objects enable row level security;" 'Disposable bootstrap failed.'
-  Get-ChildItem (Join-Path $root 'supabase/migrations') -Filter '*.sql' | Sort-Object Name | ForEach-Object { Invoke-Probe (Get-Content -Raw $_.FullName) "Migration failed: $($_.Name)" }
+  Invoke-Probe "create role anon nologin; create role authenticated nologin; create role service_role nologin; create schema auth; create table auth.users (id uuid primary key, email text); create function auth.uid() returns uuid language sql stable as `$`$ select coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub', nullif(current_setting('request.jwt.claim.sub', true), ''))::uuid `$`$; create schema storage; create table storage.buckets (id text primary key, name text not null, public boolean not null default false, file_size_limit bigint, allowed_mime_types text[]); create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text not null, name text not null, owner uuid); alter table storage.objects enable row level security;" 'Disposable bootstrap failed.'
+  $migrations = Get-ChildItem (Join-Path $root 'supabase/migrations') -Filter '*.sql' | Sort-Object Name
+  $repairMigration = $migrations | Where-Object Name -EQ '0038_modern_postgrest_service_role_claims.sql'
+  if (!$repairMigration) { throw 'Migration 0038 modern PostgREST service-role repair is missing.' }
+  $migrations | Where-Object Name -LT $repairMigration.Name | ForEach-Object { Invoke-Probe (Get-Content -Raw $_.FullName) "Migration failed: $($_.Name)" }
 
   Invoke-Probe @'
 insert into auth.users(id,email) values ('00000000-0000-4000-8000-000000000001','scheduler-owner@example.test');
-select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-000000000001"}',false);
 insert into public.farms(id,name,created_by,time_zone) values ('00000000-0000-4000-8000-000000000010','Scheduler Farm','00000000-0000-4000-8000-000000000001','America/Chicago');
 insert into public.farm_memberships(farm_id,user_id,role,status) values ('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000001','owner','active') on conflict(farm_id,user_id) do update set role='owner',status='active';
 insert into public.entities(id,farm_id,name,entity_type) values
@@ -53,16 +57,60 @@ insert into public.assigned_program_passes(id,farm_id,assignment_id,source_revis
 
 do $$ begin
   if has_function_privilege('authenticated','public.run_scheduled_alert_sweep(timestamptz)','execute') then raise exception 'authenticated can execute scheduler sweep'; end if;
+  if has_function_privilege('anon','public.run_scheduled_alert_sweep(timestamptz)','execute') then raise exception 'anon can execute scheduler sweep'; end if;
   if has_function_privilege('authenticated','public.record_scheduled_spray_window(uuid,uuid,date,boolean,timestamptz,jsonb)','execute') then raise exception 'authenticated can record server spray state'; end if;
+  if has_function_privilege('anon','public.record_scheduled_spray_window(uuid,uuid,date,boolean,timestamptz,jsonb)','execute') then raise exception 'anon can record server spray state'; end if;
   if not has_function_privilege('service_role','public.run_scheduled_alert_sweep(timestamptz)','execute') then raise exception 'service role cannot execute scheduler sweep'; end if;
   if has_table_privilege('authenticated','public.spray_window_states','select') then raise exception 'authenticated can read private scheduler state'; end if;
   begin update public.farms set time_zone='Definitely/Not_A_Time_Zone' where id='00000000-0000-4000-8000-000000000010'; raise exception 'invalid timezone accepted'; exception when check_violation then null; end;
 end $$;
 '@ '0037 seed or access-control probe failed.'
 
+  # Before-state proof: 0035/0037 inspect only request.jwt.claim.role, so a
+  # JSON-only PostgREST service-role request must be rejected before 0038.
+  Invoke-Probe @'
+select set_config('request.jwt.claims','{"role":"service_role"}',false);
+select set_config('request.jwt.claim.role','',false);
+do $$ begin
+  perform public.run_scheduled_alert_sweep('2026-07-15T18:00:00Z');
+  raise exception 'JSON-only service role unexpectedly passed before 0038';
+exception when others then
+  if sqlerrm <> 'server scheduler only' then raise; end if;
+end $$;
+'@ 'Before-state JSON-only rejection proof failed.'
+  Write-Output 'BEFORE 0038 JSON-only service role rejected by legacy check: PASS'
+
+  Invoke-Probe (Get-Content -Raw $repairMigration.FullName) 'Migration failed: 0038_modern_postgrest_service_role_claims.sql'
+
+  Invoke-Probe @'
+do $$ begin
+  if has_function_privilege('service_role','public.request_uses_service_role()','execute') then raise exception 'service role can call internal claim helper directly'; end if;
+  if has_function_privilege('authenticated','public.request_uses_service_role()','execute') then raise exception 'authenticated can call internal claim helper directly'; end if;
+  if has_function_privilege('anon','public.request_uses_service_role()','execute') then raise exception 'anon can call internal claim helper directly'; end if;
+  if has_function_privilege('authenticated','public.run_scheduled_alert_sweep(timestamptz)','execute') then raise exception '0038 widened authenticated sweep access'; end if;
+  if has_function_privilege('anon','public.run_scheduled_alert_sweep(timestamptz)','execute') then raise exception '0038 widened anon sweep access'; end if;
+  if not has_function_privilege('service_role','public.run_scheduled_alert_sweep(timestamptz)','execute') then raise exception '0038 removed service-role sweep access'; end if;
+end $$;
+'@ '0038 grant-preservation probe failed.'
+
+  Invoke-Probe @'
+do $$ begin
+  -- Modern claims must win over a conflicting legacy service-role setting.
+  perform set_config('request.jwt.claims','{"role":"authenticated"}',true);
+  perform set_config('request.jwt.claim.role','service_role',true);
+  begin perform public.run_scheduled_alert_sweep('2026-07-15T18:00:00Z'); raise exception 'authenticated sweep was accepted'; exception when others then if sqlerrm <> 'server scheduler only' then raise; end if; end;
+  begin perform public.record_scheduled_spray_window('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000030','2026-07-15',false,'2026-07-15T12:00:00Z','{"wind_speed_10m":15}'::jsonb); raise exception 'authenticated spray recording was accepted'; exception when others then if sqlerrm <> 'server scheduler only' then raise; end if; end;
+  perform set_config('request.jwt.claims','{"role":"anon"}',true);
+  perform set_config('request.jwt.claim.role','',true);
+  begin perform public.run_scheduled_alert_sweep('2026-07-15T18:00:00Z'); raise exception 'anonymous sweep was accepted'; exception when others then if sqlerrm <> 'server scheduler only' then raise; end if; end;
+  begin perform public.record_scheduled_spray_window('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000030','2026-07-15',false,'2026-07-15T12:00:00Z','{"wind_speed_10m":15}'::jsonb); raise exception 'anonymous spray recording was accepted'; exception when others then if sqlerrm <> 'server scheduler only' then raise; end if; end;
+end $$;
+'@ 'Modern-claim scheduler denial probe failed.'
+
   Invoke-Probe @'
 select set_config('request.jwt.claim.sub','',false);
-select set_config('request.jwt.claim.role','service_role',false);
+select set_config('request.jwt.claims','{"role":"service_role"}',false);
+select set_config('request.jwt.claim.role','authenticated',false);
 do $$ declare r jsonb; begin
   r:=public.run_scheduled_alert_sweep('2026-07-15T18:00:00Z');
   if (r->>'marketing_created')::integer<>2 or (r->>'program_created')::integer<>1 then raise exception 'unexpected first sweep result: %',r; end if;
@@ -75,7 +123,8 @@ end $$;
 '@ 'First scheduled sweep proof failed.'
 
   Invoke-Probe @'
-select set_config('request.jwt.claim.role','service_role',false);
+select set_config('request.jwt.claims','{"role":"service_role"}',false);
+select set_config('request.jwt.claim.role','',false);
 do $$ declare r jsonb; begin
   r:=public.run_scheduled_alert_sweep('2026-07-15T18:15:00Z');
   if (r->>'marketing_created')::integer<>0 or (r->>'program_created')::integer<>0 then raise exception 'replayed sweep duplicated work: %',r; end if;
@@ -84,7 +133,8 @@ end $$;
 '@ 'Scheduled sweep replay was not idempotent.'
 
   Invoke-Probe @'
-select set_config('request.jwt.claim.role','service_role',false);
+select set_config('request.jwt.claims','{"role":"service_role"}',false);
+select set_config('request.jwt.claim.role','',false);
 do $$ declare r jsonb; begin
   r:=public.record_scheduled_spray_window('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000030','2026-07-15',false,'2026-07-15T12:00:00Z','{"wind_speed_10m":15}'::jsonb);
   if coalesce((r->>'fired')::boolean,false) or not (r->>'initialized')::boolean then raise exception 'first observation fired: %',r; end if;

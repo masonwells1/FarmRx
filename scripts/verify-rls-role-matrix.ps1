@@ -44,6 +44,7 @@ insert into auth.users(id,email) values
   ('10000000-0000-4000-8000-000000000006','stranger@example.test');
 
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','10000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('20000000-0000-4000-8000-000000000001',1,'20000000-0000-4000-8000-000000000002',1)::text)::text,false);
 insert into public.farms(id,name,created_by) values
   ('20000000-0000-4000-8000-000000000001','Matrix Farm','10000000-0000-4000-8000-000000000001'),
   ('20000000-0000-4000-8000-000000000002','Other Farm','10000000-0000-4000-8000-000000000001');
@@ -91,6 +92,8 @@ do $$ begin
 end $$;
 
 reset role;
+select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','10000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('20000000-0000-4000-8000-000000000001',1)::text)::text,false);
 update public.farms set share_with_rep=true where id='20000000-0000-4000-8000-000000000001';
 set role authenticated;
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000005',false);

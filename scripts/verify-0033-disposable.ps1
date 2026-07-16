@@ -33,6 +33,7 @@ try {
   $seed = @'
 insert into auth.users (id, email) values ('11111111-1111-4111-8111-111111111111', 'tester@example.test');
 set request.jwt.claim.sub = '11111111-1111-4111-8111-111111111111';
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','11111111-1111-4111-8111-111111111111','x-farm-rx-access-epochs',jsonb_build_object('22222222-2222-4222-8222-222222222222',1)::text)::text,false);
 insert into public.farms (id, name, created_by) values ('22222222-2222-4222-8222-222222222222', 'Disposable Farm', '11111111-1111-4111-8111-111111111111');
 insert into public.farm_memberships (farm_id, user_id, role, status) values ('22222222-2222-4222-8222-222222222222', '11111111-1111-4111-8111-111111111111', 'owner', 'active') on conflict do nothing;
 insert into public.grain_bins (id, farm_id, name, capacity_bu, location_type) values
@@ -51,6 +52,7 @@ insert into public.grain_contracts (id, farm_id, crop_year, commodity_id, operat
   $probes = @'
 set role authenticated;
 set request.jwt.claim.sub = '11111111-1111-4111-8111-111111111111';
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','11111111-1111-4111-8111-111111111111','x-farm-rx-access-epochs',jsonb_build_object('22222222-2222-4222-8222-222222222222',1)::text)::text,false);
 do $$ declare v_soy_balance numeric; begin
   begin
     perform public.append_bin_movement('22222222-2222-4222-8222-222222222222', '{"id":"a2222222-2222-4222-8222-222222222222","grain_bin_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","direction":"in","bushels":400,"commodity_id":"corn_yellow","occurred_on":"2026-07-02"}'::jsonb);

@@ -13,6 +13,27 @@ export function foundationStaticGuard(root = process.cwd()) {
   for (const route of routes) requireText(errors, app, `path="${route}"`, `route:${route}`)
   requireText(errors, app, 'mobilePrimaryPaths = new Set(["/fields", "/grain", "/tasks", "/weather"])', 'mobile:primary-destinations')
   requireText(errors, app, 'mobileMoreNavigation', 'mobile:more-destinations')
+  requireText(errors, app, '<FarmAccessGateForUser key={user.id} user={user}>', 'identity:keyed-farm-access-gate')
+  requireText(errors, app, 'access?.userId !== user.id', 'identity:farm-access-render-fence')
+
+  const unscopedWriteFencing = read(root, 'supabase/migrations/0041_unscoped_authenticated_write_fencing.sql')
+  if ((unscopedWriteFencing.match(/perform public\.assert_current_farm_access_epoch\(p_farm_id\);/g) ?? []).length !== 3) errors.push('rpc:unscoped-write-fences')
+  requireText(errors, unscopedWriteFencing, 'revoke all on function public.save_push_subscription(text, text, text, text)', 'rpc:legacy-push-save-retired')
+  requireText(errors, unscopedWriteFencing, 'revoke all on function public.delete_push_subscription(text)', 'rpc:legacy-push-delete-retired')
+  requireText(errors, unscopedWriteFencing, 'where push_subscriptions.user_id = v_caller', 'rpc:push-endpoint-owner-fence')
+  requireText(errors, unscopedWriteFencing, "message = 'PUSH_SUBSCRIPTION_OWNED_BY_ANOTHER_USER'", 'rpc:push-endpoint-owner-conflict')
+  requireText(errors, unscopedWriteFencing, 'revoke insert, update, delete on table public.push_subscriptions from public, anon, authenticated;', 'table:push-direct-write-revoked')
+  for (const operation of ['insert', 'update', 'delete']) requireText(errors, unscopedWriteFencing, `drop policy if exists push_subscriptions_${operation} on public.push_subscriptions;`, `table:push-${operation}-policy-removed`)
+  if (/set\s+user_id\s*=\s*excluded\.user_id/i.test(unscopedWriteFencing)) errors.push('rpc:push-endpoint-owner-transfer')
+  const notificationsGateway = read(root, 'src/data/SupabaseNotificationsDataGateway.ts')
+  if ((notificationsGateway.match(/p_farm_id: context\.farmId/g) ?? []).length !== 2) errors.push('rpc:push-farm-context-forwarding')
+
+  const foundationOrchestrator = read(root, 'scripts/verify-foundation.ps1')
+  requireText(errors, foundationOrchestrator, 'if ($LASTEXITCODE -ne 0) { throw $Failure }', 'orchestrator:native-exit-check')
+  requireText(errors, foundationOrchestrator, 'Assert-IntermediateLaneFailureIsFatal', 'orchestrator:controlled-failure-probe')
+  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 17) errors.push('orchestrator:all-lanes-checked')
+  for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
+  requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
 
   const queues = [
     'src/data/fieldLocation.ts',
@@ -31,6 +52,16 @@ export function foundationStaticGuard(root = process.cwd()) {
     const source = read(root, path)
     if (!source.includes("from './queueTransaction'")) errors.push(`queue-import:${path}`)
     if (!source.includes('queueTransaction(')) errors.push(`queue-lock:${path}`)
+  }
+
+  const readRepositories = queues.filter((path) => path !== 'src/data/fieldLocation.ts')
+  const readGuard = read(root, 'src/data/queuedOperationGuard.ts')
+  requireText(errors, readGuard, 'export async function verifyQueuedReadContext(', 'read-context:shared-guard')
+  requireText(errors, readGuard, 'await verifyQueuedOperationContext(dependencies, expected, expected)', 'read-context:shared-operation-verification')
+  for (const path of readRepositories) {
+    const source = read(root, path)
+    if (!source.includes('const verifyRead = () => verifyQueuedReadContext')) errors.push(`read-context:${path}`)
+    if ((source.match(/await verifyRead\(\)/g) ?? []).length < 4) errors.push(`read-boundaries:${path}`)
   }
 
   const rls = read(root, 'supabase/migrations/0002_module1_rls.sql')

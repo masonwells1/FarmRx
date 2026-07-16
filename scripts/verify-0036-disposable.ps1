@@ -17,8 +17,8 @@ try {
   Invoke-Probe @'
 insert into auth.users(id,email) values ('00000000-0000-4000-8000-000000000001','probe@example.test');
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 insert into public.farms(id,name,created_by) values ('00000000-0000-4000-8000-000000000010','Probe Farm','00000000-0000-4000-8000-000000000001');
-insert into public.farm_memberships(farm_id,user_id,role,status) values ('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000001','owner','active') on conflict(farm_id,user_id) do update set role='owner',status='active';
 insert into public.entities(id,farm_id,name,entity_type) values ('00000000-0000-4000-8000-000000000020','00000000-0000-4000-8000-000000000010','Probe Entity','individual');
 insert into public.fields(id,farm_id,operating_entity_id,name,total_acres) values ('00000000-0000-4000-8000-000000000030','00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000020','Original Field',10);
 insert into public.arrangements(id,farm_id,field_id,arrangement_type,effective_from) values ('00000000-0000-4000-8000-000000000031','00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000030','owned','2026-01-01');
@@ -57,12 +57,14 @@ end $$;
   # Session A commits from the shared original snapshot.
   Invoke-Probe @'
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 select public.save_field_bundle_versioned('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-0000000000a1',(select field_versions from public.probe_expected),public.probe_field_draft('Session A Field'));
 '@ 'Session A field save failed.'
 
   # Session B loaded the same old snapshot and must receive the stable conflict.
   Invoke-Probe @'
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 do $$ begin
   perform public.save_field_bundle_versioned('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-0000000000b1',(select field_versions from public.probe_expected),public.probe_field_draft('Session B Field'));
   raise exception 'stale field save was accepted';
@@ -72,6 +74,7 @@ exception when sqlstate 'PT409' then if sqlerrm <> 'FARM_RX_STALE_WRITE' then ra
   # Replaying Session A after a lost response must return its receipt, not conflict.
   Invoke-Probe @'
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 select public.save_field_bundle_versioned('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-0000000000a1',(select field_versions from public.probe_expected),public.probe_field_draft('Session A Field'));
 do $$ begin if (select name from public.fields where id='00000000-0000-4000-8000-000000000030') <> 'Session A Field' then raise exception 'stale field overwrote Session A'; end if; end $$;
 update public.probe_expected set harvest_version=(select updated_at from public.crop_assignments where id='00000000-0000-4000-8000-000000000040');
@@ -79,10 +82,12 @@ update public.probe_expected set harvest_version=(select updated_at from public.
 
   Invoke-Probe @'
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 select public.save_crop_harvest_versioned('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-0000000000a2',(select harvest_version from public.probe_expected),jsonb_build_object('crop_assignment_id','00000000-0000-4000-8000-000000000040','harvested_bushels',1000,'harvest_date','2026-10-01','actual_price_per_bu',4.5));
 '@ 'Session A harvest save failed.'
   Invoke-Probe @'
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 do $$ begin
   perform public.save_crop_harvest_versioned('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-0000000000b2',(select harvest_version from public.probe_expected),jsonb_build_object('crop_assignment_id','00000000-0000-4000-8000-000000000040','harvested_bushels',900,'harvest_date','2026-10-02','actual_price_per_bu',4.4));
   raise exception 'stale harvest save was accepted';
@@ -90,18 +95,23 @@ exception when sqlstate 'PT409' then if sqlerrm <> 'FARM_RX_STALE_WRITE' then ra
 '@ 'Session B stale harvest save was not rejected.'
   Invoke-Probe @'
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 select public.save_crop_harvest_versioned('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-0000000000a2',(select harvest_version from public.probe_expected),jsonb_build_object('crop_assignment_id','00000000-0000-4000-8000-000000000040','harvested_bushels',1000,'harvest_date','2026-10-01','actual_price_per_bu',4.5));
 '@ 'Lost-response harvest replay was not idempotent.'
 
   # The same conditional UPDATE used by the direct-table gateway is proven in
   # two additional database sessions against one loaded updated_at value.
   Invoke-Probe @'
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 do $$ declare n integer; begin
   update public.equipment set name='Session A Tractor' where id='00000000-0000-4000-8000-000000000050' and farm_id='00000000-0000-4000-8000-000000000010' and updated_at=(select equipment_version from public.probe_expected);
   get diagnostics n = row_count; if n <> 1 then raise exception 'Session A compare-and-swap did not update exactly one row'; end if;
 end $$;
 '@ 'Direct-table Session A compare-and-swap failed.'
   Invoke-Probe @'
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 do $$ declare n integer; begin
   update public.equipment set name='Session B Tractor' where id='00000000-0000-4000-8000-000000000050' and farm_id='00000000-0000-4000-8000-000000000010' and updated_at=(select equipment_version from public.probe_expected);
   get diagnostics n = row_count; if n <> 0 then raise exception 'Session B stale compare-and-swap overwrote Session A'; end if;
@@ -112,6 +122,8 @@ end $$;
   # A stale full-field bundle must not erase a crop assignment added by a
   # different session after the editor loaded its aggregate snapshot.
   Invoke-Probe @'
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 update public.probe_expected set field_versions=(
   select jsonb_build_object(
     'field_updated_at',f.updated_at,

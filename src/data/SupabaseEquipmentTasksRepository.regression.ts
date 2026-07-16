@@ -12,6 +12,7 @@ import { readNeedsAttention } from './needsAttentionStore'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const farm = uid(1); const actor = uid(2); const other = uid(3); const micro = '2026-07-12T12:30:00.123456+00:00'
+const operationContext = { projectRef: 'test', userId: actor, farmId: farm, generation: 1, token: uid(999), serverEpoch: 1 }
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 async function rejects(action: () => Promise<unknown>, message: string) { let failed = false; try { await action() } catch { failed = true }; assert(failed, message) }
 const row = (value: unknown) => value as Record<string, unknown>
@@ -46,7 +47,7 @@ class FakeGateway implements EquipmentTasksDataGateway {
   async deleteServiceLogEntry(_farmId: string, id: string) { this.state.service_log = this.state.service_log.filter((item) => row(item).id !== id); return this.deleted(id) }
   async deleteInterval(_farmId: string, id: string) { this.state.intervals = this.state.intervals.filter((item) => row(item).id !== id); return this.deleted(id) }
 }
-function repo(gateway: FakeGateway) { const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fieldsFor(farm)), saveField: async () => { throw new Error('not used') } }; let next = 900; return new SupabaseEquipmentTasksRepository({ gateway, fieldsRepository, getFarmId: async () => farm, getUserId: async () => actor, createId: () => uid(next++) }) }
+function repo(gateway: FakeGateway) { const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fieldsFor(farm)), saveField: async () => { throw new Error('not used') } }; let next = 900; return new SupabaseEquipmentTasksRepository({ gateway, fieldsRepository, getFarmId: async () => farm, getUserId: async () => actor, getOperationContext: async () => operationContext, verifyOperationContext: async () => undefined, createId: () => uid(next++) }) }
 function memory(): StorageLike & { values: Map<string, string> } { const values = new Map<string, string>(); return { values, getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: (key) => values.delete(key) } }
 const equipmentWrite = (id = uid(30), name = 'New Truck'): EquipmentWrite => ({ id, farm_id: farm, name, category: 'truck', make: 'Case', model: 'Magnum', model_year: 2020, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'miles', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null })
 const meterWrite = (id = uid(20)): MeterReadingWrite => ({ id, equipment_id: machineId, reading: 1200, read_on: '2026-07-12', source: 'manual', notes: null })

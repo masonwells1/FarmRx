@@ -7,7 +7,9 @@ const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
 const files = [
   'src/App.tsx', 'src/sw.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json',
-  'supabase/migrations/0002_module1_rls.sql', 'supabase/migrations/0037_scheduled_alert_foundation.sql',
+  'scripts/verify-foundation.ps1',
+  'supabase/migrations/0002_module1_rls.sql', 'supabase/migrations/0037_scheduled_alert_foundation.sql', 'supabase/migrations/0041_unscoped_authenticated_write_fencing.sql',
+  'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/queuedOperationGuard.ts',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
   'src/data/QueuedFieldsRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/QueuedHarvestRepository.ts',
   'src/data/QueuedInventoryRepository.ts', 'src/data/QueuedNotificationsRepository.ts', 'src/data/QueuedProfitabilityRepository.ts',
@@ -27,6 +29,27 @@ try {
   mutate('src/App.tsx', (source) => source.replace('path="/grain/*"', 'path="/grain-broken/*"'))
   detected('route removal', 'route:/grain/*')
   reset()
+  mutate('src/App.tsx', (source) => source.replace('<FarmAccessGateForUser key={user.id} user={user}>', '<FarmAccessGateForUser key="shared-account" user={user}>'))
+  detected('cross-account farm gate reuse', 'identity:keyed-farm-access-gate')
+  reset()
+  mutate('supabase/migrations/0041_unscoped_authenticated_write_fencing.sql', (source) => source.replace('perform public.assert_current_farm_access_epoch(p_farm_id);', 'perform null;'))
+  detected('unscoped RPC epoch fence removal', 'rpc:unscoped-write-fences')
+  reset()
+  mutate('src/data/SupabaseNotificationsDataGateway.ts', (source) => source.replace('p_farm_id: context.farmId', "p_farm_id: 'shared-farm'"))
+  detected('push farm context removal', 'rpc:push-farm-context-forwarding')
+  reset()
+  mutate('supabase/migrations/0041_unscoped_authenticated_write_fencing.sql', (source) => source.replace('where push_subscriptions.user_id = v_caller', 'where true'))
+  detected('push endpoint owner fence removal', 'rpc:push-endpoint-owner-fence')
+  reset()
+  mutate('supabase/migrations/0041_unscoped_authenticated_write_fencing.sql', (source) => source.replace('revoke insert, update, delete on table public.push_subscriptions from public, anon, authenticated;', 'grant insert, update, delete on table public.push_subscriptions to authenticated;'))
+  detected('push direct-table write revoke removal', 'table:push-direct-write-revoked')
+  reset()
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1') }", "& (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1')"))
+  detected('intermediate foundation exit check removal', 'orchestrator:all-lanes-checked')
+  reset()
+  mutate('src/data/QueuedScoutingRepository.ts', (source) => source.replace('const verifyRead = () => verifyQueuedReadContext', 'const verifyRead = () => verifyQueuedOperationContext'))
+  detected('queued read identity fence removal', 'read-context:src/data/QueuedScoutingRepository.ts')
+  reset()
   mutate('src/data/QueuedNotificationsRepository.ts', (source) => source.replace('queueTransaction(', 'unlockedTransaction('))
   detected('queue lock removal', 'queue-lock:src/data/QueuedNotificationsRepository.ts')
   reset()
@@ -35,7 +58,7 @@ try {
   reset()
   mutate('src/data/workspaceCache.ts', (source) => source.replace('`${scope.projectRef}:${scope.userId}:${scope.farmId}:${scope.module}`', '`${scope.projectRef}:shared-user:${scope.farmId}:${scope.module}`'))
   detected('private cache user-scope removal', 'cache:user-farm-module-key')
-  console.log('Foundation mutation drill: PASS (4/4 controlled mutations turned the gate red)')
+  console.log('Foundation mutation drill: PASS (11/11 controlled mutations turned the gate red)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

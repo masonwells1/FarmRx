@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 
 const projectRef = 'agvsozfbstpekuqxpqjr'
 const userId = '00000000-0000-4000-8000-000000000001'
+const userBId = '00000000-0000-4000-8000-000000000002'
 const farmA = '00000000-0000-4000-8000-000000000010'
 const farmB = '00000000-0000-4000-8000-000000000020'
 const entityA = '00000000-0000-4000-8000-000000000011'
@@ -22,12 +23,12 @@ const farms: FarmFixture[] = [
   { id: farmB, name: 'River Bend', entityId: entityB, fieldId: fieldB, fieldName: 'South Bottom', arrangementId: arrangementB },
 ]
 
-function session() {
+function session(id = userId) {
   const expiresAt = Math.floor(Date.now() / 1000) + 86_400
-  const payload = btoa(JSON.stringify({ sub: userId, aud: 'authenticated', exp: expiresAt })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+  const payload = btoa(JSON.stringify({ sub: id, aud: 'authenticated', exp: expiresAt })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
   return {
-    access_token: `eyJhbGciOiJub25lIn0.${payload}.signature`, refresh_token: 'offline-test-refresh', expires_in: 86_400, expires_at: expiresAt, token_type: 'bearer',
-    user: { id: userId, aud: 'authenticated', role: 'authenticated', email: 'farmer@example.test', app_metadata: {}, user_metadata: {}, identities: [], created_at: now },
+    access_token: `eyJhbGciOiJub25lIn0.${payload}.signature`, refresh_token: `offline-test-refresh-${id}`, expires_in: 86_400, expires_at: expiresAt, token_type: 'bearer',
+    user: { id, aud: 'authenticated', role: 'authenticated', email: id === userId ? 'farmer@example.test' : 'other-farmer@example.test', app_metadata: {}, user_metadata: {}, identities: [], created_at: now },
   }
 }
 
@@ -55,7 +56,7 @@ async function fulfillJson(route: Route, body: unknown) {
   await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(body) })
 }
 
-async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false) {
+async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1) {
   const unexpected: string[] = []
   await page.route('https://*.supabase.co/**', async (route) => {
     const url = new URL(route.request().url())
@@ -67,6 +68,10 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
     }
     if (rest && ['entities', 'fields', 'arrangements', 'crop_assignments', 'commodities'].includes(rest)) { await fulfillJson(route, rowsFor(rest, requestedFarm(url))); return }
     if (rest === 'notifications') { await fulfillJson(route, notifications); return }
+    if (url.pathname === '/rest/v1/rpc/get_current_farm_access_epochs') {
+      await fulfillJson(route, accessible.map((farm) => ({ farm_id: farm.id, access_epoch: accessEpoch })))
+      return
+    }
     if (url.pathname === '/rest/v1/rpc/can_read_private_financials') { await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_program_items') { await fulfillJson(route, { generated_count: 0 }); return }
@@ -138,6 +143,51 @@ test('multi-farm access requires an explicit choice and keeps both farms usable'
   expect(unexpected).toEqual([])
 })
 
+test('a direct signed-in A to B replacement hides Farm A before B access validation finishes', async ({ page, context }) => {
+  await seedSession(context)
+  const sessionB = session(userBId)
+  let bFarmRequestStarted = false
+  let releaseBFarmRequest = () => {}
+  const bFarmRequest = new Promise<void>((resolve) => { releaseBFarmRequest = resolve })
+  await page.route('https://*.supabase.co/**', async (route) => {
+    const url = new URL(route.request().url())
+    const rest = url.pathname.match(/^\/rest\/v1\/([^/]+)$/)?.[1]
+    const isUserB = route.request().headers().authorization?.includes(sessionB.access_token) === true
+    const ownerId = isUserB ? userBId : userId
+    const accessible = [isUserB ? farms[1] : farms[0]]
+    if (rest === 'farms') {
+      if (isUserB && !url.searchParams.has('id')) { bFarmRequestStarted = true; await bFarmRequest }
+      await fulfillJson(route, url.searchParams.has('id') ? farmRow(requestedFarm(url)) : accessible.map(farmRow).map((row) => ({ ...row, created_by: ownerId })))
+      return
+    }
+    if (rest && ['entities', 'fields', 'arrangements', 'crop_assignments', 'commodities'].includes(rest)) { await fulfillJson(route, rowsFor(rest, requestedFarm(url))); return }
+    if (rest === 'notifications') { await fulfillJson(route, []); return }
+    if (url.pathname === '/rest/v1/rpc/get_current_farm_access_epochs') { await fulfillJson(route, accessible.map((farm) => ({ farm_id: farm.id, access_epoch: 1 }))); return }
+    if (url.pathname === '/rest/v1/rpc/can_read_private_financials' || url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { await fulfillJson(route, true); return }
+    if (url.pathname === '/rest/v1/rpc/generate_due_program_items') { await fulfillJson(route, { generated_count: 0 }); return }
+    if (url.pathname === '/auth/v1/user') { await fulfillJson(route, isUserB ? sessionB.user : session().user); return }
+    if (route.request().method() === 'GET' && rest) { await fulfillJson(route, rest === 'grain_alert_settings' ? null : []); return }
+    await route.abort('blockedbyclient')
+  })
+
+  await page.goto('/fields')
+  await expect(page.getByText('North Forty')).toBeVisible()
+  await page.evaluate(async ({ key, value }) => {
+    localStorage.setItem(key, JSON.stringify(value))
+    const channel = new BroadcastChannel(key)
+    channel.postMessage({ event: 'SIGNED_IN', session: value })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    channel.close()
+  }, { key: `farm-rx-auth:${projectRef}`, value: sessionB })
+  await expect.poll(() => bFarmRequestStarted).toBe(true)
+  await expect(page.getByText('North Forty')).toBeHidden()
+  await expect(page.getByLabel('Active farm')).toBeHidden()
+  await expect(page.getByText('Opening your farm…')).toBeVisible()
+  releaseBFarmRequest()
+  await expect(page.getByText('South Bottom')).toBeVisible()
+  await expect(page.getByText('North Forty')).toBeHidden()
+})
+
 test('a previously loaded farm reopens from its isolated cache while offline', async ({ page, context }) => {
   await seedSession(context)
   const unexpected = await mockSupabase(page, [farms[0]])
@@ -190,6 +240,158 @@ test('sign out removes farm access and readable IndexedDB workspaces', async ({ 
   }, { databaseName: `farm-rx-offline-v1-${projectRef}`, accessKey: `farm-rx-access:v1:${projectRef}:${userId}` })
   expect(remaining).toEqual({ count: 0, access: null })
   expect(unexpected).toEqual([])
+})
+
+test('revoked farm work is quarantined, exportable, and never returned to an active queue', async ({ page, context }) => {
+  await seedSession(context)
+  const operationId = '00000000-0000-4000-8000-000000000043'
+  const queueKey = `farm-rx-notifications-write-queue:v1:${projectRef}:${userId}:${farmA}`
+  const recoveryKey = `farm-rx-revoked-work-recovery:v1:${projectRef}:${userId}`
+  await context.addInitScript(({ accessKey, access, queueKey: targetQueue, queue }) => {
+    localStorage.setItem(accessKey, JSON.stringify(access))
+    localStorage.setItem(targetQueue, JSON.stringify(queue))
+  }, {
+    accessKey: `farm-rx-access:v1:${projectRef}:${userId}`,
+    access: { version: 1, userId, farms: [farmRow(farms[0])], selectedFarmId: farmA, validatedAt: now },
+    queueKey,
+    queue: { version: 1, entries: [{ version: 1, module: 'notifications', kind: 'markRead', operationId, userId, farmId: farmA, enqueuedAt: now, ids: [notificationA] }] },
+  })
+  const unexpected = await mockSupabase(page, [])
+  await page.goto('/fields')
+  await expect(page.getByRole('heading', { name: 'Saved work needs your review' })).toBeVisible()
+  await expect(page.getByText(/will never send them automatically/i)).toBeVisible()
+  expect(await page.evaluate((key) => localStorage.getItem(key), queueKey)).toBeNull()
+  const saved = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { records?: Array<{ payload?: { entries?: Array<{ operationId?: string }> } }> }, recoveryKey)
+  expect(saved.records).toHaveLength(1)
+  expect(saved.records?.[0]?.payload?.entries?.[0]?.operationId).toBe(operationId)
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export copy' }).click()
+  expect((await download).suggestedFilename()).toMatch(/^farm-rx-recovery-.*\.json$/)
+  await page.getByRole('button', { name: 'Dismiss' }).click()
+  await page.getByRole('button', { name: 'Yes, dismiss' }).click()
+  await expect(page.getByRole('heading', { name: 'Saved work needs your review' })).toBeHidden()
+  expect(await page.evaluate((key) => localStorage.getItem(key), queueKey)).toBeNull()
+  expect(await page.evaluate((key) => (JSON.parse(localStorage.getItem(key) ?? '{}') as { records?: unknown[] }).records?.length, recoveryKey)).toBe(0)
+  expect(unexpected).toEqual([])
+})
+
+test('a stale tab cannot recreate revoked queue or readable cache work after regrant', async ({ page, context }) => {
+  await seedSession(context)
+  const staleTab = await context.newPage()
+  const notifications = [{ id: notificationA, farm_id: farmA, user_id: userId, category: 'general', title: 'Stale tab alert', body: null, link: '/notifications', dedupe_key: null, read_at: null, created_by: userId, created_at: now }]
+  await mockSupabase(page, [farms[0]], notifications)
+  await mockSupabase(staleTab, [farms[0]], notifications)
+  await Promise.all([page.goto('/fields'), staleTab.goto('/fields')])
+  await Promise.all([expect(page.getByText('North Forty')).toBeVisible(), expect(staleTab.getByText('North Forty')).toBeVisible()])
+  const databaseName = `farm-rx-offline-v1-${projectRef}`
+  const cacheKey = `${projectRef}:${userId}:${farmA}:fields`
+  const staleCache = await staleTab.evaluate(async ({ databaseName: name, key }) => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open(name); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+    try { return await new Promise<Record<string, unknown>>((resolve, reject) => { const request = database.transaction('workspaces').objectStore('workspaces').get(key); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) }) } finally { database.close() }
+  }, { databaseName, key: cacheKey })
+  expect(staleCache).toMatchObject({ version: 2, farmId: farmA, serverEpoch: 1 })
+  expect(staleCache.generation).toEqual(expect.any(Number))
+  expect(staleCache.fenceToken).toEqual(expect.any(String))
+
+  await staleTab.goto('/notifications')
+  await expect(staleTab.getByText('Stale tab alert')).toBeVisible()
+  let releasePatch!: () => void
+  const patchRelease = new Promise<void>((resolve) => { releasePatch = resolve })
+  let sawPatch!: () => void
+  const patchStarted = new Promise<void>((resolve) => { sawPatch = resolve })
+  let patchAttempts = 0
+  await staleTab.route(/\/rest\/v1\/rpc\/mark_notifications_read(?:\?|$)/, async (route) => {
+    if (route.request().method() !== 'POST') { await route.fallback(); return }
+    patchAttempts += 1
+    sawPatch()
+    await patchRelease
+    await route.abort('timedout')
+  })
+  const click = staleTab.locator('.notification-row').filter({ hasText: 'Stale tab alert' }).getByRole('button', { name: 'Mark read' }).click()
+  await patchStarted
+
+  await page.unroute('https://*.supabase.co/**')
+  await mockSupabase(page, [], notifications)
+  const accessKey = `farm-rx-access:v1:${projectRef}:${userId}`
+  await page.evaluate((key) => { const value = JSON.parse(localStorage.getItem(key) ?? '{}'); value.validatedAt = '2020-01-01T00:00:00.000Z'; localStorage.setItem(key, JSON.stringify(value)) }, accessKey)
+  await page.reload()
+  const fenceKey = `farm-rx-revocation-fence:v1:${projectRef}:${userId}:${farmA}`
+  await expect.poll(() => page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { revoked?: boolean; generation?: number }, fenceKey)).toMatchObject({ revoked: true })
+  await page.evaluate((key) => localStorage.removeItem(key), fenceKey)
+
+  releasePatch()
+  await click
+  const queueKey = `farm-rx-notifications-write-queue:v1:${projectRef}:${userId}:${farmA}`
+  expect(await staleTab.evaluate((key) => localStorage.getItem(key), queueKey)).toBeNull()
+  await staleTab.evaluate(async ({ databaseName: name, value }) => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open(name); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+    try { const transaction = database.transaction('workspaces', 'readwrite'); transaction.objectStore('workspaces').put(value); await new Promise<void>((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error) }) } finally { database.close() }
+  }, { databaseName, value: staleCache })
+
+  await page.unroute('https://*.supabase.co/**')
+  await mockSupabase(page, [farms[0]], notifications, false, 3)
+  await page.evaluate((key) => { const value = JSON.parse(localStorage.getItem(key) ?? '{}'); value.validatedAt = '2020-01-01T00:00:00.000Z'; localStorage.setItem(key, JSON.stringify(value)) }, accessKey)
+  await page.reload()
+  await page.waitForTimeout(750)
+  await expect.poll(() => page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { revoked?: boolean; generation?: number }, fenceKey)).toMatchObject({ revoked: false })
+  expect((await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { generation?: number }, fenceKey)).generation).toBeGreaterThanOrEqual(2)
+
+  await context.setOffline(true)
+  await staleTab.goto('/fields')
+  await expect(staleTab.getByText('North Forty')).toBeHidden()
+  expect(patchAttempts).toBe(1)
+  expect(await staleTab.evaluate((key) => localStorage.getItem(key), queueKey)).toBeNull()
+  await context.setOffline(false)
+  await staleTab.close()
+})
+
+test('a delayed old farm read cannot overwrite the cache after revoke and regrant', async ({ page, context }) => {
+  await seedSession(context)
+  const staleTab = await context.newPage()
+  await mockSupabase(page, [farms[0]], [], false, 1)
+  await mockSupabase(staleTab, [farms[0]], [], false, 1)
+  await staleTab.goto('/fields')
+  await expect(staleTab.getByText('North Forty')).toBeVisible()
+
+  let releaseRead!: () => void
+  const readRelease = new Promise<void>((resolve) => { releaseRead = resolve })
+  let sawRead!: () => void
+  const readStarted = new Promise<void>((resolve) => { sawRead = resolve })
+  await staleTab.route(/\/rest\/v1\/fields(?:\?|$)/, async (route) => {
+    if (route.request().method() !== 'GET') { await route.fallback(); return }
+    sawRead()
+    await readRelease
+    await route.fallback()
+  })
+  const staleReload = staleTab.reload()
+  await readStarted
+
+  const accessKey = `farm-rx-access:v1:${projectRef}:${userId}`
+  const fenceKey = `farm-rx-revocation-fence:v1:${projectRef}:${userId}:${farmA}`
+  await page.unroute('https://*.supabase.co/**')
+  await mockSupabase(page, [], [], false, 2)
+  await page.goto('/fields')
+  await page.evaluate((key) => { const value = JSON.parse(localStorage.getItem(key) ?? '{}'); value.validatedAt = '2020-01-01T00:00:00.000Z'; localStorage.setItem(key, JSON.stringify(value)) }, accessKey)
+  await page.reload()
+  await expect.poll(() => page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { revoked?: boolean }, fenceKey)).toMatchObject({ revoked: true })
+
+  await page.unroute('https://*.supabase.co/**')
+  await mockSupabase(page, [farms[0]], [], false, 3)
+  await page.evaluate((key) => { const value = JSON.parse(localStorage.getItem(key) ?? '{}'); value.validatedAt = '2020-01-01T00:00:00.000Z'; localStorage.setItem(key, JSON.stringify(value)) }, accessKey)
+  await page.reload()
+  await expect(page.getByText('North Forty')).toBeVisible()
+  const currentFence = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { token: string; serverEpoch: number }, fenceKey)
+  expect(currentFence.serverEpoch).toBe(3)
+
+  releaseRead()
+  await staleReload
+  await expect(staleTab.getByText('North Forty')).toBeVisible()
+  const cachedFence = await page.evaluate(async ({ databaseName, key }) => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open(databaseName); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+    try { return await new Promise<{ fenceToken?: string; serverEpoch?: number }>((resolve, reject) => { const request = database.transaction('workspaces').objectStore('workspaces').get(key); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) }) } finally { database.close() }
+  }, { databaseName: `farm-rx-offline-v1-${projectRef}`, key: `${projectRef}:${userId}:${farmA}:fields` })
+  expect(cachedFence).toMatchObject({ fenceToken: currentFence.token, serverEpoch: 3 })
+  await staleTab.close()
 })
 
 test('an expired offline workspace fails closed with a useful connection message', async ({ page, context }) => {
@@ -275,10 +477,19 @@ test('security headers keep first-party code and embedded market data narrowly s
   expect(csp.match(/script-src[^;]*/)?.[0]).toBe("script-src 'self'")
   expect(frameHeaders['Content-Security-Policy']).toContain('https://s3.tradingview.com')
   expect(frameHeaders['Content-Security-Policy']).toContain("frame-ancestors 'self'")
+  for (const directive of ['img-src', 'connect-src', 'frame-src']) expect(csp.match(new RegExp(`${directive}[^;]*`))?.[0]).not.toContain('tradingview')
+  expect(csp.match(/frame-src[^;]*/)?.[0]).toBe("frame-src 'self'")
+  expect(frameHeaders['Content-Security-Policy']).toContain("default-src 'none'")
   expect(csp).not.toContain("script-src *")
   expect(headers['Referrer-Policy']).toBe('no-referrer')
   expect(headers['X-Content-Type-Options']).toBe('nosniff')
   expect(headers['X-Frame-Options']).toBe('DENY')
+})
+
+test('installed PWA metadata supplies local raster and Apple icons', async () => {
+  const vite = readFileSync('vite.config.ts', 'utf8'); const html = readFileSync('index.html', 'utf8')
+  expect(vite).toContain("src: '/farm-rx-icon-192.png'"); expect(vite).toContain("src: '/farm-rx-icon-512.png'")
+  expect(html).toContain('apple-touch-icon'); expect(readFileSync('public/farm-rx-icon-192.png').byteLength).toBeGreaterThan(100); expect(readFileSync('public/farm-rx-icon-512.png').byteLength).toBeGreaterThan(100); expect(readFileSync('public/apple-touch-icon.png').byteLength).toBeGreaterThan(100)
 })
 
 test('mobile navigation keeps five non-overlapping targets and exposes every destination', async ({ page, context }) => {

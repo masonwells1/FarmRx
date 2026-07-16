@@ -8,6 +8,7 @@ import { isTransportFailure } from './QueuedFieldsRepository'
 import { getSyncStatus } from './syncStatus'
 import type { NotificationCategory } from './notifications'
 import type { StorageLike } from './writeQueue'
+import type { FarmOperationContext } from './farmOperationContext'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const farm = uid(1); const actor = uid(2); const other = uid(3); const stamp = '2026-07-12T12:30:00.123456+00:00'
@@ -18,6 +19,7 @@ function notification(id = uid(10), userId = actor, category: NotificationCatego
 function queueEntry(operationId: string, ids: string[]): NotificationsQueueEntryV1 { return { version: 1, module: 'notifications', kind: 'markRead', operationId, userId: actor, farmId: farm, enqueuedAt: stamp, ids } }
 class FakeGateway implements NotificationsDataGateway {
   rows: unknown[] = []; marks: string[][] = []; markReply: unknown | null = null; markFailure: Error | null = null; creates: unknown[] = []
+  pushUserId = actor; pushFarmId = farm; pushSaves = 0; pushDeletes = 0
   async loadNotifications() { return structuredClone(this.rows) }
   async markRead(ids: string[]) {
     this.marks.push([...ids])
@@ -27,10 +29,12 @@ class FakeGateway implements NotificationsDataGateway {
     return structuredClone(this.markReply ?? { updated_count: updated.size })
   }
   async createNotification(input: { farmId: string; recipientId: string; category: NotificationCategory; title: string; body: string; link: string; dedupeKey: string | null }) { const row = notification(uid(50), input.recipientId, input.category); this.creates.push(input); return { ...row, farm_id: input.farmId, title: input.title, body: input.body, link: input.link, dedupe_key: input.dedupeKey } }
-  async savePushSubscription(input: { endpoint: string }) { return { endpoint: input.endpoint } }
-  async deletePushSubscription(endpoint: string) { return { endpoint } }
+  private assertPushContext(context: FarmOperationContext) { if (context.userId !== this.pushUserId || context.farmId !== this.pushFarmId) throw new Error('FARM_ACCESS_EPOCH_CHANGED') }
+  async savePushSubscription(input: { endpoint: string }, context: FarmOperationContext) { this.assertPushContext(context); this.pushSaves += 1; return { endpoint: input.endpoint } }
+  async deletePushSubscription(endpoint: string, context: FarmOperationContext) { this.assertPushContext(context); this.pushDeletes += 1; return { endpoint } }
 }
-function live(gateway: FakeGateway) { return new SupabaseNotificationsRepository({ gateway, getUserId: async () => actor }) }
+const operationContext = { projectRef: 'test', userId: actor, farmId: farm, generation: 1, token: uid(900), serverEpoch: 1 }
+function live(gateway: FakeGateway) { return new SupabaseNotificationsRepository({ gateway, getUserId: async () => actor, getOperationContext: async () => operationContext, verifyOperationContext: async () => undefined }) }
 function queued(gateway: FakeGateway, storage: StorageLike, offline: () => boolean) { let next = 80; return new QueuedNotificationsRepository(live(gateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'test', storage, createId: () => uid(next++), clock: () => stamp, isOffline: offline }) }
 
 async function run() {
@@ -62,6 +66,8 @@ async function run() {
   const serviceWorker = readFileSync(new URL('../sw.ts', import.meta.url), 'utf8'); assert(serviceWorker.includes("new NavigationRoute(createHandlerBoundToURL('/index.html'))") && serviceWorker.includes('self.skipWaiting()') && serviceWorker.includes('clientsClaim()'), 'The service worker must serve cached index.html for offline navigation and activate promptly.'); assert(serviceWorker.includes('plainObject(parsed) ? parsed : {}') && serviceWorker.includes('notificationText(payload.title, 160') && serviceWorker.includes('notificationText(payload.body, 500'), 'Malformed push payloads must fall back safely and cap notification text.')
   // Group 10: one refresh reads immediately, then shows an item it generated without a render-loop re-fire or stale update.
   let generated = 0; let readsAfterGeneration = 0; let applied: string[] = []; let generatedBellSignals = 0; const stopGeneratedBell = subscribeNotificationBell(() => { generatedBellSignals += 1 }); await refreshNotificationsAfterDueGeneration({ read: async () => { readsAfterGeneration += 1; return generated ? ['new due alert'] : [] }, generateDueItems: async () => { generated += 1; return 'generated' }, onData: (data) => { applied = data }, onReadError: () => { throw new Error('The controlled read should not fail.') }, onGenerated: invalidateNotificationBell, isCurrent: () => true }); stopGeneratedBell(); assert(generated === 1 && readsAfterGeneration === 2 && applied.join(',') === 'new due alert' && generatedBellSignals === 1, 'A successful due scan must trigger exactly one follow-up alerts read and one bell refresh that include its new alert.'); let staleUpdates = 0; await refreshNotificationsAfterDueGeneration({ read: async () => ['ignored'], generateDueItems: async () => 'generated', onData: () => { staleUpdates += 1 }, onReadError: () => { staleUpdates += 1 }, isCurrent: () => false }); assert(staleUpdates === 0, 'An unmounted or superseded alerts refresh must not update state.')
-  console.log('SupabaseNotificationsRepository regression passed (10 coverage groups)')
+  // Group 11: a session replacement at RPC dispatch is rejected before either push write mutates remotely.
+  const switchedPush = new FakeGateway(); switchedPush.pushUserId = other; const switchedPushRepository = live(switchedPush); const pushInput = { endpoint: 'https://push.example.test/a', p256dh: 'key', auth: 'auth', userAgent: 'Farm Rx regression' }; await rejects(() => switchedPushRepository.savePushSubscription(pushInput), 'A later account adopted a push-subscription save.'); await rejects(() => switchedPushRepository.deletePushSubscription(pushInput.endpoint), 'A later account adopted a push-subscription delete.'); assert(switchedPush.pushSaves === 0 && switchedPush.pushDeletes === 0, 'A switched account reached a remote push save or delete mutation.'); const currentPush = new FakeGateway(); await live(currentPush).savePushSubscription(pushInput); await live(currentPush).deletePushSubscription(pushInput.endpoint); assert(currentPush.pushSaves === 1 && currentPush.pushDeletes === 1, 'The captured current account could not save and delete its push subscription.'); const gatewaySource = readFileSync(new URL('./SupabaseNotificationsDataGateway.ts', import.meta.url), 'utf8'); assert((gatewaySource.match(/p_farm_id: context\.farmId/g) ?? []).length === 2, 'Both production push RPC calls must pass the captured farm id alongside the bound user and epoch headers.')
+  console.log('SupabaseNotificationsRepository regression passed (11 coverage groups)')
 }
 void run()

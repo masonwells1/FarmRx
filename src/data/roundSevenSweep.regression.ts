@@ -90,23 +90,23 @@ assert(programApplyConfirmation('link').includes('links it to the application re
 
 // ---- 5. P2-09: durable photo cleanup outbox ----
 {
-  const storage = memory(); const key = scoutingCleanupOutboxKey('sweep')
-  assert(recordScoutingCleanup(storage, key, uid(2), ['farm/f/n/a.jpg', 'farm/f/n/a.jpg', 'farm/f/n/b.jpg'], stamp), 'Recording cleanup paths must succeed and read back.')
+  const storage = memory(); const userId = uid(1); const farmId = uid(2); const key = scoutingCleanupOutboxKey('sweep', userId)
+  assert(recordScoutingCleanup(storage, key, userId, farmId, ['farm/f/n/a.jpg', 'farm/f/n/a.jpg', 'farm/f/n/b.jpg'], stamp), 'Recording cleanup paths must succeed and read back.')
   assert(readScoutingCleanupOutbox(storage, key).map((entry) => entry.path).join(',') === 'farm/f/n/a.jpg,farm/f/n/b.jpg', 'The outbox must dedupe paths durably.')
   let failRemoval = true; const removed: string[][] = []
   const remover = async (paths: string[]) => { if (failRemoval) throw new Error('storage timeout'); removed.push(paths); return paths }
-  await drainScoutingCleanupOutbox(storage, key, uid(2), remover)
+  await drainScoutingCleanupOutbox(storage, key, userId, farmId, remover)
   assert(readScoutingCleanupOutbox(storage, key).length === 2, 'A failed drain must keep every entry for the next retry.')
   failRemoval = false
-  await drainScoutingCleanupOutbox(storage, key, uid(3), remover)
+  await drainScoutingCleanupOutbox(storage, key, userId, uid(3), remover)
   const drainedByOtherFarm = removed.length
   assert(drainedByOtherFarm === 0 && readScoutingCleanupOutbox(storage, key).length === 2, 'Another farm signed in must not drain (or discard) this farm entries.')
-  await drainScoutingCleanupOutbox(storage, key, uid(2), remover)
+  await drainScoutingCleanupOutbox(storage, key, userId, farmId, remover)
   assert(removed.length === 1 && removed[0].length === 2 && readScoutingCleanupOutbox(storage, key).length === 0, 'A successful drain must remove exactly the confirmed paths.')
-  assert(recordScoutingCleanup(storage, key, uid(2), ['farm/f/n/c.jpg', 'farm/f/n/d.jpg'], stamp), 'Re-recording after a drain must succeed.')
-  await drainScoutingCleanupOutbox(storage, key, uid(2), async (paths) => paths.filter((path) => path.endsWith('c.jpg')))
+  assert(recordScoutingCleanup(storage, key, userId, farmId, ['farm/f/n/c.jpg', 'farm/f/n/d.jpg'], stamp), 'Re-recording after a drain must succeed.')
+  await drainScoutingCleanupOutbox(storage, key, userId, farmId, async (paths: string[]) => paths.filter((path: string) => path.endsWith('c.jpg')))
   assert(readScoutingCleanupOutbox(storage, key).map((entry) => entry.path).join(',') === 'farm/f/n/d.jpg', 'A resolved removal that omits a path must keep that path parked (RLS-silent omission).')
-  await drainScoutingCleanupOutbox(storage, key, uid(2), async (paths) => paths)
+  await drainScoutingCleanupOutbox(storage, key, userId, farmId, async (paths: string[]) => paths)
   storage.setItem(key, '{corrupt')
   assert(readScoutingCleanupOutbox(storage, key).length === 0, 'Corrupt outbox bytes must be discarded safely.')
 }
@@ -158,7 +158,7 @@ assert(nullableBoundedDecimal(null, { precision: 14, scale: 4, label: 'x' }) ===
     upsertBudget: unimplemented, patchBudgetInsurance: unimplemented, deleteCostLine: unimplemented, upsertAllocation: unimplemented, deleteAllocation: unimplemented, replaceMatrixSteps: unimplemented, createBudgetWithMatrix: unimplemented, copyBudget: unimplemented,
   }
   const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fields), saveField: async () => { throw new Error('not used') } }
-  const repo = new SupabaseProfitabilityRepository({ gateway, fieldsRepository, getFarmId: async () => farm, createId: () => crypto.randomUUID(), clock: () => stamp })
+  const repo = new SupabaseProfitabilityRepository({ gateway, fieldsRepository, getFarmId: async () => farm, getOperationContext: async () => ({ projectRef: 'test', userId: uid(1), farmId: farm, generation: 1, token: uid(999), serverEpoch: 1 }), verifyOperationContext: async () => undefined, createId: () => crypto.randomUUID(), clock: () => stamp })
   const workspace = await repo.getWorkspace()
   const inventoryLine = workspace.cost_lines.find((line) => line.id === uid(31))
   assert(inventoryLine?.source_kind === 'inventory' && workspace.cost_lines.length === 2, 'A DB-valid inventory-sourced cost line must LOAD instead of blocking the whole module.')

@@ -1,16 +1,22 @@
 import type { StorageLike } from './writeQueue'
+import { captureFarmRevocationFence, ensureQueueFarmGrant, queueFarmRevocationScope, verifyFarmRevocationFence } from './farmRevocationFence'
 
 const blocked = 'Saved changes on this device need attention. Nothing was deleted.'
 const leaseTtlMs = 6_000
+const leaseAcquireTimeoutMs = leaseTtlMs * 2
 const processLocks = new Map<string, Promise<void>>()
 const changeListeners = new Set<(key: string) => void>()
 let changeChannel: BroadcastChannel | null = null
 let storageListening = false
 
 function pause(milliseconds: number) { return new Promise<void>((resolve) => setTimeout(resolve, milliseconds)) }
-function expiry(raw: string | null) {
+function expiry(raw: string | null, now: number) {
   if (!raw) return 0
-  try { const value = JSON.parse(raw) as { expiresAt?: unknown }; return typeof value.expiresAt === 'number' ? value.expiresAt : 0 } catch { return 0 }
+  try {
+    const value = JSON.parse(raw) as { expiresAt?: unknown }
+    const expiresAt = value.expiresAt
+    return typeof expiresAt === 'number' && Number.isSafeInteger(expiresAt) && expiresAt > now && expiresAt <= now + leaseTtlMs + 1_000 ? expiresAt : 0
+  } catch { return 0 }
 }
 
 async function serial<T>(key: string, task: () => Promise<T>): Promise<T> {
@@ -27,6 +33,8 @@ async function serial<T>(key: string, task: () => Promise<T>): Promise<T> {
 async function leased<T>(key: string, storage: StorageLike, createId: () => string, task: (verify: () => void) => Promise<T>): Promise<T> {
   const leaseKey = `${key}:lease`
   const token = createId()
+  const acquisitionStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  const acquisitionElapsed = () => (typeof performance !== 'undefined' ? performance.now() : Date.now()) - acquisitionStartedAt
   let lease = ''
   const owns = () => storage.getItem(leaseKey) === lease
   const claim = () => {
@@ -35,7 +43,9 @@ async function leased<T>(key: string, storage: StorageLike, createId: () => stri
     return owns()
   }
   while (true) {
-    const remaining = expiry(storage.getItem(leaseKey)) - Date.now()
+    if (acquisitionElapsed() > leaseAcquireTimeoutMs) throw new Error(blocked)
+    const now = Date.now()
+    const remaining = expiry(storage.getItem(leaseKey), now) - now
     if (remaining > 0) { await pause(Math.max(20, Math.min(100, remaining))); continue }
     claim()
     // localStorage has no compare-and-swap. A short arbitration window lets
@@ -76,12 +86,31 @@ function ensureChangeFeed() {
 
 export function subscribeQueueTransactions(listener: (key: string) => void) { ensureChangeFeed(); changeListeners.add(listener); return () => changeListeners.delete(listener) }
 
+/** Cross-tab transaction for device state that is not a write queue. It uses
+ * the same Web Locks/localStorage fallback as queue transactions without
+ * applying a farm fence or publishing a queue-change notification. */
+export async function coordinatedDeviceTransaction<T>(key: string, storage: StorageLike, createId: () => string, task: (verify: () => void) => Promise<T>): Promise<T> {
+  return serial(key, async () => {
+    const lockName = `farm-rx-device:${key}`
+    if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(lockName, async () => task(() => undefined))
+    return leased(key, storage, createId, task)
+  })
+}
+
 export async function queueTransaction<T>(key: string, storage: StorageLike, createId: () => string, task: (verify: () => void) => Promise<T>): Promise<T> {
   let touched = false
   const result = await serial(key, async () => {
+    const scope = queueFarmRevocationScope(key)
+    if (scope) ensureQueueFarmGrant(storage, scope)
+    const fence = scope ? captureFarmRevocationFence(storage, scope) : null
+    const verified = (coordination?: () => void) => {
+      coordination?.()
+      if (fence) verifyFarmRevocationFence(storage, fence)
+      touched = true
+    }
     const lockName = `farm-rx-queue:${key}`
-    if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(lockName, async () => task(() => { touched = true }))
-    return leased(key, storage, createId, (verify) => task(() => { verify(); touched = true }))
+    if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(lockName, async () => { verified(); return task(() => verified()) })
+    return leased(key, storage, createId, (verify) => { verified(verify); return task(() => verified(verify)) })
   })
   if (touched) publish(key)
   return result

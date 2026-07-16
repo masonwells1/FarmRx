@@ -3,6 +3,7 @@ import type { BudgetCostLineWrite, CopyBudgetInput, ProfitabilityDataGateway, Pr
 import type { BudgetFieldAllocation, CropBudget, InsuranceBudgetPatch } from './profitability'
 import { DELETE_PERMISSION_MESSAGE, SAVE_DURABILITY_UPDATE_MESSAGE } from './saveDurability'
 import { optimisticSave } from './optimisticSave'
+import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
 
 function rows(data: unknown, error: { message: string } | null): unknown[] { if (error) throw error; if (!Array.isArray(data)) throw new Error('Farm Rx could not load the complete profitability workspace.'); return data }
 function row(data: unknown, error: { message: string } | null): unknown { if (error) throw error; if (!data || typeof data !== 'object') throw new Error('Farm Rx could not confirm the profitability save. Please try again.'); return data }
@@ -22,13 +23,10 @@ export function insuranceColumns(patch: InsuranceBudgetPatch) {
   const { rp_coverage_pct, rp_aph_yield, rp_projected_price, rp_premium_per_acre } = patch
   return { rp_coverage_pct, rp_aph_yield, rp_projected_price, rp_premium_per_acre }
 }
-async function confirmDelete(table: 'budget_cost_lines' | 'budget_field_allocations', farmId: string, id: string) {
-  const deleted = await supabase.from(table).delete().eq('id', id).eq('farm_id', farmId).select('id')
+async function confirmDelete(table: 'budget_cost_lines' | 'budget_field_allocations', farmId: string, id: string, context: FarmOperationContext) {
+  const deleted = await bindFarmOperationRequest(supabase.from(table).delete().eq('id', id).eq('farm_id', farmId).select('id'), context)
   if (deleted.error) throw deleted.error
   if (Array.isArray(deleted.data) && deleted.data.some((row) => row.id === id)) return id
-  const existing = await supabase.from(table).select('id').eq('id', id).eq('farm_id', farmId).maybeSingle()
-  if (existing.error) throw existing.error
-  if (!existing.data) return id
   throw new Error(DELETE_PERMISSION_MESSAGE)
 }
 
@@ -55,22 +53,22 @@ export class SupabaseProfitabilityDataGateway implements ProfitabilityDataGatewa
     if (permission.data !== true) throw new Error('PROFITABILITY_PRIVATE_ACCESS_DENIED')
     return { budgets: rows(budgets.data, budgets.error), cost_lines: rows(cost_lines.data, cost_lines.error), matrix_steps: rows(matrix_steps.data, matrix_steps.error), allocations: rows(allocations.data, allocations.error) }
   }
-  async upsertBudget(farmId: string, value: CropBudget) { return optimisticSave('crop_budgets', farmId, value.id, budgetColumns({ ...value, farm_id: farmId }), value.updated_at) }
-  async patchBudgetInsurance(farmId: string, budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt?: string | null) { return optimisticSave('crop_budgets', farmId, budgetId, insuranceColumns(patch), expectedUpdatedAt) }
-  async upsertCostLine(farmId: string, value: BudgetCostLineWrite) { return optimisticSave('budget_cost_lines', farmId, value.id, costLineColumns({ ...value, farm_id: farmId }), value.updated_at) }
-  async deleteCostLine(farmId: string, id: string) { return confirmDelete('budget_cost_lines', farmId, id) }
-  async upsertAllocation(farmId: string, value: BudgetFieldAllocation) { return optimisticSave('budget_field_allocations', farmId, value.id, allocationColumns({ ...value, farm_id: farmId }), value.updated_at) }
-  async deleteAllocation(farmId: string, id: string) { return confirmDelete('budget_field_allocations', farmId, id) }
-  async replaceMatrixSteps(input: ReplaceMatrixStepsInput) { const encode = (steps: import('./profitability').ProfitabilityMatrixStep[]) => steps.slice().sort((a, b) => a.axis.localeCompare(b.axis) || a.sort_order - b.sort_order || a.id.localeCompare(b.id)).map(({ id, budget_id, axis, value, sort_order }) => ({ id, budget_id, axis, value, sort_order })); const { data, error } = await supabase.rpc('replace_profitability_matrix_steps', { p_farm_id: input.farmId, p_budget_id: input.budgetId, p_steps: encode(input.steps), p_expected_steps: input.expectedSteps === undefined ? null : encode(input.expectedSteps ?? []) }); if (error && (error.code === 'PGRST202' || error.code === '42883')) throw new Error(SAVE_DURABILITY_UPDATE_MESSAGE); return rows(data, error) }
-  async createBudgetWithMatrix(input: { farmId: string; budget: CropBudget; matrixSteps: import('./profitability').ProfitabilityMatrixStep[] }) { const { data, error } = await supabase.rpc('create_crop_budget_with_matrix', { p_farm_id: input.farmId, p_budget: budgetColumns({ ...input.budget, farm_id: input.farmId }), p_matrix_steps: input.matrixSteps.map(({ id, budget_id, axis, value, sort_order }) => ({ id, budget_id, axis, value, sort_order })) }); if (error && (error.code === 'PGRST202' || error.code === '42883')) throw new Error(SAVE_DURABILITY_UPDATE_MESSAGE); return row(data, error) }
+  async upsertBudget(farmId: string, value: CropBudget, context: FarmOperationContext) { return optimisticSave('crop_budgets', farmId, value.id, budgetColumns({ ...value, farm_id: farmId }), value.updated_at, context) }
+  async patchBudgetInsurance(farmId: string, budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt: string | null | undefined, context: FarmOperationContext) { return optimisticSave('crop_budgets', farmId, budgetId, insuranceColumns(patch), expectedUpdatedAt, context) }
+  async upsertCostLine(farmId: string, value: BudgetCostLineWrite, context: FarmOperationContext) { return optimisticSave('budget_cost_lines', farmId, value.id, costLineColumns({ ...value, farm_id: farmId }), value.updated_at, context) }
+  async deleteCostLine(farmId: string, id: string, context: FarmOperationContext) { return confirmDelete('budget_cost_lines', farmId, id, context) }
+  async upsertAllocation(farmId: string, value: BudgetFieldAllocation, context: FarmOperationContext) { return optimisticSave('budget_field_allocations', farmId, value.id, allocationColumns({ ...value, farm_id: farmId }), value.updated_at, context) }
+  async deleteAllocation(farmId: string, id: string, context: FarmOperationContext) { return confirmDelete('budget_field_allocations', farmId, id, context) }
+  async replaceMatrixSteps(input: ReplaceMatrixStepsInput) { const encode = (steps: import('./profitability').ProfitabilityMatrixStep[]) => steps.slice().sort((a, b) => a.axis.localeCompare(b.axis) || a.sort_order - b.sort_order || a.id.localeCompare(b.id)).map(({ id, budget_id, axis, value, sort_order }) => ({ id, budget_id, axis, value, sort_order })); const { data, error } = await bindFarmOperationRequest(supabase.rpc('replace_profitability_matrix_steps', { p_farm_id: input.farmId, p_budget_id: input.budgetId, p_steps: encode(input.steps), p_expected_steps: input.expectedSteps === undefined ? null : encode(input.expectedSteps ?? []) }), input.context); if (error && (error.code === 'PGRST202' || error.code === '42883')) throw new Error(SAVE_DURABILITY_UPDATE_MESSAGE); return rows(data, error) }
+  async createBudgetWithMatrix(input: { farmId: string; budget: CropBudget; matrixSteps: import('./profitability').ProfitabilityMatrixStep[]; context: FarmOperationContext }) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('create_crop_budget_with_matrix', { p_farm_id: input.farmId, p_budget: budgetColumns({ ...input.budget, farm_id: input.farmId }), p_matrix_steps: input.matrixSteps.map(({ id, budget_id, axis, value, sort_order }) => ({ id, budget_id, axis, value, sort_order })) }), input.context); if (error && (error.code === 'PGRST202' || error.code === '42883')) throw new Error(SAVE_DURABILITY_UPDATE_MESSAGE); return row(data, error) }
   async copyBudget(input: CopyBudgetInput) {
-    const { data, error } = await supabase.rpc('copy_crop_budget_durable', {
+    const { data, error } = await bindFarmOperationRequest(supabase.rpc('copy_crop_budget_durable', {
       p_farm_id: input.farmId,
       p_source_id: input.sourceId,
       p_budget: budgetColumns({ ...input.budget, farm_id: input.farmId }),
       p_cost_lines: input.costLines.map((line) => costLineColumns({ ...line, farm_id: input.farmId })),
       p_matrix_steps: input.matrixSteps.map(({ id, budget_id, axis, value, sort_order }) => ({ id, budget_id, axis, value, sort_order })),
-    })
+    }), input.context)
     if (error && (error.code === 'PGRST202' || error.code === '42883')) throw new Error(SAVE_DURABILITY_UPDATE_MESSAGE)
     return row(data, error)
   }

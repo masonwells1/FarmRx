@@ -1,27 +1,44 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+
+function Invoke-FoundationLane([scriptblock]$Command, [string]$Failure) {
+  $global:LASTEXITCODE = 0
+  & $Command
+  if ($LASTEXITCODE -ne 0) { throw $Failure }
+}
+
+function Assert-IntermediateLaneFailureIsFatal {
+  $expected = 'Controlled intermediate foundation lane failed.'
+  $detected = $false
+  try {
+    Invoke-FoundationLane { & powershell -NoProfile -Command 'exit 23' } $expected
+  } catch {
+    if ($_.Exception.Message -ne $expected) { throw }
+    $detected = $true
+  }
+  if (-not $detected) { throw 'Foundation orchestrator ignored a controlled intermediate failure.' }
+  Write-Output 'Foundation orchestrator intermediate-failure probe: PASS'
+}
+
 Push-Location $root
 try {
-  & npx tsc -b --force
-  if ($LASTEXITCODE -ne 0) { throw 'Forced TypeScript failed.' }
-  & npm run regression
-  if ($LASTEXITCODE -ne 0) { throw 'Fast regression suite failed.' }
-  & npm run build
-  if ($LASTEXITCODE -ne 0) { throw 'Production build failed.' }
-  & npm audit --audit-level=high
-  if ($LASTEXITCODE -ne 0) { throw 'Dependency audit failed.' }
-  & node scripts/foundation-static-guards.mjs
-  if ($LASTEXITCODE -ne 0) { throw 'Foundation static guard failed.' }
-  & node scripts/verify-foundation-mutations.mjs
-  if ($LASTEXITCODE -ne 0) { throw 'Foundation mutation drill failed.' }
-  & (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1')
-  & (Join-Path $PSScriptRoot 'verify-0034-disposable.ps1')
-  & (Join-Path $PSScriptRoot 'verify-0035-disposable.ps1')
-  & (Join-Path $PSScriptRoot 'verify-0036-disposable.ps1')
-  & (Join-Path $PSScriptRoot 'verify-0037-disposable.ps1')
-  & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1')
-  & npm run test:e2e
-  if ($LASTEXITCODE -ne 0) { throw 'Built-browser foundation suite failed.' }
+  Assert-IntermediateLaneFailureIsFatal
+  Invoke-FoundationLane { & npx tsc -b --force } 'Forced TypeScript failed.'
+  Invoke-FoundationLane { & npm run regression } 'Fast regression suite failed.'
+  Invoke-FoundationLane { & npm run build } 'Production build failed.'
+  Invoke-FoundationLane { & npm audit --audit-level=high } 'Dependency audit failed.'
+  Invoke-FoundationLane { & node scripts/foundation-static-guards.mjs } 'Foundation static guard failed.'
+  Invoke-FoundationLane { & node scripts/verify-foundation-mutations.mjs } 'Foundation mutation drill failed.'
+  Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1') } 'Disposable 0033 proof failed.'
+  Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0034-disposable.ps1') } 'Disposable 0034 proof failed.'
+  Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0035-disposable.ps1') } 'Disposable 0035 proof failed.'
+  Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0036-disposable.ps1') } 'Disposable 0036 proof failed.'
+  Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0037-disposable.ps1') } 'Disposable 0037 proof failed.'
+  Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0039-disposable.ps1') } 'Disposable 0039 proof failed.'
+  Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0040-disposable.ps1') } 'Disposable 0040 proof failed.'
+  Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0041-disposable.ps1') } 'Disposable 0041 proof failed.'
+  Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') } 'Disposable RLS role matrix failed.'
+  Invoke-FoundationLane { & npm run test:e2e } 'Built-browser foundation suite failed.'
   Write-Output 'Farm Rx foundation gate: PASS'
 } finally {
   Pop-Location

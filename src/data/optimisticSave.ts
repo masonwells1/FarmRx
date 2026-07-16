@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabaseClient'
+import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
 
 export const STALE_WRITE_CODE = 'FARM_RX_STALE_WRITE'
 export const STALE_WRITE_MESSAGE = 'This record changed in another tab or device. Reload before saving again.'
@@ -31,12 +32,12 @@ async function current(table: string, farmId: string, idColumn: string, id: stri
 
 /** Compare-and-swap save for mutable farm rows, with identical lost-response
  * retries treated as idempotent success. */
-export async function optimisticSave(table: string, farmId: string, id: string, columns: Row, expectedUpdatedAt: string | null | undefined, idColumn = 'id'): Promise<Row> {
+export async function optimisticSave(table: string, farmId: string, id: string, columns: Row, expectedUpdatedAt: string | null | undefined, context: FarmOperationContext, idColumn = 'id'): Promise<Row> {
   const existing = await current(table, farmId, idColumn, id)
   if (existing) {
     if (sameOptimisticWrite(existing, columns)) return existing
     if (!expectedUpdatedAt || existing.updated_at !== expectedUpdatedAt) throw new StaleWriteConflictError()
-    const updated = await supabase.from(table).update(columns).eq('farm_id', farmId).eq(idColumn, id).eq('updated_at', expectedUpdatedAt).select('*').maybeSingle()
+    const updated = await bindFarmOperationRequest(supabase.from(table).update(columns).eq('farm_id', farmId).eq(idColumn, id).eq('updated_at', expectedUpdatedAt).select('*').maybeSingle(), context)
     if (updated.error) throw updated.error
     if (updated.data) return updated.data as Row
     const after = await current(table, farmId, idColumn, id)
@@ -44,7 +45,7 @@ export async function optimisticSave(table: string, farmId: string, id: string, 
     throw new StaleWriteConflictError()
   }
 
-  const inserted = await supabase.from(table).insert(columns).select('*').maybeSingle()
+  const inserted = await bindFarmOperationRequest(supabase.from(table).insert(columns).select('*').maybeSingle(), context)
   if (!inserted.error && inserted.data) return inserted.data as Row
   if (inserted.error?.code !== '23505') throw inserted.error ?? new Error('Farm Rx could not confirm that save.')
   const after = await current(table, farmId, idColumn, id)

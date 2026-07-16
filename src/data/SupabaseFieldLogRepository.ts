@@ -1,5 +1,6 @@
 import type { FieldLogDataGateway } from './FieldLogDataGateway'
 import { validateFieldLogDraft, type FarmViewerRole, type FieldLogData, type FieldLogEntry, type FieldLogEntryDraft, type FieldLogRepository } from './fieldLog'
+import type { FarmOperationContext } from './farmOperationContext'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const fail = (): never => { throw new Error('Farm Rx found invalid field log data. Please contact support.') }
@@ -23,16 +24,17 @@ export function mapFieldLogDeleteEcho(value: unknown, expected: { id: string }) 
 export function canEditFieldLog(role: FarmViewerRole) { return role === 'owner' || role === 'manager' || role === 'worker' }
 
 export class SupabaseFieldLogRepository implements FieldLogRepository {
-  constructor(private readonly d: { gateway: FieldLogDataGateway; getFarmId: () => Promise<string>; getUserId: () => Promise<string>; createId: () => string }) {}
+  constructor(private readonly d: { gateway: FieldLogDataGateway; getFarmId: () => Promise<string>; getUserId: () => Promise<string>; getOperationContext: () => Promise<FarmOperationContext>; verifyOperationContext: (expected: FarmOperationContext) => Promise<void>; createId: () => string }) {}
   async getData(fieldId?: string): Promise<FieldLogData> {
     const [farmId, userId] = await Promise.all([this.d.getFarmId(), this.d.getUserId()]); const [entries, rawViewer] = await Promise.all([this.d.gateway.loadEntries(farmId, fieldId), this.d.gateway.loadViewerRole(farmId, userId)])
     const viewer = object(rawViewer); const role = text(viewer.role, 20); if (!roles.has(role as FarmViewerRole)) fail()
     return { entries: entries.map((entry) => mapFieldLogEntry(entry, { farmId })).filter((entry) => !fieldId || entry.field_id === fieldId), viewer: { user_id: userId, role: role as FarmViewerRole } }
   }
-  async saveEntry(draft: FieldLogEntryDraft) { return this.saveEntryOperation(draft, this.d.createId()) }
-  async saveEntryOperation(draft: FieldLogEntryDraft, operationId: string) {
+  async saveEntry(draft: FieldLogEntryDraft) { return this.saveEntryOperation(draft, this.d.createId(), await this.d.getOperationContext()) }
+  async saveEntryOperation(draft: FieldLogEntryDraft, operationId: string, context: FarmOperationContext) {
     if (!uuid.test(operationId) || validateFieldLogDraft(draft) !== null) fail()
-    const farmId = await this.d.getFarmId(); return mapFieldLogEntry(await this.d.gateway.saveEntry({ farmId, operationId, entry: draft }), { farmId, entry: draft })
+    await this.d.verifyOperationContext(context); const farmId = context.farmId; const saved = await this.d.gateway.saveEntry({ farmId, operationId, entry: draft }, context); await this.d.verifyOperationContext(context); return mapFieldLogEntry(saved, { farmId, entry: draft })
   }
-  async deleteEntry(idValue: string) { if (!uuid.test(idValue)) fail(); const farmId = await this.d.getFarmId(); mapFieldLogDeleteEcho(await this.d.gateway.deleteEntry({ farmId, entryId: idValue }), { id: idValue }); return { id: idValue, deleted: true as const } }
+  async deleteEntry(idValue: string) { return this.deleteEntryOperation(idValue, await this.d.getOperationContext()) }
+  async deleteEntryOperation(idValue: string, context: FarmOperationContext) { if (!uuid.test(idValue)) fail(); await this.d.verifyOperationContext(context); const farmId = context.farmId; const deleted = await this.d.gateway.deleteEntry({ farmId, entryId: idValue }, context); await this.d.verifyOperationContext(context); mapFieldLogDeleteEcho(deleted, { id: idValue }); return { id: idValue, deleted: true as const } }
 }

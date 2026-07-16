@@ -7,9 +7,13 @@ import { roundDecimalHalfUp } from './decimal'
 import type { FieldsData, FieldsRepository } from './fields'
 import type { StorageLike } from './writeQueue'
 import { getSyncStatus } from './syncStatus'
+import type { FarmOperationContext } from './farmOperationContext'
+import { queueTransaction } from './queueTransaction'
+import { resetFarmGrantFromLive } from './farmRevocationFence'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const farm = uid(1); const otherFarm = uid(2); const actor = uid(3); const cropId = uid(4); const stamp = '2026-07-12T12:30:00.123456+00:00'
+const operationContext: FarmOperationContext = { projectRef: 'test', userId: actor, farmId: farm, generation: 1, token: uid(900), serverEpoch: 1 }
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 async function rejects(action: () => Promise<unknown>, message: string) { let failed = false; try { await action() } catch { failed = true }; assert(failed, message) }
 function memory(): StorageLike & { values: Map<string, string> } { const values = new Map<string, string>(); return { values, getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: (key) => values.delete(key) } }
@@ -31,7 +35,7 @@ class FakeGateway implements HarvestDataGateway {
     return structuredClone(this.mutate(result))
   }
 }
-function live(gateway: FakeGateway, farmId = farm, roleFields = farm) { let next = 100; return new SupabaseHarvestRepository({ gateway, fieldsRepository: fieldsRepository(roleFields), getFarmId: async () => farmId, getUserId: async () => actor, createId: () => uid(next++) }) }
+function live(gateway: FakeGateway, farmId = farm, roleFields = farm) { let next = 100; const context = { ...operationContext, farmId }; return new SupabaseHarvestRepository({ gateway, fieldsRepository: fieldsRepository(roleFields), getFarmId: async () => farmId, getUserId: async () => actor, getOperationContext: async () => context, verifyOperationContext: async () => undefined, createId: () => uid(next++) }) }
 
 async function run() {
   // Group 1: exact four-key harvest write uses SQL decimal scales and preserves projected values.
@@ -45,7 +49,7 @@ async function run() {
   const altered = new FakeGateway(); altered.mutate = (value) => ({ ...(value as object), actual_price_per_bu: 4.6 }); await rejects(() => live(altered).saveHarvest(draft()), 'An altered canonical harvest value must be rejected.')
 
   // Group 3: receipt replay uses the same operation ID, while a changed echoed ID remains unsafe.
-  const replayGateway = new FakeGateway(); const replayLive = live(replayGateway); const operation = uid(30); await replayLive.saveHarvestOperation(draft(), operation); await replayLive.saveHarvestOperation(draft(), operation); assert(replayGateway.saves.every((call) => call.operationId === operation), 'Idempotent replay must reuse one operation receipt ID.')
+  const replayGateway = new FakeGateway(); const replayLive = live(replayGateway); const operation = uid(30); await replayLive.saveHarvestOperation(draft(), operation, operationContext); await replayLive.saveHarvestOperation(draft(), operation, operationContext); assert(replayGateway.saves.every((call) => call.operationId === operation), 'Idempotent replay must reuse one operation receipt ID.')
   const store = memory(); let offline = true; let next = 40; const queued = new QueuedHarvestRepository(replayLive, { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'test', storage: store, createId: () => uid(next++), clock: () => stamp, isOffline: () => offline }); const pending = await queued.saveHarvest(draft()); const queue = new HarvestWriteQueue(store, harvestWriteQueueKey('test', actor, farm)); const entry = queue.read().entries[0]; assert(pending.pending && entry.operationId !== operation, 'Offline harvest saves must remain visibly pending with their own receipt ID.'); offline = false; await queued.inspectAndReplay(); queue.append(entry); await queued.inspectAndReplay(); assert(replayGateway.saves.filter((call) => call.operationId === entry.operationId).length === 2, 'Repeated queued replay must keep the original receipt ID.')
   offline = true; await queued.saveHarvest({ ...draft(), crop_assignment_id: uid(41) }); replayGateway.mutate = (value) => ({ ...(value as object), id: uid(42) }); offline = false; await queued.inspectAndReplay(); assert(queue.read().entries.length === 1, 'A different echoed ID must leave the queued harvest entry blocked.'); replayGateway.mutate = (value) => value
 
@@ -62,8 +66,26 @@ async function run() {
   // Group 7: transport and dependency failures stay pending; definite failures are blocked.
   const queueGateway = new FakeGateway(); const queueStore = memory(); let queueOffline = true; const queueRepository = new QueuedHarvestRepository(live(queueGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'queue-errors', storage: queueStore, createId: (() => { let id = 60; return () => uid(id++) })(), clock: () => stamp, isOffline: () => queueOffline }); await queueRepository.saveHarvest(draft()); queueOffline = false; queueGateway.failure = new TypeError('fetch failed'); await queueRepository.inspectAndReplay(); assert(getSyncStatus().kind === 'pending', 'Transport failures must leave queued harvests pending.'); queueGateway.failure = new Error('crop assignment does not belong to this farm'); await queueRepository.inspectAndReplay(); assert(getSyncStatus().kind === 'pending', 'A harvest waiting for its replayed crop assignment must remain retryable.'); queueGateway.failure = new Error('validation failed'); await queueRepository.inspectAndReplay(); assert(getSyncStatus().kind === 'blocked', 'Definite harvest failures must block the queue.')
 
-  // Group 8: pure yield, plan delta, and revenue math covers over, under, invalid acres, none, and price fallback.
+  // Group 8: a delayed save remains bound to the exact account and grant epoch captured before the queue lock.
+  for (const scenario of ['account-switch', 'same-scope-regrant'] as const) {
+    const raceStore = memory(); const projectRef = `race-${scenario}`; const scope = { projectRef, userId: actor, farmId: farm }; resetFarmGrantFromLive(raceStore, scope, 1, stamp)
+    let activeUser = actor; let writerCalls = 0; let sequence = 700
+    let entered!: () => void; const enteredPromise = new Promise<void>((resolve) => { entered = resolve })
+    let release!: () => void; const releasePromise = new Promise<void>((resolve) => { release = resolve })
+    let captured!: () => void; const capturedPromise = new Promise<void>((resolve) => { captured = resolve })
+    const queueKey = harvestWriteQueueKey(projectRef, actor, farm)
+    const blocker = queueTransaction(queueKey, raceStore, () => uid(sequence++), async () => { entered(); await releasePromise }); await enteredPromise
+    const raceLive = { saveHarvestOperation: async (value: HarvestDraft) => { writerCalls += 1; return { ...canonical(value), pending: false } } }
+    const raceRepository = new QueuedHarvestRepository(raceLive as unknown as SupabaseHarvestRepository, { getContext: async () => { const context = { userId: activeUser, farmId: farm }; captured(); return context }, projectRef, storage: raceStore, createId: () => uid(sequence++), clock: () => stamp, isOffline: () => false })
+    const saving = raceRepository.saveHarvest(draft()); await capturedPromise
+    if (scenario === 'account-switch') activeUser = uid(8); else resetFarmGrantFromLive(raceStore, scope, 1, stamp)
+    release(); await blocker
+    await rejects(() => saving, `Harvest must reject a delayed ${scenario} operation.`)
+    assert(writerCalls === 0 && new HarvestWriteQueue(raceStore, queueKey).read().entries.length === 0, `Harvest ${scenario} race reached the writer or queue.`)
+  }
+
+  // Group 9: pure yield, plan delta, and revenue math covers over, under, invalid acres, none, and price fallback.
   assert(yieldPerAcre(1200, 10) === 120 && yieldPerAcre(null, 10) === null && yieldPerAcre(1200, 0) === null && yieldPerAcre(1200, Number.POSITIVE_INFINITY) === null, 'Yield per acre must never divide by zero or produce a non-finite value.'); assert(yieldDelta(120, 112) === 8 && yieldDelta(100, 112) === -12 && yieldDelta(100, null) === null, 'Yield delta must distinguish over, under, and no expected yield.'); const actualRevenue = harvestRevenue(1000, 5, 4); const expectedRevenue = harvestRevenue(1000, null, 4); assert(actualRevenue?.value === 5000 && actualRevenue?.priceSource === 'actual' && expectedRevenue?.value === 4000 && expectedRevenue?.priceSource === 'expected' && harvestRevenue(1000, null, null) === null, 'Revenue must use actual price first, then expected price, and remain blank without either.')
-  console.log('SupabaseHarvestRepository regression passed (8 coverage groups)')
+  console.log('SupabaseHarvestRepository regression passed (9 coverage groups)')
 }
 void run()

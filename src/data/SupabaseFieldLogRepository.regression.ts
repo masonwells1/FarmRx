@@ -19,7 +19,7 @@ class FakeGateway implements FieldLogDataGateway {
   async saveEntry(input: { farmId: string; operationId: string; entry: FieldLogEntryDraft }) { this.saves.push({ operationId: input.operationId, entry: structuredClone(input.entry) }); const existing = this.entries.find((entry) => (entry as { id: string }).id === input.entry.id); const result = existing ?? canonical(input.entry, input.farmId); if (!existing) this.entries.push(result); return structuredClone(this.mutateSave(result)) }
   async deleteEntry(input: { farmId: string; entryId: string }) { this.deletes.push(input.entryId); this.entries = this.entries.filter((entry) => (entry as { farm_id: string; id: string }).farm_id !== input.farmId || (entry as { id: string }).id !== input.entryId); return structuredClone(this.mutateDelete({ id: input.entryId, deleted: true })) }
 }
-function live(gateway: FakeGateway, farmId = farm) { let next = 100; return new SupabaseFieldLogRepository({ gateway, getFarmId: async () => farmId, getUserId: async () => actor, createId: () => uid(next++) }) }
+function live(gateway: FakeGateway, farmId = farm) { let next = 100; const operationContext = { projectRef: 'test', userId: actor, farmId, generation: 1, token: uid(900), serverEpoch: 1 }; return new SupabaseFieldLogRepository({ gateway, getFarmId: async () => farmId, getUserId: async () => actor, getOperationContext: async () => operationContext, verifyOperationContext: async () => undefined, createId: () => uid(next++) }) }
 
 async function run() {
   // Group 1: canonical rainfall and note writes preserve farm, field, type, and values.

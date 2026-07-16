@@ -16,16 +16,20 @@ import { SupabaseFieldsDataGateway } from './SupabaseFieldsDataGateway'
 import { SupabaseFieldsRepository } from './SupabaseFieldsRepository'
 import { createFieldLocationClient, SupabaseFieldLocationGateway } from './fieldLocation'
 import type { FieldsRepository } from './fields'
+import { captureFarmOperationContext, verifyFarmOperationContext } from './farmOperationContext'
 
 async function currentFarmId() {
   return (await currentFarmContext()).farmId
 }
 
-const liveFields = new SupabaseFieldsRepository({ gateway: new SupabaseFieldsDataGateway(), getFarmId: currentFarmId, createId: () => crypto.randomUUID(), clock: () => new Date().toISOString() })
 const storage = localStorage
+const fieldsGetContext = async () => ({ userId: await currentUserId(), farmId: await currentFarmId() })
+const getFieldsOperationContext = async () => captureFarmOperationContext(storage, supabaseConfig.projectRef, await fieldsGetContext())
+const verifyFieldsOperationContext = async (expected: Awaited<ReturnType<typeof getFieldsOperationContext>>) => verifyFarmOperationContext(storage, expected, await getFieldsOperationContext())
+const liveFields = new SupabaseFieldsRepository({ gateway: new SupabaseFieldsDataGateway(), getFarmId: currentFarmId, getOperationContext: getFieldsOperationContext, verifyOperationContext: verifyFieldsOperationContext, createId: () => crypto.randomUUID(), clock: () => new Date().toISOString() })
 
 const queuedFields = new QueuedFieldsRepository(liveFields, {
-  getContext: async () => ({ userId: await currentUserId(), farmId: await currentFarmId() }),
+  getContext: fieldsGetContext,
   projectRef: supabaseConfig.projectRef,
   storage,
   createId: () => crypto.randomUUID(),
@@ -58,7 +62,7 @@ export const replayHarvestQueue = () => liveHarvest.replayHarvestQueue()
 const livePrograms = createSupabaseProgramsServices({ getFarmId: currentFarmId, getUserId: currentUserId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const programsRepository = livePrograms.programsRepository
 export const replayProgramsQueue = () => livePrograms.replayProgramsQueue()
-const dueProgramItems = new DueProgramItemsService({ gateway: new SupabaseDueProgramItemsGateway(), getFarmId: currentFarmId, createId: () => crypto.randomUUID() })
+const dueProgramItems = new DueProgramItemsService({ gateway: new SupabaseDueProgramItemsGateway(), getFarmId: currentFarmId, getOperationContext: getFieldsOperationContext, verifyOperationContext: verifyFieldsOperationContext, createId: () => crypto.randomUUID() })
 /** Best-effort only: later refreshes safely retry if this scan cannot reach Supabase. */
 export const generateDueProgramItems = () => dueProgramItems.generate()
 const liveScouting = createSupabaseScoutingServices({ getFarmId: currentFarmId, getUserId: currentUserId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })

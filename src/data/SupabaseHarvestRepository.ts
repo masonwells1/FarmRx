@@ -1,5 +1,6 @@
 import type { FieldsRepository } from './fields'
 import type { HarvestDataGateway } from './HarvestDataGateway'
+import type { FarmOperationContext } from './farmOperationContext'
 import { roundDecimalHalfUp } from './decimal'
 import { canEditHarvest, validateHarvestDraft, type FarmViewerRole, type HarvestData, type HarvestDraft, type HarvestRecord, type HarvestRepository } from './harvest'
 
@@ -23,7 +24,7 @@ export function mapHarvestRecord(value: unknown, expected?: { farmId: string; dr
 }
 
 export class SupabaseHarvestRepository implements HarvestRepository {
-  constructor(private readonly d: { gateway: HarvestDataGateway; fieldsRepository: FieldsRepository; getFarmId: () => Promise<string>; getUserId: () => Promise<string>; createId: () => string }) {}
+  constructor(private readonly d: { gateway: HarvestDataGateway; fieldsRepository: FieldsRepository; getFarmId: () => Promise<string>; getUserId: () => Promise<string>; getOperationContext: () => Promise<FarmOperationContext>; verifyOperationContext: (expected: FarmOperationContext) => Promise<void>; createId: () => string }) {}
   private async viewer(farmId: string, userId: string) {
     const raw = object(await this.d.gateway.loadViewerRole(farmId, userId)); const role = raw.role
     if (typeof role !== 'string' || !roles.has(role as FarmViewerRole)) fail()
@@ -34,12 +35,16 @@ export class SupabaseHarvestRepository implements HarvestRepository {
     if (fieldsData.farm.id !== farmId) fail()
     return { fieldsData, viewer: await this.viewer(farmId, userId) }
   }
-  async saveHarvest(draft: HarvestDraft) { return this.saveHarvestOperation(draft, this.d.createId()) }
-  async saveHarvestOperation(draft: HarvestDraft, operationId: string) {
+  async saveHarvest(draft: HarvestDraft) { return this.saveHarvestOperation(draft, this.d.createId(), await this.d.getOperationContext()) }
+  async saveHarvestOperation(draft: HarvestDraft, operationId: string, context: FarmOperationContext) {
     if (!uuid.test(operationId) || validateHarvestDraft(draft) !== null) fail()
-    const [farmId, userId] = await Promise.all([this.d.getFarmId(), this.d.getUserId()])
+    await this.d.verifyOperationContext(context)
+    const { farmId, userId } = context
     if (!canEditHarvest((await this.viewer(farmId, userId)).role)) throw new Error('You have view-only access to harvest records.')
+    await this.d.verifyOperationContext(context)
     const entry = canonicalDraft(draft)
-    return mapHarvestRecord(await this.d.gateway.saveHarvest({ farmId, operationId, entry }), { farmId, draft: entry })
+    const saved = await this.d.gateway.saveHarvest({ farmId, operationId, entry }, context)
+    await this.d.verifyOperationContext(context)
+    return mapHarvestRecord(saved, { farmId, draft: entry })
   }
 }

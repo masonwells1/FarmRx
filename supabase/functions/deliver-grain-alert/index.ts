@@ -1,6 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { parseExpectedGrainAlertAccess, runWithRetainedExpectedOwnerAccess } from '../_shared/grainAlertAccessFence.ts'
 
-const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' }
+const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-farm-rx-expected-user-id, x-farm-rx-access-epochs' }
 const delivered = new Map<string, number>(); const hour = 60*60*1000
 const clean = (value:unknown,max=160) => typeof value==='string' ? value.replace(/[<>\u0000-\u001f]/g,'').slice(0,max) : ''
 const json = (body:unknown,status=200) => new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json'}})
@@ -18,8 +19,11 @@ Deno.serve(async(request)=>{
     const {data:auth,error:authError}=await caller.auth.getUser(); if(authError||!auth.user?.email) return json({error:'Sign in required.'},401)
     const body=await request.json() as Record<string,unknown>; const alertKey=clean(body.alertKey); const farmId=clean(body.farmId,36); const kind=clean(body.kind,32)
     if(!/^(price_target|target_deadline|usda_report|marketing_price_target|marketing_pct_marketed_goal|marketing_deadline)$/.test(kind)||!/^[a-z0-9:_\-.]{1,160}$/i.test(alertKey)||!uuid(farmId)) return json({error:'Invalid alert.'},400)
-    const [{data:membership},{data:farm}]=await Promise.all([admin.from('farm_memberships').select('role,status').eq('farm_id',farmId).eq('user_id',auth.user.id).maybeSingle(),admin.from('farms').select('time_zone').eq('id',farmId).maybeSingle()])
-    if(membership?.role!=='owner'||membership.status!=='active') return json({error:'Only the farm owner can receive this alert.'},403)
+    const expectedAccess=parseExpectedGrainAlertAccess(request.headers,auth.user.id,farmId)
+    if(!expectedAccess) return json({error:'Alert access changed before delivery.'},409)
+    const retainsExpectedOwnerAccess=async()=>{const [{data:membership,error:membershipError},{data:epochs,error:epochError}]=await Promise.all([admin.from('farm_memberships').select('role,status').eq('farm_id',farmId).eq('user_id',auth.user.id).maybeSingle(),caller.rpc('get_current_farm_access_epochs')]); if(membershipError||epochError||!Array.isArray(epochs)) throw membershipError??epochError??new Error('farm access check failed'); const epoch=(epochs as Array<{farm_id?:unknown;access_epoch?:unknown}>).find((row)=>row.farm_id===farmId)?.access_epoch; return membership?.role==='owner'&&membership.status==='active'&&Number(epoch)===expectedAccess.accessEpoch}
+    if(!await retainsExpectedOwnerAccess()) return json({error:'Only the current farm owner can receive this alert.'},403)
+    const {data:farm,error:farmError}=await admin.from('farms').select('time_zone').eq('id',farmId).maybeSingle(); if(farmError) throw farmError
     const today=localDate(farm?.time_zone??'America/Chicago'); const throttleKey=`${farmId}:${alertKey}`; if((delivered.get(throttleKey)??0)+hour>Date.now()) return json({delivered:false,throttled:true})
     let subject='Farm Rx grain reminder'; let message='A grain item needs your review.'
     if(kind==='price_target'){
@@ -55,7 +59,9 @@ Deno.serve(async(request)=>{
     const resendKey=Deno.env.get('RESEND_API_KEY'); if(!resendKey) throw new Error('Email provider is not configured.')
     const {data:settings,error:settingsError}=await admin.from('grain_alert_settings').select('alert_emails').eq('farm_id',farmId).maybeSingle(); if(settingsError) throw settingsError
     const recipients=[...new Map([auth.user.email,...(Array.isArray(settings?.alert_emails)?settings.alert_emails.filter((address):address is string=>typeof address==='string'&&email.test(address)):[])].map(address=>[address.toLowerCase(),address])).values()]
-    const sent=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${resendKey}`,'Content-Type':'application/json'},body:JSON.stringify({from:Deno.env.get('GRAIN_ALERT_FROM')??'Farm Rx <alerts@farmrx.app>',to:recipients,subject,text:message})}); if(!sent.ok) throw new Error(`Email provider returned ${sent.status}`)
+    const provider=await runWithRetainedExpectedOwnerAccess(retainsExpectedOwnerAccess,()=>fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${resendKey}`,'Content-Type':'application/json'},body:JSON.stringify({from:Deno.env.get('GRAIN_ALERT_FROM')??'Farm Rx <alerts@farmrx.app>',to:recipients,subject,text:message})}))
+    if(!provider.allowed) return json({error:'Alert access changed before delivery.'},409)
+    const sent=provider.value; if(!sent.ok) throw new Error(`Email provider returned ${sent.status}`)
     delivered.set(throttleKey,Date.now()); console.info(JSON.stringify({event:'grain_alert_delivered',farmId,alertKey,ownerId:auth.user.id})); return json({delivered:true})
   }catch(error){ console.error(JSON.stringify({event:'grain_alert_delivery_failed',error:error instanceof Error?error.message:'unknown'})); return json({error:'Farm Rx could not send that email right now.'},503) }
 })

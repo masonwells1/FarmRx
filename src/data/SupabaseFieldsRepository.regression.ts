@@ -8,6 +8,8 @@ import { getSyncStatus } from './syncStatus'
 import { FieldsWriteQueue, writeQueueKey } from './writeQueue'
 import { moduleBackends } from './backends'
 import { supabaseConfig } from '../lib/supabaseConfig'
+import { queueTransaction } from './queueTransaction'
+import { resetFarmGrantFromLive } from './farmRevocationFence'
 
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message) }
 async function rejects(action: () => Promise<unknown>, message: string) { let failed = false; try { await action() } catch { failed = true }; assert(failed, message) }
@@ -24,8 +26,8 @@ function draft(data: FieldsData, patch: Partial<FieldDraft> = {}): FieldDraft {
 }
 
 class FakeFieldsDataGateway implements FieldsDataGateway {
-  readonly data = fieldsSeedForRegression(); inputs: SaveFieldBundleInput[] = []; failLoad = false; failSave: Error | null = null; persistNextSave = false; receipts = new Map<string, SavedFieldBundle>()
-  async loadWorkspace(_farmId: string): Promise<FieldsRowBundle> { if (this.failLoad) throw new Error('partial query failed'); return structuredClone(this.data) }
+  readonly data = fieldsSeedForRegression(); inputs: SaveFieldBundleInput[] = []; failLoad: boolean | Error = false; failSave: Error | null = null; persistNextSave = false; receipts = new Map<string, SavedFieldBundle>()
+  async loadWorkspace(_farmId: string): Promise<FieldsRowBundle> { if (this.failLoad instanceof Error) throw this.failLoad; if (this.failLoad) throw new Error('partial query failed'); return structuredClone(this.data) }
   async saveFieldBundle(input: SaveFieldBundleInput): Promise<SavedFieldBundle> {
     if (this.failSave) throw this.failSave
     if (input.draft.id === this.data.fields[0].id && input.draft.crop_assignments.some((row) => row.id && !this.data.crop_assignments.some((saved) => saved.id === row.id))) throw new Error('A crop record changed before it could be saved.')
@@ -46,7 +48,7 @@ class FakeFieldsDataGateway implements FieldsDataGateway {
 }
 
 function ids() { let value = 9000; return () => `00000000-0000-4000-8000-${String(value++).padStart(12, '0')}` }
-function repository(gateway: FakeFieldsDataGateway) { return new SupabaseFieldsRepository({ gateway, getFarmId: async () => gateway.data.farm.id, createId: ids(), clock: () => '2026-07-11T00:00:00.000Z' }) }
+function repository(gateway: FakeFieldsDataGateway) { const operationContext = { projectRef: 'test', userId: '00000000-0000-4000-8000-0000000000aa', farmId: gateway.data.farm.id, generation: 1, token: '00000000-0000-4000-8000-000000000900', serverEpoch: 1 }; return new SupabaseFieldsRepository({ gateway, getFarmId: async () => gateway.data.farm.id, getOperationContext: async () => operationContext, verifyOperationContext: async () => undefined, createId: ids(), clock: () => '2026-07-11T00:00:00.000Z' }) }
 
 async function run() {
   const gateway = new FakeFieldsDataGateway(); const live = repository(gateway); const data = await live.getData()
@@ -87,6 +89,24 @@ async function run() {
   const fullStorage = new FakeStorage(); fullStorage.throwOnSet = true; const fullQueue = new QueuedFieldsRepository(repository(new FakeFieldsDataGateway()), { getContext: raceContext, projectRef: supabaseConfig.projectRef, storage: fullStorage, createId: ids(), clock: () => '2026-07-11T00:00:00.000Z', isOffline: () => true }); await rejects(() => fullQueue.saveField({ ...draft(data), crop_assignments: [] }), 'Full storage must reject.'); const corruptStorage = new FakeStorage(); corruptStorage.setItem(queueKey, '{bad'); const corruptQueue = new QueuedFieldsRepository(repository(new FakeFieldsDataGateway()), { getContext: raceContext, projectRef: supabaseConfig.projectRef, storage: corruptStorage, createId: ids(), clock: () => '2026-07-11T00:00:00.000Z', isOffline: () => true }); await rejects(() => corruptQueue.saveField({ ...draft(data), crop_assignments: [] }), 'Corrupt storage must reject.'); assert(corruptStorage.getItem(queueKey) === '{bad', 'Corrupt queue was overwritten.')
   // 13. queue keys isolate users.
   assert(replayStorage.getItem(writeQueueKey(supabaseConfig.projectRef, userB, data.farm.id)) === null, 'Another user can see this queue.')
+  // 13c. A singleton repository must not return User A's retained workspace
+  // after the SPA switches to User B and User B's live read has a transport failure.
+  const accountStorage = new FakeStorage(); const accountGateway = new FakeFieldsDataGateway(); accountGateway.data.fields[0].name = 'USER_A_PRIVATE_FIELD'; let activeUser = userA; const accountRepository = new QueuedFieldsRepository(repository(accountGateway), { getContext: async () => ({ userId: activeUser, farmId: data.farm.id }), projectRef: supabaseConfig.projectRef, storage: accountStorage, createId: ids(), clock: () => '2026-07-15T00:00:00.000Z', isOffline: () => false }); const accountA = await accountRepository.getData(); assert(accountA.fields[0].name === 'USER_A_PRIVATE_FIELD', 'User A did not load the attack fixture.'); activeUser = userB; accountGateway.failLoad = new TypeError('Failed to fetch'); let crossAccountLeak = false; try { const accountB = await accountRepository.getData(); crossAccountLeak = accountB.fields.some((field) => field.name === 'USER_A_PRIVATE_FIELD') } catch { /* fail-closed is the expected no-cache outcome */ } assert(!crossAccountLeak, 'User B received User A in-memory workspace after a transport failure.')
+  // 13d. A save waiting behind the queue lock remains bound to its exact account and grant epoch.
+  for (const scenario of ['account-switch', 'same-scope-regrant'] as const) {
+    const guardedStorage = new FakeStorage(); const guardedRef = `fields-${scenario}`; const scope = { projectRef: guardedRef, userId: userA, farmId: data.farm.id }; resetFarmGrantFromLive(guardedStorage, scope, 1, '2026-07-15T00:00:00.000Z')
+    let guardedUser = userA; let nextId = 9500
+    let entered!: () => void; const enteredPromise = new Promise<void>((resolve) => { entered = resolve })
+    let release!: () => void; const releasePromise = new Promise<void>((resolve) => { release = resolve })
+    let captured!: () => void; const capturedPromise = new Promise<void>((resolve) => { captured = resolve })
+    const guardedKey = writeQueueKey(guardedRef, userA, data.farm.id)
+    const blocker = queueTransaction(guardedKey, guardedStorage, () => `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`, async () => { entered(); await releasePromise }); await enteredPromise
+    const guardedGateway = new FakeFieldsDataGateway(); const guarded = new QueuedFieldsRepository(repository(guardedGateway), { getContext: async () => { const value = { userId: guardedUser, farmId: data.farm.id }; captured(); return value }, projectRef: guardedRef, storage: guardedStorage, createId: () => `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`, clock: () => '2026-07-15T00:00:00.000Z', isOffline: () => true })
+    const saving = guarded.saveField({ ...draft(data), crop_assignments: [] }); await capturedPromise
+    if (scenario === 'account-switch') guardedUser = userB; else resetFarmGrantFromLive(guardedStorage, scope, 1, '2026-07-15T00:01:00.000Z')
+    release(); await blocker; await rejects(() => saving, `Fields must reject a delayed ${scenario} save.`)
+    assert(guardedGateway.inputs.length === 0 && new FieldsWriteQueue(guardedStorage, guardedKey).read().entries.length === 0, `Fields ${scenario} race reached the writer or queue.`)
+  }
   // 14. Grain reads injected Fields and preserves its own storage slice.
   const previousLocalStorage = globalThis.localStorage; Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage }); const injected: FieldsRepository = { getData: async () => data, saveField: async (value) => ({ ...data.fields[0], id: value.id ?? data.fields[0].id }) }; const grain = new MockGrainRepository(injected); const grainData = await grain.getData(); const grainEnvelope = writeGrainEnvelope(storage.getItem('farm-rx-local-data'), { ...grainData, fields: data }); assert(grainData.fields.farm.id === data.farm.id && !('fields' in (JSON.parse(grainEnvelope).grain as object)), 'Injected Grain crossed into Fields storage.'); Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: previousLocalStorage })
   // 15. release composition is deliberately live Fields + queued live Grain at the exact project ref.

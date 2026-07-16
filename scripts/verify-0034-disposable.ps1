@@ -15,6 +15,7 @@ try {
   @'
 insert into auth.users (id,email) values ('00000000-0000-4000-8000-000000000001','probe@example.test');
 select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 insert into public.farms (id,name,created_by) values ('00000000-0000-4000-8000-000000000010','Probe Farm','00000000-0000-4000-8000-000000000001');
 do $$
 declare b jsonb := '{"id":"00000000-0000-4000-8000-000000000100","farm_id":"00000000-0000-4000-8000-000000000010","crop_year":2026,"commodity_id":"corn_yellow","operating_entity_id":null,"enterprise_label":null,"name":"Probe create","expected_yield_per_acre":200,"expected_price_per_bushel":4.5,"rp_coverage_pct":80,"rp_aph_yield":180,"rp_projected_price":4.62,"rp_premium_per_acre":10,"copied_from_budget_id":null,"notes":null}'::jsonb;
