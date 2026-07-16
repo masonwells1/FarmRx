@@ -7,11 +7,22 @@ function Invoke-FoundationLane([scriptblock]$Command, [string]$Failure) {
   if ($LASTEXITCODE -ne 0) { throw $Failure }
 }
 
+function Get-FoundationProbeShell {
+  if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    return (Join-Path $PSHOME 'powershell.exe')
+  }
+  if ($IsWindows) {
+    return (Join-Path $PSHOME 'pwsh.exe')
+  }
+  return (Join-Path $PSHOME 'pwsh')
+}
+
 function Assert-IntermediateLaneFailureIsFatal {
   $expected = 'Controlled intermediate foundation lane failed.'
   $detected = $false
+  $probeShell = Get-FoundationProbeShell
   try {
-    Invoke-FoundationLane { & powershell -NoProfile -Command 'exit 23' } $expected
+    Invoke-FoundationLane { & $probeShell -NoProfile -Command 'exit 23' } $expected
   } catch {
     if ($_.Exception.Message -ne $expected) { throw }
     $detected = $true
