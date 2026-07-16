@@ -269,7 +269,25 @@ function regressionCancelledDraftsNeverReachTheLiveBundle() {
   );
 }
 
+function regressionBlankUiIdsBecomeDurableIds() {
+  const data = fieldsSeedForRegression();
+  const source = createFieldEditDraft(data, data.fields[1].id, {});
+  const arrangementWithBlankId = {
+    ...source.arrangement,
+    id: "",
+  } as FieldDraft["arrangement"] & { id: string };
+  const normalized = normalizeFieldDraft(
+    { ...source, id: "", arrangement: arrangementWithBlankId },
+    ids(),
+  );
+  assert(
+    normalized.id !== "" && normalized.arrangement.id !== "",
+    "The Add field form's blank IDs were not replaced before an online save or offline queue append.",
+  );
+}
+
 await regressionConfirmedReceiptSurvivesFailedRefresh();
 await regressionOfflineAgreementThenBasicsPreservesAgreement();
 regressionCancelledDraftsNeverReachTheLiveBundle();
+regressionBlankUiIdsBecomeDurableIds();
 console.log("Field edit patch regressions passed.");

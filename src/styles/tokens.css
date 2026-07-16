@@ -21,6 +21,6 @@
   --radius: 16px;
   --shadow-card: 0 1px 2px rgb(0 0 0 / 4%), 0 1px 3px rgb(0 0 0 / 5%);
   --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 4%), 0 8px 20px rgb(0 0 0 / 7%);
-  --brand-font: 'Barlow Semi Condensed', Helvetica, Arial, sans-serif;
+  --brand-font: Inter, Helvetica, Arial, sans-serif;
   --ui-font: 'Inter', Helvetica, Arial, sans-serif;
 }

@@ -25,9 +25,11 @@ import type {
 } from "./data/grain";
 import { marketedPercent, sameScope, scopeKey, scopeOf } from "./data/grain";
 import {
+  captureGrainAlertOperationContext,
   evaluateGrainAlerts,
   recordMarketingAlertTransitions,
   requestOwnerAlertDelivery,
+  verifyGrainAlertOperationContext,
   type GrainAlert,
 } from "./data/grainAlerts";
 import {
@@ -277,24 +279,27 @@ export function GrainPage({ services }: { services: GrainServices }) {
     : "";
   const refresh = async () => {
     try {
+      const alertOperationContext = await captureGrainAlertOperationContext();
       const [data, queueKey] = await Promise.all([services.grainRepository.getData(), services.grainRepository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)]);
+      await verifyGrainAlertOperationContext(alertOperationContext);
+      if (data.fields.farm.id !== alertOperationContext.farmId) throw new Error("The selected farm changed while grain alerts were loading.");
       setAttentionQueueKey(queueKey);
       const ruleEvaluation = evaluateMarketingAlertRules(data);
       const nextAlerts = evaluateGrainAlerts(data);
       setWorkspace(data);
       setAlerts(nextAlerts);
-      void recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions).then((transitioned) => {
-        if (transitioned !== null) return requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId || transitioned.has(alert.ruleId)), data.fields.farm.id);
+      void recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions, alertOperationContext).then((transitioned) => {
+        if (transitioned !== null) return requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId || transitioned.has(alert.ruleId)), data.fields.farm.id, alertOperationContext);
         // Pre-0035: retain current behavior, but one synchronous refresh lock
         // prevents a refresh burst from double-writing the same rule state.
         if (ruleEvaluation.firedRuleIds.length && refreshWriteLock.current.acquire()) {
           const stamp = new Date().toISOString();
           void Promise.all(ruleEvaluation.firedRuleIds.map((id) => {
             const rule = data.marketing_alert_rules.find((item) => item.id === id);
-            return rule ? services.grainRepository.saveMarketingAlertRule({ ...rule, last_triggered_at: stamp, updated_at: stamp }) : Promise.resolve();
+            return rule ? verifyGrainAlertOperationContext(alertOperationContext).then(() => services.grainRepository.saveMarketingAlertRule({ ...rule, last_triggered_at: stamp, updated_at: stamp })) : Promise.resolve();
           })).finally(() => refreshWriteLock.current.release());
         }
-        return requestOwnerAlertDelivery(nextAlerts, data.fields.farm.id);
+        return requestOwnerAlertDelivery(nextAlerts, data.fields.farm.id, alertOperationContext);
       }).then(
         (failed) =>
           setDeliveryNotice(

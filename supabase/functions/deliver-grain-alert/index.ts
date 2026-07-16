@@ -1,35 +1,67 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { parseExpectedGrainAlertAccess, runWithRetainedExpectedOwnerAccess } from '../_shared/grainAlertAccessFence.ts'
 
-const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' }
-const delivered = new Map<string, number>()
-const hour = 60 * 60 * 1000
-const clean = (value: unknown, max = 160) => typeof value === 'string' ? value.replace(/[<>\u0000-\u001f]/g, '').slice(0, max) : ''
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
-const uuid = (value: string) => /^[0-9a-f-]{36}$/i.test(value)
-const email = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/
+const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-farm-rx-expected-user-id, x-farm-rx-access-epochs' }
+const delivered = new Map<string, number>(); const hour = 60*60*1000
+const clean = (value:unknown,max=160) => typeof value==='string' ? value.replace(/[<>\u0000-\u001f]/g,'').slice(0,max) : ''
+const json = (body:unknown,status=200) => new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json'}})
+const uuid = (value:string) => /^[0-9a-f-]{36}$/i.test(value); const email=/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/
+const dayNumber=(value:string)=>Math.floor(Date.parse(`${value}T00:00:00Z`)/86400000)
+const dateDaysBefore=(value:string,days:number)=>new Date(Date.parse(`${value}T00:00:00Z`)-days*86400000).toISOString().slice(0,10)
+function localDate(timeZone:string){ return new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()) }
 
-Deno.serve(async (request) => {
-  if (request.method === 'OPTIONS') return new Response('ok', { headers: cors })
-  try {
-    const authorization = request.headers.get('Authorization')
-    if (!authorization) return json({ error: 'Sign in required.' }, 401)
-    const url = Deno.env.get('SUPABASE_URL')!; const anon = Deno.env.get('SUPABASE_ANON_KEY')!; const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const caller = createClient(url, anon, { global: { headers: { Authorization: authorization } } }); const admin = createClient(url, service)
-    const { data: auth, error: authError } = await caller.auth.getUser(); if (authError || !auth.user?.email) return json({ error: 'Sign in required.' }, 401)
-    const body = await request.json() as Record<string, unknown>; const alertKey = clean(body.alertKey); const farmId = clean(body.farmId, 36); const kind = clean(body.kind, 32)
-    if (!/^(price_target|target_deadline|usda_report|marketing_price_target|marketing_pct_marketed_goal|marketing_deadline)$/.test(kind) || !/^[a-z0-9:_\-.]{1,160}$/i.test(alertKey) || !uuid(farmId)) return json({ error: 'Invalid alert.' }, 400)
-    const { data: membership } = await admin.from('farm_memberships').select('role,status').eq('farm_id', farmId).eq('user_id', auth.user.id).maybeSingle()
-    if (membership?.role !== 'owner' || membership.status !== 'active') return json({ error: 'Only the farm owner can receive this alert.' }, 403)
-    const throttleKey = `${farmId}:${alertKey}`; if ((delivered.get(throttleKey) ?? 0) + hour > Date.now()) return json({ delivered: false, throttled: true })
-    let subject = 'Farm Rx grain reminder'; let message = 'A grain item needs your review.'
-    if (kind === 'price_target') { const targetId = clean(body.targetId, 36); const observationId = clean(body.observationId, 36); const [{ data: target }, { data: bid }] = await Promise.all([admin.from('marketing_plan_targets').select('id,target_price,commodity_id,farm_id').eq('id', targetId).eq('farm_id', farmId).maybeSingle(), admin.from('cash_bids').select('id,cash_price,commodity_id,farm_id').eq('id', observationId).eq('farm_id', farmId).maybeSingle()]); if (!target || !bid || bid.cash_price === null || bid.cash_price < target.target_price || bid.commodity_id !== target.commodity_id) return json({ error: 'Alert is no longer current.' }, 409); subject = 'Farm Rx price target reached'; message = `A saved cash-price target was reached for ${clean(target.commodity_id, 80)}.` }
-    if (kind === 'target_deadline') { const targetId = clean(body.targetId, 36); const { data: target } = await admin.from('marketing_plan_targets').select('id,deadline,commodity_id').eq('id', targetId).eq('farm_id', farmId).maybeSingle(); if (!target?.deadline) return json({ error: 'Alert is no longer current.' }, 409); subject = 'Farm Rx marketing deadline'; message = `A saved marketing deadline is coming up for ${clean(target.commodity_id, 80)}.` }
-    if (kind === 'usda_report') { const reportId = clean(body.reportId, 36); const { data: report } = await admin.from('usda_report_dates').select('id,report_name,report_date').eq('id', reportId).maybeSingle(); if (!report) return json({ error: 'Alert is no longer current.' }, 409); subject = 'Farm Rx USDA report reminder'; message = `${clean(report.report_name, 100)} is scheduled for ${clean(report.report_date, 10)}.` }
-    if (kind.startsWith('marketing_')) { const ruleId = clean(body.ruleId, 36); if (!uuid(ruleId)) return json({ error: 'Invalid alert.' }, 400); const [{ data: rule, error: ruleError }, { data: state }] = await Promise.all([admin.from('marketing_alert_rules').select('id,rule_type,active,crop_year,commodity_id,operating_entity_id,enterprise_label,threshold,direction,remind_on').eq('id', ruleId).eq('farm_id', farmId).maybeSingle(), admin.from('alert_rule_states').select('is_condition_true').eq('rule_id', ruleId).maybeSingle()]); if (ruleError) throw ruleError; const expectedType = kind === 'marketing_price_target' ? 'price_target' : kind === 'marketing_pct_marketed_goal' ? 'pct_marketed_goal' : 'deadline'; if (!rule || !state?.is_condition_true || !rule.active || rule.rule_type !== expectedType) return json({ error: 'Alert is no longer current.' }, 409); let current = false; if (expectedType === 'price_target' && typeof rule.threshold === 'number' && ['at_or_above','at_or_below'].includes(rule.direction ?? '')) { const { data: bid } = await admin.from('cash_bids').select('cash_price').eq('farm_id',farmId).eq('commodity_id',rule.commodity_id).not('cash_price','is',null).order('bid_date',{ascending:false}).limit(1).maybeSingle(); current = typeof bid?.cash_price === 'number' && (rule.direction === 'at_or_above' ? bid.cash_price >= rule.threshold : bid.cash_price <= rule.threshold) } else if (expectedType === 'deadline' && rule.remind_on) { const days = Math.round((new Date(`${rule.remind_on}T00:00:00Z`).getTime() - Date.now()) / 86400000); current = days >= 0 && days <= 7 } else if (expectedType === 'pct_marketed_goal' && typeof rule.threshold === 'number') { const { data: estimates } = await admin.from('production_estimates').select('expected_bushels,actual_bushels,drives_math').eq('farm_id',farmId).eq('crop_year',rule.crop_year).eq('commodity_id',rule.commodity_id); const production = (estimates ?? []).reduce((sum,row) => sum + (row.drives_math === 'actual' && typeof row.actual_bushels === 'number' ? row.actual_bushels : Number(row.expected_bushels ?? 0)),0); const { data: contracts } = await admin.from('grain_contracts').select('bushels').eq('farm_id',farmId).eq('crop_year',rule.crop_year).eq('commodity_id',rule.commodity_id); current = production > 0 && (contracts ?? []).reduce((sum,row)=>sum+Number(row.bushels ?? 0),0) / production * 100 < rule.threshold } if (!current) return json({ error: 'Alert is no longer current.' }, 409); const commodity = clean(rule.commodity_id, 80); if (kind === 'marketing_price_target') { subject = 'Farm Rx price target reached'; message = `${rule.crop_year} ${commodity} reached your saved cash-price target.` } else if (kind === 'marketing_pct_marketed_goal') { subject = 'Farm Rx marketed goal reminder'; message = `${rule.crop_year} ${commodity} is below your saved marketed goal.` } else { subject = 'Farm Rx marketing deadline'; message = `${rule.crop_year} ${commodity} has a saved reminder date of ${clean(rule.remind_on, 10)}.` } }
-    const resendKey = Deno.env.get('RESEND_API_KEY'); if (!resendKey) throw new Error('Email provider is not configured.')
-    const { data: settings, error: settingsError } = await admin.from('grain_alert_settings').select('alert_emails').eq('farm_id', farmId).maybeSingle(); if (settingsError) throw settingsError; const recipients = [...new Map([auth.user.email, ...(Array.isArray(settings?.alert_emails) ? settings.alert_emails.filter((address): address is string => typeof address === 'string' && email.test(address)) : [])].map((address) => [address.toLowerCase(), address])).values()]
-    const sent = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: Deno.env.get('GRAIN_ALERT_FROM') ?? 'Farm Rx <alerts@farmrx.app>', to: recipients, subject, text: message }) })
-    if (!sent.ok) throw new Error(`Email provider returned ${sent.status}`)
-    delivered.set(throttleKey, Date.now()); console.info(JSON.stringify({ event: 'grain_alert_delivered', farmId, alertKey, ownerId: auth.user.id })); return json({ delivered: true })
-  } catch (error) { console.error(JSON.stringify({ event: 'grain_alert_delivery_failed', error: error instanceof Error ? error.message : 'unknown' })); return json({ error: 'Farm Rx could not send that email right now.' }, 503) }
+Deno.serve(async(request)=>{
+  if(request.method==='OPTIONS') return new Response('ok',{headers:cors})
+  try{
+    const authorization=request.headers.get('Authorization'); if(!authorization) return json({error:'Sign in required.'},401)
+    const url=Deno.env.get('SUPABASE_URL')!; const anon=Deno.env.get('SUPABASE_ANON_KEY')!; const service=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    const caller=createClient(url,anon,{global:{headers:{Authorization:authorization}}}); const admin=createClient(url,service)
+    const {data:auth,error:authError}=await caller.auth.getUser(); if(authError||!auth.user?.email) return json({error:'Sign in required.'},401)
+    const body=await request.json() as Record<string,unknown>; const alertKey=clean(body.alertKey); const farmId=clean(body.farmId,36); const kind=clean(body.kind,32)
+    if(!/^(price_target|target_deadline|usda_report|marketing_price_target|marketing_pct_marketed_goal|marketing_deadline)$/.test(kind)||!/^[a-z0-9:_\-.]{1,160}$/i.test(alertKey)||!uuid(farmId)) return json({error:'Invalid alert.'},400)
+    const expectedAccess=parseExpectedGrainAlertAccess(request.headers,auth.user.id,farmId)
+    if(!expectedAccess) return json({error:'Alert access changed before delivery.'},409)
+    const retainsExpectedOwnerAccess=async()=>{const [{data:membership,error:membershipError},{data:epochs,error:epochError}]=await Promise.all([admin.from('farm_memberships').select('role,status').eq('farm_id',farmId).eq('user_id',auth.user.id).maybeSingle(),caller.rpc('get_current_farm_access_epochs')]); if(membershipError||epochError||!Array.isArray(epochs)) throw membershipError??epochError??new Error('farm access check failed'); const epoch=(epochs as Array<{farm_id?:unknown;access_epoch?:unknown}>).find((row)=>row.farm_id===farmId)?.access_epoch; return membership?.role==='owner'&&membership.status==='active'&&Number(epoch)===expectedAccess.accessEpoch}
+    if(!await retainsExpectedOwnerAccess()) return json({error:'Only the current farm owner can receive this alert.'},403)
+    const {data:farm,error:farmError}=await admin.from('farms').select('time_zone').eq('id',farmId).maybeSingle(); if(farmError) throw farmError
+    const today=localDate(farm?.time_zone??'America/Chicago'); const throttleKey=`${farmId}:${alertKey}`; if((delivered.get(throttleKey)??0)+hour>Date.now()) return json({delivered:false,throttled:true})
+    let subject='Farm Rx grain reminder'; let message='A grain item needs your review.'
+    if(kind==='price_target'){
+      const targetId=clean(body.targetId,36); const observationId=clean(body.observationId,36)
+      const [{data:target},{data:bid}]=await Promise.all([admin.from('marketing_plan_targets').select('id,target_price,commodity_id,farm_id').eq('id',targetId).eq('farm_id',farmId).maybeSingle(),admin.from('cash_bids').select('id,cash_price,commodity_id,farm_id,bid_date').eq('id',observationId).eq('farm_id',farmId).maybeSingle()])
+      if(!target||!bid||bid.cash_price===null||bid.cash_price<target.target_price||bid.commodity_id!==target.commodity_id||bid.bid_date<dateDaysBefore(today,2)||bid.bid_date>today) return json({error:'Alert is no longer current.'},409)
+      subject='Farm Rx price target reached'; message=`A saved cash-price target was reached for ${clean(target.commodity_id,80)}.`
+    }
+    if(kind==='target_deadline'){ const targetId=clean(body.targetId,36); const {data:target}=await admin.from('marketing_plan_targets').select('id,deadline,commodity_id').eq('id',targetId).eq('farm_id',farmId).maybeSingle(); if(!target?.deadline) return json({error:'Alert is no longer current.'},409); subject='Farm Rx marketing deadline'; message=`A saved marketing deadline is coming up for ${clean(target.commodity_id,80)}.` }
+    if(kind==='usda_report'){ const reportId=clean(body.reportId,36); const {data:report}=await admin.from('usda_report_dates').select('id,report_name,report_date').eq('id',reportId).maybeSingle(); if(!report) return json({error:'Alert is no longer current.'},409); subject='Farm Rx USDA report reminder'; message=`${clean(report.report_name,100)} is scheduled for ${clean(report.report_date,10)}.` }
+    if(kind.startsWith('marketing_')){
+      const ruleId=clean(body.ruleId,36); if(!uuid(ruleId)) return json({error:'Invalid alert.'},400)
+      const [{data:rule,error:ruleError},{data:state}]=await Promise.all([admin.from('marketing_alert_rules').select('id,rule_type,active,crop_year,commodity_id,operating_entity_id,enterprise_label,threshold,direction,remind_on').eq('id',ruleId).eq('farm_id',farmId).maybeSingle(),admin.from('alert_rule_states').select('is_condition_true').eq('rule_id',ruleId).maybeSingle()]); if(ruleError) throw ruleError
+      const expectedType=kind==='marketing_price_target'?'price_target':kind==='marketing_pct_marketed_goal'?'pct_marketed_goal':'deadline'
+      if(!rule||!state?.is_condition_true||!rule.active||rule.rule_type!==expectedType) return json({error:'Alert is no longer current.'},409)
+      let current=false
+      if(expectedType==='price_target'&&typeof rule.threshold==='number'&&['at_or_above','at_or_below'].includes(rule.direction??'')){
+        const {data:bid}=await admin.from('cash_bids').select('cash_price,bid_date').eq('farm_id',farmId).eq('commodity_id',rule.commodity_id).not('cash_price','is',null).gte('bid_date',dateDaysBefore(today,2)).lte('bid_date',today).order('bid_date',{ascending:false}).order('updated_at',{ascending:false}).limit(1).maybeSingle()
+        current=typeof bid?.cash_price==='number'&&(rule.direction==='at_or_above'?bid.cash_price>=rule.threshold:bid.cash_price<=rule.threshold)
+      }else if(expectedType==='deadline'&&rule.remind_on){ const days=dayNumber(rule.remind_on)-dayNumber(today); current=days>=0&&days<=7 }
+      else if(expectedType==='pct_marketed_goal'&&typeof rule.threshold==='number'){
+        let estimatesQuery=admin.from('production_estimates').select('expected_bushels,actual_bushels,drives_math').eq('farm_id',farmId).eq('crop_year',rule.crop_year).eq('commodity_id',rule.commodity_id)
+        estimatesQuery=rule.operating_entity_id===null?estimatesQuery.is('operating_entity_id',null):estimatesQuery.eq('operating_entity_id',rule.operating_entity_id)
+        estimatesQuery=rule.enterprise_label===null?estimatesQuery.is('enterprise_label',null):estimatesQuery.eq('enterprise_label',rule.enterprise_label)
+        let contractsQuery=admin.from('grain_contracts').select('bushels').eq('farm_id',farmId).eq('crop_year',rule.crop_year).eq('commodity_id',rule.commodity_id)
+        contractsQuery=rule.operating_entity_id===null?contractsQuery.is('operating_entity_id',null):contractsQuery.eq('operating_entity_id',rule.operating_entity_id)
+        contractsQuery=rule.enterprise_label===null?contractsQuery.is('enterprise_label',null):contractsQuery.eq('enterprise_label',rule.enterprise_label)
+        const [{data:estimates},{data:contracts}]=await Promise.all([estimatesQuery,contractsQuery]); const production=(estimates??[]).reduce((sum,row)=>sum+(row.drives_math==='actual'&&typeof row.actual_bushels==='number'?row.actual_bushels:Number(row.expected_bushels??0)),0); current=production>0&&(contracts??[]).reduce((sum,row)=>sum+Number(row.bushels??0),0)/production*100<rule.threshold
+      }
+      if(!current) return json({error:'Alert is no longer current.'},409)
+      const commodity=clean(rule.commodity_id,80); if(kind==='marketing_price_target'){subject='Farm Rx price target reached';message=`${rule.crop_year} ${commodity} reached your saved cash-price target.`}else if(kind==='marketing_pct_marketed_goal'){subject='Farm Rx marketed goal reminder';message=`${rule.crop_year} ${commodity} is below your saved marketed goal.`}else{subject='Farm Rx marketing deadline';message=`${rule.crop_year} ${commodity} has a saved reminder date of ${clean(rule.remind_on,10)}.`}
+    }
+    const resendKey=Deno.env.get('RESEND_API_KEY'); if(!resendKey) throw new Error('Email provider is not configured.')
+    const {data:settings,error:settingsError}=await admin.from('grain_alert_settings').select('alert_emails').eq('farm_id',farmId).maybeSingle(); if(settingsError) throw settingsError
+    const recipients=[...new Map([auth.user.email,...(Array.isArray(settings?.alert_emails)?settings.alert_emails.filter((address):address is string=>typeof address==='string'&&email.test(address)):[])].map(address=>[address.toLowerCase(),address])).values()]
+    const provider=await runWithRetainedExpectedOwnerAccess(retainsExpectedOwnerAccess,()=>fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${resendKey}`,'Content-Type':'application/json'},body:JSON.stringify({from:Deno.env.get('GRAIN_ALERT_FROM')??'Farm Rx <alerts@farmrx.app>',to:recipients,subject,text:message})}))
+    if(!provider.allowed) return json({error:'Alert access changed before delivery.'},409)
+    const sent=provider.value; if(!sent.ok) throw new Error(`Email provider returned ${sent.status}`)
+    delivered.set(throttleKey,Date.now()); console.info(JSON.stringify({event:'grain_alert_delivered',farmId,alertKey,ownerId:auth.user.id})); return json({delivered:true})
+  }catch(error){ console.error(JSON.stringify({event:'grain_alert_delivery_failed',error:error instanceof Error?error.message:'unknown'})); return json({error:'Farm Rx could not send that email right now.'},503) }
 })

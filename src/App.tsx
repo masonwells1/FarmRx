@@ -14,11 +14,14 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
+import type { User } from "@supabase/supabase-js";
 import { useAuth } from "./auth/AuthProvider";
 import {
   bootstrapInitialOwnerFarm,
-  findOnlyAccessibleFarm,
 } from "./auth/bootstrapFarm";
+import { FarmAccessProvider, useFarmAccess } from "./auth/FarmAccessContext";
+import { hasPendingFarmWork, loadFarmAccess, selectFarm, type FarmAccess } from "./auth/farmContext";
+import { RevokedFarmRecovery } from './components/RevokedFarmRecovery';
 import { createSubmitLock } from "./lib/submitLock";
 import { RequireSession } from "./auth/RequireSession";
 import { FieldDetailPage, FieldFormPage, FieldsPage } from "./FieldsModule";
@@ -62,6 +65,7 @@ import {
   subscribeSyncStatus,
 } from "./data/syncStatus";
 import type { EntityType } from "./data/fields";
+import { getWorkspaceCacheNotices, subscribeWorkspaceCacheNotices } from "./data/workspaceCache";
 import { farmerError } from "./lib/farmerErrors";
 
 function NavGlyph({ d }: { d: string }) {
@@ -157,26 +161,19 @@ const navigation = [
   },
 ];
 
+type NavigationItem = (typeof navigation)[number];
+const mobilePrimaryPaths = new Set(["/fields", "/grain", "/tasks", "/weather"]);
+const mobilePrimaryNavigation = navigation.filter((item) => mobilePrimaryPaths.has(item.path));
+const mobileMoreNavigation = navigation.filter((item) => !mobilePrimaryPaths.has(item.path));
+
 function AppLayout() {
-  const { signOut } = useAuth();
+  const { signOut, user } = useAuth();
+  const { farms, activeFarm, source, chooseFarm } = useFarmAccess();
   const navigate = useNavigate();
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const signOutLock = useRef(createSubmitLock());
-  const [farmName, setFarmName] = useState<string | null>(null);
-  useEffect(() => {
-    let active = true;
-    void findOnlyAccessibleFarm()
-      .then((farm) => {
-        if (active) setFarmName(farm?.name ?? null);
-      })
-      .catch(() => {
-        if (active) setFarmName(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+  const farmName = activeFarm.name;
   async function handleSignOut() {
     if (!signOutLock.current.acquire()) return;
     setSigningOut(true);
@@ -197,7 +194,7 @@ function AppLayout() {
     <div className="app-shell">
       <aside className="sidebar" aria-label="Farm Rx navigation">
         <div className="farm-lockup">
-          {farmName && <div className="farm-name">{farmName}</div>}
+          <div className="farm-name">{farmName}</div>
           <div className="farm-logo-note">Your farm</div>
         </div>
         <Navigation className="sidebar-nav" />
@@ -213,7 +210,16 @@ function AppLayout() {
           <div className="product-name">
             Farm <span>Rx</span>
           </div>
-          {farmName && <div className="farm-summary">{farmName}</div>}
+          <div className="farm-summary">
+            {farms.length > 1 ? (
+              <label className="farm-switcher">Farm
+                <select value={activeFarm.id} onChange={(event) => { void chooseFarm(event.target.value) }} aria-label="Active farm">
+                  {farms.map((farm) => <option key={farm.id} value={farm.id}>{farm.name}</option>)}
+                </select>
+              </label>
+            ) : farmName}
+            {source === "offline" && <span className="offline-context">Offline access</span>}
+          </div>
           <div className="topbar-actions">
             <NotificationBell
               repository={notificationsRepository}
@@ -235,7 +241,9 @@ function AppLayout() {
           </p>
         )}
         <SyncNotice />
+        <OfflineDataNotice />
         <div className="content-area">
+          <RevokedFarmRecovery userId={user?.id ?? null} />
           <Routes>
             <Route path="/fields" element={<FieldsPage />} />
             <Route path="/fields/new" element={<FieldFormPage />} />
@@ -303,9 +311,7 @@ function AppLayout() {
           </Routes>
         </div>
       </main>
-      <nav className="mobile-nav" aria-label="Farm Rx navigation">
-        <Navigation className="mobile-nav-list" />
-      </nav>
+      <MobileNavigation />
     </div>
   );
 }
@@ -357,46 +363,71 @@ function SyncNotice() {
   );
 }
 
+function OfflineDataNotice() {
+  const notices = useSyncExternalStore(subscribeWorkspaceCacheNotices, getWorkspaceCacheNotices, getWorkspaceCacheNotices);
+  if (!notices.length) return null;
+  const oldest = notices[0];
+  return <div className="offline-data-notice" role="status">Showing an offline copy from {new Date(oldest.cachedAt).toLocaleString()}. Saved changes stay on this device until Farm Rx reconnects.</div>;
+}
+
 function FarmAccessGate({ children }: { children: ReactNode }) {
   const { user } = useAuth();
+  if (!user)
+    return (
+      <main className="login-page">
+        <p className="opening-farm">Opening your farm…</p>
+      </main>
+    );
+  return <FarmAccessGateForUser key={user.id} user={user}>{children}</FarmAccessGateForUser>;
+}
+
+function FarmAccessGateForUser({ children, user }: { children: ReactNode; user: User }) {
   const [state, setState] = useState<
-    "checking" | "ready" | "setup" | "blocked"
+    "checking" | "choose" | "ready" | "setup" | "blocked"
   >("checking");
+  const [access, setAccess] = useState<FarmAccess | null>(null);
   const [message, setMessage] = useState("");
   useEffect(() => {
     let active = true;
-    const replayOnReconnect = () => {
-      void (async () => {
-        await replayFieldsQueue();
-        await replayProgramsThenGenerateDueItems(
-          replayProgramsQueue,
-          generateDueProgramItems,
-        );
-        await replayHarvestQueue();
-        void replayGrainQueue();
-        void replayInventoryQueue();
-        void replayProfitabilityQueue();
-        void replayEquipmentTasksQueue();
-        await replayFieldLocationQueue();
-        await replayFieldLogQueue();
-        await replayScoutingQueue();
-        await replayNotificationsQueue();
-      })();
+    const acceptValidatedAccess = async (latest: FarmAccess) => {
+      if (!active) return;
+      if (latest.userId !== user.id) throw new Error("Farm access validation no longer matches the signed-in account.");
+      setAccess(latest);
+      if (!latest.selectedFarmId) {
+        if (latest.farms.length) setState("choose");
+        else if (user?.app_metadata.initial_farm_owner === true) setState("setup");
+        else { setMessage("Crop RX needs to finish your farm setup."); setState("blocked"); }
+        return;
+      }
+      setState("ready");
+      await replayFieldsQueue();
+      await replayProgramsThenGenerateDueItems(
+        replayProgramsQueue,
+        generateDueProgramItems,
+      );
+      await replayHarvestQueue();
+      void replayGrainQueue();
+      void replayInventoryQueue();
+      void replayProfitabilityQueue();
+      void replayEquipmentTasksQueue();
+      await replayFieldLocationQueue();
+      await replayFieldLogQueue();
+      await replayScoutingQueue();
+      await replayNotificationsQueue();
     };
-    window.addEventListener("online", replayOnReconnect);
-    void findOnlyAccessibleFarm()
-      .then((farm) => {
+    const replayOnReconnect = async () => {
+      if (!user) return;
+      try { await acceptValidatedAccess(await loadFarmAccess(user.id, true)); }
+      catch (error) {
         if (!active) return;
-        if (farm) {
-          setState("ready");
-          replayOnReconnect();
-        } else if (user?.app_metadata.initial_farm_owner === true)
-          setState("setup");
-        else {
-          setMessage("Crop RX needs to finish your farm setup.");
-          setState("blocked");
-        }
-      })
+        setMessage(farmerError(error, "open your farm"));
+        setState("blocked");
+      }
+    };
+    const reconnect = () => { void replayOnReconnect() };
+    window.addEventListener("online", reconnect);
+    if (user) void loadFarmAccess(user.id, true)
+      .then(acceptValidatedAccess)
       .catch((error: unknown) => {
         if (!active) return;
         setMessage(farmerError(error, "open your farm"));
@@ -404,7 +435,7 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
       });
     return () => {
       active = false;
-      window.removeEventListener("online", replayOnReconnect);
+      window.removeEventListener("online", reconnect);
     };
   }, [user?.app_metadata.initial_farm_owner, user?.id]);
   if (state === "checking")
@@ -413,20 +444,37 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
         <p className="opening-farm">Opening your farm…</p>
       </main>
     );
-  if (state === "setup" && user)
-    return <InitialFarmSetup onComplete={() => setState("ready")} />;
+  if (state === "setup")
+    return <InitialFarmSetup onComplete={async () => { const latest = await loadFarmAccess(user.id, true); setAccess(latest); setState(latest.selectedFarmId ? "ready" : "choose"); }} />;
+  if (state === "choose" && access?.userId === user.id)
+    return <main className="login-page"><section className="login-panel farm-choice" aria-labelledby="farm-choice-title"><h1 id="farm-choice-title">Choose a farm</h1><p>Your records and saved offline work stay separated by farm.</p><div className="farm-choice-list">{access.farms.map((farm) => <button className="primary-action" type="button" key={farm.id} onClick={() => { void selectFarm(user.id, farm.id).then(() => window.location.assign('/fields')).catch((error) => { setMessage(farmerError(error, 'open this farm')); setState('blocked') }) }}>{farm.name}</button>)}</div><RevokedFarmRecovery userId={user.id} /></section></main>;
   if (state === "blocked")
     return (
       <main className="login-page">
         <section className="login-panel">
           <p className="opening-farm">{message}</p>
+          <RevokedFarmRecovery userId={user.id} />
         </section>
       </main>
     );
-  return <>{children}</>;
+  if (access?.userId !== user.id || !access.selectedFarmId)
+    return (
+      <main className="login-page">
+        <p className="opening-farm">Opening your farm…</p>
+      </main>
+    );
+  const activeFarm = access.farms.find((farm) => farm.id === access.selectedFarmId);
+  if (!activeFarm) return null;
+  const chooseFarm = async (farmId: string) => {
+    if (farmId === activeFarm.id) return;
+    if (hasPendingFarmWork(user.id, activeFarm.id) && !window.confirm(`Saved changes are still waiting for ${activeFarm.name}. They will stay with that farm. Switch farms anyway?`)) return;
+    await selectFarm(user.id, farmId);
+    window.location.assign('/fields');
+  };
+  return <FarmAccessProvider value={{ farms: access.farms, activeFarm, source: access.source, chooseFarm }}>{children}</FarmAccessProvider>;
 }
 
-function InitialFarmSetup({ onComplete }: { onComplete: () => void }) {
+function InitialFarmSetup({ onComplete }: { onComplete: () => Promise<void> }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submitLock = useRef(createSubmitLock());
@@ -444,7 +492,7 @@ function InitialFarmSetup({ onComplete }: { onComplete: () => void }) {
           form.get("entityType") ?? "llc",
         ) as EntityType,
       });
-      onComplete();
+      await onComplete();
     } catch (caught) {
       setError(farmerError(caught, "finish your setup"));
     } finally {
@@ -501,11 +549,11 @@ function InitialFarmSetup({ onComplete }: { onComplete: () => void }) {
   );
 }
 
-function Navigation({ className }: { className: string }) {
+function Navigation({ className, items = navigation, onNavigate }: { className: string; items?: NavigationItem[]; onNavigate?: () => void }) {
   return (
     <div className={className}>
-      {navigation.map((item) => (
-        <NavLink key={item.path} className="nav-link" to={item.path}>
+      {items.map((item) => (
+        <NavLink key={item.path} className="nav-link" to={item.path} onClick={onNavigate}>
           <span className="nav-icon" aria-hidden="true">
             {item.icon}
           </span>
@@ -513,6 +561,37 @@ function Navigation({ className }: { className: string }) {
         </NavLink>
       ))}
     </div>
+  );
+}
+
+function MobileNavigation() {
+  const location = useLocation();
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreActive = mobileMoreNavigation.some((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`));
+  useEffect(() => setMoreOpen(false), [location.pathname]);
+  return (
+    <>
+      {moreOpen && (
+        <section className="mobile-more-menu" id="mobile-more-menu" aria-label="More Farm Rx destinations">
+          <header><strong>More</strong><button type="button" onClick={() => setMoreOpen(false)} aria-label="Close more navigation">Close</button></header>
+          <Navigation className="mobile-more-grid" items={mobileMoreNavigation} onNavigate={() => setMoreOpen(false)} />
+        </section>
+      )}
+      <nav className="mobile-nav" aria-label="Farm Rx navigation">
+        <div className="mobile-nav-list">
+          {mobilePrimaryNavigation.map((item) => (
+            <NavLink key={item.path} className="nav-link" to={item.path}>
+              <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+              <span>{item.label}</span>
+            </NavLink>
+          ))}
+          <button className={`nav-link mobile-more-toggle${moreActive ? " active" : ""}`} type="button" aria-expanded={moreOpen} aria-controls="mobile-more-menu" onClick={() => setMoreOpen((open) => !open)}>
+            <span className="nav-icon" aria-hidden="true"><NavGlyph d="M5 12h.01M12 12h.01M19 12h.01" /></span>
+            <span>More</span>
+          </button>
+        </div>
+      </nav>
+    </>
   );
 }
 

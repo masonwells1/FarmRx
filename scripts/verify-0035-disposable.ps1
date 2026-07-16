@@ -2,18 +2,20 @@ $ErrorActionPreference = 'Stop'
 $name = "farmrx-0035-$PID"
 $root = Split-Path -Parent $PSScriptRoot
 $passed = $false
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker CLI is required for the disposable 0035 proof but is not available on PATH.' }
 try {
-  docker run --rm -d --name $name -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=farmrx_disposable postgres:16 | Out-Null
-  for ($i = 0; $i -lt 30; $i++) { if ((docker exec $name pg_isready -U postgres -d farmrx_disposable 2>$null) -match 'accepting connections') { break }; Start-Sleep -Milliseconds 500 }
-  if ((docker exec $name pg_isready -U postgres -d farmrx_disposable 2>$null) -notmatch 'accepting connections') { throw 'Disposable postgres:16 did not become ready.' }
-  $bootstrap = "create role anon nologin; create role authenticated nologin; create role service_role nologin; create schema auth; create table auth.users (id uuid primary key, email text); create function auth.uid() returns uuid language sql stable as `$`$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid `$`$; create schema storage; create table storage.buckets (id text primary key, name text not null, public boolean not null default false, file_size_limit bigint, allowed_mime_types text[]); create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text not null, name text not null, owner uuid); alter table storage.objects enable row level security;"
+  docker run --rm -d --name $name -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=farmrx_disposable postgres:17 | Out-Null
+  $ready = $false
+  for ($i = 0; $i -lt 30; $i++) { if ((docker exec $name sh -c 'grep -qx postgres /proc/1/comm && pg_isready -U postgres -d farmrx_disposable' 2>$null) -match 'accepting connections') { $ready = $true; break }; Start-Sleep -Milliseconds 500 }
+  if (!$ready) { throw 'Disposable postgres:17 did not become ready.' }
+  $bootstrap = "create role anon nologin; create role authenticated nologin; create role service_role nologin; create schema auth; create table auth.users (id uuid primary key, email text); create function auth.uid() returns uuid language sql stable as `$`$ select coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub', nullif(current_setting('request.jwt.claim.sub', true), ''))::uuid `$`$; create schema storage; create table storage.buckets (id text primary key, name text not null, public boolean not null default false, file_size_limit bigint, allowed_mime_types text[]); create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text not null, name text not null, owner uuid); alter table storage.objects enable row level security;"
   $bootstrap | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable
   Get-ChildItem (Join-Path $root 'supabase/migrations') -Filter '*.sql' | Sort-Object Name | ForEach-Object { (Get-Content -Raw $_.FullName) | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable; if ($LASTEXITCODE -ne 0) { throw "Migration failed: $($_.Name)" } }
   @'
 insert into auth.users(id,email) values ('00000000-0000-4000-8000-000000000001','probe@example.test');
-select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',false);
+select set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-000000000001"}',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 insert into public.farms(id,name,created_by) values ('00000000-0000-4000-8000-000000000010','Probe Farm','00000000-0000-4000-8000-000000000001');
-insert into public.farm_memberships(farm_id,user_id,role,status) values ('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000001','owner','active') on conflict(farm_id,user_id) do update set role='owner',status='active';
 insert into public.entities(id,farm_id,name,entity_type) values ('00000000-0000-4000-8000-000000000020','00000000-0000-4000-8000-000000000010','Probe Entity','individual');
 insert into public.fields(id,farm_id,operating_entity_id,name,total_acres) values ('00000000-0000-4000-8000-000000000030','00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000020','Probe Field',10);
 insert into public.crop_assignments(id,farm_id,field_id,crop_year,commodity_id,planted_acres) values ('00000000-0000-4000-8000-000000000040','00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000030',2026,'corn_yellow',10);
@@ -29,16 +31,38 @@ do $$ begin
  if (select count(*) from public.notifications where dedupe_key like 'program:%:due:%') <> 1 then raise exception 'client and scheduler generators produced duplicate notifications'; end if;
  if (select count(*) from public.push_deliveries) <> 1 then raise exception 'due generation queue missing or duplicated'; end if;
  if (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname in ('push_deliveries','service_log_meter_readings','alert_rule_states') and c.relrowsecurity) <> 3 then raise exception '0035 table missing row level security'; end if;
- -- Claim honors the in-flight backoff: a second sweep inside the window gets nothing.
+ if has_function_privilege('authenticated','public.claim_push_deliveries(integer)','execute') or has_function_privilege('anon','public.claim_push_deliveries(integer)','execute') then raise exception '0038 widened push-claim grants'; end if;
+ if has_function_privilege('authenticated','public.finish_push_delivery(uuid,boolean,text)','execute') or has_function_privilege('anon','public.finish_push_delivery(uuid,boolean,text)','execute') then raise exception '0038 widened push-finish grants'; end if;
+ if has_function_privilege('service_role','public.claim_push_deliveries(integer)','execute') or has_function_privilege('service_role','public.finish_push_delivery(uuid,boolean,text)','execute') then raise exception '0039 left the legacy parent push protocol executable'; end if;
+ if not has_function_privilege('service_role','public.claim_push_delivery_targets(uuid,integer)','execute') or not has_function_privilege('service_role','public.finish_push_delivery_target(uuid,text,text)','execute') or not has_function_privilege('service_role','public.get_push_delivery_health(uuid)','execute') then raise exception '0039 target push protocol grants are incomplete'; end if;
+ if not has_function_privilege('authenticated','public.generate_due_program_notifications(uuid,date)','execute') or has_function_privilege('anon','public.generate_due_program_notifications(uuid,date)','execute') then raise exception '0038 changed Program generator grants'; end if;
+ if has_function_privilege('service_role','public.request_uses_service_role()','execute') or has_function_privilege('authenticated','public.request_uses_service_role()','execute') or has_function_privilege('anon','public.request_uses_service_role()','execute') then raise exception 'internal claim helper is directly executable'; end if;
+ -- Modern JSON claims are authoritative. A conflicting legacy service role
+ -- must not elevate authenticated or anonymous requests.
+ perform set_config('request.jwt.claims','{"role":"authenticated"}',true);
  perform set_config('request.jwt.claim.role','service_role',true);
- if (select count(*) from public.claim_push_deliveries(25)) <> 1 then raise exception 'first claim did not return the pending delivery'; end if;
- if (select count(*) from public.claim_push_deliveries(25)) <> 0 then raise exception 'second claim double-claimed an in-flight delivery'; end if;
- -- A failure recorded on a NEVER-claimed row must stamp claimed_at so the sweep can retry it.
- insert into public.notifications(id,farm_id,user_id,category,title,created_by) values ('00000000-0000-4000-8000-0000000000b0','00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000001','task','Probe unclaimed failure','00000000-0000-4000-8000-000000000001');
- perform public.finish_push_delivery((select id from public.push_deliveries where notification_id='00000000-0000-4000-8000-0000000000b0'),false,'probe failure');
- if (select claimed_at from public.push_deliveries where notification_id='00000000-0000-4000-8000-0000000000b0') is null then raise exception 'failed-unclaimed delivery left claimed_at null (permanently unretryable)'; end if;
- update public.push_deliveries set claimed_at=now()-interval '6 minutes' where notification_id='00000000-0000-4000-8000-0000000000b0';
- if (select count(*) from public.claim_push_deliveries(25)) <> 1 then raise exception 'failed delivery past backoff was not reclaimed'; end if;
+ begin perform * from public.claim_push_deliveries(25); raise exception 'authenticated claim was accepted'; exception when others then if sqlerrm <> 'server delivery only' then raise; end if; end;
+ begin perform public.finish_push_delivery('00000000-0000-4000-8000-0000000000ff',true); raise exception 'authenticated finish was accepted'; exception when others then if sqlerrm <> 'server delivery only' then raise; end if; end;
+ begin perform public.generate_due_program_notifications('00000000-0000-4000-8000-000000000010',current_date); raise exception 'legacy role overrode modern authenticated Program request'; exception when others then if sqlerrm <> 'authentication is required' then raise; end if; end;
+ perform set_config('request.jwt.claims','{"role":"anon"}',true);
+ begin perform * from public.claim_push_deliveries(25); raise exception 'anonymous claim was accepted'; exception when others then if sqlerrm <> 'server delivery only' then raise; end if; end;
+ begin perform public.finish_push_delivery('00000000-0000-4000-8000-0000000000ff',true); raise exception 'anonymous finish was accepted'; exception when others then if sqlerrm <> 'server delivery only' then raise; end if; end;
+ begin perform public.generate_due_program_notifications('00000000-0000-4000-8000-000000000010',current_date); raise exception 'anonymous Program generation was accepted'; exception when others then if sqlerrm <> 'authentication is required' then raise; end if; end;
+ -- Malformed modern JSON also fails closed instead of falling back to legacy.
+ perform set_config('request.jwt.claims','not-json',true);
+ if public.request_uses_service_role() then raise exception 'malformed modern claims fell back to legacy service role'; end if;
+ -- Legacy remains a compatibility fallback only when modern claims are absent.
+ perform set_config('request.jwt.claims','',true);
+ if not public.request_uses_service_role() then raise exception 'legacy service-role fallback was not preserved'; end if;
+
+ -- JSON-only service-role Program generation succeeds. The legacy parent push
+ -- protocol is retired once 0039 makes per-device targets authoritative.
+ perform set_config('request.jwt.claims','{"role":"service_role"}',true);
+ perform set_config('request.jwt.claim.role','',true);
+ perform public.generate_due_program_notifications('00000000-0000-4000-8000-000000000010',current_date);
+ begin perform * from public.claim_push_deliveries(25); raise exception 'legacy claim remained active'; exception when others then if sqlerrm <> 'legacy push protocol retired' then raise; end if; end;
+ begin perform public.finish_push_delivery((select id from public.push_deliveries where notification_id=(select id from public.notifications where dedupe_key like 'program:%:due:%')),true); raise exception 'legacy finish remained active'; exception when others then if sqlerrm <> 'legacy push protocol retired' then raise; end if; end;
+ perform set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-000000000001"}',true);
  perform set_config('request.jwt.claim.role','',true);
  insert into public.farm_tasks(id,farm_id,title,status,priority,source,program_assigned_pass_id,program_cycle_key,created_by) values ('00000000-0000-4000-8000-000000000071','00000000-0000-4000-8000-000000000010','Program task','todo','normal','program','00000000-0000-4000-8000-000000000070','probe','00000000-0000-4000-8000-000000000001');
  begin update public.farm_tasks set status='done' where id='00000000-0000-4000-8000-000000000071'; raise exception 'direct program task status change accepted'; exception when others then if position('PROGRAM_TASK_STATUS_MANAGED_BY_PROGRAM' in sqlerrm)=0 then raise; end if; end;
@@ -56,7 +80,7 @@ do $$ begin
  if (select count(*) from public.alert_rule_states where rule_id='00000000-0000-4000-8000-000000000090') <> 1 then raise exception 'alert transition unique receipt missing'; end if;
  -- A rule id from another farm must be rejected even for a user who can edit both.
  insert into public.farms(id,name,created_by) values ('00000000-0000-4000-8000-000000000011','Second Farm','00000000-0000-4000-8000-000000000001');
- insert into public.farm_memberships(farm_id,user_id,role,status) values ('00000000-0000-4000-8000-000000000011','00000000-0000-4000-8000-000000000001','owner','active') on conflict(farm_id,user_id) do update set role='owner',status='active';
+ perform set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1,'00000000-0000-4000-8000-000000000011',1)::text)::text,true);
  begin perform public.record_marketing_alert_transition('00000000-0000-4000-8000-000000000011','00000000-0000-4000-8000-000000000090',true); raise exception 'cross-farm alert rule accepted'; exception when others then if position('alert rule not found for this farm' in sqlerrm)=0 then raise; end if; end;
 end $$;
 '@ | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable

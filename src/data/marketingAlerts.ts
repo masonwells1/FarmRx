@@ -22,6 +22,8 @@ export function validateMarketingAlertRule(value: MarketingAlertRule): string[] 
 export function latestManualCashBid(workspace: GrainWorkspace, commodityId: string): CashBid | null {
   return workspace.cash_bids.filter((bid) => bid.commodity_id === commodityId && bid.cash_price !== null && !isMarsBid(bid)).sort((left, right) => right.bid_date.localeCompare(left.bid_date) || right.updated_at.localeCompare(left.updated_at))[0] ?? null
 }
+export const MARKETING_BID_MAX_AGE_DAYS = 2
+export function freshManualCashBid(workspace: GrainWorkspace, commodityId: string, today: string, maxAgeDays = MARKETING_BID_MAX_AGE_DAYS): CashBid | null { const bid = latestManualCashBid(workspace, commodityId); return bid && dayDifference(today, bid.bid_date) >= 0 && dayDifference(today, bid.bid_date) <= maxAgeDays ? bid : null }
 export function latestManualCashPrice(workspace: GrainWorkspace, commodityId: string): number | null { return latestManualCashBid(workspace, commodityId)?.cash_price ?? null }
 
 function commodityName(workspace: GrainWorkspace, rule: MarketingAlertRule) { return workspace.fields.commodities.find((item) => item.id === rule.commodity_id)?.name ?? rule.commodity_id }
@@ -35,7 +37,7 @@ export function evaluateMarketingAlertRules(workspace: GrainWorkspace, now = new
     if (!rule.active || validateMarketingAlertRule(rule).length) continue
     const commodity = commodityName(workspace, rule); let message: string | null = null; let kind: MarketingAlertEvent['kind'] = 'marketing_price_target'
     if (rule.rule_type === 'price_target' && rule.threshold !== null && rule.direction !== null) {
-      const bid = latestManualCashBid(workspace, rule.commodity_id); const price = bid?.cash_price ?? null
+      const bid = freshManualCashBid(workspace, rule.commodity_id, today); const price = bid?.cash_price ?? null
       const met = price !== null && (rule.direction === 'at_or_above' ? price >= rule.threshold : price <= rule.threshold)
       if (met && bid) { kind = 'marketing_price_target'; message = `${rule.crop_year} ${commodity} cash price is ${money(price)} (bid ${bidDate(bid.bid_date)}). You set ${rule.direction === 'at_or_above' ? 'at or above' : 'at or below'} ${money(rule.threshold)}.` }
     } else if (rule.rule_type === 'pct_marketed_goal' && rule.threshold !== null) {

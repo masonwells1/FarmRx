@@ -1,36 +1,56 @@
 import { isTransportFailure } from './QueuedFieldsRepository'
 import { HarvestWriteQueue, harvestWriteQueueKey, type HarvestQueueEntryV1 } from './harvestWriteQueue'
 import { setModuleSyncRetryAction, setModuleSyncStatus } from './syncStatus'
-import { validateHarvestDraft, type HarvestDraft, type HarvestRecord, type HarvestRepository } from './harvest'
+import { validateHarvestDraft, type HarvestData, type HarvestDraft, type HarvestRecord, type HarvestRepository } from './harvest'
 import type { StorageLike } from './writeQueue'
 import type { SupabaseHarvestRepository } from './SupabaseHarvestRepository'
+import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, writeWorkspaceCache } from './workspaceCache'
+import { queueTransaction } from './queueTransaction'
+import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
+import type { FarmOperationContext } from './farmOperationContext'
 
 const blocked = 'Saved changes on this device need attention. Nothing was deleted.'
 type Context = { userId: string; farmId: string }
-const processLocks = new Map<string, Promise<void>>()
-const leaseTtl = 6_000
-function pendingRecord(entry: HarvestQueueEntryV1, context: Context): HarvestRecord { return { ...entry.draft, id: entry.draft.crop_assignment_id, farm_id: context.farmId, pending: true } }
-async function serial<T>(key: string, task: () => Promise<T>): Promise<T> { const previous = processLocks.get(key) ?? Promise.resolve(); let release!: () => void; const next = new Promise<void>((resolve) => { release = resolve }); processLocks.set(key, previous.then(() => next)); await previous; try { return await task() } finally { release(); if (processLocks.get(key) === next) processLocks.delete(key) } }
+function pendingRecord(entry: HarvestQueueEntryV1, context: Context): HarvestRecord { return { ...entry.draft, id: entry.draft.crop_assignment_id, farm_id: context.farmId, updated_at: entry.enqueuedAt, pending: true } }
 function waitingForCropAssignment(error: unknown) { return error instanceof Error && /crop assignment does not belong to this farm/i.test(error.message) }
-async function crossTabLock<T>(key: string, storage: StorageLike, createId: () => string, task: (verify: () => void) => Promise<T>): Promise<T> { const name = `farm-rx-harvest:${key}`; if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(name, async () => task(() => undefined)); const leaseKey = `${key}:lease`; const token = createId(); let lease = ''; const owns = () => storage.getItem(leaseKey) === lease; const renew = () => { if (!owns()) throw new Error(blocked); lease = JSON.stringify({ token, expiresAt: Date.now() + leaseTtl }); storage.setItem(leaseKey, lease); if (!owns()) throw new Error(blocked) }; const existing = storage.getItem(leaseKey); try { if (existing) { const parsed = JSON.parse(existing) as { expiresAt?: unknown }; if (typeof parsed.expiresAt === 'number' && parsed.expiresAt > Date.now()) throw new Error(blocked) } lease = JSON.stringify({ token, expiresAt: Date.now() + leaseTtl }); storage.setItem(leaseKey, lease); if (!owns()) throw new Error(blocked); const timer = setInterval(() => { try { renew() } catch { /* the next guarded mutation fails closed */ } }, Math.floor(leaseTtl / 3)); try { return await task(renew) } finally { clearInterval(timer); if (owns()) storage.removeItem(leaseKey) } } catch (error) { throw error instanceof Error ? error : new Error(blocked) } }
 
 export class QueuedHarvestRepository implements HarvestRepository {
   constructor(private readonly live: SupabaseHarvestRepository, private readonly d: { getContext: () => Promise<Context>; projectRef: string; storage: StorageLike; createId: () => string; clock: () => string; isOffline: () => boolean }) { setModuleSyncRetryAction('harvest', () => this.inspectAndReplay()) }
-  private async source() { const context = await this.d.getContext(); return { context, queue: new HarvestWriteQueue(this.d.storage, harvestWriteQueueKey(this.d.projectRef, context.userId, context.farmId)) } }
-  private locked<T>(key: string, task: (verify: () => void) => Promise<T>) { return serial(key, () => crossTabLock(key, this.d.storage, this.d.createId, task)) }
-  async getData() { return this.live.getData() }
-  private async send(entry: HarvestQueueEntryV1) { return this.live.saveHarvestOperation(entry.draft, entry.operationId) }
+  private async source() { const operationContext = await captureQueuedOperationContext(this.d); const context = { userId: operationContext.userId, farmId: operationContext.farmId }; return { context, operationContext, queue: new HarvestWriteQueue(this.d.storage, harvestWriteQueueKey(this.d.projectRef, context.userId, context.farmId)) } }
+  private locked<T>(key: string, task: (verify: () => void) => Promise<T>) { return queueTransaction(key, this.d.storage, this.d.createId, task) }
+  async getData() {
+    const { context, operationContext, queue } = await this.source()
+    const verifyRead = () => verifyQueuedReadContext(this.d, operationContext)
+    const cacheScope = { projectRef: this.d.projectRef, ...context, module: 'harvest' }
+    try {
+      await this.inspectAndReplay(); await verifyRead()
+      const cacheFence = captureWorkspaceCacheFence(cacheScope)
+      const data = await this.live.getData(); await verifyRead()
+      await writeWorkspaceCache(cacheScope, data, cacheFence); await verifyRead()
+      return data
+    } catch (error) {
+      await verifyRead()
+      if (!isTransportFailure(error, this.d.isOffline())) throw error
+      const cached = await readWorkspaceCache<HarvestData>(cacheScope, operationalCacheMaxAgeMs); await verifyRead()
+      if (!cached) throw error
+      const data = structuredClone(cached.data)
+      for (const entry of queue.read().entries) data.fieldsData.crop_assignments = data.fieldsData.crop_assignments.map((row) => row.id === entry.draft.crop_assignment_id ? { ...row, harvested_bushels: entry.draft.harvested_bushels, harvest_date: entry.draft.harvest_date, actual_price_per_bu: entry.draft.actual_price_per_bu, updated_at: entry.enqueuedAt } : row)
+      await verifyRead(); return data
+    }
+  }
+  private async send(entry: HarvestQueueEntryV1, operationContext: FarmOperationContext) { await verifyQueuedOperationContext(this.d, operationContext, entry); return this.live.saveHarvestOperation(entry.draft, entry.operationId, operationContext) }
   async saveHarvest(draft: HarvestDraft) {
     const validation = validateHarvestDraft(draft); if (validation) throw new Error(validation)
-    const { context, queue } = await this.source(); const entry: HarvestQueueEntryV1 = { version: 1, module: 'harvest', kind: 'saveHarvest', operationId: this.d.createId(), userId: context.userId, farmId: context.farmId, enqueuedAt: this.d.clock(), draft: { crop_assignment_id: draft.crop_assignment_id, harvested_bushels: draft.harvested_bushels, harvest_date: draft.harvest_date, actual_price_per_bu: draft.actual_price_per_bu } }
-    return this.locked(queue.key, async (verify) => { verify(); if (this.d.isOffline() || queue.read().entries.length) { const next = queue.append(entry); setModuleSyncStatus('harvest', { kind: 'pending', pending: next.entries.length }); void this.inspectAndReplay(); return pendingRecord(entry, context) }
-      try { const result = await this.send(entry); verify(); setModuleSyncStatus('harvest', { kind: 'synced', pending: 0 }); return result } catch (error) { if (!isTransportFailure(error, this.d.isOffline())) throw error; verify(); const next = queue.append(entry); setModuleSyncStatus('harvest', { kind: 'pending', pending: next.entries.length }); void this.inspectAndReplay(); return pendingRecord(entry, context) } })
+    const { context, operationContext, queue } = await this.source(); const entry: HarvestQueueEntryV1 = { version: 1, module: 'harvest', kind: 'saveHarvest', operationId: this.d.createId(), userId: context.userId, farmId: context.farmId, enqueuedAt: this.d.clock(), draft: { crop_assignment_id: draft.crop_assignment_id, harvested_bushels: draft.harvested_bushels, harvest_date: draft.harvest_date, actual_price_per_bu: draft.actual_price_per_bu, ...(Object.hasOwn(draft, 'expected_updated_at') ? { expected_updated_at: draft.expected_updated_at ?? null } : {}) } }
+    return this.locked(queue.key, async (verify) => { const verifyOperation = async () => { verify(); await verifyQueuedOperationContext(this.d, operationContext, entry) }; await verifyOperation(); if (this.d.isOffline() || queue.read().entries.length) { await verifyOperation(); const next = queue.append(entry); setModuleSyncStatus('harvest', { kind: 'pending', pending: next.entries.length }); void this.inspectAndReplay(); return pendingRecord(entry, context) }
+      try { const result = await this.send(entry, operationContext); await verifyOperation(); setModuleSyncStatus('harvest', { kind: 'synced', pending: 0 }); return result } catch (error) { await verifyQueuedOperationContext(this.d, operationContext, entry); if (!isTransportFailure(error, this.d.isOffline())) throw error; await verifyOperation(); const next = queue.append(entry); setModuleSyncStatus('harvest', { kind: 'pending', pending: next.entries.length }); void this.inspectAndReplay(); return pendingRecord(entry, context) } })
   }
   async inspectAndReplay() {
     let source: Awaited<ReturnType<QueuedHarvestRepository['source']>>; try { source = await this.source() } catch { return }
-    const { context, queue } = source
+    const { context, operationContext, queue } = source
     try { await this.locked(queue.key, async (verify) => { let envelope = queue.read(); if (!envelope.entries.length) { setModuleSyncStatus('harvest', { kind: 'synced', pending: 0 }); return }; if (this.d.isOffline()) { setModuleSyncStatus('harvest', { kind: 'pending', pending: envelope.entries.length }); return }
-      while (envelope.entries.length) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); setModuleSyncStatus('harvest', { kind: 'syncing', pending: envelope.entries.length }); try { await this.send(head); verify(); envelope = queue.removeConfirmedHead(head.operationId) } catch (error) { if (isTransportFailure(error, this.d.isOffline()) || waitingForCropAssignment(error)) { setModuleSyncStatus('harvest', { kind: 'pending', pending: envelope.entries.length }); return } setModuleSyncStatus('harvest', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } }
+      const versions = new Map<string, string>()
+      while (envelope.entries.length) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); await verifyQueuedOperationContext(this.d, operationContext, head); setModuleSyncStatus('harvest', { kind: 'syncing', pending: envelope.entries.length }); try { const chained = versions.get(head.draft.crop_assignment_id); const saved = await this.send(chained ? { ...head, draft: { ...head.draft, expected_updated_at: chained } } : head, operationContext); versions.set(head.draft.crop_assignment_id, saved.updated_at); verify(); await verifyQueuedOperationContext(this.d, operationContext, head); envelope = queue.removeConfirmedHead(head.operationId) } catch (error) { await verifyQueuedOperationContext(this.d, operationContext, head); if (isTransportFailure(error, this.d.isOffline()) || waitingForCropAssignment(error)) { setModuleSyncStatus('harvest', { kind: 'pending', pending: envelope.entries.length }); return } setModuleSyncStatus('harvest', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } }
       setModuleSyncStatus('harvest', { kind: 'synced', pending: 0 }) })
     } catch { setModuleSyncStatus('harvest', { kind: 'blocked', pending: 0, message: blocked }) }
   }

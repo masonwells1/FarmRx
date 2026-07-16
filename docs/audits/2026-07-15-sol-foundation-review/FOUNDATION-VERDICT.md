@@ -1,59 +1,49 @@
 # Farm Rx Foundation Verdict
 
-**Review date:** 2026-07-15  
-**Reviewer:** Sol  
-**Verdict:** **NOT SOLID**
+**Review date:** 2026-07-15
+**Reviewer:** Sol
+**Original verdict:** **NOT SOLID**
+**Post-repair branch verdict:** **CONDITIONALLY SOLID**
 
-Farm Rx has a materially stronger database foundation than its current verdict suggests: all required build gates pass, all 35 migrations apply to fresh Postgres, the hardened Grain/Profitability/operational probes pass, and a fresh role matrix proves the intended manager/worker/read-only/rep/stranger boundaries. The deployed authenticated app also opens every major module successfully.
+The July 15 review found seven P1 and two P2 foundation defects. The repair loop closed the branch-level code and local-proof portion of all nine findings on `codex/farmrx-foundation-repair`. The complete foundation gate now passes forced TypeScript, the regression suite, production build, dependency audit, all migrations through 0037, disposable behavior probes, a fresh role/RLS matrix, four deliberate gate mutations, and 22 production-build browser tests across desktop and phone.
 
-The foundation is not ready for broad feature expansion because the offline promise fails in the deployed app, multi-farm/rep accounts are rejected by design, several local queues are unsafe across tabs, important mutable records still accept stale last-write-wins saves, and a third-party market widget executes JavaScript inside the authenticated Farm Rx origin without a Content Security Policy. Green regressions do not exercise any of those paths.
+This is not a production release verdict. Migrations 0036-0037, the scheduled Edge Function, GitHub scheduler secrets, revised Grain delivery function, and web security headers exist only on the repair branch. No live migration, function deployment, setting change, data write, web deployment, or merge occurred.
 
 ## Decision in plain English
 
-Do **not** keep stacking major features on this base yet. Pause feature expansion long enough to repair and prove the P1 items. Existing features can be demonstrated with a connection, but the app should not be represented as field-ready offline or ready for multi-customer Crop RX rep use.
+Farm Rx is now a usable foundation for controlled work, but it is not wise to resume major feature expansion until the branch is reviewed and the five release actions below are completed. The remaining risk is concentrated in deployment/live configuration and physical-device proof, not in a known unguarded P1 code path on this branch.
 
-## Top risks
+## What the branch now proves
 
-1. **Offline operation is not dependable.** After loading Fields online, cutting the network and reloading the deployed PWA produced only: “We could not reach Farm Rx. Check your signal and try again.” Queue setup also calls live Auth and `farms` endpoints before it can append an offline write.
-2. **A user with access to two farms cannot use any module.** `currentFarmId()` explicitly throws when RLS returns more than one farm. That breaks the natural Crop RX rep workflow as soon as a rep receives a second customer grant.
-3. **Some queues can lose or replay work during two-tab contention.** Inventory, Equipment/Tasks, Scouting, and Notifications lack the cross-tab lock used by Fields, Grain, Profitability, Programs, Harvest, and Field Log.
-4. **Stale saves can silently overwrite newer farm and financial data.** Many canonical writes are ID-based upserts with no row version or expected timestamp.
-5. **The authenticated browser trusts third-party JavaScript too broadly.** TradingView’s script runs as first-party code while Supabase session tokens persist in `localStorage`; production has no CSP header.
-6. **Alerts are not a dependable app-closed service.** Marketing and legacy Grain alerts are explicitly check-on-open. Spray alerts are component-lifecycle transitions. The repository contains no active scheduler configuration, and an external Supabase schedule could not be verified from this checkout.
-7. **The green test command is narrower than its name implies.** It is 28 TypeScript scripts using pure math and fake gateways; there is no component runner, browser E2E suite, CI workflow, migration reset gate, or live RLS matrix in `npm run regression`.
+- A previously loaded farm reopens offline from a user+farm+module IndexedDB cache; offline field creation survives reload; expired caches fail closed; sign-out clears readable private workspaces.
+- Multi-farm accounts receive an explicit picker and safe farm switcher. Browser proof keeps two farm caches and requests isolated.
+- Every queue family uses one Web Locks/renewable-lease transaction primitive and publishes cross-tab changes. A two-page test and a 40-concurrent-append regression preserve all operations.
+- Mutable Fields, Harvest, Grain, Profitability, Inventory products, Equipment, intervals, and tasks use expected versions. Disposable sessions prove stale saves cannot overwrite, lost-response retries are idempotent, and a stale full-field bundle cannot erase a crop added by another session.
+- TradingView runs only in a sandboxed opaque frame. The authenticated parent CSP allows first-party scripts only; the isolated frame has its own hash-pinned bootstrap and TradingView allowlist. Hostile script tests cannot reach parent DOM/session storage.
+- A server-owned scheduled evaluator handles farm-local Program reminders, fresh/scoped marketing transitions, spray false→true transitions, and durable push-queue creation. Replays create no duplicate business event.
+- Client and email-delivery alert rechecks now use the same two-day bid freshness rule and exact entity/enterprise scope.
+- Mobile navigation uses four primary destinations plus an accessible More surface. All destinations remain reachable with 48px targets and no overlap at 320, 375, 390, and 430 pixels.
+- CI and `npm run verify:foundation` exercise the real database/browser paths. Controlled route, queue-lock, RLS, and private-cache mutations all turn the gate red.
 
-## What is already solid
+## Remaining conditions
 
-- `npx tsc -b --force`, `npm run regression`, and `npm run build` all pass.
-- All 35 migrations apply successfully to a disposable PostgreSQL 16 database.
-- Disposable 0033, 0034, and 0035 behavior suites pass: bin capacity/nonnegative/commodity rules, replay idempotency, price-leg finalization, contract delivery limits, profitability matrix compare-and-swap, durable budget creation/copy, push claim/backoff, Program-task authority, cross-farm alert rejection, and service-log reversal.
-- A fresh role matrix passed:
-  - manager: read/edit/manage/private-financial access;
-  - worker: read/edit, but no manage/private-financial access by default;
-  - read-only: read only, no financial access by default;
-  - named rep: no access until both farm sharing and the explicit grant are active; after that, read/private-financial access but no edits;
-  - stranger: no access.
-- Tenant IDs are generally server-derived or rechecked, RLS is pervasive, Security Definer functions use fixed search paths, scouting storage is private/path-scoped, and sensitive financial reads use the stricter privacy helper.
-- The most dangerous Grain actions use strong server paths: append-only bin movement, immutable price-leg finalization, atomic firm-offer fill, and delivery recording.
-- Profitability matrix replacement has an expected-snapshot conflict guard. Inventory receipts/applications are bundled in RPCs. Program operations use receipt-style operation IDs and server-owned task transitions.
-- The live authenticated browser opened Fields, Grain, Inventory, Profitability, Equipment, Tasks, Weather, Field Log, Scouting, Harvest, Programs, and Alerts with HTTP 200 and no visible page alert.
-- The manifest and service worker are registered, the page is service-worker controlled, and the app shell itself is available offline.
+1. Migrations 0036 and 0037 have not been applied to linked Supabase.
+2. `scheduled-alert-sweep` has not been deployed, its scheduler secrets are not configured, and the GitHub schedule has not run against a test environment.
+3. The revised `deliver-grain-alert`, web build, CSP, and response headers are not deployed or live-verified.
+4. Real iOS/Android installed-PWA behavior, storage pressure, access revocation while offline, and physical app-closed push receipt remain unverified.
+5. Live Auth settings, security advisors, schema drift, bucket settings, and a real owner/worker/read-only/rep/revoked-rep/stranger matrix remain unverified because this checkout is not linked.
+6. The local Edge runtime could not be bundled/invoked: Deno is unavailable, `supabase functions serve` reported that the local Supabase stack is not running, and `vercel build` reported missing local project settings. Database and browser boundaries are proven; deployment-runtime proof remains a release gate.
 
-## What remains unverified
+## Top five release actions
 
-- Current live migration registry and schema drift. `supabase migration list --linked` was blocked because this checkout is not linked.
-- Live Supabase security-advisor state, public-signup setting, leaked-password protection, scheduled functions/cron, and edge-function secret readiness.
-- A real two-user/two-farm live isolation pass, including revoked membership and rep access.
-- Real device PWA install, iOS/Android offline write/reopen/replay, storage pressure, and conflict behavior.
-- Real phone push with a subscribed device while the app is closed; Resend delivery to production customer domains.
-- Live write proofs were deliberately not performed in this review.
+1. Review and apply migrations 0036-0037 in a non-production Supabase environment; rerun the disposable/session/RLS attacks against that environment.
+2. Deploy `scheduled-alert-sweep`, configure the three scheduler secrets, run it twice with a fixed test clock, and verify one Program/marketing/spray event plus one durable delivery.
+3. Redeploy `deliver-grain-alert` and the web app; verify CSP/security headers and the isolated market frame on every SPA route.
+4. Run a physical-device matrix: iOS and Android install, online load, force-close, offline reopen/create/edit/delete, reconnect, storage pressure, and a real app-closed push.
+5. Run read-only live drift/security checks and the real multi-account isolation matrix, then review and merge only if all results remain green.
 
-## Top five repair actions
+## Recommendation to Mason
 
-1. **Build real offline state:** persist the selected farm/user context and canonical workspaces in IndexedDB, let queues resolve context without network, project every queued operation into the UI, and prove close/reopen/offline/reconnect.
-2. **Make all writes concurrency-safe:** use one cross-tab queue lock everywhere and add server-side row versions/expected timestamps for mutable records; show a conflict instead of overwriting.
-3. **Close the browser privacy hole:** isolate TradingView in a sandboxed origin and add CSP, Referrer-Policy, Permissions-Policy, and related production headers.
-4. **Add an explicit farm selector:** persist a selected accessible farm, revalidate it through RLS, and prove owner/employee/rep behavior across at least two farms.
-5. **Make alerts and proof operational:** add a monitored server scheduler and shared canonical alert evaluator, then put browser E2E, role/RLS, disposable migrations, mobile screenshots, and offline/two-tab tests into CI.
+Do not add another major module yet. Small isolated fixes are reasonable on separate branches, but finish the release actions above before feature expansion. If they pass, the foundation can move from **CONDITIONALLY SOLID** to **SOLID**.
 
-The detailed evidence is in [FINDINGS.md](./FINDINGS.md), [WORKFLOW-COVERAGE-MATRIX.md](./WORKFLOW-COVERAGE-MATRIX.md), and [COMMAND-LOG.md](./COMMAND-LOG.md).
+Detailed evidence is in [FINDINGS.md](./FINDINGS.md), [WORKFLOW-COVERAGE-MATRIX.md](./WORKFLOW-COVERAGE-MATRIX.md), [TEST-AND-PROOF-GAPS.md](./TEST-AND-PROOF-GAPS.md), and [COMMAND-LOG.md](./COMMAND-LOG.md).

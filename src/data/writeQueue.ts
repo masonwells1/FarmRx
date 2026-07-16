@@ -15,6 +15,13 @@ const isDate = (value: unknown) => typeof value === 'string' && date.test(value)
 const nullableString = (value: unknown) => value === null || typeof value === 'string'
 const nullableNumber = (value: unknown) => value === null || (typeof value === 'number' && Number.isFinite(value))
 const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(value)
+const timestamp = (value: unknown) => typeof value === 'string' && !Number.isNaN(Date.parse(value))
+
+function isExpectedVersions(value: unknown): boolean {
+  if (value === null) return true
+  if (!isRecord(value) || !exact(value, ['field_updated_at', 'arrangement', 'crop_assignments']) || !timestamp(value.field_updated_at) || !isRecord(value.arrangement) || !exact(value.arrangement, ['id', 'updated_at']) || !isUuid(value.arrangement.id) || !timestamp(value.arrangement.updated_at) || !Array.isArray(value.crop_assignments)) return false
+  return value.crop_assignments.every((item) => isRecord(item) && exact(item, ['id', 'updated_at']) && isUuid(item.id) && timestamp(item.updated_at))
+}
 
 const legacyFlexTypes = ['price', 'yield', 'revenue']
 const structuredFlexMethods = ['base_plus_bonus', 'pct_of_revenue', 'base_flex_price', 'base_flex_price_yield']
@@ -38,7 +45,9 @@ function isCrop(value: unknown): boolean {
 }
 function isDraft(value: unknown): value is NormalizedQueueDraft {
   if (!isRecord(value)) return false
-  return exact(value, ['id', 'name', 'operating_entity_id', 'total_acres', 'county', 'state', 'legal_description', 'fsa_farm_number', 'fsa_tract_number', 'soil_productivity_index', 'arrangement', 'crop_assignments']) && isUuid(value.id) && typeof value.name === 'string' && isUuid(value.operating_entity_id) && finite(value.total_acres) && nullableString(value.county) && nullableString(value.state) && nullableString(value.legal_description) && nullableString(value.fsa_farm_number) && nullableString(value.fsa_tract_number) && nullableNumber(value.soil_productivity_index) && isArrangement(value.arrangement) && Array.isArray(value.crop_assignments) && value.crop_assignments.every(isCrop)
+  const legacyKeys = ['id', 'name', 'operating_entity_id', 'total_acres', 'county', 'state', 'legal_description', 'fsa_farm_number', 'fsa_tract_number', 'soil_productivity_index', 'arrangement', 'crop_assignments']
+  const shape = exact(value, legacyKeys) || exact(value, [...legacyKeys, 'expected_versions'])
+  return shape && (!Object.hasOwn(value, 'expected_versions') || isExpectedVersions(value.expected_versions)) && isUuid(value.id) && typeof value.name === 'string' && isUuid(value.operating_entity_id) && finite(value.total_acres) && nullableString(value.county) && nullableString(value.state) && nullableString(value.legal_description) && nullableString(value.fsa_farm_number) && nullableString(value.fsa_tract_number) && nullableNumber(value.soil_productivity_index) && isArrangement(value.arrangement) && Array.isArray(value.crop_assignments) && value.crop_assignments.every(isCrop)
 }
 function isEntry(value: unknown): value is FieldsQueueEntryV1 { return isRecord(value) && exact(value, ['version', 'module', 'kind', 'operationId', 'userId', 'farmId', 'enqueuedAt', 'draft']) && value.version === 1 && value.module === 'fields' && value.kind === 'saveField' && isUuid(value.operationId) && isUuid(value.userId) && isUuid(value.farmId) && typeof value.enqueuedAt === 'string' && !Number.isNaN(Date.parse(value.enqueuedAt)) && isDraft(value.draft) }
 export function parseFieldsQueue(serialized: string): FieldsQueueEnvelopeV1 { let parsed: unknown; try { parsed = JSON.parse(serialized) } catch { throw new Error(blocked) }; if (!isRecord(parsed) || !exact(parsed, ['version', 'entries']) || parsed.version !== 1 || !Array.isArray(parsed.entries) || !parsed.entries.every(isEntry)) throw new Error(blocked); return parsed as unknown as FieldsQueueEnvelopeV1 }

@@ -1,80 +1,67 @@
-# Repair Roadmap
+# Repair and Release Roadmap
 
-## Recommendation
+## Branch repair status
 
-Freeze major feature expansion. Small isolated bug fixes are reasonable, but the following foundation sequence should be completed and proved before adding another large module.
+The code-repair phases for SOL-FND-001 through SOL-FND-009 are complete on `codex/farmrx-foundation-repair`. The complete local gate passes. The remaining roadmap is deliberately a release-validation sequence; none of these steps was authorized or performed by this loop.
 
-## Phase 1 — Make offline real (highest priority)
+## 1. Database review and non-production apply
 
-**Closes:** SOL-FND-001 and part of SOL-FND-003.
+- Review migrations `0036_optimistic_concurrency.sql` and `0037_scheduled_alert_foundation.sql`.
+- Confirm live schema high-water and function signatures before applying.
+- Apply first to a non-production Supabase project.
+- Rerun 0036 stale-session, full-field child-set, receipt-replay, 0037 fixed-clock, and role/RLS probes through PostgREST.
+- Confirm the revoked legacy Field/Harvest RPC grants cannot be used by `authenticated`.
 
-- Persist authenticated user identity, the explicit selected farm, and per-module canonical snapshots in IndexedDB.
-- Let a queue open from validated cached context while offline; revalidate membership before replay.
-- Project queued create/edit/delete for every operation, not only inventory products.
-- Clear or quarantine farm caches and queued work on sign-out, revocation, or farm switch.
-- Add an honest data-age indicator and a recoverable “needs attention” path.
+**Exit:** all attacks pass against the deployed non-production database; no drift or unexpected policy change.
 
-**Exit proof:** close/reopen with no network; every core module shows cached data; queued writes survive another close/reopen; reconnect produces exactly one canonical effect; revoked access never replays.
+## 2. Edge Functions and scheduler activation
 
-## Phase 2 — Standardize concurrency and conflict control
+- Bundle and deploy `scheduled-alert-sweep`.
+- Redeploy the revised `deliver-grain-alert`.
+- Configure scheduler URL, scheduler secret, and anon key in the GitHub environment; configure required Supabase service/weather/push secrets without copying values into Git.
+- Invoke the sweep twice at a fixed test time; verify one business event, one push-delivery row, no duplicate, and visible structured logs.
+- Simulate one weather provider failure and one push-provider failure; verify other fields continue and the queue stays retryable.
 
-**Closes:** SOL-FND-003 and SOL-FND-004.
+**Exit:** app-closed Program, scoped marketing, and approved spray events are observed once in a test environment.
 
-- Extract the proven Web Locks + renewable localStorage lease into one shared queue transaction primitive.
-- Apply it to Inventory, Equipment/Tasks, Scouting, and Notifications for append, park, remove, and replay.
-- Add row versions or expected timestamps to Fields, Grain mutable records, Profitability budgets/costs/allocations, Equipment/Tasks, Harvest, and other mutable aggregates.
-- Return stable conflict codes and build a reload/compare/merge UI.
-- Keep append-only ledgers, operation receipts, and immutable finalization paths unchanged.
+## 3. Preview web deployment and browser policy proof
 
-**Exit proof:** two-tab barrier tests retain every queued operation once; two authenticated stale editors cannot overwrite one another; offline stale replay becomes an actionable conflict.
+- Deploy the branch to a preview.
+- Inspect headers on login, every SPA route, assets, and `/market-quote-frame.html`.
+- Confirm the authenticated parent permits only first-party scripts; the frame alone permits the hash-pinned bootstrap and TradingView.
+- Repeat the hostile widget test against preview and verify Supabase, Open-Meteo, PWA, fonts, and quotes still work.
 
-## Phase 3 — Close browser privacy and delivery hardening
+**Exit:** actual CDN headers match `vercel.json`; no blocked required request or broadened script trust.
 
-**Closes:** SOL-FND-005.
+## 4. Physical device and live-role matrix
 
-- Move TradingView execution into a sandboxed isolated origin/document.
-- Add a production CSP using nonces/hashes and explicit `connect-src`, `frame-src`, `img-src`, and `frame-ancestors`.
-- Add Referrer-Policy, Permissions-Policy, `nosniff`, and an intentional framing policy.
-- Inventory every third-party network request and document the data boundary.
+- iOS and Android: install, load each core module, force-close, go offline, reopen, create/edit/delete, close/reopen, reconnect, and inspect canonical rows.
+- Exercise quota/storage pressure and cache expiry.
+- Revoke a membership/rep grant while the device is offline; reconnect and prove no queued write replays and readable caches disappear.
+- Use owner, manager, worker, read-only, rep-off, rep-on, revoked rep, and stranger accounts.
+- Receive one real app-closed push and one controlled email.
 
-**Exit proof:** a controlled hostile widget script cannot read the parent DOM/localStorage; headers are present on live routes; all required Supabase, weather, font, and widget paths still work.
+**Exit:** physical and live authorization behavior matches local proof.
 
-## Phase 4 — Support the authorization model in the app
+## 5. Merge decision and production rollout
 
-**Closes:** SOL-FND-002.
+- Make the foundation workflow a required PR check.
+- Review the final branch diff and migration/rollback plan.
+- Merge only after steps 1-4 pass.
+- Apply production migrations and deploy functions/web in the reviewed order.
+- Run read-only production health, schema drift, security advisor, headers, scheduler logs, and queue health.
+- Monitor before resuming major feature work.
 
-- Add an explicit accessible-farm list and selected-farm state.
-- Show the active farm prominently and require a safe switch decision if work is pending.
-- Revalidate RLS access at startup, switch, reconnect, and replay.
-- Keep caches, push links, storage paths, and queue keys isolated by user+farm.
+**Exit:** verdict may move from **CONDITIONALLY SOLID** to **SOLID**.
 
-**Exit proof:** two-farm owner and two-grant rep can switch safely; worker/read-only controls match permissions; revocation removes access; stranger sees nothing.
+## Top five actions in order
 
-## Phase 5 — Make alerts canonical and operational
+1. Non-production migration apply plus session/RLS attacks.
+2. Edge Function deployment and scheduler/delivery proof.
+3. Preview deployment and real response-header/hostile-frame proof.
+4. Physical offline/push and live role/revocation matrix.
+5. Required CI, reviewed merge, staged production rollout, and post-deploy health.
 
-**Closes:** SOL-FND-006 and SOL-FND-008.
+## Feature guidance
 
-- Create one server-side evaluator shared by in-app, email, and push paths.
-- Enforce farm/year/commodity/entity/enterprise scope and explicit quote freshness/delivery semantics.
-- Add a monitored scheduled Edge Function for due Programs, marketing transitions, delivery queue drain, and any approved weather evaluator.
-- Store evaluation/delivery receipts so retries are idempotent and explainable.
-
-**Exit proof:** with every client closed, a scheduled transition produces exactly one correctly scoped notification and one delivery; stale bids and other-entity data never trigger it.
-
-## Phase 6 — Replace green-by-assumption with a release gate
-
-**Closes:** SOL-FND-007 and SOL-FND-009.
-
-- Put the fast regressions, fresh migrations, role matrix, 0033-0035 probes, Playwright flows, offline/two-tab/conflict tests, and mobile screenshots in CI.
-- Redesign the mobile bottom navigation before taking baseline screenshots.
-- Add a read-only production drift/health job; never let it mutate live state.
-
-**Exit proof:** one documented command/CI workflow proves the full story and fails on deliberate offline, RLS, stale-write, or responsive regressions.
-
-## Top five actions in execution order
-
-1. Persist offline context/data and prove close/reopen/replay.
-2. Add shared cross-tab queue locking and server conflict versions.
-3. Isolate TradingView and ship restrictive security headers.
-4. Add and prove the multi-farm selector/rep workflow.
-5. Build canonical scheduled alerts and make the complete browser/database proof gate mandatory.
+Do not start another major module until this roadmap passes. Small isolated fixes may continue on separate branches, but they should not widen the repair PR or bypass its release gates.

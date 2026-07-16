@@ -1,4 +1,5 @@
 import type { FieldDraft } from './fields'
+import type { FarmOperationContext } from './farmOperationContext'
 
 export interface FieldsRowBundle {
   farm: unknown
@@ -23,5 +24,5 @@ export interface SavedFieldBundle {
 
 export interface FieldsDataGateway {
   loadWorkspace(farmId: string): Promise<FieldsRowBundle>
-  saveFieldBundle(input: SaveFieldBundleInput): Promise<SavedFieldBundle>
+  saveFieldBundle(input: SaveFieldBundleInput, context: FarmOperationContext): Promise<SavedFieldBundle>
 }

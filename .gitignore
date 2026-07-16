@@ -10,3 +10,5 @@ dist/
 .vercel
 .env*
 .playwright-cli/
+playwright-report/
+test-results/

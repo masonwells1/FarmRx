@@ -269,6 +269,7 @@ function EquipmentForm({
         warranty_notes: String(f.get("warrantyNotes") ?? "").trim() || null,
         status: String(f.get("status")) as Equipment["status"],
         notes: String(f.get("notes") ?? "").trim() || null,
+        expected_updated_at: equipment?.updated_at ?? null,
       });
       done();
     } catch (caught) {
@@ -547,6 +548,7 @@ function EquipmentDetail({
             interval_cycle_key: task.interval_cycle_key,
             program_assigned_pass_id: task.program_assigned_pass_id,
             program_cycle_key: task.program_cycle_key,
+            expected_updated_at: task.updated_at,
           });
       } catch {
         setError(
@@ -924,6 +926,7 @@ function TaskColumn({
         interval_cycle_key: task.interval_cycle_key,
         program_assigned_pass_id: task.program_assigned_pass_id,
         program_cycle_key: task.program_cycle_key,
+        expected_updated_at: task.updated_at,
       });
       await refresh();
     } finally {
@@ -1117,6 +1120,7 @@ function TaskForm({
         interval_cycle_key: task?.interval_cycle_key ?? null,
         program_assigned_pass_id: task?.program_assigned_pass_id ?? null,
         program_cycle_key: task?.program_cycle_key ?? null,
+        expected_updated_at: task?.updated_at ?? null,
       });
       done(id);
     } catch (caught) {

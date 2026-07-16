@@ -1,8 +1,9 @@
 import { supabase } from '../lib/supabaseClient'
 import { farmLocalCalendarDate } from './farmDates'
+import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
 
 export interface DueProgramItemsGateway {
-  generateDueProgramItems(input: { farmId: string; operationId: string; localDate: string }): Promise<unknown>
+  generateDueProgramItems(input: { farmId: string; operationId: string; localDate: string }, context: FarmOperationContext): Promise<unknown>
 }
 
 export function localCalendarDate(now = new Date()) {
@@ -22,13 +23,15 @@ export async function replayProgramsThenGenerateDueItems(replayProgramsQueue: ()
  * skipped and retried by a later app/Programs/Alerts refresh.
  */
 export class DueProgramItemsService {
-  constructor(private readonly d: { gateway: DueProgramItemsGateway; getFarmId: () => Promise<string>; createId: () => string; today?: () => string }) {}
+  constructor(private readonly d: { gateway: DueProgramItemsGateway; getFarmId: () => Promise<string>; getOperationContext: () => Promise<FarmOperationContext>; verifyOperationContext: (expected: FarmOperationContext) => Promise<void>; createId: () => string; today?: () => string }) {}
 
   async generate() { return this.generateOperation(this.d.createId()) }
 
   async generateOperation(operationId: string): Promise<'generated' | 'skipped'> {
     try {
-      await this.d.gateway.generateDueProgramItems({ farmId: await this.d.getFarmId(), operationId, localDate: this.d.today?.() ?? localCalendarDate() })
+      const context = await this.d.getOperationContext(); await this.d.verifyOperationContext(context)
+      await this.d.gateway.generateDueProgramItems({ farmId: context.farmId, operationId, localDate: this.d.today?.() ?? localCalendarDate() }, context)
+      await this.d.verifyOperationContext(context)
       return 'generated'
     } catch {
       return 'skipped'
@@ -37,8 +40,8 @@ export class DueProgramItemsService {
 }
 
 export class SupabaseDueProgramItemsGateway implements DueProgramItemsGateway {
-  async generateDueProgramItems(input: { farmId: string; operationId: string; localDate: string }) {
-    const result = await supabase.rpc('generate_due_program_items', { p_farm_id: input.farmId, p_operation_id: input.operationId, p_local_date: input.localDate })
+  async generateDueProgramItems(input: { farmId: string; operationId: string; localDate: string }, context: FarmOperationContext) {
+    const result = await bindFarmOperationRequest(supabase.rpc('generate_due_program_items', { p_farm_id: input.farmId, p_operation_id: input.operationId, p_local_date: input.localDate }), context)
     if (result.error) throw result.error
     return result.data
   }

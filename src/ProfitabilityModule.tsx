@@ -535,7 +535,7 @@ export function ProfitabilityPage() {
             budget={budget}
             costs={costs}
             draftContext={insuranceDraftContext}
-            onSave={(next) => save(budget.id, () => profitabilityRepository.saveBudgetInsurance(budget.id, next))}
+            onSave={(next) => save(budget.id, () => profitabilityRepository.saveBudgetInsurance(budget.id, next, budget.updated_at))}
           />
         </>
       )}

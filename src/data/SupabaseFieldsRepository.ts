@@ -1,6 +1,7 @@
 import type { Arrangement, Commodity, CropAssignment, Entity, EntityType, Farm, Field, FieldDraft, FieldsData, FieldsRepository, FlexBonusFormula, FlexMethod, LandArrangementType } from './fields'
 import type { FieldsDataGateway, SaveFieldBundleInput } from './FieldsDataGateway'
 import { structuredFlexFormulaError } from './flexLeaseValidation'
+import type { FarmOperationContext } from './farmOperationContext'
 
 export interface SavedFieldOperation {
   field: Field
@@ -9,7 +10,7 @@ export interface SavedFieldOperation {
 }
 
 export interface FieldsOperationWriter {
-  saveFieldOperation(draft: FieldDraft, operationId: string): Promise<SavedFieldOperation>
+  saveFieldOperation(draft: FieldDraft, operationId: string, context: FarmOperationContext): Promise<SavedFieldOperation>
 }
 
 type Clock = () => string
@@ -116,11 +117,11 @@ export function normalizeFieldDraft(draft: FieldDraft, createId: IdSource): Norm
   })
   assert(new Set(assignments.map((row) => `${row.crop_year}|${row.commodity_id}|${row.planting_sequence}`)).size === assignments.length, 'Crop assignments must have unique crop, year, and planting sequence combinations.')
   const existingArrangementId = (draft.arrangement as FieldDraft['arrangement'] & { id?: string }).id
-  return { ...draft, id: draft.id ?? createId(), name: draft.name.trim(), county: cleanText(draft.county), state: cleanText(draft.state), legal_description: cleanText(draft.legal_description), fsa_farm_number: cleanText(draft.fsa_farm_number), fsa_tract_number: cleanText(draft.fsa_tract_number), arrangement: { ...draft.arrangement, id: existingArrangementId ?? createId(), landlord_name: cleanText(draft.arrangement.landlord_name), landlord_phone: cleanText(draft.arrangement.landlord_phone), landlord_contact_notes: cleanText(draft.arrangement.landlord_contact_notes), notes: cleanText(draft.arrangement.notes) }, crop_assignments: assignments }
+  return { ...draft, id: draft.id || createId(), name: draft.name.trim(), county: cleanText(draft.county), state: cleanText(draft.state), legal_description: cleanText(draft.legal_description), fsa_farm_number: cleanText(draft.fsa_farm_number), fsa_tract_number: cleanText(draft.fsa_tract_number), arrangement: { ...draft.arrangement, id: existingArrangementId || createId(), landlord_name: cleanText(draft.arrangement.landlord_name), landlord_phone: cleanText(draft.arrangement.landlord_phone), landlord_contact_notes: cleanText(draft.arrangement.landlord_contact_notes), notes: cleanText(draft.arrangement.notes) }, crop_assignments: assignments }
 }
 
 export class SupabaseFieldsRepository implements FieldsRepository, FieldsOperationWriter {
-  constructor(private readonly dependencies: { gateway: FieldsDataGateway; getFarmId: () => Promise<string>; createId: IdSource; clock: Clock }) {}
+  constructor(private readonly dependencies: { gateway: FieldsDataGateway; getFarmId: () => Promise<string>; getOperationContext: () => Promise<FarmOperationContext>; verifyOperationContext: (expected: FarmOperationContext) => Promise<void>; createId: IdSource; clock: Clock }) {}
 
   async getData(): Promise<FieldsData> {
     const farmId = await this.dependencies.getFarmId()
@@ -130,12 +131,14 @@ export class SupabaseFieldsRepository implements FieldsRepository, FieldsOperati
     return data
   }
 
-  async saveField(draft: FieldDraft): Promise<Field> { return (await this.saveFieldOperation(draft, this.dependencies.createId())).field }
+  async saveField(draft: FieldDraft): Promise<Field> { return (await this.saveFieldOperation(draft, this.dependencies.createId(), await this.dependencies.getOperationContext())).field }
 
-  async saveFieldOperation(draft: FieldDraft, operationId: string): Promise<SavedFieldOperation> {
+  async saveFieldOperation(draft: FieldDraft, operationId: string, context: FarmOperationContext): Promise<SavedFieldOperation> {
     const normalized = normalizeFieldDraft(draft, this.dependencies.createId)
-    const input: SaveFieldBundleInput = { farmId: await this.dependencies.getFarmId(), operationId, draft: normalized }
-    const saved = await this.dependencies.gateway.saveFieldBundle(input)
+    await this.dependencies.verifyOperationContext(context)
+    const input: SaveFieldBundleInput = { farmId: context.farmId, operationId, draft: normalized }
+    const saved = await this.dependencies.gateway.saveFieldBundle(input, context)
+    await this.dependencies.verifyOperationContext(context)
     const field = mapField(saved.field)
     const arrangement = mapArrangement(saved.arrangement)
     const assignments = saved.cropAssignments.map(mapCropAssignment)

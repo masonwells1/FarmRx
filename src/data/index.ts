@@ -1,5 +1,5 @@
-import { supabase } from '../lib/supabaseClient'
 import { supabaseConfig } from '../lib/supabaseConfig'
+import { currentFarmContext, currentUserId } from '../auth/farmContext'
 import { moduleBackends } from './backends'
 import { QueuedFieldsRepository } from './QueuedFieldsRepository'
 import { createSupabaseGrainServices } from './createSupabaseGrainServices'
@@ -16,27 +16,20 @@ import { SupabaseFieldsDataGateway } from './SupabaseFieldsDataGateway'
 import { SupabaseFieldsRepository } from './SupabaseFieldsRepository'
 import { createFieldLocationClient, SupabaseFieldLocationGateway } from './fieldLocation'
 import type { FieldsRepository } from './fields'
-
-async function currentUserId() {
-  const { data, error } = await supabase.auth.getUser()
-  if (error || !data.user) throw new Error('Your sign-in ended. Please sign in again.')
-  return data.user.id
-}
+import { captureFarmOperationContext, verifyFarmOperationContext } from './farmOperationContext'
 
 async function currentFarmId() {
-  await currentUserId()
-  const { data, error } = await supabase.from('farms').select('id')
-  if (error) throw error
-  if (data.length === 0) throw new Error('Crop RX needs to finish your farm setup.')
-  if (data.length > 1) throw new Error('We found more than one farm for this account. Crop RX needs to finish your setup.')
-  return data[0].id
+  return (await currentFarmContext()).farmId
 }
 
-const liveFields = new SupabaseFieldsRepository({ gateway: new SupabaseFieldsDataGateway(), getFarmId: currentFarmId, createId: () => crypto.randomUUID(), clock: () => new Date().toISOString() })
 const storage = localStorage
+const fieldsGetContext = async () => ({ userId: await currentUserId(), farmId: await currentFarmId() })
+const getFieldsOperationContext = async () => captureFarmOperationContext(storage, supabaseConfig.projectRef, await fieldsGetContext())
+const verifyFieldsOperationContext = async (expected: Awaited<ReturnType<typeof getFieldsOperationContext>>) => verifyFarmOperationContext(storage, expected, await getFieldsOperationContext())
+const liveFields = new SupabaseFieldsRepository({ gateway: new SupabaseFieldsDataGateway(), getFarmId: currentFarmId, getOperationContext: getFieldsOperationContext, verifyOperationContext: verifyFieldsOperationContext, createId: () => crypto.randomUUID(), clock: () => new Date().toISOString() })
 
 const queuedFields = new QueuedFieldsRepository(liveFields, {
-  getContext: async () => ({ userId: await currentUserId(), farmId: await currentFarmId() }),
+  getContext: fieldsGetContext,
   projectRef: supabaseConfig.projectRef,
   storage,
   createId: () => crypto.randomUUID(),
@@ -50,7 +43,7 @@ export const fieldLocationClient = createFieldLocationClient({ gateway: new Supa
 export const replayFieldLocationQueue = () => fieldLocationClient.replay()
 
 if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'supabase' || moduleBackends.inventory !== 'supabase' || moduleBackends.profitability !== 'supabase' || moduleBackends.equipment_tasks !== 'supabase' || moduleBackends.fieldLog !== 'supabase' || moduleBackends.scouting !== 'supabase' || moduleBackends.harvest !== 'supabase' || moduleBackends.programs !== 'supabase' || moduleBackends.notifications !== 'supabase') throw new Error('Farm Rx backend configuration is invalid.')
-const getContext = async () => ({ userId: await currentUserId(), farmId: await currentFarmId() })
+const getContext = currentFarmContext
 const liveProfitability = createSupabaseProfitabilityServices({ fieldsRepository, getFarmId: currentFarmId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const profitabilityRepository = liveProfitability.profitabilityRepository
 export const replayProfitabilityQueue = () => liveProfitability.replayProfitabilityQueue()
@@ -69,7 +62,7 @@ export const replayHarvestQueue = () => liveHarvest.replayHarvestQueue()
 const livePrograms = createSupabaseProgramsServices({ getFarmId: currentFarmId, getUserId: currentUserId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })
 export const programsRepository = livePrograms.programsRepository
 export const replayProgramsQueue = () => livePrograms.replayProgramsQueue()
-const dueProgramItems = new DueProgramItemsService({ gateway: new SupabaseDueProgramItemsGateway(), getFarmId: currentFarmId, createId: () => crypto.randomUUID() })
+const dueProgramItems = new DueProgramItemsService({ gateway: new SupabaseDueProgramItemsGateway(), getFarmId: currentFarmId, getOperationContext: getFieldsOperationContext, verifyOperationContext: verifyFieldsOperationContext, createId: () => crypto.randomUUID() })
 /** Best-effort only: later refreshes safely retry if this scan cannot reach Supabase. */
 export const generateDueProgramItems = () => dueProgramItems.generate()
 const liveScouting = createSupabaseScoutingServices({ getFarmId: currentFarmId, getUserId: currentUserId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: () => typeof navigator !== 'undefined' && navigator.onLine === false })

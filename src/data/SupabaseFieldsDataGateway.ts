@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabaseClient'
 import type { FieldsDataGateway, FieldsRowBundle, SaveFieldBundleInput, SavedFieldBundle } from './FieldsDataGateway'
+import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
 
 function required<T>(data: T, error: { message: string } | null): T {
   if (error) throw error
@@ -32,8 +33,8 @@ export class SupabaseFieldsDataGateway implements FieldsDataGateway {
     }
   }
 
-  async saveFieldBundle(input: SaveFieldBundleInput): Promise<SavedFieldBundle> {
-    const { data, error } = await supabase.rpc('save_field_bundle', { p_farm_id: input.farmId, p_operation_id: input.operationId, p_draft: input.draft })
+  async saveFieldBundle(input: SaveFieldBundleInput, context: FarmOperationContext): Promise<SavedFieldBundle> {
+    const { data, error } = await bindFarmOperationRequest(supabase.rpc('save_field_bundle_versioned', { p_farm_id: input.farmId, p_operation_id: input.operationId, p_expected_versions: input.draft.expected_versions ?? null, p_draft: input.draft }), context)
     if (error) throw error
     if (!data || typeof data !== 'object') throw new Error('Farm Rx could not confirm the field save. Please try again.')
     const result = data as Record<string, unknown>

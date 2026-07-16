@@ -41,7 +41,7 @@ class FakeGateway implements ProfitabilityDataGateway {
   readonly state = fixture(); fail = false; throwError: Error | null = null; mutate: Mutators = {}
   budgetInputs: CropBudget[] = []; costLineInputs: BudgetCostLineWrite[] = []; deletedCostLineIds: string[] = []
   allocationInputs: BudgetFieldAllocation[] = []; deletedAllocationIds: string[] = []
-  matrixInputs: ReplaceMatrixStepsInput[] = []; copyInputs: CopyBudgetInput[] = []; insuranceCalls = 0
+  matrixInputs: ReplaceMatrixStepsInput[] = []; copyInputs: CopyBudgetInput[] = []; insuranceCalls = 0; afterInsuranceMutation: (() => void) | null = null
   private guard() { if (this.throwError) throw this.throwError }
   async loadWorkspace(_farmId: string): Promise<ProfitabilityRowBundle> { if (this.fail) throw new Error('network timeout'); return structuredClone(this.state.bundle) }
   async upsertBudget(_farmId: string, row: CropBudget) {
@@ -52,7 +52,7 @@ class FakeGateway implements ProfitabilityDataGateway {
   async patchBudgetInsurance(_farmId: string, budgetId: string, patch: import('./profitability').InsuranceBudgetPatch) {
     this.guard(); this.insuranceCalls++; const current = this.state.bundle.budgets.find((item) => item.id === budgetId) as Record<string, unknown> | undefined
     if (!current) throw new Error('missing budget')
-    return { ...current, ...patch }
+    const response = { ...current, ...patch }; this.afterInsuranceMutation?.(); return response
   }
   async upsertCostLine(_farmId: string, row: BudgetCostLineWrite) {
     this.guard(); this.costLineInputs.push(structuredClone(row))
@@ -78,8 +78,8 @@ class FakeGateway implements ProfitabilityDataGateway {
     const response = input.steps.map((step) => ({ id: step.id, farm_id: this.state.scope.farm_id, budget_id: step.budget_id, axis: step.axis, step_order: step.sort_order, value: step.value, created_at: stamp, updated_at: stamp }))
     return this.mutate.matrix ? this.mutate.matrix(response) : response
   }
-  async createBudgetWithMatrix(input: { farmId: string; budget: CropBudget; matrixSteps: ProfitabilityMatrixStep[] }) {
-    this.guard(); this.budgetInputs.push(structuredClone(input.budget)); this.matrixInputs.push({ farmId: input.farmId, budgetId: input.budget.id, steps: structuredClone(input.matrixSteps), expectedSteps: null })
+  async createBudgetWithMatrix(input: { farmId: string; budget: CropBudget; matrixSteps: ProfitabilityMatrixStep[]; context: import('./farmOperationContext').FarmOperationContext }) {
+    this.guard(); this.budgetInputs.push(structuredClone(input.budget)); this.matrixInputs.push({ farmId: input.farmId, budgetId: input.budget.id, steps: structuredClone(input.matrixSteps), expectedSteps: null, context: input.context })
     return { ...input.budget, farm_id: this.state.scope.farm_id, notes: null }
   }
   async copyBudget(input: CopyBudgetInput) {
@@ -89,11 +89,12 @@ class FakeGateway implements ProfitabilityDataGateway {
     return this.mutate.copy ? this.mutate.copy(response) : response
   }
 }
-function repository(gateway: FakeGateway) {
+function repository(gateway: FakeGateway, verifyOperationContext: (context: import('./farmOperationContext').FarmOperationContext) => Promise<void> = async () => undefined) {
   const fields = gateway.state.fields
   const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fields), saveField: async () => { throw new Error('not used') } }
   let n = 900
-  return new SupabaseProfitabilityRepository({ gateway, fieldsRepository, getFarmId: async () => fields.farm.id, createId: () => uid(n++), clock: () => stamp })
+  const operationContext = { projectRef: 'test', userId: uid(10), farmId: fields.farm.id, generation: 1, token: uid(999), serverEpoch: 1 }
+  return new SupabaseProfitabilityRepository({ gateway, fieldsRepository, getFarmId: async () => fields.farm.id, getOperationContext: async () => operationContext, verifyOperationContext, createId: () => uid(n++), clock: () => stamp })
 }
 function memoryStorage(): StorageLike & { values: Map<string, string> } { return { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } } }
 
@@ -174,7 +175,8 @@ async function run() {
   await repo.saveCostLine({ ...workspace.cost_lines[0], amount_per_acre: 999 })
   assert(gateway.costLineInputs.at(-1)?.sort_order === 0, 'Updating an existing cost line must keep its own sort_order.')
   // 10: a forced duplicate sort_order fails closed (simulating the DB's unique constraint).
-  await rejects(() => repo.saveCostLineOperation({ id: uid(701), budget_id: savedBudget.id, category: 'labor', name: 'Labor', amount_per_acre: 10, sort_order: 0, created_at: stamp, updated_at: stamp }), 'A forced duplicate sort_order must fail closed.')
+  const operationContext = { projectRef: 'test', userId: uid(10), farmId: gateway.state.fields.farm.id, generation: 1, token: uid(999), serverEpoch: 1 }
+  await rejects(() => repo.saveCostLineOperation({ id: uid(701), budget_id: savedBudget.id, category: 'labor', name: 'Labor', amount_per_acre: 10, sort_order: 0, created_at: stamp, updated_at: stamp }, operationContext), 'A forced duplicate sort_order must fail closed.')
   // 11: matrix validation — fewer than two steps per axis, and duplicate values, are rejected before the gateway is called.
   const matrixCallsBefore = gateway.matrixInputs.length
   await rejects(() => repo.replaceMatrixSteps(savedBudget.id, [{ id: uid(710), budget_id: savedBudget.id, axis: 'price', value: 4, sort_order: 0 }]), 'Fewer than two steps per axis must reject.')
@@ -182,10 +184,10 @@ async function run() {
   await rejects(() => repo.replaceMatrixSteps(savedBudget.id, [{ id: uid(711), budget_id: savedBudget.id, axis: 'price', value: 4, sort_order: 0 }, { id: uid(712), budget_id: savedBudget.id, axis: 'price', value: 4, sort_order: 1 }, { id: uid(713), budget_id: savedBudget.id, axis: 'yield', value: 200, sort_order: 0 }, { id: uid(714), budget_id: savedBudget.id, axis: 'yield', value: 220, sort_order: 1 }]), 'Duplicate matrix values per axis must reject.')
   // 12: matrix idempotency — replaying the identical desired state succeeds twice with the same set.
   const validSteps = workspace.matrix_steps.filter((step) => step.budget_id === savedBudget.id)
-  const first = await repo.replaceMatrixStepsOperation(savedBudget.id, validSteps)
-  const second = await repo.replaceMatrixStepsOperation(savedBudget.id, validSteps)
+  const first = await repo.replaceMatrixStepsOperation(savedBudget.id, validSteps, undefined, operationContext)
+  const second = await repo.replaceMatrixStepsOperation(savedBudget.id, validSteps, undefined, operationContext)
   assert(first.length === second.length && first.length === validSteps.length, 'Replaying the identical matrix desired-state must be idempotent.')
-  await rejects(() => repo.replaceMatrixStepsOperation(savedBudget.id, validSteps, validSteps.map((step, index) => index === 0 ? { ...step, value: step.value + 1 } : step)), 'The fake gateway must enforce the expected matrix snapshot with MATRIX_CHANGED_ON_ANOTHER_DEVICE.')
+  await rejects(() => repo.replaceMatrixStepsOperation(savedBudget.id, validSteps, validSteps.map((step, index) => index === 0 ? { ...step, value: step.value + 1 } : step), operationContext), 'The fake gateway must enforce the expected matrix snapshot with MATRIX_CHANGED_ON_ANOTHER_DEVICE.')
   // 13: deep-copy integrity — new ids for the budget and every child, re-parented, no shared references.
   const sourceLine = workspace.cost_lines.find((line) => line.budget_id === savedBudget.id)!
   await repo.copyBudget(savedBudget.id, { ...savedBudget, id: uid(720), name: 'Deep copy', copied_from_budget_id: null })
@@ -294,7 +296,13 @@ async function run() {
   const corruptStorage = memoryStorage(); const corruptKey = profitabilityWriteQueueKey(supabaseConfig.projectRef, uid(10), gateway.state.scope.farm_id)
   corruptStorage.setItem(corruptKey, '{"version":1,"entries":[{"bad":true}]}')
   await rejects(async () => { new ProfitabilityWriteQueue(corruptStorage, corruptKey).read() }, 'A corrupt queue envelope must fail closed.')
-  // 22: release composition selected the live backend.
+  // 22 (FRX-D8-003): insurance is online-only, so it must re-check the captured
+  // access fence after the server accepts the patch and before publishing success.
+  const fenceGateway = new FakeGateway(); let insuranceRevoked = false; fenceGateway.afterInsuranceMutation = () => { insuranceRevoked = true }
+  const fenceRepo = repository(fenceGateway, async () => { if (insuranceRevoked) throw new Error('The signed-in account or selected farm changed before this operation could finish.') })
+  await rejects(() => fenceRepo.saveBudgetInsurance(String(fenceGateway.state.bundle.budgets[0].id), { rp_coverage_pct: 75, rp_aph_yield: 180, rp_projected_price: 4.62, rp_premium_per_acre: 0 }), 'An insurance patch published success after its access fence changed.')
+  assert(insuranceRevoked && fenceGateway.insuranceCalls === 1, 'The insurance fence regression did not reach an accepted server mutation.')
+  // 23: release composition selected the live backend.
   assert(moduleBackends.profitability === 'supabase', 'Release composition did not select the live Profitability backend.')
   console.log('SupabaseProfitabilityRepository regressions passed.')
 }

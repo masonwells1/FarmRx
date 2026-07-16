@@ -2,6 +2,7 @@
 import { clientsClaim } from 'workbox-core'
 import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching'
 import { NavigationRoute, registerRoute } from 'workbox-routing'
+import { safeNotificationLink } from './data/notificationLink'
 
 declare let self: ServiceWorkerGlobalScope & { __WB_MANIFEST: Array<unknown> }
 cleanupOutdatedCaches()
@@ -11,7 +12,6 @@ clientsClaim()
 registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html')))
 
 const plainObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
-const notificationLink = (value: unknown) => typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') ? value : '/notifications'
 const notificationText = (value: unknown, maximum: number, fallback = '') => typeof value === 'string' ? value.slice(0, maximum) : fallback
 
 self.addEventListener('push', (event) => {
@@ -20,11 +20,13 @@ self.addEventListener('push', (event) => {
   const payload = plainObject(parsed) ? parsed : {}
   const title = notificationText(payload.title, 160, 'Farm Rx alert') || 'Farm Rx alert'
   const body = notificationText(payload.body, 500)
-  const link = notificationLink(payload.link)
-  event.waitUntil(self.registration.showNotification(title, { body, data: { link } }))
+  const link = safeNotificationLink(payload.link, self.location.origin)
+  const notificationId = notificationText(payload.notification_id, 100)
+  const tag = notificationId ? `farm-rx-notification-${notificationId}` : undefined
+  event.waitUntil(self.registration.showNotification(title, { body, tag, data: { link, notificationId } }))
 })
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const link = notificationLink(event.notification.data?.link)
+  const link = safeNotificationLink(event.notification.data?.link, self.location.origin)
   event.waitUntil((async () => { const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true }); const existing = clients.find((client) => new URL(client.url).origin === self.location.origin); if (existing) { await existing.focus(); if ('navigate' in existing) await existing.navigate(link); return } await self.clients.openWindow(link) })())
 })

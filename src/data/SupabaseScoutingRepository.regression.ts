@@ -5,6 +5,7 @@ import { canEditScouting, SupabaseScoutingRepository } from './SupabaseScoutingR
 import { normalizeScoutingCoordinate, type ScoutingNoteDraft } from './scouting'
 import { uploadScoutingPhotos, validateScoutingPhotoFile } from './scoutingStorage'
 import { readScoutingCleanupOutbox, scoutingCleanupOutboxKey } from './scoutingCleanupOutbox'
+import { resetFarmGrantFromLive } from './farmRevocationFence'
 import type { StorageLike } from './writeQueue'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -44,7 +45,7 @@ class FakeGateway implements ScoutingDataGateway {
     return structuredClone(this.mutateDelete({ id: input.noteId, deleted: true, storage_paths: paths }))
   }
 }
-function live(gateway: FakeGateway, farmId = farm) { let next = 100; return new SupabaseScoutingRepository({ gateway, getFarmId: async () => farmId, getUserId: async () => actor, createId: () => uid(next++) }) }
+function live(gateway: FakeGateway, farmId = farm) { let next = 100; const operationContext = { projectRef: 'test', userId: actor, farmId, generation: 1, token: uid(900), serverEpoch: 1 }; return new SupabaseScoutingRepository({ gateway, getFarmId: async () => farmId, getUserId: async () => actor, getOperationContext: async () => operationContext, verifyOperationContext: async () => undefined, createId: () => uid(next++) }) }
 
 async function run() {
   // Group 1: SQL-faithful null notes and numeric(9,6) coordinates are accepted as canonical echoes.
@@ -66,20 +67,21 @@ async function run() {
 
   // Group 4: an upload followed by a transport failure queues the same operation and replays its photo metadata.
   const transportGateway = new FakeGateway(); transportGateway.saveFailure = new TypeError('network timeout'); let transportOffline = false; let next = 300; const transportStore = memory(); const removedAfterTransport: string[][] = []
-  const transportQueued = new QueuedScoutingRepository(live(transportGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'transport', storage: transportStore, createId: () => uid(next++), clock: () => stamp, isOffline: () => transportOffline, removeStoragePaths: async (paths: string[]) => { removedAfterTransport.push(paths); return paths } })
-  const uploadedDraft = draft(uid(22), true); const pendingSave = await transportQueued.saveNote(uploadedDraft); const transportQueue = new ScoutingWriteQueue(transportStore, scoutingWriteQueueKey('transport', actor, farm)); const queuedSave = transportQueue.read().entries[0]
-  assert(pendingSave.pending && queuedSave.kind === 'saveNote' && queuedSave.uploadedPaths[0] === uploadedDraft.photos[0].storage_path, 'Transport failures must retain uploaded photo path metadata.')
+  const transportQueued = new QueuedScoutingRepository(live(transportGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'transport', storage: transportStore, createId: () => uid(next++), clock: () => stamp, isOffline: () => transportOffline, uploadPhoto: async (_farmId, _fieldId, noteId) => `${farm}/${field}/${noteId}/uploaded.jpg`, removeStoragePaths: async (paths: string[]) => { removedAfterTransport.push(paths); return paths } })
+  const uploadedDraft = draft(uid(22)); const pendingSave = await transportQueued.saveNote(uploadedDraft, [{ type: 'image/jpeg', size: 1, name: 'field.jpg' } as File]); const transportQueue = new ScoutingWriteQueue(transportStore, scoutingWriteQueueKey('transport', actor, farm)); const queuedSave = transportQueue.read().entries[0]
+  assert(pendingSave.pending && queuedSave.kind === 'saveNote' && queuedSave.uploadedPaths[0] === `${farm}/${field}/${uid(22)}/uploaded.jpg`, 'Transport failures must retain uploaded photo path metadata.')
   transportGateway.saveFailure = null; await transportQueued.inspectAndReplay(); assert(transportQueue.read().entries.length === 0 && transportGateway.saves.every((call) => call.operationId === queuedSave.operationId) && transportGateway.photos.length === 1 && removedAfterTransport.length === 0, 'Replay must reuse the operation ID and keep the successfully uploaded photo attached.')
 
   // Group 5: a definite save failure removes only the newly uploaded paths and does not queue a bad RPC.
   const rejectedGateway = new FakeGateway(); rejectedGateway.saveFailure = new Error('validation failed'); const rejectedStore = memory(); const cleanedDefinite: string[][] = []
-  const rejectedQueued = new QueuedScoutingRepository(live(rejectedGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'rejected', storage: rejectedStore, createId: () => uid(350), clock: () => stamp, isOffline: () => false, removeStoragePaths: async (paths: string[]) => { cleanedDefinite.push(paths); return paths } })
-  await rejects(() => rejectedQueued.saveNote(draft(uid(23), true)), 'A definite RPC failure must be returned to the caller.')
+  const rejectedQueued = new QueuedScoutingRepository(live(rejectedGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'rejected', storage: rejectedStore, createId: () => uid(350), clock: () => stamp, isOffline: () => false, uploadPhoto: async (_farmId, _fieldId, noteId) => `${farm}/${field}/${noteId}/uploaded.jpg`, removeStoragePaths: async (paths: string[]) => { cleanedDefinite.push(paths); return paths } })
+  await rejects(() => rejectedQueued.saveNote(draft(uid(23)), [{ type: 'image/jpeg', size: 1, name: 'field.jpg' } as File]), 'A definite RPC failure must be returned to the caller.')
   assert(cleanedDefinite.length === 1 && cleanedDefinite[0].length === 1 && new ScoutingWriteQueue(rejectedStore, scoutingWriteQueueKey('rejected', actor, farm)).read().entries.length === 0, 'Definite failures must clean uploaded paths instead of queueing an invalid save.')
 
   // Group 6: a partial upload rolls back the paths that did finish uploading.
   const partialCleanup: string[][] = []; let uploadAttempt = 0
-  await rejects(() => uploadScoutingPhotos(farm, field, uid(24), [{ type: 'image/jpeg', size: 1 } as File, { type: 'image/jpeg', size: 1 } as File], async () => { uploadAttempt += 1; if (uploadAttempt === 2) throw new Error('upload failed'); return `${farm}/${field}/${uid(24)}/uploaded-${uploadAttempt}.jpg` }, async (paths: string[]) => { partialCleanup.push(paths); return paths }), 'A partial upload must surface its upload failure.')
+  const uploadContext = { projectRef: 'test', userId: actor, farmId: farm, generation: 1, token: uid(901), serverEpoch: 1 }
+  await rejects(() => uploadScoutingPhotos(farm, field, uid(24), [{ type: 'image/jpeg', size: 1 } as File, { type: 'image/jpeg', size: 1 } as File], uploadContext, async () => undefined, async (_farmId, _fieldId, _noteId, _file, _context) => { uploadAttempt += 1; if (uploadAttempt === 2) throw new Error('upload failed'); return `${farm}/${field}/${uid(24)}/uploaded-${uploadAttempt}.jpg` }, async (paths: string[], _context) => { partialCleanup.push(paths); return paths }), 'A partial upload must surface its upload failure.')
   assert(partialCleanup.length === 1 && partialCleanup[0][0].endsWith('uploaded-1.jpg'), 'A partial upload must clean paths that already uploaded.')
 
   // Group 7 (audit P2-09): a failed photo removal after the DB delete parks the paths in the
@@ -88,9 +90,9 @@ async function run() {
   const deleteGateway = new FakeGateway(); await live(deleteGateway).saveNote(draft(uid(25), true)); const deleteOffline = false; let failRemoval = true; const removedDeletes: string[][] = []; const deleteStore = memory()
   const deleteQueued = new QueuedScoutingRepository(live(deleteGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'delete', storage: deleteStore, createId: () => uid(400), clock: () => stamp, isOffline: () => deleteOffline, removeStoragePaths: async (paths: string[]) => { if (failRemoval) { failRemoval = false; throw new Error('storage timeout') } removedDeletes.push(paths); return paths } })
   const originalPath = `${farm}/${field}/${uid(25)}/photo.jpg`; const deleteReceipt = await deleteQueued.deleteNote(uid(25), [originalPath]); const deleteQueue = new ScoutingWriteQueue(deleteStore, scoutingWriteQueueKey('delete', actor, farm))
-  const parkedCleanup = readScoutingCleanupOutbox(deleteStore, scoutingCleanupOutboxKey('delete'))
+  const parkedCleanup = readScoutingCleanupOutbox(deleteStore, scoutingCleanupOutboxKey('delete', actor))
   assert(!deleteReceipt.pending && deleteReceipt.deleted && deleteQueue.read().entries.length === 0 && deleteGateway.photos.length === 0 && parkedCleanup.length === 1 && parkedCleanup[0].path === originalPath, 'A failed storage deletion must finish the delete and park the captured paths durably.')
-  await deleteQueued.inspectAndReplay(); assert(deleteGateway.deletes.length === 1 && removedDeletes.length === 1 && removedDeletes[0][0] === originalPath && readScoutingCleanupOutbox(deleteStore, scoutingCleanupOutboxKey('delete')).length === 0, 'The next replay must drain the parked path without re-running the delete RPC.')
+  await deleteQueued.inspectAndReplay(); assert(deleteGateway.deletes.length === 1 && removedDeletes.length === 1 && removedDeletes[0][0] === originalPath && readScoutingCleanupOutbox(deleteStore, scoutingCleanupOutboxKey('delete', actor)).length === 0, 'The next replay must drain the parked path without re-running the delete RPC.')
 
   // Group 8: client file checks reject unsupported MIME types and files larger than 20 MB before upload.
   assert(validateScoutingPhotoFile({ type: 'application/pdf', size: 1 }) === 'Choose a JPEG, PNG, WebP, HEIC, or HEIF photo.' && validateScoutingPhotoFile({ type: 'image/jpeg', size: 20 * 1024 * 1024 + 1 }) === 'Choose a photo smaller than 20 MB.' && validateScoutingPhotoFile({ type: 'image/heic', size: 1 }) === null, 'Client file validation must enforce the allowed image types and 20 MB limit.')
@@ -98,6 +100,34 @@ async function run() {
   // Group 9: the RPC boundary rejects read-only writers while worker reads and writes remain allowed.
   const readonly = new FakeGateway(); readonly.role = { role: 'read_only' }; readonly.canWrite = false; const readOnlyRepository = live(readonly); const readOnlyData = await readOnlyRepository.getData(); await rejects(() => readOnlyRepository.saveNote(draft(uid(26))), 'Read-only RPC writes must be rejected.')
   assert(readOnlyData.viewer.role === 'read_only' && !canEditScouting('read_only') && canEditScouting('worker') && (await repository.saveNote(draft(uid(27)))).id === uid(27), 'Workers must remain able to save while read-only users cannot.')
-  console.log('SupabaseScoutingRepository regression passed (9 coverage groups)')
+
+  // Group 10 (FRX-D8-001): once the account/farm changes after the first upload,
+  // no second Storage request, DB write, queue append, cleanup request, or outbox write may occur.
+  const switchStore = memory(); const switchRef = 'scouting-upload-switch'; let active = { userId: actor, farmId: farm }
+  let uploadCalls = 0; let cleanupCalls = 0; let dbWrites = 0; let releaseUpload!: () => void; let sawUpload!: () => void
+  const uploadStarted = new Promise<void>((resolve) => { sawUpload = resolve }); const uploadRelease = new Promise<void>((resolve) => { releaseUpload = resolve })
+  const switchQueued = new QueuedScoutingRepository({ saveNoteOperation: async () => { dbWrites += 1; throw new Error('DB writer reached') } } as never, {
+    getContext: async () => active, projectRef: switchRef, storage: switchStore, createId: (() => { let n = 500; return () => uid(n++) })(), clock: () => stamp, isOffline: () => false,
+    uploadPhoto: async (_farmId, _fieldId, noteId) => { uploadCalls += 1; if (uploadCalls === 1) { sawUpload(); await uploadRelease } return `${farm}/${field}/${noteId}/upload-${uploadCalls}.jpg` },
+    removeStoragePaths: async (paths) => { cleanupCalls += 1; return paths },
+  })
+  const switchedSave = switchQueued.saveNote(draft(uid(28)), [{ type: 'image/jpeg', size: 1, name: 'one.jpg' } as File, { type: 'image/jpeg', size: 1, name: 'two.jpg' } as File]).then(() => null).catch((error: unknown) => error)
+  await uploadStarted; active = { userId: uid(30), farmId: uid(31) }; releaseUpload()
+  const switchedOutcome = await switchedSave
+  assert(switchedOutcome instanceof Error && uploadCalls === 1 && cleanupCalls === 0 && dbWrites === 0, 'A switched scouting upload must stop after the first Storage request and never publish later mutations.')
+  assert(new ScoutingWriteQueue(switchStore, scoutingWriteQueueKey(switchRef, actor, farm)).read().entries.length === 0 && switchStore.getItem(scoutingCleanupOutboxKey(switchRef, actor)) === null, 'A switched scouting upload must not append to the initiating queue or cleanup outbox.')
+
+  // Group 11 (FRX-D8-001): same user/farm IDs after revoke/regrant are still a
+  // different access epoch and cannot resume the old photo operation.
+  const regrantStore = memory(); const regrantRef = 'scouting-upload-regrant'; let regrantUploads = 0; let regrantDbWrites = 0
+  const regrantQueued = new QueuedScoutingRepository({ saveNoteOperation: async () => { regrantDbWrites += 1; throw new Error('DB writer reached') } } as never, {
+    getContext: async () => ({ userId: actor, farmId: farm }), projectRef: regrantRef, storage: regrantStore, createId: (() => { let n = 600; return () => uid(n++) })(), clock: () => stamp, isOffline: () => false,
+    uploadPhoto: async (_farmId, _fieldId, noteId) => { regrantUploads += 1; resetFarmGrantFromLive(regrantStore, { projectRef: regrantRef, userId: actor, farmId: farm }, 2, stamp); return `${farm}/${field}/${noteId}/upload-${regrantUploads}.jpg` },
+    removeStoragePaths: async (paths) => paths,
+  })
+  await rejects(() => regrantQueued.saveNote(draft(uid(29)), [{ type: 'image/jpeg', size: 1, name: 'one.jpg' } as File, { type: 'image/jpeg', size: 1, name: 'two.jpg' } as File]), 'A revoke/regrant during a scouting upload must reject.')
+  assert(regrantUploads === 1 && regrantDbWrites === 0 && new ScoutingWriteQueue(regrantStore, scoutingWriteQueueKey(regrantRef, actor, farm)).read().entries.length === 0 && regrantStore.getItem(scoutingCleanupOutboxKey(regrantRef, actor)) === null, 'A revoke/regrant must stop all later scouting mutations without rebinding to the new epoch.')
+
+  console.log('SupabaseScoutingRepository regression passed (11 coverage groups)')
 }
 void run()

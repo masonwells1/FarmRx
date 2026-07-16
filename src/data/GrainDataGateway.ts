@@ -1,4 +1,5 @@
 import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainCapabilities, GrainContract, GrainContractDelivery, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate } from './grain'
+import type { FarmOperationContext } from './farmOperationContext'
 
 /** The network boundary deliberately exposes untrusted rows only. */
 export interface GrainRowBundle {
@@ -18,21 +19,21 @@ export interface GrainRowBundle {
   capabilities?: GrainCapabilities
 }
 
-export interface ReplaceMarketingPlanInput { farmId: string; scope: PositionScope; targets: MarketingPlanTarget[] }
+export interface ReplaceMarketingPlanInput { farmId: string; scope: PositionScope; targets: MarketingPlanTarget[]; context: FarmOperationContext }
 export interface GrainDataGateway {
   loadWorkspace(farmId: string): Promise<GrainRowBundle>
-  upsertProductionEstimate(farmId: string, row: ProductionEstimate): Promise<unknown>
-  upsertContract(farmId: string, row: GrainContract): Promise<unknown>
+  upsertProductionEstimate(farmId: string, row: ProductionEstimate, context: FarmOperationContext): Promise<unknown>
+  upsertContract(farmId: string, row: GrainContract, context: FarmOperationContext): Promise<unknown>
   replaceMarketingPlan(input: ReplaceMarketingPlanInput): Promise<unknown[]>
-  upsertCashBid(farmId: string, row: CashBid): Promise<unknown>
-  upsertMarketingAlertRule(farmId: string, row: MarketingAlertRule): Promise<unknown>
-  deleteMarketingAlertRule(farmId: string, id: string): Promise<void>
-  upsertFirmOffer(farmId: string, row: FirmOffer): Promise<unknown>
-  fillFirmOffer(farmId: string, offerId: string, contract: GrainContract): Promise<unknown>
-  deleteFirmOffer(farmId: string, id: string): Promise<void>
-  upsertGrainBin(farmId: string, row: GrainBin): Promise<unknown>
-  appendBinTransactionRpc?(farmId: string, row: BinTransaction): Promise<unknown>
-  appendContractDeliveryRpc?(farmId: string, row: GrainContractDelivery, allowOverdelivery: boolean): Promise<unknown>
-  finalizeContractPriceLegRpc?(farmId: string, contractId: string, leg: 'futures_price' | 'basis', value: number): Promise<unknown>
-  upsertGrainAlertSettings(farmId: string, row: GrainAlertSettings): Promise<unknown>
+  upsertCashBid(farmId: string, row: CashBid, context: FarmOperationContext): Promise<unknown>
+  upsertMarketingAlertRule(farmId: string, row: MarketingAlertRule, context: FarmOperationContext): Promise<unknown>
+  deleteMarketingAlertRule(farmId: string, id: string, context: FarmOperationContext): Promise<void>
+  upsertFirmOffer(farmId: string, row: FirmOffer, context: FarmOperationContext): Promise<unknown>
+  fillFirmOffer(farmId: string, offerId: string, contract: GrainContract, context: FarmOperationContext): Promise<unknown>
+  deleteFirmOffer(farmId: string, id: string, context: FarmOperationContext): Promise<void>
+  upsertGrainBin(farmId: string, row: GrainBin, context: FarmOperationContext): Promise<unknown>
+  appendBinTransactionRpc?(farmId: string, row: BinTransaction, context: FarmOperationContext): Promise<unknown>
+  appendContractDeliveryRpc?(farmId: string, row: GrainContractDelivery, allowOverdelivery: boolean, context: FarmOperationContext): Promise<unknown>
+  finalizeContractPriceLegRpc?(farmId: string, contractId: string, leg: 'futures_price' | 'basis', value: number, context: FarmOperationContext): Promise<unknown>
+  upsertGrainAlertSettings(farmId: string, row: GrainAlertSettings, context: FarmOperationContext): Promise<unknown>
 }
