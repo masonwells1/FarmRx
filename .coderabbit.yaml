@@ -1,0 +1,58 @@
+# CodeRabbit configuration for Farm Rx
+# Docs: https://docs.coderabbit.ai/reference/configuration
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-US
+
+# "chill" = fewer style nitpicks, focus on real problems. Mason is a solo,
+# non-coder owner; signal matters more than volume.
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+
+  # Project-specific review guidance, mirroring the rules and gotchas in this
+  # repo's CLAUDE.md so CodeRabbit flags Farm Rx's real risk areas.
+  path_instructions:
+    - path: "supabase/migrations/**"
+      instructions: >-
+        PostgreSQL migrations for Farm Rx (a customer-facing farm app on its
+        OWN Supabase project — never the CRX Manager database). Rule #2 of this
+        project: grain and financial data defaults to PRIVATE and must be
+        enforced with Row Level Security, not just the UI. Flag as high
+        severity: any new table that does NOT enable RLS with policies in the
+        same migration; any SECURITY DEFINER function missing
+        `SET search_path = public, pg_temp`; any function that lets the
+        `authenticated` or `anon` role reach data belonging to another farm;
+        any server-only path (push delivery, scheduled sweeps) that does not
+        actually verify it is running as service_role. Money must be integer
+        cents / defined precision — never floating point.
+    - path: "src/**"
+      instructions: >-
+        React + TypeScript (Vite) PWA for farmers on phones. Flag: any
+        hardcoded secret, service-role key, or private key in client code
+        (only publishable/anon and VAPID PUBLIC keys belong here); money handled
+        as floating point instead of integer cents; grain quantity logic that
+        overwrites `expected_bushels` with `actual_bushels` (both must be kept
+        separately); treating a crop as a column on a field instead of its own
+        `field_id + year + crop` row (double-crop soybeans break the column
+        model); and merging white corn / non-GMO corn with yellow corn (they
+        are distinct marketable commodities).
+    - path: "supabase/functions/**"
+      instructions: >-
+        Supabase Edge Functions (Deno). Secrets (SUPABASE_SERVICE_ROLE_KEY,
+        VAPID_PRIVATE_KEY, RESEND_API_KEY, SCHEDULER_SECRET) must come from
+        Deno.env only and must never be logged or returned to the client. Flag
+        any hardcoded secret value and any service-role client that is exposed
+        to an unauthenticated caller.
+
+chat:
+  auto_reply: true
