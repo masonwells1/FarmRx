@@ -25,7 +25,7 @@ const farms: FarmFixture[] = [
 
 function session(id = userId) {
   const expiresAt = Math.floor(Date.now() / 1000) + 86_400
-  const payload = btoa(JSON.stringify({ sub: id, aud: 'authenticated', exp: expiresAt })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+  const payload = btoa(JSON.stringify({ sub: id, aud: 'authenticated', exp: expiresAt, session_id: `session-${id}` })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
   return {
     access_token: `eyJhbGciOiJub25lIn0.${payload}.signature`, refresh_token: `offline-test-refresh-${id}`, expires_in: 86_400, expires_at: expiresAt, token_type: 'bearer',
     user: { id, aud: 'authenticated', role: 'authenticated', email: id === userId ? 'farmer@example.test' : 'other-farmer@example.test', app_metadata: {}, user_metadata: {}, identities: [], created_at: now },
@@ -33,15 +33,25 @@ function session(id = userId) {
 }
 
 async function seedSession(context: BrowserContext) {
-  await context.addInitScript(({ key, value }) => localStorage.setItem(key, JSON.stringify(value)), { key: `farm-rx-auth:${projectRef}`, value: session() })
+  await context.addInitScript(({ sessionKey, intentKey, value, intent }) => { localStorage.setItem(intentKey, JSON.stringify(intent)); localStorage.setItem(sessionKey, JSON.stringify(value)) }, {
+    sessionKey: `farm-rx-auth:${projectRef}`,
+    intentKey: `farm-rx-auth-intent:v1:${projectRef}`,
+    value: session(),
+    intent: { version: 1, nonce: 'playwright-session-a', phase: 'accepted', userId, sessionLineage: `session-${userId}`, startedAtMs: Date.now() },
+  })
 }
 
 async function seedPendingWriteQueues(context: BrowserContext) {
   const fieldsKey = `farm-rx-write-queue:v1:${projectRef}:${userId}:${farmA}`
   const equipmentKey = `farm-rx-equipment-tasks-queue:v1:${projectRef}:${userId}:${farmA}`
+  const fenceKey = `farm-rx-revocation-fence:v1:${projectRef}:${userId}:${farmA}`
+  const generationKey = `farm-rx-revocation-generation:v1:${projectRef}:${userId}:${farmA}`
+  const grantToken = '00000000-0000-4000-8000-000000000099'
   const fieldsQueue = { version: 1, entries: [{ version: 1, module: 'fields', kind: 'saveField', operationId: '00000000-0000-4000-8000-000000000061', userId, farmId: farmA, enqueuedAt: now, draft: { id: fieldA, name: 'North Forty queued edit', operating_entity_id: entityA, total_acres: 80, county: 'McLean', state: 'IL', legal_description: null, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: 134, arrangement: { id: arrangementA, arrangement_type: 'owned', landlord_name: null, landlord_phone: null, landlord_contact_notes: null, effective_from: '2026-01-01', cash_rent_per_acre: null, flex_bonus_formula: null, landlord_crop_pct: null, landlord_seed_pct: 0, landlord_fertilizer_pct: 0, landlord_chemical_pct: 0, landlord_fuel_pct: 0, landlord_labor_custom_pct: 0, landlord_crop_insurance_pct: 0, landlord_equipment_pct: 0, landlord_interest_pct: 0, landlord_other_input_pct: 0, notes: null }, crop_assignments: [] } }] }
   const equipmentQueue = { version: 1, entries: [{ version: 1, module: 'equipment_tasks', kind: 'saveEquipment', operationId: '00000000-0000-4000-8000-000000000062', userId, farmId: farmA, enqueuedAt: now, value: { id: '00000000-0000-4000-8000-000000000063', farm_id: farmA, name: 'Queued tractor', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null } }] }
-  await context.addInitScript(({ values }) => { for (const [key, value] of Object.entries(values)) localStorage.setItem(key, JSON.stringify(value)) }, { values: { [fieldsKey]: fieldsQueue, [equipmentKey]: equipmentQueue } })
+  const fence = { version: 2, generation: 2, token: grantToken, serverEpoch: 1, revoked: false, changedAt: now }
+  const generation = { version: 2, generation: 2, token: grantToken, serverEpoch: 1, changedAt: now }
+  await context.addInitScript(({ values }) => { for (const [key, value] of Object.entries(values)) localStorage.setItem(key, JSON.stringify(value)) }, { values: { [fieldsKey]: fieldsQueue, [equipmentKey]: equipmentQueue, [fenceKey]: fence, [generationKey]: generation } })
   return { fieldsKey, equipmentKey }
 }
 
@@ -92,6 +102,12 @@ const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, str
   firm_offers: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,created_at.asc,id.asc' }),
   grain_alert_settings: (farm) => ({ select: '*', farm_id: `eq.${farm.id}` }),
 }
+const profitabilityReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
+  crop_budgets: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
+  budget_cost_lines: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'budget_id.asc,sort_order.asc' }),
+  profitability_matrix_steps: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'budget_id.asc,axis.asc,step_order.asc' }),
+  budget_field_allocations: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'budget_id.asc,crop_assignment_id.asc' }),
+}
 function grainRows(table: string, farm: FarmFixture) {
   if (table === 'production_estimates') return [{ id: '00000000-0000-4000-8000-000000000051', farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, planted_acres: 80, aph_yield: 190, expected_bushels: 15_200, actual_bushels: null, drives_math: 'projected', notes: null, created_at: now, updated_at: now }]
   return table === 'grain_alert_settings' ? null : []
@@ -135,11 +151,13 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
       const answers: Record<string, boolean> = { can_access_farm: activeMember || profile.namedRep, is_active_farm_member: activeMember, can_edit_farm: canEdit, can_manage_farm: canManage, can_read_private_financials: canReadPrivate, has_explicit_rep_access: profile.namedRep }
       await fulfillJson(route, answers[helper!] ?? false); return
     }
-    if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; if (route.request().method() !== 'POST' || !body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body as Record<string, unknown>).length !== 0) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
+    if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
+    if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (profile.memberRole === null || profile.memberRole === 'read_only' || route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || !accessible.some((farm) => farm.id === value.p_farm_id)) { await rejectShape('generate_due_service_tasks body'); return }; await fulfillJson(route, { created_count: 0 }); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_program_items') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (profile.memberRole === null || profile.memberRole === 'read_only' || route.request().method() !== 'POST' || !value || Object.keys(value).sort().join('|') !== 'p_farm_id|p_local_date|p_operation_id' || !accessible.some((farm) => farm.id === value.p_farm_id) || typeof value.p_operation_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_operation_id) || typeof value.p_local_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.p_local_date)) { await rejectShape('generate_due_program_items body'); return }; await fulfillJson(route, { generated_count: 0 }); return }
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, session().user); return }
     if (url.pathname === '/auth/v1/logout') { await fulfillJson(route, {}); return }
     if (emptyUnknownReads && rest && Object.hasOwn(grainReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, grainReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, grainRows(rest, farm)); return }
+    if (emptyUnknownReads && rest && Object.hasOwn(profitabilityReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, profitabilityReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, []); return }
     unexpected.push(`${route.request().method()} ${url.pathname}`)
     await route.abort('blockedbyclient')
   })
@@ -222,15 +240,23 @@ test('multi-farm access requires an explicit choice and keeps both farms usable'
   expect(unexpected).toEqual([])
 })
 
-test('a named rep receives only proven rep-safe navigation and direct routes', async ({ page, context }) => {
+test('a named rep receives only proven rep-safe navigation and direct routes', async ({ page, context }, testInfo) => {
   await seedSession(context)
   const pendingKeys = await seedPendingWriteQueues(context)
   const unexpected = await mockSupabase(page, [farms[0]], [], false, 1, { memberRole: null, canViewFinancials: false, namedRep: true })
   await page.goto('/fields')
   await expect(page.getByText('North Forty')).toBeVisible()
-  const sidebar = page.locator('.sidebar')
-  for (const label of ['Fields', 'Grain', 'Inventory', 'Profitability', 'Alerts']) await expect(sidebar.getByRole('link', { name: label })).toBeVisible()
-  for (const label of ['Equipment', 'Tasks', 'Weather', 'Field Log', 'Scouting', 'Harvest', 'Programs']) await expect(sidebar.getByRole('link', { name: label })).toHaveCount(0)
+  const navigation = testInfo.project.name === 'chromium-phone' ? page.getByRole('navigation', { name: 'Farm Rx navigation' }) : page.locator('.sidebar')
+  if (testInfo.project.name === 'chromium-phone') {
+    for (const label of ['Fields', 'Grain']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
+    await navigation.getByRole('button', { name: 'More' }).click()
+    const more = page.getByRole('region', { name: 'More Farm Rx destinations' })
+    for (const label of ['Inventory', 'Profitability', 'Alerts']) await expect(more.getByRole('link', { name: label })).toBeVisible()
+    for (const label of ['Equipment', 'Tasks', 'Weather', 'Field Log', 'Scouting', 'Harvest', 'Programs']) await expect(more.getByRole('link', { name: label })).toHaveCount(0)
+  } else {
+    for (const label of ['Fields', 'Grain', 'Inventory', 'Profitability', 'Alerts']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
+    for (const label of ['Equipment', 'Tasks', 'Weather', 'Field Log', 'Scouting', 'Harvest', 'Programs']) await expect(navigation.getByRole('link', { name: label })).toHaveCount(0)
+  }
   await page.goto('/tasks')
   await expect(page).toHaveURL(/\/fields$/)
   await expect(page.getByText('North Forty')).toBeVisible()
@@ -239,16 +265,25 @@ test('a named rep receives only proven rep-safe navigation and direct routes', a
   expect(unexpected).toEqual([])
 })
 
-test('a read-only member can view member modules but cannot enter edit routes or replay writes', async ({ page, context }) => {
+test('a read-only member can view member modules but cannot enter edit routes or replay writes', async ({ page, context }, testInfo) => {
   await seedSession(context)
   const pendingKeys = await seedPendingWriteQueues(context)
   const unexpected = await mockSupabase(page, [farms[0]], [], false, 1, { memberRole: 'read_only', canViewFinancials: false, namedRep: false })
   await page.goto('/fields')
   await expect(page.getByText('North Forty')).toBeVisible()
   await expect(page.locator('fieldset[disabled][aria-label="Read-only farm data"]')).toBeVisible()
-  await expect(page.locator('.sidebar').getByRole('link', { name: 'Programs' })).toBeVisible()
-  await expect(page.locator('.sidebar').getByRole('link', { name: 'Weather' })).toHaveCount(0)
-  await expect(page.locator('.sidebar').getByRole('link', { name: 'Grain' })).toHaveCount(0)
+  const navigation = testInfo.project.name === 'chromium-phone' ? page.getByRole('navigation', { name: 'Farm Rx navigation' }) : page.locator('.sidebar')
+  if (testInfo.project.name === 'chromium-phone') {
+    await navigation.getByRole('button', { name: 'More' }).click()
+    const more = page.getByRole('region', { name: 'More Farm Rx destinations' })
+    await expect(more.getByRole('link', { name: 'Programs' })).toBeVisible()
+    await expect(navigation.getByRole('link', { name: 'Weather' })).toHaveCount(0)
+    await expect(navigation.getByRole('link', { name: 'Grain' })).toHaveCount(0)
+  } else {
+    await expect(navigation.getByRole('link', { name: 'Programs' })).toBeVisible()
+    await expect(navigation.getByRole('link', { name: 'Weather' })).toHaveCount(0)
+    await expect(navigation.getByRole('link', { name: 'Grain' })).toHaveCount(0)
+  }
   await page.goto('/fields/new')
   await expect(page).toHaveURL(/\/fields$/)
   await expect(page.getByText('North Forty')).toBeVisible()
@@ -286,7 +321,8 @@ test('a direct signed-in A to B replacement hides Farm A before B access validat
     if (rest === 'notifications') { if (route.request().method() !== 'GET' || !exactQuery(url, { select: '*', order: 'created_at.desc,id.desc' })) { await rejectShape('notifications query'); return }; await fulfillJson(route, []); return }
     if (url.pathname === '/rest/v1/rpc/get_current_farm_access_epochs') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; if (route.request().method() !== 'POST' || !body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body as Record<string, unknown>).length !== 0) { await rejectShape('epoch body'); return }; await fulfillJson(route, accessible.map((farm) => ({ farm_id: farm.id, access_epoch: 1 }))); return }
     if (['can_access_farm', 'is_active_farm_member', 'can_edit_farm', 'can_manage_farm', 'can_read_private_financials', 'has_explicit_rep_access'].some((name) => url.pathname === `/rest/v1/rpc/${name}`)) { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || value.target_farm_id !== accessible[0]!.id) { await rejectShape(`${url.pathname} body`); return }; await fulfillJson(route, !url.pathname.endsWith('/has_explicit_rep_access')); return }
-    if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; if (route.request().method() !== 'POST' || !body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body as Record<string, unknown>).length !== 0) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
+    if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
+    if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || value.p_farm_id !== accessible[0]!.id) { await rejectShape('generate_due_service_tasks body'); return }; await fulfillJson(route, { created_count: 0 }); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_program_items') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).sort().join('|') !== 'p_farm_id|p_local_date|p_operation_id' || value.p_farm_id !== accessible[0]!.id || typeof value.p_operation_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_operation_id) || typeof value.p_local_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.p_local_date)) { await rejectShape('generate_due_program_items body'); return }; await fulfillJson(route, { generated_count: 0 }); return }
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, isUserB ? sessionB.user : session().user); return }
     unexpected.push(`${route.request().method()} ${url.pathname}`)
@@ -295,13 +331,14 @@ test('a direct signed-in A to B replacement hides Farm A before B access validat
 
   await page.goto('/fields')
   await expect(page.getByText('North Forty')).toBeVisible()
-  await page.evaluate(async ({ key, value }) => {
+  await page.evaluate(async ({ key, intentKey, value, intent }) => {
+    localStorage.setItem(intentKey, JSON.stringify(intent))
     localStorage.setItem(key, JSON.stringify(value))
     const channel = new BroadcastChannel(key)
     channel.postMessage({ event: 'SIGNED_IN', session: value })
     await new Promise((resolve) => setTimeout(resolve, 0))
     channel.close()
-  }, { key: `farm-rx-auth:${projectRef}`, value: sessionB })
+  }, { key: `farm-rx-auth:${projectRef}`, intentKey: `farm-rx-auth-intent:v1:${projectRef}`, value: sessionB, intent: { version: 1, nonce: 'playwright-session-b', phase: 'accepted', userId: userBId, sessionLineage: `session-${userBId}`, startedAtMs: Date.now() } })
   await expect.poll(() => bFarmRequestStarted).toBe(true)
   await expect(page.getByText('North Forty')).toBeHidden()
   await expect(page.getByLabel('Active farm')).toBeHidden()
@@ -507,6 +544,8 @@ test('a delayed old farm read cannot overwrite the cache after revoke and regran
   const currentFence = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { token: string; serverEpoch: number }, fenceKey)
   expect(currentFence.serverEpoch).toBe(3)
 
+  await staleTab.unroute('https://*.supabase.co/**')
+  await mockSupabase(staleTab, [farms[0]], [], false, 3)
   releaseRead()
   await staleReload
   await expect(staleTab.getByText('North Forty')).toBeVisible()

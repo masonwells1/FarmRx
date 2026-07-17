@@ -532,6 +532,26 @@ try {
     assert(noticeUnhandled.length === 0, 'The farm gate retry leaked an unhandled rejection.')
   } finally { await act(async () => { gateRoot.unmount() }); gateContainer.remove() }
 
+  // A sibling tab may publish an equivalent fresh access snapshot after this
+  // tab loads access but before it loads permissions. Retry the whole live
+  // validation once instead of leaving the farmer on a recoverable error gate.
+  let siblingAccessLoads = 0
+  let siblingProfileLoads = 0
+  const siblingDependencies = {
+    loadAccess: async () => { siblingAccessLoads += 1; return gateAccess },
+    loadProfile: async () => { siblingProfileLoads += 1; if (siblingProfileLoads === 1) throw new Error('Farm access changed while permissions were loading.'); return gateProfile },
+    replayWork: async () => undefined,
+    installRetryActions: () => undefined,
+    clearRetryActions: () => undefined,
+    selectFarm: async () => undefined,
+  }
+  const siblingContainer = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(siblingContainer); const siblingRoot = createRoot(siblingContainer as unknown as HTMLElement)
+  try {
+    await act(async () => { siblingRoot.render(createElement(FarmAccessGateForUser, { user: gateUser as never, dependencies: siblingDependencies, children: createElement('div', null, 'Sibling retry ready') })) })
+    for (let attempt = 0; attempt < 100 && !siblingContainer.textContent?.includes('Sibling retry ready'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)) })
+    assert(siblingContainer.textContent?.includes('Sibling retry ready') && siblingAccessLoads === 2 && siblingProfileLoads === 2 && !siblingContainer.textContent.includes('Try again'), 'A same-account sibling access refresh did not recover through one bounded fresh validation.')
+  } finally { await act(async () => { siblingRoot.unmount() }); siblingContainer.remove() }
+
   // A current cached offline profile must run every queue inspection while
   // skipping only server-side due generation, then publish the real gate ready.
   resetFarmGrantFromLive(gateStorage, { projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA }, 1, stamp)
@@ -1261,7 +1281,7 @@ try {
   const expiredPendingContainer = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(expiredPendingContainer); const expiredPendingRoot = createRoot(expiredPendingContainer as unknown as HTMLElement)
   try {
     await act(async () => { expiredPendingRoot.render(createElement(AuthProvider, { dependencies: expiredPendingDependencies, children: createElement(ExpiredPendingProbe) })) })
-    for (let attempt = 0; attempt < 100 && !expiredPendingContainer.textContent?.includes('signed_out:none'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    for (let attempt = 0; attempt < 100 && !expiredPendingContainer.textContent?.includes('signed_out:none'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)) })
     const expiredReplacement = JSON.parse(expiredPendingHub.values.get(authIntentStorageKey) ?? '{}') as { phase?: string }
     assert(expiredPendingContainer.textContent?.includes('signed_out:none') && expiredPendingHub.values.get(authSessionKey) === undefined && expiredReplacement.phase === 'signed_out', 'An expired pending password marker was treated as absent and authorized its persisted session.')
     expiredPendingStorage.setItem(authSessionKey, JSON.stringify(crossTabSessionA))
@@ -1282,7 +1302,7 @@ try {
   const signedOutOfflineContainer = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(signedOutOfflineContainer); const signedOutOfflineRoot = createRoot(signedOutOfflineContainer as unknown as HTMLElement)
   try {
     await act(async () => { signedOutOfflineRoot.render(createElement(AuthProvider, { dependencies: signedOutOfflineDependencies, children: createElement(ExpiredPendingProbe) })) })
-    for (let attempt = 0; attempt < 100 && !signedOutOfflineContainer.textContent?.includes('signed_out:none'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    for (let attempt = 0; attempt < 100 && !signedOutOfflineContainer.textContent?.includes('signed_out:none'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)) })
     assert(signedOutOfflineContainer.textContent?.includes('signed_out:none') && signedOutOfflineHub.values.get(authSessionKey) === undefined, 'A durable signed-out fence was bypassed by transport-failure offline restoration.')
   } finally {
     await act(async () => { signedOutOfflineRoot.unmount() }); signedOutOfflineContainer.remove(); signedOutOfflineWindow.close()
@@ -1297,7 +1317,7 @@ try {
   const signedOutRemountContainer = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(signedOutRemountContainer); const signedOutRemountRoot = createRoot(signedOutRemountContainer as unknown as HTMLElement)
   try {
     await act(async () => { signedOutRemountRoot.render(createElement(AuthProvider, { dependencies: signedOutRemountDependencies, children: createElement(ExpiredPendingProbe) })) })
-    for (let attempt = 0; attempt < 100 && !signedOutRemountContainer.textContent?.includes('signed_out:none'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    for (let attempt = 0; attempt < 100 && !signedOutRemountContainer.textContent?.includes('signed_out:none'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)) })
     assert(signedOutRemountContainer.textContent?.includes('signed_out:none') && signedOutOfflineHub.values.get(authSessionKey) === undefined && signedOutOfflineHub.values.get(authIntentStorageKey) === durableFenceBytes, 'A remount did not preserve the exact durable signed-out fence against offline restoration.')
   } finally {
     await act(async () => { signedOutRemountRoot.unmount() }); signedOutRemountContainer.remove(); signedOutRemountWindow.close()
@@ -1317,7 +1337,7 @@ try {
   const staleLineageOfflineContainer = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(staleLineageOfflineContainer); const staleLineageOfflineRoot = createRoot(staleLineageOfflineContainer as unknown as HTMLElement)
   try {
     await act(async () => { staleLineageOfflineRoot.render(createElement(AuthProvider, { dependencies: staleLineageOfflineDependencies, children: createElement(ExpiredPendingProbe) })) })
-    for (let attempt = 0; attempt < 100 && !staleLineageOfflineContainer.textContent?.includes('signed_out:none'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    for (let attempt = 0; attempt < 100 && !staleLineageOfflineContainer.textContent?.includes('signed_out:none'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)) })
     const staleLineageFence = JSON.parse(staleLineageOfflineHub.values.get(authIntentStorageKey) ?? '{}') as { phase?: string }
     assert(staleLineageOfflineContainer.textContent?.includes('signed_out:none') && staleLineageOfflineHub.values.get(authSessionKey) === undefined && staleLineageFence.phase === 'signed_out', 'A stale same-user session_id reopened accepted offline farm access during a retryable transport failure.')
   } finally {

@@ -625,22 +625,29 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
       return acceptedSource;
     };
     const replayOnReconnect = async (showChecking = true, propagateFailure = false): Promise<FarmAccess["source"] | null> => {
-      const isCurrent = beginEffectValidation();
-      if (!user) return null;
-      dependencies.clearRetryActions();
-      setAccess(null); setProfile(null); if (showChecking) setState("checking");
-      try {
-        const latest = await dependencies.loadAccess(user.id, true);
-        if (!isCurrent()) return null;
-        return await acceptValidatedAccess(latest, isCurrent);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const isCurrent = beginEffectValidation();
+        if (!user) return null;
+        dependencies.clearRetryActions();
+        setAccess(null); setProfile(null); if (showChecking) setState("checking");
+        try {
+          const latest = await dependencies.loadAccess(user.id, true);
+          if (!isCurrent()) return null;
+          return await acceptValidatedAccess(latest, isCurrent);
+        }
+        catch (error) {
+          if (!isCurrent()) return null;
+          const message = error instanceof Error ? error.message : "";
+          const supersededBySibling = message === "Farm access changed while permissions were loading."
+            || message === "Access to this farm changed while work was being saved. Nothing was queued or replayed.";
+          if (attempt === 0 && supersededBySibling) continue;
+          setMessage(farmerError(error, "open your farm"));
+          setState("blocked");
+          if (propagateFailure) throw error;
+          return null;
+        }
       }
-      catch (error) {
-        if (!isCurrent()) return null;
-        setMessage(farmerError(error, "open your farm"));
-        setState("blocked");
-        if (propagateFailure) throw error;
-        return null;
-      }
+      return null;
     };
     const openFarm = async () => {
       const source = await replayOnReconnect(false, true);
