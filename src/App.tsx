@@ -63,6 +63,7 @@ import {
   getSyncStatus,
   getSyncNoticeState,
   retrySavedChanges,
+  setModuleSyncStatus,
   setModuleSyncRetryAction,
   subscribeSyncStatus,
 } from "./data/syncStatus";
@@ -439,6 +440,8 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
 
 const farmRetryModules = ["fields", "grain", "profitability", "inventory", "equipment_tasks", "weather", "fieldLog", "scouting", "harvest", "programs", "notifications"] as const;
 function clearFarmRetryActions() { for (const module of farmRetryModules) setModuleSyncRetryAction(module, null) }
+const farmSyncModule: Partial<Record<FarmAppModule, Parameters<typeof setModuleSyncStatus>[0]>> = { fields: "fields", grain: "grain", profitability: "profitability", inventory: "inventory", equipment: "equipment_tasks", weather: "weather", field_log: "fieldLog", scouting: "scouting", harvest: "harvest", programs: "programs", notifications: "notifications" };
+function clearSkippedFarmModuleStatus(module: FarmAppModule) { const syncModule = farmSyncModule[module]; if (syncModule) setModuleSyncStatus(syncModule, { kind: "synced", pending: 0 }) }
 function authorizedFarmRetry(latestProfile: LoadedFarmAccessProfile, module: FarmAppModule, action: () => Promise<unknown>) {
   return async () => {
     const authorization = beginFarmReplayAuthorization(latestProfile, undefined, { supersede: false });
@@ -524,10 +527,10 @@ export async function replayAuthorizedFarmWork(latestProfile: LoadedFarmAccessPr
   if (!isCurrent()) throw new Error("Farm access validation was superseded.");
   const authorization = beginFarmReplayAuthorization(latestProfile);
   const verify = () => { authorization.verify(); if (!isCurrent()) throw new Error("Farm access validation was superseded."); };
-  const replay = async (module: FarmAppModule, action: () => Promise<unknown>) => { verify(); if (canReplayFarmModule(latestProfile, module)) await action(); verify(); };
+  const replay = async (module: FarmAppModule, action: () => Promise<unknown>) => { verify(); if (canReplayFarmModule(latestProfile, module)) await action(); else clearSkippedFarmModuleStatus(module); verify(); };
   try {
     await replay("fields", actions.replayFieldsQueue);
-    await replay("fields", actions.replayFieldLocationQueue);
+    await replay("weather", actions.replayFieldLocationQueue);
     await replay("programs", actions.replayProgramsQueue);
     if (latestProfile.source === "live") await replay("programs", actions.generateDueProgramItems);
     await replay("harvest", actions.replayHarvestQueue);

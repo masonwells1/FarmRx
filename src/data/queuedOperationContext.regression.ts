@@ -493,6 +493,7 @@ try {
   const gateProfile: LoadedFarmAccessProfile = { ...staleProfileA, userId: userA, farmId: farmA, operationContext: captureFarmRevocationFence(gateStorage, { projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA }) }
   const gateFarm = { id: farmA, name: 'Gate Farm A', share_with_rep: false, created_by: userA, created_at: stamp, updated_at: stamp }
   const gateAccess = { userId: userA, farms: [gateFarm], selectedFarmId: farmA, validatedAt: stamp, source: 'live' as const }
+  const readOnlyGateProfile: LoadedFarmAccessProfile = { ...gateProfile, kind: 'read_only', memberRole: 'read_only', memberCanViewFinancials: false, capabilities: { ...gateProfile.capabilities, canEditOperational: false, canManageFarm: false, canReadPrivateFinancials: false } }
   const gateUser = { id: userA, email: 'account-a@example.test', app_metadata: {}, user_metadata: {}, aud: 'authenticated', created_at: stamp }
   const gateFields = fieldsSeedForRegression(); gateFields.farm.id = farmA; for (const row of [...gateFields.entities, ...gateFields.fields, ...gateFields.crop_assignments, ...gateFields.arrangements]) row.farm_id = farmA
   let releaseGateRetry!: () => void
@@ -1396,6 +1397,12 @@ try {
     replayScoutingQueue: offlineAction('scouting-queue'),
     replayNotificationsQueue: offlineAction('notifications-queue'),
   }
+  const currentReadOnlyGateProfile: LoadedFarmAccessProfile = { ...readOnlyGateProfile, operationContext: captureFarmRevocationFence(gateStorage, { projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA }) }
+  for (const module of ['fields', 'grain', 'profitability', 'inventory', 'equipment_tasks', 'weather', 'fieldLog', 'scouting', 'harvest', 'programs', 'notifications'] as const) setModuleSyncStatus(module, { kind: 'synced', pending: 0 })
+  setModuleSyncStatus('fields', { kind: 'blocked', pending: 1, message: 'Old farm Fields work' }); setModuleSyncStatus('weather', { kind: 'pending', pending: 1 }); setModuleSyncStatus('equipment_tasks', { kind: 'blocked', pending: 1, message: 'Old farm Equipment work' }); setModuleSyncStatus('programs', { kind: 'pending', pending: 1 })
+  await replayAuthorizedFarmWork(currentReadOnlyGateProfile, () => true, offlineReplayActions)
+  assert(offlineReplayEvents.join(',') === 'notifications-queue' && getSyncStatus().kind === 'synced', 'A read-only farm inherited stale pending or blocked sync state from skipped modules.')
+  offlineReplayEvents.length = 0
   let offlineRetryInstalls = 0
   let offlineAccessLoads = 0
   type GateRetryAction = Exclude<Parameters<typeof setModuleSyncRetryAction>[1], null>
