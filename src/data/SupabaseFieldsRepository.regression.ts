@@ -201,7 +201,8 @@ async function run() {
   await validationLive.saveField(optionalFlex); await invalidQueued.saveField(optionalFlex)
   const onlineOptional = validationGateway.inputs.at(-1)!.draft.arrangement.flex_bonus_formula as unknown as Record<string, unknown>; const offlineOptional = new FieldsWriteQueue(invalidQueueStorage, writeQueueKey(invalidQueueRef, userA, data.farm.id)).read().entries.at(-1)!.draft.arrangement.flex_bonus_formula as unknown as Record<string, unknown>
   for (const formula of [onlineOptional, offlineOptional]) assert(formula.min_rent_per_acre === null && formula.max_rent_per_acre === null && formula.price_source_note === null, 'Omitted optional flex settings were not canonicalized identically online and offline.')
-  const validationInputsBeforeInvalid = validationGateway.inputs.length; const invalidQueueBytesBefore = new Map(invalidQueueStorage.values)
+  const durableInvalidQueueBytes = () => JSON.stringify([...invalidQueueStorage.values].filter(([key]) => !key.endsWith(':lease')).sort(([left], [right]) => left.localeCompare(right)))
+  const validationInputsBeforeInvalid = validationGateway.inputs.length; const invalidQueueBytesBefore = durableInvalidQueueBytes()
   const legacyFlex = structuredClone(flexBase); legacyFlex.arrangement.flex_bonus_formula = { type: 'revenue', trigger: 700, bonus_rate: 20 }
   const invalidDrafts: Array<[string, FieldDraft]> = [
     ['over-precision field acres', { ...draft(data), total_acres: 80.001 }],
@@ -219,7 +220,7 @@ async function run() {
     ['unknown legacy-flex setting', { ...legacyFlex, arrangement: { ...legacyFlex.arrangement, flex_bonus_formula: { ...(legacyFlex.arrangement.flex_bonus_formula as unknown as Record<string, unknown>), surprise: true } as never } }],
   ]
   for (const [label, invalid] of invalidDrafts) { await rejects(() => validationLive.saveField(invalid), `Online Fields accepted ${label}.`); await rejects(() => invalidQueued.saveField(invalid), `Offline Fields accepted ${label}.`) }
-  assert(validationGateway.inputs.length === validationInputsBeforeInvalid && JSON.stringify([...invalidQueueStorage.values]) === JSON.stringify([...invalidQueueBytesBefore]), 'Invalid Fields drafts reached a writer or changed durable queue storage.')
+  assert(validationGateway.inputs.length === validationInputsBeforeInvalid && durableInvalidQueueBytes() === invalidQueueBytesBefore, 'Invalid Fields drafts reached a writer or changed durable queue storage.')
   const roundedEchoGateway = new FakeFieldsDataGateway(); roundedEchoGateway.mutateSave = (reply) => { const field = reply.field as Record<string, unknown>; return { ...reply, field: { ...field, total_acres: Number(field.total_acres) + 0.01 } } }; await rejects(() => repository(roundedEchoGateway).saveField(draft(roundedEchoGateway.data)), 'A server-rounded field echo was accepted as the exact save result.')
   // 10. full, corrupt, and unknown queue values reject without replacement.
   const badStorage = new FakeStorage(); badStorage.setItem(queueKey, '{"version":2,"entries":[]}'); const badQueued = new QueuedFieldsRepository(repository(new FakeFieldsDataGateway()), { getContext: async () => ({ userId: userA, farmId: data.farm.id }), projectRef: supabaseConfig.projectRef, storage: badStorage, createId: ids(), clock: () => '2026-07-11T00:00:00.000Z', isOffline: () => true }); await rejects(() => badQueued.saveField({ ...draft(data), crop_assignments: [] }), 'Unknown queue version must reject.'); assert(badStorage.getItem(queueKey) === '{"version":2,"entries":[]}', 'Unsafe queue was overwritten.')
