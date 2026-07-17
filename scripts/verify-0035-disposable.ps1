@@ -65,14 +65,34 @@ do $$ begin
  perform set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-000000000001"}',true);
  perform set_config('request.jwt.claim.role','',true);
  insert into public.farm_tasks(id,farm_id,title,status,priority,source,program_assigned_pass_id,program_cycle_key,created_by) values ('00000000-0000-4000-8000-000000000071','00000000-0000-4000-8000-000000000010','Program task','todo','normal','program','00000000-0000-4000-8000-000000000070','probe','00000000-0000-4000-8000-000000000001');
- begin update public.farm_tasks set status='done' where id='00000000-0000-4000-8000-000000000071'; raise exception 'direct program task status change accepted'; exception when others then if position('PROGRAM_TASK_STATUS_MANAGED_BY_PROGRAM' in sqlerrm)=0 then raise; end if; end;
- perform set_config('farmrx.program_task_status_change','on',true); update public.farm_tasks set status='done' where id='00000000-0000-4000-8000-000000000071'; if (select status from public.farm_tasks where id='00000000-0000-4000-8000-000000000071') <> 'done' then raise exception 'program flag did not permit status'; end if;
+ -- This disposable block runs as the table owner, the same trusted identity as
+ -- the SECURITY DEFINER Program RPCs. Application-role attacks are proven in
+ -- verify-0042-disposable.ps1.
+ update public.farm_tasks set status='done' where id='00000000-0000-4000-8000-000000000071';
+ if (select status from public.farm_tasks where id='00000000-0000-4000-8000-000000000071') <> 'done' then raise exception 'trusted Program task transition failed'; end if;
  insert into public.equipment(id,farm_id,name,category,created_by) values ('00000000-0000-4000-8000-000000000080','00000000-0000-4000-8000-000000000010','Probe Tractor','tractor','00000000-0000-4000-8000-000000000001');
  insert into public.equipment_service_intervals(id,farm_id,equipment_id,name,every_months,created_by) values ('00000000-0000-4000-8000-000000000081','00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000080','Oil',6,'00000000-0000-4000-8000-000000000001');
+ -- Keep older same-value service history plus an unrelated manual reading. The
+ -- save RPC must link the new explicit reading rather than guessing either row.
  insert into public.equipment_meter_readings(id,farm_id,equipment_id,reading,read_on,source,created_by) values ('00000000-0000-4000-8000-000000000082','00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000080',100,current_date,'service','00000000-0000-4000-8000-000000000001'),('00000000-0000-4000-8000-000000000083','00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000080',101,current_date,'manual','00000000-0000-4000-8000-000000000001');
- insert into public.equipment_service_log(id,farm_id,equipment_id,service_date,work_performed,meter_reading,interval_id,created_by) values ('00000000-0000-4000-8000-000000000084','00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000080',current_date,'Oil change',100,'00000000-0000-4000-8000-000000000081','00000000-0000-4000-8000-000000000001');
+ perform public.save_service_log_entry(
+   '00000000-0000-4000-8000-000000000010',
+   jsonb_build_object(
+     'id','00000000-0000-4000-8000-000000000084',
+     'equipment_id','00000000-0000-4000-8000-000000000080',
+     'service_date',current_date::text,
+     'work_performed','Oil change',
+     'parts',null,
+     'vendor',null,
+     'cost',null,
+     'meter_reading',100,
+     'interval_id','00000000-0000-4000-8000-000000000081'
+   ),
+   '00000000-0000-4000-8000-000000000085'
+ );
+ if (select meter_reading_id from public.service_log_meter_readings where service_log_id='00000000-0000-4000-8000-000000000084') is distinct from '00000000-0000-4000-8000-000000000085'::uuid then raise exception 'save RPC did not persist exact service-reading provenance'; end if;
  perform public.delete_service_log_with_reversal('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000084');
- if exists(select 1 from public.equipment_service_log where id='00000000-0000-4000-8000-000000000084') or exists(select 1 from public.equipment_meter_readings where id='00000000-0000-4000-8000-000000000082') or not exists(select 1 from public.equipment_meter_readings where id='00000000-0000-4000-8000-000000000083') then raise exception 'service reversal provenance failed'; end if;
+ if exists(select 1 from public.equipment_service_log where id='00000000-0000-4000-8000-000000000084') or exists(select 1 from public.equipment_meter_readings where id='00000000-0000-4000-8000-000000000085') or not exists(select 1 from public.equipment_meter_readings where id in ('00000000-0000-4000-8000-000000000082','00000000-0000-4000-8000-000000000083')) then raise exception 'service reversal provenance failed'; end if;
  if exists(select 1 from public.equipment_service_intervals where id='00000000-0000-4000-8000-000000000081' and (last_done_on is not null or last_done_reading is not null)) then raise exception 'service reversal did not clear interval'; end if;
  perform public.delete_service_log_with_reversal('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000084');
  perform public.record_marketing_alert_transition('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000090',true);

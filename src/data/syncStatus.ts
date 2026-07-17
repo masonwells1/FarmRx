@@ -1,8 +1,11 @@
+import { isFarmReplayContextChangedError } from './writeQueue'
+
 export type SyncState =
   | { kind: 'synced'; pending: 0 }
   | { kind: 'pending'; pending: number }
   | { kind: 'syncing'; pending: number }
   | { kind: 'blocked'; pending: number; message: string }
+export type SyncNoticeState = SyncState | { kind: 'retry_failed'; message: string }
 
 type Module = 'fields' | 'grain' | 'profitability' | 'inventory' | 'equipment_tasks' | 'weather' | 'fieldLog' | 'scouting' | 'harvest' | 'programs' | 'notifications'
 const states: Record<Module, SyncState> = { fields: { kind: 'synced', pending: 0 }, grain: { kind: 'synced', pending: 0 }, profitability: { kind: 'synced', pending: 0 }, inventory: { kind: 'synced', pending: 0 }, equipment_tasks: { kind: 'synced', pending: 0 }, weather: { kind: 'synced', pending: 0 }, fieldLog: { kind: 'synced', pending: 0 }, scouting: { kind: 'synced', pending: 0 }, harvest: { kind: 'synced', pending: 0 }, programs: { kind: 'synced', pending: 0 }, notifications: { kind: 'synced', pending: 0 } }
@@ -29,4 +32,20 @@ export function setModuleSyncRetryAction(module: Module, action: (() => void | P
 /** Compatibility for non-queue callers; queues must identify their module. */
 export function setSyncStatus(next: SyncState) { setModuleSyncStatus('fields', next) }
 export function setSyncRetryAction(action: (() => void | Promise<unknown>) | null) { setModuleSyncRetryAction('fields', action) }
-export async function retrySavedChanges() { await Promise.allSettled(Object.values(retries).map((retry) => Promise.resolve(retry?.()))) }
+export function getSyncNoticeState(status: SyncState, retryError: string | null): SyncNoticeState {
+  return retryError ? { kind: 'retry_failed', message: retryError } : status
+}
+export async function retrySavedChanges() {
+  let firstError: unknown
+  let failed = false
+  for (const retry of Object.values(retries)) {
+    try { await retry?.() }
+    catch (error) {
+      // A farm/account switch invalidates every remaining action captured from
+      // the old profile, so stop immediately instead of invoking more stale work.
+      if (isFarmReplayContextChangedError(error)) throw error
+      if (!failed) { failed = true; firstError = error }
+    }
+  }
+  if (failed) throw firstError
+}

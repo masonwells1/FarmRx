@@ -1,0 +1,15 @@
+# Luna independent proof and scope review 20 — final auth/offline checkpoint
+
+Act as a fresh-context, read-only proof and scope reviewer using actual `gpt-5.6-luna` at Medium reasoning. Inspect base `48aad521bd1ecb4c5704ef2e6c5bb30e4d522685` through the current working tree directly. Do not trust summaries, earlier verdicts, manifests, or PASS claims without checking. Do not edit/create files, alter Git, commit, push, deploy, call live services, run browser/Playwright/phone lanes, apply migrations, mutate persistent data, or expose credential values. The outer runner alone writes your response.
+
+Return `GO` only if no HIGH or MEDIUM blocker remains. Reconcile every one of the exact 44 non-audit implementation/config/test files to the Farmer Simplicity release purpose and confirm `src/auth/AuthProvider.tsx` is the sole Review-20 scope addition. Confirm 18/18 ordered routes are unchanged, staged count is zero, HEAD equals base, Option 2 hash is exact, and the credential scan deterministically covers all 44 files.
+
+Audit whether the new regressions prove production behavior rather than helpers or tautological fakes: a half-open auth restore reaches exact offline access only after a bounded transport failure; persisted account/JWT must match the farm grant; cross-tab/farm/cache/time/clock changes invalidate it; all eleven queues run offline without server due generation; strict live signal checks serialize; a normal save after offline-ready never reaches the gateway merely because the browser reports online.
+
+Attack the mounted auth tests and production code for missing permutations: local and external-tab sign-out, no queued auth-js cleanup, stale A refresh before/after B sign-in, B failure and thrown transport error, storage rewrite, action supersession, per-tab late-event block, and legitimate exact cross-tab B `SIGNED_IN`. Look for fixtures that share module globals in a way real tabs do not, assertions that check only text while wrong auth bytes survive, unhandled rejections, or cleanup that can race a newer session.
+
+Spot-check prior proofs for scope drift or regression: pure snapshots, queue cancellation, retry status, farm rollback, capability fences, Fields/flex, Equipment/service behavior, operational RLS, Program/service provenance, PostgreSQL concurrency, strict request mocks, and no generated/secret artifact in release scope.
+
+Outer proof reports PASS for focused regressions, forced and standalone E2E TypeScript, 39 regression lanes, production build, dependency audit 0, targeted static 11/11, foundation static and mutations 11/11, credential scan 44/0, diff/scope/routes/hash/staged gates, and nine PostgreSQL 17 disposable probes. Browser/Playwright/phone are deliberately excluded. Rerun concise read-only non-browser probes if useful.
+
+Report findings first with exact evidence and the smallest correction. End with categorical `GO` or `NO-GO`, LOW follow-ups, actual model/effort if visible, scope/proof reconciliation, skipped-lane limits, and `External mutation: no` only if true.

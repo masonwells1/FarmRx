@@ -26,16 +26,17 @@ export class DueProgramItemsService {
   constructor(private readonly d: { gateway: DueProgramItemsGateway; getFarmId: () => Promise<string>; getOperationContext: () => Promise<FarmOperationContext>; verifyOperationContext: (expected: FarmOperationContext) => Promise<void>; createId: () => string; today?: () => string }) {}
 
   async generate() { return this.generateOperation(this.d.createId()) }
+  async generateStrict() { return this.generateOperationStrict(this.d.createId()) }
 
   async generateOperation(operationId: string): Promise<'generated' | 'skipped'> {
-    try {
-      const context = await this.d.getOperationContext(); await this.d.verifyOperationContext(context)
-      await this.d.gateway.generateDueProgramItems({ farmId: context.farmId, operationId, localDate: this.d.today?.() ?? localCalendarDate() }, context)
-      await this.d.verifyOperationContext(context)
-      return 'generated'
-    } catch {
-      return 'skipped'
-    }
+    try { return await this.generateOperationStrict(operationId) } catch { return 'skipped' }
+  }
+
+  async generateOperationStrict(operationId: string): Promise<'generated'> {
+    const context = await this.d.getOperationContext(); await this.d.verifyOperationContext(context)
+    await this.d.gateway.generateDueProgramItems({ farmId: context.farmId, operationId, localDate: this.d.today?.() ?? localCalendarDate() }, context)
+    await this.d.verifyOperationContext(context)
+    return 'generated'
   }
 }
 

@@ -1,5 +1,8 @@
 import { captureFarmRevocationFence, ensureQueueFarmGrant, verifyFarmRevocationFence, type FarmRevocationSnapshot } from './farmRevocationFence'
+import type { ReadOnlySnapshot } from './fields'
 import type { StorageLike } from './writeQueue'
+export { maximumClockSkewMs } from './deviceClockFence'
+import { maximumClockSkewMs } from './deviceClockFence'
 
 export const financialCacheMaxAgeMs = 24 * 60 * 60 * 1_000
 export const operationalCacheMaxAgeMs = 7 * 24 * 60 * 60 * 1_000
@@ -26,6 +29,25 @@ function open(projectRef: string): Promise<IDBDatabase> {
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error ?? new Error('Farm Rx could not open offline storage.'))
     request.onblocked = () => reject(new Error('Farm Rx offline storage is blocked by another tab.'))
+  })
+}
+async function openExisting(projectRef: string): Promise<IDBDatabase | null> {
+  if (!available()) return null
+  const factory = indexedDB as IDBFactory & { databases?: () => Promise<Array<{ name?: string }>> }
+  if (typeof factory.databases !== 'function') return null
+  const name = databaseName(projectRef)
+  const known = await factory.databases.call(factory)
+  if (!known.some((entry) => entry.name === name)) return null
+  return new Promise((resolve) => {
+    const request = indexedDB.open(name)
+    let upgrading = false
+    request.onupgradeneeded = () => { upgrading = true; request.transaction?.abort() }
+    request.onsuccess = () => {
+      if (upgrading || !request.result.objectStoreNames.contains(storeName)) { request.result.close(); resolve(null); return }
+      resolve(request.result)
+    }
+    request.onerror = () => resolve(null)
+    request.onblocked = () => resolve(null)
   })
 }
 function requestResult<T>(request: IDBRequest<T>): Promise<T> { return new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error ?? new Error('Farm Rx could not use offline storage.')) }) }
@@ -95,10 +117,28 @@ export async function readWorkspaceCache<T>(scope: WorkspaceCacheScope, maximumA
     const value = await requestResult(transaction.objectStore(storeName).get(cacheKey(scope)))
     if (value === undefined) return null
     if (!validEnvelope<T>(value, scope, fence)) return null
-    if (Date.now() - Date.parse(value.cachedAt) > maximumAgeMs) throw new WorkspaceCacheExpiredError()
+    const ageMs = Date.now() - Date.parse(value.cachedAt)
+    if (ageMs < -maximumClockSkewMs || ageMs > maximumAgeMs) throw new WorkspaceCacheExpiredError()
     try { verifyFarmRevocationFence(localStorage, fence) } catch { return null }
     publish({ module: scope.module.split(':')[0], cachedAt: value.cachedAt })
     return { data: structuredClone(value.data), cachedAt: value.cachedAt }
+  } finally { database.close() }
+}
+
+/** Read-only projection cache access. It never creates/upgrades IndexedDB and never publishes UI notices. */
+export async function readWorkspaceCachePure<T>(scope: WorkspaceCacheScope, fence: FarmRevocationSnapshot, maximumAgeMs: number, storage: StorageLike, nowMs = Date.now()): Promise<ReadOnlySnapshot<T> | null> {
+  if (!Number.isFinite(nowMs) || fence.projectRef !== scope.projectRef || fence.userId !== scope.userId || fence.farmId !== scope.farmId) return null
+  try { verifyFarmRevocationFence(storage, fence) } catch { return null }
+  const database = await openExisting(scope.projectRef)
+  if (!database) return null
+  try {
+    const transaction = database.transaction(storeName, 'readonly')
+    const value = await requestResult(transaction.objectStore(storeName).get(cacheKey(scope)))
+    if (value === undefined || !validEnvelope<T>(value, scope, fence)) return null
+    const ageMs = nowMs - Date.parse(value.cachedAt)
+    if (ageMs < -maximumClockSkewMs || ageMs > maximumAgeMs) throw new WorkspaceCacheExpiredError()
+    try { verifyFarmRevocationFence(storage, fence) } catch { return null }
+    return { data: structuredClone(value.data), source: 'offline', capturedAt: value.cachedAt }
   } finally { database.close() }
 }
 

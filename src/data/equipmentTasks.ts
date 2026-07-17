@@ -1,4 +1,5 @@
-import type { FieldsData } from './fields'
+import type { FarmOperationContext } from './farmOperationContext'
+import type { FieldsData, ReadOnlySnapshot } from './fields'
 
 export type EquipmentCategory = 'tractor' | 'combine' | 'sprayer' | 'truck' | 'trailer' | 'header' | 'tillage' | 'planter' | 'grain_cart' | 'utility' | 'other'
 export type EquipmentStatus = 'active' | 'sold' | 'retired'
@@ -20,4 +21,4 @@ export type IntervalWrite = Omit<ServiceInterval, 'farm_id' | 'created_by' | 'cr
 export type TaskWrite = Omit<FarmTask, 'farm_id' | 'created_by' | 'created_at' | 'updated_at' | 'completed_by' | 'completed_at' | 'program_assigned_pass_id' | 'program_cycle_key'> & ExpectedWriteVersion & { program_assigned_pass_id?: string | null; program_cycle_key?: string | null }
 export type ServiceLogWrite = Omit<ServiceLogEntry, 'farm_id' | 'created_by' | 'created_at' | 'updated_at'> & { reading_id: string | null }
 export type ServiceLogEntryInput = Omit<ServiceLogWrite, 'reading_id'>
-export interface EquipmentTasksRepository { getWorkspace(): Promise<EquipmentTasksWorkspace>; getNeedsAttentionQueueKey?(): Promise<string>; getOperationalIntegrityCapability?(): Promise<boolean>; saveEquipment(value: EquipmentWrite): Promise<void>; addMeterReading(value: MeterReadingWrite): Promise<void>; saveInterval(value: IntervalWrite): Promise<void>; addServiceLogEntry(value: ServiceLogEntryInput): Promise<void>; saveTask(value: TaskWrite): Promise<void>; deleteTask(id: string): Promise<void>; deleteServiceLogEntry(id: string): Promise<void>; deleteInterval(id: string): Promise<void> }
+export interface EquipmentTasksRepository { getWorkspace(): Promise<EquipmentTasksWorkspace>; /** Pure read: consumes an already-published context and performs no access resolution, queue replay, generation, cache write, or mutation. */ getSnapshot?(context: FarmOperationContext): Promise<ReadOnlySnapshot<EquipmentTasksWorkspace>>; getNeedsAttentionQueueKey?(): Promise<string>; getOperationalIntegrityCapability?(): Promise<boolean>; saveEquipment(value: EquipmentWrite): Promise<void>; addMeterReading(value: MeterReadingWrite): Promise<void>; saveInterval(value: IntervalWrite): Promise<void>; addServiceLogEntry(value: ServiceLogEntryInput): Promise<void>; saveTask(value: TaskWrite): Promise<void>; deleteTask(id: string): Promise<void>; deleteServiceLogEntry(id: string): Promise<void>; deleteInterval(id: string): Promise<void> }

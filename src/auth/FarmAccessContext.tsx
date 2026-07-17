@@ -1,12 +1,14 @@
 import { createContext, useContext, type ReactNode } from 'react'
 import type { Farm } from '../data/fields'
-import type { FarmAccessSource } from './farmContext'
+import type { FarmAccessSource, LoadedFarmAccessProfile } from './farmContext'
 
 export type FarmAccessContextValue = {
   farms: Farm[]
   activeFarm: Farm
+  profile: LoadedFarmAccessProfile
   source: FarmAccessSource
   chooseFarm(farmId: string): Promise<void>
+  checkSignal(): Promise<void>
 }
 
 const FarmContext = createContext<FarmAccessContextValue | null>(null)

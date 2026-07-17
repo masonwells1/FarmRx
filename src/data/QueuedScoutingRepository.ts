@@ -2,11 +2,11 @@ import { isTransportFailure } from './QueuedFieldsRepository'
 import { drainScoutingCleanupOutbox, recordScoutingCleanup, scoutingCleanupOutboxKey } from './scoutingCleanupOutbox'
 import type { SupabaseScoutingRepository } from './SupabaseScoutingRepository'
 import { ScoutingWriteQueue, scoutingWriteQueueKey, type ScoutingQueueEntryV1 } from './scoutingWriteQueue'
-import { setModuleSyncRetryAction, setModuleSyncStatus } from './syncStatus'
+import { setModuleSyncStatus } from './syncStatus'
 import { isScoutingPhotoPath, normalizeScoutingNoteDraft, validateScoutingNoteDraft, type ScoutingData, type ScoutingDeleteReceipt, type ScoutingNote, type ScoutingNoteDraft, type ScoutingRepository } from './scouting'
-import type { StorageLike } from './writeQueue'
+import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
 import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, writeWorkspaceCache } from './workspaceCache'
-import { queueTransaction, subscribeQueueTransactions } from './queueTransaction'
+import { queueTransaction } from './queueTransaction'
 import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 import type { FarmOperationContext } from './farmOperationContext'
 import { uploadScoutingPhotos, validateScoutingPhotoFile } from './scoutingStorage'
@@ -31,11 +31,7 @@ function pending(entry: Extract<ScoutingQueueEntryV1, { kind: 'saveNote' }>, con
 }
 
 export class QueuedScoutingRepository implements ScoutingRepository {
-  constructor(private readonly live: SupabaseScoutingRepository, private readonly d: Dependencies) {
-    setModuleSyncRetryAction('scouting', () => this.inspectAndReplay())
-    if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.inspectAndReplay() })
-    subscribeQueueTransactions((key) => { void this.source().then(({ queue }) => { if (queue.key === key) void this.inspectAndReplay() }).catch(() => undefined) })
-  }
+  constructor(private readonly live: SupabaseScoutingRepository, private readonly d: Dependencies) {}
 
   private async source(): Promise<Source> {
     const operationContext = await captureQueuedOperationContext(this.d)
@@ -65,7 +61,6 @@ export class QueuedScoutingRepository implements ScoutingRepository {
     const verifyRead = () => verifyQueuedReadContext(this.d, operationContext)
     const cacheScope = { projectRef: this.d.projectRef, ...context, module: `scouting:${fieldId ?? 'all'}` }
     try {
-      await this.inspectAndReplay(); await verifyRead()
       const cacheFence = captureWorkspaceCacheFence(cacheScope)
       const data = await this.live.getData(fieldId); await verifyRead()
       await writeWorkspaceCache(cacheScope, data, cacheFence); await verifyRead()
@@ -107,6 +102,7 @@ export class QueuedScoutingRepository implements ScoutingRepository {
         const missed = paths.filter((path) => !confirmed.includes(path))
         if (missed.length) this.recordPhotoCleanup(entry, missed)
       } catch (error) {
+        if (isFarmReplayContextChangedError(error)) throw error
         await verifyQueuedOperationContext(this.d, operationContext, entry)
         this.recordPhotoCleanup(entry, paths)
       }
@@ -114,7 +110,7 @@ export class QueuedScoutingRepository implements ScoutingRepository {
     return { ...receipt, storage_paths: paths }
   }
 
-  private enqueue(queue: ScoutingWriteQueue, entry: ScoutingQueueEntryV1) { const next = queue.append(entry); setModuleSyncStatus('scouting', { kind: 'pending', pending: next.entries.length }); void this.inspectAndReplay(); return next }
+  private enqueue(queue: ScoutingWriteQueue, entry: ScoutingQueueEntryV1) { const next = queue.append(entry); setModuleSyncStatus('scouting', { kind: 'pending', pending: next.entries.length }); launchReplayInBackground(() => this.inspectAndReplay()); return next }
 
   private async cleanupFailedUpload(entry: Extract<ScoutingQueueEntryV1, { kind: 'saveNote' }>, operationContext: FarmOperationContext) {
     if (!entry.uploadedPaths.length || !this.d.removeStoragePaths) return
@@ -122,7 +118,8 @@ export class QueuedScoutingRepository implements ScoutingRepository {
       const confirmed = await this.removePaths(entry.uploadedPaths, operationContext, entry)
       const missed = entry.uploadedPaths.filter((path) => !confirmed.includes(path))
       if (missed.length) this.recordPhotoCleanup(entry, missed)
-    } catch {
+    } catch (error) {
+      if (isFarmReplayContextChangedError(error)) throw error
       await verifyQueuedOperationContext(this.d, operationContext, entry)
       this.recordPhotoCleanup(entry, entry.uploadedPaths)
     }
@@ -189,11 +186,13 @@ export class QueuedScoutingRepository implements ScoutingRepository {
 
   async inspectAndReplay() {
     let source: Source
-    try { source = await this.source() } catch { return }
+    try { source = await this.source() } catch (error) { if (isFarmReplayContextChangedError(error)) throw error; return }
     const { context, operationContext, queue } = source
-    try { await verifyQueuedOperationContext(this.d, operationContext, context); await this.drainPhotoCleanup(source); await verifyQueuedOperationContext(this.d, operationContext, context) } catch { /* retried next replay */ }
+    try { await verifyQueuedOperationContext(this.d, operationContext, context); await this.drainPhotoCleanup(source); await verifyQueuedOperationContext(this.d, operationContext, context) } catch (error) { if (isFarmReplayContextChangedError(error)) throw error /* retried next replay */ }
     try {
       await this.locked(queue, async (verify) => {
+        await verifyQueuedOperationContext(this.d, operationContext, context)
+        verify()
         let envelope = queue.read()
         if (!envelope.entries.length) { setModuleSyncStatus('scouting', { kind: 'synced', pending: 0 }); return }
         if (this.d.isOffline()) { setModuleSyncStatus('scouting', { kind: 'pending', pending: envelope.entries.length }); return }
@@ -215,6 +214,6 @@ export class QueuedScoutingRepository implements ScoutingRepository {
         }
         setModuleSyncStatus('scouting', { kind: 'synced', pending: 0 })
       })
-    } catch { setModuleSyncStatus('scouting', { kind: 'blocked', pending: 0, message: blocked }) }
+    } catch (error) { if (isFarmReplayContextChangedError(error)) throw error; setModuleSyncStatus('scouting', { kind: 'blocked', pending: 0, message: blocked }) }
   }
 }

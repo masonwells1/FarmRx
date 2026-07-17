@@ -12,7 +12,7 @@ const fieldA = '00000000-0000-4000-8000-000000000012'
 const fieldB = '00000000-0000-4000-8000-000000000022'
 const arrangementA = '00000000-0000-4000-8000-000000000013'
 const arrangementB = '00000000-0000-4000-8000-000000000023'
-const commodityId = '00000000-0000-4000-8000-000000000030'
+const commodityId = 'corn_yellow'
 const notificationA = '00000000-0000-4000-8000-000000000041'
 const notificationB = '00000000-0000-4000-8000-000000000042'
 const now = '2026-07-15T12:00:00.000Z'
@@ -25,7 +25,7 @@ const farms: FarmFixture[] = [
 
 function session(id = userId) {
   const expiresAt = Math.floor(Date.now() / 1000) + 86_400
-  const payload = btoa(JSON.stringify({ sub: id, aud: 'authenticated', exp: expiresAt })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+  const payload = btoa(JSON.stringify({ sub: id, aud: 'authenticated', exp: expiresAt, session_id: `session-${id}` })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
   return {
     access_token: `eyJhbGciOiJub25lIn0.${payload}.signature`, refresh_token: `offline-test-refresh-${id}`, expires_in: 86_400, expires_at: expiresAt, token_type: 'bearer',
     user: { id, aud: 'authenticated', role: 'authenticated', email: id === userId ? 'farmer@example.test' : 'other-farmer@example.test', app_metadata: {}, user_metadata: {}, identities: [], created_at: now },
@@ -33,10 +33,32 @@ function session(id = userId) {
 }
 
 async function seedSession(context: BrowserContext) {
-  await context.addInitScript(({ key, value }) => localStorage.setItem(key, JSON.stringify(value)), { key: `farm-rx-auth:${projectRef}`, value: session() })
+  await context.addInitScript(({ sessionKey, intentKey, value, intent }) => { localStorage.setItem(intentKey, JSON.stringify(intent)); localStorage.setItem(sessionKey, JSON.stringify(value)) }, {
+    sessionKey: `farm-rx-auth:${projectRef}`,
+    intentKey: `farm-rx-auth-intent:v1:${projectRef}`,
+    value: session(),
+    intent: { version: 1, nonce: 'playwright-session-a', phase: 'accepted', userId, sessionLineage: `session-${userId}`, startedAtMs: Date.now() },
+  })
 }
 
-function farmRow(farm: FarmFixture) { return { id: farm.id, name: farm.name, share_with_rep: false, created_by: userId, created_at: now, updated_at: now } }
+async function seedPendingWriteQueues(context: BrowserContext) {
+  const fieldsKey = `farm-rx-write-queue:v1:${projectRef}:${userId}:${farmA}`
+  const equipmentKey = `farm-rx-equipment-tasks-queue:v1:${projectRef}:${userId}:${farmA}`
+  const fenceKey = `farm-rx-revocation-fence:v1:${projectRef}:${userId}:${farmA}`
+  const generationKey = `farm-rx-revocation-generation:v1:${projectRef}:${userId}:${farmA}`
+  const grantToken = '00000000-0000-4000-8000-000000000099'
+  const fieldsQueue = { version: 1, entries: [{ version: 1, module: 'fields', kind: 'saveField', operationId: '00000000-0000-4000-8000-000000000061', userId, farmId: farmA, enqueuedAt: now, draft: { id: fieldA, name: 'North Forty queued edit', operating_entity_id: entityA, total_acres: 80, county: 'McLean', state: 'IL', legal_description: null, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: 134, arrangement: { id: arrangementA, arrangement_type: 'owned', landlord_name: null, landlord_phone: null, landlord_contact_notes: null, effective_from: '2026-01-01', cash_rent_per_acre: null, flex_bonus_formula: null, landlord_crop_pct: null, landlord_seed_pct: 0, landlord_fertilizer_pct: 0, landlord_chemical_pct: 0, landlord_fuel_pct: 0, landlord_labor_custom_pct: 0, landlord_crop_insurance_pct: 0, landlord_equipment_pct: 0, landlord_interest_pct: 0, landlord_other_input_pct: 0, notes: null }, crop_assignments: [] } }] }
+  const equipmentQueue = { version: 1, entries: [{ version: 1, module: 'equipment_tasks', kind: 'saveEquipment', operationId: '00000000-0000-4000-8000-000000000062', userId, farmId: farmA, enqueuedAt: now, value: { id: '00000000-0000-4000-8000-000000000063', farm_id: farmA, name: 'Queued tractor', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null } }] }
+  const fence = { version: 2, generation: 2, token: grantToken, serverEpoch: 1, revoked: false, changedAt: now }
+  const generation = { version: 2, generation: 2, token: grantToken, serverEpoch: 1, changedAt: now }
+  await context.addInitScript(({ values }) => { for (const [key, value] of Object.entries(values)) localStorage.setItem(key, JSON.stringify(value)) }, { values: { [fieldsKey]: fieldsQueue, [equipmentKey]: equipmentQueue, [fenceKey]: fence, [generationKey]: generation } })
+  return { fieldsKey, equipmentKey }
+}
+
+type AccessProfileFixture = { memberRole: 'owner' | 'manager' | 'worker' | 'read_only' | null; canViewFinancials: boolean; namedRep: boolean }
+const ownerProfile: AccessProfileFixture = { memberRole: 'owner', canViewFinancials: false, namedRep: false }
+function farmRow(farm: FarmFixture, shareWithRep = false) { return { id: farm.id, name: farm.name, share_with_rep: shareWithRep, created_by: userId, created_at: now, updated_at: now } }
+function membershipRow(farm: FarmFixture, memberId = userId, profile = ownerProfile) { return profile.memberRole === null ? null : { farm_id: farm.id, user_id: memberId, role: profile.memberRole, status: 'active', can_view_financials: profile.canViewFinancials } }
 function rowsFor(table: string, farm: FarmFixture) {
   if (table === 'entities') return [{ id: farm.entityId, farm_id: farm.id, name: `${farm.name} LLC`, entity_type: 'llc', is_active: true, created_at: now, updated_at: now }]
   if (table === 'fields') return [{ id: farm.fieldId, farm_id: farm.id, operating_entity_id: farm.entityId, name: farm.fieldName, legal_description: null, county: 'McLean', state: 'IL', total_acres: 80, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: 134, latitude: null, longitude: null, location_source: null, is_active: true, created_at: now, updated_at: now }]
@@ -52,33 +74,90 @@ function requestedFarm(url: URL) {
   return farms.find((farm) => farm.id === id) ?? farms[0]
 }
 
+function exactQuery(url: URL, expected: Record<string, string>) {
+  const actual = [...url.searchParams.entries()].sort(([leftKey, leftValue], [rightKey, rightValue]) => leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue))
+  const wanted = Object.entries(expected).sort(([leftKey, leftValue], [rightKey, rightValue]) => leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue))
+  return JSON.stringify(actual) === JSON.stringify(wanted)
+}
+
+const fieldsReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
+  entities: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc' }),
+  fields: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc' }),
+  arrangements: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'effective_from.asc' }),
+  crop_assignments: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,planting_sequence.asc' }),
+  commodities: () => ({ select: '*', is_active: 'eq.true', order: 'name.asc' }),
+}
+const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
+  production_estimates: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
+  grain_contracts: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,delivery_start.asc,id.asc' }),
+  grain_contract_deliveries: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'delivered_on.asc,id.asc' }),
+  marketing_plan_targets: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,target_month.asc,id.asc' }),
+  insurance_units: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,unit_name.asc,id.asc' }),
+  grain_bins: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' }),
+  bin_inventory: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
+  bin_transactions: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'occurred_on.desc,created_at.desc,id.desc' }),
+  cash_bids: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'bid_date.asc,id.asc' }),
+  usda_report_dates: () => ({ select: '*', order: 'report_date.asc,id.asc' }),
+  marketing_alert_rules: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,created_at.asc,id.asc' }),
+  firm_offers: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,created_at.asc,id.asc' }),
+  grain_alert_settings: (farm) => ({ select: '*', farm_id: `eq.${farm.id}` }),
+}
+const profitabilityReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
+  crop_budgets: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
+  budget_cost_lines: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'budget_id.asc,sort_order.asc' }),
+  profitability_matrix_steps: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'budget_id.asc,axis.asc,step_order.asc' }),
+  budget_field_allocations: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'budget_id.asc,crop_assignment_id.asc' }),
+}
+function grainRows(table: string, farm: FarmFixture) {
+  if (table === 'production_estimates') return [{ id: '00000000-0000-4000-8000-000000000051', farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, planted_acres: 80, aph_yield: 190, expected_bushels: 15_200, actual_bushels: null, drives_math: 'projected', notes: null, created_at: now, updated_at: now }]
+  return table === 'grain_alert_settings' ? null : []
+}
+
 async function fulfillJson(route: Route, body: unknown) {
   await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(body) })
 }
 
-async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1) {
+async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1, profile = ownerProfile) {
   const unexpected: string[] = []
   await page.route('https://*.supabase.co/**', async (route) => {
     const url = new URL(route.request().url())
     const rest = url.pathname.match(/^\/rest\/v1\/([^/]+)$/)?.[1]
+    const rejectShape = async (label: string) => { unexpected.push(`INVALID ${label}`); await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ message: `Invalid mocked ${label}` }) }) }
     if (rest === 'farms') {
-      if (url.searchParams.has('id')) await fulfillJson(route, farmRow(requestedFarm(url)))
-      else await fulfillJson(route, accessible.map(farmRow))
+      if (route.request().method() !== 'GET') { await rejectShape('farms method'); return }
+      if (url.searchParams.has('id')) { const farm = requestedFarm(url); if (!exactQuery(url, { select: '*', id: `eq.${farm.id}` })) { await rejectShape('farms selected query'); return }; await fulfillJson(route, farmRow(farm, profile.namedRep)) }
+      else { if (!exactQuery(url, { select: '*', order: 'name.asc,id.asc' })) { await rejectShape('farms list query'); return }; await fulfillJson(route, accessible.map((farm) => farmRow(farm, profile.namedRep))) }
       return
     }
-    if (rest && ['entities', 'fields', 'arrangements', 'crop_assignments', 'commodities'].includes(rest)) { await fulfillJson(route, rowsFor(rest, requestedFarm(url))); return }
-    if (rest === 'notifications') { await fulfillJson(route, notifications); return }
+    if (rest === 'farm_memberships') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,user_id,role,status,can_view_financials', farm_id: `eq.${farm.id}`, user_id: `eq.${userId}` })) { await rejectShape('farm_memberships query'); return }; await fulfillJson(route, membershipRow(farm, userId, profile)); return }
+    if (rest === 'farm_rep_access') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,rep_user_id,enabled,revoked_at', farm_id: `eq.${farm.id}`, rep_user_id: `eq.${userId}` })) { await rejectShape('farm_rep_access query'); return }; await fulfillJson(route, profile.namedRep ? { farm_id: farm.id, rep_user_id: userId, enabled: true, revoked_at: null } : null); return }
+    if (rest && Object.hasOwn(fieldsReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, fieldsReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, rowsFor(rest, farm)); return }
+    if (rest === 'notifications') { if (route.request().method() !== 'GET' || !exactQuery(url, { select: '*', order: 'created_at.desc,id.desc' })) { await rejectShape('notifications query'); return }; await fulfillJson(route, notifications); return }
     if (url.pathname === '/rest/v1/rpc/get_current_farm_access_epochs') {
+      let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
+      if (route.request().method() !== 'POST' || !body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body as Record<string, unknown>).length !== 0) { await rejectShape('get_current_farm_access_epochs body'); return }
       await fulfillJson(route, accessible.map((farm) => ({ farm_id: farm.id, access_epoch: accessEpoch })))
       return
     }
-    if (url.pathname === '/rest/v1/rpc/can_read_private_financials') { await fulfillJson(route, true); return }
-    if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { await fulfillJson(route, true); return }
-    if (url.pathname === '/rest/v1/rpc/generate_due_program_items') { await fulfillJson(route, { generated_count: 0 }); return }
+    if (['can_access_farm', 'is_active_farm_member', 'can_edit_farm', 'can_manage_farm', 'can_read_private_financials', 'has_explicit_rep_access'].some((name) => url.pathname === `/rest/v1/rpc/${name}`)) {
+      let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
+      const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
+      if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || !accessible.some((farm) => farm.id === value.target_farm_id)) { await rejectShape(`${url.pathname} body`); return }
+      const helper = url.pathname.split('/').at(-1)
+      const activeMember = profile.memberRole !== null
+      const canEdit = activeMember && profile.memberRole !== 'read_only'
+      const canManage = activeMember && (profile.memberRole === 'owner' || profile.memberRole === 'manager')
+      const canReadPrivate = profile.namedRep || activeMember && (profile.memberRole === 'owner' || profile.memberRole === 'manager' || profile.canViewFinancials)
+      const answers: Record<string, boolean> = { can_access_farm: activeMember || profile.namedRep, is_active_farm_member: activeMember, can_edit_farm: canEdit, can_manage_farm: canManage, can_read_private_financials: canReadPrivate, has_explicit_rep_access: profile.namedRep }
+      await fulfillJson(route, answers[helper!] ?? false); return
+    }
+    if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
+    if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (profile.memberRole === null || profile.memberRole === 'read_only' || route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || !accessible.some((farm) => farm.id === value.p_farm_id)) { await rejectShape('generate_due_service_tasks body'); return }; await fulfillJson(route, { created_count: 0 }); return }
+    if (url.pathname === '/rest/v1/rpc/generate_due_program_items') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (profile.memberRole === null || profile.memberRole === 'read_only' || route.request().method() !== 'POST' || !value || Object.keys(value).sort().join('|') !== 'p_farm_id|p_local_date|p_operation_id' || !accessible.some((farm) => farm.id === value.p_farm_id) || typeof value.p_operation_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_operation_id) || typeof value.p_local_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.p_local_date)) { await rejectShape('generate_due_program_items body'); return }; await fulfillJson(route, { generated_count: 0 }); return }
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, session().user); return }
     if (url.pathname === '/auth/v1/logout') { await fulfillJson(route, {}); return }
-    if (emptyUnknownReads && rest === 'production_estimates') { await fulfillJson(route, [{ id: '00000000-0000-4000-8000-000000000051', farm_id: farmA, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, planted_acres: 80, aph_yield: 190, expected_bushels: 15_200, actual_bushels: null, drives_math: 'projected', notes: null, created_at: now, updated_at: now }]); return }
-    if (emptyUnknownReads && route.request().method() === 'GET' && rest) { await fulfillJson(route, rest === 'grain_alert_settings' ? null : []); return }
+    if (emptyUnknownReads && rest && Object.hasOwn(grainReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, grainReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, grainRows(rest, farm)); return }
+    if (emptyUnknownReads && rest && Object.hasOwn(profitabilityReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, profitabilityReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, []); return }
     unexpected.push(`${route.request().method()} ${url.pathname}`)
     await route.abort('blockedbyclient')
   })
@@ -100,6 +179,24 @@ test('built login route is usable and does not require a live data request', asy
   await expect(page.getByLabel('Password')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
   expect(liveRequests).toEqual([])
+})
+
+test('strict Supabase mocks reject unknown tables, extra parameters, wrong methods, and wrong RPC bodies', async ({ page }) => {
+  const unexpected = await mockSupabase(page, [farms[0]], [], true)
+  await page.goto('/login')
+  await page.evaluate(async ({ base, farmId }) => {
+    await Promise.allSettled([
+      fetch(`${base}/rest/v1/misspelled_table?select=*`),
+      fetch(`${base}/rest/v1/production_estimates?select=*&farm_id=eq.${farmId}&order=crop_year.asc%2Ccommodity_id.asc%2Cid.asc&extra=bad`),
+      fetch(`${base}/rest/v1/grain_contracts`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+      fetch(`${base}/rest/v1/rpc/operational_integrity_capability_probe`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ unexpected: true }) }),
+      fetch(`${base}/rest/v1/rpc/operational_integrity_capability_probe`),
+    ])
+  }, { base: `https://${projectRef}.supabase.co`, farmId: farmA })
+  expect(unexpected).toContain('GET /rest/v1/misspelled_table')
+  expect(unexpected).toContain('INVALID production_estimates query')
+  expect(unexpected).toContain('INVALID grain_contracts query')
+  expect(unexpected.filter((value) => value === 'INVALID operational_integrity_capability_probe body')).toHaveLength(2)
 })
 
 test('PWA shell reopens offline after the service worker controls it', async ({ page, context }) => {
@@ -143,10 +240,63 @@ test('multi-farm access requires an explicit choice and keeps both farms usable'
   expect(unexpected).toEqual([])
 })
 
+test('a named rep receives only proven rep-safe navigation and direct routes', async ({ page, context }, testInfo) => {
+  await seedSession(context)
+  const pendingKeys = await seedPendingWriteQueues(context)
+  const unexpected = await mockSupabase(page, [farms[0]], [], false, 1, { memberRole: null, canViewFinancials: false, namedRep: true })
+  await page.goto('/fields')
+  await expect(page.getByText('North Forty')).toBeVisible()
+  const navigation = testInfo.project.name === 'chromium-phone' ? page.getByRole('navigation', { name: 'Farm Rx navigation' }) : page.locator('.sidebar')
+  if (testInfo.project.name === 'chromium-phone') {
+    for (const label of ['Fields', 'Grain']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
+    await navigation.getByRole('button', { name: 'More' }).click()
+    const more = page.getByRole('region', { name: 'More Farm Rx destinations' })
+    for (const label of ['Inventory', 'Profitability', 'Alerts']) await expect(more.getByRole('link', { name: label })).toBeVisible()
+    for (const label of ['Equipment', 'Tasks', 'Weather', 'Field Log', 'Scouting', 'Harvest', 'Programs']) await expect(more.getByRole('link', { name: label })).toHaveCount(0)
+  } else {
+    for (const label of ['Fields', 'Grain', 'Inventory', 'Profitability', 'Alerts']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
+    for (const label of ['Equipment', 'Tasks', 'Weather', 'Field Log', 'Scouting', 'Harvest', 'Programs']) await expect(navigation.getByRole('link', { name: label })).toHaveCount(0)
+  }
+  await page.goto('/tasks')
+  await expect(page).toHaveURL(/\/fields$/)
+  await expect(page.getByText('North Forty')).toBeVisible()
+  const pending = await page.evaluate((keys) => keys.map((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { entries?: unknown[] }).map((value) => value.entries?.length ?? 0), [pendingKeys.fieldsKey, pendingKeys.equipmentKey])
+  expect(pending).toEqual([1, 1])
+  expect(unexpected).toEqual([])
+})
+
+test('a read-only member can view member modules but cannot enter edit routes or replay writes', async ({ page, context }, testInfo) => {
+  await seedSession(context)
+  const pendingKeys = await seedPendingWriteQueues(context)
+  const unexpected = await mockSupabase(page, [farms[0]], [], false, 1, { memberRole: 'read_only', canViewFinancials: false, namedRep: false })
+  await page.goto('/fields')
+  await expect(page.getByText('North Forty')).toBeVisible()
+  await expect(page.locator('fieldset[disabled][aria-label="Read-only farm data"]')).toBeVisible()
+  const navigation = testInfo.project.name === 'chromium-phone' ? page.getByRole('navigation', { name: 'Farm Rx navigation' }) : page.locator('.sidebar')
+  if (testInfo.project.name === 'chromium-phone') {
+    await navigation.getByRole('button', { name: 'More' }).click()
+    const more = page.getByRole('region', { name: 'More Farm Rx destinations' })
+    await expect(more.getByRole('link', { name: 'Programs' })).toBeVisible()
+    await expect(navigation.getByRole('link', { name: 'Weather' })).toHaveCount(0)
+    await expect(navigation.getByRole('link', { name: 'Grain' })).toHaveCount(0)
+  } else {
+    await expect(navigation.getByRole('link', { name: 'Programs' })).toBeVisible()
+    await expect(navigation.getByRole('link', { name: 'Weather' })).toHaveCount(0)
+    await expect(navigation.getByRole('link', { name: 'Grain' })).toHaveCount(0)
+  }
+  await page.goto('/fields/new')
+  await expect(page).toHaveURL(/\/fields$/)
+  await expect(page.getByText('North Forty')).toBeVisible()
+  const pending = await page.evaluate((keys) => keys.map((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { entries?: unknown[] }).map((value) => value.entries?.length ?? 0), [pendingKeys.fieldsKey, pendingKeys.equipmentKey])
+  expect(pending).toEqual([1, 1])
+  expect(unexpected).toEqual([])
+})
+
 test('a direct signed-in A to B replacement hides Farm A before B access validation finishes', async ({ page, context }) => {
   await seedSession(context)
   const sessionB = session(userBId)
   let bFarmRequestStarted = false
+  const unexpected: string[] = []
   let releaseBFarmRequest = () => {}
   const bFarmRequest = new Promise<void>((resolve) => { releaseBFarmRequest = resolve })
   await page.route('https://*.supabase.co/**', async (route) => {
@@ -155,30 +305,40 @@ test('a direct signed-in A to B replacement hides Farm A before B access validat
     const isUserB = route.request().headers().authorization?.includes(sessionB.access_token) === true
     const ownerId = isUserB ? userBId : userId
     const accessible = [isUserB ? farms[1] : farms[0]]
+    const rejectShape = async (label: string) => { unexpected.push(`INVALID ${label}`); await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ message: `Invalid replacement ${label}` }) }) }
     if (rest === 'farms') {
       if (isUserB && !url.searchParams.has('id')) { bFarmRequestStarted = true; await bFarmRequest }
-      await fulfillJson(route, url.searchParams.has('id') ? farmRow(requestedFarm(url)) : accessible.map(farmRow).map((row) => ({ ...row, created_by: ownerId })))
+      const farm = requestedFarm(url)
+    const query: Record<string, string> = url.searchParams.has('id') ? { select: '*', id: `eq.${farm.id}` } : { select: '*', order: 'name.asc,id.asc' }
+      if (route.request().method() !== 'GET' || !exactQuery(url, query)) { await rejectShape('farms query'); return }
+      const response = { ...farmRow(farm), created_by: ownerId }
+      await fulfillJson(route, url.searchParams.has('id') ? response : accessible.map((item) => ({ ...farmRow(item), created_by: ownerId })))
       return
     }
-    if (rest && ['entities', 'fields', 'arrangements', 'crop_assignments', 'commodities'].includes(rest)) { await fulfillJson(route, rowsFor(rest, requestedFarm(url))); return }
-    if (rest === 'notifications') { await fulfillJson(route, []); return }
-    if (url.pathname === '/rest/v1/rpc/get_current_farm_access_epochs') { await fulfillJson(route, accessible.map((farm) => ({ farm_id: farm.id, access_epoch: 1 }))); return }
-    if (url.pathname === '/rest/v1/rpc/can_read_private_financials' || url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { await fulfillJson(route, true); return }
-    if (url.pathname === '/rest/v1/rpc/generate_due_program_items') { await fulfillJson(route, { generated_count: 0 }); return }
+    if (rest === 'farm_memberships') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,user_id,role,status,can_view_financials', farm_id: `eq.${farm.id}`, user_id: `eq.${ownerId}` })) { await rejectShape('membership query'); return }; await fulfillJson(route, membershipRow(farm, ownerId)); return }
+    if (rest === 'farm_rep_access') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,rep_user_id,enabled,revoked_at', farm_id: `eq.${farm.id}`, rep_user_id: `eq.${ownerId}` })) { await rejectShape('rep query'); return }; await fulfillJson(route, null); return }
+    if (rest && Object.hasOwn(fieldsReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, fieldsReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, rowsFor(rest, farm)); return }
+    if (rest === 'notifications') { if (route.request().method() !== 'GET' || !exactQuery(url, { select: '*', order: 'created_at.desc,id.desc' })) { await rejectShape('notifications query'); return }; await fulfillJson(route, []); return }
+    if (url.pathname === '/rest/v1/rpc/get_current_farm_access_epochs') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; if (route.request().method() !== 'POST' || !body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body as Record<string, unknown>).length !== 0) { await rejectShape('epoch body'); return }; await fulfillJson(route, accessible.map((farm) => ({ farm_id: farm.id, access_epoch: 1 }))); return }
+    if (['can_access_farm', 'is_active_farm_member', 'can_edit_farm', 'can_manage_farm', 'can_read_private_financials', 'has_explicit_rep_access'].some((name) => url.pathname === `/rest/v1/rpc/${name}`)) { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || value.target_farm_id !== accessible[0]!.id) { await rejectShape(`${url.pathname} body`); return }; await fulfillJson(route, !url.pathname.endsWith('/has_explicit_rep_access')); return }
+    if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
+    if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || value.p_farm_id !== accessible[0]!.id) { await rejectShape('generate_due_service_tasks body'); return }; await fulfillJson(route, { created_count: 0 }); return }
+    if (url.pathname === '/rest/v1/rpc/generate_due_program_items') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).sort().join('|') !== 'p_farm_id|p_local_date|p_operation_id' || value.p_farm_id !== accessible[0]!.id || typeof value.p_operation_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_operation_id) || typeof value.p_local_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.p_local_date)) { await rejectShape('generate_due_program_items body'); return }; await fulfillJson(route, { generated_count: 0 }); return }
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, isUserB ? sessionB.user : session().user); return }
-    if (route.request().method() === 'GET' && rest) { await fulfillJson(route, rest === 'grain_alert_settings' ? null : []); return }
+    unexpected.push(`${route.request().method()} ${url.pathname}`)
     await route.abort('blockedbyclient')
   })
 
   await page.goto('/fields')
   await expect(page.getByText('North Forty')).toBeVisible()
-  await page.evaluate(async ({ key, value }) => {
+  await page.evaluate(async ({ key, intentKey, value, intent }) => {
+    localStorage.setItem(intentKey, JSON.stringify(intent))
     localStorage.setItem(key, JSON.stringify(value))
     const channel = new BroadcastChannel(key)
     channel.postMessage({ event: 'SIGNED_IN', session: value })
     await new Promise((resolve) => setTimeout(resolve, 0))
     channel.close()
-  }, { key: `farm-rx-auth:${projectRef}`, value: sessionB })
+  }, { key: `farm-rx-auth:${projectRef}`, intentKey: `farm-rx-auth-intent:v1:${projectRef}`, value: sessionB, intent: { version: 1, nonce: 'playwright-session-b', phase: 'accepted', userId: userBId, sessionLineage: `session-${userBId}`, startedAtMs: Date.now() } })
   await expect.poll(() => bFarmRequestStarted).toBe(true)
   await expect(page.getByText('North Forty')).toBeHidden()
   await expect(page.getByLabel('Active farm')).toBeHidden()
@@ -186,6 +346,7 @@ test('a direct signed-in A to B replacement hides Farm A before B access validat
   releaseBFarmRequest()
   await expect(page.getByText('South Bottom')).toBeVisible()
   await expect(page.getByText('North Forty')).toBeHidden()
+  expect(unexpected).toEqual([])
 })
 
 test('a previously loaded farm reopens from its isolated cache while offline', async ({ page, context }) => {
@@ -383,6 +544,8 @@ test('a delayed old farm read cannot overwrite the cache after revoke and regran
   const currentFence = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { token: string; serverEpoch: number }, fenceKey)
   expect(currentFence.serverEpoch).toBe(3)
 
+  await staleTab.unroute('https://*.supabase.co/**')
+  await mockSupabase(staleTab, [farms[0]], [], false, 3)
   releaseRead()
   await staleReload
   await expect(staleTab.getByText('North Forty')).toBeVisible()

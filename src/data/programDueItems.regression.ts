@@ -40,8 +40,13 @@ async function run() {
   const failingGateway = new FakeGateway(); failingGateway.failure = new Error('offline'); const bestEffort = new DueProgramItemsService({ gateway: failingGateway, ...operationDependencies, createId: () => uid(30), today: () => '2026-07-12' })
   assert(await bestEffort.generate() === 'skipped', 'A due-generation failure must be swallowed by the best-effort service.')
 
-  // Group 4: reconnect replays queued Programs writes before one un-awaited due scan, using a farm-local date at UTC midnight.
+  // Group 4: startup/reconnect uses the strict path so the farm gate remains
+  // blocked and retryable instead of silently opening without due work.
+  let strictRejected = false; try { await bestEffort.generateStrict() } catch (error) { strictRejected = error instanceof Error && error.message === 'offline' }
+  assert(strictRejected, 'The strict Programs due-generation path swallowed a startup failure.')
+
+  // Group 5: reconnect replays queued Programs writes before one un-awaited due scan, using a farm-local date at UTC midnight.
   const events: string[] = []; await replayProgramsThenGenerateDueItems(async () => { events.push('programs-replayed') }, async () => { events.push('due-generated'); return 'generated' }); assert(events.join(',') === 'programs-replayed,due-generated', 'Reconnect must start due generation only after queued Programs writes resolve.'); const serverCurrentDate = '2026-07-12'; const midnightLocalDate = localCalendarDate(new Date('2026-07-12T00:30:00.000Z')); const dateDistance = Math.abs((Date.parse(`${midnightLocalDate}T00:00:00Z`) - Date.parse(`${serverCurrentDate}T00:00:00Z`)) / 86400000); const midnightGateway = new FakeGateway(); const midnight = new DueProgramItemsService({ gateway: midnightGateway, ...operationDependencies, createId: () => uid(40), today: () => midnightLocalDate }); await midnight.generate(); assert(midnightGateway.calls[0]?.localDate === midnightLocalDate && dateDistance <= 1, 'The UTC-midnight scan must send the farm-local calendar date, within the RPC one-day server-date bound.')
-  console.log('programDueItems regression passed (4 coverage groups)')
+  console.log('programDueItems regression passed (5 coverage groups)')
 }
 void run()
