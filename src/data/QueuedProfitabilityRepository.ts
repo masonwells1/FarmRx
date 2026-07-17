@@ -7,15 +7,15 @@ import { SOURCED_COST_LINE_EDIT_MESSAGE, type BudgetCostLine, type BudgetFieldAl
 import { ProfitabilityWriteQueue, type ProfitabilityQueueEntryV1, profitabilityWriteQueueKey } from './profitabilityWriteQueue'
 import { isTransportFailure } from './QueuedFieldsRepository'
 import { manualCostLineWrite, type ProfitabilityOperationWriter } from './SupabaseProfitabilityRepository'
-import { setModuleSyncRetryAction, setModuleSyncStatus } from './syncStatus'
+import { setModuleSyncStatus } from './syncStatus'
 import { readNeedsAttention } from './needsAttentionStore'
-import type { StorageLike } from './writeQueue'
+import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
 import { setSaveReceipt } from '../lib/saveReceipt'
 import { SAVE_DURABILITY_UPDATE_MESSAGE } from './saveDurability'
 import { captureWorkspaceCacheFence, financialCacheMaxAgeMs, readWorkspaceCache, WorkspaceMemoryChangedError, WorkspaceMemoryScope, writeWorkspaceCache, type WorkspaceMemoryGuard } from './workspaceCache'
 import { queueTransaction } from './queueTransaction'
 import { verifyFarmOperationContext, type FarmOperationContext } from './farmOperationContext'
-import { captureQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
+import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 
 type Context = { userId: string; farmId: string }
 type Dependencies = { getContext: () => Promise<Context>; projectRef: string; storage: StorageLike; createId: () => string; clock: () => string; isOffline: () => boolean }
@@ -41,7 +41,7 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
   private workspace: ProfitabilityWorkspace | null = null
   private rawCostLineCache: BudgetCostLineWrite[] = []
   private readonly memoryScope = new WorkspaceMemoryScope()
-  constructor(private readonly writer: ProfitabilityRepository & ProfitabilityOperationWriter, private readonly dependencies: Dependencies) { if (typeof window !== 'undefined') window.addEventListener('online', () => { void this.replayCurrent() }); setModuleSyncRetryAction('profitability', () => this.replayCurrent()) }
+  constructor(private readonly writer: ProfitabilityRepository & ProfitabilityOperationWriter, private readonly dependencies: Dependencies) {}
   private async contextAndQueue() { const operationContext = await captureQueuedOperationContext(this.dependencies); const context = { userId: operationContext.userId, farmId: operationContext.farmId }; const queue = new ProfitabilityWriteQueue(this.dependencies.storage, profitabilityWriteQueueKey(this.dependencies.projectRef, context.userId, context.farmId)); const memoryGuard = this.memoryScope.enter(this.dependencies.storage, { projectRef: this.dependencies.projectRef, ...context, module: 'profitability' }, () => { this.workspace = null; this.rawCostLineCache = [] }); return { context, operationContext, queue, memoryGuard } }
   async getNeedsAttentionQueueKey() { return (await this.contextAndQueue()).queue.key }
   async getInsuranceDraftContext() { const { context } = await this.contextAndQueue(); return { projectRef: this.dependencies.projectRef, ...context } }
@@ -53,7 +53,6 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
     const verifyRead = () => verifyQueuedReadContext(this.dependencies, operationContext)
     const cacheScope = { projectRef: this.dependencies.projectRef, ...context, module: 'profitability' }
     try {
-      await this.replayCurrent(); await verifyRead()
       const cacheFence = captureWorkspaceCacheFence(cacheScope)
       const workspace = await this.writer.getWorkspace(); await verifyRead()
       this.memoryScope.verify(this.dependencies.storage, memoryGuard)
@@ -100,7 +99,7 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
   private rebase(entry: ProfitabilityQueueEntryV1, versions: Map<string, string>): ProfitabilityQueueEntryV1 { const key = this.mutableKey(entry); if (!key || !versions.has(key) || !('row' in entry)) return entry; return { ...entry, row: { ...entry.row, updated_at: versions.get(key)! } } as ProfitabilityQueueEntryV1 }
   private syncOrParked(queue: ProfitabilityWriteQueue) { const parked = readNeedsAttention(this.dependencies.storage, queue.key).length; setModuleSyncStatus('profitability', parked ? { kind: 'blocked', pending: parked, message: `${parked} saves need attention.` } : { kind: 'synced', pending: 0 }) }
   private receiptId(entry: ProfitabilityQueueEntryV1) { if (entry.kind === 'createBudget' || entry.kind === 'saveBudget') return entry.row.id; if (entry.kind === 'copyBudget') return entry.budget.id; if (entry.kind === 'saveCostLine' || entry.kind === 'saveAllocation') return entry.row.id; return entry.kind === 'replaceMatrixSteps' ? entry.budgetId : entry.id }
-  private async save(entry: ProfitabilityQueueEntryV1, operationContext: FarmOperationContext): Promise<'saved' | 'queued offline'> { const { context, queue, memoryGuard } = await this.contextAndQueue(); if (entry.userId !== context.userId || entry.farmId !== context.farmId) throw new Error(blocked); await this.verifyOperation(entry, operationContext, memoryGuard); const receiptId = this.receiptId(entry); setSaveReceipt(receiptId, 'saving'); const disposition = await this.locked(queue, async (verify) => { verify(); const enqueue = async () => { verify(); await this.verifyOperation(entry, operationContext, memoryGuard); const next = queue.append(entry); setModuleSyncStatus('profitability', { kind: 'pending', pending: next.entries.length }); if (this.workspace) { this.memoryScope.verify(this.dependencies.storage, memoryGuard); this.workspace = this.overlay(this.workspace, next.entries) } setSaveReceipt(receiptId, 'queued offline'); return 'queued offline' as const }; await this.verifyOperation(entry, operationContext, memoryGuard); if (queue.read().entries.length || this.dependencies.isOffline()) return enqueue(); try { await this.write(entry, operationContext); verify(); await this.verifyOperation(entry, operationContext, memoryGuard); this.syncOrParked(queue); setSaveReceipt(receiptId, 'saved'); return 'saved' as const } catch (error) { await this.verifyOperation(entry, operationContext, memoryGuard); if (isTransportFailure(error, this.dependencies.isOffline())) return enqueue(); setSaveReceipt(receiptId, 'needs attention'); throw error } }); void this.replayCurrent(); return disposition }
+  private async save(entry: ProfitabilityQueueEntryV1, operationContext: FarmOperationContext): Promise<'saved' | 'queued offline'> { const { context, queue, memoryGuard } = await this.contextAndQueue(); if (entry.userId !== context.userId || entry.farmId !== context.farmId) throw new Error(blocked); await this.verifyOperation(entry, operationContext, memoryGuard); const receiptId = this.receiptId(entry); setSaveReceipt(receiptId, 'saving'); const disposition = await this.locked(queue, async (verify) => { verify(); const enqueue = async () => { verify(); await this.verifyOperation(entry, operationContext, memoryGuard); const next = queue.append(entry); setModuleSyncStatus('profitability', { kind: 'pending', pending: next.entries.length }); if (this.workspace) { this.memoryScope.verify(this.dependencies.storage, memoryGuard); this.workspace = this.overlay(this.workspace, next.entries) } setSaveReceipt(receiptId, 'queued offline'); return 'queued offline' as const }; await this.verifyOperation(entry, operationContext, memoryGuard); if (queue.read().entries.length || this.dependencies.isOffline()) return enqueue(); try { await this.write(entry, operationContext); verify(); await this.verifyOperation(entry, operationContext, memoryGuard); this.syncOrParked(queue); setSaveReceipt(receiptId, 'saved'); return 'saved' as const } catch (error) { await this.verifyOperation(entry, operationContext, memoryGuard); if (isTransportFailure(error, this.dependencies.isOffline())) return enqueue(); setSaveReceipt(receiptId, 'needs attention'); throw error } }); launchReplayInBackground(() => this.replayCurrent()); return disposition }
 
   async createBudget(value: CropBudget) {
     const { context, memoryGuard } = await this.contextAndQueue()
@@ -116,7 +115,7 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
   async saveBudgetInsurance(budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt?: string | null) { if (this.dependencies.isOffline()) throw new Error('Insurance changes need a connection before they can be confirmed.'); const { context, memoryGuard } = await this.contextAndQueue(); await this.verifyDirect(context, memoryGuard.fence, memoryGuard); await this.writer.saveBudgetInsuranceOperation(budgetId, patch, expectedUpdatedAt, memoryGuard.fence); await this.verifyDirect(context, memoryGuard.fence, memoryGuard); return 'saved' as const }
   async saveCostLine(value: BudgetCostLine) {
     const { context, memoryGuard } = await this.contextAndQueue()
-    if (!this.workspace) { try { await this.getWorkspace() } catch { /* offline with nothing cached yet is handled by mintCostLine below */ } }
+    if (!this.workspace) { try { await this.getWorkspace() } catch (error) { if (isFarmReplayContextChangedError(error)) throw error /* offline with nothing cached yet is handled by mintCostLine below */ } }
     const raw = await this.effectiveRawCostLines()
     const existing = raw.find((line) => line.id === value.id)
     if (existing && existing.source_kind !== undefined && existing.source_kind !== 'manual') throw new Error(SOURCED_COST_LINE_EDIT_MESSAGE)
@@ -164,10 +163,13 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
   }
   async replayCurrent() {
     let source: Awaited<ReturnType<QueuedProfitabilityRepository['contextAndQueue']>>
-    try { source = await this.contextAndQueue() } catch { return }
-    const { context, queue, memoryGuard } = source
+    try { source = await this.contextAndQueue() } catch (error) { if (isFarmReplayContextChangedError(error)) throw error; return }
+    const { context, operationContext, queue, memoryGuard } = source
     try {
       await this.locked(queue, async (verify) => {
+        await verifyQueuedOperationContext(this.dependencies, operationContext, context)
+        verify()
+        this.memoryScope.verify(this.dependencies.storage, memoryGuard)
         let envelope = queue.read()
         if (!envelope.entries.length) { const parked = readNeedsAttention(this.dependencies.storage, queue.key).length; setModuleSyncStatus('profitability', parked ? { kind: 'blocked', pending: parked, message: `${parked} saves need attention.` } : { kind: 'synced', pending: 0 }); return }
         if (this.dependencies.isOffline()) { setModuleSyncStatus('profitability', { kind: 'pending', pending: envelope.entries.length }); return }
@@ -187,6 +189,6 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
         }
         const parked = readNeedsAttention(this.dependencies.storage, queue.key).length; setModuleSyncStatus('profitability', parked ? { kind: 'blocked', pending: parked, message: `${parked} saves need attention.` } : { kind: 'synced', pending: 0 })
       })
-    } catch { setModuleSyncStatus('profitability', { kind: 'blocked', pending: 0, message: blocked }) }
+    } catch (error) { if (isFarmReplayContextChangedError(error)) throw error; setModuleSyncStatus('profitability', { kind: 'blocked', pending: 0, message: blocked }) }
   }
 }

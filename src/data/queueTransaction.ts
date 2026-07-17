@@ -19,16 +19,18 @@ function expiry(raw: string | null, now: number) {
   } catch { return 0 }
 }
 
-async function serial<T>(key: string, task: () => Promise<T>): Promise<T> {
-  const previous = processLocks.get(key) ?? Promise.resolve()
+async function serialWithLocks<T>(locks: Map<string, Promise<void>>, key: string, task: () => Promise<T>): Promise<T> {
+  const previous = locks.get(key) ?? Promise.resolve()
   let release!: () => void
   const current = new Promise<void>((resolve) => { release = resolve })
   const tail = previous.then(() => current)
-  processLocks.set(key, tail)
+  locks.set(key, tail)
   await previous
   try { return await task() }
-  finally { release(); if (processLocks.get(key) === tail) processLocks.delete(key) }
+  finally { release(); if (locks.get(key) === tail) locks.delete(key) }
 }
+
+function serial<T>(key: string, task: () => Promise<T>): Promise<T> { return serialWithLocks(processLocks, key, task) }
 
 async function leased<T>(key: string, storage: StorageLike, createId: () => string, task: (verify: () => void) => Promise<T>): Promise<T> {
   const leaseKey = `${key}:lease`
@@ -89,13 +91,20 @@ export function subscribeQueueTransactions(listener: (key: string) => void) { en
 /** Cross-tab transaction for device state that is not a write queue. It uses
  * the same Web Locks/localStorage fallback as queue transactions without
  * applying a farm fence or publishing a queue-change notification. */
-export async function coordinatedDeviceTransaction<T>(key: string, storage: StorageLike, createId: () => string, task: (verify: () => void) => Promise<T>): Promise<T> {
-  return serial(key, async () => {
-    const lockName = `farm-rx-device:${key}`
-    if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(lockName, async () => task(() => undefined))
-    return leased(key, storage, createId, task)
-  })
+export function createDeviceTransactionCoordinator() {
+  // Each browser tab has its own module realm and therefore its own in-process
+  // queue. Cross-tab exclusion comes from Web Locks or the storage lease.
+  const localLocks = new Map<string, Promise<void>>()
+  return async function coordinate<T>(key: string, storage: StorageLike, createId: () => string, task: (verify: () => void) => Promise<T>): Promise<T> {
+    return serialWithLocks(localLocks, key, async () => {
+      const lockName = `farm-rx-device:${key}`
+      if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(lockName, async () => task(() => undefined))
+      return leased(key, storage, createId, task)
+    })
+  }
 }
+
+export const coordinatedDeviceTransaction = createDeviceTransactionCoordinator()
 
 export async function queueTransaction<T>(key: string, storage: StorageLike, createId: () => string, task: (verify: () => void) => Promise<T>): Promise<T> {
   let touched = false

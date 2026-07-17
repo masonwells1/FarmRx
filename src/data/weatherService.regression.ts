@@ -57,8 +57,10 @@ async function run() {
   const failingStorage = new Storage(); failingStorage.throwOnGet = true; failingStorage.throwOnSet = true; const uncachedLive = await createWeatherService({ storage: failingStorage, clock: () => new Date('2026-07-12T15:00:00Z'), fetch: async () => response(payload) }).fetchForecast(38, -88); assert(!uncachedLive.stale && uncachedLive.current.temperature_f === 72, 'Storage failures must not hide a good live forecast.')
 
   // Group 5: RPC echoes and the live Field mapper fail closed on location provenance.
-  const farmId = id(1); const fieldId = id(2); const good = mapFieldLocationEcho({ id: fieldId, farm_id: farmId, latitude: '38', longitude: '-88', location_source: 'gps' }, { farmId, fieldId }); assert(good.latitude === 38, 'String-numeric location echoes must map.')
-  throws(() => mapFieldLocationEcho({ id: id(3), farm_id: farmId, latitude: 38, longitude: -88, location_source: 'gps' }, { farmId, fieldId }), 'A field-ID echo mismatch must fail closed.')
+  const farmId = id(1); const fieldId = id(2); const expectedLocation = { farmId, fieldId, latitude: 38, longitude: -88, source: 'gps' as const }; const good = mapFieldLocationEcho({ id: fieldId, farm_id: farmId, latitude: '38', longitude: '-88', location_source: 'gps' }, expectedLocation); assert(good.latitude === 38, 'String-numeric location echoes must map.')
+  throws(() => mapFieldLocationEcho({ id: id(3), farm_id: farmId, latitude: 38, longitude: -88, location_source: 'gps' }, expectedLocation), 'A field-ID echo mismatch must fail closed.')
+  throws(() => mapFieldLocationEcho({ id: fieldId, farm_id: farmId, latitude: 38.0001, longitude: -88, location_source: 'gps' }, expectedLocation), 'A valid but different latitude echo must fail closed.')
+  throws(() => mapFieldLocationEcho({ id: fieldId, farm_id: farmId, latitude: 38, longitude: -88, location_source: 'manual' }, expectedLocation), 'A different location-source echo must fail closed.')
   const rawField = fieldsSeedForRegression().fields[0]
   assert(mapField({ ...rawField, latitude: null, longitude: null, location_source: null }).location_source === null, 'A null point with null provenance must map.')
   assert(mapField({ ...rawField, latitude: '38.125', longitude: '-88.125', location_source: 'gps' }).latitude === 38.125, 'Numeric and string-numeric coordinates must map.')

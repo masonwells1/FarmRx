@@ -6,7 +6,13 @@ import {
   type FieldsOperationWriter,
   type SavedFieldOperation,
 } from "./SupabaseFieldsRepository";
-import { createFieldEditDraft, type FieldEditPatch } from "./fieldEditPatch";
+import {
+  createFieldEditDraft,
+  currentArrangementForFieldEdit,
+  resolveFieldDetail,
+  resolveFieldForm,
+  type FieldEditPatch,
+} from "./fieldEditPatch";
 import type { StorageLike } from "./writeQueue";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -206,7 +212,7 @@ function regressionCancelledDraftsNeverReachTheLiveBundle() {
   const data = fieldsSeedForRegression();
   const field = data.fields[1];
   const cancelledName = "CANCELLED-BASICS-SENTINEL";
-  const cancelledCommodity = "CANCELLED-RECORD-SENTINEL";
+  const cancelledCommodity = "cancelled_record_sentinel";
   const reopenedCounty = "REOPENED-BASICS-SENTINEL";
   const changedAssignment = data.crop_assignments.find(
     (row) => row.field_id === field.id,
@@ -286,8 +292,65 @@ function regressionBlankUiIdsBecomeDurableIds() {
   );
 }
 
+function regressionFieldDetailRecoveryStatesStayDistinct() {
+  const data = fieldsSeedForRegression();
+  const field = data.fields[1];
+  const ready = resolveFieldDetail(data, field.id);
+  assert(
+    ready.kind === "ready" && ready.field.id === field.id,
+    "A complete field did not resolve to its editable detail state.",
+  );
+
+  const withoutCurrentAgreement = structuredClone(data);
+  withoutCurrentAgreement.arrangements = withoutCurrentAgreement.arrangements.filter(
+    (row) => row.field_id !== field.id || row.effective_to !== null,
+  );
+  const repair = resolveFieldDetail(withoutCurrentAgreement, field.id);
+  assert(
+    repair.kind === "missing_arrangement" && repair.field.id === field.id,
+    "A field missing only its current agreement was mislabeled as deleted.",
+  );
+  assert(
+    resolveFieldDetail(data, "00000000-0000-4000-8000-999999999999").kind ===
+      "missing_field",
+    "A genuinely missing field did not retain the not-found state.",
+  );
+
+  const addForm = resolveFieldForm(data, undefined);
+  assert(addForm.kind === "add", "The explicit Add Field route did not resolve as add.");
+  assert(
+    currentArrangementForFieldEdit(data, addForm) === null,
+    "The Add Field path lost its deliberate new-field agreement default.",
+  );
+  const editForm = resolveFieldForm(data, field.id);
+  assert(editForm.kind === "edit" && editForm.field.id === field.id, "A known field route did not resolve as edit.");
+  assert(
+    currentArrangementForFieldEdit(data, editForm)?.field_id === field.id,
+    "An existing field with a real agreement could not preserve it.",
+  );
+  const missingForm = resolveFieldForm(data, "00000000-0000-4000-8000-999999999999");
+  assert(
+    missingForm.kind === "missing_field",
+    "A supplied unknown edit ID was allowed to fall through to Add Field.",
+  );
+  const missingAgreementForm = resolveFieldForm(withoutCurrentAgreement, field.id);
+  assert(missingAgreementForm.kind === "edit", "A field missing only its agreement did not remain an edit.");
+  let missingAgreementRejected = false;
+  try {
+    currentArrangementForFieldEdit(withoutCurrentAgreement, missingAgreementForm);
+  } catch (error) {
+    missingAgreementRejected =
+      error instanceof Error && /current agreement/i.test(error.message);
+  }
+  assert(
+    missingAgreementRejected,
+    "An existing field without an agreement could silently synthesize owned ground.",
+  );
+}
+
 await regressionConfirmedReceiptSurvivesFailedRefresh();
 await regressionOfflineAgreementThenBasicsPreservesAgreement();
 regressionCancelledDraftsNeverReachTheLiveBundle();
 regressionBlankUiIdsBecomeDurableIds();
+regressionFieldDetailRecoveryStatesStayDistinct();
 console.log("Field edit patch regressions passed.");

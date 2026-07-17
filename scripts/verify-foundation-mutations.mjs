@@ -27,7 +27,7 @@ try {
   reset()
   if (foundationStaticGuard(temporary).length) throw new Error('Static guard baseline was not green before mutation drills.')
   mutate('src/App.tsx', (source) => source.replace('path="/grain/*"', 'path="/grain-broken/*"'))
-  detected('route removal', 'route:/grain/*')
+  detected('ordered route manifest change', 'routes:exact-ordered-manifest')
   reset()
   mutate('src/App.tsx', (source) => source.replace('<FarmAccessGateForUser key={user.id} user={user}>', '<FarmAccessGateForUser key="shared-account" user={user}>'))
   detected('cross-account farm gate reuse', 'identity:keyed-farm-access-gate')

@@ -1,3 +1,5 @@
+import type { FarmOperationContext } from './farmOperationContext'
+
 export type EntityType = 'individual' | 'sole_proprietorship' | 'partnership' | 'llc' | 'corporation' | 'trust'
 export type LandArrangementType = 'owned' | 'cash_rent' | 'flex_cash_rent' | 'crop_share'
 
@@ -181,5 +183,13 @@ export interface FieldDraft {
 
 export interface FieldsRepository {
   getData(): Promise<FieldsData>
+  /** Pure read for projections such as Today. The caller supplies the already-published, fenced context; the repository must never resolve access, replay, or mutate. */
+  getSnapshot?(context: FarmOperationContext): Promise<ReadOnlySnapshot<FieldsData>>
   saveField(draft: FieldDraft): Promise<Field>
+}
+
+export type ReadOnlySnapshot<T> = {
+  data: T
+  source: 'live' | 'offline'
+  capturedAt: string
 }

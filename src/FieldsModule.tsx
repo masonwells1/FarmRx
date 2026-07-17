@@ -33,6 +33,9 @@ import { structuredFlexFormulaError } from "./data/flexLeaseValidation";
 import { roundDecimalHalfUp } from "./data/decimal";
 import {
   createFieldEditDraft,
+  currentArrangementForFieldEdit,
+  resolveFieldDetail,
+  resolveFieldForm,
   type FieldEditPatch,
 } from "./data/fieldEditPatch";
 
@@ -917,10 +920,11 @@ export function FieldDetailPage() {
     dataRef.current = data;
   }, [data]);
   if (!data) return <LoadingState message={error || undefined} />;
-  const field = data.fields.find((item) => item.id === id);
-  if (!field) return <NotFoundState />;
-  const arrangement = currentArrangement(data.arrangements, field.id);
-  if (!arrangement) return <NotFoundState />;
+  const detail = resolveFieldDetail(data, id);
+  if (detail.kind === "missing_field") return <NotFoundState />;
+  if (detail.kind === "missing_arrangement")
+    return <MissingArrangementState field={detail.field} />;
+  const { field, arrangement } = detail;
   const save = (patch: FieldEditPatch) => {
     const queued = saveTail.current.then(async () => {
       const latest = dataRef.current;
@@ -1949,7 +1953,8 @@ export function FieldFormPage() {
   const { data, refresh } = useFieldsData();
   const { id } = useParams();
   const navigate = useNavigate();
-  const existing = data?.fields.find((field) => field.id === id);
+  const formResolution = data ? resolveFieldForm(data, id) : null;
+  const existing = formResolution?.kind === "edit" ? formResolution.field : undefined;
   const [name, setName] = useState("");
   const [acres, setAcres] = useState("");
   const [county, setCounty] = useState("");
@@ -1963,6 +1968,9 @@ export function FieldFormPage() {
     }
   }, [existing]);
   if (!data) return <LoadingState />;
+  if (!formResolution || formResolution.kind === "missing_field") {
+    return <NotFoundState />;
+  }
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const parsed = Number(acres);
@@ -1975,8 +1983,15 @@ export function FieldFormPage() {
       const entity = existing
         ? data.entities.find((item) => item.id === existing.operating_entity_id)
         : data.entities.find((item) => item.is_active);
-      const arrangement =
-        existing && currentArrangement(data.arrangements, existing.id);
+      let arrangement: Arrangement | null;
+      try {
+        arrangement = currentArrangementForFieldEdit(data, formResolution);
+      } catch {
+        setError(
+          "This field's current agreement is missing. Farm Rx will not guess that it is owned. Ask your Farm Rx administrator to repair it.",
+        );
+        return;
+      }
       if (!entity) {
         setError("No active operating entity is available.");
         return;
@@ -2216,6 +2231,24 @@ function NotFoundState() {
       <div className="empty-state">
         <h1>Field not found</h1>
         <p>That field may have been removed from this device.</p>
+        <Link className="primary-action" to="/fields">
+          Back to fields
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function MissingArrangementState({ field }: { field: Field }) {
+  return (
+    <section className="page">
+      <div className="empty-state">
+        <h1>Current agreement missing</h1>
+        <p>
+          {field.name} is still on your farm. Farm Rx kept it read-only so it
+          does not guess that you own this ground.
+        </p>
+        <p>Ask your Farm Rx administrator to repair the land agreement.</p>
         <Link className="primary-action" to="/fields">
           Back to fields
         </Link>

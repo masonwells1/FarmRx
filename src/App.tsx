@@ -20,7 +20,7 @@ import {
   bootstrapInitialOwnerFarm,
 } from "./auth/bootstrapFarm";
 import { FarmAccessProvider, useFarmAccess } from "./auth/FarmAccessContext";
-import { hasPendingFarmWork, loadFarmAccess, selectFarm, type FarmAccess } from "./auth/farmContext";
+import { beginFarmReplayAuthorization, canAccessFarmModule, canEditFarmModule, canReplayFarmModule, createFarmAccessValidationGate, FarmAccessStorageUnsafeError, hasPendingFarmWork, loadFarmAccess, loadFarmAccessProfile, publishFarmReadyAuthorization, selectFarm, type FarmAccess, type FarmAppModule, type LoadedFarmAccessProfile } from "./auth/farmContext";
 import { RevokedFarmRecovery } from './components/RevokedFarmRecovery';
 import { createSubmitLock } from "./lib/submitLock";
 import { RequireSession } from "./auth/RequireSession";
@@ -39,13 +39,14 @@ import {
   equipmentTasksRepository,
   fieldLogRepository,
   fieldsRepository,
+  generateDueEquipmentTasks,
   generateDueProgramItems,
   grainServices,
   harvestRepository,
   inventoryRepository,
+  inspectEquipmentTasksQueue,
   notificationsRepository,
   programsRepository,
-  replayEquipmentTasksQueue,
   replayFieldLocationQueue,
   replayFieldLogQueue,
   replayFieldsQueue,
@@ -58,10 +59,11 @@ import {
   replayScoutingQueue,
   scoutingRepository,
 } from "./data";
-import { replayProgramsThenGenerateDueItems } from "./data/programDueItems";
 import {
   getSyncStatus,
+  getSyncNoticeState,
   retrySavedChanges,
+  setModuleSyncRetryAction,
   subscribeSyncStatus,
 } from "./data/syncStatus";
 import type { EntityType } from "./data/fields";
@@ -84,25 +86,30 @@ function NavGlyph({ d }: { d: string }) {
   );
 }
 
-const navigation = [
+type NavigationItem = { label: string; path: string; icon: ReactNode; module: FarmAppModule };
+const navigation: NavigationItem[] = [
   {
     label: "Fields",
     path: "/fields",
+    module: "fields",
     icon: <NavGlyph d="M4 4h16v16H4zM4 12h16M12 4v16" />,
   },
   {
     label: "Grain",
     path: "/grain",
+    module: "grain",
     icon: <NavGlyph d="M3 20h18M6 20V8l6-4 6 4v12" />,
   },
   {
     label: "Inventory",
     path: "/inventory",
+    module: "inventory",
     icon: <NavGlyph d="M21 8v13H3V8M1 3h22v5H1zM10 12h4" />,
   },
   {
     label: "Profitability",
     path: "/profitability",
+    module: "profitability",
     icon: (
       <NavGlyph d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
     ),
@@ -110,6 +117,7 @@ const navigation = [
   {
     label: "Equipment",
     path: "/equipment",
+    module: "equipment",
     icon: (
       <NavGlyph d="M7 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM17 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM10 16h4M4 13V7h9l3 5h4v4" />
     ),
@@ -117,6 +125,7 @@ const navigation = [
   {
     label: "Tasks",
     path: "/tasks",
+    module: "tasks",
     icon: (
       <NavGlyph d="M9 11l3 3 8-8M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
     ),
@@ -124,6 +133,7 @@ const navigation = [
   {
     label: "Weather",
     path: "/weather",
+    module: "weather",
     icon: (
       <NavGlyph d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z" />
     ),
@@ -131,11 +141,13 @@ const navigation = [
   {
     label: "Field Log",
     path: "/field-log",
+    module: "field_log",
     icon: <NavGlyph d="M4 6h16M4 12h16M4 18h10" />,
   },
   {
     label: "Scouting",
     path: "/scouting",
+    module: "scouting",
     icon: (
       <NavGlyph d="M12 21s7-5.1 7-11a7 7 0 1 0-14 0c0 5.9 7 11 7 11zM12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z" />
     ),
@@ -143,6 +155,7 @@ const navigation = [
   {
     label: "Harvest",
     path: "/harvest",
+    module: "harvest",
     icon: (
       <NavGlyph d="M12 3v6M12 9c-3 0-5 2-5 5v7h10v-7c0-3-2-5-5-5zM9 3c0 2 1 3 3 3s3-1 3-3" />
     ),
@@ -150,25 +163,60 @@ const navigation = [
   {
     label: "Programs",
     path: "/programs",
+    module: "programs",
     icon: <NavGlyph d="M8 4h12M8 12h12M8 20h12M4 4h.01M4 12h.01M4 20h.01" />,
   },
   {
     label: "Alerts",
     path: "/notifications",
+    module: "notifications",
     icon: (
       <NavGlyph d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" />
     ),
   },
 ];
 
-type NavigationItem = (typeof navigation)[number];
 const mobilePrimaryPaths = new Set(["/fields", "/grain", "/tasks", "/weather"]);
-const mobilePrimaryNavigation = navigation.filter((item) => mobilePrimaryPaths.has(item.path));
-const mobileMoreNavigation = navigation.filter((item) => !mobilePrimaryPaths.has(item.path));
+
+function CapabilityRoute({ module, editOnly = false, lockWrites = false, children }: { module: FarmAppModule; editOnly?: boolean; lockWrites?: boolean; children: ReactNode }) {
+  const { profile } = useFarmAccess();
+  if (!canAccessFarmModule(profile, module) || editOnly && !canEditFarmModule(profile, module)) return <Navigate to="/fields" replace />;
+  if (lockWrites && !canEditFarmModule(profile, module)) return <fieldset disabled aria-label="Read-only farm data" style={{ border: 0, margin: 0, minInlineSize: 0, padding: 0 }}>{children}</fieldset>;
+  return children;
+}
+
+export function FarmSwitcher({ farms, activeFarm, chooseFarm }: { farms: FarmAccess["farms"]; activeFarm: FarmAccess["farms"][number]; chooseFarm: (farmId: string) => Promise<void> }) {
+  const [switching, setSwitching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const switchLock = useRef(createSubmitLock());
+  async function switchTo(farmId: string) {
+    if (!switchLock.current.acquire()) return;
+    setSwitching(true);
+    setError(null);
+    try {
+      await chooseFarm(farmId);
+    } catch (caught) {
+      setError(farmerError(caught, "switch farms"));
+    } finally {
+      setSwitching(false);
+      switchLock.current.release();
+    }
+  }
+  return (
+    <div>
+      <label className="farm-switcher">Farm
+        <select value={activeFarm.id} disabled={switching} onChange={(event) => { void switchTo(event.target.value) }} aria-label="Active farm">
+          {farms.map((farm) => <option key={farm.id} value={farm.id}>{farm.name}</option>)}
+        </select>
+      </label>
+      {error && <p className="auth-error" role="alert">{error}</p>}
+    </div>
+  );
+}
 
 function AppLayout() {
   const { signOut, user } = useAuth();
-  const { farms, activeFarm, source, chooseFarm } = useFarmAccess();
+  const { farms, activeFarm, profile, source, chooseFarm } = useFarmAccess();
   const navigate = useNavigate();
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
@@ -197,7 +245,7 @@ function AppLayout() {
           <div className="farm-name">{farmName}</div>
           <div className="farm-logo-note">Your farm</div>
         </div>
-        <Navigation className="sidebar-nav" />
+        <Navigation className="sidebar-nav" items={navigation.filter((item) => canAccessFarmModule(profile, item.module))} />
         <div className="powered-by">
           <div className="powered-mark">
             Crop <span>RX</span>
@@ -212,19 +260,12 @@ function AppLayout() {
           </div>
           <div className="farm-summary">
             {farms.length > 1 ? (
-              <label className="farm-switcher">Farm
-                <select value={activeFarm.id} onChange={(event) => { void chooseFarm(event.target.value) }} aria-label="Active farm">
-                  {farms.map((farm) => <option key={farm.id} value={farm.id}>{farm.name}</option>)}
-                </select>
-              </label>
+              <FarmSwitcher farms={farms} activeFarm={activeFarm} chooseFarm={chooseFarm} />
             ) : farmName}
             {source === "offline" && <span className="offline-context">Offline access</span>}
           </div>
           <div className="topbar-actions">
-            <NotificationBell
-              repository={notificationsRepository}
-              generateDueItems={generateDueProgramItems}
-            />
+            {canAccessFarmModule(profile, "notifications") && <NotificationBell repository={notificationsRepository} />}
             <button
               className="sign-out"
               type="button"
@@ -245,66 +286,64 @@ function AppLayout() {
         <div className="content-area">
           <RevokedFarmRecovery userId={user?.id ?? null} />
           <Routes>
-            <Route path="/fields" element={<FieldsPage />} />
-            <Route path="/fields/new" element={<FieldFormPage />} />
-            <Route path="/fields/:id" element={<FieldDetailPage />} />
-            <Route path="/fields/:id/edit" element={<FieldFormPage />} />
+            <Route path="/fields" element={<CapabilityRoute module="fields" lockWrites><FieldsPage /></CapabilityRoute>} />
+            <Route path="/fields/new" element={<CapabilityRoute module="fields" editOnly><FieldFormPage /></CapabilityRoute>} />
+            <Route path="/fields/:id" element={<CapabilityRoute module="fields" lockWrites><FieldDetailPage /></CapabilityRoute>} />
+            <Route path="/fields/:id/edit" element={<CapabilityRoute module="fields" editOnly><FieldFormPage /></CapabilityRoute>} />
             <Route
               path="/grain/*"
-              element={<GrainPage services={grainServices} />}
+              element={<CapabilityRoute module="grain" lockWrites><GrainPage services={grainServices} /></CapabilityRoute>}
             />
             <Route
               path="/inventory"
-              element={<InventoryPage repository={inventoryRepository} />}
+              element={<CapabilityRoute module="inventory" lockWrites><InventoryPage repository={inventoryRepository} /></CapabilityRoute>}
             />
-            <Route path="/profitability/*" element={<ProfitabilityPage />} />
+            <Route path="/profitability/*" element={<CapabilityRoute module="profitability" lockWrites><ProfitabilityPage /></CapabilityRoute>} />
             <Route
               path="/equipment"
-              element={<EquipmentPage repository={equipmentTasksRepository} />}
+              element={<CapabilityRoute module="equipment" lockWrites><EquipmentPage repository={equipmentTasksRepository} /></CapabilityRoute>}
             />
             <Route
               path="/tasks"
-              element={<TasksPage repository={equipmentTasksRepository} />}
+              element={<CapabilityRoute module="tasks" lockWrites><TasksPage repository={equipmentTasksRepository} /></CapabilityRoute>}
             />
-            <Route path="/weather" element={<WeatherPage />} />
+            <Route path="/weather" element={<CapabilityRoute module="weather"><WeatherPage /></CapabilityRoute>} />
             <Route
               path="/field-log"
               element={
-                <FieldLogPage
+                <CapabilityRoute module="field_log" lockWrites><FieldLogPage
                   fieldLogRepository={fieldLogRepository}
                   fieldsRepository={fieldsRepository}
-                />
+                /></CapabilityRoute>
               }
             />
             <Route
               path="/scouting"
               element={
-                <ScoutingPage
+                <CapabilityRoute module="scouting" lockWrites><ScoutingPage
                   scoutingRepository={scoutingRepository}
                   fieldsRepository={fieldsRepository}
-                />
+                /></CapabilityRoute>
               }
             />
             <Route
               path="/harvest"
-              element={<HarvestPage harvestRepository={harvestRepository} />}
+              element={<CapabilityRoute module="harvest" lockWrites><HarvestPage harvestRepository={harvestRepository} /></CapabilityRoute>}
             />
             <Route
               path="/programs"
               element={
-                <ProgramsPage
+                <CapabilityRoute module="programs" lockWrites><ProgramsPage
                   repository={programsRepository}
-                  generateDueItems={generateDueProgramItems}
-                />
+                /></CapabilityRoute>
               }
             />
             <Route
               path="/notifications"
               element={
-                <NotificationsPage
+                <CapabilityRoute module="notifications"><NotificationsPage
                   repository={notificationsRepository}
-                  generateDueItems={generateDueProgramItems}
-                />
+                /></CapabilityRoute>
               }
             />
             <Route path="*" element={<Navigate to="/fields" replace />} />
@@ -316,35 +355,52 @@ function AppLayout() {
   );
 }
 
-function SyncNotice() {
+export function SyncNotice() {
+  const { source, checkSignal } = useFarmAccess();
   const status = useSyncExternalStore(
     subscribeSyncStatus,
     getSyncStatus,
     getSyncStatus,
   );
   const retryLock = useRef(createSubmitLock());
+  const [retryError, setRetryError] = useState<string | null>(null);
   const retry = async () => {
     if (!retryLock.current.acquire()) return;
     try {
-      await retrySavedChanges();
+      setRetryError(null);
+      if (source === "offline") await checkSignal();
+      else await retrySavedChanges();
+    } catch (caught) {
+      setRetryError(farmerError(caught, "retry saved changes"));
     } finally {
       retryLock.current.release();
     }
   };
-  if (status.kind === "synced")
+  const notice = getSyncNoticeState(status, retryError);
+  if (notice.kind === "retry_failed")
+    return (
+      <div className="sync-notice blocked" role="alert">
+        <span>{notice.message}</span>
+        <button type="button" onClick={() => void retry()}>
+          Try again
+        </button>
+      </div>
+    );
+  if (notice.kind === "synced")
     return (
       <div className="sync-notice synced" role="status">
-        All changes synced.
+        {source === "offline" ? <><span>Working offline. Saved changes stay on this device.</span><button type="button" onClick={() => void retry()}>Check signal</button></> : "All changes synced."}
       </div>
     );
-  if (status.kind === "pending")
+  if (notice.kind === "pending")
     return (
       <div className="sync-notice pending" role="status">
-        Saved on this device — waiting for signal. {status.pending} change
-        {status.pending === 1 ? "" : "s"} pending.
+        <span>Saved on this device — waiting for signal. {notice.pending} change
+        {notice.pending === 1 ? "" : "s"} pending.</span>
+        {source === "offline" && <button type="button" onClick={() => void retry()}>Check signal</button>}
       </div>
     );
-  if (status.kind === "syncing")
+  if (notice.kind === "syncing")
     return (
       <div className="sync-notice syncing" role="status">
         Sending saved changes…
@@ -353,7 +409,7 @@ function SyncNotice() {
   return (
     <div className="sync-notice blocked" role="alert">
       <span>
-        {status.pending} saved change{status.pending === 1 ? "" : "s"} needs
+        {notice.pending} saved change{notice.pending === 1 ? "" : "s"} needs
         attention. Nothing was deleted.
       </span>
       <button type="button" onClick={() => void retry()}>
@@ -381,63 +437,268 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
   return <FarmAccessGateForUser key={user.id} user={user}>{children}</FarmAccessGateForUser>;
 }
 
-function FarmAccessGateForUser({ children, user }: { children: ReactNode; user: User }) {
+const farmRetryModules = ["fields", "grain", "profitability", "inventory", "equipment_tasks", "weather", "fieldLog", "scouting", "harvest", "programs", "notifications"] as const;
+function clearFarmRetryActions() { for (const module of farmRetryModules) setModuleSyncRetryAction(module, null) }
+function authorizedFarmRetry(latestProfile: LoadedFarmAccessProfile, module: FarmAppModule, action: () => Promise<unknown>) {
+  return async () => {
+    const authorization = beginFarmReplayAuthorization(latestProfile, undefined, { supersede: false });
+    try {
+      authorization.verify();
+      if (!canReplayFarmModule(latestProfile, module)) throw new Error("Farm permissions no longer allow this saved work.");
+      await action();
+      authorization.verify();
+    } finally { authorization.end(); }
+  };
+}
+export function installFarmRetryActions(
+  latestProfile: LoadedFarmAccessProfile,
+  actions: FarmReplayWorkActions = defaultFarmReplayWorkActions,
+  setRetryAction: typeof setModuleSyncRetryAction = setModuleSyncRetryAction,
+  clearRetryActions: () => void = clearFarmRetryActions,
+  revalidateAccess?: () => Promise<void>,
+) {
+  clearRetryActions();
+  if (latestProfile.source === "offline" && revalidateAccess) {
+    let revalidation: Promise<void> | null = null;
+    const revalidateOnce = () => {
+      if (!revalidation) revalidation = Promise.resolve().then(revalidateAccess).catch((error) => { revalidation = null; throw error; });
+      return revalidation;
+    };
+    if (canReplayFarmModule(latestProfile, "fields")) { setRetryAction("fields", revalidateOnce); setRetryAction("weather", revalidateOnce) }
+    if (canReplayFarmModule(latestProfile, "grain")) setRetryAction("grain", revalidateOnce);
+    if (canReplayFarmModule(latestProfile, "profitability")) setRetryAction("profitability", revalidateOnce);
+    if (canReplayFarmModule(latestProfile, "inventory")) setRetryAction("inventory", revalidateOnce);
+    if (canReplayFarmModule(latestProfile, "equipment")) setRetryAction("equipment_tasks", revalidateOnce);
+    if (canReplayFarmModule(latestProfile, "field_log")) setRetryAction("fieldLog", revalidateOnce);
+    if (canReplayFarmModule(latestProfile, "scouting")) setRetryAction("scouting", revalidateOnce);
+    if (canReplayFarmModule(latestProfile, "harvest")) setRetryAction("harvest", revalidateOnce);
+    if (canReplayFarmModule(latestProfile, "programs")) setRetryAction("programs", revalidateOnce);
+    if (canReplayFarmModule(latestProfile, "notifications")) setRetryAction("notifications", revalidateOnce);
+    return;
+  }
+  if (canReplayFarmModule(latestProfile, "fields")) { setRetryAction("fields", authorizedFarmRetry(latestProfile, "fields", actions.replayFieldsQueue)); setRetryAction("weather", authorizedFarmRetry(latestProfile, "fields", actions.replayFieldLocationQueue)) }
+  if (canReplayFarmModule(latestProfile, "grain")) setRetryAction("grain", authorizedFarmRetry(latestProfile, "grain", actions.replayGrainQueue));
+  if (canReplayFarmModule(latestProfile, "profitability")) setRetryAction("profitability", authorizedFarmRetry(latestProfile, "profitability", actions.replayProfitabilityQueue));
+  if (canReplayFarmModule(latestProfile, "inventory")) setRetryAction("inventory", authorizedFarmRetry(latestProfile, "inventory", actions.replayInventoryQueue));
+  if (canReplayFarmModule(latestProfile, "equipment")) setRetryAction("equipment_tasks", authorizedFarmRetry(latestProfile, "equipment", async () => { await actions.inspectEquipmentTasksQueue(); if (latestProfile.source === "live") await actions.generateDueEquipmentTasks() }));
+  if (canReplayFarmModule(latestProfile, "field_log")) setRetryAction("fieldLog", authorizedFarmRetry(latestProfile, "field_log", actions.replayFieldLogQueue));
+  if (canReplayFarmModule(latestProfile, "scouting")) setRetryAction("scouting", authorizedFarmRetry(latestProfile, "scouting", actions.replayScoutingQueue));
+  if (canReplayFarmModule(latestProfile, "harvest")) setRetryAction("harvest", authorizedFarmRetry(latestProfile, "harvest", actions.replayHarvestQueue));
+  if (canReplayFarmModule(latestProfile, "programs")) setRetryAction("programs", authorizedFarmRetry(latestProfile, "programs", async () => { await actions.replayProgramsQueue(); if (latestProfile.source === "live") await actions.generateDueProgramItems() }));
+  if (canReplayFarmModule(latestProfile, "notifications")) setRetryAction("notifications", authorizedFarmRetry(latestProfile, "notifications", actions.replayNotificationsQueue));
+}
+
+export interface FarmReplayWorkActions {
+  replayFieldsQueue: typeof replayFieldsQueue;
+  replayFieldLocationQueue: typeof replayFieldLocationQueue;
+  replayProgramsQueue: typeof replayProgramsQueue;
+  generateDueProgramItems: typeof generateDueProgramItems;
+  replayHarvestQueue: typeof replayHarvestQueue;
+  replayGrainQueue: typeof replayGrainQueue;
+  replayInventoryQueue: typeof replayInventoryQueue;
+  replayProfitabilityQueue: typeof replayProfitabilityQueue;
+  inspectEquipmentTasksQueue: typeof inspectEquipmentTasksQueue;
+  generateDueEquipmentTasks: typeof generateDueEquipmentTasks;
+  replayFieldLogQueue: typeof replayFieldLogQueue;
+  replayScoutingQueue: typeof replayScoutingQueue;
+  replayNotificationsQueue: typeof replayNotificationsQueue;
+}
+
+const defaultFarmReplayWorkActions: FarmReplayWorkActions = {
+  replayFieldsQueue,
+  replayFieldLocationQueue,
+  replayProgramsQueue,
+  generateDueProgramItems,
+  replayHarvestQueue,
+  replayGrainQueue,
+  replayInventoryQueue,
+  replayProfitabilityQueue,
+  inspectEquipmentTasksQueue,
+  generateDueEquipmentTasks,
+  replayFieldLogQueue,
+  replayScoutingQueue,
+  replayNotificationsQueue,
+};
+
+export async function replayAuthorizedFarmWork(latestProfile: LoadedFarmAccessProfile, isCurrent: () => boolean = () => true, actions: FarmReplayWorkActions = defaultFarmReplayWorkActions) {
+  if (!isCurrent()) throw new Error("Farm access validation was superseded.");
+  const authorization = beginFarmReplayAuthorization(latestProfile);
+  const verify = () => { authorization.verify(); if (!isCurrent()) throw new Error("Farm access validation was superseded."); };
+  const replay = async (module: FarmAppModule, action: () => Promise<unknown>) => { verify(); if (canReplayFarmModule(latestProfile, module)) await action(); verify(); };
+  try {
+    await replay("fields", actions.replayFieldsQueue);
+    await replay("fields", actions.replayFieldLocationQueue);
+    await replay("programs", actions.replayProgramsQueue);
+    if (latestProfile.source === "live") await replay("programs", actions.generateDueProgramItems);
+    await replay("harvest", actions.replayHarvestQueue);
+    await replay("grain", actions.replayGrainQueue);
+    await replay("inventory", actions.replayInventoryQueue);
+    await replay("profitability", actions.replayProfitabilityQueue);
+    await replay("equipment", actions.inspectEquipmentTasksQueue);
+    if (latestProfile.source === "live") await replay("equipment", actions.generateDueEquipmentTasks);
+    await replay("field_log", actions.replayFieldLogQueue);
+    await replay("scouting", actions.replayScoutingQueue);
+    await replay("notifications", actions.replayNotificationsQueue);
+  } finally { authorization.end(); }
+}
+
+export interface FarmAccessGateDependencies {
+  loadAccess: typeof loadFarmAccess;
+  loadProfile: typeof loadFarmAccessProfile;
+  replayWork: typeof replayAuthorizedFarmWork;
+  installRetryActions: (latestProfile: LoadedFarmAccessProfile, revalidateAccess?: () => Promise<void>) => void;
+  clearRetryActions: typeof clearFarmRetryActions;
+  selectFarm: typeof selectFarm;
+}
+
+const defaultFarmAccessGateDependencies: FarmAccessGateDependencies = {
+  loadAccess: loadFarmAccess,
+  loadProfile: loadFarmAccessProfile,
+  replayWork: replayAuthorizedFarmWork,
+  installRetryActions: (latestProfile, revalidateAccess) => installFarmRetryActions(latestProfile, defaultFarmReplayWorkActions, setModuleSyncRetryAction, clearFarmRetryActions, revalidateAccess),
+  clearRetryActions: clearFarmRetryActions,
+  selectFarm,
+};
+
+async function restoreCurrentFarmAfterFailedSwitch(latestProfile: LoadedFarmAccessProfile, dependencies: FarmAccessGateDependencies, revalidateAccess?: () => Promise<void>) {
+  const authorization = beginFarmReplayAuthorization(latestProfile);
+  try {
+    authorization.verify();
+    dependencies.installRetryActions(latestProfile, revalidateAccess);
+    authorization.verify();
+    publishFarmReadyAuthorization(latestProfile);
+  } finally {
+    authorization.end();
+  }
+}
+
+export function FarmAccessGateForUser({ children, user, dependencies = defaultFarmAccessGateDependencies }: { children: ReactNode; user: User; dependencies?: FarmAccessGateDependencies }) {
   const [state, setState] = useState<
     "checking" | "choose" | "ready" | "setup" | "blocked"
   >("checking");
   const [access, setAccess] = useState<FarmAccess | null>(null);
+  const [profile, setProfile] = useState<LoadedFarmAccessProfile | null>(null);
   const [message, setMessage] = useState("");
+  const [retrying, setRetrying] = useState(false);
+  const mounted = useRef(true);
+  const validationGate = useRef(createFarmAccessValidationGate());
+  const openFarmRef = useRef<null | (() => Promise<FarmAccess["source"]>)>(null);
+  const liveRevalidationRef = useRef<null | (() => Promise<void>)>(null);
+  const retryLock = useRef(createSubmitLock());
+  const beginValidation = () => {
+    const isLatestGeneration = validationGate.current.begin();
+    return () => mounted.current && isLatestGeneration();
+  };
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; validationGate.current.invalidate(); };
+  }, []);
   useEffect(() => {
     let active = true;
-    const acceptValidatedAccess = async (latest: FarmAccess) => {
-      if (!active) return;
+    dependencies.clearRetryActions();
+    const beginEffectValidation = () => {
+      const isLatestGeneration = beginValidation();
+      return () => active && isLatestGeneration();
+    };
+    const acceptValidatedAccess = async (latest: FarmAccess, isCurrent: () => boolean): Promise<FarmAccess["source"]> => {
+      if (!isCurrent()) throw new Error("Farm access validation was superseded.");
       if (latest.userId !== user.id) throw new Error("Farm access validation no longer matches the signed-in account.");
-      setAccess(latest);
       if (!latest.selectedFarmId) {
+        setProfile(null);
+        setAccess(latest);
         if (latest.farms.length) setState("choose");
         else if (user?.app_metadata.initial_farm_owner === true) setState("setup");
         else { setMessage("Crop RX needs to finish your farm setup."); setState("blocked"); }
-        return;
+        return latest.source;
       }
+      const latestProfile = await dependencies.loadProfile(latest);
+      if (!isCurrent()) throw new Error("Farm access validation was superseded.");
+      if (latestProfile.userId !== user.id || latestProfile.farmId !== latest.selectedFarmId) throw new Error("Farm permissions no longer match the signed-in account or selected farm.");
+      await dependencies.replayWork(latestProfile, isCurrent);
+      if (!isCurrent()) throw new Error("Farm access validation was superseded.");
+      dependencies.installRetryActions(latestProfile, liveRevalidationRef.current ?? undefined);
+      publishFarmReadyAuthorization(latestProfile);
+      setProfile(latestProfile);
+      const acceptedSource = latest.source === "offline" || latestProfile.source === "offline" ? "offline" : "live";
+      setAccess(acceptedSource === latest.source ? latest : { ...latest, source: acceptedSource });
       setState("ready");
-      await replayFieldsQueue();
-      await replayProgramsThenGenerateDueItems(
-        replayProgramsQueue,
-        generateDueProgramItems,
-      );
-      await replayHarvestQueue();
-      void replayGrainQueue();
-      void replayInventoryQueue();
-      void replayProfitabilityQueue();
-      void replayEquipmentTasksQueue();
-      await replayFieldLocationQueue();
-      await replayFieldLogQueue();
-      await replayScoutingQueue();
-      await replayNotificationsQueue();
+      return acceptedSource;
     };
-    const replayOnReconnect = async () => {
-      if (!user) return;
-      try { await acceptValidatedAccess(await loadFarmAccess(user.id, true)); }
+    const replayOnReconnect = async (showChecking = true, propagateFailure = false): Promise<FarmAccess["source"] | null> => {
+      const isCurrent = beginEffectValidation();
+      if (!user) return null;
+      dependencies.clearRetryActions();
+      setAccess(null); setProfile(null); if (showChecking) setState("checking");
+      try {
+        const latest = await dependencies.loadAccess(user.id, true);
+        if (!isCurrent()) return null;
+        return await acceptValidatedAccess(latest, isCurrent);
+      }
       catch (error) {
-        if (!active) return;
+        if (!isCurrent()) return null;
         setMessage(farmerError(error, "open your farm"));
         setState("blocked");
+        if (propagateFailure) throw error;
+        return null;
       }
     };
-    const reconnect = () => { void replayOnReconnect() };
+    const openFarm = async () => {
+      const source = await replayOnReconnect(false, true);
+      if (!source) throw new Error("Farm access validation was superseded.");
+      return source;
+    };
+    const retrySavedWork = async () => {
+      const source = await openFarm();
+      if (source !== "live") throw new TypeError("We could not reach Farm Rx. Check your signal and try again.");
+    };
+    openFarmRef.current = openFarm;
+    liveRevalidationRef.current = retrySavedWork;
+    const reconnect = () => { void replayOnReconnect(true) };
     window.addEventListener("online", reconnect);
-    if (user) void loadFarmAccess(user.id, true)
-      .then(acceptValidatedAccess)
-      .catch((error: unknown) => {
-        if (!active) return;
-        setMessage(farmerError(error, "open your farm"));
-        setState("blocked");
-      });
+    if (user) void replayOnReconnect(true);
     return () => {
       active = false;
+      validationGate.current.invalidate();
+      dependencies.clearRetryActions();
+      if (openFarmRef.current === openFarm) openFarmRef.current = null;
+      if (liveRevalidationRef.current === retrySavedWork) liveRevalidationRef.current = null;
       window.removeEventListener("online", reconnect);
     };
-  }, [user?.app_metadata.initial_farm_owner, user?.id]);
+  }, [dependencies, user?.app_metadata.initial_farm_owner, user?.id]);
+  const retryOpenFarm = async () => {
+    if (!retryLock.current.acquire()) return;
+    setRetrying(true);
+    try {
+      const openFarm = openFarmRef.current;
+      if (!openFarm) throw new Error("Farm access is not ready to retry.");
+      await openFarm();
+    } catch (error) {
+      if (mounted.current) { setMessage(farmerError(error, "open your farm")); setState("blocked"); }
+    } finally {
+      setRetrying(false);
+      retryLock.current.release();
+    }
+  };
+  const completeInitialFarmSetup = async () => {
+    const isCurrent = beginValidation();
+    const latest = await dependencies.loadAccess(user.id, true);
+    let acceptedSource = latest.source;
+    if (!isCurrent()) return;
+    if (latest.userId !== user.id) throw new Error("Farm access validation no longer matches the signed-in account.");
+    if (latest.selectedFarmId) {
+      const latestProfile = await dependencies.loadProfile(latest);
+      if (!isCurrent()) return;
+      if (latestProfile.userId !== user.id || latestProfile.farmId !== latest.selectedFarmId) throw new Error("Farm permissions no longer match the signed-in account or selected farm.");
+      await dependencies.replayWork(latestProfile, isCurrent);
+      if (!isCurrent()) return;
+      dependencies.installRetryActions(latestProfile, liveRevalidationRef.current ?? undefined);
+      publishFarmReadyAuthorization(latestProfile);
+      setProfile(latestProfile);
+      if (latestProfile.source === "offline") acceptedSource = "offline";
+    } else setProfile(null);
+    setAccess(acceptedSource === latest.source ? latest : { ...latest, source: acceptedSource });
+    setState(latest.selectedFarmId ? "ready" : "choose");
+  };
   if (state === "checking")
     return (
       <main className="login-page">
@@ -445,7 +706,7 @@ function FarmAccessGateForUser({ children, user }: { children: ReactNode; user: 
       </main>
     );
   if (state === "setup")
-    return <InitialFarmSetup onComplete={async () => { const latest = await loadFarmAccess(user.id, true); setAccess(latest); setState(latest.selectedFarmId ? "ready" : "choose"); }} />;
+    return <InitialFarmSetup onComplete={completeInitialFarmSetup} />;
   if (state === "choose" && access?.userId === user.id)
     return <main className="login-page"><section className="login-panel farm-choice" aria-labelledby="farm-choice-title"><h1 id="farm-choice-title">Choose a farm</h1><p>Your records and saved offline work stay separated by farm.</p><div className="farm-choice-list">{access.farms.map((farm) => <button className="primary-action" type="button" key={farm.id} onClick={() => { void selectFarm(user.id, farm.id).then(() => window.location.assign('/fields')).catch((error) => { setMessage(farmerError(error, 'open this farm')); setState('blocked') }) }}>{farm.name}</button>)}</div><RevokedFarmRecovery userId={user.id} /></section></main>;
   if (state === "blocked")
@@ -453,11 +714,14 @@ function FarmAccessGateForUser({ children, user }: { children: ReactNode; user: 
       <main className="login-page">
         <section className="login-panel">
           <p className="opening-farm">{message}</p>
+          <button className="primary-action" type="button" disabled={retrying} onClick={() => { void retryOpenFarm() }}>
+            {retrying ? "Trying again…" : "Try again"}
+          </button>
           <RevokedFarmRecovery userId={user.id} />
         </section>
       </main>
     );
-  if (access?.userId !== user.id || !access.selectedFarmId)
+  if (access?.userId !== user.id || !access.selectedFarmId || profile?.userId !== user.id || profile.farmId !== access.selectedFarmId)
     return (
       <main className="login-page">
         <p className="opening-farm">Opening your farm…</p>
@@ -468,10 +732,36 @@ function FarmAccessGateForUser({ children, user }: { children: ReactNode; user: 
   const chooseFarm = async (farmId: string) => {
     if (farmId === activeFarm.id) return;
     if (hasPendingFarmWork(user.id, activeFarm.id) && !window.confirm(`Saved changes are still waiting for ${activeFarm.name}. They will stay with that farm. Switch farms anyway?`)) return;
-    await selectFarm(user.id, farmId);
+    try {
+      await dependencies.selectFarm(user.id, farmId);
+    } catch (error) {
+      if (error instanceof FarmAccessStorageUnsafeError) {
+        dependencies.clearRetryActions();
+        setAccess(null);
+        setProfile(null);
+        setMessage(error.message);
+        setState("blocked");
+        throw error;
+      }
+      try {
+        await restoreCurrentFarmAfterFailedSwitch(profile, dependencies, liveRevalidationRef.current ?? undefined);
+      } catch (recoveryError) {
+        dependencies.clearRetryActions();
+        setAccess(null);
+        setProfile(null);
+        setMessage(farmerError(recoveryError, "restore your farm"));
+        setState("blocked");
+      }
+      throw error;
+    }
     window.location.assign('/fields');
   };
-  return <FarmAccessProvider value={{ farms: access.farms, activeFarm, source: access.source, chooseFarm }}>{children}</FarmAccessProvider>;
+  const checkSignal = async () => {
+    const revalidate = liveRevalidationRef.current;
+    if (!revalidate) throw new Error("Farm access is not ready to check the signal.");
+    await revalidate();
+  };
+  return <FarmAccessProvider value={{ farms: access.farms, activeFarm, profile, source: access.source, chooseFarm, checkSignal }}>{children}</FarmAccessProvider>;
 }
 
 function InitialFarmSetup({ onComplete }: { onComplete: () => Promise<void> }) {
@@ -549,7 +839,7 @@ function InitialFarmSetup({ onComplete }: { onComplete: () => Promise<void> }) {
   );
 }
 
-function Navigation({ className, items = navigation, onNavigate }: { className: string; items?: NavigationItem[]; onNavigate?: () => void }) {
+function Navigation({ className, items, onNavigate }: { className: string; items: NavigationItem[]; onNavigate?: () => void }) {
   return (
     <div className={className}>
       {items.map((item) => (
@@ -565,8 +855,12 @@ function Navigation({ className, items = navigation, onNavigate }: { className: 
 }
 
 function MobileNavigation() {
+  const { profile } = useFarmAccess();
   const location = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
+  const allowed = navigation.filter((item) => canAccessFarmModule(profile, item.module));
+  const mobilePrimaryNavigation = allowed.filter((item) => mobilePrimaryPaths.has(item.path));
+  const mobileMoreNavigation = allowed.filter((item) => !mobilePrimaryPaths.has(item.path));
   const moreActive = mobileMoreNavigation.some((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`));
   useEffect(() => setMoreOpen(false), [location.pathname]);
   return (

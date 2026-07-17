@@ -1,4 +1,5 @@
 import type {
+  Arrangement,
   CropAssignment,
   Field,
   FieldDraft,
@@ -42,12 +43,54 @@ export interface FieldEditPatch {
   newCropAssignments?: EditableCropValues[];
 }
 
-function currentArrangement(data: FieldsData, fieldId: string) {
+export type FieldDetailResolution =
+  | { kind: "ready"; field: Field; arrangement: Arrangement }
+  | { kind: "missing_field" }
+  | { kind: "missing_arrangement"; field: Field };
+
+export type FieldFormResolution =
+  | { kind: "add" }
+  | { kind: "edit"; field: Field }
+  | { kind: "missing_field" };
+
+export function resolveFieldForm(
+  data: FieldsData,
+  fieldId: string | undefined,
+): FieldFormResolution {
+  if (fieldId === undefined) return { kind: "add" };
+  const field = data.fields.find((item) => item.id === fieldId);
+  return field ? { kind: "edit", field } : { kind: "missing_field" };
+}
+
+export function resolveFieldDetail(
+  data: FieldsData,
+  fieldId: string | undefined,
+): FieldDetailResolution {
+  const field = data.fields.find((item) => item.id === fieldId);
+  if (!field) return { kind: "missing_field" };
   const arrangement = data.arrangements.find(
-    (item) => item.field_id === fieldId && item.effective_to === null,
+    (item) => item.field_id === field.id && item.effective_to === null,
   );
-  if (!arrangement) throw new Error("The field no longer has a current agreement.");
-  return arrangement;
+  return arrangement
+    ? { kind: "ready", field, arrangement }
+    : { kind: "missing_arrangement", field };
+}
+
+/**
+ * Existing-field saves must preserve a real current agreement. Returning null
+ * is reserved for the Add Field flow, whose explicit product default is owned.
+ */
+export function currentArrangementForFieldEdit(
+  data: FieldsData,
+  resolution: Extract<FieldFormResolution, { kind: "add" | "edit" }>,
+): Arrangement | null {
+  if (resolution.kind === "add") return null;
+  const detail = resolveFieldDetail(data, resolution.field.id);
+  if (detail.kind === "missing_field") throw new Error("The field no longer exists.");
+  if (detail.kind === "missing_arrangement") {
+    throw new Error("The field no longer has a current agreement.");
+  }
+  return detail.arrangement;
 }
 
 function assignmentDraft(row: CropAssignment): FieldDraft["crop_assignments"][number] {
@@ -76,9 +119,10 @@ export function createFieldEditDraft(
   fieldId: string,
   patch: FieldEditPatch,
 ): FieldDraft {
-  const field = data.fields.find((item) => item.id === fieldId);
-  if (!field) throw new Error("The field no longer exists.");
-  const arrangement = currentArrangement(data, fieldId);
+  const detail = resolveFieldDetail(data, fieldId);
+  if (detail.kind === "missing_field") throw new Error("The field no longer exists.");
+  if (detail.kind === "missing_arrangement") throw new Error("The field no longer has a current agreement.");
+  const { field, arrangement } = detail;
   const changedRows = new Map(
     (patch.cropAssignmentChanges ?? []).map((row) => [row.id, row]),
   );

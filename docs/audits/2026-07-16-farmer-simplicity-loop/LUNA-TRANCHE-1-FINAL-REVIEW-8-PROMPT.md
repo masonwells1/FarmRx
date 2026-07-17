@@ -1,0 +1,9 @@
+Act as a fresh-context, read-only `gpt-5.6-luna` release-quality reviewer at Medium reasoning. Inspect base `48aad521bd1ecb4c5704ef2e6c5bb30e4d522685` through the current working tree. Do not edit or create files, change Git state, commit, push, deploy, call live services, run a browser or Playwright, change a database, or print credentials. The outer runner alone writes your final response.
+
+Return `GO` only if no HIGH or MEDIUM issue remains. Otherwise return `NO-GO` with exact evidence and the smallest repair. Reconcile the exact 20 core plus 10 replay-containment code/test files in `SCOPE-CORRECTION.md`, exclude audit evidence, confirm Option 2, and confirm routes are unchanged.
+
+Cross-check the latest fixes for two races: (a) an older async farm-access validation finishing after a newer startup/reconnect/setup validation and (b) a split `currentUserId()` then `currentFarmId()` lookup crossing from User A to User B. Verify generation invalidation, pre-await capture, post-await checks, retry-action publication order, replay-token supersession, same-storage verification, online/offline identity binding, and queue/writer non-mutation. Judge whether the executable and static regression assertions would fail if either production guard were removed.
+
+Spot-check no regression in the earlier flex lease validation, role-shaped routes/navigation, awaited readiness, pure snapshots, Equipment FIFO, strict mocks/echoes, and hidden replay removal. Fresh proof reported: focused queued-context PASS; forced TypeScript and standalone E2E TypeScript PASS; all 39 regressions PASS; build PASS with existing chunk warning only; audit 0 vulnerabilities; static and credential gates PASS; exact 30-file scope; 18 routes unchanged; Option 2 hash matches. You may rerun concise non-browser read-only checks.
+
+End with verdict, model/effort, scope and proof assessment, and intentionally unverified browser/live-service limits.
