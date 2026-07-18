@@ -12,7 +12,7 @@ That change in timing does not erase history. Farm Rx was previously committed, 
 
 Prove that the existing Farm Rx product can carry a farmer through a realistic 2027 farm year safely, plainly, and without hidden cross-module mutations.
 
-The work starts from the completed Farmer Simplicity layer: `Today`, `Quick Record`, guided setup and forms, role-shaped navigation, visible save/recovery states, and the existing offline/farm-access protections. The season-readiness effort exercises and repairs those existing workflows. It does not start a second product architecture.
+The work starts from the completed Farmer Simplicity hardening: guided Fields setup/forms, role-shaped direct navigation into the existing modules, visible save/recovery states, and the existing offline/farm-access protections. The season-readiness effort exercises and repairs those source-real workflows. It adds no new launcher or dashboard and does not start a second product architecture.
 
 ## Product boundary
 
