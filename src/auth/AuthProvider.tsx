@@ -96,7 +96,7 @@ function persistPasswordRecoveryFence(target: Storage, session: Session, ownerId
   const lineage = sessionLineage(session)
   if (!lineage) throw new Error('Farm Rx could not verify this password-reset link.')
   const existing = activePasswordRecoveryFence(target, nowMs)
-  if (existing && existing.userId === session.user.id && existing.sessionLineage === lineage) return existing.ownerId
+  if (existing) return existing.ownerId
   const fence = { version: 2, ownerId, userId: session.user.id, sessionLineage: lineage, createdAtMs: nowMs } satisfies PersistedPasswordRecoveryFence
   const serialized = JSON.stringify(fence)
   target.setItem(passwordRecoveryOwnerLeaseKey(ownerId), serialized)
@@ -178,6 +178,11 @@ interface PersistedAuthSnapshot {
   entries: Array<readonly [key: string, value: string | null]>
 }
 
+interface PersistedAuthCleanupAuthority {
+  snapshot: PersistedAuthSnapshot
+  intentBytes: string | null
+}
+
 interface PersistedAuthRollbackState {
   session: Session
   snapshot: PersistedAuthSnapshot
@@ -194,6 +199,22 @@ function authStorageEntries(target: Storage): Array<readonly [string, string | n
 
 function authStorageEntriesMatch(left: PersistedAuthSnapshot['entries'], right: PersistedAuthSnapshot['entries']): boolean {
   return left.length === right.length && left.every(([key, value], index) => right[index]?.[0] === key && right[index]?.[1] === value)
+}
+
+function capturePersistedAuthCleanupAuthority(target: Storage): PersistedAuthCleanupAuthority | null {
+  const intentBytesBefore = target.getItem(authIntentKey)
+  const entriesBefore = authStorageEntries(target)
+  const intentBytesAfter = target.getItem(authIntentKey)
+  const entriesAfter = authStorageEntries(target)
+  if (intentBytesBefore !== intentBytesAfter || !authStorageEntriesMatch(entriesBefore, entriesAfter)) return null
+  return { snapshot: { entries: entriesBefore }, intentBytes: intentBytesBefore }
+}
+
+function persistedAuthCleanupAuthorityMatches(target: Storage, authority: PersistedAuthCleanupAuthority): boolean {
+  const current = capturePersistedAuthCleanupAuthority(target)
+  return Boolean(current
+    && current.intentBytes === authority.intentBytes
+    && authStorageEntriesMatch(current.snapshot.entries, authority.snapshot.entries))
 }
 
 function restorePersistedAuthSnapshot(target: Storage, snapshot: PersistedAuthSnapshot) {
@@ -487,8 +508,12 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
           eventVersion += 1
           void d.coordinateAuthState(async (verify) => {
             verify()
-            persistPasswordRecoveryFence(d.storage, nextSession, recoveryOwnerId.current!, d.now())
+            const claimedOwnerId = persistPasswordRecoveryFence(d.storage, nextSession, recoveryOwnerId.current!, d.now())
             verify()
+            if (claimedOwnerId !== recoveryOwnerId.current
+              || !passwordRecoveryFenceMatches(d.storage, nextSession, recoveryOwnerId.current!, d.now())) {
+              throw new Error('Another Farm Rx tab already owns this password-reset link.')
+            }
             recoveryCompleted.current = false
             recoverySession.current = nextSession
             if (signInInFlight.current) recoveryConflictDuringSignIn.current = true
@@ -812,6 +837,7 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
       let serverUpdated = false
       let recoveryContextInvalid = false
       let cleanupFailed = false
+      let cleanupAuthority: PersistedAuthCleanupAuthority | null = null
       try {
         await d.coordinateAuthState(async (verify) => {
           verify()
@@ -821,13 +847,14 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
             recoveryContextInvalid = true
             throw new Error('This password-reset link is invalid or has expired. Request a new one from the sign-in page.')
           }
+          cleanupAuthority = capturePersistedAuthCleanupAuthority(d.storage)
+          if (!cleanupAuthority) throw new Error('Farm Rx could not protect this device session before updating the password.')
           // Keep the ready fence through a confirmed server failure so the
           // farmer can retry. The shared transaction excludes every competing
           // tab until this remote operation and its final fence are complete.
           await d.updateRecoveryPassword(currentRecoverySession, password)
           serverUpdated = true
           recoveryCompleted.current = true
-          verify()
 
           // From this point forward the password is already changed. Revoke
           // the one-purpose capability immediately and never present cleanup
@@ -840,10 +867,17 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
           setOfflineUser(null)
           setPhase('signed_out')
           setPasswordRecoveryPhase('complete')
+          verify()
+          if (!persistedAuthCleanupAuthorityMatches(d.storage, cleanupAuthority)) {
+            throw new Error('Farm Rx preserved a newer device sign-in after the password changed.')
+          }
           clearOwnedPasswordRecoveryFence(d.storage, recoveryOwnerId.current!)
           verify()
           clearPersistedAuthSession(d.storage, false)
           verify()
+          if (d.storage.getItem(authIntentKey) !== cleanupAuthority.intentBytes) {
+            throw new Error('Farm Rx preserved a newer device sign-in intent after the password changed.')
+          }
           persistSignedOutIntent(d.storage, d.now(), d.createId())
           verify()
         })
@@ -856,19 +890,32 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
             setSession(null)
             setOfflineUser(null)
             setPhase('signed_out')
-            try { clearOwnedPasswordRecoveryFence(d.storage, recoveryOwnerId.current!) } catch { /* fail closed locally */ }
-            try { clearPersistedAuthSession(d.storage, false) } catch { /* fail closed locally */ }
-            try { persistSignedOutIntent(d.storage, d.now(), d.createId()) } catch { /* fail closed locally */ }
+            try { abandonOwnedPasswordRecoveryFence(d.storage, recoveryOwnerId.current!) } catch { /* bounded expiry remains */ }
           }
           throw error
         }
         cleanupFailed = true
-        // The coordinated transaction can fail if device storage is blocked.
-        // Repeat each safe, idempotent fence independently to clear as much as
-        // the browser will permit without undoing the successful server save.
-        try { clearOwnedPasswordRecoveryFence(d.storage, recoveryOwnerId.current!) } catch { /* warning below */ }
-        try { clearPersistedAuthSession(d.storage, false) } catch { /* warning below */ }
-        try { persistSignedOutIntent(d.storage, d.now(), d.createId()) } catch { /* warning below */ }
+        // The server save is already true. Direct cleanup may revoke only this
+        // mount's unique lease. Shared Auth bytes are retried under the lock
+        // and only while they still exactly match the pre-save authority;
+        // a newer accepted session is never overwritten by this old recovery.
+        try { abandonOwnedPasswordRecoveryFence(d.storage, recoveryOwnerId.current!) } catch { /* warning below */ }
+        if (cleanupAuthority) {
+          try {
+            await d.coordinateAuthState(async (verify) => {
+              verify()
+              if (!persistedAuthCleanupAuthorityMatches(d.storage, cleanupAuthority!)) return
+              clearOwnedPasswordRecoveryFence(d.storage, recoveryOwnerId.current!)
+              verify()
+              if (!persistedAuthCleanupAuthorityMatches(d.storage, cleanupAuthority!)) return
+              clearPersistedAuthSession(d.storage, false)
+              verify()
+              if (d.storage.getItem(authIntentKey) !== cleanupAuthority!.intentBytes) return
+              persistSignedOutIntent(d.storage, d.now(), d.createId())
+              verify()
+            })
+          } catch { /* keep successful server truth and preserve newer shared state */ }
+        }
       }
       if (cleanupFailed) setPasswordRecoveryPhase('complete_with_warning')
     },
@@ -950,21 +997,18 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
         signInInFlight.current = false
         setPasswordRecoveryPhase('invalid')
         applySignedOutLocal()
+        try { abandonOwnedPasswordRecoveryFence(d.storage, recoveryOwnerId.current!) } catch { /* bounded expiry remains */ }
         try {
           await d.coordinateAuthState(async (verify) => {
             verify()
-            clearOwnedPasswordRecoveryFence(d.storage, recoveryOwnerId.current!)
-            verify()
+            if (!ownsPersistedIntent()) return
             clearPersistedAuthSession(d.storage, false)
             verify()
+            if (!ownsPersistedIntent()) return
             persistSignedOutIntent(d.storage, d.now(), d.createId())
             verify()
           })
-        } catch {
-          try { clearOwnedPasswordRecoveryFence(d.storage, recoveryOwnerId.current!) } catch { /* fail closed locally */ }
-          try { clearPersistedAuthSession(d.storage, false) } catch { /* fail closed locally */ }
-          try { persistSignedOutIntent(d.storage, d.now(), d.createId()) } catch { /* fail closed locally */ }
-        }
+        } catch { /* preserve any newer accepted session */ }
       }
       const restoreOwnedPriorState = () => d.coordinateAuthState(async (verify) => {
         verify()

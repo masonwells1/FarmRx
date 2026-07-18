@@ -94,10 +94,13 @@ would return. Both concern abuse of *Mason's* project rather than a data leak:
 2. **Account-creation spam.** Open sign-up lets bots create confirmed accounts, burning free-tier
    quota and auth email sends.
 
-**Required state: keep public sign-up disabled.** With the sign-up endpoint off, no stranger can
-obtain an account at all, so `bootstrap_first_farm` is unreachable by strangers and the empty-farm
-and spam vectors disappear. The owner-provisioned model never uses public sign-up, and the **Admin
-API still creates users with sign-up disabled** (the toggle blocks only the public endpoint).
+**Required state: keep public sign-up disabled.** With the sign-up endpoint off, an anonymous
+stranger cannot self-register, so the public empty-farm and account-spam vectors are closed. The
+owner-provisioned model never uses public sign-up, and the **Admin API still creates users with
+sign-up disabled** (the toggle blocks only the public endpoint). This does not authorize every
+authenticated zero-farm account: until the RPC itself checks `initial_farm_owner`, operators must
+create only approved owners and must not hand an unapproved authenticated account to the bootstrap
+path.
 
 ---
 
@@ -204,9 +207,10 @@ already done.
 
 **Troubleshooting quick hits:**
 - *"Set up your farm" never appears / stuck on the "finish your setup" message* → the
-  `initial_farm_owner` flag isn't `true`. Confirm with an admin read of the user, or re-run the
-  provisioning step (createUser will report "already exists"; in that case set the flag with
-  `admin.auth.admin.updateUserById(id, { app_metadata: { initial_farm_owner: true } })`).
+  `initial_farm_owner` flag isn't `true`. Stop and verify that this is the intended, approved farm
+  owner. Do not grant the flag as a troubleshooting shortcut. The resend command accepts only an
+  account that is already marked as an approved initial owner; it never creates, changes, or
+  upgrades an account.
 - *The setup email did not arrive* → verify custom SMTP and Auth delivery logs. If the account was
   created, run `node scripts/provision-customer.mjs --resend-setup` and enter the email at the
   prompt; that mode proves the existing user is an approved initial owner before it requests another
@@ -236,9 +240,10 @@ These are the current settings and known platform limits for the Farm Rx project
 - **Invite completion is not used.** First-password setup and later self-service recovery both use
   the narrowly fenced `/update-password` recovery capability. Before releasing either flow,
   configure custom SMTP and run the real-email proof in `docs/password-recovery-support.md`.
-- **RPC-level flag enforcement.** With public sign-ups off, the empty-farm risk is closed. As
-  defense-in-depth, a later migration could make `bootstrap_first_farm` also require
-  `initial_farm_owner`, so the flag is enforced in the database, not just the UI. Not required for
-  v1 once sign-ups are disabled.
+- **RPC-level flag enforcement.** Public sign-ups being off closes anonymous self-registration, but
+  an authenticated zero-farm account can still call `bootstrap_first_farm` directly because the RPC
+  does not yet require `initial_farm_owner`. A later migration should enforce the approved-owner
+  flag in the database, not just the UI. Until then, provisioning discipline is part of the v1
+  security boundary.
 - **Option (c), the in-app admin screen,** remains the eventual home for onboarding so Mason doesn't
   need Claude in the loop per customer — build it after Fields + Grain reach real customers.

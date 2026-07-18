@@ -115,6 +115,7 @@ do $$ declare changed integer; begin
 end $$;
 
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000005',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','10000000-0000-4000-8000-000000000005','x-farm-rx-access-epochs',jsonb_build_object('20000000-0000-4000-8000-000000000001',3)::text)::text,false);
 do $$ begin
   if public.can_access_farm('20000000-0000-4000-8000-000000000001') then raise exception 'rep accessed farm while sharing off'; end if;
   if public.can_read_private_financials('20000000-0000-4000-8000-000000000001') then raise exception 'rep read financials while sharing off'; end if;

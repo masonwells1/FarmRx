@@ -206,7 +206,13 @@ test('password recovery fails closed after a page refresh or missing current-lin
   await page.goto('/update-password')
   await expect(page.getByRole('alert')).toContainText('interrupted when the page closed or refreshed')
   await expect(page.getByText('Request a fresh link or contact your Crop RX representative.')).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Request a new link' })).toHaveAttribute('href', '/login')
+  if (process.env.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED === 'true') {
+    await page.getByRole('link', { name: 'Request a new link' }).click()
+    await expect(page.getByRole('heading', { name: 'Reset your password' })).toBeVisible()
+  } else {
+    await expect(page.getByRole('link', { name: 'Request a new link' })).toHaveCount(0)
+    await expect(page.getByRole('link', { name: 'Return to sign in' })).toHaveAttribute('href', '/login')
+  }
 })
 
 test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks are unavailable', async ({ page, context }, testInfo) => {

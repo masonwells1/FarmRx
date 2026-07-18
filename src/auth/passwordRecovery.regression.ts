@@ -114,7 +114,12 @@ try {
   const isolatedCapturedUsers: string[] = []
   let updateFailuresRemaining = 0
   let failAfterUpdateCall: number | null = null
+  let injectNewerAcceptedOnCoordinationFailure = false
+  let newerAcceptedInjected = false
+  let injectedNewerSessionBytes: string | null = null
+  let injectedNewerIntentBytes: string | null = null
   const authSessionKey = `farm-rx-auth:${supabaseConfig.projectRef}`
+  const authIntentKey = `farm-rx-auth-intent:v1:${supabaseConfig.projectRef}`
   const recoveryFenceKey = `farm-rx-password-recovery:v2:${supabaseConfig.projectRef}`
   const productionAuthStorage = createAuthSessionStorage(authWindow.localStorage, supabaseConfig.projectRef)
   let transactionTail = Promise.resolve()
@@ -125,7 +130,16 @@ try {
     await previous
     try {
       return await task(() => {
-        if (failAfterUpdateCall !== null && updateCalls >= failAfterUpdateCall) throw new Error('simulated coordination loss after server update')
+        if (failAfterUpdateCall !== null && updateCalls >= failAfterUpdateCall) {
+          if (injectNewerAcceptedOnCoordinationFailure && !newerAcceptedInjected) {
+            newerAcceptedInjected = true
+            injectedNewerSessionBytes = JSON.stringify(otherSession)
+            injectedNewerIntentBytes = JSON.stringify({ version: 1, nonce: 'newer-accepted-after-recovery', phase: 'accepted', userId: otherSession.user.id, sessionLineage: 'other-session-lineage', startedAtMs: Date.now() })
+            authWindow.localStorage.setItem(authSessionKey, injectedNewerSessionBytes)
+            authWindow.localStorage.setItem(authIntentKey, injectedNewerIntentBytes)
+          }
+          throw new Error('simulated coordination loss after server update')
+        }
       })
     } finally { release() }
   }
@@ -244,11 +258,15 @@ try {
   root = await renderProvider()
   await beginRecovery()
   assert(currentAuth().passwordRecoveryPhase === 'ready', 'The provider could not begin the cleanup-failure recovery test.')
+  const cleanupFailureFence = JSON.parse(authWindow.localStorage.getItem(recoveryFenceKey) ?? 'null') as { ownerId?: string } | null
+  assert(cleanupFailureFence?.ownerId, 'The cleanup-failure fixture did not capture the recovery owner.')
+  injectNewerAcceptedOnCoordinationFailure = true
   failAfterUpdateCall = updateCalls + 1
   await act(async () => { await currentAuth().updatePassword('a different secure passphrase'); await Promise.resolve() })
   assert(Number(updateCalls) === 3, 'A successful server update was lost during local cleanup failure.')
   assert(currentAuth().phase === 'signed_out' && currentAuth().user === null && currentAuth().passwordRecoveryPhase === 'complete_with_warning', 'A post-save cleanup failure was presented as a retryable password failure.')
-  assert(authWindow.localStorage.getItem(authSessionKey) === null && authWindow.localStorage.getItem(recoveryFenceKey) === null, 'Best-effort cleanup left reusable recovery bytes after a coordination failure.')
+  assert(newerAcceptedInjected && authWindow.localStorage.getItem(authSessionKey) === injectedNewerSessionBytes && authWindow.localStorage.getItem(authIntentKey) === injectedNewerIntentBytes, 'Post-save fallback cleanup overwrote a newer accepted session outside the coordinator.')
+  assert(authWindow.localStorage.getItem(`${recoveryFenceKey}:owner:${cleanupFailureFence!.ownerId}`) === null, 'Post-save coordination failure left the exact recovery owner lease active.')
   await act(async () => { authEvent?.('TOKEN_REFRESHED', recoverySession); authEvent?.('USER_UPDATED', recoverySession); await new Promise((resolve) => setTimeout(resolve, 0)) })
   assert(currentAuth().phase === 'signed_out' && currentAuth().passwordRecoveryPhase === 'complete_with_warning', 'A refresh event resurrected a recovery session after cleanup warning.')
   await act(async () => { root.unmount() })
@@ -259,7 +277,7 @@ try {
   authWindow.localStorage.clear()
   transactionTail = Promise.resolve()
   failAfterUpdateCall = null
-  const authIntentKey = `farm-rx-auth-intent:v1:${supabaseConfig.projectRef}`
+  injectNewerAcceptedOnCoordinationFailure = false
   authWindow.localStorage.setItem(authSessionKey, JSON.stringify(otherSession))
   authWindow.localStorage.setItem(authIntentKey, JSON.stringify({ version: 1, nonce: 'ordinary-tab-session', phase: 'accepted', userId: otherSession.user.id, sessionLineage: 'other-session-lineage', startedAtMs: Date.now() }))
   let ownerEvent: ((event: string, session: typeof recoverySession | null) => void) | null = null
@@ -418,9 +436,9 @@ try {
   await act(async () => {
     authEventA?.('PASSWORD_RECOVERY', recoverySession)
     authEventB?.('PASSWORD_RECOVERY', recoverySession)
-    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
   })
-  assert(currentA.value?.passwordRecoveryPhase === 'ready' && currentB.value?.passwordRecoveryPhase === 'ready', 'Both recovery tabs did not begin with the same ready capability.')
+  assert(currentA.value?.passwordRecoveryPhase === 'ready' && String(currentB.value?.passwordRecoveryPhase) === 'invalid', 'A foreign-owner recovery tab exposed a ready password form.')
   let competingResults: PromiseSettledResult<void>[] = []
   await act(async () => {
     competingResults = await Promise.allSettled([
