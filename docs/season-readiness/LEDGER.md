@@ -102,3 +102,14 @@ Copy this template below the last entry. Do not replace the template or modify a
 - **External actions actually performed:** none. No live or external action was taken.
 - **Remaining risk / next approval:** The governance packet is accepted for beginning the deterministic harness tranche, but no season, backend, or browser proof exists yet. Custom SMTP remains unproven/unconfigured, and the physical iPhone/Safari and Android/Chrome customer-zero journeys remain unperformed. No outward action is authorized by this entry.
 - **Canonical status:** defer to [`docs/GOAL.md`](../GOAL.md); no canonical status claim is made here.
+
+## SR-002 — Correct Cedar JSON provenance wording
+
+- **Date/time:** 2026-07-18T15:33:43-05:00 (`America/Chicago`)
+- **Actor/model/effort:** Sol orchestrator; fresh-context, read-only `gpt-5.6-sol` reviewer at `xhigh` effort
+- **Commit or state SHA:** `a4da8f94c19f9a878e48516904258168cdf1a661`
+- **Correction:** SR-001 said `both Cedar provider-shaped JSON blocks parse`; this is inaccurate. Both Cedar JSON blocks parse, but only the fresh-response block is provider-shaped. The stale-path block is the service-normalized `CacheEnvelope`, as specified by the [`Cedar browser seam`](WORKFLOWS-AND-SCENARIOS.md#cedar-browser-seam).
+- **Review verdict/findings:** Exact ledger commit `a4da8f94c19f9a878e48516904258168cdf1a661` received **BLOCK** solely for this provenance wording. This corrective commit awaits fresh review.
+- **Proof and authority effect:** This append-only correction changes no accepted scenario, fixture UUID, proof result, authority, canonical status, or external action. No backend, browser, or season proof exists yet.
+- **External actions actually performed:** none.
+- **Canonical status:** defer to [`docs/GOAL.md`](../GOAL.md); no canonical status claim is made here.
