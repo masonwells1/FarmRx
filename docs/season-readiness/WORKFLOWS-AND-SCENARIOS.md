@@ -62,14 +62,19 @@ This manifest is proof infrastructure, not product schema. IDs remain stable acr
 | Pine 2027 corn crop assignment | `27030000-0000-4000-8000-000000000006` |
 | Maple known inventory product | `27040000-0000-4000-8000-000000000000` |
 | Prairie known inventory product | `27040000-0000-4000-8000-000000000001` |
+| Cedar known inventory product | `27040000-0000-4000-8000-000000000005` |
 | Maple receipt | `27041000-0000-4000-8000-000000000000` |
 | Prairie receipt | `27041000-0000-4000-8000-000000000001` |
+| Cedar receipt | `27041000-0000-4000-8000-000000000005` |
 | Maple receipt line | `27042000-0000-4000-8000-000000000000` |
 | Prairie receipt line | `27042000-0000-4000-8000-000000000001` |
+| Cedar receipt line | `27042000-0000-4000-8000-000000000005` |
 | Maple completed application record | `27043000-0000-4000-8000-000000000000` |
 | Prairie application record | `27043000-0000-4000-8000-000000000001` |
+| Cedar completed application record | `27043000-0000-4000-8000-000000000005` |
 | Maple completed application product | `27044000-0000-4000-8000-000000000000` |
 | Prairie application product | `27044000-0000-4000-8000-000000000001` |
+| Cedar completed application product | `27044000-0000-4000-8000-000000000005` |
 | Maple synthetic program | `27050000-0000-4000-8000-000000000001` |
 | Maple program pass | `27051000-0000-4000-8000-000000000001` |
 | Maple program-pass product | `27051100-0000-4000-8000-000000000001` |
@@ -111,7 +116,7 @@ Commodity IDs are existing non-UUID lookup keys: use `corn_yellow` for the corn 
 - North Fork starts with active memberships mapping owner user → `owner`, manager user → `manager`, worker user → `worker`, and read-only user → `read_only`; the named rep has an enabled, unrevoked grant but no membership; the outsider has neither. The farm has North Home 80 and its crop assignment, sharing is `false`, and the named-rep access epoch is `1`.
 - Prairie Spray starts with exactly 100.00 gal on hand of `Synthetic Herbicide 41`; its canonical inventory unit is `gal`, with fictional EPA snapshot `00000-000`, REI `12 hr`, PHI `0 hr`, and no assertion that any value is legally sufficient.
 - Harvest Ridge starts with production estimate `expected_bushels = 32000.00`, `actual_bushels = null`, and `drives_math = projected`; a 30,000.00 bu manifest bin baseline in a 40,000.00 bu bin; and a 5,000.00 bu `cash` contract with buyer `Synthetic Elevator`, cash price `$4.25/bu`, delivery dates `2027-11-01` through `2027-12-15`, and contract number `HR-2027-001`.
-- Cedar West 40 is fixed at latitude `38.210000`, longitude `-89.120000`, `location_source = manual`. Cedar weather uses only the exact local response below; no external provider is contacted.
+- Cedar West 40 is fixed at latitude `38.210000`, longitude `-89.120000`, `location_source = manual`. Cedar starts with the manifest product `Synthetic Cedar Herbicide 41`: `product_kind = chemical`, canonical inventory unit `gal`, fictional EPA registration `00000-005`, restricted-use `false`, signal word `caution`, REI `12 hr`, PHI `0 hr`, maximum label rate `0.125 gal/acre`, manufacturer `Synthetic Ag Labs`. Its manifest received opening-balance receipt/line contains exactly 20.00 gal at `$12.50` per canonical gal, so pre-scenario on-hand is exactly 20.00 gal. Cedar weather uses only the intercepted local responses below; no packet reaches an external provider.
 - Pine Hill starts with the worker user's active membership on Pine Hill, access epoch `1`, Pine North 60 selected, and an empty field-log queue. Its browser fence is version `2`, generation `1`, manifest initial token, server epoch `1`, `revoked = false`, and `changedAt = 2027-08-04T13:55:00-05:00`; the independent generation ledger has the same generation/token/epoch/time.
 
 ## Scenario MR — Maple Ridge 12-month farm year
@@ -180,43 +185,95 @@ The two November actions must also pass in the opposite order after a clean scen
 
 ## Scenario CC — Cedar Creek weather and scouting
 
-**Fixed instant:** `2027-07-07T13:20:00-05:00` · **Role:** owner · **Network:** browser online to local services; weather provider replaced by deterministic local double
+**Page clock for every Cedar step:** `2027-07-07T13:20:00-05:00` (`2027-07-07T18:20:00.000Z`) · **Role:** owner · **Network:** browser to local app/backend only; Playwright owns the Open-Meteo route
 
-- Cedar West 40 uses manifest coordinates `38.210000`, `-89.120000`. The local double returns this exact finite bundle; field-wall-clock weather times are intentionally offset-free, while `fetched_at` is an absolute America/Chicago instant:
+### Cedar browser seam
+
+`weatherService.ts` constructs this exact request for manifest coordinates `38.210000`, `-89.120000`:
+
+```text
+https://api.open-meteo.com/v1/forecast?latitude=38.21&longitude=-89.12&current=temperature_2m%2Crelative_humidity_2m%2Cprecipitation%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m%2Ccloud_cover&hourly=temperature_2m%2Crelative_humidity_2m%2Cprecipitation%2Cprecipitation_probability%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m%2Ccloud_cover&daily=precipitation_sum%2Cprecipitation_probability_max%2Ctemperature_2m_max%2Ctemperature_2m_min%2Csunrise%2Csunset&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&forecast_days=7
+```
+
+For the fresh path, Playwright observes that exact browser request and fulfills it inside the test process with status `200`, `content-type: application/json`, and this exact provider-shaped raw response. No network packet leaves the test process.
 
 ```json
 {
-  "fetched_at": "2027-07-07T13:15:00-05:00",
-  "stale": false,
   "current": {
     "time": "2027-07-07T13:20",
-    "temperature_f": 74.0,
-    "relative_humidity": 52,
-    "precipitation_in": 0.0,
-    "precipitation_probability": 10,
-    "wind_speed_mph": 8.0,
-    "wind_direction_degrees": 225,
-    "wind_gusts_mph": 10.0,
+    "temperature_2m": 74.0,
+    "relative_humidity_2m": 52,
+    "precipitation": 0.0,
+    "wind_speed_10m": 8.0,
+    "wind_direction_10m": 225,
+    "wind_gusts_10m": 10.0,
     "cloud_cover": 30
   },
-  "hourly": [
-    { "time": "2027-07-07T13:20", "temperature_f": 74.0, "relative_humidity": 52, "precipitation_in": 0.0, "precipitation_probability": 10, "wind_speed_mph": 8.0, "wind_direction_degrees": 225, "wind_gusts_mph": 10.0, "cloud_cover": 30 },
-    { "time": "2027-07-07T14:20", "temperature_f": 75.0, "relative_humidity": 50, "precipitation_in": 0.0, "precipitation_probability": 10, "wind_speed_mph": 8.0, "wind_direction_degrees": 225, "wind_gusts_mph": 10.0, "cloud_cover": 28 },
-    { "time": "2027-07-07T15:20", "temperature_f": 77.0, "relative_humidity": 48, "precipitation_in": 0.0, "precipitation_probability": 10, "wind_speed_mph": 9.0, "wind_direction_degrees": 230, "wind_gusts_mph": 11.0, "cloud_cover": 25 },
-    { "time": "2027-07-07T16:20", "temperature_f": 78.0, "relative_humidity": 47, "precipitation_in": 0.0, "precipitation_probability": 10, "wind_speed_mph": 9.5, "wind_direction_degrees": 230, "wind_gusts_mph": 12.0, "cloud_cover": 25 },
-    { "time": "2027-07-07T17:20", "temperature_f": 77.0, "relative_humidity": 49, "precipitation_in": 0.0, "precipitation_probability": 10, "wind_speed_mph": 8.5, "wind_direction_degrees": 225, "wind_gusts_mph": 11.0, "cloud_cover": 28 }
-  ],
-  "daily": [
-    { "date": "2027-07-07", "precipitation_sum_in": 0.0, "precipitation_probability_max": 10, "temperature_max_f": 82.0, "temperature_min_f": 62.0, "sunrise": "2027-07-07T05:38", "sunset": "2027-07-07T20:27" },
-    { "date": "2027-07-08", "precipitation_sum_in": 0.0, "precipitation_probability_max": 15, "temperature_max_f": 83.0, "temperature_min_f": 63.0, "sunrise": "2027-07-08T05:39", "sunset": "2027-07-08T20:27" }
-  ]
+  "hourly": {
+    "time": ["2027-07-07T13:20", "2027-07-07T14:20", "2027-07-07T15:20", "2027-07-07T16:20", "2027-07-07T17:20"],
+    "temperature_2m": [74.0, 75.0, 77.0, 78.0, 77.0],
+    "relative_humidity_2m": [52, 50, 48, 47, 49],
+    "precipitation": [0.0, 0.0, 0.0, 0.0, 0.0],
+    "precipitation_probability": [10, 10, 10, 10, 10],
+    "wind_speed_10m": [8.0, 8.0, 9.0, 9.5, 8.5],
+    "wind_direction_10m": [225, 225, 230, 230, 225],
+    "wind_gusts_10m": [10.0, 10.0, 11.0, 12.0, 11.0],
+    "cloud_cover": [30, 28, 25, 25, 28]
+  },
+  "daily": {
+    "time": ["2027-07-07", "2027-07-08"],
+    "precipitation_sum": [0.0, 0.0],
+    "precipitation_probability_max": [10, 15],
+    "temperature_2m_max": [82.0, 83.0],
+    "temperature_2m_min": [62.0, 63.0],
+    "sunrise": ["2027-07-07T05:38", "2027-07-08T05:39"],
+    "sunset": ["2027-07-07T20:27", "2027-07-08T20:27"]
+  }
 }
 ```
 
-- **CC-1 fresh proof:** Weather displays `74°F`, `8 mph SW`, gusts `10 mph`, humidity `52%`, rain `0.00 in`, a fresh **Good / Spray now** verdict, and the five-hour good window ending at `18:20`. Browser network evidence shows zero request to an external weather host. Opening Weather changes no product row.
-- **CC-2 stale proof:** Reuse the exact current/hourly/daily body with `fetched_at = 2027-07-07T10:00:00-05:00` and `stale = true`. At the fixed scenario clock it is displayed as three hours old, the verdict is **Caution / Refresh before spraying**, and no actionable good window is shown. Opening/retrying Weather changes no product row.
-- **CC-3 scouting proof:** While CC-2 remains visible, use `Quick Record` to save the manifest Cedar scouting note: field Cedar West 40, date `2027-07-07`, category `weed`, note `Synthetic waterhemp along west edge`, `latitude = null`, `longitude = null`, `photos = []`, and `create_task = false`. Exactly one `scouting_notes` row is created and the receipt remains visible even though Weather is stale.
-- **Required Cedar non-writes:** `scouting_photos`, `farm_tasks`, `notifications`, `application_records`, `application_products`, Inventory, Program, Grain, and field-location rows/counts/versions remain unchanged. No spray save, photo, follow-up task, notification, or location capture is part of the required Cedar pass. Manual weather transcription and the absence of provider provenance are proved by the required Maple and Prairie spray scenarios with exact `8.0 mph SW`, `74.0°F`, and `52%` values.
+For the stale path, Playwright preloads `window.localStorage` key `farm-rx-weather:v1:38.210:-89.120` with this exact `CacheEnvelope`. It is the service's normalized cache shape, not a provider response; neither the envelope nor its bundle contains a `stale` property.
+
+```json
+{
+  "version": 1,
+  "fetched_at": "2027-07-07T11:40:00-05:00",
+  "bundle": {
+    "current": {
+      "time": "2027-07-07T13:20",
+      "temperature_f": 74.0,
+      "relative_humidity": 52,
+      "precipitation_in": 0.0,
+      "precipitation_probability": null,
+      "wind_speed_mph": 8.0,
+      "wind_direction_degrees": 225,
+      "wind_gusts_mph": 10.0,
+      "cloud_cover": 30
+    },
+    "hourly": [
+      { "time": "2027-07-07T13:20", "temperature_f": 74.0, "relative_humidity": 52, "precipitation_in": 0.0, "precipitation_probability": 10, "wind_speed_mph": 8.0, "wind_direction_degrees": 225, "wind_gusts_mph": 10.0, "cloud_cover": 30 },
+      { "time": "2027-07-07T14:20", "temperature_f": 75.0, "relative_humidity": 50, "precipitation_in": 0.0, "precipitation_probability": 10, "wind_speed_mph": 8.0, "wind_direction_degrees": 225, "wind_gusts_mph": 10.0, "cloud_cover": 28 },
+      { "time": "2027-07-07T15:20", "temperature_f": 77.0, "relative_humidity": 48, "precipitation_in": 0.0, "precipitation_probability": 10, "wind_speed_mph": 9.0, "wind_direction_degrees": 230, "wind_gusts_mph": 11.0, "cloud_cover": 25 },
+      { "time": "2027-07-07T16:20", "temperature_f": 78.0, "relative_humidity": 47, "precipitation_in": 0.0, "precipitation_probability": 10, "wind_speed_mph": 9.5, "wind_direction_degrees": 230, "wind_gusts_mph": 12.0, "cloud_cover": 25 },
+      { "time": "2027-07-07T17:20", "temperature_f": 77.0, "relative_humidity": 49, "precipitation_in": 0.0, "precipitation_probability": 10, "wind_speed_mph": 8.5, "wind_direction_degrees": 225, "wind_gusts_mph": 11.0, "cloud_cover": 28 }
+    ],
+    "daily": [
+      { "date": "2027-07-07", "precipitation_sum_in": 0.0, "precipitation_probability_max": 10, "temperature_max_f": 82.0, "temperature_min_f": 62.0, "sunrise": "2027-07-07T05:38", "sunset": "2027-07-07T20:27" },
+      { "date": "2027-07-08", "precipitation_sum_in": 0.0, "precipitation_probability_max": 15, "temperature_max_f": 83.0, "temperature_min_f": 63.0, "sunrise": "2027-07-08T05:39", "sunset": "2027-07-08T20:27" }
+    ],
+    "fetched_at": "2027-07-07T11:40:00-05:00"
+  }
+}
+```
+
+### Required Cedar sequence
+
+1. **CC-1 — Fresh Weather view.** Start with the cache key absent and the page clock pinned. Open Weather. The Playwright route fulfills exactly one matching request with the raw response above. The service normalizes it and stamps outer/bundle `fetched_at = 2027-07-07T18:20:00.000Z`; the returned runtime bundle adds `stale = false`. UI shows `74°F`, `8 mph SW`, gusts `10 mph`, humidity `52%`, rain `0.00 in`, **Good / Spray now**, and five good hourly samples. The route is observed, but no external packet leaves the process. Weather and cache writes create or mutate no product-database row.
+2. **CC-2 — Manual spray transcription.** After reading CC-1, use `Quick Record` → Spray record. Manually select Cedar West 40 and its manifest 2027 soybean assignment; enter 40.00 ac, date `2027-07-07`, time `13:20`, target pest `Synthetic broadleaf`, applicator `Scenario Operator`, license text `PRESENCE-ONLY-2027`, wind `8.0` mph, direction `SW`, temperature `74.0°F`, and RH `52%`. Select manifest product `Synthetic Cedar Herbicide 41`; enter rate `0.125`, rate unit `gal`, rate basis `acre`, total `5.00`, total unit `gal`, and no package factor. Save completed with the manifest Cedar application/application-product IDs.
+3. **CC-2 write proof.** Exactly one `application_records` row and one `application_products` row are created. The application row contains the exact farm/field/crop/date/time/acres/pest/applicator/license/weather values above. The product row snapshots exactly `chemical`, `Synthetic Cedar Herbicide 41`, `00000-005`, restricted-use `false`, signal word `caution`, REI `12`, PHI `0`, maximum `0.125 gal/acre`, and inventory unit `gal`; its quantity in inventory units is 5.00. Derived on-hand changes exactly from 20.00 gal to 15.00 gal because `40.00 × 0.125 = 5.00`.
+4. **CC-3 — Real stale fallback.** Navigate away from Weather. Replace only the exact weather cache key with the CacheEnvelope above, remove the fresh fulfill route, install a Playwright route for the exact same URL that aborts the request locally, then reopen Weather at the same fixed page clock. Cache age is exactly 100 minutes: greater than the service's 30-minute direct-cache threshold and within its two-hour fallback ceiling. The service attempts the observed refresh, the local abort fails it before any packet leaves the test process, and the service returns the cached normalized bundle with runtime `stale = true`. UI shows **Weather data is 2 hours old — refresh before spraying.**, **Caution / Refresh before spraying**, **Spray window unknown until refreshed**, and **Showing your last forecast — reconnect for the latest.**; no actionable window is shown and no product-database row changes.
+5. **CC-4 — Scouting while Weather is stale.** Use `Quick Record` to save the manifest Cedar scouting note: field Cedar West 40, date `2027-07-07`, category `weed`, note `Synthetic waterhemp along west edge`, `latitude = null`, `longitude = null`, `photos = []`, and `create_task = false`. Exactly one `scouting_notes` row is created and the receipt remains visible while the Weather lane is stale.
+6. **Required Cedar non-writes and limits.** Weather never auto-fills or auto-saves the spray form. No provider observation/provenance table, row, ID, or link is created; the application contains only manually typed weather values. `scouting_photos`, `farm_tasks`, `notifications`, Programs, Grain, field-location rows, and every unrelated Inventory row/count/version remain unchanged. No photo, follow-up task, notification, or location capture is part of this pass. The license scenario proves only that the literal text is present in the saved snapshot; it makes no claim about eligibility, validity, expiration, jurisdiction, or legal status.
 
 No assertion here requests a new weather vendor, weather-history table, automatic weather transcription, or weather-to-spray provenance feature.
 
