@@ -9,10 +9,10 @@
 
 ## Owner verdict
 
-The code slice is designed to be safe to merge with password-email delivery **off by default**.
-It must not be called customer-zero complete until custom SMTP and two physical-phone journeys are
-proven. No production deployment, Auth setting, secret, live data, or live migration was changed by
-this implementation lane.
+The code slice is merged and deployed with password-email delivery **off by default**. It must not
+be called customer-zero operationally complete until custom SMTP and two physical-phone journeys
+are proven. The publication changed application code and documentation only: no Auth setting,
+secret, live data, or live migration was changed.
 
 Final independent Sol verdict on the integrated release commit: **GO**, with no P0, P1, P2, or P3
 findings. The final uninterrupted foundation gate on that exact code and base: **PASS**, exit 0.
@@ -140,6 +140,9 @@ for this default-off code release.
 | Production build before the final non-enumeration helper edit | PASS; route chunks emitted, PWA 30-entry precache, 1341.35 KiB |
 | Full foundation gate before the final non-enumeration helper edit | PASS, exit 0: audit 0 vulnerabilities; static guards; 11/11 mutations; disposable 0033/34/35/36/37/39/40/41/42; expanded RLS matrix; 50/50 browser |
 | Final `CI=1 npm run verify:foundation` on the exact integrated release code | **PASS, exit 0**: forced TypeScript; every regression; production build; audit 0 vulnerabilities; static guards; 11/11 mutations; disposable 0033/34/35/36/37/39/40/41/42/43; authenticated-owner privacy RLS matrix; Playwright 53 passed, 1 intentional skip in 1.3 minutes |
+| PR #6 required checks on feature head `2a8bc6d8adcdd61831cb58c9653c37989458b04b` | **PASS**: foundation, Vercel preview, Vercel Preview Comments, and CodeRabbit; latest CodeRabbit review produced no actionable comments |
+| Post-merge production HTTP proof | **PASS**: `/`, `/login`, `/update-password`, `/privacy`, `/manifest.webmanifest`, and `/sw.js` returned 200 with the expected content types and CSP, referrer, permissions, no-sniff, frame-deny, and same-origin opener headers |
+| Post-merge production Chromium proof | **PASS**, desktop Chrome + Pixel 5: required sign-in fields; default-off support guidance with no reset button; invalid recovery fails closed to **Return to sign in**; unauthenticated privacy redirects to sign-in; no horizontal overflow, console errors, or page errors |
 
 One earlier non-CI Playwright attempt reused another task's preview on port 4173; that preview exited
 mid-run and later tests received `ERR_CONNECTION_REFUSED`. That run is discarded and is not release
@@ -162,9 +165,14 @@ intentional project-specific skip.
 These are operational go-live gates. They are not claims that automated desktop emulation can
 replace.
 
-## Publish boundary
+## Publish closeout
 
-This branch has not been committed, pushed, opened as a PR, merged, or deployed by the
-implementation lane. Merging to `main` is production-coupled through Vercel. The default-off email
-guards make that code publication safe while SMTP remains absent; enabling email delivery is a
-separate production action with its own proof.
+- Pull request: `https://github.com/masonwells1/FarmRx/pull/6`, merged 2026-07-18.
+- Reviewed feature head: `2a8bc6d8adcdd61831cb58c9653c37989458b04b`.
+- Production merge commit: `a6541b2ca33917e2ca3f63c22f43ca60095532a8`.
+- Vercel production deployment: `dpl_5ySZms2MjWJ2thtP8uQuKpAE3NLT`, status **Ready**, aliased to
+  `https://farm-rx.vercel.app`.
+- Production app shell observed after deployment: `/assets/index-BSgdbEQT.js`.
+
+The default-off email guards make this code publication safe while SMTP remains absent. Enabling
+email delivery is a separate production action with its own proof; this release did not enable it.
