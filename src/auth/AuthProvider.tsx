@@ -654,6 +654,11 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
       }
     })
     const storageChanged = (event: StorageEvent) => {
+      // This tab has already consumed and revoked its one-purpose recovery
+      // capability. A sibling may legitimately publish a newer accepted
+      // session, but the stale recovery page must remain terminal and signed
+      // out rather than adopting that ordinary session.
+      if (recoveryCompleted.current) return
       if (event.key === authSessionKey && event.newValue === null) {
         // A sibling tab may remove stale auth bytes while a newer password
         // attempt owns the shared pending nonce. That cleanup must not turn

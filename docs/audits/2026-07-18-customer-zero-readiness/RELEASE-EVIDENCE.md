@@ -50,7 +50,8 @@ lease, ordinary-tab broadcast isolation, and fail-closed back/forward-cache reva
 - Password updates require 12 characters, confirmation, strength feedback, and a submit lock.
 - Once the server changes the password, local state immediately becomes completed/signed-out. If
   device cleanup then fails, the UI truthfully says the password changed, disables retry, clears as
-  much local state as possible, and gives close-tabs/support guidance.
+  much local state as possible, and gives close-tabs/support guidance. A sibling tab's newer
+  accepted session remains exact and usable; the terminal recovery page cannot adopt or overwrite it.
 - The password mutation uses a one-purpose, non-persistent Auth client seeded only with the captured
   recovery credentials; a shared-tab ambient session change cannot redirect the update to another
   account.
@@ -128,7 +129,7 @@ for this default-off code release.
 | Command / proof | Result |
 |---|---|
 | `node scripts/provision-customer.regression.mjs` | PASS, exit 0: unshared secret, exact redirect, owner-only resend, partial-success recovery, prompt-only CLI input (malicious positional input is rejected before prompt/provision/output), default-off CLI gate |
-| `npx tsx src/auth/passwordRecovery.regression.ts` | PASS, natural exit 0: production-adapter memory-only recovery, ordinary-route broadcast isolation, exact owner pagehide lease revocation, fail-closed back/forward-cache restore with zero mutation, bounded crash cleanup, mounted route/cancel cleanup, one-winner cross-tab update, isolated mutation, retry/completion truth, non-enumeration helper |
+| `npx tsx src/auth/passwordRecovery.regression.ts` | PASS, natural exit 0: production-adapter memory-only recovery, ordinary-route broadcast isolation, exact owner pagehide lease revocation, fail-closed back/forward-cache restore with zero mutation, eight primary/retry cleanup fault boundaries preserving a sibling's exact accepted session and rendered sign-in, bounded crash cleanup, mounted route/cancel cleanup, one-winner cross-tab update, isolated mutation, retry/completion truth, non-enumeration helper |
 | Post-broadcast-repair focused matrix | PASS: forced TypeScript; Auth-session storage fence; queued-operation context; foundation static guards; invalid-recovery and default-off login Playwright 4/4 across desktop + phone |
 | `npx tsx src/data/SupabaseFarmSharingRepository.regression.ts` | PASS, exit 0: exact context, offline refusal, cross-farm/race/malformed response failure |
 | `npx tsc -b --force` | PASS, exit 0 inside the final uninterrupted foundation gate |
