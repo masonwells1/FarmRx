@@ -1,38 +1,52 @@
-// Provision one Farm Rx customer. Run by Claude from Mason's machine only.
-// The service-role key is a SECRET: it is read from the environment, never
-// committed, and never shipped to the app. Usage:
-//   node scripts/provision-customer.mjs farmer@email.com
-import { createClient } from '@supabase/supabase-js'
-import { randomBytes } from 'node:crypto'
+// Provision one Farm Rx owner account and send its first-password email.
+// The service-role key is read from the environment and never printed.
+import { createInterface } from 'node:readline/promises'
+import { stdin, stdout } from 'node:process'
+import { pathToFileURL } from 'node:url'
+import { provisionCustomer } from './provision-customer-lib.mjs'
 
-const url = 'https://agvsozfbstpekuqxpqjr.supabase.co'
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-const email = (process.argv[2] || '').trim().toLowerCase()
-
-if (!serviceKey) { console.error('Set SUPABASE_SERVICE_ROLE_KEY first.'); process.exit(1) }
-if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { console.error('Pass a valid email.'); process.exit(1) }
-
-// Strong, human-typeable one-time password.
-const password = randomBytes(9).toString('base64url') + 'A9!'
-
-const admin = createClient(url, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
-
-const { data, error } = await admin.auth.admin.createUser({
-  email,
-  password,
-  email_confirm: true,                       // no confirmation email needed; they can sign in now
-  app_metadata: { initial_farm_owner: true } // the flag that unlocks the "Set up your farm" screen
-})
-
-if (error) {
-  // Most common: the email already has an account.
-  console.error('Could not create user:', error.message)
-  process.exit(1)
+export function commandMode(args) {
+  if (args.length === 0) return 'create'
+  if (args.length === 1 && args[0] === '--resend-setup') return 'resend'
+  throw new Error('Customer email addresses are entered only at the secure prompt. Run with no arguments, or with --resend-setup only.')
 }
 
-console.log('\n=== Farm Rx account created ===')
-console.log('Email:            ', email)
-console.log('Starting password:', password)
-console.log('User id:          ', data.user.id)
-console.log('initial_farm_owner:', data.user.app_metadata?.initial_farm_owner === true)
-console.log('\nRelay the email + starting password to the farmer by phone/text (do not email the password).')
+export async function readCustomerEmail() {
+  const terminal = createInterface({ input: stdin, output: stdout })
+  try {
+    return await terminal.question('Customer owner email: ')
+  } finally {
+    terminal.close()
+  }
+}
+
+export async function runProvisionCustomerCli(
+  args = process.argv.slice(2),
+  environment = process.env,
+  output = console,
+  { provision = provisionCustomer, readEmail = readCustomerEmail } = {},
+) {
+  // Parse all command-line input before prompting or touching Auth. A customer email must never
+  // travel through the shell command line, shell history, or a copied terminal command.
+  const mode = commandMode(args)
+  const email = await readEmail()
+  const result = await provision({
+    mode,
+    email,
+    serviceKey: environment.SUPABASE_SERVICE_ROLE_KEY ?? '',
+    emailDeliveryReady: environment.FARM_RX_AUTH_EMAIL_DELIVERY_READY === 'true',
+  })
+
+  output.log('\n=== Farm Rx owner setup email sent ===')
+  output.log('Email:             ', result.email)
+  output.log('User id:           ', result.userId)
+  output.log('initial_farm_owner:', result.initialFarmOwner)
+  output.log('Next: the farmer opens the newest email and chooses their first password. No password is relayed by Crop RX.')
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runProvisionCustomerCli().catch((error) => {
+    console.error(error instanceof Error ? error.message : 'Farm Rx could not provision this customer.')
+    process.exitCode = 1
+  })
+}

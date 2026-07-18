@@ -1,6 +1,6 @@
 # STANDING GOAL — Build Farm Rx to first customer ship
 
-**Owner:** Mason Wells · **Started:** 2026-07-11 · **Status:** Production-ready; first-customer handoff pending
+**Owner:** Mason Wells · **Started:** 2026-07-11 · **Status:** Customer-zero code release in progress; first-customer handoff pending
 
 ## The goal
 Build Farm Rx (customer-facing farm management PWA by Crop RX Solutions) to the point where
@@ -26,6 +26,14 @@ don't build it yet.
 - The remaining finish line is operational, not engineering: select the first customers,
   provision their accounts, and perform the real-phone handoff pass that Mason deferred on
   2026-07-18. Use `docs/ship-checklist.md` as the runbook.
+
+The current code release closes the farmer-visible privacy control, password recovery, and
+rural-network bundle cost. The remaining real-device customer-zero proof is defined in
+`docs/customer-zero-readiness-runbook.md`.
+
+**Provisioning guard:** use the documented create flow (or owner-validated resend mode) with no
+customer-email argument, then enter the email only at the prompt. Customer email must never be
+placed in a shell command or shell history.
 
 ## How we work (decided 2026-07-11)
 - **Claude = orchestrator** — plans, delegates, reviews, verifies in browser, reports to Mason.
@@ -449,10 +457,10 @@ Module 3's existing delivery-event inbox hook.
         Supabase Auth site_url + uri_allow_list set to the prod URL (was localhost:3000). LIVE E2E
         PROVEN over HTTPS in browser: login (farmtest@) → /fields real data (2 fields/245.5ac) →
         /programs renders; deep-link /programs serves the app (no 404); no console errors; signed out.
-        OPEN PROD FOLLOW-UPS (Mason's calls): custom SMTP for real signup/reset emails (default SMTP is
-        test-rate-limited; email-confirm is ON); public signups still OPEN (disable_signup=False — likely
-        want OFF + provision-customer.mjs); test farm/accounts still in prod DB (RLS-isolated); phone-push
-        SEND still gated (in-app alerts work).
+        HISTORICAL FOLLOW-UP SNAPSHOT (superseded 2026-07-13): this entry predates the public-signup
+        disablement. Current read-only Auth evidence: public sign-up is disabled; custom SMTP is the
+        remaining customer-onboarding blocker; test farm/accounts remain RLS-isolated; phone-push SEND
+        remains gated (in-app alerts work).
       OPERATING MODEL (Mason 2026-07-12): **Opus = orchestrator** (plan/delegate/verify-in-browser/
       report). **Terra + Luna = the everyday workers** (most chunks; Terra modules/UI, Luna boilerplate/
       docs/mechanical). **Sol = complex/architectural work AND Opus's peer advisor** (equal-or-better —
@@ -506,8 +514,8 @@ Module 3's existing delivery-event inbox hook.
    Test user + farm fully deleted after (verified 0 rows). NOTE: farmtest verify password
    rotated again — see docs/build-notes/verify-login.md.
 4. [x] Live-path multi-user test matrix — PROVEN IN BROWSER 2026-07-12 ~3:30AM against the
-   live DB with real signups (created while public signups are still open — do NOT delete
-   these test users when signups get disabled):
+   live DB with real signups created before public signup was disabled (do NOT delete these
+   RLS-isolated test users):
    · farmworker@croprxsolutions.com (worker member, no financial flag): Fields visible
      (2 fields / 245.5 ac), Inventory visible (live 20 gal shelf), Grain DENIED with the
      farmer-English "Grain records are private on this farm" message, Profitability DENIED

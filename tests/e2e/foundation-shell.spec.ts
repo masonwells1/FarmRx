@@ -23,6 +23,26 @@ const farms: FarmFixture[] = [
   { id: farmB, name: 'River Bend', entityId: entityB, fieldId: fieldB, fieldName: 'South Bottom', arrangementId: arrangementB },
 ]
 
+test('login blocks empty credentials and keeps the login brand legible on dark green', async ({ page }) => {
+  await page.goto('/login')
+  const email = page.locator('#email')
+  const password = page.locator('#password')
+  await expect(email).toHaveAttribute('required', '')
+  await expect(password).toHaveAttribute('required', '')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  await expect(email).toBeFocused()
+  expect(await email.evaluate((input) => (input as HTMLInputElement).validity.valueMissing)).toBe(true)
+  await expect(page.locator('.slogan')).toHaveCSS('color', 'rgb(188, 239, 207)')
+  if (process.env.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED === 'true') {
+    await page.getByRole('button', { name: 'Forgot password?' }).click()
+    await expect(page.getByRole('heading', { name: 'Reset your password' })).toBeVisible()
+    await expect(page.locator('#reset-email')).toHaveAttribute('required', '')
+  } else {
+    await expect(page.getByRole('button', { name: 'Forgot password?' })).toHaveCount(0)
+    await expect(page.getByText('Need password help? Contact your Crop RX representative.')).toBeVisible()
+  }
+})
+
 function session(id = userId) {
   const expiresAt = Math.floor(Date.now() / 1000) + 86_400
   const payload = btoa(JSON.stringify({ sub: id, aud: 'authenticated', exp: expiresAt, session_id: `session-${id}` })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
@@ -180,6 +200,19 @@ test('built login route is usable and does not require a live data request', asy
   await expect(page.getByLabel('Password')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
   expect(liveRequests).toEqual([])
+})
+
+test('password recovery fails closed after a page refresh or missing current-link event', async ({ page }) => {
+  await page.goto('/update-password')
+  await expect(page.getByRole('alert')).toContainText('interrupted when the page closed or refreshed')
+  await expect(page.getByText('Request a fresh link or contact your Crop RX representative.')).toBeVisible()
+  if (process.env.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED === 'true') {
+    await page.getByRole('link', { name: 'Request a new link' }).click()
+    await expect(page.getByRole('heading', { name: 'Reset your password' })).toBeVisible()
+  } else {
+    await expect(page.getByRole('link', { name: 'Request a new link' })).toHaveCount(0)
+    await expect(page.getByRole('link', { name: 'Return to sign in' })).toHaveAttribute('href', '/login')
+  }
 })
 
 test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks are unavailable', async ({ page, context }, testInfo) => {

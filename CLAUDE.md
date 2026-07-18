@@ -20,6 +20,8 @@
 - Supabase project: **separate free-tier project for Farm Rx** — NEVER the live CRX-Manager database.
 - Live URL / production: `https://farm-rx.vercel.app` (Vercel). Production hardening release
   verified 2026-07-18 at merge commit `3e7abe0a6e96ce5a092a4ce1630e407e55582e7c`.
+  The Vercel project is linked to GitHub `main`, so merging to `main` is production-coupled and
+  requires explicit release approval plus post-deploy verification.
 
 ## Standing loop (Mason-approved 2026-07-11)
 - If a session opens here with no specific request, resume the build loop: next unchecked
@@ -79,3 +81,6 @@
 - Store `expected_bushels` AND `actual_bushels` — never overwrite projected with actual.
 - Options contracts, weather alerts, landlord portal, app-store distribution, elevator scraping:
   explicitly OUT of scope (handoff Part 7).
+- Customer provisioning accepts no email command-line argument. Use the documented create flow or
+  resend mode, then enter the email only at its prompt; never put a customer email in shell history
+  or a copied command.
