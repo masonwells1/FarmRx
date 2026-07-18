@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   Navigate,
+  Link,
   NavLink,
   Route,
   Routes,
@@ -18,6 +19,7 @@ import {
 } from "react-router-dom";
 import type { User } from "@supabase/supabase-js";
 import { useAuth } from "./auth/AuthProvider";
+import { minimumPasswordLength, passwordEmailDeliveryEnabled, passwordResetPublicResponse, passwordStrength, passwordValidationMessage } from './auth/passwordRecovery';
 import {
   bootstrapInitialOwnerFarm,
 } from "./auth/bootstrapFarm";
@@ -30,6 +32,7 @@ import { RequireSession } from "./auth/RequireSession";
 import { NotificationsPage, NotificationBell } from "./NotificationsModule";
 import {
   equipmentTasksRepository,
+  farmSharingRepository,
   fieldLogRepository,
   fieldsRepository,
   generateDueEquipmentTasks,
@@ -78,6 +81,7 @@ const FieldLogPage = lazy(() => recoverLazyRoute("field-log", () => import("./Fi
 const ScoutingPage = lazy(() => recoverLazyRoute("scouting", () => import("./ScoutingModule")).then((module) => ({ default: module.ScoutingPage })));
 const HarvestPage = lazy(() => recoverLazyRoute("harvest", () => import("./HarvestModule")).then((module) => ({ default: module.HarvestPage })));
 const ProgramsPage = lazy(() => recoverLazyRoute("programs", () => import("./ProgramsModule")).then((module) => ({ default: module.ProgramsPage })));
+const FarmPrivacyPage = lazy(() => recoverLazyRoute("farm-privacy", () => import("./FarmPrivacyPage")).then((module) => ({ default: module.FarmPrivacyPage })));
 
 function NavGlyph({ d }: { d: string }) {
   return (
@@ -108,6 +112,12 @@ const navigation: NavigationItem[] = [
     path: "/grain",
     module: "grain",
     icon: <NavGlyph d="M3 20h18M6 20V8l6-4 6 4v12" />,
+  },
+  {
+    label: "Privacy",
+    path: "/privacy",
+    module: "fields",
+    icon: <NavGlyph d="M12 3l8 4v5c0 5-3.4 8.2-8 9-4.6-.8-8-4-8-9V7l8-4zM9 12l2 2 4-4" />,
   },
   {
     label: "Inventory",
@@ -358,6 +368,7 @@ function AppLayout() {
                 /></CapabilityRoute>
               }
             />
+            <Route path="/privacy" element={<FarmPrivacyPage repository={farmSharingRepository} />} />
             <Route path="*" element={<Navigate to="/fields" replace />} />
             </Routes>
             </Suspense>
@@ -913,11 +924,13 @@ function MobileNavigation() {
 }
 
 function LoginPage() {
-  const { phase, signIn } = useAuth();
+  const { phase, signIn, requestPasswordReset } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [forgotPassword, setForgotPassword] = useState(false);
+  const [resetResponse, setResetResponse] = useState<string | null>(null);
   const signInLock = useRef(createSubmitLock());
 
   if (phase === "restoring")
@@ -977,6 +990,24 @@ function LoginPage() {
     }
   }
 
+  async function handlePasswordReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!passwordEmailDeliveryEnabled) return;
+    if (!signInLock.current.acquire()) return;
+    try {
+      setSubmitting(true);
+      setError(null);
+      const form = new FormData(event.currentTarget);
+      setResetResponse(await requestPasswordReset(String(form.get('email') ?? '')));
+    } catch {
+      // Account existence and delivery details are intentionally never shown.
+      setResetResponse(passwordResetPublicResponse);
+    } finally {
+      setSubmitting(false);
+      signInLock.current.release();
+    }
+  }
+
   return (
     <main className="login-page">
       <section className="login-panel" aria-labelledby="login-title">
@@ -989,7 +1020,15 @@ function LoginPage() {
           </h1>
           <p>Farm records made clear.</p>
         </div>
-        <form className="login-card" onSubmit={handleSubmit}>
+        {forgotPassword ? <form className="login-card" onSubmit={handlePasswordReset}>
+          <h2>Reset your password</h2>
+          <p>Enter your email and we’ll send a link to choose a new password.</p>
+          <label htmlFor="reset-email">Email address</label>
+          <input id="reset-email" name="email" type="email" autoComplete="email" placeholder="you@farm.com" required disabled={submitting || Boolean(resetResponse)} />
+          {resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}
+          <button className="primary-action" type="submit" disabled={submitting || Boolean(resetResponse)}>{submitting ? 'Sending…' : 'Send reset link'}</button>
+          <button className="auth-link" type="button" onClick={() => { setForgotPassword(false); setError(null); setResetResponse(null) }} disabled={submitting}>Back to sign in</button>
+        </form> : <form className="login-card" onSubmit={handleSubmit}>
           <label htmlFor="email">Email address</label>
           <input
             id="email"
@@ -997,6 +1036,7 @@ function LoginPage() {
             type="email"
             autoComplete="email"
             placeholder="you@farm.com"
+            required
             disabled={submitting}
           />
           <label htmlFor="password">Password</label>
@@ -1006,6 +1046,7 @@ function LoginPage() {
             type="password"
             autoComplete="current-password"
             placeholder="Enter your password"
+            required
             disabled={submitting}
           />
           {error && (
@@ -1026,7 +1067,10 @@ function LoginPage() {
           >
             {submitting ? "Signing in…" : "Sign in"}
           </button>
-        </form>
+          {passwordEmailDeliveryEnabled
+            ? <button className="auth-link" type="button" onClick={() => { setForgotPassword(true); setError(null) }} disabled={submitting}>Forgot password?</button>
+            : <p className="auth-help">Need password help? Contact your Crop RX representative.</p>}
+        </form>}
         <p className="slogan">INNOVATIVE SOLUTIONS. UNMATCHED RESULTS.</p>
         <p className="byline">by Crop RX Solutions</p>
       </section>
@@ -1034,10 +1078,72 @@ function LoginPage() {
   );
 }
 
+function UpdatePasswordPage() {
+  const { passwordRecoveryPhase, updatePassword, cancelPasswordRecovery } = useAuth();
+  const navigate = useNavigate();
+  const [password, setPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const updateLock = useRef(createSubmitLock());
+  const validationMessage = passwordValidationMessage(password, confirmation);
+  const strength = passwordStrength(password);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (validationMessage || !updateLock.current.acquire()) return;
+    try {
+      setSubmitting(true);
+      setError(null);
+      await updatePassword(password);
+    } catch (caught) {
+      setError(farmerError(caught, 'update your password'));
+    } finally {
+      setSubmitting(false);
+      updateLock.current.release();
+    }
+  }
+
+  async function cancelRecovery() {
+    if (!updateLock.current.acquire()) return;
+    try {
+      setSubmitting(true);
+      setError(null);
+      await cancelPasswordRecovery();
+      navigate('/login', { replace: true });
+    } catch (caught) {
+      setError(farmerError(caught, 'cancel password recovery'));
+      setSubmitting(false);
+      updateLock.current.release();
+    }
+  }
+
+  return <main className="login-page"><section className="login-panel" aria-labelledby="update-password-title">
+    <div className="login-brand"><div className="rx-mark" aria-hidden="true">℞</div><h1 id="update-password-title">Choose a new password</h1><p>Keep your Farm Rx account secure.</p></div>
+    {passwordRecoveryPhase === 'checking' && <p className="opening-farm" role="status">Checking your password-reset link…</p>}
+    {passwordRecoveryPhase === 'invalid' && <div className="login-card"><p className="auth-error" role="alert">This password-reset link is invalid, expired, already used, or was interrupted when the page closed or refreshed. Request a fresh link or contact your Crop RX representative.</p><Link className="primary-action" to="/login">Request a new link</Link></div>}
+    {passwordRecoveryPhase === 'complete' && <div className="login-card"><p className="reset-confirmation" role="status">Your password has been updated. Sign in with your new password.</p><Link className="primary-action" to="/login">Go to sign in</Link></div>}
+    {passwordRecoveryPhase === 'complete_with_warning' && <div className="login-card"><p className="auth-error" role="alert">Your password was updated, but this device could not completely clear the reset session. Close every Farm Rx tab, reopen the app, and sign in with your new password. If that still fails, contact your Farm Rx administrator.</p></div>}
+    {passwordRecoveryPhase === 'ready' && <form className="login-card" onSubmit={submit}>
+      <p className="auth-help" role="note">For your security, keep this page open until your password is updated. Closing or refreshing it invalidates this reset session.</p>
+      <label htmlFor="new-password">New password</label>
+      <input id="new-password" name="password" type="password" autoComplete="new-password" minLength={minimumPasswordLength} required value={password} onChange={(event) => setPassword(event.target.value)} disabled={submitting} />
+      <p className={`password-strength ${strength}`} aria-live="polite">{strength === 'too_short' ? `Use at least ${minimumPasswordLength} characters.` : strength === 'strong' ? 'Strong password.' : 'Good length. Add a mix of letters, numbers, or symbols to make it stronger.'}</p>
+      <label htmlFor="confirm-password">Confirm new password</label>
+      <input id="confirm-password" name="confirmation" type="password" autoComplete="new-password" minLength={minimumPasswordLength} required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} disabled={submitting} />
+      {validationMessage && confirmation && <p className="auth-error" role="alert">{validationMessage}</p>}
+      {error && <p className="auth-error" role="alert">{error}</p>}
+      <button className="primary-action" type="submit" disabled={submitting || Boolean(validationMessage)}>{submitting ? 'Updating…' : 'Update password'}</button>
+      <button className="auth-link" type="button" disabled={submitting} onClick={() => { void cancelRecovery() }}>Cancel and return to sign in</button>
+    </form>}
+  </section></main>
+}
+
 export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/update-password" element={<UpdatePasswordPage />} />
       <Route
         path="/*"
         element={

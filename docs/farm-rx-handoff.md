@@ -7,7 +7,10 @@
 - **Parent brand:** Crop RX Solutions (Robinson, IL)
 - **Audience:** Corn / soybean / wheat growers in southeastern Illinois & western Indiana
 - **Owner:** Mason Wells
-- **Status:** Greenfield build. Nothing exists yet except the CRX Manager codebase to port from.
+- **Status:** Production PWA deployed at **https://farm-rx.vercel.app**. Fields, Grain, and the broader farm workflow exist; current release work is customer-zero trust, onboarding recovery, device proof, and field feedback.
+- **Provisioning guard:** the owner-provisioning CLI takes no customer-email command argument.
+  Use the documented create flow or resend mode and enter the email only at its prompt; never put a
+  customer email in terminal history or a copied command.
 
 ---
 

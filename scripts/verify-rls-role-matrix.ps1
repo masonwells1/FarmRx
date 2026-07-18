@@ -58,6 +58,7 @@ values ('20000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-00000000
 set role authenticated;
 
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000002',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','10000000-0000-4000-8000-000000000002','x-farm-rx-access-epochs',jsonb_build_object('20000000-0000-4000-8000-000000000001',1)::text)::text,false);
 do $$ begin
   if not public.can_access_farm('20000000-0000-4000-8000-000000000001') then raise exception 'manager access failed'; end if;
   if not public.can_edit_farm('20000000-0000-4000-8000-000000000001') then raise exception 'manager edit failed'; end if;
@@ -66,7 +67,25 @@ do $$ begin
   if (select count(*) from public.farms) <> 1 then raise exception 'manager visible farm count failed'; end if;
 end $$;
 
+update public.farms set share_with_rep=true where id='20000000-0000-4000-8000-000000000001';
+do $$ begin
+  if not (select share_with_rep from public.farms where id='20000000-0000-4000-8000-000000000001') then raise exception 'manager could not turn sharing on'; end if;
+end $$;
+reset role;
+do $$ begin if (select access_epoch from public.farm_access_epochs where farm_id='20000000-0000-4000-8000-000000000001' and user_id='10000000-0000-4000-8000-000000000005') <> 2 then raise exception 'sharing on did not bump the named rep epoch'; end if; end $$;
+set role authenticated;
+select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000002',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','10000000-0000-4000-8000-000000000002','x-farm-rx-access-epochs',jsonb_build_object('20000000-0000-4000-8000-000000000001',1)::text)::text,false);
+update public.farms set share_with_rep=false where id='20000000-0000-4000-8000-000000000001';
+do $$ begin
+  if (select share_with_rep from public.farms where id='20000000-0000-4000-8000-000000000001') then raise exception 'manager could not turn sharing off'; end if;
+end $$;
+reset role;
+do $$ begin if (select access_epoch from public.farm_access_epochs where farm_id='20000000-0000-4000-8000-000000000001' and user_id='10000000-0000-4000-8000-000000000005') <> 3 then raise exception 'sharing off did not bump the named rep epoch'; end if; end $$;
+set role authenticated;
+
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000003',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','10000000-0000-4000-8000-000000000003','x-farm-rx-access-epochs',jsonb_build_object('20000000-0000-4000-8000-000000000001',1)::text)::text,false);
 do $$ begin
   if not public.can_access_farm('20000000-0000-4000-8000-000000000001') then raise exception 'worker access failed'; end if;
   if not public.can_edit_farm('20000000-0000-4000-8000-000000000001') then raise exception 'worker edit failed'; end if;
@@ -74,14 +93,25 @@ do $$ begin
   if public.can_read_private_financials('20000000-0000-4000-8000-000000000001') then raise exception 'worker financial access leaked'; end if;
   if (select count(*) from public.farms) <> 1 then raise exception 'worker visible farm count failed'; end if;
 end $$;
+do $$ declare changed integer; begin
+  update public.farms set share_with_rep=true where id='20000000-0000-4000-8000-000000000001';
+  get diagnostics changed = row_count;
+  if changed <> 0 then raise exception 'worker changed farm sharing'; end if;
+end $$;
 
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000004',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','10000000-0000-4000-8000-000000000004','x-farm-rx-access-epochs',jsonb_build_object('20000000-0000-4000-8000-000000000001',1)::text)::text,false);
 do $$ begin
   if not public.can_access_farm('20000000-0000-4000-8000-000000000001') then raise exception 'read-only access failed'; end if;
   if public.can_edit_farm('20000000-0000-4000-8000-000000000001') then raise exception 'read-only edit leaked'; end if;
   if public.can_manage_farm('20000000-0000-4000-8000-000000000001') then raise exception 'read-only manage leaked'; end if;
   if public.can_read_private_financials('20000000-0000-4000-8000-000000000001') then raise exception 'read-only financial access leaked'; end if;
   if (select count(*) from public.farms) <> 1 then raise exception 'read-only visible farm count failed'; end if;
+end $$;
+do $$ declare changed integer; begin
+  update public.farms set share_with_rep=true where id='20000000-0000-4000-8000-000000000001';
+  get diagnostics changed = row_count;
+  if changed <> 0 then raise exception 'read-only member changed farm sharing'; end if;
 end $$;
 
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000005',false);
@@ -92,17 +122,28 @@ do $$ begin
 end $$;
 
 reset role;
+set role authenticated;
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);
 select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','10000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('20000000-0000-4000-8000-000000000001',1)::text)::text,false);
 update public.farms set share_with_rep=true where id='20000000-0000-4000-8000-000000000001';
+reset role;
+do $$ begin
+  if (select access_epoch from public.farm_access_epochs where farm_id='20000000-0000-4000-8000-000000000001' and user_id='10000000-0000-4000-8000-000000000005') <> 4 then raise exception 'owner sharing change did not bump the named rep epoch'; end if;
+end $$;
 set role authenticated;
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000005',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','10000000-0000-4000-8000-000000000005','x-farm-rx-access-epochs',jsonb_build_object('20000000-0000-4000-8000-000000000001',4)::text)::text,false);
 do $$ begin
   if not public.can_access_farm('20000000-0000-4000-8000-000000000001') then raise exception 'explicit rep access failed'; end if;
   if public.can_edit_farm('20000000-0000-4000-8000-000000000001') then raise exception 'rep edit leaked'; end if;
   if public.can_manage_farm('20000000-0000-4000-8000-000000000001') then raise exception 'rep manage leaked'; end if;
   if not public.can_read_private_financials('20000000-0000-4000-8000-000000000001') then raise exception 'rep financial access failed'; end if;
   if (select count(*) from public.farms) <> 1 then raise exception 'rep visible farm count failed'; end if;
+end $$;
+do $$ declare changed integer; begin
+  update public.farms set share_with_rep=false where id='20000000-0000-4000-8000-000000000001';
+  get diagnostics changed = row_count;
+  if changed <> 0 then raise exception 'rep changed farm sharing'; end if;
 end $$;
 
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000006',false);
