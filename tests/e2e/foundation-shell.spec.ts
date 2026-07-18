@@ -117,11 +117,12 @@ async function fulfillJson(route: Route, body: unknown) {
   await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(body) })
 }
 
-async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1, profile = ownerProfile) {
+async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1, profile = ownerProfile, activeUser: string | (() => string) = userId) {
   const unexpected: string[] = []
   await page.route('https://*.supabase.co/**', async (route) => {
     const url = new URL(route.request().url())
     const rest = url.pathname.match(/^\/rest\/v1\/([^/]+)$/)?.[1]
+    const activeUserId = typeof activeUser === 'function' ? activeUser() : activeUser
     const rejectShape = async (label: string) => { unexpected.push(`INVALID ${label}`); await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ message: `Invalid mocked ${label}` }) }) }
     if (rest === 'farms') {
       if (route.request().method() !== 'GET') { await rejectShape('farms method'); return }
@@ -129,8 +130,8 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
       else { if (!exactQuery(url, { select: '*', order: 'name.asc,id.asc' })) { await rejectShape('farms list query'); return }; await fulfillJson(route, accessible.map((farm) => farmRow(farm, profile.namedRep))) }
       return
     }
-    if (rest === 'farm_memberships') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,user_id,role,status,can_view_financials', farm_id: `eq.${farm.id}`, user_id: `eq.${userId}` })) { await rejectShape('farm_memberships query'); return }; await fulfillJson(route, membershipRow(farm, userId, profile)); return }
-    if (rest === 'farm_rep_access') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,rep_user_id,enabled,revoked_at', farm_id: `eq.${farm.id}`, rep_user_id: `eq.${userId}` })) { await rejectShape('farm_rep_access query'); return }; await fulfillJson(route, profile.namedRep ? { farm_id: farm.id, rep_user_id: userId, enabled: true, revoked_at: null } : null); return }
+    if (rest === 'farm_memberships') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,user_id,role,status,can_view_financials', farm_id: `eq.${farm.id}`, user_id: `eq.${activeUserId}` })) { await rejectShape('farm_memberships query'); return }; await fulfillJson(route, membershipRow(farm, activeUserId, profile)); return }
+    if (rest === 'farm_rep_access') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,rep_user_id,enabled,revoked_at', farm_id: `eq.${farm.id}`, rep_user_id: `eq.${activeUserId}` })) { await rejectShape('farm_rep_access query'); return }; await fulfillJson(route, profile.namedRep ? { farm_id: farm.id, rep_user_id: activeUserId, enabled: true, revoked_at: null } : null); return }
     if (rest && Object.hasOwn(fieldsReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, fieldsReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, rowsFor(rest, farm)); return }
     if (rest === 'notifications') { if (route.request().method() !== 'GET' || !exactQuery(url, { select: '*', order: 'created_at.desc,id.desc' })) { await rejectShape('notifications query'); return }; await fulfillJson(route, notifications); return }
     if (url.pathname === '/rest/v1/rpc/get_current_farm_access_epochs') {
@@ -154,7 +155,7 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
     if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (profile.memberRole === null || profile.memberRole === 'read_only' || route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || !accessible.some((farm) => farm.id === value.p_farm_id)) { await rejectShape('generate_due_service_tasks body'); return }; await fulfillJson(route, { created_count: 0 }); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_program_items') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (profile.memberRole === null || profile.memberRole === 'read_only' || route.request().method() !== 'POST' || !value || Object.keys(value).sort().join('|') !== 'p_farm_id|p_local_date|p_operation_id' || !accessible.some((farm) => farm.id === value.p_farm_id) || typeof value.p_operation_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_operation_id) || typeof value.p_local_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.p_local_date)) { await rejectShape('generate_due_program_items body'); return }; await fulfillJson(route, { generated_count: 0 }); return }
-    if (url.pathname === '/auth/v1/user') { await fulfillJson(route, session().user); return }
+    if (url.pathname === '/auth/v1/user') { await fulfillJson(route, session(activeUserId).user); return }
     if (url.pathname === '/auth/v1/logout') { await fulfillJson(route, {}); return }
     if (emptyUnknownReads && rest && Object.hasOwn(grainReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, grainReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, grainRows(rest, farm)); return }
     if (emptyUnknownReads && rest && Object.hasOwn(profitabilityReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, profitabilityReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, []); return }
@@ -179,6 +180,177 @@ test('built login route is usable and does not require a live data request', asy
   await expect(page.getByLabel('Password')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
   expect(liveRequests).toEqual([])
+})
+
+test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks are unavailable', async ({ page, context }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'One real desktop browser context proves the shared two-tab fallback path.')
+
+  const authSessionKey = `farm-rx-auth:${projectRef}`
+  const authIntentKey = `farm-rx-auth-intent:v1:${projectRef}`
+  const authLeaseKey = `${authIntentKey}:lease`
+  await context.addInitScript(({ intentKey, leaseKey, sessionKey }) => {
+    type LeaseAudit = { type: 'claim' | 'remove' | 'foreign-claim' | 'foreign-remove' | 'intent' | 'session-set' | 'session-remove'; tabId: string; token: string | null; value?: string }
+    const currentTabId = window.name === 'farm-rx-fallback-test-tab' ? 'older-tab' : 'newer-tab'
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined })
+    const audit: LeaseAudit[] = []
+    Object.defineProperty(window, '__farmRxFallbackLeaseAudit', { configurable: true, value: audit })
+    Object.defineProperty(window, '__farmRxHideForeignLeaseOnce', { configurable: true, writable: true, value: false })
+    const token = (serialized: string | null) => {
+      try { const value = JSON.parse(serialized ?? 'null') as { token?: unknown } | null; return typeof value?.token === 'string' ? value.token : null } catch { return null }
+    }
+    const originalGetItem = Storage.prototype.getItem
+    const originalSetItem = Storage.prototype.setItem
+    const originalRemoveItem = Storage.prototype.removeItem
+    Storage.prototype.getItem = function getItem(key: string) {
+      const value = originalGetItem.call(this, key)
+      const harness = window as Window & { __farmRxHideForeignLeaseOnce: boolean }
+      if (this === localStorage && key === leaseKey && value !== null && harness.__farmRxHideForeignLeaseOnce) {
+        // Model the exact non-atomic localStorage race: tab B observed no lease
+        // just before tab A's claim became visible, so B also attempts a claim.
+        harness.__farmRxHideForeignLeaseOnce = false
+        return null
+      }
+      return value
+    }
+    Storage.prototype.setItem = function setItem(key: string, value: string) {
+      originalSetItem.call(this, key, value)
+      if (this !== localStorage) return
+      if (key === leaseKey) {
+        const claimedToken = token(value)
+        audit.push({ type: 'claim', tabId: currentTabId, token: claimedToken })
+      }
+      if (key === intentKey) audit.push({ type: 'intent', tabId: currentTabId, token: token(localStorage.getItem(leaseKey)), value })
+      if (key === sessionKey) audit.push({ type: 'session-set', tabId: currentTabId, token: token(localStorage.getItem(leaseKey)), value })
+    }
+    Storage.prototype.removeItem = function removeItem(key: string) {
+      const removedToken = this === localStorage && key === leaseKey ? token(localStorage.getItem(leaseKey)) : null
+      const removedSession = this === localStorage && key === sessionKey ? originalGetItem.call(this, key) : null
+      originalRemoveItem.call(this, key)
+      if (this === localStorage && key === leaseKey) audit.push({ type: 'remove', tabId: currentTabId, token: removedToken })
+      if (this === localStorage && key === sessionKey) audit.push({ type: 'session-remove', tabId: currentTabId, token: token(localStorage.getItem(leaseKey)), value: removedSession ?? undefined })
+    }
+    window.addEventListener('storage', (event) => {
+      if (event.key !== leaseKey) return
+      audit.push({ type: event.newValue === null ? 'foreign-remove' : 'foreign-claim', tabId: currentTabId, token: token(event.newValue) })
+    })
+  }, { intentKey: authIntentKey, leaseKey: authLeaseKey, sessionKey: authSessionKey })
+
+  let authoritativeUserId = userId
+  const newerUnexpected = await mockSupabase(page, [farms[0]], [], false, 1, ownerProfile, () => authoritativeUserId)
+  await page.goto('/login')
+  const popupOpened = context.waitForEvent('page')
+  await page.evaluate(() => {
+    const popup = window.open('/login?fallback-tab=older', 'farm-rx-fallback-test-tab')
+    if (!popup) throw new Error('The fallback test tab could not be opened.')
+    ;(window as Window & { __farmRxFallbackTestTab?: Window }).__farmRxFallbackTestTab = popup
+  })
+  const olderTab = await popupOpened
+  const olderUnexpected = await mockSupabase(olderTab, [farms[0]], [], false, 1, ownerProfile, () => authoritativeUserId)
+  await expect(olderTab.getByRole('button', { name: 'Sign in' })).toBeVisible()
+  const olderSession = session(userBId)
+  const newerSession = session(userId)
+  let olderRequestStarted = false
+  let newerRequestStarted = false
+  let releaseOlderRequest = () => {}
+  let releaseNewerRequest = () => {}
+  const olderRequestGate = new Promise<void>((resolve) => { releaseOlderRequest = resolve })
+  const newerRequestGate = new Promise<void>((resolve) => { releaseNewerRequest = resolve })
+
+  await olderTab.route('https://*.supabase.co/auth/v1/token**', async (route) => {
+    olderRequestStarted = true
+    await olderRequestGate
+    await fulfillJson(route, olderSession)
+  })
+  await page.route('https://*.supabase.co/auth/v1/token**', async (route) => {
+    newerRequestStarted = true
+    await newerRequestGate
+    await fulfillJson(route, newerSession)
+  })
+
+  expect(await Promise.all([olderTab.evaluate(() => navigator.locks), page.evaluate(() => navigator.locks)])).toEqual([undefined, undefined])
+
+  await olderTab.getByLabel('Email address').fill('other-farmer@example.test')
+  await olderTab.getByLabel('Password').fill('older-password')
+  await page.getByLabel('Email address').fill('farmer@example.test')
+  await page.getByLabel('Password').fill('newer-password')
+
+  // Both real tabs are same-origin, so the opener can dispatch both form
+  // submissions in one JavaScript task. Tab B's one-time stale read above
+  // injects localStorage's real non-atomic race, forcing both module realms to
+  // claim before either 30-49ms arbitration wait can finish.
+  await olderTab.evaluate(() => { (window as Window & { __farmRxHideForeignLeaseOnce: boolean }).__farmRxHideForeignLeaseOnce = true })
+  await page.evaluate(() => {
+    const popup = (window as Window & { __farmRxFallbackTestTab?: Window }).__farmRxFallbackTestTab
+    if (!popup) throw new Error('The fallback test tab is unavailable.')
+    ;(document.querySelector('form') as HTMLFormElement).requestSubmit()
+    ;(popup.document.querySelector('form') as HTMLFormElement).requestSubmit()
+  })
+  await expect.poll(() => [olderRequestStarted, newerRequestStarted], { timeout: 10_000 }).toEqual([true, true])
+  const authoritativePending = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null') as { phase?: string; email?: string } | null, authIntentKey)
+  expect(authoritativePending?.phase).toBe('pending')
+  expect(['farmer@example.test', 'other-farmer@example.test']).toContain(authoritativePending?.email)
+  const newerRequestIsAuthoritative = authoritativePending?.email === 'farmer@example.test'
+  authoritativeUserId = newerRequestIsAuthoritative ? userId : userBId
+  const authoritativeSession = newerRequestIsAuthoritative ? newerSession : olderSession
+  const supersededSession = newerRequestIsAuthoritative ? olderSession : newerSession
+  const supersededTab = newerRequestIsAuthoritative ? olderTab : page
+  const authoritativeTab = newerRequestIsAuthoritative ? page : olderTab
+  const releaseSupersededRequest = newerRequestIsAuthoritative ? releaseOlderRequest : releaseNewerRequest
+  const releaseAuthoritativeRequest = newerRequestIsAuthoritative ? releaseNewerRequest : releaseOlderRequest
+  expect(await page.evaluate((key) => localStorage.getItem(key), authLeaseKey)).toBeNull()
+
+  type LeaseAudit = { type: 'claim' | 'remove' | 'foreign-claim' | 'foreign-remove' | 'intent' | 'session-set' | 'session-remove'; tabId: string; token: string | null; value?: string }
+  const readAudits = () => Promise.all([olderTab, page].map((tab) => tab.evaluate(() => (window as Window & { __farmRxFallbackLeaseAudit: LeaseAudit[] }).__farmRxFallbackLeaseAudit)))
+  const acquisitionAudits = await readAudits()
+  const lostClaimWasReclaimed = acquisitionAudits.some((entries) => entries.some((entry, claimIndex) => {
+    if (entry.type !== 'claim' || !entry.token) return false
+    const overwrittenAt = entries.findIndex((candidate, index) => index > claimIndex && candidate.type === 'foreign-claim' && candidate.token !== entry.token)
+    return overwrittenAt > claimIndex && entries.some((candidate, index) => index > overwrittenAt && candidate.type === 'claim' && candidate.token === entry.token)
+  }))
+  expect(lostClaimWasReclaimed, JSON.stringify(acquisitionAudits)).toBe(true)
+
+  releaseSupersededRequest()
+  await expect(supersededTab.getByRole('alert')).toHaveText('Farm Rx could not sign you in right now. Please try again.')
+  await expect(supersededTab).toHaveURL(/\/login(?:\?.*)?$/)
+  await expect(authoritativeTab.getByRole('button', { name: 'Signing in…' })).toBeDisabled()
+  const protectedPendingState = await page.evaluate(({ sessionKey, intentKey }) => ({
+    session: JSON.parse(localStorage.getItem(sessionKey) ?? 'null') as { user?: { id?: string }; access_token?: string } | null,
+    intent: JSON.parse(localStorage.getItem(intentKey) ?? 'null') as { phase?: string; email?: string },
+  }), { sessionKey: authSessionKey, intentKey: authIntentKey })
+  expect(protectedPendingState.intent).toMatchObject({ phase: 'pending', email: authoritativePending?.email })
+  expect(protectedPendingState.intent.phase).not.toBe('accepted')
+  expect(protectedPendingState.session?.user?.id).not.toBe(supersededSession.user.id)
+  expect(protectedPendingState.session?.access_token).not.toBe(supersededSession.access_token)
+  const supersededSessionWasPublished = (await readAudits()).flat().filter((entry) => entry.type === 'session-set').some((entry) => {
+    const published = JSON.parse(entry.value ?? 'null') as { user?: { id?: string }; access_token?: string } | null
+    return published?.user?.id === supersededSession.user.id || published?.access_token === supersededSession.access_token
+  })
+  expect(supersededSessionWasPublished).toBe(false)
+  expect(await page.evaluate((key) => localStorage.getItem(key), authLeaseKey)).toBeNull()
+
+  releaseAuthoritativeRequest()
+  await Promise.all([
+    expect(page.getByText('North Forty')).toBeVisible(),
+    expect(olderTab.getByText('North Forty')).toBeVisible(),
+  ])
+  const finalState = await page.evaluate(({ sessionKey, intentKey, leaseKey }) => ({
+    session: JSON.parse(localStorage.getItem(sessionKey) ?? 'null') as { user?: { id?: string }; access_token?: string },
+    intent: JSON.parse(localStorage.getItem(intentKey) ?? 'null') as { phase?: string; userId?: string; sessionLineage?: string },
+    lease: localStorage.getItem(leaseKey),
+  }), { sessionKey: authSessionKey, intentKey: authIntentKey, leaseKey: authLeaseKey })
+  expect(finalState.session.user?.id).toBe(authoritativeUserId)
+  expect(finalState.session.access_token).toBe(authoritativeSession.access_token)
+  expect(finalState.intent).toMatchObject({ phase: 'accepted', userId: authoritativeUserId, sessionLineage: `session-${authoritativeUserId}` })
+  expect(finalState.lease).toBeNull()
+
+  const intentWrites = (await readAudits()).flat().filter((entry) => entry.type === 'intent')
+  const tokenOwners = new Map((await readAudits()).flat().filter((entry) => entry.type === 'claim' && entry.token).map((entry) => [entry.token!, entry.tabId]))
+  expect(intentWrites.length).toBeGreaterThanOrEqual(3)
+  expect(intentWrites.every((entry) => entry.token !== null && tokenOwners.get(entry.token) === entry.tabId)).toBe(true)
+  expect(intentWrites.some((entry) => (JSON.parse(entry.value!) as { phase?: string }).phase === 'accepted')).toBe(true)
+  expect(olderUnexpected).toEqual([])
+  expect(newerUnexpected).toEqual([])
+  await olderTab.close()
 })
 
 test('strict Supabase mocks reject unknown tables, extra parameters, wrong methods, and wrong RPC bodies', async ({ page }) => {

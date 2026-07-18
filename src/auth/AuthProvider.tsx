@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabaseClient'
 import { supabaseConfig } from '../lib/supabaseConfig'
 import { coordinatedDeviceTransaction } from '../data/queueTransaction'
 import { clearFarmAccess, isDefiniteTransportFailure, restoreOfflineFarmUserId } from './farmContext'
+import { consumeAuthSessionRemovalTicket, type AuthSessionRemovalTicket } from './authSessionStorage'
 
 export type AuthPhase = 'restoring' | 'signed_out' | 'signed_in'
 
@@ -277,12 +278,16 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
       setOfflineUser({ id: userId, app_metadata: {}, user_metadata: {}, aud: 'authenticated', created_at: '' } as User)
       setPhase('signed_in')
     }
-    const applySignedOutFence = async () => {
+    const applySignedOutFence = async (removalTicket: AuthSessionRemovalTicket | null = null) => {
       await d.coordinateAuthState(async (verify) => {
         verify()
         const coherent = capturePersistedAuthRollbackState(d.storage)
         const intent = readPersistedAuthIntent(d.storage, d.now())
-        if (coherent && intent?.phase === 'accepted') {
+        const authorizedLocalRemoval = removalTicket !== null
+          && d.storage.getItem(authSessionKey) === removalTicket.sessionBytes
+          && d.storage.getItem(authIntentKey) === removalTicket.intentBytes
+        if (removalTicket && !authorizedLocalRemoval && intent?.phase !== 'accepted') return
+        if (coherent && intent?.phase === 'accepted' && !authorizedLocalRemoval) {
           blockAuthEventsUntilManualSignIn.current = false
           d.intentionalSignOut.set(false)
           eventVersion += 1
@@ -309,12 +314,53 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
         applySession(null)
       })
     }
+    const publishTrustedAuthEventSession = (nextSession: Session) => {
+      void d.coordinateAuthState(async (verify) => {
+        verify()
+        if (hasMalformedPersistedAuthIntent(d.storage) || blockAuthEventsUntilManualSignIn.current) {
+          throw new Error('Farm Rx rejected an untrusted sign-in event.')
+        }
+        const intentRecord = readPersistedAuthIntentRecord(d.storage)
+        const intent = readPersistedAuthIntent(d.storage, d.now())
+        if (intentRecord?.phase === 'pending' || intent?.phase === 'signed_out') {
+          throw new Error('Farm Rx rejected an auth event behind an active intent fence.')
+        }
+        const trustedSession = acceptedSession.current
+        if (trustedSession && nextSession.user.id !== trustedSession.user.id) {
+          throw new Error('Farm Rx rejected an auth event from another account.')
+        }
+        if (intent?.phase === 'accepted') {
+          if (!persistedAuthIntentMatches(d.storage, nextSession, d.now())) {
+            throw new Error('Farm Rx rejected an auth event from another session lineage.')
+          }
+        } else {
+          if (intentRecord !== null) throw new Error('Farm Rx rejected malformed auth intent state.')
+          const legacySession = readPersistedAuthSession(d.storage)
+          if (!legacySession || legacySession.user.id !== nextSession.user.id) {
+            throw new Error('Farm Rx rejected an auth event without trusted legacy state.')
+          }
+        }
+        persistTrustedAuthSession(d.storage, nextSession)
+        verify()
+        if (!persistedAuthSessionMatches(d.storage, nextSession)) {
+          throw new Error('Farm Rx could not preserve a trusted auth event.')
+        }
+        if (intent?.phase === 'accepted' && !persistedAuthIntentMatches(d.storage, nextSession, d.now())) {
+          throw new Error('Farm Rx auth intent changed while preserving a trusted event.')
+        }
+        blockAuthEventsUntilManualSignIn.current = false
+        d.intentionalSignOut.set(false)
+        eventVersion += 1
+        applySession(nextSession)
+      }).catch(() => { void applySignedOutFence() })
+    }
     if (initialIntentPhase === 'signed_out' || initialIntentMalformed) void applySignedOutFence()
     const { data: listener } = d.auth.onAuthStateChange((event, nextSession) => {
       if (event === 'SIGNED_OUT') {
-        if (signInInFlight.current) return
-        if (readPersistedAuthIntent(d.storage, d.now())?.phase === 'pending') return
-        void applySignedOutFence()
+        const removalTicket = consumeAuthSessionRemovalTicket(d.storage, supabaseConfig.projectRef)
+        if (signInInFlight.current && !removalTicket) return
+        if (readPersistedAuthIntent(d.storage, d.now())?.phase === 'pending' && !removalTicket) return
+        void applySignedOutFence(removalTicket)
         return
       }
       if (event === 'SIGNED_IN') {
@@ -331,6 +377,10 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
           d.intentionalSignOut.set(false)
           eventVersion += 1
           applySession(nextSession)
+          return
+        }
+        if (nextSession && intent?.phase === 'accepted' && persistedAuthIntentMatches(d.storage, nextSession, d.now())) {
+          publishTrustedAuthEventSession(nextSession)
           return
         }
         if (intentRecord?.phase === 'pending') {
@@ -382,8 +432,8 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
           void applySignedOutFence()
           return
         }
-        eventVersion += 1
-        applySession(nextSession)
+        if (nextSession) publishTrustedAuthEventSession(nextSession)
+        else void applySignedOutFence()
       }
     })
     const storageChanged = (event: StorageEvent) => {
@@ -525,7 +575,8 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
       const restoreOwnedPriorState = () => d.coordinateAuthState(async (verify) => {
         verify()
         if (!ownsPersistedIntent()) return false
-        if (priorSharedState) {
+        const priorSessionBytes = priorSharedState?.snapshot.entries.find(([key]) => key === `farm-rx-auth:${supabaseConfig.projectRef}`)?.[1]
+        if (priorSharedState && d.storage.getItem(`farm-rx-auth:${supabaseConfig.projectRef}`) === priorSessionBytes) {
           restorePersistedAuthSnapshot(d.storage, priorSharedState.snapshot)
           verify()
           if (!ownsPersistedIntent()) return false
