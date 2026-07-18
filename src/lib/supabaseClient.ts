@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { createAuthSessionStorage } from '../auth/authSessionStorage'
 import { farmAccessEpochRequestHeader } from '../auth/farmAccessEpoch'
 import { supabaseConfig } from './supabaseConfig'
 
@@ -18,6 +19,10 @@ const hostname = new URL(supabaseConfig.url).hostname
 if (hostname !== `${supabaseConfig.projectRef}.supabase.co`) {
   throw new Error('Farm Rx is not connected to its expected data service.')
 }
+
+const authStorage = typeof localStorage === 'undefined'
+  ? undefined
+  : createAuthSessionStorage(localStorage, supabaseConfig.projectRef)
 
 const client = createClient(
   supabaseConfig.url,
@@ -46,6 +51,7 @@ const client = createClient(
       autoRefreshToken: true,
       detectSessionInUrl: true,
       storageKey: `farm-rx-auth:${supabaseConfig.projectRef}`,
+      storage: authStorage,
     },
   },
 )

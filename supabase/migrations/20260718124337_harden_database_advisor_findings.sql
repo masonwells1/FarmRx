@@ -159,6 +159,9 @@ from public, anon, authenticated;
 
 -- Keep the UNIQUE constraint-backed index and remove only the redundant
 -- manually-created copy.
+set lock_timeout = '5s';
+set statement_timeout = '5min';
+
 drop index if exists public.firm_offers_id_farm_id_idx;
 
 -- Each index below is the minimum full B-tree left-prefix required to protect
@@ -234,3 +237,6 @@ create index if not exists scouting_notes_field_farm_idx on public.scouting_note
 create index if not exists scouting_photos_note_farm_idx on public.scouting_photos (note_id, farm_id);
 create index if not exists spray_window_states_farm_id_idx on public.spray_window_states (farm_id);
 create index if not exists spray_window_states_field_same_farm_idx on public.spray_window_states (field_id, farm_id);
+
+reset lock_timeout;
+reset statement_timeout;

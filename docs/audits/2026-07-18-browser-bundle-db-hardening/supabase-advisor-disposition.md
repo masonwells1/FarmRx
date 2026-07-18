@@ -70,4 +70,4 @@ After restoration, `verify-0043-disposable.ps1`, `verify-0042-disposable.ps1`, a
 
 ## Remaining release risk
 
-The migration creates 66 indexes in one transaction. Current FarmRx tables are very small, so the expected lock/build window is short. Before production apply, the release orchestrator should re-run advisors and inspect relation sizes. After apply, re-run both advisor classes and the RLS role matrix, then confirm the notification-to-push-delivery trigger on the live schema with a non-destructive catalog check or normal application event.
+The migration creates 66 indexes. Its index DDL uses a five-second `lock_timeout` and five-minute `statement_timeout`, then explicitly resets both settings, so a busy table fails the release instead of waiting indefinitely. Current FarmRx tables are very small, so the expected lock/build window is short. Before production apply, the release orchestrator should re-run advisors and inspect relation sizes. After apply, re-run both advisor classes and the RLS role matrix, then confirm the notification-to-push-delivery trigger on the live schema with a non-destructive catalog check or normal application event.

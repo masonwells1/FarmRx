@@ -188,8 +188,8 @@ test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks a
   const authSessionKey = `farm-rx-auth:${projectRef}`
   const authIntentKey = `farm-rx-auth-intent:v1:${projectRef}`
   const authLeaseKey = `${authIntentKey}:lease`
-  await context.addInitScript(({ intentKey, leaseKey }) => {
-    type LeaseAudit = { type: 'claim' | 'remove' | 'foreign-claim' | 'foreign-remove' | 'intent'; tabId: string; token: string | null; intent?: string }
+  await context.addInitScript(({ intentKey, leaseKey, sessionKey }) => {
+    type LeaseAudit = { type: 'claim' | 'remove' | 'foreign-claim' | 'foreign-remove' | 'intent' | 'session-set' | 'session-remove'; tabId: string; token: string | null; value?: string }
     const currentTabId = window.name === 'farm-rx-fallback-test-tab' ? 'older-tab' : 'newer-tab'
     Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined })
     const audit: LeaseAudit[] = []
@@ -219,18 +219,21 @@ test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks a
         const claimedToken = token(value)
         audit.push({ type: 'claim', tabId: currentTabId, token: claimedToken })
       }
-      if (key === intentKey) audit.push({ type: 'intent', tabId: currentTabId, token: token(localStorage.getItem(leaseKey)), intent: value })
+      if (key === intentKey) audit.push({ type: 'intent', tabId: currentTabId, token: token(localStorage.getItem(leaseKey)), value })
+      if (key === sessionKey) audit.push({ type: 'session-set', tabId: currentTabId, token: token(localStorage.getItem(leaseKey)), value })
     }
     Storage.prototype.removeItem = function removeItem(key: string) {
       const removedToken = this === localStorage && key === leaseKey ? token(localStorage.getItem(leaseKey)) : null
+      const removedSession = this === localStorage && key === sessionKey ? originalGetItem.call(this, key) : null
       originalRemoveItem.call(this, key)
       if (this === localStorage && key === leaseKey) audit.push({ type: 'remove', tabId: currentTabId, token: removedToken })
+      if (this === localStorage && key === sessionKey) audit.push({ type: 'session-remove', tabId: currentTabId, token: token(localStorage.getItem(leaseKey)), value: removedSession ?? undefined })
     }
     window.addEventListener('storage', (event) => {
       if (event.key !== leaseKey) return
       audit.push({ type: event.newValue === null ? 'foreign-remove' : 'foreign-claim', tabId: currentTabId, token: token(event.newValue) })
     })
-  }, { intentKey: authIntentKey, leaseKey: authLeaseKey })
+  }, { intentKey: authIntentKey, leaseKey: authLeaseKey, sessionKey: authSessionKey })
 
   let authoritativeUserId = userId
   const newerUnexpected = await mockSupabase(page, [farms[0]], [], false, 1, ownerProfile, () => authoritativeUserId)
@@ -289,13 +292,14 @@ test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks a
   const newerRequestIsAuthoritative = authoritativePending?.email === 'farmer@example.test'
   authoritativeUserId = newerRequestIsAuthoritative ? userId : userBId
   const authoritativeSession = newerRequestIsAuthoritative ? newerSession : olderSession
+  const supersededSession = newerRequestIsAuthoritative ? olderSession : newerSession
   const supersededTab = newerRequestIsAuthoritative ? olderTab : page
   const authoritativeTab = newerRequestIsAuthoritative ? page : olderTab
   const releaseSupersededRequest = newerRequestIsAuthoritative ? releaseOlderRequest : releaseNewerRequest
   const releaseAuthoritativeRequest = newerRequestIsAuthoritative ? releaseNewerRequest : releaseOlderRequest
   expect(await page.evaluate((key) => localStorage.getItem(key), authLeaseKey)).toBeNull()
 
-  type LeaseAudit = { type: 'claim' | 'remove' | 'foreign-claim' | 'foreign-remove' | 'intent'; tabId: string; token: string | null; intent?: string }
+  type LeaseAudit = { type: 'claim' | 'remove' | 'foreign-claim' | 'foreign-remove' | 'intent' | 'session-set' | 'session-remove'; tabId: string; token: string | null; value?: string }
   const readAudits = () => Promise.all([olderTab, page].map((tab) => tab.evaluate(() => (window as Window & { __farmRxFallbackLeaseAudit: LeaseAudit[] }).__farmRxFallbackLeaseAudit)))
   const acquisitionAudits = await readAudits()
   const lostClaimWasReclaimed = acquisitionAudits.some((entries) => entries.some((entry, claimIndex) => {
@@ -310,11 +314,18 @@ test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks a
   await expect(supersededTab).toHaveURL(/\/login(?:\?.*)?$/)
   await expect(authoritativeTab.getByRole('button', { name: 'Signing in…' })).toBeDisabled()
   const protectedPendingState = await page.evaluate(({ sessionKey, intentKey }) => ({
-    session: JSON.parse(localStorage.getItem(sessionKey) ?? 'null') as { user?: { id?: string } } | null,
+    session: JSON.parse(localStorage.getItem(sessionKey) ?? 'null') as { user?: { id?: string }; access_token?: string } | null,
     intent: JSON.parse(localStorage.getItem(intentKey) ?? 'null') as { phase?: string; email?: string },
   }), { sessionKey: authSessionKey, intentKey: authIntentKey })
   expect(protectedPendingState.intent).toMatchObject({ phase: 'pending', email: authoritativePending?.email })
   expect(protectedPendingState.intent.phase).not.toBe('accepted')
+  expect(protectedPendingState.session?.user?.id).not.toBe(supersededSession.user.id)
+  expect(protectedPendingState.session?.access_token).not.toBe(supersededSession.access_token)
+  const supersededSessionWasPublished = (await readAudits()).flat().filter((entry) => entry.type === 'session-set').some((entry) => {
+    const published = JSON.parse(entry.value ?? 'null') as { user?: { id?: string }; access_token?: string } | null
+    return published?.user?.id === supersededSession.user.id || published?.access_token === supersededSession.access_token
+  })
+  expect(supersededSessionWasPublished).toBe(false)
   expect(await page.evaluate((key) => localStorage.getItem(key), authLeaseKey)).toBeNull()
 
   releaseAuthoritativeRequest()
@@ -336,7 +347,7 @@ test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks a
   const tokenOwners = new Map((await readAudits()).flat().filter((entry) => entry.type === 'claim' && entry.token).map((entry) => [entry.token!, entry.tabId]))
   expect(intentWrites.length).toBeGreaterThanOrEqual(3)
   expect(intentWrites.every((entry) => entry.token !== null && tokenOwners.get(entry.token) === entry.tabId)).toBe(true)
-  expect(intentWrites.some((entry) => (JSON.parse(entry.intent!) as { phase?: string }).phase === 'accepted')).toBe(true)
+  expect(intentWrites.some((entry) => (JSON.parse(entry.value!) as { phase?: string }).phase === 'accepted')).toBe(true)
   expect(olderUnexpected).toEqual([])
   expect(newerUnexpected).toEqual([])
   await olderTab.close()
