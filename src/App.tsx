@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useEffect,
   useRef,
   useState,
@@ -22,18 +24,9 @@ import {
 import { FarmAccessProvider, useFarmAccess } from "./auth/FarmAccessContext";
 import { beginFarmReplayAuthorization, canAccessFarmModule, canEditFarmModule, canReplayFarmModule, createFarmAccessValidationGate, FarmAccessStorageUnsafeError, hasPendingFarmWork, loadFarmAccess, loadFarmAccessProfile, publishFarmReadyAuthorization, selectFarm, type FarmAccess, type FarmAppModule, type LoadedFarmAccessProfile } from "./auth/farmContext";
 import { RevokedFarmRecovery } from './components/RevokedFarmRecovery';
+import { LazyRouteErrorBoundary } from "./components/LazyRouteErrorBoundary";
 import { createSubmitLock } from "./lib/submitLock";
 import { RequireSession } from "./auth/RequireSession";
-import { FieldDetailPage, FieldFormPage, FieldsPage } from "./FieldsModule";
-import { GrainPage } from "./GrainModule";
-import { ProfitabilityPage } from "./ProfitabilityModule";
-import { InventoryPage } from "./InventoryModule";
-import { EquipmentPage, TasksPage } from "./EquipmentTasksModule";
-import { WeatherPage } from "./WeatherModule";
-import { FieldLogPage } from "./FieldLogModule";
-import { ScoutingPage } from "./ScoutingModule";
-import { HarvestPage } from "./HarvestModule";
-import { ProgramsPage } from "./ProgramsModule";
 import { NotificationsPage, NotificationBell } from "./NotificationsModule";
 import {
   equipmentTasksRepository,
@@ -70,6 +63,21 @@ import {
 import type { EntityType } from "./data/fields";
 import { getWorkspaceCacheNotices, subscribeWorkspaceCacheNotices } from "./data/workspaceCache";
 import { farmerError } from "./lib/farmerErrors";
+import { recoverLazyRoute } from "./lib/lazyRouteRecovery";
+
+const FieldDetailPage = lazy(() => recoverLazyRoute("field-detail", () => import("./FieldsModule")).then((module) => ({ default: module.FieldDetailPage })));
+const FieldFormPage = lazy(() => recoverLazyRoute("field-form", () => import("./FieldsModule")).then((module) => ({ default: module.FieldFormPage })));
+const FieldsPage = lazy(() => recoverLazyRoute("fields", () => import("./FieldsModule")).then((module) => ({ default: module.FieldsPage })));
+const GrainPage = lazy(() => recoverLazyRoute("grain", () => import("./GrainModule")).then((module) => ({ default: module.GrainPage })));
+const ProfitabilityPage = lazy(() => recoverLazyRoute("profitability", () => import("./ProfitabilityModule")).then((module) => ({ default: module.ProfitabilityPage })));
+const InventoryPage = lazy(() => recoverLazyRoute("inventory", () => import("./InventoryModule")).then((module) => ({ default: module.InventoryPage })));
+const EquipmentPage = lazy(() => recoverLazyRoute("equipment", () => import("./EquipmentTasksModule")).then((module) => ({ default: module.EquipmentPage })));
+const TasksPage = lazy(() => recoverLazyRoute("tasks", () => import("./EquipmentTasksModule")).then((module) => ({ default: module.TasksPage })));
+const WeatherPage = lazy(() => recoverLazyRoute("weather", () => import("./WeatherModule")).then((module) => ({ default: module.WeatherPage })));
+const FieldLogPage = lazy(() => recoverLazyRoute("field-log", () => import("./FieldLogModule")).then((module) => ({ default: module.FieldLogPage })));
+const ScoutingPage = lazy(() => recoverLazyRoute("scouting", () => import("./ScoutingModule")).then((module) => ({ default: module.ScoutingPage })));
+const HarvestPage = lazy(() => recoverLazyRoute("harvest", () => import("./HarvestModule")).then((module) => ({ default: module.HarvestPage })));
+const ProgramsPage = lazy(() => recoverLazyRoute("programs", () => import("./ProgramsModule")).then((module) => ({ default: module.ProgramsPage })));
 
 function NavGlyph({ d }: { d: string }) {
   return (
@@ -219,6 +227,7 @@ function AppLayout() {
   const { signOut, user } = useAuth();
   const { farms, activeFarm, profile, source, chooseFarm } = useFarmAccess();
   const navigate = useNavigate();
+  const location = useLocation();
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const signOutLock = useRef(createSubmitLock());
@@ -286,7 +295,9 @@ function AppLayout() {
         <OfflineDataNotice />
         <div className="content-area">
           <RevokedFarmRecovery userId={user?.id ?? null} />
-          <Routes>
+          <LazyRouteErrorBoundary key={location.pathname}>
+            <Suspense fallback={<p className="loading-state" role="status">Opening this page…</p>}>
+            <Routes>
             <Route path="/fields" element={<CapabilityRoute module="fields" lockWrites><FieldsPage /></CapabilityRoute>} />
             <Route path="/fields/new" element={<CapabilityRoute module="fields" editOnly><FieldFormPage /></CapabilityRoute>} />
             <Route path="/fields/:id" element={<CapabilityRoute module="fields" lockWrites><FieldDetailPage /></CapabilityRoute>} />
@@ -348,7 +359,9 @@ function AppLayout() {
               }
             />
             <Route path="*" element={<Navigate to="/fields" replace />} />
-          </Routes>
+            </Routes>
+            </Suspense>
+          </LazyRouteErrorBoundary>
         </div>
       </main>
       <MobileNavigation />

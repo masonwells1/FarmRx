@@ -3,6 +3,7 @@ $name = "farmrx-0042-$PID"
 $root = Split-Path -Parent $PSScriptRoot
 $provenanceMigrationName = '20260717023021_repair_service_log_meter_provenance.sql'
 $hardeningMigrationName = '20260717105500_harden_operational_write_boundaries.sql'
+$advisorMigrationName = '20260718124337_harden_database_advisor_findings.sql'
 $provenanceMigrationPath = Join-Path $root "supabase/migrations/$provenanceMigrationName"
 $hardeningMigrationPath = Join-Path $root "supabase/migrations/$hardeningMigrationName"
 $passed = $false
@@ -28,7 +29,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Disposable database bootstrap failed.' }
 
   Get-ChildItem (Join-Path $root 'supabase/migrations') -Filter '*.sql' |
-    Where-Object Name -NotIn @($provenanceMigrationName, $hardeningMigrationName) |
+    Where-Object Name -NotIn @($provenanceMigrationName, $hardeningMigrationName, $advisorMigrationName) |
     Sort-Object Name |
     ForEach-Object {
       (Get-Content -Raw $_.FullName) | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable
