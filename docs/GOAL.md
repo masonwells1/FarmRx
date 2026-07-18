@@ -1,6 +1,6 @@
 # STANDING GOAL — Build Farm Rx to first customer ship
 
-**Owner:** Mason Wells · **Started:** 2026-07-11 · **Status:** Phase 0 (setup) in progress
+**Owner:** Mason Wells · **Started:** 2026-07-11 · **Status:** Production-ready; first-customer handoff pending
 
 ## The goal
 Build Farm Rx (customer-facing farm management PWA by Crop RX Solutions) to the point where
@@ -10,6 +10,22 @@ That is the finish line for this goal; everything after gets reprioritized by th
 
 Later: CRX Manager connects to Farm Rx via API (bill pay, delivery visibility) — design for it,
 don't build it yet.
+
+## Current state (2026-07-18)
+- Production is live at `https://farm-rx.vercel.app` on Vercel, backed by the separate Farm Rx
+  Supabase project `agvsozfbstpekuqxpqjr`.
+- PR #4 completed the browser, bundle, and database hardening release and merged as
+  `3e7abe0a6e96ce5a092a4ce1630e407e55582e7c`; Vercel served that exact commit in production.
+- The full foundation gate passed, including 43 browser tests with one intentional phone-ship
+  skip. A production mobile-sized browser smoke reached `/login` with no console/page errors or
+  horizontal overflow; the manifest and service worker both returned HTTP 200.
+- Supabase migration `20260718124337_harden_database_advisor_findings.sql` is live and recorded.
+  Post-apply catalog proof found all 25 target policies optimized, no missing FK indexes, no
+  anonymous-executable SECURITY DEFINER functions, 48 reviewed authenticated functions, no
+  browser execution of the internal push trigger, and the redundant index removed.
+- The remaining finish line is operational, not engineering: select the first customers,
+  provision their accounts, and perform the real-phone handoff pass that Mason deferred on
+  2026-07-18. Use `docs/ship-checklist.md` as the runbook.
 
 ## How we work (decided 2026-07-11)
 - **Claude = orchestrator** — plans, delegates, reviews, verifies in browser, reports to Mason.
@@ -27,7 +43,7 @@ don't build it yet.
 WARNs only). Fields proven LIVE end-to-end in browser: real sign-in -> live list ->
 quick-add save through save_field_bundle RPC -> row + receipt confirmed in Postgres.**
 - [x] Phase 0a: project home, git, docs, .claude guardrails, taste-skill, design brief
-- [x] Phase 0a2: private GitHub repo github.com/masonwells1/FarmRx created + main pushed 2026-07-11
+- [x] Phase 0a2: GitHub repo github.com/masonwells1/FarmRx created + main pushed 2026-07-11
       (initial push approved by Mason; FUTURE pushes still require his OK — no auto-push)
 - [x] Phase 0b: CRX Manager engine analysis doc (`docs/crx-engines.md`, Sol) — done 2026-07-11, 30KB, real schemas + RLS warnings
 - [x] Phase 0c: app shell running in browser (Vite React TS PWA, brand tokens, login + nav, Terra) — verified 2026-07-11: build+tsc clean, login→Fields works, no console errors
