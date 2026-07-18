@@ -76,3 +76,29 @@ Copy this template below the last entry. Do not replace the template or modify a
 - **Remaining risk / next approval:**
 - **Canonical status:** link to docs/GOAL.md; do not redefine it here
 ```
+
+## SR-001 — Governance adversarial review chain accepted
+
+- **Date/time:** 2026-07-18T15:24:11-05:00 (`America/Chicago`)
+- **Actor/model/effort:** Sol orchestrator; fresh-context, read-only `gpt-5.6-sol` reviewers at `xhigh` effort
+- **Worktree/branch:** `C:\Users\mason\.codex\worktrees\farmrx-farmer-simplicity` / `codex/farmrx-2027-season-ready`
+- **Commit or state SHA:** `381306e2824619921f8eab1235158c9b482c188b`
+- **Parent/base SHA:** governance-chain base `7e19be18daa3b4d5d6228ad70ee245d2f37ee756` (`origin/main` at tranche start); reviewed commit parent `1b7f435b9bc672f027464365e2fb67f783f34c54`
+- **Authority used:** Documentation/governance-only local authority from SR-000 and [`../GOAL.md`](../GOAL.md). No push, pull request, merge, deployment, live service, migration/data, secret/auth/permission, customer, communication, or other outward authority was granted.
+- **Files/systems in scope:** The exact approved documentation allowlist for each commit in the review chain and this append-only `docs/season-readiness/LEDGER.md` correction. No code, schema, package, backend, browser, live system, external service, or `C:\FarmRx` mutation was in scope.
+- **Scenario steps / fixture-manifest hash:** Accepted scenario document and its 81-entry deterministic UUID manifest are pinned by Git blob `1109915956d976c1fd4a8f54ebaa982e4a4667e2` at the accepted SHA. All 81 UUIDs are valid and unique; both Cedar provider-shaped JSON blocks parse.
+- **Expected writes:** One append-only SR-001 ledger entry and one local documentation commit.
+- **Expected non-writes:** SR-000 and the ledger template remain byte-identical and in their original order. No scenario, goal, runbook, archive, application code, schema, package, backend, browser, live/external system, customer state, or evidence claim changes.
+- **Proof and exit codes:** Archive equality passed: `docs/archive/goals/2026-07-11-first-customer-ship.md` and `origin/main:docs/GOAL.md` both have Git blob `9ed0964b3207eba6576052cf0bb567e25e8babd1`. Every review-chain commit matched its exact approved documentation allowlist and passed `git diff --check` (exit `0`). The accepted packet retained 81 valid unique fixture UUIDs, two valid Cedar JSON blocks, working Markdown links, and clean placeholder/secret/route/authority checks. Focused regressions passed: weather service (9 coverage groups), `SupabaseGrainRepository`, and `grainRepair`.
+- **Browser/local DB evidence paths:** none. No deterministic season harness, disposable-backend proof, or browser proof exists yet.
+- **Review verdict/findings:**
+  - `92390fa498ab82d3ce3b21f3190c60cc8ac7c0d5` — **BLOCK:** deterministic placeholders + disposable-backend wording.
+  - `aa741a68cca6c4b4291e711c882a6f3abafbdcd3` — **BLOCK:** Cedar manual-copy gap + impossible 3-hour stale cache.
+  - `33a7a3eff8cab38d0808fad744d2391a7ca9cde6` — **BLOCK:** nonexistent Quick Record routes.
+  - `58976d6afb2155cf7a1c6f643897fef73bd0bf58` — **BLOCK:** Program commodity input, receipt reference, planting-date editor inventions.
+  - `1b7f435b9bc672f027464365e2fb67f783f34c54` — **BLOCK:** missing FirstEstimate step before Grain reconciliation.
+  - `381306e2824619921f8eab1235158c9b482c188b` — **PASS:** no findings; source-real deterministic governance accepted.
+- **Append-only correction to SR-000:** SR-000 named `Today` and `Quick Record`, but exact source has no such UI. Active source truth is direct existing module routes plus guided Fields/forms, role-shaped navigation, and recovery/offline/farm-access hardening, as corrected in [`../GOAL.md`](../GOAL.md) and [`WORKFLOWS-AND-SCENARIOS.md`](WORKFLOWS-AND-SCENARIOS.md). This correction does not rewrite history.
+- **External actions actually performed:** none. No live or external action was taken.
+- **Remaining risk / next approval:** The governance packet is accepted for beginning the deterministic harness tranche, but no season, backend, or browser proof exists yet. Custom SMTP remains unproven/unconfigured, and the physical iPhone/Safari and Android/Chrome customer-zero journeys remain unperformed. No outward action is authorized by this entry.
+- **Canonical status:** defer to [`docs/GOAL.md`](../GOAL.md); no canonical status claim is made here.
