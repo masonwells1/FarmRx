@@ -74,7 +74,7 @@ These are the only status definitions for this initiative. Other files may repor
 
 ### RELEASE CANDIDATE READY
 
-**RELEASE CANDIDATE READY** means local exact-SHA disposable, browser, foundation, and season proof has passed and a fresh-context, read-only Sol review has accepted that exact commit. It does not mean anything was pushed, merged, deployed, migrated, enabled, or used on a physical device or live service.
+**RELEASE CANDIDATE READY** means local exact-SHA disposable-backend, browser, foundation, and season proof has passed and a fresh-context, read-only Sol review has accepted that exact commit. It does not mean anything was pushed, merged, deployed, migrated, enabled, or used on a physical device or live service.
 
 ### COMPLETE
 
