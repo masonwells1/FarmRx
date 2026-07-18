@@ -1,61 +1,65 @@
 import assert from "node:assert/strict";
-import { createAuthSessionStorage } from "./authSessionStorage";
+import { consumeAuthSessionRemovalTicket, createAuthSessionStorage } from "./authSessionStorage";
 
 const projectRef = "storage-fence-test";
 const sessionKey = `farm-rx-auth:${projectRef}`;
 const intentKey = `farm-rx-auth-intent:v1:${projectRef}`;
 const values = new Map<string, string>();
+let sessionMutationCalls = 0;
 const target = {
   getItem: (key: string) => values.get(key) ?? null,
-  setItem: (key: string, value: string) => { values.set(key, value); },
-  removeItem: (key: string) => { values.delete(key); },
+  setItem: (key: string, value: string) => { if (key === sessionKey) sessionMutationCalls += 1; values.set(key, value); },
+  removeItem: (key: string) => { if (key === sessionKey) sessionMutationCalls += 1; values.delete(key); },
 };
 const storage = createAuthSessionStorage(target, projectRef);
-const encoded = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-const session = (userId: string, lineage: string) => JSON.stringify({
-  access_token: `${encoded({ alg: "none" })}.${encoded({ sub: userId, session_id: lineage })}.signature`,
-  refresh_token: `refresh-${userId}`,
-  user: { id: userId },
-});
 
-storage.setItem(sessionKey, "legacy-session");
-assert.equal(values.get(sessionKey), "legacy-session", "A legacy session without an intent must remain refreshable.");
+for (const intent of [
+  null,
+  JSON.stringify({ version: 1, phase: "pending" }),
+  JSON.stringify({ version: 1, phase: "signed_out" }),
+  JSON.stringify({ version: 1, nonce: "accepted", phase: "accepted", userId: "user-a", sessionLineage: "lineage-a", startedAtMs: 1 }),
+  "malformed",
+]) {
+  if (intent === null) target.removeItem(intentKey); else target.setItem(intentKey, intent);
+  target.setItem(sessionKey, "farm-rx-owned-session");
+  const callsBefore = sessionMutationCalls;
+  storage.setItem(sessionKey, "auth-js-session");
+  storage.removeItem(sessionKey);
+  assert.equal(sessionMutationCalls, callsBefore, "The synchronous auth wrapper reached a racy shared-session mutation.");
+  assert.equal(values.get(sessionKey), "farm-rx-owned-session", "A stale auth client changed the Farm Rx-owned session.");
+}
 
-target.setItem(intentKey, JSON.stringify({ version: 1, phase: "pending" }));
-storage.setItem(sessionKey, "superseded-session");
-assert.equal(values.get(sessionKey), "legacy-session", "Supabase published a session while a Farm Rx sign-in intent was pending.");
+storage.setItem("farm-rx-auth-code-verifier", "verifier");
+assert.equal(values.get("farm-rx-auth-code-verifier"), "verifier", "Non-session auth storage was unexpectedly blocked.");
+storage.removeItem("farm-rx-auth-code-verifier");
+assert.equal(values.has("farm-rx-auth-code-verifier"), false, "Non-session auth cleanup was unexpectedly blocked.");
+
+target.setItem(intentKey, JSON.stringify({ version: 1, nonce: "accepted", phase: "accepted", userId: "user-a", sessionLineage: "lineage-a", startedAtMs: 1 }));
+target.setItem(sessionKey, "accepted-session");
 storage.removeItem(sessionKey);
-assert.equal(values.get(sessionKey), "legacy-session", "Supabase removed rollback state while a Farm Rx sign-in intent was pending.");
+storage.getItem(sessionKey);
+storage.setItem("farm-rx-auth-unrelated", "interleaved");
+storage.removeItem(`${sessionKey}-code-verifier`);
+storage.getItem(intentKey);
+storage.removeItem(`${sessionKey}-user`);
+assert.deepEqual(consumeAuthSessionRemovalTicket(target, projectRef), {
+  sessionBytes: "accepted-session",
+  intentBytes: target.getItem(intentKey),
+}, "A genuine auth-js teardown did not hand its exact local tuple to Farm Rx.");
+assert.equal(consumeAuthSessionRemovalTicket(target, projectRef), null, "A local removal ticket was reusable.");
+assert.equal(values.get(sessionKey), "accepted-session", "The synchronous wrapper deleted shared auth outside coordination.");
 
-target.setItem(sessionKey, "farm-rx-owned-session");
-assert.equal(values.get(sessionKey), "farm-rx-owned-session", "Farm Rx could not directly persist its owned session.");
-
-target.setItem(intentKey, JSON.stringify({ version: 1, phase: "signed_out" }));
-storage.setItem(sessionKey, "resurrected-session");
-assert.equal(values.get(sessionKey), "farm-rx-owned-session", "Supabase resurrected a session behind a signed-out fence.");
-
-target.setItem(intentKey, "malformed");
-storage.setItem(sessionKey, "malformed-intent-session");
-assert.equal(values.get(sessionKey), "farm-rx-owned-session", "Supabase persisted a session behind malformed intent bytes.");
-
-target.setItem(intentKey, JSON.stringify({ version: 1, phase: "accepted", userId: "user-a", sessionLineage: "lineage-a" }));
-storage.setItem(sessionKey, session("user-a", "lineage-a"));
-assert.equal(values.get(sessionKey), "farm-rx-owned-session", "A partial accepted intent bypassed the malformed-intent fence.");
-target.setItem(intentKey, JSON.stringify({ version: 1, nonce: "accepted-a", phase: "accepted", userId: "user-a", sessionLineage: "", startedAtMs: 1 }));
-storage.setItem(sessionKey, session("user-a", ""));
-assert.equal(values.get(sessionKey), "farm-rx-owned-session", "An empty accepted lineage bypassed the malformed-intent fence.");
-
-target.setItem(intentKey, JSON.stringify({ version: 1, nonce: "accepted-a", phase: "accepted", userId: "user-a", sessionLineage: "lineage-a", startedAtMs: 1 }));
-storage.setItem(sessionKey, session("user-b", "lineage-b"));
-assert.equal(values.get(sessionKey), "farm-rx-owned-session", "A stale account replaced the accepted session.");
-storage.setItem(sessionKey, session("user-a", "old-lineage"));
-assert.equal(values.get(sessionKey), "farm-rx-owned-session", "A stale lineage replaced the accepted session.");
-const refreshedSession = session("user-a", "lineage-a");
-storage.setItem(sessionKey, refreshedSession);
-assert.equal(values.get(sessionKey), refreshedSession, "An accepted session refresh was blocked.");
 storage.removeItem(sessionKey);
-assert.equal(values.get(sessionKey), refreshedSession, "A stale auth client removed an accepted session.");
-target.removeItem(sessionKey);
-assert.equal(values.has(sessionKey), false, "Farm Rx could not directly remove its accepted session.");
+storage.removeItem(`${sessionKey}-code-verifier`);
+storage.removeItem(`${sessionKey}-user`);
+storage.setItem(sessionKey, "concurrent-refresh");
+assert.equal(consumeAuthSessionRemovalTicket(target, projectRef), null, "A newer auth-js session attempt did not cancel the older removal ticket.");
+assert.equal(values.get(sessionKey), "accepted-session", "A suppressed auth-js refresh bypassed Farm Rx coordination.");
+
+storage.removeItem(sessionKey);
+storage.removeItem("farm-rx-auth-unexpected-cleanup");
+storage.removeItem(`${sessionKey}-code-verifier`);
+storage.removeItem(`${sessionKey}-user`);
+assert.equal(consumeAuthSessionRemovalTicket(target, projectRef), null, "An interrupted cleanup sequence created removal authority.");
 
 console.log("Auth session storage fence regressions passed.");

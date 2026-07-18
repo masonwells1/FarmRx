@@ -28,6 +28,7 @@ import { captureFarmRevocationFence, resetFarmGrantFromLive } from './farmRevoca
 import { createFieldLocationClient, parseFieldLocationQueue } from './fieldLocation'
 import { beginFarmReplayAuthorization, captureFarmReplayContextGuard, captureFarmReplayUserGuard, createFarmAccessValidationGate, currentFarmContext, type FarmAccess, type LoadedFarmAccessProfile } from '../auth/farmContext'
 import { farmActiveContextKey, writeFarmAccessEpochs } from '../auth/farmAccessEpoch'
+import { createAuthSessionStorage } from '../auth/authSessionStorage'
 import { supabaseConfig } from '../lib/supabaseConfig'
 import { createDeviceTransactionCoordinator, queueTransaction } from './queueTransaction'
 import { getSyncStatus, retrySavedChanges, setModuleSyncRetryAction, setModuleSyncStatus } from './syncStatus'
@@ -941,7 +942,10 @@ try {
     await settleCrossTabEvents()
     const sharedAccountB = JSON.parse(tabHub.values.get(authSessionKey) ?? '{}') as { user?: { id?: string }; refresh_token?: string }
     assert(tabAContainer.textContent?.includes(`signed_in:${userB}`) && tabBContainer.textContent?.includes(`signed_in:${userB}`) && sharedAccountB.user?.id === userB && sharedAccountB.refresh_token === crossTabSessionB.refresh_token, 'The deliberate account-B sign-in intent was not accepted and preserved across independent tabs.')
-    const acceptedAccountBBeforeHistoricalDelete = captureAcceptedAuthBytes(crossTabSessionB, userB, 'session-b', 'Historical deletion setup')
+    const refreshedAccountB = { ...crossTabSessionB, access_token: authJwt(userB, 'session-b'), refresh_token: 'tab-b-refreshed' }
+    await act(async () => { tabBClient.broadcast('TOKEN_REFRESHED', refreshedAccountB); await Promise.resolve() })
+    await settleCrossTabEvents()
+    const acceptedAccountBBeforeHistoricalDelete = captureAcceptedAuthBytes(refreshedAccountB, userB, 'session-b', 'Accepted refresh publication')
     await act(async () => {
       tabBWindow.dispatchEvent(new tabBWindow.StorageEvent('storage', { key: authSessionKey, oldValue: JSON.stringify(crossTabSessionA), newValue: null as unknown as string, storageArea: tabBStorage, url: tabAWindow.location.href } as never))
       await Promise.resolve()
@@ -965,6 +969,52 @@ try {
       assert(tabAContainer.textContent?.includes(`signed_in:${userB}`) && tabBContainer.textContent?.includes(`signed_in:${userB}`), 'The fixture could not deliberately re-establish account B after a fail-closed lineage mismatch.')
     }
     await establishAccountB()
+
+    // Auth-js cannot synchronously remove shared bytes because doing so would
+    // race another tab's intent. Its exact local teardown sequence instead
+    // gives AuthProvider one-use authority to clear only the tuple it saw.
+    const tabBAuthStorage = createAuthSessionStorage(tabBStorage, supabaseConfig.projectRef)
+    const issueTabBRemovalTicket = () => {
+      tabBAuthStorage.removeItem(authSessionKey)
+      tabBAuthStorage.removeItem(`${authSessionKey}-code-verifier`)
+      tabBAuthStorage.removeItem(`${authSessionKey}-user`)
+    }
+    issueTabBRemovalTicket()
+    await act(async () => { tabBClient.emit('SIGNED_OUT', null); await Promise.resolve() })
+    await settleCrossTabEvents()
+    const genuineRemovalFence = JSON.parse(tabHub.values.get(authIntentStorageKey) ?? '{}') as { phase?: string }
+    assert(tabAContainer.textContent?.includes('signed_out:none') && tabBContainer.textContent?.includes('signed_out:none') && tabHub.values.get(authSessionKey) === undefined && genuineRemovalFence.phase === 'signed_out', 'A genuine local auth-js teardown did not clear its exact accepted session.')
+    await establishAccountB()
+
+    let finishReplacementFailure!: () => void
+    tabAClient.installSignIn(() => new Promise((resolve) => {
+      finishReplacementFailure = () => resolve({ data: { session: null }, error: new Error('Replacement rejected') })
+    }))
+    const beforeReplacementPending = tabHub.values.get(authIntentStorageKey)
+    let failedReplacement!: Promise<void>
+    await act(async () => { failedReplacement = tabASignIn('replacement@example.test', 'password'); await Promise.resolve() })
+    await waitForNewPendingIntent(beforeReplacementPending, 'Replacement after local teardown')
+    issueTabBRemovalTicket()
+    await act(async () => { tabBClient.emit('SIGNED_OUT', null); await Promise.resolve() })
+    await settleCrossTabEvents()
+    assert(tabHub.values.get(authSessionKey) === undefined && JSON.parse(tabHub.values.get(authIntentStorageKey) ?? '{}').phase === 'pending', 'A genuine teardown during replacement sign-in did not invalidate the dead rollback session while preserving the pending attempt.')
+    await act(async () => { finishReplacementFailure(); await rejects(() => failedReplacement, 'The rejected replacement fixture unexpectedly succeeded.') })
+    await settleCrossTabEvents()
+    const failedReplacementFence = JSON.parse(tabHub.values.get(authIntentStorageKey) ?? '{}') as { phase?: string }
+    assert(tabAContainer.textContent?.includes('signed_out:none') && tabBContainer.textContent?.includes('signed_out:none') && tabHub.values.get(authSessionKey) === undefined && failedReplacementFence.phase === 'signed_out', 'A failed replacement sign-in resurrected the genuinely removed prior session.')
+    await establishAccountB()
+
+    issueTabBRemovalTicket()
+    tabAClient.installSignIn(async () => ({ data: { session: crossTabSessionC }, error: null }))
+    await act(async () => { await tabASignIn('account-c@example.test', 'password') })
+    await settleCrossTabEvents()
+    const acceptedAccountCBeforeStaleRemoval = captureAcceptedAuthBytes(crossTabSessionC, userC, 'session-c', 'Delayed local removal setup')
+    await act(async () => { tabBClient.emit('SIGNED_OUT', null); await Promise.resolve() })
+    await settleCrossTabEvents()
+    assert(tabAContainer.textContent?.includes(`signed_in:${userC}`) && tabBContainer.textContent?.includes(`signed_in:${userC}`), 'A delayed local removal ticket signed out the newer account-C session.')
+    assertAcceptedAuthUnchanged(acceptedAccountCBeforeStaleRemoval, 'Delayed local removal ticket')
+    await establishAccountB()
+
     const staleSameAccountB = { ...crossTabSessionB, access_token: authJwt(userB, 'stale-session-b'), refresh_token: 'sbrt' }
     tabBStorage.setItem(authSessionKey, JSON.stringify(staleSameAccountB))
     await act(async () => { tabBClient.broadcast('SIGNED_IN', staleSameAccountB); await Promise.resolve() })
