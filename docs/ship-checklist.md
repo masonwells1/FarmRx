@@ -3,6 +3,10 @@
 Written 2026-07-13. Plain-English go-live sheet for the SHIP GATE in GOAL.md:
 **Fields + Grain in front of a handful of real Crop RX customers.**
 
+Release status refreshed 2026-07-18: the browser/bundle/database hardening release is merged,
+live, and verified in production. The engineering release is complete; this checklist now tracks
+only the human handoff to the first customers.
+
 ## What is READY (built, reviewed, proven live)
 - All modules live on https://farm-rx.vercel.app against the farm-rx Supabase project:
   Fields, Grain (position/plan/contracts/bins/basis/alerts/offers/carry), Profitability
@@ -28,7 +32,9 @@ Written 2026-07-13. Plain-English go-live sheet for the SHIP GATE in GOAL.md:
 5. **Supabase Pro** (recommended at ship, not required): daily backups, support, and
    leaked-password protection (free tier can't enable it). ~$25/mo.
 6. **Real-device pass**: install the PWA on Mason's phone, walk the sunlight/gloves
-   two-tap flows once before handing it to a farmer.
+   two-tap flows once before handing it to a farmer. Mason deferred this pass on 2026-07-18;
+   it was intentionally excluded from the completed hardening release, but remains required
+   before the first farmer handoff.
 
 ## How customer #1 goes live (the runbook)
 1. Claude runs `node scripts/provision-customer.mjs <farmer email>` (local, service key

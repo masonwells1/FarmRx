@@ -5,15 +5,30 @@ Project: `agvsozfbstpekuqxpqjr` (`farm-rx`)
 Live status during audit: `ACTIVE_HEALTHY`, PostgreSQL 17.6
 Organization plan: Free
 Migration: `20260718124337_harden_database_advisor_findings.sql`
-Live application status: **not applied by this work lane**
+Live application status: **applied and verified 2026-07-18**
 
 ## Decision
 
-Apply the narrow migration after the disposable proof and full release gate pass. It removes the actionable security warning, optimizes the exact 25 flagged RLS policies, covers every public foreign key, and removes one proven duplicate index without changing FarmRx row-access rules or widening the Data API.
+The narrow migration was applied after the disposable proof and full release gate passed. It removes the actionable security warning, optimizes the exact 25 flagged RLS policies, covers every public foreign key, and removes one proven duplicate index without changing FarmRx row-access rules or widening the Data API.
 
 Supabase documents that wrapping `auth.uid()` in a scalar `select` lets PostgreSQL initialize the value once per statement instead of re-evaluating it per row. It also recommends indexing columns used by RLS and common relational access paths. See [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security) and [Database linter](https://supabase.com/docs/guides/database/database-linter).
 
 The July 17 Envoy gateway breaking change is self-hosted-only and does not affect this hosted FarmRx project. The April 2026 default-grant change affects how new tables are exposed, but this migration creates no tables and grants no table access. See [Supabase changelog](https://supabase.com/changelog?tags=breaking-change).
+
+## Live production verification
+
+The migration ran against Farm Rx project `agvsozfbstpekuqxpqjr` and was recorded in the remote
+migration history as version `20260718124337`. A post-apply catalog query verified:
+
+- 25 of 25 target policies use the optimized definition;
+- zero public foreign keys lack a covering index;
+- zero anonymous-executable public SECURITY DEFINER functions remain;
+- authenticated execution matches the reviewed 48-function allowlist;
+- `anon` and `authenticated` cannot execute `enqueue_push_delivery()`;
+- `firm_offers_id_farm_id_idx` is absent and the constraint-backed unique index remains; and
+- the enabled `notifications_enqueue_push_delivery` trigger still calls `enqueue_push_delivery`.
+
+The Farm Rx project remained `ACTIVE_HEALTHY` after apply.
 
 ## Advisor disposition
 
@@ -68,6 +83,9 @@ Each mutation was applied temporarily, observed failing, and then restored befor
 
 After restoration, `verify-0043-disposable.ps1`, `verify-0042-disposable.ps1`, and `verify-rls-role-matrix.ps1` all passed.
 
-## Remaining release risk
+## Production outcome
 
-The migration creates 66 indexes. Its index DDL uses a five-second `lock_timeout` and five-minute `statement_timeout`, then explicitly resets both settings, so a busy table fails the release instead of waiting indefinitely. Current FarmRx tables are very small, so the expected lock/build window is short. Before production apply, the release orchestrator should re-run advisors and inspect relation sizes. After apply, re-run both advisor classes and the RLS role matrix, then confirm the notification-to-push-delivery trigger on the live schema with a non-destructive catalog check or normal application event.
+The 66 indexes completed within the migration's five-second `lock_timeout` and five-minute
+`statement_timeout`; both settings were reset by the migration. The live post-apply catalog checks
+and notification-trigger check passed. Leaked-password protection remains the only documented
+plan-blocked advisor item and should be enabled if Farm Rx moves from Supabase Free to Pro.

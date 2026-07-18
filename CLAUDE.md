@@ -18,7 +18,8 @@
 ## Stack
 - React + TypeScript (Vite), Supabase (Postgres + RLS + Auth), Vercel hosting, Recharts, PWA.
 - Supabase project: **separate free-tier project for Farm Rx** — NEVER the live CRX-Manager database.
-- Live URL / production: not deployed yet.
+- Live URL / production: `https://farm-rx.vercel.app` (Vercel). Production hardening release
+  verified 2026-07-18 at merge commit `3e7abe0a6e96ce5a092a4ce1630e407e55582e7c`.
 
 ## Standing loop (Mason-approved 2026-07-11)
 - If a session opens here with no specific request, resume the build loop: next unchecked
@@ -59,7 +60,7 @@
 - "Done" = ran and watched it work (open the page / run the endpoint), not just "tests pass".
 
 ## How changes ship
-- Remote: private repo git@github.com:masonwells1/FarmRx.git (main). Get explicit approval
+- Remote: public repo `git@github.com:masonwells1/FarmRx.git` (`main`). Get explicit approval
   before: pushing, deploying, changing the live database, or deleting data. No auto-push.
 - Build order (handoff Part 6): Fields → Grain → Profitability → Inventory → Equipment/Tasks →
   Machine data import. Ship Fields + Grain to real customers before building the rest.
