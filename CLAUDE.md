@@ -1,86 +1,31 @@
-# CLAUDE.md — Farm Rx
+# CLAUDE.md — Farm Rx router
 
-## What this is
-- Farm Rx: a customer-facing farm management app (installable web app / PWA) by Crop RX Solutions.
-  Farmers track fields, grain marketing, inventory/spray records, profitability, equipment, and tasks.
-- Owner (Mason) has ~0 coding experience — explain in plain English, plan before risky changes,
-  lead with one recommendation.
-- **Source of truth: `docs/farm-rx-handoff.md`.** Read it before building anything. Visual
-  reference: `docs/rx-one-brand-mockup.html` (labeled "Rx One" — the name is now Farm Rx).
+## Sources of truth
 
-## The three rules (from the handoff — every decision defers to these)
-1. **Simplicity beats features.** 55-year-old farmer, phone, sunlight, gloves. 18px base font,
-   48px tap targets, tabular-nums for all numbers, two-tap rule, plain English.
-2. **The data is theirs and they must SEE that.** Grain/financials default PRIVATE; explicit
-   per-farm "share with my Crop RX rep" toggle; enforced with Postgres RLS, not just UI.
-3. **Brand the wrapper, never the buttons.** No medical metaphors in navigation.
+1. Read `docs/farm-rx-handoff.md` for enduring Farm Rx product, privacy, farmer-usability, brand, and architecture rules.
+2. Read `docs/GOAL.md` for Mason's current 2027 directive, scope, capability truth, carried gates, and canonical statuses.
+3. Execute scenarios from `docs/season-readiness/WORKFLOWS-AND-SCENARIOS.md` under `docs/season-readiness/ORCHESTRATOR-RUNBOOK.md`.
+4. Append exact state and evidence to `docs/season-readiness/LEDGER.md`; never rewrite earlier entries.
 
-## Stack
-- React + TypeScript (Vite), Supabase (Postgres + RLS + Auth), Vercel hosting, Recharts, PWA.
-- Supabase project: **separate free-tier project for Farm Rx** — NEVER the live CRX-Manager database.
-- Live URL / production: `https://farm-rx.vercel.app` (Vercel). Production hardening release
-  verified 2026-07-18 at merge commit `3e7abe0a6e96ce5a092a4ce1630e407e55582e7c`.
-  The Vercel project is linked to GitHub `main`, so merging to `main` is production-coupled and
-  requires explicit release approval plus post-deploy verification.
+Mason directed on 2026-07-18 that no real farmer will use Farm Rx until 2027. This changes timing but does not deny prior commit, merge, deployment, migration, or production-verification history.
 
-## Standing loop (Mason-approved 2026-07-11)
-- If a session opens here with no specific request, resume the build loop: next unchecked
-  item in `docs/GOAL.md`, per its Loop policy (never block on questions; park them in
-  Pending decisions and keep working). Each Codex build gets a Sol adversarial self-review
-  before Claude verifies in-browser and commits.
+## Initiative rules
 
-## AI delegation (Codex CLI, Claude orchestrates)
-- Claude = orchestrator: plans, splits work, reviews, verifies in the browser.
-- **Codex launch rule:** always end `codex exec` invocations with `< /dev/null` (an open stdin
-  pipe makes codex block on "Reading additional input from stdin..." forever — cost us 1.5h
-  on 2026-07-11).
-- **Stall watchdog:** while any codex background task runs, every loop wakeup checks progress
-  (newest `~/.codex/sessions/<date>` file mtime + new files in repo). No activity for 15+ min
-  → kill the codex PID and relaunch the task (fresh prompt, stdin closed). Never sit waiting.
-- Codex via `codex exec -m <model>`: **gpt-5.6-sol** = architecture/schema/security/review,
-  **gpt-5.6-terra** = everyday module building/UI, **gpt-5.6-luna** = boilerplate/docs/mechanical.
-- **Codex may plan-and-wait even with `approval: never`:** Terra once ended its session with
-  "reply OK to approve the plan" and exited 0 having built NOTHING (2026-07-11, Module 3 UI).
-  Prepend every build prompt with a CRITICAL EXECUTION RULE line: headless, no human, asking
-  for approval = task failure, everything pre-approved, implement fully then report. Always
-  verify via `git status` that files actually changed before trusting a "completed" task.
-- **Absolute paths in codex launches:** the orchestrator shell's cwd can silently reset to C:\
-  between calls, so `$(cat relative/prompt.md)` can expand to EMPTY (codex then no-ops and asks
-  "what would you like me to work on?" while still exiting 0). Always pass the prompt file and
-  `-o` output file as absolute `C:\FarmRx\...` paths, and after launching, head the task output
-  to confirm the prompt text actually arrived (cost us a lost fix round on 2026-07-11).
-- CRX Manager (`C:\CRX_Manager`) is READ-ONLY reference material for porting — never modify it
-  from this project.
+- Sol is the orchestrator. Use bounded Sol/Terra workers; use Luna only if actually available and recorded. Workers do not recursively delegate.
+- Work one bounded tranche and one immutable commit at a time. Fresh-context, read-only Sol reviews every exact commit. Repairs are new commits and receive new reviews.
+- Build on the completed Farmer Simplicity layer and existing modules. No standalone modules, vendors, broad redesigns, speculative features, or proof-only `run_id` product column.
+- Missing integrations are negative assertions/out of scope unless an approved scenario reveals a defect in existing behavior.
+- Season proof uses synthetic fixtures, a fixed `America/Chicago` 2027 clock, deterministic external UUIDs, and a disposable local backend—not live services or customer data.
+- `C:\CRX_Manager` is read-only reference material and must not be modified from Farm Rx work.
 
-## How to run & verify it
-- Install: `npm install`
-- Run locally (preview): `npm run dev`
-- Build: `npm run build`
-- Typecheck: **`npx tsc -b --force`** — plain `npx tsc --noEmit` at repo root checks ZERO
-  files (root tsconfig has `files: []`) and passes vacuously; discovered 2026-07-11.
-- Test: `npm run test` (once tests exist)
-- "Done" = ran and watched it work (open the page / run the endpoint), not just "tests pass".
+## Production and approval boundary
 
-## How changes ship
-- Remote: public repo `git@github.com:masonwells1/FarmRx.git` (`main`). Get explicit approval
-  before: pushing, deploying, changing the live database, or deleting data. No auto-push.
-- Build order (handoff Part 6): Fields → Grain → Profitability → Inventory → Equipment/Tasks →
-  Machine data import. Ship Fields + Grain to real customers before building the rest.
+Farm Rx production is `https://farm-rx.vercel.app`. GitHub `main` is linked to Vercel, so a merge or push to `main` is production-coupled.
 
-## Design
-- Brand tokens verbatim from handoff Part 5 (CRX_GREEN #28A26A etc.), 16px card radius,
-  Inter for body + ALL numbers (`tabular-nums`) — this overrides any skill that bans Inter.
-- `.claude/skills/taste-skill` = design-quality guidance for marketing/login surfaces;
-  handoff brand rules always win on conflicts.
+Never infer approval from silence or label work “pre-approved.” Get Mason's explicit approval before push, pull-request mutation, main/production push, merge, deploy, live migration/data, secrets/auth/permissions, customer accounts, customer communication, or destructive actions. Local build/test/commit approval does not authorize an outward action.
 
-## Project gotchas (add as you learn them)
-- Crop assignments are their own rows (`field_id + year + crop`) — never a crop column on fields
-  (double-crop soybeans break that).
-- White corn and non-GMO corn are distinct marketable commodities (own contracts/premiums/bids),
-  not variants of yellow corn.
-- Store `expected_bushels` AND `actual_bushels` — never overwrite projected with actual.
-- Options contracts, weather alerts, landlord portal, app-store distribution, elevator scraping:
-  explicitly OUT of scope (handoff Part 7).
-- Customer provisioning accepts no email command-line argument. Use the documented create flow or
-  resend mode, then enter the email only at its prompt; never put a customer email in shell history
-  or a copied command.
+## Local verification
+
+- Forced TypeScript: `npx tsc -b --force` (plain root `tsc --noEmit` is not sufficient here).
+- Use the current repository scripts only after inspecting `package.json`.
+- “Done” requires the exact UI/local-database behavior and expected non-writes, not only green unit tests.
