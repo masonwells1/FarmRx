@@ -1,0 +1,15 @@
+# Unique local Docker stack identity for this season-readiness worktree.
+project_id = "farmrx-farmer-simplicity-2027-local"
+
+[api]
+port = 55321
+
+[db]
+port = 55322
+shadow_port = 55320
+
+[edge_runtime]
+inspector_port = 8183
+
+[analytics]
+enabled = false
