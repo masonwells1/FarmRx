@@ -21,6 +21,7 @@ const cropId = fixture('Maple 2027 corn crop assignment')
 declare global {
   interface Window {
     __farmRxSeasonIds: (ids: string[] | null) => void
+    __farmRxSeasonClockObservations: string[]
   }
 }
 
@@ -41,11 +42,14 @@ async function installDeterminism(page: Page) {
   page.on('pageerror', (error) => console.log(`BROWSER_PAGE_ERROR ${error.message}`))
   await page.addInitScript(({ fixedMs }) => {
     const RealDate = Date
+    const seasonClockObservations: string[] = []
     window.Date = new Proxy(RealDate, {
       construct(target, argumentsList) {
         const stack = new Error().stack ?? ''
         const shouldUseSeasonInstant = argumentsList.length === 0 && stack.includes('/src/data/index.ts')
-        return Reflect.construct(target, shouldUseSeasonInstant ? [fixedMs] : argumentsList)
+        const result = Reflect.construct(target, shouldUseSeasonInstant ? [fixedMs] : argumentsList) as Date
+        if (shouldUseSeasonInstant) seasonClockObservations.push(result.toISOString())
+        return result
       },
       apply(target, thisArgument, argumentsList) {
         return Reflect.apply(target, thisArgument, argumentsList)
@@ -68,7 +72,17 @@ async function installDeterminism(page: Page) {
         })
       },
     })
+    Object.defineProperty(window, '__farmRxSeasonClockObservations', {
+      configurable: false,
+      value: seasonClockObservations,
+    })
   }, { fixedMs: fixedInstant.getTime() })
+}
+
+async function expectExactSeasonClockConsumption(page: Page) {
+  const observations = await page.evaluate(() => [...window.__farmRxSeasonClockObservations])
+  expect(observations.length).toBeGreaterThan(0)
+  expect(new Set(observations)).toEqual(new Set([fixedInstant.toISOString()]))
 }
 
 async function queueRecordIds(page: Page, ids: string[]) {
@@ -100,6 +114,7 @@ test('@desktop-write creates the exact Maple January field through the real loca
   })
 
   await signIn(page)
+  await expectExactSeasonClockConsumption(page)
   expect(fieldWrites).toBe(0)
 
   await page.getByRole('link', { name: 'Full field details' }).click()
@@ -170,6 +185,7 @@ test('@phone-read reloads the January state without another field write', async 
   })
 
   await signIn(page)
+  await expectExactSeasonClockConsumption(page)
   await expect(page.getByText('Maple East 160')).toBeVisible()
   await page.getByText('Maple East 160').first().click()
   await expect(page.getByRole('heading', { name: 'Maple East 160' })).toBeVisible()
