@@ -8,6 +8,7 @@ import {
 import type { BinInventory, BinTransaction, ProductionEstimate } from './grain'
 import { isBinTransactionSuperseded, PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from './binLedger'
 import { farmerError } from '../lib/farmerErrors'
+import { readFileSync } from 'node:fs'
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 
@@ -32,5 +33,15 @@ assert(movementCommodityOptions(commodities, undefined, [{ ...cornBeforeBaseline
 assert(movementCommodityOptions(commodities, undefined, []).map((item) => item.id).join('|') === 'corn_yellow|soybeans|wheat', 'An empty bin must offer every commodity.')
 assert(HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY === 'Harvest-minus-bins is not shown because bins cover the whole farm and all years.', 'The reconciliation scope-suppression copy must be the exported UI constant.')
 assert(farmerError(new Error('Movement date must be after the latest bin baseline.'), 'add this movement') === PRE_BASELINE_BIN_MOVEMENT_MESSAGE && farmerError(new Error(PRE_BASELINE_BIN_MOVEMENT_MESSAGE), 'add this movement') === PRE_BASELINE_BIN_MOVEMENT_MESSAGE, 'Repository and database pre-baseline rejections must share the farmer-facing baseline message.')
+
+const grainModule = readFileSync(new URL('../GrainModule.tsx', import.meta.url), 'utf8')
+assert(grainModule.includes('const refresh = async (strict = false)') && grainModule.includes('if (strict) throw new Error(message);'), 'Post-write refresh must reject while initial page refresh remains handled.')
+const deliveryAction = grainModule.slice(grainModule.indexOf('const record = async () => {'), grainModule.indexOf('return <div className="contract-actions">'))
+assert(deliveryAction.indexOf('await onDeliverySaved();') < deliveryAction.indexOf('deliveryId.current = null;') && deliveryAction.indexOf('await onDeliverySaved();') < deliveryAction.indexOf('setDelivery("");'), 'Delivery UUID and form values must remain until the saved row is confirmed by refresh.')
+assert(grainModule.includes('await refresh(true); whisper();') && grainModule.includes('Delivery may be recorded but could not be confirmed. Retry keeps the same delivery and will not create another.'), 'Delivery refresh failure must remain retry-safe and truthful.')
+const movementSubmit = grainModule.slice(grainModule.indexOf('const submit = async (event: FormEvent) => {', grainModule.indexOf('function MovementForm')), grainModule.indexOf('return (', grainModule.indexOf('function MovementForm')))
+assert(movementSubmit.indexOf('await onSave(transaction);') < movementSubmit.indexOf('movementId.current = null;'), 'Movement UUID must remain until the saved row is confirmed by refresh.')
+assert(grainModule.includes('This bin movement may be recorded but could not be confirmed. Retry keeps the same movement and will not create another.'), 'Movement refresh failure must remain retry-safe and truthful.')
+assert(grainModule.includes('Recording a delivery does not remove grain from a bin.') && grainModule.includes('Bin-out changes this bin only. It does not mark a contract delivered.'), 'The UI must explain that delivery and bin-out are separate farmer actions.')
 
 console.log('Grain repair regressions passed.')
