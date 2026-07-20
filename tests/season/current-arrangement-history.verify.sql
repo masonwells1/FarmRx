@@ -263,6 +263,48 @@ begin
 end
 $$;
 
+-- A malformed gap must fail closed rather than selecting a plausible-looking
+-- predecessor and extending it. The failed bundle and its receipt roll back.
+update public.arrangements
+set effective_to = '2028-01-30'
+where id = '27021000-0000-4000-8000-0000000000f1';
+
+do $$
+begin
+  begin
+    perform public.save_field_bundle_versioned(
+      '27010000-0000-4000-8000-000000000001',
+      '27090000-0000-4000-8000-0000000000f7',
+      pg_temp.maple_expected_versions(),
+      pg_temp.maple_agreement_draft(
+        '27021000-0000-4000-8000-0000000000f2',
+        '2028-03-01',
+        'cash_rent',
+        300
+      )
+    );
+    raise exception 'date correction guessed across malformed agreement history';
+  exception
+    when others then
+      if sqlerrm <> 'agreement history must be repaired before changing the current start date' then raise; end if;
+  end;
+  if exists (
+    select 1 from public.repository_write_receipts
+    where farm_id = '27010000-0000-4000-8000-000000000001'
+      and operation_id = '27090000-0000-4000-8000-0000000000f7'
+  ) or not exists (
+    select 1 from public.arrangements
+    where id = '27021000-0000-4000-8000-0000000000f2'
+      and effective_from = '2028-02-01'
+      and effective_to is null
+  ) then raise exception 'malformed-history rejection was not atomic'; end if;
+end
+$$;
+
+update public.arrangements
+set effective_to = '2028-01-31'
+where id = '27021000-0000-4000-8000-0000000000f1';
+
 \o
 select 'CURRENT_ARRANGEMENT_HISTORY_PASS' as proof;
 

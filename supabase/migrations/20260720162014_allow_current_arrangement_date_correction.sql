@@ -94,11 +94,18 @@ begin
 
     if exists (
       select 1
-      from public.arrangements a
-      where a.farm_id = p_farm_id
-        and a.field_id = v_saved.field_id
-        and a.id <> v_saved.id
-        and a.effective_from >= v_saved.effective_from
+      from (
+        select
+          a.effective_from,
+          a.effective_to,
+          lead(a.effective_from) over (order by a.effective_from, a.id) as next_effective_from
+        from public.arrangements a
+        where a.farm_id = p_farm_id
+          and a.field_id = v_saved.field_id
+      ) ordered
+      where (ordered.next_effective_from is null and ordered.effective_to is not null)
+         or (ordered.next_effective_from is not null
+             and ordered.effective_to is distinct from ordered.next_effective_from - 1)
     ) then
       raise exception 'agreement history must be repaired before changing the current start date';
     end if;
