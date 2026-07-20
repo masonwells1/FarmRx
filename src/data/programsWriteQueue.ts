@@ -1,4 +1,4 @@
-import { normalizeProgramProductDraft, uuid, validDate, validateActualProgramProducts, validateProgramDraft, validateProgramPassDraft, validateProgramProductDraft, type ActualProgramProduct, type ProgramApplicationLink, type ProgramDraft, type ProgramPassDraft, type ProgramProductDraft } from './programs'
+import { normalizeProgramProductDraft, uuid, validAssignmentIdentityPlans, validDate, validateActualProgramProducts, validateProgramDraft, validateProgramPassDraft, validateProgramProductDraft, type ActualProgramProduct, type AssignmentIdentityPlan, type ProgramApplicationLink, type ProgramDraft, type ProgramPassDraft, type ProgramProductDraft } from './programs'
 import type { StorageLike } from './writeQueue'
 type Base = { version: 1; module: 'programs'; operationId: string; userId: string; farmId: string; enqueuedAt: string }
 export type ProgramsQueueEntryV1 =
@@ -7,7 +7,7 @@ export type ProgramsQueueEntryV1 =
   | Base & { kind: 'reorder_program_passes'; programId: string; orderedPassIds: string[] }
   | Base & { kind: 'delete_program_pass'; programId: string; passId: string }
   | Base & { kind: 'delete_program'; programId: string }
-  | Base & { kind: 'assign_program'; programId: string; cropAssignmentIds: string[] }
+  | Base & { kind: 'assign_program'; programId: string; assignmentPlans: AssignmentIdentityPlan[] }
   | Base & { kind: 'refresh_program_assignment'; assignmentId: string }
   | Base & { kind: 'reassign_program_assignment'; assignmentId: string; newProgramId: string; reason: string }
   | Base & { kind: 'reschedule_program_pass'; assignedPassId: string; dueOn: string; timingLabel: string | null }
@@ -28,7 +28,7 @@ function valid(v: unknown): v is ProgramsQueueEntryV1 { if (!rec(v) || !goodBase
   if (v.kind === 'reorder_program_passes') return exact(v, [...base, 'programId', 'orderedPassIds']) && uuidValue(v.programId) && Array.isArray(v.orderedPassIds) && v.orderedPassIds.length > 0 && v.orderedPassIds.every(uuidValue) && new Set(v.orderedPassIds).size === v.orderedPassIds.length
   if (v.kind === 'delete_program_pass') return exact(v, [...base, 'programId', 'passId']) && uuidValue(v.programId) && uuidValue(v.passId)
   if (v.kind === 'delete_program') return exact(v, [...base, 'programId']) && uuidValue(v.programId)
-  if (v.kind === 'assign_program') return exact(v, [...base, 'programId', 'cropAssignmentIds']) && uuidValue(v.programId) && Array.isArray(v.cropAssignmentIds) && v.cropAssignmentIds.length > 0 && v.cropAssignmentIds.length <= 200 && v.cropAssignmentIds.every(uuidValue) && new Set(v.cropAssignmentIds).size === v.cropAssignmentIds.length
+  if (v.kind === 'assign_program') return exact(v, [...base, 'programId', 'assignmentPlans']) && uuidValue(v.programId) && validAssignmentIdentityPlans(v.assignmentPlans)
   if (v.kind === 'refresh_program_assignment') return exact(v, [...base, 'assignmentId']) && uuidValue(v.assignmentId)
   if (v.kind === 'reassign_program_assignment') return exact(v, [...base, 'assignmentId', 'newProgramId', 'reason']) && uuidValue(v.assignmentId) && uuidValue(v.newProgramId) && reason(v.reason)
   if (v.kind === 'reschedule_program_pass') return exact(v, [...base, 'assignedPassId', 'dueOn', 'timingLabel']) && uuidValue(v.assignedPassId) && typeof v.dueOn === 'string' && validDate(v.dueOn) && (v.timingLabel === null || typeof v.timingLabel === 'string' && v.timingLabel.length <= 160)

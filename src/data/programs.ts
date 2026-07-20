@@ -11,7 +11,7 @@ export interface ProgramProduct extends Omit<ProgramProductDraft, 'id'> { id: st
 export interface ProgramPass extends Omit<ProgramPassDraft, 'id'> { id: string; farm_id: string; program_id: string; sequence: number; is_archived: boolean; products: ProgramProduct[]; pending?: boolean }
 export interface Program extends Omit<ProgramDraft, 'id'> { id: string; farm_id: string; revision: number; is_archived: boolean; passes: ProgramPass[]; pending?: boolean }
 export interface CropAssignmentChoice { id: string; farm_id: string; field_id: string; field_name: string; commodity_id: string; commodity_name: string; crop_year: number; planting_sequence: number; planting_date: string | null; planted_acres: number; latitude: number | null; longitude: number | null }
-export interface AssignedProgramProduct { id: string; farm_id: string; assigned_pass_id: string; sequence: number; product_name: string; rate_text: string; unit_text: string; estimated_cost_per_acre: number | null; notes: string | null; actual_product_name: string | null; actual_rate_text: string | null; actual_unit_text: string | null; actual_cost_per_acre: number | null }
+export interface AssignedProgramProduct { id: string; farm_id: string; assigned_pass_id: string; source_program_pass_product_id: string | null; sequence: number; product_name: string; rate_text: string; unit_text: string; estimated_cost_per_acre: number | null; notes: string | null; actual_product_name: string | null; actual_rate_text: string | null; actual_unit_text: string | null; actual_cost_per_acre: number | null }
 export interface ActualProgramProduct { id: string; actual_product_name: string; actual_rate_text: string; actual_unit_text: string; actual_cost_per_acre: number | null }
 export interface AssignedProgramPass { id: string; assignment_id: string; source_program_pass_id: string | null; source_revision: number; sequence: number; name: string; pass_type: ProgramPassType; activity_type: ProgramActivityType; timing_label: string | null; target_date: string | null; planting_offset_days: number | null; reminder_lead_days: number; notes: string | null; due_on: string | null; due_source: 'template_date' | 'planting_offset' | 'manual' | 'unscheduled'; is_field_override: boolean; status: AssignedPassStatus; applied_on: string | null; applied_acres: number | null; skipped_on: string | null; skip_reason: string | null; cancelled_at: string | null; cancel_reason: string | null; application_record_id: string | null; products: AssignedProgramProduct[]; pending?: boolean }
 export interface ProgramApplicationRecord { id: string; farm_id: string; crop_assignment_id: string; application_date: string; applied_acres: number; status: 'draft' | 'completed' }
@@ -19,12 +19,36 @@ export interface ProgramAssignmentCost { assignment_id: string; farm_id: string;
 export interface ProgramCropCostRollup { crop_assignment_id: string; farm_id: string; planted_acres: number; planned_cost_is_complete: boolean; planned_cost_per_acre: number | null; planned_known_cost_per_acre: number | null; total_planned_cost: number | null; actual_cost_is_complete: boolean; actual_cost_per_acre: number | null; actual_known_cost_per_acre: number | null; total_actual_cost: number | null }
 export interface ProgramAssignment extends CropAssignmentChoice { assignment_id: string; program_id: string; program_name_snapshot: string; program_kind_snapshot: ProgramKind | null; assignment_status: 'active' | 'archived'; template_revision: number; current_template_revision: number; passes: AssignedProgramPass[]; cost?: ProgramAssignmentCost | null; pending?: boolean }
 export interface ProgramsData { programs: Program[]; assignments: ProgramAssignment[]; cropAssignments: CropAssignmentChoice[]; applicationRecords: ProgramApplicationRecord[]; assignmentCosts: ProgramAssignmentCost[]; cropCostRollups: ProgramCropCostRollup[]; viewer: { user_id: string; role: FarmViewerRole } }
+export interface AssignmentProductIdentityPlan { source_program_pass_product_id: string; assigned_product_id: string }
+export interface AssignmentPassIdentityPlan { source_program_pass_id: string; assigned_pass_id: string; products: AssignmentProductIdentityPlan[] }
+export interface AssignmentIdentityPlan { crop_assignment_id: string; assignment_id: string; expected_program_revision: number; passes: AssignmentPassIdentityPlan[] }
 export type ProgramApplicationLink = { kind: 'none' } | { kind: 'link'; applicationRecordId: string; canonicalAppliedOn?: string; canonicalAppliedAcres?: number } | { kind: 'create'; applicationRecordId: string }
 export interface ProgramsRepository { getData(includeArchived?: boolean): Promise<ProgramsData>; saveProgram(draft: ProgramDraft): Promise<Program>; saveProgramPass(programId: string, pass: ProgramPassDraft, products: ProgramProductDraft[], placeAfterPassId: string | null): Promise<ProgramPass>; reorderProgramPasses(programId: string, orderedPassIds: string[]): Promise<string[]>; deleteProgramPass(programId: string, passId: string): Promise<void>; deleteProgram(programId: string): Promise<Program>; assignProgram(programId: string, cropAssignmentIds: string[]): Promise<ProgramAssignment[]>; refreshProgramAssignment(assignmentId: string): Promise<ProgramAssignment>; reassignProgramAssignment(assignmentId: string, newProgramId: string, reason: string): Promise<ProgramAssignment>; rescheduleProgramPass(assignedPassId: string, dueOn: string, timingLabel: string | null): Promise<AssignedProgramPass>; markProgramPassApplied(assignedPassId: string, appliedOn: string, appliedAcres: number, actualProducts: ActualProgramProduct[], applicationLink?: ProgramApplicationLink): Promise<AssignedProgramPass>; skipProgramPass(assignedPassId: string, skippedOn: string, reason: string): Promise<AssignedProgramPass>; unassignProgram(assignmentId: string, reason: string): Promise<void> }
 
 export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const date = /^\d{4}-\d{2}-\d{2}$/
 const exact = (value: object, keys: readonly string[]) => Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
+export function validAssignmentIdentityPlans(value: unknown): value is AssignmentIdentityPlan[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 200) return false
+  const generated = new Set<string>(); const source = new Set<string>(); const crops = new Set<string>()
+  const generatedId = (candidate: unknown) => { if (typeof candidate !== 'string' || !uuid.test(candidate) || generated.has(candidate)) return false; generated.add(candidate); return true }
+  for (const plan of value) {
+    if (!record(plan) || !exact(plan, ['crop_assignment_id', 'assignment_id', 'expected_program_revision', 'passes']) || typeof plan.crop_assignment_id !== 'string' || !uuid.test(plan.crop_assignment_id) || crops.has(plan.crop_assignment_id) || !generatedId(plan.assignment_id) || !Number.isInteger(plan.expected_program_revision) || Number(plan.expected_program_revision) < 1 || !Array.isArray(plan.passes)) return false
+    crops.add(plan.crop_assignment_id)
+    const passSources = new Set<string>()
+    for (const pass of plan.passes) {
+      if (!record(pass) || !exact(pass, ['source_program_pass_id', 'assigned_pass_id', 'products']) || typeof pass.source_program_pass_id !== 'string' || !uuid.test(pass.source_program_pass_id) || passSources.has(pass.source_program_pass_id) || !generatedId(pass.assigned_pass_id) || !Array.isArray(pass.products)) return false
+      passSources.add(pass.source_program_pass_id); source.add(pass.source_program_pass_id)
+      const productSources = new Set<string>()
+      for (const product of pass.products) {
+        if (!record(product) || !exact(product, ['source_program_pass_product_id', 'assigned_product_id']) || typeof product.source_program_pass_product_id !== 'string' || !uuid.test(product.source_program_pass_product_id) || productSources.has(product.source_program_pass_product_id) || !generatedId(product.assigned_product_id)) return false
+        productSources.add(product.source_program_pass_product_id); source.add(product.source_program_pass_product_id)
+      }
+    }
+  }
+  return [...generated].every((candidate) => !source.has(candidate))
+}
 const text = (value: unknown, maximum: number, required = false) => typeof value === 'string' && value.length <= maximum && (!required || value.trim().length > 0)
 const nullableText = (value: unknown, maximum: number) => value === null || text(value, maximum)
 export function roundDecimalHalfUp(value: number, places = 4) { if (!Number.isFinite(value)) return value; const factor = 10 ** places; const shifted = Number((Math.abs(value) * factor).toPrecision(15)); return Math.sign(value) * Math.floor(shifted + 0.5) / factor }
