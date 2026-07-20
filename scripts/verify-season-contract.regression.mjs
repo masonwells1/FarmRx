@@ -234,6 +234,20 @@ await runAppendIsolationMutation(
 );
 
 await runAppendIsolationMutation(
+  "binding-pattern shadow and constructor smuggling",
+  "scripts/verify-season-contract.regression.mjs",
+  `const { readFile } = { readFile: [].filter.constructor }; const { resolve } = { resolve: readFile("console.log('AST_BYPASS_EXECUTED')") }; resolve();`,
+  /^scripts\/verify-season-contract\.regression\.mjs shadows allowlisted call target readFile\.$/,
+);
+
+await runAppendIsolationMutation(
+  "array binding-pattern shadow",
+  "scripts/verify-season-contract.regression.mjs",
+  "const [readFile] = [];",
+  /^scripts\/verify-season-contract\.regression\.mjs shadows allowlisted call target readFile\.$/,
+);
+
+await runAppendIsolationMutation(
   "unknown constructor",
   "scripts/verify-season-contract.regression.mjs",
   "new AbortController();",
@@ -255,5 +269,5 @@ await runAppendIsolationMutation(
   /^scripts\/verify-season\.ps1 does not match the pinned SHA-256\.$/,
 );
 
-console.log("Season contract regressions: PASS (9 rejected contract mutations; 12 rejected isolation mutations)");
+console.log("Season contract regressions: PASS (9 rejected contract mutations; 14 rejected isolation mutations)");
 console.log("Season regression proof boundary: contract/isolation only; disposable-backend and browser workflow proof not yet run");

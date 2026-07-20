@@ -233,6 +233,8 @@ const ALLOWED_STATIC_CALLS = new Map([
       "ts.createSourceFile",
       "ts.forEachChild",
       "ts.isBinaryExpression",
+      "ts.isArrayBindingPattern",
+      "ts.isBindingElement",
       "ts.isCallExpression",
       "ts.isClassDeclaration",
       "ts.isClassExpression",
@@ -246,6 +248,7 @@ const ALLOWED_STATIC_CALLS = new Map([
       "ts.isNamedImports",
       "ts.isNewExpression",
       "ts.isNumericLiteral",
+      "ts.isObjectBindingPattern",
       "ts.isParameter",
       "ts.isPropertyAccessExpression",
       "ts.isStringLiteral",
@@ -278,6 +281,7 @@ const ALLOWED_INSTANCE_METHODS = new Set([
   "keys",
   "map",
   "match",
+  "pop",
   "push",
   "replace",
   "slice",
@@ -631,12 +635,24 @@ function validateExecutableModule(content, file) {
       !ts.isClassDeclaration(node) && !ts.isClassExpression(node) && !ts.isFunctionExpression(node),
       `${file} contains a forbidden class or function-expression capability.`,
     );
-    if (
-      (ts.isVariableDeclaration(node) || ts.isParameter(node)) &&
-      ts.isIdentifier(node.name) &&
-      (allowedIdentifierCalls.has(node.name.text) || ALLOWED_NEW_TARGETS.has(node.name.text))
-    ) {
-      fail(`${file} shadows allowlisted call target ${node.name.text}.`);
+    if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
+      const pendingBindings = [node.name];
+      while (pendingBindings.length > 0) {
+        const binding = pendingBindings.pop();
+        if (ts.isIdentifier(binding)) {
+          if (allowedIdentifierCalls.has(binding.text) || ALLOWED_NEW_TARGETS.has(binding.text)) {
+            fail(`${file} shadows allowlisted call target ${binding.text}.`);
+          }
+          continue;
+        }
+        assert(
+          ts.isObjectBindingPattern(binding) || ts.isArrayBindingPattern(binding),
+          `${file} contains an unknown binding pattern.`,
+        );
+        for (const element of binding.elements) {
+          if (ts.isBindingElement(element)) pendingBindings.push(element.name);
+        }
+      }
     }
     if (ts.isIdentifier(node)) {
       assert(
