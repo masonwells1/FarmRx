@@ -136,6 +136,7 @@ test('@desktop-write creates the exact Maple January field through the real loca
   const records = card(page, 'Records')
   await records.getByRole('button', { name: 'Edit' }).click()
   await records.getByRole('combobox').selectOption('corn_yellow')
+  await expect(records.getByLabel('Crop year')).toHaveValue('2027')
   await records.getByLabel('Crop year').fill('2027')
   await records.getByLabel('Sequence').fill('1')
   await records.getByLabel('Planted acres').fill('160.00')
