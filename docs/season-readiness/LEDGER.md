@@ -132,3 +132,13 @@ Copy this template below the last entry. Do not replace the template or modify a
 - **External actions actually performed:** none. No push, pull request, merge, deployment, live migration/data, secret/auth/permission change, customer action, or communication occurred.
 - **Remaining risk / next approval:** January is accepted locally, not the complete season. February through December, the other governed scenarios, physical iPhone/Safari and Android/Chrome journeys, custom SMTP, publication, deployment, and live verification remain unproven or unauthorized.
 - **Canonical status:** defer to [`docs/GOAL.md`](../GOAL.md); no canonical status claim is made here.
+
+## SR-004 — Correct January harness range and cash-bid evidence scope
+
+- **Date/time:** 2026-07-20T17:15:00-05:00 (`America/Chicago`)
+- **Actor/model/effort:** Sol orchestrator; fresh `gpt-5.6-sol` adversarial ledger review
+- **Commit or state SHA:** correction applies to SR-003 ledger commit `8eaa5a4346442cc63fddf1b6c9c1d93aac8f41a6`
+- **Correction:** SR-003's inclusive harness range is `b78fb52^..0238361`, not `b78fb52..0238361`. SR-003 also overstates the cash-bid non-write evidence: the accepted SQL proof establishes that exactly one Maple cash-bid row still exists after January, but it does not prove every value in that row remained unchanged. Treat the SR-003 phrase `the seeded cash bid remains unchanged` as replaced by `exactly one seeded Maple cash-bid row still exists`; exact value stability remains unproven until a later proof asserts the row contents or a before/after hash.
+- **Proof and authority effect:** The January product/harness Sol PASS, exact field writes, zero opening/phone field writes, absence of later monthly outcomes, zero Inventory on-hand, authority boundaries, and remaining risks are unchanged. This correction narrows evidence; it does not add a product or release claim.
+- **External actions actually performed:** none.
+- **Canonical status:** defer to [`docs/GOAL.md`](../GOAL.md); no canonical status claim is made here.
