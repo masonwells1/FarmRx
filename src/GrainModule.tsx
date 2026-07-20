@@ -14,6 +14,7 @@ import type {
   GrainAlertSettings,
   GrainBin,
   GrainContract,
+  GrainContractDelivery,
   GrainContractType,
   GrainServices,
   GrainWorkspace,
@@ -2727,7 +2728,7 @@ function ContractEntry({
 }
 
 function ContractActions({ contract, workspace, services, onSaved, onDeliverySaved }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; onSaved: () => Promise<void>; onDeliverySaved: () => Promise<void> }) {
-  const [price, setPrice] = useState(""); const [delivery, setDelivery] = useState(""); const [message, setMessage] = useState(""); const [saving, setSaving] = useState(false); const lock = useRef(createSubmitLock()); const deliveryId = useRef<string | null>(null);
+  const [price, setPrice] = useState(""); const [delivery, setDelivery] = useState(""); const [message, setMessage] = useState(""); const [saving, setSaving] = useState(false); const [deliveryUnconfirmed, setDeliveryUnconfirmed] = useState(false); const lock = useRef(createSubmitLock()); const deliveryDraft = useRef<GrainContractDelivery | null>(null);
   const missingLeg = contract.contract_type === "basis" ? "futures_price" : contract.contract_type === "hta" ? "basis" : null;
   const finalize = async () => { if (!missingLeg || !lock.current.acquire()) return; setSaving(true); try { if (price.trim() === "") throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const value = Number(price); if (!Number.isFinite(value) || (missingLeg === "futures_price" && value <= 0)) throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const shown = `${missingLeg === "basis" && value < 0 ? "-" : ""}$${Math.abs(value).toFixed(2)}/bu`; if (!window.confirm(`Set ${missingLeg === "basis" ? "basis" : "futures price"} to ${shown}? This cannot be changed afterward.`)) return; await services.grainRepository.finalizeContractPriceLeg(contract.id, missingLeg, value); setMessage("Price leg set. Add a contract note for any correction."); await onSaved() } catch (error) { setMessage(farmerError(error, "set this price")) } finally { lock.current.release(); setSaving(false) } };
   const record = async () => {
@@ -2735,27 +2736,29 @@ function ContractActions({ contract, workspace, services, onSaved, onDeliverySav
     setSaving(true);
     let writeAccepted = false;
     try {
-      const value = Number(delivery);
+      const value = deliveryDraft.current?.bushels ?? Number(delivery);
       if (!Number.isFinite(value) || value <= 0) throw new Error("Enter delivered bushels.");
       const delivered = workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((sum, item) => sum + item.bushels, 0);
       const excess = delivered + value - contract.bushels;
       const allow_overdelivery = excess > 0 && window.confirm(`This is ${preciseBushels.format(excess)} bu more than the contract. Record anyway?`);
       if (excess > 0 && !allow_overdelivery) return;
-      deliveryId.current ??= services.createGrainId();
-      await services.grainRepository.recordContractDelivery({ id: deliveryId.current, farm_id: workspace.fields.farm.id, grain_contract_id: contract.id, bushels: value, delivered_on: localCalendarDay(new Date()), note: null, created_at: new Date().toISOString(), allow_overdelivery });
+      deliveryDraft.current ??= { id: services.createGrainId(), farm_id: workspace.fields.farm.id, grain_contract_id: contract.id, bushels: value, delivered_on: localCalendarDay(new Date()), note: null, created_at: new Date().toISOString(), allow_overdelivery };
+      await services.grainRepository.recordContractDelivery(deliveryDraft.current);
       writeAccepted = true;
       await onDeliverySaved();
-      deliveryId.current = null;
+      deliveryDraft.current = null;
+      setDeliveryUnconfirmed(false);
       setDelivery("");
       setMessage("Delivery recorded.");
     } catch (error) {
-      setMessage(writeAccepted ? "Delivery may be recorded but could not be confirmed. Retry keeps the same delivery and will not create another." : farmerError(error, "record this delivery"));
+      if (deliveryDraft.current) setDeliveryUnconfirmed(true);
+      setMessage(deliveryDraft.current || writeAccepted ? "Delivery may be recorded but could not be confirmed. Retry keeps the same delivery and will not create another." : farmerError(error, "record this delivery"));
     } finally {
       lock.current.release();
       setSaving(false);
     }
   };
-  return <div className="contract-actions">{missingLeg && contract[missingLeg] === null && <label>{missingLeg === "basis" ? "Set basis $/bu" : "Set futures price $/bu"}<input type="number" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_price_finalization} onClick={() => void finalize()}>{missingLeg === "basis" ? "Set basis" : "Set futures price"}</button>{!workspace.capabilities?.contract_price_finalization && <small>Price finalization arrives with the next database update. Reload the app after the update.</small>}</label>}<label>Delivered bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={delivery} onChange={(event) => setDelivery(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_deliveries} onClick={() => void record()}>Record delivery</button><small>Recording a delivery does not remove grain from a bin.</small>{!workspace.capabilities?.contract_deliveries && <small>Tracking arrives with the next database update. Reload the app after the update.</small>}</label>{message && <small>{message}</small>}</div>
+  return <div className="contract-actions">{missingLeg && contract[missingLeg] === null && <label>{missingLeg === "basis" ? "Set basis $/bu" : "Set futures price $/bu"}<input type="number" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_price_finalization} onClick={() => void finalize()}>{missingLeg === "basis" ? "Set basis" : "Set futures price"}</button>{!workspace.capabilities?.contract_price_finalization && <small>Price finalization arrives with the next database update. Reload the app after the update.</small>}</label>}<label>Delivered bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={delivery} disabled={deliveryUnconfirmed} onChange={(event) => setDelivery(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_deliveries} onClick={() => void record()}>{deliveryUnconfirmed ? "Retry delivery" : "Record delivery"}</button><small>Recording a delivery does not remove grain from a bin.</small>{!workspace.capabilities?.contract_deliveries && <small>Tracking arrives with the next database update. Reload the app after the update.</small>}</label>{message && <small>{message}</small>}</div>
 }
 
 function Bins({
