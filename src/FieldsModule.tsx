@@ -2033,18 +2033,15 @@ export function FieldFormPage() {
       created_at: "",
       updated_at: "",
     };
-      const saved = await fieldsRepository.saveField(
-        toDraft(
-          {
-            ...base,
-            name: name.trim(),
-            total_acres: parsed,
-            county: county.trim() || null,
-          },
-          agreement,
-          existing ? cropRows(data, existing.id, moduleYear) : [],
-        ),
-      );
+      const fieldValues = {
+        name: name.trim(),
+        total_acres: parsed,
+        county: county.trim() || null,
+      };
+      const draft = existing
+        ? createFieldEditDraft(data, existing.id, { field: fieldValues })
+        : toDraft({ ...base, ...fieldValues }, agreement);
+      const saved = await fieldsRepository.saveField(draft);
       try {
         await refresh();
         navigate(`/fields/${saved.id}`);

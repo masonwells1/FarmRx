@@ -177,7 +177,7 @@ export interface FieldDraft {
   fsa_farm_number: string | null
   fsa_tract_number: string | null
   soil_productivity_index: number | null
-  arrangement: Pick<Arrangement, 'arrangement_type' | 'landlord_name' | 'landlord_phone' | 'landlord_contact_notes' | 'effective_from' | 'cash_rent_per_acre' | 'flex_bonus_formula' | 'landlord_crop_pct' | 'landlord_seed_pct' | 'landlord_fertilizer_pct' | 'landlord_chemical_pct' | 'landlord_fuel_pct' | 'landlord_labor_custom_pct' | 'landlord_crop_insurance_pct' | 'landlord_equipment_pct' | 'landlord_interest_pct' | 'landlord_other_input_pct' | 'notes'>
+  arrangement: Pick<Arrangement, 'arrangement_type' | 'landlord_name' | 'landlord_phone' | 'landlord_contact_notes' | 'effective_from' | 'cash_rent_per_acre' | 'flex_bonus_formula' | 'landlord_crop_pct' | 'landlord_seed_pct' | 'landlord_fertilizer_pct' | 'landlord_chemical_pct' | 'landlord_fuel_pct' | 'landlord_labor_custom_pct' | 'landlord_crop_insurance_pct' | 'landlord_equipment_pct' | 'landlord_interest_pct' | 'landlord_other_input_pct' | 'notes'> & { id?: string }
   crop_assignments: Array<Omit<Pick<CropAssignment, 'id' | 'crop_year' | 'commodity_id' | 'planted_acres' | 'planting_sequence' | 'variety' | 'planting_date' | 'harvest_date' | 'harvested_bushels' | 'expected_yield_per_acre' | 'expected_price_per_bu' | 'notes'>, 'id'> & { id?: string; /** Required by the RPC after normalization. */ is_new?: boolean }>
 }
 
