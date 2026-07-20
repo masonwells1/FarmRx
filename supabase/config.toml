@@ -8,6 +8,10 @@ port = 55321
 port = 55322
 shadow_port = 55320
 
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
 [edge_runtime]
 inspector_port = 8183
 
