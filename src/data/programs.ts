@@ -32,6 +32,9 @@ export function canEditPrograms(role: FarmViewerRole) { return role === 'owner' 
 /** Audit P2-15: at the moment of confirming a pass, the farmer must see exactly what the
  * save does and does not do — program progress is never a spray record or an on-hand change. */
 export type ProgramApplyRecordChoice = 'none' | 'create' | 'link'
+export function defaultProgramApplyRecordChoice(activityType: ProgramActivityType): ProgramApplyRecordChoice {
+  return activityType === 'spray' ? 'create' : 'none'
+}
 export function programApplyConfirmation(choice: ProgramApplyRecordChoice): string {
   if (choice === 'none') return 'Progress only: this marks the pass done in your program plan. It does NOT create a spray/application record and does NOT change inventory on hand.'
   if (choice === 'create') return 'This marks the pass done AND creates a new draft application record. Inventory on hand still does not change — products here are free-typed, not matched to your shelf.'
