@@ -24,7 +24,9 @@ values
   ('27030000-0000-4000-8000-000000000002', '27010000-0000-4000-8000-000000000001', '27020000-0000-4000-8000-000000000002', 2027, 'corn_yellow', 1, 1);
 
 insert into public.programs (id, farm_id, name, program_kind, crop_year, revision, created_by, updated_by)
-values ('27050000-0000-4000-8000-000000000001', '27010000-0000-4000-8000-000000000001', 'Maple 2027 Corn Program', 'chemical', 2027, 2, '27000000-0000-4000-8000-000000000001', '27000000-0000-4000-8000-000000000001');
+values
+  ('27050000-0000-4000-8000-000000000001', '27010000-0000-4000-8000-000000000001', 'Maple 2027 Corn Program', 'chemical', 2027, 2, '27000000-0000-4000-8000-000000000001', '27000000-0000-4000-8000-000000000001'),
+  ('27050000-0000-4000-8000-000000000002', '27010000-0000-4000-8000-000000000001', 'Maple Reassign Compatibility Program', 'chemical', 2027, 1, '27000000-0000-4000-8000-000000000001', '27000000-0000-4000-8000-000000000001');
 
 insert into public.program_passes (id, farm_id, program_id, sequence, name, pass_type, activity_type, target_date, reminder_lead_days, created_by, updated_by)
 values ('27051000-0000-4000-8000-000000000001', '27010000-0000-4000-8000-000000000001', '27050000-0000-4000-8000-000000000001', 1, 'Post-emerge synthetic pass', 'post', 'spray', '2027-05-20', 3, '27000000-0000-4000-8000-000000000001', '27000000-0000-4000-8000-000000000001');
@@ -110,6 +112,42 @@ begin
   begin
     perform public.assign_program(
       '27010000-0000-4000-8000-000000000001',
+      '27059000-0000-4000-8000-000000000004',
+      '27050000-0000-4000-8000-000000000001',
+      pg_temp.maple_assignment_plan('27030000-0000-4000-8000-000000000002', '27051000-0000-4000-8000-000000000001', '27053000-0000-4000-8000-000000000004', '27053100-0000-4000-8000-000000000004')
+    );
+    raise exception 'a target identity reused a template source identity';
+  exception when others then
+    if sqlerrm not like '%must not reuse template source IDs%' then raise; end if;
+  end;
+
+  begin
+    perform public.assign_program(
+      '27010000-0000-4000-8000-000000000001',
+      '27059000-0000-4000-8000-000000000005',
+      '27050000-0000-4000-8000-000000000001',
+      pg_temp.maple_assignment_plan('27030000-0000-4000-8000-000000000002', '27052000-0000-4000-8000-000000000005', '27052000-0000-4000-8000-000000000001', '27053100-0000-4000-8000-000000000005')
+    );
+    raise exception 'an assigned-pass identity reused an existing assignment identity';
+  exception when others then
+    if sqlerrm not like '%already in use%' then raise; end if;
+  end;
+
+  begin
+    perform public.assign_program(
+      '27010000-0000-4000-8000-000000000001',
+      '27059000-0000-4000-8000-000000000006',
+      '27050000-0000-4000-8000-000000000001',
+      pg_temp.maple_assignment_plan('27030000-0000-4000-8000-000000000002', '27052000-0000-4000-8000-000000000006', '27053000-0000-4000-8000-000000000006', '27053000-0000-4000-8000-000000000001')
+    );
+    raise exception 'an assigned-product identity reused an existing assigned-pass identity';
+  exception when others then
+    if sqlerrm not like '%already in use%' then raise; end if;
+  end;
+
+  begin
+    perform public.assign_program(
+      '27010000-0000-4000-8000-000000000001',
       '27059000-0000-4000-8000-000000000002',
       '27050000-0000-4000-8000-000000000001',
       pg_temp.maple_assignment_plan('27030000-0000-4000-8000-000000000002', '27052000-0000-4000-8000-000000000002', '27053000-0000-4000-8000-000000000002', '27053100-0000-4000-8000-000000000002', 1)
@@ -144,6 +182,18 @@ begin
     or not has_function_privilege('authenticated', 'public.assign_program(uuid,uuid,uuid,jsonb)', 'EXECUTE')
     or has_function_privilege('authenticated', 'public.materialize_program_assignment_snapshot(uuid,uuid,uuid,uuid,uuid,jsonb)', 'EXECUTE') then
     raise exception 'assignment RPC privileges are not sealed';
+  end if;
+
+  perform public.reassign_program_assignment(
+    '27010000-0000-4000-8000-000000000001',
+    '27059000-0000-4000-8000-000000000007',
+    '27052000-0000-4000-8000-000000000001',
+    '27050000-0000-4000-8000-000000000002',
+    'Compatibility proof'
+  );
+  if not exists (select 1 from public.program_assignments where id = '27052000-0000-4000-8000-000000000001' and status = 'archived')
+    or not exists (select 1 from public.program_assignments where crop_assignment_id = '27030000-0000-4000-8000-000000000001' and program_id = '27050000-0000-4000-8000-000000000002' and status = 'active') then
+    raise exception 'legacy reassign path did not preserve a working server-owned replacement';
   end if;
 end;
 $$;

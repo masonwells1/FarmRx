@@ -11,80 +11,674 @@ import type { FarmOperationContext } from './farmOperationContext'
 const blocked = 'Saved changes on this device need attention. Nothing was deleted.'
 const offlineMessage = 'Your saved programs are waiting on this device. Connect to load your programs.'
 type Context = { userId: string; farmId: string }
-function pendingProgram(entry: Extract<ProgramsQueueEntryV1, { kind: 'save_program' }>, context: Context, existing?: Program): Program { return { ...entry.draft, id: entry.draft.id!, farm_id: context.farmId, revision: existing?.revision ?? 1, is_archived: existing?.is_archived ?? false, passes: existing?.passes ?? [], pending: true } }
-function pendingPass(entry: Extract<ProgramsQueueEntryV1, { kind: 'save_program_pass' }>, context: Context, existing?: ProgramPass): ProgramPass { return { ...entry.pass, id: entry.pass.id!, farm_id: context.farmId, program_id: entry.programId, sequence: existing?.sequence ?? 1, is_archived: false, products: entry.products.map((product, index) => ({ ...normalizeProgramProductDraft(product), id: product.id!, farm_id: context.farmId, program_pass_id: entry.pass.id!, sequence: index + 1, is_archived: false })), pending: true } }
+function pendingProgram(entry: Extract<ProgramsQueueEntryV1, { kind: 'save_program' }>, context: Context, existing?: Program): Program {
+  return {
+    ...entry.draft,
+    id: entry.draft.id!,
+    farm_id: context.farmId,
+    revision: existing?.revision ?? 1,
+    is_archived: existing?.is_archived ?? false,
+    passes: existing?.passes ?? [],
+    pending: true,
+  }
+}
+function pendingPass(entry: Extract<ProgramsQueueEntryV1, { kind: 'save_program_pass' }>, context: Context, existing?: ProgramPass): ProgramPass {
+  return {
+    ...entry.pass,
+    id: entry.pass.id!,
+    farm_id: context.farmId,
+    program_id: entry.programId,
+    sequence: existing?.sequence ?? 1,
+    is_archived: false,
+    products: entry.products.map((product, index) => ({
+      ...normalizeProgramProductDraft(product),
+      id: product.id!,
+      farm_id: context.farmId,
+      program_pass_id: entry.pass.id!,
+      sequence: index + 1,
+      is_archived: false,
+    })),
+    pending: true,
+  }
+}
 export class QueuedProgramsRepository implements ProgramsRepository {
   private workspace: ProgramsData | null = null
   private readonly memoryScope = new WorkspaceMemoryScope()
-  constructor(private readonly live: SupabaseProgramsRepository, private readonly d: { getContext: () => Promise<Context>; projectRef: string; storage: StorageLike; createId: () => string; clock: () => string; isOffline: () => boolean }) {}
-  private async source() { const operationContext = await captureQueuedOperationContext(this.d); const context = { userId: operationContext.userId, farmId: operationContext.farmId }; const queue = new ProgramsWriteQueue(this.d.storage, programsWriteQueueKey(this.d.projectRef, context.userId, context.farmId)); const memoryGuard = this.memoryScope.enter(this.d.storage, { projectRef: this.d.projectRef, ...context, module: 'programs' }, () => { this.workspace = null }); return { context, operationContext, queue, memoryGuard } }
-  private locked<T>(queue: ProgramsWriteQueue, task: (verify: () => void) => Promise<T>) { return queueTransaction(queue.key, this.d.storage, this.d.createId, task) }
-  private base<K extends ProgramsQueueEntryV1['kind']>(kind: K, context: Context) { return { version: 1 as const, module: 'programs' as const, kind, operationId: this.d.createId(), userId: context.userId, farmId: context.farmId, enqueuedAt: this.d.clock() } }
+  constructor(
+    private readonly live: SupabaseProgramsRepository,
+    private readonly d: {
+      getContext: () => Promise<Context>
+      projectRef: string
+      storage: StorageLike
+      createId: () => string
+      clock: () => string
+      isOffline: () => boolean
+    },
+  ) {}
+  private async source() {
+    const operationContext = await captureQueuedOperationContext(this.d)
+    const context = {
+      userId: operationContext.userId,
+      farmId: operationContext.farmId,
+    }
+    const queue = new ProgramsWriteQueue(this.d.storage, programsWriteQueueKey(this.d.projectRef, context.userId, context.farmId))
+    const memoryGuard = this.memoryScope.enter(this.d.storage, { projectRef: this.d.projectRef, ...context, module: 'programs' }, () => {
+      this.workspace = null
+    })
+    return { context, operationContext, queue, memoryGuard }
+  }
+  private locked<T>(queue: ProgramsWriteQueue, task: (verify: () => void) => Promise<T>) {
+    return queueTransaction(queue.key, this.d.storage, this.d.createId, task)
+  }
+  private base<K extends ProgramsQueueEntryV1['kind']>(kind: K, context: Context) {
+    return {
+      version: 1 as const,
+      module: 'programs' as const,
+      kind,
+      operationId: this.d.createId(),
+      userId: context.userId,
+      farmId: context.farmId,
+      enqueuedAt: this.d.clock(),
+    }
+  }
+  private assignmentPlans(program: Program, cropAssignmentIds: string[]) {
+    const plans: AssignmentIdentityPlan[] = cropAssignmentIds.map((crop_assignment_id) => ({
+      crop_assignment_id,
+      assignment_id: this.d.createId(),
+      expected_program_revision: program.revision,
+      passes: program.passes.map((pass) => ({
+        source_program_pass_id: pass.id,
+        assigned_pass_id: this.d.createId(),
+        products: pass.products.map((product) => ({
+          source_program_pass_product_id: product.id,
+          assigned_product_id: this.d.createId(),
+        })),
+      })),
+    }))
+    if (!validAssignmentIdentityPlans(plans)) throw new Error(blocked)
+    return plans
+  }
   /** Audit P2-06: report the real number of waiting Program saves whenever the queue is
    * readable; fall back to the stored-bytes signal only when the queue itself is corrupt. */
-  private rawPending(queue: ProgramsWriteQueue) { try { return queue.read().entries.length } catch { return queue.hasStoredData() ? 1 : 0 } }; private markBlocked(queue: ProgramsWriteQueue) { setModuleSyncStatus('programs', { kind: 'blocked', pending: this.rawPending(queue), message: blocked }) }; private async refreshWorkspace(memoryGuard: WorkspaceMemoryGuard, operationContext: FarmOperationContext) { const workspace = await this.live.getData(true); await verifyQueuedReadContext(this.d, operationContext); this.memoryScope.verify(this.d.storage, memoryGuard); this.workspace = workspace; return this.workspace }
+  private rawPending(queue: ProgramsWriteQueue) {
+    try {
+      return queue.read().entries.length
+    } catch {
+      return queue.hasStoredData() ? 1 : 0
+    }
+  }
+  private markBlocked(queue: ProgramsWriteQueue) {
+    setModuleSyncStatus('programs', {
+      kind: 'blocked',
+      pending: this.rawPending(queue),
+      message: blocked,
+    })
+  }
+  private async refreshWorkspace(memoryGuard: WorkspaceMemoryGuard, operationContext: FarmOperationContext) {
+    const workspace = await this.live.getData(true)
+    await verifyQueuedReadContext(this.d, operationContext)
+    this.memoryScope.verify(this.d.storage, memoryGuard)
+    this.workspace = workspace
+    return this.workspace
+  }
   async getData(includeArchived = false): Promise<ProgramsData> {
-    const { context, operationContext, queue, memoryGuard } = await this.source(); const verifyRead = () => verifyQueuedReadContext(this.d, operationContext); const cacheScope = { projectRef: this.d.projectRef, ...context, module: 'programs' }
+    const { context, operationContext, queue, memoryGuard } = await this.source()
+    const verifyRead = () => verifyQueuedReadContext(this.d, operationContext)
+    const cacheScope = {
+      projectRef: this.d.projectRef,
+      ...context,
+      module: 'programs',
+    }
     try {
       if (!this.d.isOffline()) {
         const cacheFence = captureWorkspaceCacheFence(cacheScope)
         await this.refreshWorkspace(memoryGuard, operationContext)
-        await writeWorkspaceCache(cacheScope, this.workspace, cacheFence); await verifyRead(); this.memoryScope.verify(this.d.storage, memoryGuard)
+        await writeWorkspaceCache(cacheScope, this.workspace, cacheFence)
+        await verifyRead()
+        this.memoryScope.verify(this.d.storage, memoryGuard)
       }
-      if (!this.workspace) { const cached = await readWorkspaceCache<ProgramsData>(cacheScope, operationalCacheMaxAgeMs); await verifyRead(); this.memoryScope.verify(this.d.storage, memoryGuard); if (cached) this.workspace = cached.data }
+      if (!this.workspace) {
+        const cached = await readWorkspaceCache<ProgramsData>(cacheScope, operationalCacheMaxAgeMs)
+        await verifyRead()
+        this.memoryScope.verify(this.d.storage, memoryGuard)
+        if (cached) this.workspace = cached.data
+      }
       if (!this.workspace) throw new Error(offlineMessage)
-      await verifyRead(); this.memoryScope.verify(this.d.storage, memoryGuard)
+      await verifyRead()
+      this.memoryScope.verify(this.d.storage, memoryGuard)
       const result = await this.locked(queue, () => Promise.resolve(this.project(this.workspace!, queue.read().entries, includeArchived)))
-      await verifyRead(); return result
+      await verifyRead()
+      return result
     } catch (error) {
       await verifyRead()
       try {
-        const entries = await this.locked(queue, () => Promise.resolve(queue.read().entries)); await verifyRead()
-        if (!this.workspace && isTransportFailure(error, this.d.isOffline())) { const cached = await readWorkspaceCache<ProgramsData>(cacheScope, operationalCacheMaxAgeMs); await verifyRead(); this.memoryScope.verify(this.d.storage, memoryGuard); if (cached) this.workspace = cached.data }
-        if (this.workspace && isTransportFailure(error, this.d.isOffline())) { await verifyRead(); this.memoryScope.verify(this.d.storage, memoryGuard); return this.project(this.workspace, entries, includeArchived) }
+        const entries = await this.locked(queue, () => Promise.resolve(queue.read().entries))
+        await verifyRead()
+        if (!this.workspace && isTransportFailure(error, this.d.isOffline())) {
+          const cached = await readWorkspaceCache<ProgramsData>(cacheScope, operationalCacheMaxAgeMs)
+          await verifyRead()
+          this.memoryScope.verify(this.d.storage, memoryGuard)
+          if (cached) this.workspace = cached.data
+        }
+        if (this.workspace && isTransportFailure(error, this.d.isOffline())) {
+          await verifyRead()
+          this.memoryScope.verify(this.d.storage, memoryGuard)
+          return this.project(this.workspace, entries, includeArchived)
+        }
         if (!this.workspace && entries.length && isTransportFailure(error, this.d.isOffline())) throw new Error(offlineMessage)
-      } catch (fallbackError) { this.markBlocked(queue); throw fallbackError }
+      } catch (fallbackError) {
+        this.markBlocked(queue)
+        throw fallbackError
+      }
       throw error
     }
   }
   private project(workspace: ProgramsData, entries: ProgramsQueueEntryV1[], includeArchived: boolean): ProgramsData {
     const value = structuredClone(workspace)
     for (const entry of entries) {
-      if (entry.kind === 'save_program') { const index = value.programs.findIndex((program) => program.id === entry.draft.id); const next = pendingProgram(entry, entry, index >= 0 ? value.programs[index] : undefined); if (index >= 0) value.programs[index] = next; else value.programs.push(next); continue }
-      if (entry.kind === 'save_program_pass') { const program = value.programs.find((item) => item.id === entry.programId); if (!program) continue; const next = pendingPass(entry, entry); const without = program.passes.filter((pass) => pass.id !== next.id); const after = entry.placeAfterPassId === null ? -1 : without.findIndex((pass) => pass.id === entry.placeAfterPassId); if (entry.placeAfterPassId !== null && after < 0) throw new Error(blocked); program.passes = [...without.slice(0, after + 1), next, ...without.slice(after + 1)].map((pass, index) => ({ ...pass, sequence: index + 1 })); continue }
-      if (entry.kind === 'reorder_program_passes') { const program = value.programs.find((item) => item.id === entry.programId); if (!program) continue; const byId = new Map(program.passes.map((pass) => [pass.id, pass])); if (entry.orderedPassIds.length !== byId.size || entry.orderedPassIds.some((id) => !byId.has(id))) throw new Error(blocked); program.passes = entry.orderedPassIds.map((id, index) => ({ ...byId.get(id)!, sequence: index + 1, pending: true })); continue }
-      if (entry.kind === 'delete_program_pass') { const program = value.programs.find((item) => item.id === entry.programId); if (program) program.passes = program.passes.filter((pass) => pass.id !== entry.passId).map((pass, index) => ({ ...pass, sequence: index + 1, pending: true })); continue }
-      if (entry.kind === 'delete_program') { value.programs.forEach((program) => { if (program.id === entry.programId) { program.is_archived = true; program.pending = true } }); continue }
-      if (entry.kind === 'assign_program') { const program = value.programs.find((item) => item.id === entry.programId); if (!program) continue; for (const plan of entry.assignmentPlans) { const crop = value.cropAssignments.find((item) => item.id === plan.crop_assignment_id); if (!crop) continue; const passes = plan.passes.map((passPlan) => { const source = program.passes.find((pass) => pass.id === passPlan.source_program_pass_id)!; return { id: passPlan.assigned_pass_id, assignment_id: plan.assignment_id, source_program_pass_id: source.id, source_revision: plan.expected_program_revision, sequence: source.sequence, name: source.name, pass_type: source.pass_type, activity_type: source.activity_type, timing_label: source.timing_label, target_date: source.target_date, planting_offset_days: source.planting_offset_days, reminder_lead_days: source.reminder_lead_days, notes: source.notes, due_on: source.target_date, due_source: source.target_date ? 'template_date' as const : source.planting_offset_days !== null && crop.planting_date ? 'planting_offset' as const : 'unscheduled' as const, is_field_override: false, status: 'planned' as const, applied_on: null, applied_acres: null, skipped_on: null, skip_reason: null, cancelled_at: null, cancel_reason: null, application_record_id: null, products: passPlan.products.map((productPlan) => { const product = source.products.find((item) => item.id === productPlan.source_program_pass_product_id)!; return { id: productPlan.assigned_product_id, farm_id: crop.farm_id, assigned_pass_id: passPlan.assigned_pass_id, source_program_pass_product_id: product.id, sequence: product.sequence, product_name: product.product_name, rate_text: product.rate_text, unit_text: product.unit_text, estimated_cost_per_acre: product.estimated_cost_per_acre, notes: product.notes, actual_product_name: null, actual_rate_text: null, actual_unit_text: null, actual_cost_per_acre: null } }) } }); value.assignments.push({ ...crop, assignment_id: plan.assignment_id, program_id: program.id, program_name_snapshot: program.name, program_kind_snapshot: program.program_kind, assignment_status: 'active', template_revision: plan.expected_program_revision, current_template_revision: plan.expected_program_revision, passes, pending: true }) }; continue }
+      if (entry.kind === 'save_program') {
+        const index = value.programs.findIndex((program) => program.id === entry.draft.id)
+        const next = pendingProgram(entry, entry, index >= 0 ? value.programs[index] : undefined)
+        if (index >= 0) value.programs[index] = next
+        else value.programs.push(next)
+        continue
+      }
+      if (entry.kind === 'save_program_pass') {
+        const program = value.programs.find((item) => item.id === entry.programId)
+        if (!program) continue
+        const next = pendingPass(entry, entry)
+        const without = program.passes.filter((pass) => pass.id !== next.id)
+        const after = entry.placeAfterPassId === null ? -1 : without.findIndex((pass) => pass.id === entry.placeAfterPassId)
+        if (entry.placeAfterPassId !== null && after < 0) throw new Error(blocked)
+        program.passes = [...without.slice(0, after + 1), next, ...without.slice(after + 1)].map((pass, index) => ({ ...pass, sequence: index + 1 }))
+        continue
+      }
+      if (entry.kind === 'reorder_program_passes') {
+        const program = value.programs.find((item) => item.id === entry.programId)
+        if (!program) continue
+        const byId = new Map(program.passes.map((pass) => [pass.id, pass]))
+        if (entry.orderedPassIds.length !== byId.size || entry.orderedPassIds.some((id) => !byId.has(id))) throw new Error(blocked)
+        program.passes = entry.orderedPassIds.map((id, index) => ({
+          ...byId.get(id)!,
+          sequence: index + 1,
+          pending: true,
+        }))
+        continue
+      }
+      if (entry.kind === 'delete_program_pass') {
+        const program = value.programs.find((item) => item.id === entry.programId)
+        if (program)
+          program.passes = program.passes
+            .filter((pass) => pass.id !== entry.passId)
+            .map((pass, index) => ({
+              ...pass,
+              sequence: index + 1,
+              pending: true,
+            }))
+        continue
+      }
+      if (entry.kind === 'delete_program') {
+        value.programs.forEach((program) => {
+          if (program.id === entry.programId) {
+            program.is_archived = true
+            program.pending = true
+          }
+        })
+        continue
+      }
+      if (entry.kind === 'assign_program') {
+        const program = value.programs.find((item) => item.id === entry.programId)
+        if (!program) continue
+        if ('cropAssignmentIds' in entry) {
+          for (const cropId of entry.cropAssignmentIds) {
+            const crop = value.cropAssignments.find((item) => item.id === cropId)
+            if (crop)
+              value.assignments.push({
+                ...crop,
+                assignment_id: 'pending:' + entry.operationId + ':' + crop.id,
+                program_id: program.id,
+                program_name_snapshot: program.name,
+                program_kind_snapshot: program.program_kind,
+                assignment_status: 'active',
+                template_revision: program.revision,
+                current_template_revision: program.revision,
+                passes: [],
+                pending: true,
+              })
+          }
+          continue
+        }
+        for (const plan of entry.assignmentPlans) {
+          const crop = value.cropAssignments.find((item) => item.id === plan.crop_assignment_id)
+          if (!crop) continue
+          const passes = plan.passes.map((passPlan) => {
+            const source = program.passes.find((pass) => pass.id === passPlan.source_program_pass_id)!
+            return {
+              id: passPlan.assigned_pass_id,
+              assignment_id: plan.assignment_id,
+              source_program_pass_id: source.id,
+              source_revision: plan.expected_program_revision,
+              sequence: source.sequence,
+              name: source.name,
+              pass_type: source.pass_type,
+              activity_type: source.activity_type,
+              timing_label: source.timing_label,
+              target_date: source.target_date,
+              planting_offset_days: source.planting_offset_days,
+              reminder_lead_days: source.reminder_lead_days,
+              notes: source.notes,
+              due_on: source.target_date,
+              due_source: source.target_date ? ('template_date' as const) : source.planting_offset_days !== null && crop.planting_date ? ('planting_offset' as const) : ('unscheduled' as const),
+              is_field_override: false,
+              status: 'planned' as const,
+              applied_on: null,
+              applied_acres: null,
+              skipped_on: null,
+              skip_reason: null,
+              cancelled_at: null,
+              cancel_reason: null,
+              application_record_id: null,
+              products: passPlan.products.map((productPlan) => {
+                const product = source.products.find((item) => item.id === productPlan.source_program_pass_product_id)!
+                return {
+                  id: productPlan.assigned_product_id,
+                  farm_id: crop.farm_id,
+                  assigned_pass_id: passPlan.assigned_pass_id,
+                  source_program_pass_product_id: product.id,
+                  sequence: product.sequence,
+                  product_name: product.product_name,
+                  rate_text: product.rate_text,
+                  unit_text: product.unit_text,
+                  estimated_cost_per_acre: product.estimated_cost_per_acre,
+                  notes: product.notes,
+                  actual_product_name: null,
+                  actual_rate_text: null,
+                  actual_unit_text: null,
+                  actual_cost_per_acre: null,
+                }
+              }),
+            }
+          })
+          value.assignments.push({
+            ...crop,
+            assignment_id: plan.assignment_id,
+            program_id: program.id,
+            program_name_snapshot: program.name,
+            program_kind_snapshot: program.program_kind,
+            assignment_status: 'active',
+            template_revision: plan.expected_program_revision,
+            current_template_revision: plan.expected_program_revision,
+            passes,
+            pending: true,
+          })
+        }
+        continue
+      }
       const passId = 'assignedPassId' in entry ? entry.assignedPassId : null
       const assignment = 'assignmentId' in entry ? value.assignments.find((item) => item.assignment_id === entry.assignmentId) : value.assignments.find((item) => passId !== null && item.passes.some((pass) => pass.id === passId))
       if (!assignment) continue
       assignment.pending = true
-      if (entry.kind === 'unassign_program') { assignment.assignment_status = 'archived'; continue }
-      if (entry.kind === 'reassign_program_assignment') { const program = value.programs.find((item) => item.id === entry.newProgramId); if (program) value.assignments.push({ ...assignment, assignment_id: 'pending:' + entry.operationId + ':' + assignment.id, program_id: program.id, program_name_snapshot: program.name, program_kind_snapshot: program.program_kind, assignment_status: 'active', template_revision: program.revision, current_template_revision: program.revision, passes: [], pending: true }); continue }
+      if (entry.kind === 'unassign_program') {
+        assignment.assignment_status = 'archived'
+        continue
+      }
+      if (entry.kind === 'reassign_program_assignment') {
+        const program = value.programs.find((item) => item.id === entry.newProgramId)
+        if (program)
+          value.assignments.push({
+            ...assignment,
+            assignment_id: 'pending:' + entry.operationId + ':' + assignment.id,
+            program_id: program.id,
+            program_name_snapshot: program.name,
+            program_kind_snapshot: program.program_kind,
+            assignment_status: 'active',
+            template_revision: program.revision,
+            current_template_revision: program.revision,
+            passes: [],
+            pending: true,
+          })
+        continue
+      }
       const pass = assignment.passes.find((item) => item.id === passId)
       if (!pass) continue
-      if (entry.kind === 'reschedule_program_pass') Object.assign(pass, { due_on: entry.dueOn, timing_label: entry.timingLabel, due_source: 'manual', is_field_override: true, pending: true })
-      if (entry.kind === 'skip_program_pass') Object.assign(pass, { status: 'skipped', skipped_on: entry.skippedOn, skip_reason: entry.reason, pending: true })
-      if (entry.kind === 'mark_program_pass_applied') { const link = entry.applicationLink; const linked = link.kind === 'link'; Object.assign(pass, { status: 'applied', applied_on: linked ? link.canonicalAppliedOn ?? entry.appliedOn : entry.appliedOn, applied_acres: linked ? link.canonicalAppliedAcres ?? entry.appliedAcres : entry.appliedAcres, application_record_id: link.kind === 'none' ? null : link.applicationRecordId, pending: true }); pass.products = pass.products.map((product) => { const actual = entry.actualProducts.find((item) => item.id === product.id); return actual ? { ...product, ...actual } : product }) }
+      if (entry.kind === 'reschedule_program_pass')
+        Object.assign(pass, {
+          due_on: entry.dueOn,
+          timing_label: entry.timingLabel,
+          due_source: 'manual',
+          is_field_override: true,
+          pending: true,
+        })
+      if (entry.kind === 'skip_program_pass')
+        Object.assign(pass, {
+          status: 'skipped',
+          skipped_on: entry.skippedOn,
+          skip_reason: entry.reason,
+          pending: true,
+        })
+      if (entry.kind === 'mark_program_pass_applied') {
+        const link = entry.applicationLink
+        const linked = link.kind === 'link'
+        Object.assign(pass, {
+          status: 'applied',
+          applied_on: linked ? (link.canonicalAppliedOn ?? entry.appliedOn) : entry.appliedOn,
+          applied_acres: linked ? (link.canonicalAppliedAcres ?? entry.appliedAcres) : entry.appliedAcres,
+          application_record_id: link.kind === 'none' ? null : link.applicationRecordId,
+          pending: true,
+        })
+        pass.products = pass.products.map((product) => {
+          const actual = entry.actualProducts.find((item) => item.id === product.id)
+          return actual ? { ...product, ...actual } : product
+        })
+      }
     }
-    return { ...value, programs: value.programs.filter((program) => includeArchived || !program.is_archived).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)), assignments: value.assignments.filter((assignment) => includeArchived || assignment.assignment_status === 'active' || assignment.passes.some((pass) => pass.status !== 'planned')) }
+    return {
+      ...value,
+      programs: value.programs.filter((program) => includeArchived || !program.is_archived).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+      assignments: value.assignments.filter((assignment) => includeArchived || assignment.assignment_status === 'active' || assignment.passes.some((pass) => pass.status !== 'planned')),
+    }
   }
-  private async send(entry: ProgramsQueueEntryV1, operationContext: FarmOperationContext) { await verifyQueuedOperationContext(this.d, operationContext, entry); if (entry.kind === 'save_program') return this.live.saveProgramOperation(entry.draft, entry.operationId, operationContext); if (entry.kind === 'save_program_pass') return this.live.saveProgramPassOperation(entry.programId, entry.pass, entry.products, entry.placeAfterPassId, entry.operationId, operationContext); if (entry.kind === 'reorder_program_passes') return this.live.reorderProgramPassesOperation(entry.programId, entry.orderedPassIds, entry.operationId, operationContext); if (entry.kind === 'delete_program_pass') return this.live.deleteProgramPassOperation(entry.programId, entry.passId, entry.operationId, operationContext); if (entry.kind === 'delete_program') return this.live.deleteProgramOperation(entry.programId, entry.operationId, operationContext); if (entry.kind === 'assign_program') return this.live.assignProgramOperation(entry.programId, entry.assignmentPlans, entry.operationId, operationContext); if (entry.kind === 'refresh_program_assignment') return this.live.refreshProgramAssignmentOperation(entry.assignmentId, entry.operationId, operationContext); if (entry.kind === 'reassign_program_assignment') return this.live.reassignProgramAssignmentOperation(entry.assignmentId, entry.newProgramId, entry.reason, entry.operationId, operationContext); if (entry.kind === 'reschedule_program_pass') return this.live.rescheduleProgramPassOperation(entry.assignedPassId, entry.dueOn, entry.timingLabel, entry.operationId, operationContext); if (entry.kind === 'mark_program_pass_applied') return this.live.markProgramPassAppliedOperation(entry.assignedPassId, entry.appliedOn, entry.appliedAcres, entry.actualProducts, entry.applicationLink, entry.operationId, operationContext); if (entry.kind === 'skip_program_pass') return this.live.skipProgramPassOperation(entry.assignedPassId, entry.skippedOn, entry.reason, entry.operationId, operationContext); return this.live.unassignProgramOperation(entry.assignmentId, entry.reason, entry.operationId, operationContext) }
-  private async submit(entry: ProgramsQueueEntryV1, operationContext: FarmOperationContext, alreadyQueued = false) { const { context, queue, memoryGuard } = await this.source(); if (entry.userId !== context.userId || entry.farmId !== context.farmId) throw new Error(blocked); await verifyQueuedOperationContext(this.d, operationContext, entry); const result = await this.locked(queue, async (verify) => { const verifyOperation = async () => { verify(); await verifyQueuedOperationContext(this.d, operationContext, entry); this.memoryScope.verify(this.d.storage, memoryGuard) }; await verifyOperation(); const enqueue = async () => { await verifyOperation(); const next = alreadyQueued ? queue.read() : queue.append(entry); setModuleSyncStatus('programs', { kind: 'pending', pending: next.entries.length }); return undefined }; if (this.d.isOffline() || queue.read().entries.length) return enqueue(); try { const sent = await this.send(entry, operationContext); await verifyOperation(); await this.refreshWorkspace(memoryGuard, operationContext); await verifyOperation(); setModuleSyncStatus('programs', { kind: 'synced', pending: 0 }); return sent } catch (error) { await verifyQueuedOperationContext(this.d, operationContext, entry); if (!isTransportFailure(error, this.d.isOffline())) throw error; return enqueue() } }); launchReplayInBackground(() => this.inspectAndReplay()); return result }
-  async saveProgram(draft: ProgramDraft) { const validation = validateProgramDraft(draft); if (validation) throw new Error(validation); const { context, operationContext } = await this.source(); const entry = { ...this.base('save_program', context), draft: { ...draft, id: draft.id ?? this.d.createId() } } as Extract<ProgramsQueueEntryV1, { kind: 'save_program' }>; return (await this.submit(entry, operationContext) as Program | undefined) ?? pendingProgram(entry, context, this.workspace?.programs.find((p) => p.id === entry.draft.id)) }
-  async saveProgramPass(programId: string, pass: ProgramPassDraft, products: ProgramProductDraft[], placeAfterPassId: string | null) { const validation = validateProgramPassDraft(pass) ?? products.map(validateProgramProductDraft).find(Boolean) ?? null; if (validation) throw new Error(validation); const { context, operationContext } = await this.source(); const entry = { ...this.base('save_program_pass', context), programId, pass: { ...pass, id: pass.id ?? this.d.createId() }, products: products.map((p) => ({ ...p, id: p.id ?? this.d.createId() })), placeAfterPassId } as Extract<ProgramsQueueEntryV1, { kind: 'save_program_pass' }>; return (await this.submit(entry, operationContext) as ProgramPass | undefined) ?? pendingPass(entry, context) }
-  async reorderProgramPasses(programId: string, orderedPassIds: string[]) { const { context, operationContext } = await this.source(); const entry = { ...this.base('reorder_program_passes', context), programId, orderedPassIds } as Extract<ProgramsQueueEntryV1, { kind: 'reorder_program_passes' }>; return (await this.submit(entry, operationContext) as string[] | undefined) ?? orderedPassIds }
-  async deleteProgramPass(programId: string, passId: string) { const { context, operationContext } = await this.source(); await this.submit({ ...this.base('delete_program_pass', context), programId, passId } as Extract<ProgramsQueueEntryV1, { kind: 'delete_program_pass' }>, operationContext) }
-  async deleteProgram(programId: string) { const { context, operationContext } = await this.source(); const result = await this.submit({ ...this.base('delete_program', context), programId } as Extract<ProgramsQueueEntryV1, { kind: 'delete_program' }>, operationContext); return (result as Program | undefined) ?? { id: programId, farm_id: context.farmId, name: 'Archived program', program_kind: null, commodity_id: null, crop_year: null, notes: null, revision: 1, is_archived: true, passes: [], pending: true } }
-  async assignProgram(programId: string, cropAssignmentIds: string[]) { const { context, operationContext } = await this.source(); const program = this.workspace?.programs.find((item) => item.id === programId && !item.is_archived); if (!program || !cropAssignmentIds.length || cropAssignmentIds.length > 200 || new Set(cropAssignmentIds).size !== cropAssignmentIds.length || cropAssignmentIds.some((id) => !this.workspace?.cropAssignments.some((crop) => crop.id === id))) throw new Error(blocked); const assignmentPlans: AssignmentIdentityPlan[] = cropAssignmentIds.map((crop_assignment_id) => ({ crop_assignment_id, assignment_id: this.d.createId(), expected_program_revision: program.revision, passes: program.passes.map((pass) => ({ source_program_pass_id: pass.id, assigned_pass_id: this.d.createId(), products: pass.products.map((product) => ({ source_program_pass_product_id: product.id, assigned_product_id: this.d.createId() })) })) })); if (!validAssignmentIdentityPlans(assignmentPlans)) throw new Error(blocked); const entry = { ...this.base('assign_program', context), programId, assignmentPlans } as Extract<ProgramsQueueEntryV1, { kind: 'assign_program' }>; const queue = new ProgramsWriteQueue(this.d.storage, programsWriteQueueKey(this.d.projectRef, context.userId, context.farmId)); await this.locked(queue, async () => { queue.append(entry) }); const result = await this.submit(entry, operationContext, true); return (result as ProgramAssignment[] | undefined) ?? [] }
-  async refreshProgramAssignment(assignmentId: string) { const { context, operationContext } = await this.source(); const entry = { ...this.base('refresh_program_assignment', context), assignmentId } as Extract<ProgramsQueueEntryV1, { kind: 'refresh_program_assignment' }>; return (await this.submit(entry, operationContext) as ProgramAssignment | undefined) ?? this.pendingAssignment(assignmentId) }
-  async reassignProgramAssignment(assignmentId: string, newProgramId: string, reason: string) { const { context, operationContext } = await this.source(); const entry = { ...this.base('reassign_program_assignment', context), assignmentId, newProgramId, reason } as Extract<ProgramsQueueEntryV1, { kind: 'reassign_program_assignment' }>; return (await this.submit(entry, operationContext) as ProgramAssignment | undefined) ?? this.pendingAssignment(assignmentId) }
-  async rescheduleProgramPass(assignedPassId: string, dueOn: string, timingLabel: string | null) { const { context, operationContext } = await this.source(); const entry = { ...this.base('reschedule_program_pass', context), assignedPassId, dueOn, timingLabel } as Extract<ProgramsQueueEntryV1, { kind: 'reschedule_program_pass' }>; return (await this.submit(entry, operationContext) as AssignedProgramPass | undefined) ?? this.pendingPassById(assignedPassId) }
-  async markProgramPassApplied(assignedPassId: string, appliedOn: string, appliedAcres: number, actualProducts: ActualProgramProduct[], applicationLink: import('./programs').ProgramApplicationLink = { kind: 'none' }) { const validation = validateActualProgramProducts(actualProducts); if (validation) throw new Error(validation); const { context, operationContext } = await this.source(); const entry = { ...this.base('mark_program_pass_applied', context), assignedPassId, appliedOn, appliedAcres, actualProducts, applicationLink } as Extract<ProgramsQueueEntryV1, { kind: 'mark_program_pass_applied' }>; return (await this.submit(entry, operationContext) as AssignedProgramPass | undefined) ?? this.pendingPassById(assignedPassId) }
-  async skipProgramPass(assignedPassId: string, skippedOn: string, reason: string) { const { context, operationContext } = await this.source(); const entry = { ...this.base('skip_program_pass', context), assignedPassId, skippedOn, reason } as Extract<ProgramsQueueEntryV1, { kind: 'skip_program_pass' }>; return (await this.submit(entry, operationContext) as AssignedProgramPass | undefined) ?? this.pendingPassById(assignedPassId) }
-  async unassignProgram(assignmentId: string, reason: string) { const { context, operationContext } = await this.source(); await this.submit({ ...this.base('unassign_program', context), assignmentId, reason } as Extract<ProgramsQueueEntryV1, { kind: 'unassign_program' }>, operationContext) }
-  private pendingAssignment(id: string) { const assignment = this.workspace?.assignments.find((a) => a.assignment_id === id); if (!assignment) throw new Error(blocked); return { ...assignment, pending: true } }
-  private pendingPassById(id: string) { const pass = this.workspace?.assignments.flatMap((a) => a.passes).find((p) => p.id === id); if (!pass) throw new Error(blocked); return { ...pass, pending: true } }
-  async inspectAndReplay() { let source: Awaited<ReturnType<QueuedProgramsRepository['source']>>; try { source = await this.source() } catch (error) { if (isFarmReplayContextChangedError(error)) throw error; return }; const { context, operationContext, queue, memoryGuard } = source; try { await this.locked(queue, async (verify) => { await verifyQueuedOperationContext(this.d, operationContext, context); verify(); this.memoryScope.verify(this.d.storage, memoryGuard); let envelope = queue.read(); if (!envelope.entries.length) { setModuleSyncStatus('programs', { kind: 'synced', pending: 0 }); return } if (this.d.isOffline()) { setModuleSyncStatus('programs', { kind: 'pending', pending: envelope.entries.length }); return } while (envelope.entries.length) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); await verifyQueuedOperationContext(this.d, operationContext, head); setModuleSyncStatus('programs', { kind: 'syncing', pending: envelope.entries.length }); try { await this.send(head, operationContext); verify(); await verifyQueuedOperationContext(this.d, operationContext, head); await this.refreshWorkspace(memoryGuard, operationContext); verify(); await verifyQueuedOperationContext(this.d, operationContext, head); envelope = queue.removeConfirmedHead(head.operationId) } catch (error) { await verifyQueuedOperationContext(this.d, operationContext, head); if (isTransportFailure(error, this.d.isOffline())) { setModuleSyncStatus('programs', { kind: 'pending', pending: envelope.entries.length }); return } setModuleSyncStatus('programs', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } } setModuleSyncStatus('programs', { kind: 'synced', pending: 0 }) }) } catch (error) { if (isFarmReplayContextChangedError(error)) throw error; this.markBlocked(queue) } }
+  private async send(entry: ProgramsQueueEntryV1, operationContext: FarmOperationContext) {
+    await verifyQueuedOperationContext(this.d, operationContext, entry)
+    if (entry.kind === 'save_program') return this.live.saveProgramOperation(entry.draft, entry.operationId, operationContext)
+    if (entry.kind === 'save_program_pass') return this.live.saveProgramPassOperation(entry.programId, entry.pass, entry.products, entry.placeAfterPassId, entry.operationId, operationContext)
+    if (entry.kind === 'reorder_program_passes') return this.live.reorderProgramPassesOperation(entry.programId, entry.orderedPassIds, entry.operationId, operationContext)
+    if (entry.kind === 'delete_program_pass') return this.live.deleteProgramPassOperation(entry.programId, entry.passId, entry.operationId, operationContext)
+    if (entry.kind === 'delete_program') return this.live.deleteProgramOperation(entry.programId, entry.operationId, operationContext)
+    if (entry.kind === 'assign_program') {
+      if ('cropAssignmentIds' in entry) throw new Error(blocked)
+      return this.live.assignProgramOperation(entry.programId, entry.assignmentPlans, entry.operationId, operationContext)
+    }
+    if (entry.kind === 'refresh_program_assignment') return this.live.refreshProgramAssignmentOperation(entry.assignmentId, entry.operationId, operationContext)
+    if (entry.kind === 'reassign_program_assignment') return this.live.reassignProgramAssignmentOperation(entry.assignmentId, entry.newProgramId, entry.reason, entry.operationId, operationContext)
+    if (entry.kind === 'reschedule_program_pass') return this.live.rescheduleProgramPassOperation(entry.assignedPassId, entry.dueOn, entry.timingLabel, entry.operationId, operationContext)
+    if (entry.kind === 'mark_program_pass_applied') return this.live.markProgramPassAppliedOperation(entry.assignedPassId, entry.appliedOn, entry.appliedAcres, entry.actualProducts, entry.applicationLink, entry.operationId, operationContext)
+    if (entry.kind === 'skip_program_pass') return this.live.skipProgramPassOperation(entry.assignedPassId, entry.skippedOn, entry.reason, entry.operationId, operationContext)
+    return this.live.unassignProgramOperation(entry.assignmentId, entry.reason, entry.operationId, operationContext)
+  }
+  private async submit(entry: ProgramsQueueEntryV1, operationContext: FarmOperationContext, alreadyQueued = false) {
+    const { context, queue, memoryGuard } = await this.source()
+    if (entry.userId !== context.userId || entry.farmId !== context.farmId) throw new Error(blocked)
+    await verifyQueuedOperationContext(this.d, operationContext, entry)
+    const result = await this.locked(queue, async (verify) => {
+      const verifyOperation = async () => {
+        verify()
+        await verifyQueuedOperationContext(this.d, operationContext, entry)
+        this.memoryScope.verify(this.d.storage, memoryGuard)
+      }
+      await verifyOperation()
+      const enqueue = async () => {
+        await verifyOperation()
+        const next = alreadyQueued ? queue.read() : queue.append(entry)
+        setModuleSyncStatus('programs', {
+          kind: 'pending',
+          pending: next.entries.length,
+        })
+        return undefined
+      }
+      if (this.d.isOffline() || queue.read().entries.length) return enqueue()
+      try {
+        const sent = await this.send(entry, operationContext)
+        await verifyOperation()
+        await this.refreshWorkspace(memoryGuard, operationContext)
+        await verifyOperation()
+        setModuleSyncStatus('programs', { kind: 'synced', pending: 0 })
+        return sent
+      } catch (error) {
+        await verifyQueuedOperationContext(this.d, operationContext, entry)
+        if (!isTransportFailure(error, this.d.isOffline())) throw error
+        return enqueue()
+      }
+    })
+    launchReplayInBackground(() => this.inspectAndReplay())
+    return result
+  }
+  async saveProgram(draft: ProgramDraft) {
+    const validation = validateProgramDraft(draft)
+    if (validation) throw new Error(validation)
+    const { context, operationContext } = await this.source()
+    const entry = {
+      ...this.base('save_program', context),
+      draft: { ...draft, id: draft.id ?? this.d.createId() },
+    } as Extract<ProgramsQueueEntryV1, { kind: 'save_program' }>
+    return (
+      ((await this.submit(entry, operationContext)) as Program | undefined) ??
+      pendingProgram(
+        entry,
+        context,
+        this.workspace?.programs.find((p) => p.id === entry.draft.id),
+      )
+    )
+  }
+  async saveProgramPass(programId: string, pass: ProgramPassDraft, products: ProgramProductDraft[], placeAfterPassId: string | null) {
+    const validation = validateProgramPassDraft(pass) ?? products.map(validateProgramProductDraft).find(Boolean) ?? null
+    if (validation) throw new Error(validation)
+    const { context, operationContext } = await this.source()
+    const entry = {
+      ...this.base('save_program_pass', context),
+      programId,
+      pass: { ...pass, id: pass.id ?? this.d.createId() },
+      products: products.map((p) => ({ ...p, id: p.id ?? this.d.createId() })),
+      placeAfterPassId,
+    } as Extract<ProgramsQueueEntryV1, { kind: 'save_program_pass' }>
+    return ((await this.submit(entry, operationContext)) as ProgramPass | undefined) ?? pendingPass(entry, context)
+  }
+  async reorderProgramPasses(programId: string, orderedPassIds: string[]) {
+    const { context, operationContext } = await this.source()
+    const entry = {
+      ...this.base('reorder_program_passes', context),
+      programId,
+      orderedPassIds,
+    } as Extract<ProgramsQueueEntryV1, { kind: 'reorder_program_passes' }>
+    return ((await this.submit(entry, operationContext)) as string[] | undefined) ?? orderedPassIds
+  }
+  async deleteProgramPass(programId: string, passId: string) {
+    const { context, operationContext } = await this.source()
+    await this.submit(
+      {
+        ...this.base('delete_program_pass', context),
+        programId,
+        passId,
+      } as Extract<ProgramsQueueEntryV1, { kind: 'delete_program_pass' }>,
+      operationContext,
+    )
+  }
+  async deleteProgram(programId: string) {
+    const { context, operationContext } = await this.source()
+    const result = await this.submit({ ...this.base('delete_program', context), programId } as Extract<ProgramsQueueEntryV1, { kind: 'delete_program' }>, operationContext)
+    return (
+      (result as Program | undefined) ?? {
+        id: programId,
+        farm_id: context.farmId,
+        name: 'Archived program',
+        program_kind: null,
+        commodity_id: null,
+        crop_year: null,
+        notes: null,
+        revision: 1,
+        is_archived: true,
+        passes: [],
+        pending: true,
+      }
+    )
+  }
+  async assignProgram(programId: string, cropAssignmentIds: string[]) {
+    const { context, operationContext } = await this.source()
+    const program = this.workspace?.programs.find((item) => item.id === programId && !item.is_archived)
+    if (!program || !cropAssignmentIds.length || cropAssignmentIds.length > 200 || new Set(cropAssignmentIds).size !== cropAssignmentIds.length || cropAssignmentIds.some((id) => !this.workspace?.cropAssignments.some((crop) => crop.id === id))) throw new Error(blocked)
+    const assignmentPlans = this.assignmentPlans(program, cropAssignmentIds)
+    const entry = {
+      ...this.base('assign_program', context),
+      programId,
+      assignmentPlans,
+    } as Extract<ProgramsQueueEntryV1, { kind: 'assign_program'; assignmentPlans: AssignmentIdentityPlan[] }>
+    const queue = new ProgramsWriteQueue(this.d.storage, programsWriteQueueKey(this.d.projectRef, context.userId, context.farmId))
+    await this.locked(queue, async () => {
+      queue.append(entry)
+    })
+    const result = await this.submit(entry, operationContext, true)
+    return (result as ProgramAssignment[] | undefined) ?? []
+  }
+  async refreshProgramAssignment(assignmentId: string) {
+    const { context, operationContext } = await this.source()
+    const entry = {
+      ...this.base('refresh_program_assignment', context),
+      assignmentId,
+    } as Extract<ProgramsQueueEntryV1, { kind: 'refresh_program_assignment' }>
+    return ((await this.submit(entry, operationContext)) as ProgramAssignment | undefined) ?? this.pendingAssignment(assignmentId)
+  }
+  async reassignProgramAssignment(assignmentId: string, newProgramId: string, reason: string) {
+    const { context, operationContext } = await this.source()
+    const entry = {
+      ...this.base('reassign_program_assignment', context),
+      assignmentId,
+      newProgramId,
+      reason,
+    } as Extract<ProgramsQueueEntryV1, { kind: 'reassign_program_assignment' }>
+    return ((await this.submit(entry, operationContext)) as ProgramAssignment | undefined) ?? this.pendingAssignment(assignmentId)
+  }
+  async rescheduleProgramPass(assignedPassId: string, dueOn: string, timingLabel: string | null) {
+    const { context, operationContext } = await this.source()
+    const entry = {
+      ...this.base('reschedule_program_pass', context),
+      assignedPassId,
+      dueOn,
+      timingLabel,
+    } as Extract<ProgramsQueueEntryV1, { kind: 'reschedule_program_pass' }>
+    return ((await this.submit(entry, operationContext)) as AssignedProgramPass | undefined) ?? this.pendingPassById(assignedPassId)
+  }
+  async markProgramPassApplied(
+    assignedPassId: string,
+    appliedOn: string,
+    appliedAcres: number,
+    actualProducts: ActualProgramProduct[],
+    applicationLink: import('./programs').ProgramApplicationLink = {
+      kind: 'none',
+    },
+  ) {
+    const validation = validateActualProgramProducts(actualProducts)
+    if (validation) throw new Error(validation)
+    const { context, operationContext } = await this.source()
+    const entry = {
+      ...this.base('mark_program_pass_applied', context),
+      assignedPassId,
+      appliedOn,
+      appliedAcres,
+      actualProducts,
+      applicationLink,
+    } as Extract<ProgramsQueueEntryV1, { kind: 'mark_program_pass_applied' }>
+    return ((await this.submit(entry, operationContext)) as AssignedProgramPass | undefined) ?? this.pendingPassById(assignedPassId)
+  }
+  async skipProgramPass(assignedPassId: string, skippedOn: string, reason: string) {
+    const { context, operationContext } = await this.source()
+    const entry = {
+      ...this.base('skip_program_pass', context),
+      assignedPassId,
+      skippedOn,
+      reason,
+    } as Extract<ProgramsQueueEntryV1, { kind: 'skip_program_pass' }>
+    return ((await this.submit(entry, operationContext)) as AssignedProgramPass | undefined) ?? this.pendingPassById(assignedPassId)
+  }
+  async unassignProgram(assignmentId: string, reason: string) {
+    const { context, operationContext } = await this.source()
+    await this.submit(
+      {
+        ...this.base('unassign_program', context),
+        assignmentId,
+        reason,
+      } as Extract<ProgramsQueueEntryV1, { kind: 'unassign_program' }>,
+      operationContext,
+    )
+  }
+  private pendingAssignment(id: string) {
+    const assignment = this.workspace?.assignments.find((a) => a.assignment_id === id)
+    if (!assignment) throw new Error(blocked)
+    return { ...assignment, pending: true }
+  }
+  private pendingPassById(id: string) {
+    const pass = this.workspace?.assignments.flatMap((a) => a.passes).find((p) => p.id === id)
+    if (!pass) throw new Error(blocked)
+    return { ...pass, pending: true }
+  }
+  async inspectAndReplay() {
+    let source: Awaited<ReturnType<QueuedProgramsRepository['source']>>
+    try {
+      source = await this.source()
+    } catch (error) {
+      if (isFarmReplayContextChangedError(error)) throw error
+      return
+    }
+    const { context, operationContext, queue, memoryGuard } = source
+    try {
+      await this.locked(queue, async (verify) => {
+        await verifyQueuedOperationContext(this.d, operationContext, context)
+        verify()
+        this.memoryScope.verify(this.d.storage, memoryGuard)
+        let envelope = queue.read()
+        if (!envelope.entries.length) {
+          setModuleSyncStatus('programs', { kind: 'synced', pending: 0 })
+          return
+        }
+        if (this.d.isOffline()) {
+          setModuleSyncStatus('programs', {
+            kind: 'pending',
+            pending: envelope.entries.length,
+          })
+          return
+        }
+        while (envelope.entries.length) {
+          let head = envelope.entries[0]
+          if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked)
+          await verifyQueuedOperationContext(this.d, operationContext, head)
+          setModuleSyncStatus('programs', {
+            kind: 'syncing',
+            pending: envelope.entries.length,
+          })
+          try {
+            if (head.kind === 'assign_program' && 'cropAssignmentIds' in head) {
+              const legacyHead = head
+              const workspace = await this.refreshWorkspace(memoryGuard, operationContext)
+              verify()
+              await verifyQueuedOperationContext(this.d, operationContext, legacyHead)
+              const program = workspace.programs.find((item) => item.id === legacyHead.programId && !item.is_archived)
+              if (!program || legacyHead.cropAssignmentIds.some((id) => !workspace.cropAssignments.some((crop) => crop.id === id))) throw new Error(blocked)
+              const { cropAssignmentIds, ...base } = legacyHead
+              const upgraded: ProgramsQueueEntryV1 = {
+                ...base,
+                assignmentPlans: this.assignmentPlans(program, cropAssignmentIds),
+              }
+              envelope = queue.replaceHead(legacyHead.operationId, upgraded)
+              head = envelope.entries[0]
+            }
+            await this.send(head, operationContext)
+            verify()
+            await verifyQueuedOperationContext(this.d, operationContext, head)
+            await this.refreshWorkspace(memoryGuard, operationContext)
+            verify()
+            await verifyQueuedOperationContext(this.d, operationContext, head)
+            envelope = queue.removeConfirmedHead(head.operationId)
+          } catch (error) {
+            await verifyQueuedOperationContext(this.d, operationContext, head)
+            if (isTransportFailure(error, this.d.isOffline())) {
+              setModuleSyncStatus('programs', {
+                kind: 'pending',
+                pending: envelope.entries.length,
+              })
+              return
+            }
+            setModuleSyncStatus('programs', {
+              kind: 'blocked',
+              pending: envelope.entries.length,
+              message: blocked,
+            })
+            return
+          }
+        }
+        setModuleSyncStatus('programs', { kind: 'synced', pending: 0 })
+      })
+    } catch (error) {
+      if (isFarmReplayContextChangedError(error)) throw error
+      this.markBlocked(queue)
+    }
+  }
 }

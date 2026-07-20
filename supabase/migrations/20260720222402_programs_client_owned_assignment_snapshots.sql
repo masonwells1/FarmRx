@@ -168,6 +168,7 @@ declare
   v_crop_ids uuid[] := '{}';
   v_assignment_ids uuid[] := '{}';
   v_all_target_ids uuid[] := '{}';
+  v_all_source_ids uuid[] := '{}';
   v_program_commodity text;
   v_program_year integer;
   v_graphs jsonb := '[]'::jsonb;
@@ -246,7 +247,7 @@ begin
       end if;
       begin
         v_all_target_ids := array_append(v_all_target_ids, (v_pass ->> 'id')::uuid);
-        perform (v_pass ->> 'source_program_pass_id')::uuid;
+        v_all_source_ids := array_append(v_all_source_ids, (v_pass ->> 'source_program_pass_id')::uuid);
       exception when invalid_text_representation then
         raise exception 'assigned-pass snapshot IDs must be valid UUIDs';
       end;
@@ -265,7 +266,7 @@ begin
         end if;
         begin
           v_all_target_ids := array_append(v_all_target_ids, (v_product ->> 'id')::uuid);
-          perform (v_product ->> 'source_program_pass_product_id')::uuid;
+          v_all_source_ids := array_append(v_all_source_ids, (v_product ->> 'source_program_pass_product_id')::uuid);
         exception when invalid_text_representation then
           raise exception 'assigned-product snapshot IDs must be valid UUIDs';
         end;
@@ -278,6 +279,9 @@ begin
     or cardinality(v_all_target_ids) <> cardinality(array(select distinct x from unnest(v_all_target_ids) x))
   then
     raise exception 'assignment snapshot IDs must be globally distinct';
+  end if;
+  if v_all_target_ids && v_all_source_ids then
+    raise exception 'assignment snapshot IDs must not reuse template source IDs';
   end if;
 
   -- Canonicalize unordered plan maps so semantically identical retries have the

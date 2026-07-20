@@ -109,6 +109,41 @@ async function run() {
   const replace = new FakeGateway(); replace.programs = [programRow(program(uid(620), 'Old'), 2), programRow(program(uid(621), 'New'))]; replace.passes = [passRow(uid(620), pass(uid(512))), passRow(uid(621), pass(uid(622), 'New pass'))]; replace.products = [productRow(uid(512), product(uid(513))), productRow(uid(622), product(uid(623), 'New product'))]; replace.cropAssignments = [cropTrackerRow(uid(624))]; const oldTrack = trackerAssignment(uid(620), uid(625), 'applied'); replace.assignments = [oldTrack]; const replaceRepo = live(replace); const replacement = await replaceRepo.reassignProgramAssignment(uid(625), uid(621), 'Changed plan'); assert(oldTrack.assignment_status === 'archived' && oldTrack.passes[0].status === 'applied' && replacement.assignment_status === 'active' && replacement.id === oldTrack.id && replacement.passes.length === 1 && replacement.passes[0].products.length === 1, 'Reassign must archive the old applied track and materialize a separate active replacement on the same crop.')
   // Group 23: link echoes and rereads are checked against the server record, never client-cached values.
   const links = new FakeGateway(); links.programs = [programRow(program(uid(630), 'Link test'))]; links.cropAssignments = [cropTrackerRow(uid(631)), cropTrackerRow(uid(632))]; links.assignments = [trackerAssignment(uid(630), uid(633))]; links.applicationRecords = [{ id: uid(634), farm_id: farm, crop_assignment_id: uid(631), application_date: '2026-06-18', applied_acres: 60, status: 'completed' }, { id: uid(635), farm_id: farm, crop_assignment_id: uid(632), application_date: '2026-06-20', applied_acres: 80, status: 'completed' }]; links.assignments[0].id = uid(631); const linkRepo = live(links); const actual = [{ id: uid(511), actual_product_name: 'Free type', actual_rate_text: '1', actual_unit_text: 'qt/ac', actual_cost_per_acre: 12 }]; const staleClientLink = { kind: 'link' as const, applicationRecordId: uid(634), canonicalAppliedOn: '2026-06-21', canonicalAppliedAcres: 80 }; links.applyCanonicalOverride = { appliedOn: staleClientLink.canonicalAppliedOn, appliedAcres: staleClientLink.canonicalAppliedAcres }; await rejects(() => linkRepo.markProgramPassAppliedOperation(uid(522), '2026-06-21', 80, actual, staleClientLink, uid(640), operationContext), 'A server echo that only matches stale client link values must be rejected.'); links.applyCanonicalOverride = null; Object.assign(links.assignments[0].passes[0], { status: 'planned', applied_on: null, applied_acres: null, application_record_id: null }); links.loseResponseOnce = true; await rejects(() => linkRepo.markProgramPassAppliedOperation(uid(522), '2026-06-21', 80, actual, staleClientLink, uid(641), operationContext), 'A lost server-truth link response must be replayed.'); const linked = await linkRepo.markProgramPassAppliedOperation(uid(522), '2026-06-21', 80, actual, staleClientLink, uid(641), operationContext); assert(linked.application_record_id === uid(634) && linked.applied_on === '2026-06-18' && linked.applied_acres === 60 && links.calls.filter((call) => call === 'apply:' + uid(641)).length === 2 && links.receipts.has(uid(641)), 'A link must accept only the server record date/acres and replay one idempotent receipt.'); const createTrack = trackerAssignment(uid(630), uid(636)); createTrack.id = uid(631); createTrack.passes[0].id = uid(637); createTrack.passes[0].products[0].assigned_pass_id = uid(637); links.assignments.push(createTrack); const created = await linkRepo.markProgramPassApplied(uid(637), '2026-06-21', 80, actual, { kind: 'create', applicationRecordId: uid(638) }); assert(created.application_record_id === uid(638) && links.applicationRecords.some((record) => record.id === uid(638) && record.status === 'draft'), 'Create must use the client stable ID and make only an un-posted draft.'); const rejectTrack = trackerAssignment(uid(630), uid(639)); rejectTrack.id = uid(631); rejectTrack.passes[0].id = uid(642); rejectTrack.passes[0].products[0].assigned_pass_id = uid(642); links.assignments.push(rejectTrack); await rejects(() => linkRepo.markProgramPassApplied(uid(642), '2026-06-22', 80, actual, { kind: 'link', applicationRecordId: uid(635) }), 'A link to another crop must be rejected.');
-  console.log('SupabaseProgramsRepository regression passed (23 coverage groups)')
+  // Group 24: a parent-format assignment queue head upgrades durably before send and replays the exact generated graph after a lost response.
+  const legacyAssign = new FakeGateway()
+  legacyAssign.programs = [programRow(program(uid(650), 'Legacy queued assignment'), 4)]
+  legacyAssign.passes = [passRow(uid(650), pass(uid(651)))]
+  legacyAssign.products = [productRow(uid(651), product(uid(652)))]
+  legacyAssign.cropAssignments = [cropTrackerRow(uid(653))]
+  const legacyAssignStore = memory()
+  const legacyAssignKey = programsWriteQueueKey('legacy-assign', actor, farm)
+  legacyAssignStore.setItem(legacyAssignKey, JSON.stringify({
+    version: 1,
+    entries: [{
+      version: 1,
+      module: 'programs',
+      kind: 'assign_program',
+      operationId: uid(654),
+      userId: actor,
+      farmId: farm,
+      enqueuedAt: stamp,
+      programId: uid(650),
+      cropAssignmentIds: [uid(653)],
+    }],
+  }))
+  const legacyAssignRepo = queued(legacyAssign, legacyAssignStore, () => false, 'legacy-assign')
+  legacyAssign.loseResponseOnce = true
+  await legacyAssignRepo.inspectAndReplay()
+  const upgradedRaw = legacyAssignStore.getItem(legacyAssignKey)
+  assert(upgradedRaw !== null, 'A legacy assignment head must remain durable after an uncertain response.')
+  const upgradedEnvelope = JSON.parse(upgradedRaw) as { entries: Array<Record<string, unknown>> }
+  const upgradedHead = upgradedEnvelope.entries[0]
+  assert(Array.isArray(upgradedHead?.assignmentPlans) && !('cropAssignmentIds' in upgradedHead), 'A legacy assignment head must be replaced with complete assignment plans before its first send.')
+  const durablePlans = JSON.stringify(upgradedHead.assignmentPlans)
+  assert(durablePlans === JSON.stringify(legacyAssign.assignInputs[0]), 'The first send must use the exact assignment identities written durably during upgrade.')
+  await legacyAssignRepo.inspectAndReplay()
+  const legacyAssignments = legacyAssign.assignments.filter((row) => row.program_id === uid(650) && row.id === uid(653))
+  assert(legacyAssign.assignInputs.length === 2 && JSON.stringify(legacyAssign.assignInputs[1]) === durablePlans && legacyAssignments.length === 1 && legacyAssignments[0].assignment_id === legacyAssign.assignInputs[0][0].assignment_id && legacyAssignments[0].passes[0].id === legacyAssign.assignInputs[0][0].passes[0].assigned_pass_id && legacyAssignments[0].passes[0].products[0].id === legacyAssign.assignInputs[0][0].passes[0].products[0].assigned_product_id && new ProgramsWriteQueue(legacyAssignStore, legacyAssignKey).read().entries.length === 0, 'Legacy assignment replay must reuse every durable ID, materialize one graph, and clear only after canonical confirmation.')
+  console.log('SupabaseProgramsRepository regression passed (24 coverage groups)')
 }
 void run()
