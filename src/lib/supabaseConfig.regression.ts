@@ -8,7 +8,7 @@ const production = {
   publishableKey: 'sb_publishable_NonG7JNpCB3jqHwEq4xhLg_hY7fAwnM',
 } as const
 const local = {
-  VITE_LOCAL_SUPABASE_PROJECT_REF: 'farmrx-farmer-simplicity-2027-local',
+  VITE_LOCAL_SUPABASE_PROJECT_REF: 'farmrxlocalsimplicity2027',
   VITE_LOCAL_SUPABASE_URL: 'http://127.0.0.1:55321',
   VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_1234567890_ABCDEFGHIJ',
 } as const
@@ -32,6 +32,7 @@ function rejected(environment: SupabaseConfigEnvironment, message: string): void
 }
 
 rejected({ VITE_LOCAL_SUPABASE_URL: local.VITE_LOCAL_SUPABASE_URL }, 'A partial local override was accepted.')
+rejected({ ...local, VITE_LOCAL_SUPABASE_PROJECT_REF: 'farmrx-farmer-simplicity-2027-local' }, 'A project ref incompatible with access-epoch storage was accepted.')
 rejected({ ...local, VITE_LOCAL_SUPABASE_URL: 'http://192.168.1.20:54321' }, 'A LAN hostname was accepted.')
 rejected({ ...local, VITE_LOCAL_SUPABASE_URL: 'https://127.0.0.1:55321' }, 'An HTTPS local override was accepted.')
 rejected({ ...local, VITE_LOCAL_SUPABASE_URL: 'http://localhost.example.com:55321' }, 'A loopback-looking remote hostname was accepted.')

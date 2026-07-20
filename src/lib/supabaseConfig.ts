@@ -66,8 +66,8 @@ function isBrowserSafeKey(value: string): boolean {
 
 function isLocalProjectRef(value: string): boolean {
   return value === value.trim()
-    && /^[A-Za-z0-9][A-Za-z0-9_-]+$/.test(value)
-    && /local/i.test(value)
+    && /^[a-z0-9]{8,40}$/.test(value)
+    && value.includes('local')
     && value !== productionSupabaseConfig.projectRef
 }
 
