@@ -88,6 +88,11 @@ export function buildProductionSaveInput(estimate: ProductionEstimate, aphValue:
   return { ...estimate, aph_yield: Number(aphValue), actual_bushels: actualOverride ?? (actualValue.trim() === "" ? null : Number(actualValue)), drives_math };
 }
 
+/** Harvest reconciliation changes only the persisted Grain actual and its math basis. */
+export function buildHarvestReconciliationInput(estimate: ProductionEstimate, harvestActual: number): ProductionEstimate {
+  return { ...estimate, actual_bushels: harvestActual, drives_math: "actual" };
+}
+
 /** A bin with active lots may only offer those commodities; an empty bin offers every commodity. */
 export function movementCommodityOptions<T extends { id: string }>(commodities: T[], inventory: BinInventory | undefined, transactions: BinTransaction[]) {
   const activeCommodityIds = activeBinCommodityIds(inventory, transactions);
@@ -2117,10 +2122,10 @@ function PositionCard({
       : minRevenue === null
         ? "No insurance unit."
         : `${money.format(minRevenue)}/ac minimum revenue.`;
-  const saveProduction = async (drives_math = estimate.drives_math, actualOverride?: number) => {
+  const saveProduction = async (input: ProductionEstimate) => {
     if (!submitLock.current.acquire()) return;
     try {
-      await services.grainRepository.saveProductionEstimate(buildProductionSaveInput(estimate, aph, actual, drives_math, actualOverride));
+      await services.grainRepository.saveProductionEstimate(input);
       setError("");
       await onSaved();
     } catch (exception) {
@@ -2150,7 +2155,7 @@ function PositionCard({
           <button
             type="button"
             className={estimate.drives_math === "projected" ? "active" : ""}
-            onClick={() => void saveProduction("projected")}
+            onClick={() => void saveProduction(buildProductionSaveInput(estimate, aph, actual, "projected"))}
           >
             Projected
           </button>
@@ -2158,7 +2163,7 @@ function PositionCard({
             type="button"
             className={estimate.drives_math === "actual" ? "active" : ""}
             disabled={estimate.actual_bushels === null}
-            onClick={() => void saveProduction("actual")}
+            onClick={() => void saveProduction(buildProductionSaveInput(estimate, aph, actual, "actual"))}
           >
             Actual
           </button>
@@ -2180,7 +2185,7 @@ function PositionCard({
           ? ". Add a cash price target to estimate it."
           : ` using your cash price target of ${money.format(plannedPrice)}.`}
       </p>
-      <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p><button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { if (window.confirm("Use the harvest total as Grain actual? This changes Grain actual only; it does not change bins.")) { setActual(String(harvestActual)); void saveProduction("actual", harvestActual); } }}>Use harvest total as Grain actual</button></section>
+      <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p><button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { if (window.confirm("Use the harvest total as Grain actual? This changes Grain actual only; it does not change bins.")) { setActual(String(harvestActual)); void saveProduction(buildHarvestReconciliationInput(estimate, harvestActual)); } }}>Use harvest total as Grain actual</button></section>
       <div className="position-stats">
         <Metric
           label="Fully priced"
@@ -2272,7 +2277,7 @@ function PositionCard({
         <button
           type="button"
           className="secondary-action"
-          onClick={() => void saveProduction()}
+          onClick={() => void saveProduction(buildProductionSaveInput(estimate, aph, actual))}
         >
           Save production
         </button>

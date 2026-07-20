@@ -1,6 +1,6 @@
 import {
   buildBinLedgerRow,
-  buildProductionSaveInput,
+  buildHarvestReconciliationInput,
   displayBushels,
   HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY,
   movementCommodityOptions,
@@ -12,8 +12,11 @@ import { farmerError } from '../lib/farmerErrors'
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 
 const estimate = { id: 'estimate', farm_id: 'farm', crop_year: 2026, commodity_id: 'corn_yellow', operating_entity_id: null, enterprise_label: null, planted_acres: null, aph_yield: 200, expected_bushels: 40_000, actual_bushels: null, drives_math: 'projected', notes: null, created_at: '2026-07-01T00:00:00.000Z', updated_at: '2026-07-01T00:00:00.000Z' } as ProductionEstimate
-const savedHarvestTotal = buildProductionSaveInput(estimate, '200', '40000', 'actual', 50000)
-assert(savedHarvestTotal.actual_bushels === 50000 && savedHarvestTotal.drives_math === 'actual', 'Harvest reconciliation must save its 50,000-bu override, not stale 40,000-bu form state.')
+const unsavedAphText = '999'
+const unsavedActualText = '40000'
+const reconciledHarvestTotal = buildHarvestReconciliationInput(estimate, 50_000)
+assert(JSON.stringify(reconciledHarvestTotal) === JSON.stringify({ ...estimate, actual_bushels: 50_000, drives_math: 'actual' }), 'Harvest reconciliation must preserve the persisted production estimate exactly except Grain actual and its math basis.')
+assert(reconciledHarvestTotal.aph_yield !== Number(unsavedAphText) && reconciledHarvestTotal.actual_bushels !== Number(unsavedActualText), 'Unsaved APH and actual form text must not affect harvest reconciliation.')
 
 const cornBaseline = { id: 'baseline', farm_id: 'farm', grain_bin_id: 'bin', crop_year: 2026, commodity_id: 'corn_yellow', bushels: 600, committed_bushels: 0, measured_at: '2026-07-01T12:00:00.000Z', notes: null, created_at: '2026-07-01T12:00:00.000Z', updated_at: '2026-07-01T12:00:00.000Z' } as BinInventory
 const cornBeforeBaseline = { id: 'corn-before', farm_id: 'farm', grain_bin_id: 'bin', direction: 'in', bushels: 100, commodity_id: 'corn_yellow', occurred_on: '2026-07-01', note: null, source_kind: 'manual entry', created_at: '2026-07-01T00:00:00.000Z' } as BinTransaction
