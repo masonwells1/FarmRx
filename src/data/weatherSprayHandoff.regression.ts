@@ -1,40 +1,24 @@
 import assert from 'node:assert/strict'
-import type { ForecastBundle } from './weather'
-import { createWeatherSprayHandoff, parseWeatherSprayHandoff } from './weatherSprayHandoff'
+import { readFileSync } from 'node:fs'
+import { isManualSprayRecordIntent, manualSprayRecordIntent } from './weatherSprayHandoff'
 
-const fieldId = '27020000-0000-4000-8000-000000000005'
-const foreignFieldId = '27020000-0000-4000-8000-000000000006'
-const now = Date.parse('2027-07-07T18:25:00.000Z')
-const bundle = {
-  stale: false,
-  fetched_at: '2027-07-07T18:20:00.000Z',
-  current: {
-    time: '2027-07-07T13:20',
-    temperature_f: 74,
-    relative_humidity: 52,
-    precipitation_in: 0,
-    precipitation_probability: null,
-    wind_speed_mph: 8,
-    wind_direction_degrees: 225,
-    wind_gusts_mph: 10,
-    cloud_cover: 30,
-  },
-} satisfies Pick<ForecastBundle, 'current' | 'fetched_at' | 'stale'>
+assert.deepEqual(manualSprayRecordIntent, { kind: 'manual-spray-record', version: 1 })
+assert.equal(Object.isFrozen(manualSprayRecordIntent), true, 'The route intent must be immutable.')
+assert.equal(isManualSprayRecordIntent(manualSprayRecordIntent), true, 'The exact manual route intent must open Spray record.')
+assert.equal(isManualSprayRecordIntent({ ...manualSprayRecordIntent, fieldId: '27020000-0000-4000-8000-000000000005' }), false, 'Field data must never ride the manual route intent.')
+assert.equal(isManualSprayRecordIntent({ ...manualSprayRecordIntent, windSpeedMph: 8 }), false, 'Weather data must never ride the manual route intent.')
+assert.equal(isManualSprayRecordIntent({ kind: 'manual-spray-record', version: 2 }), false, 'Unknown intent versions must fail closed.')
 
-const handoff = createWeatherSprayHandoff(fieldId, bundle, now)
-assert(handoff, 'An actionably fresh forecast should create a handoff.')
-assert.equal(handoff.windDirection, 'SW', '225 degrees must map to SW before the handoff leaves Weather.')
-assert.deepEqual(parseWeatherSprayHandoff(handoff, [fieldId], now), {
-  ...handoff,
-  applicationDate: '2027-07-07',
-  applicationTime: '13:20',
-}, 'A valid handoff must preserve the field and exact field-local sample date/time and weather values.')
+const weatherModule = readFileSync(new URL('../WeatherModule.tsx', import.meta.url), 'utf8')
+const inventoryModule = readFileSync(new URL('../InventoryModule.tsx', import.meta.url), 'utf8')
+const standingGoal = readFileSync(new URL('../../docs/GOAL.md', import.meta.url), 'utf8')
 
-assert.equal(parseWeatherSprayHandoff(handoff, [foreignFieldId], now), null, 'A handoff for a field outside the current farm workspace must fail closed.')
-assert.equal(createWeatherSprayHandoff(fieldId, { ...bundle, stale: true }, now), null, 'A stale forecast must not create a handoff action.')
-assert.equal(parseWeatherSprayHandoff({ ...handoff, fetchedAt: '2027-07-07T16:00:00.000Z' }, [fieldId], now), null, 'A handoff older than the spray freshness ceiling must be rejected at Inventory.')
-assert.equal(parseWeatherSprayHandoff({ ...handoff, windDirection: 'SSW' }, [fieldId], now), null, 'An unsupported direction must fail closed.')
-assert.equal(parseWeatherSprayHandoff({ ...handoff, relativeHumidityPct: 120 }, [fieldId], now), null, 'Malformed weather values must fail closed.')
-assert.equal(parseWeatherSprayHandoff({ ...handoff, surprise: 'unsafe' }, [fieldId], now), null, 'Unexpected state fields must fail closed.')
+assert.match(weatherModule, /navigate\('\/inventory', \{ state: manualSprayRecordIntent \}\)/, 'Weather must navigate with the exact payload-free manual intent.')
+assert.match(weatherModule, /Open blank spray record/, 'The Weather action must tell the farmer it opens a blank record.')
+assert.match(weatherModule, /type what you observed at application time/, 'The Weather copy must require manual transcription of observed conditions.')
+assert.doesNotMatch(weatherModule, /createWeatherSprayHandoff|kind: 'weather-spray-handoff'/, 'Weather must not construct a field or forecast payload for Inventory.')
+assert.match(inventoryModule, /isManualSprayRecordIntent\(location\.state\) \? 'spray' : 'shelf'/, 'The payload-free intent must open the Spray tab.')
+assert.doesNotMatch(inventoryModule, /weatherPrefill|parseWeatherSprayHandoff|weather-prefill-warning/, 'The spray form must preserve its original manual defaults with no route prefill or warning.')
+assert.match(standingGoal, /A farmer manually transcribes weather into a spray record; there is no weather-to-spray provenance link\./, 'The standing goal must continue to define weather entry as manual transcription with no provenance link.')
 
-console.log('Weather to spray handoff regressions passed.')
+console.log('Weather to manual spray route regressions passed.')
