@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { createAuthSessionStorage } from '../auth/authSessionStorage'
 import { farmAccessEpochRequestHeader } from '../auth/farmAccessEpoch'
-import { supabaseConfig } from './supabaseConfig'
+import { isTrustedSupabaseConfig, supabaseConfig } from './supabaseConfig'
 
 function jwtSubject(authorization: string | null): string | null {
   const token = authorization?.match(/^Bearer\s+([^\s]+)$/i)?.[1]
@@ -15,8 +15,7 @@ function jwtSubject(authorization: string | null): string | null {
   } catch { return null }
 }
 
-const hostname = new URL(supabaseConfig.url).hostname
-if (hostname !== `${supabaseConfig.projectRef}.supabase.co`) {
+if (!isTrustedSupabaseConfig(supabaseConfig)) {
   throw new Error('Farm Rx is not connected to its expected data service.')
 }
 
