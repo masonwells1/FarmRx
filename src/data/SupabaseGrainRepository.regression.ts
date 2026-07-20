@@ -1,4 +1,5 @@
 import type { GrainDataGateway, GrainRowBundle, ReplaceMarketingPlanInput } from './GrainDataGateway'
+import { productionActualColumns } from './SupabaseGrainDataGateway'
 import { GrainWriteQueue, grainWriteQueueKey, parseGrainQueue } from './grainWriteQueue'
 import { QueuedGrainRepository } from './QueuedGrainRepository'
 import { fieldsSeedForRegression } from './MockFieldsRepository'
@@ -36,12 +37,13 @@ function fixture() {
  * existing test keeps its original round-trip behavior. */
 type ResponseMutators = { production?: (value: ProductionEstimate) => ProductionEstimate; contract?: (value: GrainContract) => GrainContract; plan?: (value: MarketingPlanTarget[]) => MarketingPlanTarget[]; bid?: (value: CashBid) => CashBid }
 class FakeGateway implements GrainDataGateway {
-  readonly state: { fields: ReturnType<typeof fixture>['fields']; scope: ReturnType<typeof fixture>['scope']; bundle: GrainRowBundle } = fixture(); fail = false; productionInputs: ProductionEstimate[] = []; contractInputs: GrainContract[] = []; planInputs: ReplaceMarketingPlanInput[] = []; bidInputs: CashBid[] = []; offerInputs: FirmOffer[] = []; fillInputs: Array<{ farmId: string; offerId: string; contract: GrainContract }> = []; deleteOfferIds: string[] = []; binInputs: GrainBin[] = []; movementInputs: BinTransaction[] = []
+  readonly state: { fields: ReturnType<typeof fixture>['fields']; scope: ReturnType<typeof fixture>['scope']; bundle: GrainRowBundle } = fixture(); fail = false; productionInputs: ProductionEstimate[] = []; productionActualInputs: Array<{ farmId: string; id: string; actualBushels: number; expectedUpdatedAt: string }> = []; contractInputs: GrainContract[] = []; planInputs: ReplaceMarketingPlanInput[] = []; bidInputs: CashBid[] = []; offerInputs: FirmOffer[] = []; fillInputs: Array<{ farmId: string; offerId: string; contract: GrainContract }> = []; deleteOfferIds: string[] = []; binInputs: GrainBin[] = []; movementInputs: BinTransaction[] = []
   mutate: ResponseMutators = {}; throwError: Error | null = null; movementError: Error | null = null; fillError: Error | null = null; fillResponse: { contract: GrainContract; offer: FirmOffer } | null = null
   afterOnlineMutation: (() => void) | null = null
   private guard() { if (this.throwError) throw this.throwError }
   async loadWorkspace(_farmId: string): Promise<GrainRowBundle> { if (this.fail) throw new Error('network timeout'); return structuredClone(this.state.bundle) }
   async upsertProductionEstimate(_farm: string, row: ProductionEstimate) { this.guard(); this.productionInputs.push(structuredClone(row)); const response = structuredClone(row); return this.mutate.production ? this.mutate.production(response) : response }
+  async updateProductionActual(farmId: string, id: string, actualBushels: number, expectedUpdatedAt: string) { this.guard(); this.productionActualInputs.push({ farmId, id, actualBushels, expectedUpdatedAt }); const current = this.state.bundle.production_estimates.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === id) as ProductionEstimate | undefined; if (!current) throw new Error('missing production estimate'); const saved = { ...current, actual_bushels: actualBushels, drives_math: 'actual' as const, updated_at: stamp }; this.state.bundle.production_estimates = this.state.bundle.production_estimates.map((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === id ? saved : item); this.afterOnlineMutation?.(); return structuredClone(saved) }
   async upsertContract(_farm: string, row: GrainContract) { this.guard(); this.contractInputs.push(structuredClone(row)); const response = structuredClone(row); return this.mutate.contract ? this.mutate.contract(response) : response }
   async replaceMarketingPlan(input: ReplaceMarketingPlanInput) { this.guard(); this.planInputs.push(structuredClone(input)); const response = structuredClone(input.targets); return this.mutate.plan ? this.mutate.plan(response) : response }
   async upsertCashBid(_farm: string, row: CashBid) { this.guard(); this.bidInputs.push(structuredClone(row)); const response = structuredClone(row); return this.mutate.bid ? this.mutate.bid(response) : response }
@@ -67,6 +69,8 @@ async function run() {
   const firstInventory = gateway.state.bundle.bin_inventory[0] as Record<string, unknown>; firstInventory.farm_id = uid(55); await rejects(() => repo.getData(), 'Cross-farm private rows must reject.'); firstInventory.farm_id = gateway.state.fields.farm.id
   // 6-10: all persistence shapes bind the farm and preserve client IDs.
   const production = data.production_estimates[0]; await repo.saveProductionEstimate({ ...production, farm_id: uid(88), planted_acres: 1, expected_bushels: 1 }); assert(gateway.productionInputs[0].farm_id === data.fields.farm.id && gateway.productionInputs[0].id === production.id && gateway.productionInputs[0].expected_bushels === acres * production.aph_yield, 'Production save did not bind farm and derived totals.')
+  await repo.reconcileHarvestActual(production, 50_000); assert(JSON.stringify(gateway.productionActualInputs[0]) === JSON.stringify({ farmId: data.fields.farm.id, id: production.id, actualBushels: 50_000, expectedUpdatedAt: production.updated_at }), 'Harvest reconciliation must send only identity, actual bushels, and the optimistic version to the gateway.')
+  assert(JSON.stringify(productionActualColumns(50_000)) === JSON.stringify({ actual_bushels: 50_000, drives_math: 'actual' }), 'The final Harvest gateway patch must contain only Grain actual and its math basis.')
   await repo.saveContract(data.grain_contracts[0]); assert(gateway.contractInputs[0].id === data.grain_contracts[0].id, 'Contract upsert lost its stable id.')
   await rejects(() => repo.saveContract({ ...data.grain_contracts[0], cash_price: null }), 'Invalid contract shape was accepted.')
   const changed: MarketingPlanTarget = { ...data.marketing_plan_targets[0], target_pct_of_production: 25 }; await repo.saveMarketingPlanTarget(changed); assert(gateway.planInputs.at(-1)?.targets.length === 1 && gateway.planInputs.at(-1)?.targets[0].id === changed.id, 'Single target edit did not become a complete scoped plan.')
@@ -240,6 +244,10 @@ async function run() {
   // 25 (FRX-D8-003): all four online-only Grain RPCs must re-check the captured
   // access fence after the server accepts the mutation and before publishing success.
   const changedFence = async (revoked: () => boolean) => { if (revoked()) throw new Error('The signed-in account or selected farm changed before this operation could finish.') }
+  const fenceHarvestGateway = new FakeGateway(); let harvestRevoked = false; fenceHarvestGateway.afterOnlineMutation = () => { harvestRevoked = true }
+  const fenceHarvestRepo = repository(fenceHarvestGateway, () => changedFence(() => harvestRevoked)); const fenceHarvestProduction = (await fenceHarvestRepo.getData()).production_estimates[0]
+  await rejects(() => fenceHarvestRepo.reconcileHarvestActual(fenceHarvestProduction, 50_000), 'Harvest reconciliation published success after its access fence changed.')
+  assert(harvestRevoked && fenceHarvestGateway.productionActualInputs.length === 1, 'The Harvest fence regression did not reach an accepted narrow server mutation.')
   const fenceDeliveryGateway = new FakeGateway(); let deliveryRevoked = false; fenceDeliveryGateway.afterOnlineMutation = () => { deliveryRevoked = true }
   const fenceDeliveryRepo = repository(fenceDeliveryGateway, () => changedFence(() => deliveryRevoked)); const fencedDelivery = { id: uid(998), farm_id: fenceDeliveryGateway.state.fields.farm.id, grain_contract_id: String((fenceDeliveryGateway.state.bundle.grain_contracts[0] as { id: string }).id), bushels: 5, delivered_on: '2026-07-12', note: null, created_at: stamp }
   await rejects(() => fenceDeliveryRepo.recordContractDelivery(fencedDelivery), 'A delivery RPC published success after its access fence changed.')

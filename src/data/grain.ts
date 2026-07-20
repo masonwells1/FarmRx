@@ -108,6 +108,7 @@ export interface GrainRepository {
   getData(): Promise<GrainWorkspace>
   getNeedsAttentionQueueKey?(): Promise<string>
   saveProductionEstimate(estimate: ProductionEstimate): Promise<void>
+  reconcileHarvestActual(estimate: ProductionEstimate, harvestActual: number): Promise<void>
   saveContract(contract: GrainContract): Promise<void>
   finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number): Promise<void>
   recordContractDelivery(delivery: GrainContractDelivery): Promise<void>

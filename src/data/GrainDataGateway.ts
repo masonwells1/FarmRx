@@ -23,6 +23,7 @@ export interface ReplaceMarketingPlanInput { farmId: string; scope: PositionScop
 export interface GrainDataGateway {
   loadWorkspace(farmId: string): Promise<GrainRowBundle>
   upsertProductionEstimate(farmId: string, row: ProductionEstimate, context: FarmOperationContext): Promise<unknown>
+  updateProductionActual(farmId: string, id: string, actualBushels: number, expectedUpdatedAt: string, context: FarmOperationContext): Promise<unknown>
   upsertContract(farmId: string, row: GrainContract, context: FarmOperationContext): Promise<unknown>
   replaceMarketingPlan(input: ReplaceMarketingPlanInput): Promise<unknown[]>
   upsertCashBid(farmId: string, row: CashBid, context: FarmOperationContext): Promise<unknown>

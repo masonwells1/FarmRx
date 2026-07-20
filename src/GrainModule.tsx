@@ -2138,6 +2138,19 @@ function PositionCard({
       submitLock.current.release();
     }
   };
+  const reconcileHarvest = async () => {
+    if (!submitLock.current.acquire()) return;
+    try {
+      await services.grainRepository.reconcileHarvestActual(estimate, harvestActual);
+      setActual(String(harvestActual));
+      setError("");
+      await onSaved();
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : "Unable to reconcile the harvest total.");
+    } finally {
+      submitLock.current.release();
+    }
+  };
   return (
     <article className="position-card">
       <div className="position-top">
@@ -2185,7 +2198,7 @@ function PositionCard({
           ? ". Add a cash price target to estimate it."
           : ` using your cash price target of ${money.format(plannedPrice)}.`}
       </p>
-      <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p><button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { if (window.confirm("Use the harvest total as Grain actual? This changes Grain actual only; it does not change bins.")) { setActual(String(harvestActual)); void saveProduction(buildHarvestReconciliationInput(estimate, harvestActual)); } }}>Use harvest total as Grain actual</button></section>
+      <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p><button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { if (window.confirm("Use the harvest total as Grain actual? This changes Grain actual only; it does not change bins.")) void reconcileHarvest() }}>Use harvest total as Grain actual</button></section>
       <div className="position-stats">
         <Metric
           label="Fully priced"
