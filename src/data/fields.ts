@@ -166,7 +166,7 @@ export interface FieldDraft {
   expected_versions?: {
     field_updated_at: string
     arrangement: { id: string; updated_at: string }
-    crop_assignments: Array<{ id: string; updated_at: string }>
+    crop_assignments: Array<{ id: string; updated_at: string; crop_year?: number }>
   } | null
   name: string
   operating_entity_id: string

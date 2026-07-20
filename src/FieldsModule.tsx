@@ -442,7 +442,11 @@ function toDraft(
     expected_versions: field.updated_at && arrangement.updated_at ? {
       field_updated_at: field.updated_at,
       arrangement: { id: arrangement.id, updated_at: arrangement.updated_at },
-      crop_assignments: assignments.map((item) => ({ id: item.id, updated_at: item.updated_at })),
+      crop_assignments: assignments.map((item) => ({
+        id: item.id,
+        updated_at: item.updated_at,
+        crop_year: item.crop_year,
+      })),
     } : null,
     name: nextField.name,
     operating_entity_id: nextField.operating_entity_id,

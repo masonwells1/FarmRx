@@ -305,6 +305,18 @@ function regressionExistingAgreementIdentitySurvivesCardEditDraft() {
     cardDraft.arrangement.id === current.id,
     "An existing-field card edit replaced the current agreement identity and would report a confirmed save as failed.",
   );
+  const fieldCrops = data.crop_assignments.filter((row) => row.field_id === field.id);
+  assert(
+    cardDraft.crop_assignments.length === 0 &&
+      cardDraft.expected_versions?.crop_assignments.length === fieldCrops.length &&
+      fieldCrops.every((row) =>
+        cardDraft.expected_versions?.crop_assignments.some(
+          (version) =>
+            version.id === row.id && version.crop_year === row.crop_year,
+        ),
+      ),
+    "A field-only edit did not carry every loaded crop version while leaving crop rows unchanged.",
+  );
 }
 
 function regressionAgreementIdentityMatchesHistoryIntent() {

@@ -154,7 +154,11 @@ function assertExpectedVersions(value: FieldDraft['expected_versions'] | undefin
   const arrangement = exactRecord(versions.arrangement, 'Arrangement save version', ['id', 'updated_at'])
   assert(validUuid(String(arrangement.id)) && validStamp(String(arrangement.updated_at)), 'Arrangement save version is malformed.')
   assert(Array.isArray(versions.crop_assignments), 'Crop save versions are malformed.')
-  for (const value of versions.crop_assignments) { const crop = exactRecord(value, 'Crop save version', ['id', 'updated_at']); assert(validUuid(String(crop.id)) && validStamp(String(crop.updated_at)), 'Crop save version is malformed.') }
+  for (const value of versions.crop_assignments) {
+    const crop = exactRecord(value, 'Crop save version', ['id', 'updated_at'], ['crop_year'])
+    assert(validUuid(String(crop.id)) && validStamp(String(crop.updated_at)), 'Crop save version is malformed.')
+    assert(crop.crop_year === undefined || (Number.isInteger(crop.crop_year) && Number(crop.crop_year) >= 1900 && Number(crop.crop_year) <= 2200), 'Crop save version year is malformed.')
+  }
 }
 function canonicalFlexFormula(value: FlexBonusFormula | null): FlexBonusFormula | null {
   if (value === null) return null
@@ -240,12 +244,24 @@ function sameJson(left: unknown, right: unknown) { return JSON.stringify(canonic
 function confirmSavedBundle(draft: NormalizedDraft, field: Field, arrangement: Arrangement, assignments: CropAssignment[], farmId: string) {
   const fieldKeys = ['id', 'name', 'operating_entity_id', 'total_acres', 'county', 'state', 'legal_description', 'fsa_farm_number', 'fsa_tract_number', 'soil_productivity_index'] as const
   const arrangementKeys = ['id', 'arrangement_type', 'landlord_name', 'landlord_phone', 'landlord_contact_notes', 'effective_from', 'cash_rent_per_acre', 'landlord_crop_pct', 'landlord_seed_pct', 'landlord_fertilizer_pct', 'landlord_chemical_pct', 'landlord_fuel_pct', 'landlord_labor_custom_pct', 'landlord_crop_insurance_pct', 'landlord_equipment_pct', 'landlord_interest_pct', 'landlord_other_input_pct', 'notes'] as const
-  if (field.farm_id !== farmId || arrangement.farm_id !== farmId || arrangement.field_id !== field.id || arrangement.effective_to !== null || fieldKeys.some((key) => field[key] !== draft[key]) || arrangementKeys.some((key) => arrangement[key] !== draft.arrangement[key]) || !sameJson(arrangement.flex_bonus_formula, draft.arrangement.flex_bonus_formula) || assignments.length !== draft.crop_assignments.length) fail('Farm Rx could not confirm the field save. Please try again.')
+  if (field.farm_id !== farmId || arrangement.farm_id !== farmId || arrangement.field_id !== field.id || arrangement.effective_to !== null || fieldKeys.some((key) => field[key] !== draft[key]) || arrangementKeys.some((key) => arrangement[key] !== draft.arrangement[key]) || !sameJson(arrangement.flex_bonus_formula, draft.arrangement.flex_bonus_formula)) fail('Farm Rx could not confirm the field save. Please try again.')
   const savedById = new Map(assignments.map((row) => [row.id, row]))
+  const submittedById = new Map(draft.crop_assignments.map((row) => [row.id, row]))
+  const changedYears = new Set(draft.crop_assignments.map((row) => row.crop_year))
+  const expectedRows = draft.expected_versions?.crop_assignments ?? []
+  const expectedById = new Map(expectedRows.map((row) => [row.id, row]))
+  if (savedById.size !== assignments.length || submittedById.size !== draft.crop_assignments.length || expectedById.size !== expectedRows.length) fail('Farm Rx could not confirm the field save. Please try again.')
+  for (const expected of expectedRows) {
+    if ((expected.crop_year === undefined || !changedYears.has(expected.crop_year)) && !savedById.has(expected.id)) fail('Farm Rx could not confirm the field save. Please try again.')
+  }
   for (const expected of draft.crop_assignments) {
     const saved = savedById.get(expected.id)
     const keys = ['id', 'crop_year', 'commodity_id', 'planted_acres', 'planting_sequence', 'variety', 'planting_date', 'harvest_date', 'harvested_bushels', 'expected_yield_per_acre', 'expected_price_per_bu', 'notes'] as const
     if (!saved || saved.farm_id !== farmId || saved.field_id !== field.id || keys.some((key) => saved[key] !== expected[key]) || !validNullableDecimal(saved.actual_price_per_bu, 6, 6) || !validStamp(saved.created_at) || !validStamp(saved.updated_at)) fail('Farm Rx could not confirm the field save. Please try again.')
+  }
+  for (const saved of assignments) {
+    if (saved.farm_id !== farmId || saved.field_id !== field.id || !validNullableDecimal(saved.actual_price_per_bu, 6, 6) || !validStamp(saved.created_at) || !validStamp(saved.updated_at)) fail('Farm Rx could not confirm the field save. Please try again.')
+    if (changedYears.has(saved.crop_year) ? !submittedById.has(saved.id) : !expectedById.has(saved.id)) fail('Farm Rx could not confirm the field save. Please try again.')
   }
   if (!validStamp(field.created_at) || !validStamp(field.updated_at) || !validStamp(arrangement.created_at) || !validStamp(arrangement.updated_at)) fail('Farm Rx could not confirm the field save. Please try again.')
 }
