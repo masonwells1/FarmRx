@@ -113,3 +113,22 @@ Copy this template below the last entry. Do not replace the template or modify a
 - **Proof and authority effect:** This append-only correction changes no accepted scenario, fixture UUID, proof result, authority, canonical status, or external action. No backend, browser, or season proof exists yet.
 - **External actions actually performed:** none.
 - **Canonical status:** defer to [`docs/GOAL.md`](../GOAL.md); no canonical status claim is made here.
+
+## SR-003 — Maple Ridge January tranche accepted
+
+- **Date/time:** 2026-07-20T17:11:44-05:00 (`America/Chicago`)
+- **Actor/model/effort:** Sol orchestrator; bounded Terra implementation support; fresh `gpt-5.6-sol` adversarial reviews
+- **Worktree/branch:** `C:\Users\mason\.codex\worktrees\farmrx-farmer-simplicity` / `codex/farmrx-2027-season-ready`
+- **Commit or state SHA:** accepted January proof HEAD `0238361192b7fa23d67956f43ffbf74be64c4022`; product-repair range `64c4d03^..9648c60`; harness range `b78fb52..0238361`
+- **Parent/base SHA:** accepted HEAD parent `8d205afb9d459299589e0ce09837d2e8b9277008`; initiative base `7e19be18daa3b4d5d6228ad70ee245d2f37ee756`
+- **Authority used:** isolated local implementation, disposable local backend/browser verification, local commits, and read-only review. No outward or live authority was used.
+- **Files/systems in scope:** existing Fields editor/repositories, the versioned land-arrangement correction migration, focused regressions, disposable local Supabase, Playwright desktop/phone January harness, SQL assertions, and proof scripts. Primary `C:\FarmRx` remained untouched.
+- **Scenario steps / fixture-manifest hash:** Maple Ridge January row in [`WORKFLOWS-AND-SCENARIOS.md`](WORKFLOWS-AND-SCENARIOS.md), scenario blob `1109915956d976c1fd4a8f54ebaa982e4a4667e2`; fixture-manifest blob `8821e601a994761246f609b59926860b58dd69bd`; exact runtime instant `2027-01-12T14:00:00.000Z`.
+- **Expected writes:** exactly five `save_field_bundle_versioned` browser writes create/update the one manifest field, its owned arrangement, and its 2027 corn crop assignment, including the exact state/location, arrangement start date, crop values, and yield.
+- **Expected non-writes:** opening Fields/detail and the phone read produce zero field RPC writes; no later monthly outcome rows appear; Inventory on-hand stays zero; the seeded cash bid remains unchanged.
+- **Proof and exit codes:** full regression/postregression/build passed; focused Fields patch and `SupabaseFieldsRepository` regressions passed; TypeScript passed; durable arrangement-history disposable proof passed; local Supabase security advisor reported no issues; final January disposable proof exited `0` with two Playwright tests passed and `MAPLE_2027_JANUARY_DISPOSABLE_PASS`.
+- **Browser/local DB evidence paths:** committed deterministic harness `tests/e2e/season/maple-january.spec.ts`, runner `scripts/verify-maple-january-disposable.ps1`, and SQL proof `tests/season/maple-2027-january.verify.sql`. Playwright trace capture is disabled; generated `test-results` were removed after verification.
+- **Review verdict/findings:** product range received fresh Sol **PASS** with no actionable findings. Harness `b78fb52` was blocked for retained traces and insufficient clock proof; `8d205af` closed trace leakage but remained blocked because year-only proof could false-green; exact `0238361` received fresh Sol **PASS**, proving at least one runtime `Date` call from `src/data/index.ts` returned only `2027-01-12T14:00:00.000Z` in desktop and phone runs.
+- **External actions actually performed:** none. No push, pull request, merge, deployment, live migration/data, secret/auth/permission change, customer action, or communication occurred.
+- **Remaining risk / next approval:** January is accepted locally, not the complete season. February through December, the other governed scenarios, physical iPhone/Safari and Android/Chrome journeys, custom SMTP, publication, deployment, and live verification remain unproven or unauthorized.
+- **Canonical status:** defer to [`docs/GOAL.md`](../GOAL.md); no canonical status claim is made here.
