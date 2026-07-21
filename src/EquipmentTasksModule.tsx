@@ -830,6 +830,7 @@ export function TasksPage({
             repository={repository}
             refresh={reload}
             edit={setEditing}
+            selectReceipt={setLastReceiptId}
           />
         ))}
       </div>
@@ -886,6 +887,7 @@ function TaskColumn({
   repository,
   refresh,
   edit,
+  selectReceipt,
 }: {
   status: TaskStatus;
   tasks: FarmTask[];
@@ -893,6 +895,7 @@ function TaskColumn({
   repository: EquipmentTasksRepository;
   refresh: () => Promise<void>;
   edit: (x: FarmTask) => void;
+  selectReceipt: (id: string) => void;
 }) {
   const navigate = useNavigate();
   const [more, setMore] = useState(false);
@@ -911,6 +914,7 @@ function TaskColumn({
     const taskLock = taskLocks.current.get(task.id);
     if (!taskLock.acquire()) return;
     try {
+      selectReceipt(task.id);
       await repository.saveTask({
         id: task.id,
         title: task.title,
