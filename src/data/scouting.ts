@@ -8,7 +8,7 @@ export interface ScoutingData { notes: ScoutingNote[]; viewer: { user_id: string
 export interface ScoutingDeleteReceipt { id: string; deleted: true; storage_paths: string[]; pending?: boolean }
 /** Audit P2-10: an offline delete succeeded on this device — it must never read as a failure. */
 export const SCOUTING_OFFLINE_DELETE_MESSAGE = 'Deleted on this device. It will finish syncing when you reconnect.'
-export interface ScoutingRepository { getData(fieldId?: string): Promise<ScoutingData>; saveNote(draft: ScoutingNoteDraft, files?: File[]): Promise<ScoutingNote>; deleteNote(id: string, storagePaths?: string[]): Promise<ScoutingDeleteReceipt> }
+export interface ScoutingRepository { getData(fieldId?: string): Promise<ScoutingData>; saveNote(draft: ScoutingNoteDraft, files?: File[]): Promise<ScoutingNote>; deleteNote(id: string, storagePaths?: string[]): Promise<ScoutingDeleteReceipt>; getNeedsAttentionQueueKey?(): Promise<string>; retryNeedsAttention?(queueKey: string, operationId: string): Promise<void>; dismissNeedsAttention?(queueKey: string, operationId: string): Promise<void> }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const isoDate = /^\d{4}-\d{2}-\d{2}$/
