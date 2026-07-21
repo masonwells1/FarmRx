@@ -10,20 +10,25 @@ export const readOnlySeasonAccessRpcs = new Set([
   'service_due_generation_status',
 ])
 
-type RequestKind = 'pre-auth' | 'password-auth' | 'safe-read' | 'read-only-rpc' | 'target-mutation-rpc' | 'unexpected-rpc' | 'unexpected-non-read'
+type RequestKind = 'pre-auth' | 'password-auth' | 'safe-read' | 'read-only-rpc' | 'target-mutation-rpc' | 'target-mutation-path' | 'unexpected-rpc' | 'unexpected-non-read'
 
 export function createSeasonRequestClassifier(options: {
   targetMutationRpcs?: Iterable<string>
+  /** Exact PostgREST paths for a deliberately direct, non-RPC target write. */
+  targetMutationPaths?: Iterable<string>
   blockUnexpectedNonReadRequests?: boolean
 } = {}) {
   const targetMutationRpcs = new Set(options.targetMutationRpcs)
+  const targetMutationPaths = new Set(options.targetMutationPaths)
   const observedTargetMutationRpcs: string[] = []
+  const observedTargetMutationPaths: string[] = []
   const unexpectedRpcs: string[] = []
   const blockedNonReadRequests: string[] = []
   let armed = false
 
   return {
     observedTargetMutationRpcs,
+    observedTargetMutationPaths,
     unexpectedRpcs,
     blockedNonReadRequests,
     observe(methodValue: string, urlValue: string): { kind: RequestKind; block: boolean } {
@@ -47,6 +52,11 @@ export function createSeasonRequestClassifier(options: {
         }
         unexpectedRpcs.push(`${method} ${url.pathname}`)
         return { kind: 'unexpected-rpc', block: options.blockUnexpectedNonReadRequests === true }
+      }
+
+      if (method === 'POST' && targetMutationPaths.has(url.pathname)) {
+        observedTargetMutationPaths.push(url.pathname)
+        return { kind: 'target-mutation-path', block: false }
       }
 
       if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return { kind: 'safe-read', block: false }
