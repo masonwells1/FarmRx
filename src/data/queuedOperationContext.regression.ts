@@ -1457,6 +1457,77 @@ try {
   setModuleSyncStatus('fields', { kind: 'blocked', pending: 1, message: 'Old farm Fields work' }); setModuleSyncStatus('weather', { kind: 'pending', pending: 1 }); setModuleSyncStatus('equipment_tasks', { kind: 'blocked', pending: 1, message: 'Old farm Equipment work' }); setModuleSyncStatus('programs', { kind: 'pending', pending: 1 })
   await replayAuthorizedFarmWork(currentReadOnlyGateProfile, () => true, offlineReplayActions)
   assert(offlineReplayEvents.join(',') === 'notifications-queue' && getSyncStatus().kind === 'synced', 'A read-only farm inherited stale pending or blocked sync state from skipped modules.')
+
+  // December startup contract: exercise the exported production orchestrator
+  // with real Program/Equipment strict client seams. Durable task,
+  // notification, repository-receipt, idempotency, and concurrent-generator
+  // proof belongs to scripts/verify-startup-due-generation-disposable.ps1;
+  // focused client regressions own response parsing and context rejection.
+  const { DueProgramItemsService } = await import('./programDueItems')
+  // replayAuthorizedFarmWork intentionally captures browser storage itself;
+  // use this test window's real localStorage so its authorization fence is
+  // the same storage scope the production gate will verify.
+  const decemberStorage = gateStorage
+  const decemberFarm = id(777)
+  resetFarmGrantFromLive(decemberStorage, { projectRef: supabaseConfig.projectRef, userId: userA, farmId: decemberFarm }, 1, stamp)
+  const decemberContext = captureFarmRevocationFence(decemberStorage, { projectRef: supabaseConfig.projectRef, userId: userA, farmId: decemberFarm })
+  const decemberProfile: LoadedFarmAccessProfile = { ...gateProfile, farmId: decemberFarm, operationContext: decemberContext }
+  const decemberFields = structuredClone(gateFields); decemberFields.farm.id = decemberFarm
+  const decemberQueueKeys = [
+    `farm-rx-write-queue:v1:${supabaseConfig.projectRef}:${userA}:${decemberFarm}`,
+    `farm-rx-field-location-queue:v1:${supabaseConfig.projectRef}:${userA}:${decemberFarm}`,
+    programsWriteQueueKey(supabaseConfig.projectRef, userA, decemberFarm),
+    `farm-rx-harvest-write-queue:v1:${supabaseConfig.projectRef}:${userA}:${decemberFarm}`,
+    grainWriteQueueKey(supabaseConfig.projectRef, userA, decemberFarm), inventoryWriteQueueKey(supabaseConfig.projectRef, userA, decemberFarm), profitabilityWriteQueueKey(supabaseConfig.projectRef, userA, decemberFarm),
+    equipmentTasksWriteQueueKey(supabaseConfig.projectRef, userA, decemberFarm), fieldLogWriteQueueKey(supabaseConfig.projectRef, userA, decemberFarm), scoutingWriteQueueKey(supabaseConfig.projectRef, userA, decemberFarm), notificationsWriteQueueKey(supabaseConfig.projectRef, userA, decemberFarm),
+  ]
+  const assertDecemberNoLocalCustody = (message: string) => assert(decemberQueueKeys.every((key) => decemberStorage.getItem(key) === null) && getSaveReceipt(id(977)) === null && getSaveReceipt(id(978)) === null, message)
+  assertDecemberNoLocalCustody('December startup began with unexpected local queue or visible save-receipt custody.')
+  const queueAction = (events: string[], name: string) => async () => { events.push(name) }
+  const actionSet = (events: string[], program: () => Promise<'generated' | 'not-due'>, equipment: () => Promise<void>) => ({
+    replayFieldsQueue: queueAction(events, 'fields-queue'), replayFieldLocationQueue: queueAction(events, 'field-location-queue'), replayProgramsQueue: queueAction(events, 'programs-queue'),
+    generateDueProgramItems: async () => { events.push('programs-status-and-v2'); return program() }, replayHarvestQueue: queueAction(events, 'harvest-queue'), replayGrainQueue: queueAction(events, 'grain-queue'),
+    replayInventoryQueue: queueAction(events, 'inventory-queue'), replayProfitabilityQueue: queueAction(events, 'profitability-queue'), inspectEquipmentTasksQueue: queueAction(events, 'equipment-queue'),
+    generateDueEquipmentTasks: async () => { events.push('equipment-status-and-v2'); return equipment() }, replayFieldLogQueue: queueAction(events, 'field-log-queue'), replayScoutingQueue: queueAction(events, 'scouting-queue'), replayNotificationsQueue: queueAction(events, 'notifications-queue'),
+  })
+  let falseIds = 0; let falseProgramStatus = 0; let falseProgramV2 = 0; let falseEquipmentStatus = 0; let falseEquipmentV2 = 0
+  const falsePrograms = new DueProgramItemsService({ gateway: {
+    getDueGenerationStatus: async () => { falseProgramStatus += 1; return { has_due: false, task_needed: false, notification_needed: false, local_date: '2026-12-01' } },
+    generateDueProgramItemsV2: async () => { falseProgramV2 += 1; return null }, generateDueProgramItems: async () => null,
+  }, getFarmId: async () => decemberFarm, getOperationContext: async () => decemberContext, verifyOperationContext: async () => undefined, createId: () => { falseIds += 1; return id(977) } })
+  const falseEquipmentGateway: EquipmentTasksDataGateway = { ...gateGateway,
+    async getDueServiceGenerationStatus() { falseEquipmentStatus += 1; return { has_due: false, task_needed: false, notification_needed: false, local_date: '2026-12-01' } },
+    async generateDueServiceTasksV2() { falseEquipmentV2 += 1; return null },
+  }
+  const falseEquipment = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(decemberFields), saveField: async () => { throw new Error('Unexpected December field save.') } }, getFarmId: async () => decemberFarm, getContext: async () => ({ userId: userA, farmId: decemberFarm }), projectRef: supabaseConfig.projectRef, storage: decemberStorage, createId: () => { falseIds += 1; return id(978) }, isOffline: () => false, gateway: falseEquipmentGateway })
+  const falseEvents: string[] = []
+  await replayAuthorizedFarmWork(decemberProfile, () => true, actionSet(falseEvents, () => falsePrograms.generateIfDueStrict(), falseEquipment.generateDueEquipmentTasks))
+  await replayAuthorizedFarmWork(decemberProfile, () => true, actionSet(falseEvents, () => falsePrograms.generateIfDueStrict(), falseEquipment.generateDueEquipmentTasks))
+  assert(falseProgramStatus === 2 && falseEquipmentStatus === 2 && falseIds === 0 && falseProgramV2 === 0 && falseEquipmentV2 === 0, 'Repeated false December restoration did not use one read-only preflight per module without allocating IDs or calling Program/Equipment v2.')
+  assert(falseEvents.indexOf('programs-queue') < falseEvents.indexOf('programs-status-and-v2') && falseEvents.indexOf('equipment-queue') < falseEvents.indexOf('equipment-status-and-v2'), 'A December due scan did not follow its own module queue replay.')
+  assert(falseEvents.filter((event) => event === 'grain-queue').length === 2 && !falseEvents.some((event) => event.includes('grain-generator')), 'December restoration did not call exactly one Grain queue callback per pass, or the fake action set unexpectedly exposed a Grain generator callback.')
+  assertDecemberNoLocalCustody('Repeated false December restoration left a local queue or visible save receipt.')
+  let trueIds = 0; let trueProgramStatus = 0; let trueProgramV2 = 0; let trueEquipmentStatus = 0; let trueEquipmentV2 = 0
+  const truePrograms = new DueProgramItemsService({ gateway: {
+    getDueGenerationStatus: async () => { trueProgramStatus += 1; return { has_due: true, task_needed: true, notification_needed: true, local_date: '2026-12-01' } },
+    generateDueProgramItemsV2: async () => { trueProgramV2 += 1; return { operation_kind: 'generate_due_program_items_v2', task_created_count: 1, notification_created_count: 1, local_date: '2026-12-01' } }, generateDueProgramItems: async () => null,
+  }, getFarmId: async () => decemberFarm, getOperationContext: async () => decemberContext, verifyOperationContext: async () => undefined, createId: () => { trueIds += 1; return id(979) } })
+  const trueEquipmentGateway: EquipmentTasksDataGateway = { ...gateGateway,
+    async getDueServiceGenerationStatus() { trueEquipmentStatus += 1; return { has_due: true, task_needed: true, notification_needed: true, local_date: '2026-12-01' } },
+    async generateDueServiceTasksV2() { trueEquipmentV2 += 1; return { operation_kind: 'generate_due_service_tasks_v2', task_created_count: 1, notification_created_count: 1, local_date: '2026-12-01' } },
+  }
+  const trueEquipment = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(decemberFields), saveField: async () => { throw new Error('Unexpected December field save.') } }, getFarmId: async () => decemberFarm, getContext: async () => ({ userId: userA, farmId: decemberFarm }), projectRef: supabaseConfig.projectRef, storage: decemberStorage, createId: () => { trueIds += 1; return id(980) }, isOffline: () => false, gateway: trueEquipmentGateway })
+  const trueEvents: string[] = []
+  await replayAuthorizedFarmWork(decemberProfile, () => true, actionSet(trueEvents, () => truePrograms.generateIfDueStrict(), trueEquipment.generateDueEquipmentTasks))
+  assert(trueProgramStatus === 1 && trueEquipmentStatus === 1 && trueIds === 2 && trueProgramV2 === 1 && trueEquipmentV2 === 1, 'A true December startup did not execute exactly one Program and Equipment status/v2 call with two IDs total.')
+  assert(trueEvents.indexOf('programs-queue') < trueEvents.indexOf('programs-status-and-v2') && trueEvents.indexOf('equipment-queue') < trueEvents.indexOf('equipment-status-and-v2'), 'A true December startup reached a due scan before its module queue was canonical.')
+  assertDecemberNoLocalCustody('December startup left a local queue or farmer-visible save receipt after its Program/Equipment due calls completed.')
+  const decemberReadOnlyEvents: string[] = []
+  await replayAuthorizedFarmWork({ ...decemberProfile, kind: 'read_only', memberRole: 'read_only', capabilities: { ...decemberProfile.capabilities, canEditOperational: false, canManageFarm: false, canReadPrivateFinancials: false } }, () => true, actionSet(decemberReadOnlyEvents, async () => { throw new Error('Read-only Program generation reached') }, async () => { throw new Error('Read-only Equipment generation reached') }))
+  assert(decemberReadOnlyEvents.join(',') === 'notifications-queue', 'A read-only December startup did more than its permitted notification queue inspection.')
+  // Concurrent production restoration is outside this deterministic client
+  // test; this test proves only two sequential false passes.
+
   offlineReplayEvents.length = 0
   let offlineRetryInstalls = 0
   let offlineAccessLoads = 0
