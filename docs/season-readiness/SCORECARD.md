@@ -1,6 +1,6 @@
 # Farm Rx 2027 season-readiness scorecard
 
-**Snapshot:** `codex/farmrx-2027-season-ready` at `adc527efca30005b24e1ae1205b8dc9c0222ab47` (`adc527e`)
+**Snapshot:** `codex/farmrx-2027-season-ready` at `600b8212486292ac43242e42890d342631863638` (`600b821`)
 **Controlling contract:** [`../GOAL.md`](../GOAL.md), [`WORKFLOWS-AND-SCENARIOS.md`](WORKFLOWS-AND-SCENARIOS.md), [`ORCHESTRATOR-RUNBOOK.md`](ORCHESTRATOR-RUNBOOK.md), and append-only [`LEDGER.md`](LEDGER.md)
 
 This file is a current-state index, not proof by itself. It must never upgrade a lane based on chat, intent, a committed test that was not run, or a result from a different HEAD.
@@ -23,7 +23,7 @@ This file is a current-state index, not proof by itself. It must never upgrade a
 | Goal, no-feature-expansion boundary, scenario contract, deterministic manifest, Sol/Terra orchestration, approval gates | **STATIC-ACCEPTED** | Governance review chain culminated at `381306e2824619921f8eab1235158c9b482c188b`; SR-001 records fresh Sol PASS and its limits. |
 | January accepted evidence packet | **PROVEN** | SR-003/SR-004 record browser, local DB, exact clock, regressions/build, and fresh Sol review at January proof HEAD `0238361192b7fa23d67956f43ffbf74be64c4022`. The cash-bid evidence is limited exactly as corrected in SR-004. |
 | February–June evidence packets and ledger entries | **RUNTIME-BLOCKED** | Harness commits and chat-reported Sol PASS exist, but runtime outputs, browser/DB indexes, hashes, exact-SHA packets, and append-only ledger acceptance are not durable. Do not call these months proven. |
-| Exact-current-HEAD verification ladder | **RUNTIME-BLOCKED** | Current HEAD is `adc527efca30005b24e1ae1205b8dc9c0222ab47`. No durable packet proves all 11 runbook ladder steps on this exact SHA; the continuous browser run is blocked by disposable synthetic authentication setup. |
+| Exact-current-HEAD verification ladder | **RUNTIME-BLOCKED** | Current HEAD is `600b8212486292ac43242e42890d342631863638`. No durable packet proves all 11 runbook ladder steps on this exact SHA; the continuous browser run is blocked by disposable synthetic authentication setup. |
 | Full-year evidence packet and append-only closeout | **UNMAPPED/UNBUILT** | No continuous January–December accepted evidence packet or final ledger entry exists. |
 
 ## Maple Ridge continuous year
@@ -41,15 +41,15 @@ The required Maple run resets once before January and preserves the same disposa
 | July | **PRODUCT-BLOCKED** | Read-only mapping identified that Scouting closes after save without an honest receipt; Task quick actions also lack receipts. No committed July harness exists. | Repair existing receipt behavior, add offline/replay/failure/double-submit proof, then build browser/SQL lane. |
 | August | **PRODUCT-BLOCKED** | Task quick-action receipt gap affects trusted status changes; no committed August harness exists. | Same bounded receipt repair plus executable browser/DB proof. |
 | September | **PRODUCT-BLOCKED** | Harvest save has no honest receipt; no committed September harness exists. | Repair receipt behavior and prove write/non-write/replay behavior. |
-| October | **UNMAPPED/UNBUILT** | Chat-only read-only mapping found the Grain workflow plausibly proof-ready, but no durable accepted mapping, committed harness, or runtime result exists. | Durably record and review the mapping, then build and run browser/DB proof on the continuous fixture. |
+| October | **STATIC-ACCEPTED** | Durable mapping commit `fae1365` records the explicit two-step Grain workflow, ordered writes, and non-coupling boundaries; immutable Sol review passed. No committed harness or runtime result exists. | Build and run browser/DB proof on the continuous fixture. |
 | November | **PRODUCT-BLOCKED** | Grain bin/storage and contract/delivery actions lack honest receipt coverage; no committed harness exists. | Repair receipts and prove five independent writes and all required non-writes. |
-| December | **PRODUCT-BLOCKED** | Zero-effect Program due-item checks currently create hidden receipt rows on page load, violating the required zero-write closeout; no committed harness exists. | Correct zero-effect receipt behavior, prove truly zero writes, then build closeout proof. |
+| December | **PRODUCT-BLOCKED** | Startup currently calls the mutating Program due-item generator, which consumes an operation receipt even when it creates zero tasks and notifications; no committed closeout harness exists. | Add the mapped read-only eligibility preflight while preserving generator idempotency, align the disposable database clock, prove truly zero startup writes, then build closeout proof. |
 
 ## Governed scenario gauntlets
 
 | Scenario | Status | Current blocker / missing evidence |
 |---|---|---|
-| NF — North Fork permissions/privacy | **UNMAPPED/UNBUILT** | Current migrations replace the historical operational-write policies with `can_edit_farm(farm_id)`, so the earlier read-only-member write concern is not a proven current defect. No accepted executable role-matrix browser/database gauntlet exists; any live auth/RLS action remains separately approval-gated. |
+| NF — North Fork permissions/privacy | **STATIC-ACCEPTED** | Durable mapping commit `600b821` confirms current migrations use `can_edit_farm(farm_id)` and records the required owner/manager/worker/read-only/rep/outsider role matrix, epoch changes, server-clock seam, and non-writes. No executable browser/database gauntlet exists; any live auth/RLS action remains separately approval-gated. |
 | PS — Prairie Spray compliance presence | **PRODUCT-BLOCKED** | The saved application detail UI does not surface existing stored compliance facts required by the scenario: application time, pest, applicator/license, weather, and product rate/total fields. Fixture interpretation is also unresolved; proof must assert saved snapshots only and never claim license eligibility, validity, or expiration. |
 | HR — Harvest Ridge Grain truth | **PRODUCT-BLOCKED** | Existing Grain bin/movement actions do not show action-specific honest save receipts; the generic page timestamp can be inherited from a different prior storage action. Deterministic baseline evidence and the executable reconciliation/contracts/deliveries/bin-ledger gauntlet are also absent. |
 | CC — Cedar Creek weather/scouting | **PRODUCT-BLOCKED** | The deterministic weather contract is static, but Scouting's missing save receipt blocks a trustworthy executable workflow. No accepted CC runtime packet exists. |
