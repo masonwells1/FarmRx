@@ -332,7 +332,7 @@ resetFarmGrantFromLive(grainConfirmStorage, { projectRef: grainConfirmRef, userI
 const grainConfirmQueue = new GrainWriteQueue(grainConfirmStorage, grainWriteQueueKey(grainConfirmRef, userA, farmA))
 grainConfirmQueue.append({ version: 1, module: 'grain', kind: 'deleteMarketingAlertRule', operationId: id(37), userId: userA, farmId: farmA, enqueuedAt: stamp, id: rowId })
 const grainConfirmRace = new QueuedGrainRepository({ async deleteMarketingAlertRuleOperation() { grainConfirmUser = userB; throw new Error('identity changed during delete') }, async getData() { grainConfirmReads += 1; return grainWorkspaceFor(grainConfirmUser) } } as never, { getContext: async () => ({ userId: grainConfirmUser, farmId: farmA }), projectRef: grainConfirmRef, storage: grainConfirmStorage, createId: () => id(38), clock: () => stamp, isOffline: () => false })
-await grainConfirmRace.inspectAndReplay()
+ await rejectsChangedContext(() => grainConfirmRace.inspectAndReplay(), 'Grain replay must surface the typed account-context cancellation.')
 assert(grainConfirmQueue.read().entries.length === 1 && grainConfirmReads === 0, 'Grain replay treated a different account\'s RLS-hidden workspace as proof of deletion.')
 
 // A capability-approved replay must stay bound to the exact account/farm grant that

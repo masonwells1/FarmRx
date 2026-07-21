@@ -1,5 +1,5 @@
 import { captureFarmRevocationFence, verifyFarmRevocationFence, type FarmRevocationSnapshot } from './farmRevocationFence'
-import type { StorageLike } from './writeQueue'
+import { FarmReplayContextChangedError, type StorageLike } from './writeQueue'
 
 export type FarmOperationContext = FarmRevocationSnapshot
 export type FarmSelectionContext = Pick<FarmOperationContext, 'userId' | 'farmId'>
@@ -11,8 +11,8 @@ export function captureFarmOperationContext(storage: StorageLike, projectRef: st
 }
 
 export function verifyFarmOperationContext(storage: StorageLike, expected: FarmOperationContext, current: FarmOperationContext): void {
-  if (expected.projectRef !== current.projectRef || expected.userId !== current.userId || expected.farmId !== current.farmId || expected.generation !== current.generation || expected.token !== current.token || expected.serverEpoch !== current.serverEpoch) throw new Error(changed)
-  verifyFarmRevocationFence(storage, expected)
+  if (expected.projectRef !== current.projectRef || expected.userId !== current.userId || expected.farmId !== current.farmId || expected.generation !== current.generation || expected.token !== current.token || expected.serverEpoch !== current.serverEpoch) throw new FarmReplayContextChangedError(changed)
+  try { verifyFarmRevocationFence(storage, expected) } catch (error) { throw new FarmReplayContextChangedError(error instanceof Error ? error.message : changed) }
 }
 
 export function farmOperationRequestHeaders(context: FarmOperationContext): Record<string, string> {

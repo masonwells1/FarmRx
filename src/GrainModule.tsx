@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "react-router-dom";
 import { NeedsAttentionList } from "./components/NeedsAttentionList";
+import { SaveReceipt } from "./components/SaveReceipt";
 import { MarketQuoteSection } from "./components/MarketQuote";
 import { SectionTabs } from "./SectionTabs";
 import { farmerError } from "./lib/farmerErrors";
+import { useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type {
   BinTransaction,
@@ -257,6 +259,8 @@ function binPosition(workspace: GrainWorkspace, bin: GrainBin) {
 export function GrainPage({ services }: { services: GrainServices }) {
   const [workspace, setWorkspace] = useState<GrainWorkspace | null>(null);
   const [attentionQueueKey, setAttentionQueueKey] = useState<string | null>(null);
+  const [lastReceiptId, setLastReceiptId] = useState<string | null>(null);
+  const receipt = useSaveReceipt(lastReceiptId);
   const [selectedEstimateId, setSelectedEstimateId] = useState("");
   const [editingTarget, setEditingTarget] = useState<{
     month: number;
@@ -359,6 +363,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
         workspace={workspace}
         services={services}
         onSaved={refresh}
+        onReceipt={setLastReceiptId}
+        receipt={receipt}
       />
     );
   const selectedScope = scopeOf(selectedEstimate);
@@ -453,6 +459,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
         </div>
       </div>
       <NeedsAttentionList module="grain" queueKey={attentionQueueKey} onChanged={refresh} />
+      <SaveReceipt state={receipt} />
       <SectionTabs base="/grain" tabs={GRAIN_TABS} />
       {tabPath === "" && (
         <>
@@ -496,6 +503,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
                   whisper();
                   await refresh();
                 }}
+                onReceipt={setLastReceiptId}
               />
             ))}
           </section>
@@ -1850,14 +1858,18 @@ function AlertEmailSettings({
   );
 }
 
-function FirstEstimate({
+export function FirstEstimate({
   workspace,
   services,
   onSaved,
+  onReceipt,
+  receipt,
 }: {
   workspace: GrainWorkspace;
   services: GrainServices;
   onSaved: () => Promise<void>;
+  onReceipt: (id: string) => void;
+  receipt: ReturnType<typeof useSaveReceipt>;
 }) {
   const assignments = workspace.fields.crop_assignments;
   const [aph, setAph] = useState("");
@@ -1881,9 +1893,11 @@ function FirstEstimate({
   const create = async (assignment: (typeof assignments)[number]) => {
     if (!submitLock.current.acquire()) return;
     const now = new Date().toISOString();
+    const id = services.createGrainId();
     try {
+      onReceipt(id);
       await services.grainRepository.saveProductionEstimate({
-        id: services.createGrainId(),
+        id,
         farm_id: workspace.fields.farm.id,
         crop_year: assignment.crop_year,
         commodity_id: assignment.commodity_id,
@@ -1921,6 +1935,7 @@ function FirstEstimate({
           </p>
         </div>
       </div>
+      <SaveReceipt state={receipt} />
       <label>
         APH / expected yield
         <input
@@ -1964,13 +1979,14 @@ function FirstEstimate({
   );
 }
 
-function PositionCard({
+export function PositionCard({
   estimate,
   workspace,
   services,
   saleLimit,
   onSaleLimitChange,
   onSaved,
+  onReceipt,
 }: {
   estimate: ProductionEstimate;
   workspace: GrainWorkspace;
@@ -1978,6 +1994,7 @@ function PositionCard({
   saleLimit: number | null;
   onSaleLimitChange: (limit: number | null) => void;
   onSaved: () => Promise<void>;
+  onReceipt: (id: string) => void;
 }) {
   const [aph, setAph] = useState(String(estimate.aph_yield));
   const [actual, setActual] = useState(
@@ -2147,6 +2164,7 @@ function PositionCard({
   const reconcileHarvest = async () => {
     if (!submitLock.current.acquire()) return;
     try {
+      onReceipt(estimate.id);
       await services.grainRepository.reconcileHarvestActual(estimate, harvestActual);
       setActual(String(harvestActual));
       setError("");
