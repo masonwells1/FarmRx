@@ -49,6 +49,9 @@ function Invoke-CheckedSwapMutation {
 
 function Invoke-MapleSwapRecovery {
   param([hashtable]$Adapter,[hashtable]$Inventory)
+  try { Assert-MapleSwapInventory $Inventory $Adapter.ExpectedContract | Out-Null } catch {
+    return [pscustomobject]@{Restored=$false;Failures=@("recovery inventory refused: $($_.Exception.Message)");JournalRetained=$true}
+  }
   $failures=[Collections.Generic.List[string]]::new();$actual=&$Adapter['InspectActualState']
   if($actual.ReplacementExists){
     if($actual.ReplacementOwned -ne $true){$failures.Add('ambiguous replacement ownership');return [pscustomobject]@{Restored=$false;Failures=$failures;JournalRetained=$true}}

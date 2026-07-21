@@ -39,6 +39,7 @@ $cleanup=New-Mock;$cleanup.Adapter.RemoveDerivedImageIfOwned={$false};$cleanupRe
 $extra=$inventory.Clone();$extra.extra='x'
 foreach($bad in @($extra,@{contract_hash='bad';network_id=('b'*64);original_id=('c'*64);original_image_id=('sha256:'+('d'*64));snapshot_tag=('farmrx-clock-snapshot:'+('e'*12));derived_tag='farmrx-frozen-clock-swap:20270200-9faa7279';volume_name='supabase_db_farmrx-farmer-simplicity-2027-local'})){try{Assert-MapleSwapInventory $bad $inventory|Out-Null;$accepted=$true}catch{$accepted=$false};Assert-True(-not$accepted)'invalid inventory accepted'}
 foreach($field in @('contract_hash','network_id')){$stale=$inventory.Clone();$stale[$field]=('f'*64);try{Assert-MapleSwapInventory $stale $inventory|Out-Null;$accepted=$true}catch{$accepted=$false};Assert-True(-not$accepted)"valid-shaped stale $field accepted"}
+foreach($field in @('contract_hash','network_id','original_id')){$stale=$inventory.Clone();$stale[$field]=('f'*64);$recoveryMock=New-Mock;$recoveryResult=Invoke-MapleSwapRecovery $recoveryMock.Adapter $stale;Assert-True(-not$recoveryResult.Restored-and$recoveryResult.JournalRetained-and$recoveryResult.Failures[0]-match'recovery inventory refused')"direct recovery accepted stale $field";Assert-True($recoveryMock.Log.Count-eq 0)"direct recovery inspected or mutated state for stale $field"}
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('maple-journal-'+[guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($temp)|Out-Null
 try{
