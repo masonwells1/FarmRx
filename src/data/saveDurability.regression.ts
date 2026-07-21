@@ -46,6 +46,7 @@ assert(restored?.rp_coverage_pct === 80 && restored.rp_aph_yield === 180 && stor
 setSaveReceipt('save', 'saving'); assert(getSaveReceipt('save') === 'saving', 'A receipt starts as Saving.')
 setSaveReceipt('save', 'queued offline'); assert(getSaveReceipt('save') === 'queued offline', 'A queued receipt keeps the offline label.')
 setSaveReceipt('save', 'needs attention'); assert(getSaveReceipt('save') === 'needs attention', 'A needs-attention receipt persists until changed.')
+setSaveReceipt('save', 'confirmation needed'); assert(getSaveReceipt('save') === 'confirmation needed', 'An ambiguous direct write keeps its confirmation-needed receipt until retried or reloaded.')
 setSaveReceipt('save', 'saved'); assert(getSaveReceipt('save') === 'saved', 'A saved receipt is visible before it clears.')
 await new Promise((resolve) => setTimeout(resolve, 1850))
 assert(getSaveReceipt('save') === null, 'A saved receipt clears after its confirmation window.')
