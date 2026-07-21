@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { createSeasonRequestClassifier } from './season-request-classifier'
 
 const manifest = JSON.parse(readFileSync(resolve('tests/season/season-2027.manifest.json'), 'utf8')) as {
   fixtures: Array<{ label: string; uuid: string }>
@@ -20,6 +21,7 @@ const productId = fixture('Maple program-pass product')
 const assignmentId = fixture('Maple program assignment')
 const assignedPassId = fixture('Maple assigned pass')
 const assignedProductId = fixture('Maple assigned-program-pass product')
+const expectedFebruaryMutationRpcs = ['save_program', 'save_program_pass', 'assign_program']
 
 declare global {
   interface Window {
@@ -28,7 +30,20 @@ declare global {
   }
 }
 
-async function installDeterminism(page: Page) {
+async function installDeterminism(page: Page, requests: ReturnType<typeof createSeasonRequestClassifier>) {
+  const allowedOrigins = new Set(['http://127.0.0.1:4174', 'http://127.0.0.1:55321'])
+  const forbiddenDestinations: string[] = []
+  await page.route('**/*', async (route) => {
+    const url = new URL(route.request().url())
+    if (!['data:', 'blob:'].includes(url.protocol) && !allowedOrigins.has(url.origin)) { forbiddenDestinations.push(route.request().url()); await route.abort('blockedbyclient'); return }
+    if (url.origin === 'http://127.0.0.1:55321' && requests.observe(route.request().method(), route.request().url()).block) { await route.abort('blockedbyclient'); return }
+    await route.continue()
+  })
+  await page.routeWebSocket(/^(?:ws|wss):\/\//, async (route) => {
+    const url = new URL(route.url())
+    if (url.hostname !== '127.0.0.1' || !['4174', '55321'].includes(url.port)) { forbiddenDestinations.push(route.url()); await route.close({ code: 1008, reason: 'February proof permits loopback only' }); return }
+    route.connectToServer()
+  })
   page.on('response', (response) => {
     if (response.url().startsWith('http://127.0.0.1:55321/') && response.status() >= 400) {
       console.log(`LOCAL_RESPONSE ${response.request().method()} ${new URL(response.url()).pathname} ${response.status()}`)
@@ -49,7 +64,7 @@ async function installDeterminism(page: Page) {
     window.Date = new Proxy(RealDate, {
       construct(target, argumentsList) {
         const stack = new Error().stack ?? ''
-        const useSeasonInstant = argumentsList.length === 0 && stack.includes('/src/data/index.ts')
+        const useSeasonInstant = argumentsList.length === 0 && (stack.includes('/src/data/index.ts') || stack.includes('/src/data/createSupabaseProgramsServices.ts'))
         const result = Reflect.construct(target, useSeasonInstant ? [fixedMs] : argumentsList) as Date
         if (useSeasonInstant) clockObservations.push(result.toISOString())
         return result
@@ -60,7 +75,10 @@ async function installDeterminism(page: Page) {
     }) as DateConstructor
 
     const original = crypto.randomUUID.bind(crypto)
-    const uiIds = [ids.program, ids.pass]
+    // React development StrictMode mounts the new Pass editor twice. Return
+    // the same manifest ID for both mount attempts so the retained state is
+    // deterministic rather than whichever random ID the second mount gets.
+    const uiIds = [ids.program, ids.pass, ids.pass]
     const passSaveIds = ['27ff0000-0000-4000-8000-000000000001', ids.product]
     const assignmentIds = [ids.assignment, ids.assignedPass, ids.assignedProduct]
     const observations: string[] = []
@@ -91,6 +109,7 @@ async function installDeterminism(page: Page) {
     fixedMs: fixedInstant.getTime(),
     ids: { program: programId, pass: passId, product: productId, assignment: assignmentId, assignedPass: assignedPassId, assignedProduct: assignedProductId },
   })
+  return forbiddenDestinations
 }
 
 async function signIn(page: Page) {
@@ -104,17 +123,15 @@ async function signIn(page: Page) {
 }
 
 test('@february-write creates and assigns the exact Maple Program through the real local UI', async ({ page }) => {
-  await installDeterminism(page)
-  const writes: string[] = []
-  page.on('request', (request) => {
-    const path = new URL(request.url()).pathname
-    if (path.includes('/rest/v1/rpc/') && request.method() === 'POST') writes.push(path)
-  })
+  const requests = createSeasonRequestClassifier({ targetMutationRpcs: expectedFebruaryMutationRpcs, blockUnexpectedNonReadRequests: true })
+  const forbiddenDestinations = await installDeterminism(page, requests)
 
   await signIn(page)
   await page.getByRole('link', { name: 'Programs' }).click()
   await expect(page.getByRole('heading', { name: 'Programs', exact: true })).toBeVisible()
-  expect(writes).toEqual([])
+  expect(requests.observedTargetMutationRpcs, 'target mutation RPC ran before the February write action').toEqual([])
+  expect(requests.unexpectedRpcs, 'unexpected RPC ran after password authentication').toEqual([])
+  expect(requests.blockedNonReadRequests, 'unexpected non-read request ran after password authentication').toEqual([])
 
   await page.getByRole('button', { name: 'New program' }).click()
   await page.getByLabel('Program name').fill('Maple 2027 Corn Program')
@@ -146,6 +163,7 @@ test('@february-write creates and assigns the exact Maple Program through the re
   await page.getByLabel('Program').selectOption({ label: 'Maple 2027 Corn Program — chemical' })
   await page.getByText(/Maple East 160 — Yellow Corn — 2027, planting 1/).click()
   await page.getByRole('button', { name: 'Assign to 1 field' }).click()
+  await page.getByLabel('Program').selectOption(programId)
   await expect(page.getByText(/Already assigned/)).toBeVisible()
 
   await page.getByRole('button', { name: 'My programs' }).click()
@@ -159,12 +177,18 @@ test('@february-write creates and assigns the exact Maple Program through the re
   await expect(page.getByText('Maple 2027 Corn Program').first()).toBeVisible()
   await expect(page.getByText('Post-emerge synthetic pass').first()).toBeVisible()
 
-  expect(writes.filter((path) => path.endsWith('/save_program'))).toHaveLength(1)
-  expect(writes.filter((path) => path.endsWith('/save_program_pass'))).toHaveLength(1)
-  expect(writes.filter((path) => path.endsWith('/assign_program'))).toHaveLength(1)
-  expect(await page.evaluate(() => new Set(window.__farmRxFebruaryClockObservations))).toEqual(new Set([fixedInstant.toISOString()]))
+  expect(requests.observedTargetMutationRpcs.filter((name) => name === 'save_program')).toHaveLength(1)
+  expect(requests.observedTargetMutationRpcs.filter((name) => name === 'save_program_pass')).toHaveLength(1)
+  expect(requests.observedTargetMutationRpcs.filter((name) => name === 'assign_program')).toHaveLength(1)
+  expect(requests.unexpectedRpcs, 'unexpected RPC ran after password authentication').toEqual([])
+  expect(requests.blockedNonReadRequests, 'unexpected non-read request ran after password authentication').toEqual([])
+  const clockObservations = await page.evaluate(() => window.__farmRxFebruaryClockObservations)
+  expect(clockObservations.length).toBeGreaterThan(0)
+  expect(new Set(clockObservations)).toEqual(new Set([fixedInstant.toISOString()]))
+  expect(forbiddenDestinations).toEqual([])
   expect(await page.evaluate(() => window.__farmRxFebruaryIdentityObservations)).toEqual([
     `ui:${programId}`,
+    `ui:${passId}`,
     `ui:${passId}`,
     'pass-save:27ff0000-0000-4000-8000-000000000001',
     `pass-save:${productId}`,

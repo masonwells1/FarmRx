@@ -44,8 +44,9 @@ async function mockPrivacyFarm(page: Page, role: Role, failSave = false) {
     if (url.pathname === '/rest/v1/rpc/get_current_farm_access_epochs') return fulfillJson(route, [{ farm_id: farmId, access_epoch: 1 }])
     if (url.pathname.startsWith('/rest/v1/rpc/')) {
       const rpc = url.pathname.split('/').at(-1)
-      if (rpc === 'generate_due_service_tasks') return fulfillJson(route, { created_count: 0 })
-      if (rpc === 'generate_due_program_items') return fulfillJson(route, { generated_count: 0 })
+      if (rpc === 'program_due_generation_status' || rpc === 'service_due_generation_status') return fulfillJson(route, { has_due: false, task_needed: false, notification_needed: false, local_date: '2026-07-12' })
+      if (rpc === 'generate_due_service_tasks_v2' || rpc === 'generate_due_program_items_v2') throw new Error(`False due preflight unexpectedly called ${rpc}`)
+      if (rpc === 'generate_due_service_tasks' || rpc === 'generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${rpc}`)
       const canManage = role === 'owner' || role === 'manager'
       const answers: Record<string, boolean> = {
         can_access_farm: true,

@@ -3,6 +3,8 @@
 
 begin;
 
+select set_config('farmrx.season_owner_password', :'season_owner_password', true) \g /dev/null
+
 do $proof$
 declare
   v_farm_id constant uuid := '27010000-0000-4000-8000-000000000001';
@@ -12,6 +14,14 @@ declare
   v_bid_id constant uuid := '27070500-0000-4000-8000-000000000001';
   v_outcome_count bigint;
 begin
+  if not exists (
+    select 1 from auth.users
+    where id = v_owner_id
+      and encrypted_password = crypt(current_setting('farmrx.season_owner_password'), encrypted_password)
+  ) then
+    raise exception 'Maple start proof failed: generated synthetic credential does not match the owner verifier';
+  end if;
+
   if (select count(*) from public.farms) <> 1 or not exists (
     select 1 from public.farms
     where id = v_farm_id

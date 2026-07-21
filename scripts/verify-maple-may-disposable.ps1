@@ -5,6 +5,9 @@ $expectedProjectId = 'farmrx-farmer-simplicity-2027-local'
 $expectedContainer = "supabase_db_$expectedProjectId"
 $aprilProof = Join-Path $root 'scripts/verify-maple-april-disposable.ps1'
 $maySql = Join-Path $root 'tests/season/maple-2027-may.verify.sql'
+$credentialHelperPath = Join-Path $root 'scripts/maple-season-credential.ps1'
+
+. $credentialHelperPath
 $snapshotSql = @'
 create temporary table season_may_snapshot(table_name text primary key, state jsonb);
 do $snapshot$
@@ -50,13 +53,14 @@ select (
 )::text;
 '@
 
-if (-not $env:FARMRX_SEASON_OWNER_PASSWORD) { throw 'FARMRX_SEASON_OWNER_PASSWORD is required and must contain only the synthetic local fixture password.' }
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker CLI is required for the Maple May proof.' }
 if (-not (Get-Command npx -ErrorAction SilentlyContinue)) { throw 'Node.js/npm with npx is required for the Maple May browser proof.' }
 $supabase = if ($env:SUPABASE_GO_BINARY) { $env:SUPABASE_GO_BINARY } else { (Get-Command supabase -ErrorAction Stop).Source }
+$boundary = Assert-MapleSeasonLocalBoundary -Root $root -Supabase $supabase -ExpectedProjectId $expectedProjectId -ExpectedContainer $expectedContainer
 
 Push-Location $root
 try {
+  Enter-MapleSeasonCredential
   # April invokes March -> February -> January. January is the sole reset owner.
   & powershell -NoProfile -ExecutionPolicy Bypass -File $aprilProof
   if ($LASTEXITCODE -ne 0) { throw 'Continuous Maple January-April prerequisite failed.' }
@@ -84,12 +88,13 @@ try {
 
   $after = $snapshotSql | docker exec -i $expectedContainer psql -U postgres -d postgres -v ON_ERROR_STOP=1 -At
   if ($LASTEXITCODE -ne 0 -or ($before -join "`n") -cne ($after -join "`n")) { throw 'Maple May changed an unrelated continuous-year table or row.' }
-  Get-Content -Raw -LiteralPath $maySql | docker exec -i $expectedContainer psql -U postgres -d postgres -v ON_ERROR_STOP=1 -P pager=off
-  if ($LASTEXITCODE -ne 0) { throw 'Maple May post-browser database assertions failed.' }
+  if (-not (Invoke-MapleSeasonSqlFile -Path $maySql -ExpectedContainer $expectedContainer)) { throw 'Maple May post-browser database assertions failed.' }
   Write-Output 'MAPLE_2027_MAY_DISPOSABLE_PASS'
 } finally {
   Remove-Item Env:VITE_LOCAL_SUPABASE_PROJECT_REF -ErrorAction SilentlyContinue
   Remove-Item Env:VITE_LOCAL_SUPABASE_URL -ErrorAction SilentlyContinue
   Remove-Item Env:VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY -ErrorAction SilentlyContinue
+  Exit-MapleSeasonCredential
+  $boundary = $null
   Pop-Location
 }

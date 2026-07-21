@@ -14,7 +14,7 @@ insert into auth.users (
   '00000000-0000-0000-0000-000000000000',
   '27000000-0000-4000-8000-000000000001',
   'authenticated', 'authenticated', 'maple.owner@farmrx.local.test',
-  '$2a$10$HU4qKAkUUTh8zudes1sqYu74RMeFZwIRb1tXxOxTFrV9COElPyXKm',
+  crypt(set_config('farmrx.season_owner_password', :'season_owner_password', true), gen_salt('bf', 10)),
   '2027-01-12 14:00:00+00', '', '', '', '',
   '{"provider":"email","providers":["email"]}'::jsonb,
   '{"email_verified":true,"synthetic_local_fixture":true}'::jsonb,

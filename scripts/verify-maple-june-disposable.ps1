@@ -6,6 +6,9 @@ $expectedContainer = "supabase_db_$expectedProjectId"
 $mayProof = Join-Path $root 'scripts/verify-maple-may-disposable.ps1'
 $maySql = Join-Path $root 'tests/season/maple-2027-may.verify.sql'
 $juneSql = Join-Path $root 'tests/season/maple-2027-june.verify.sql'
+$credentialHelperPath = Join-Path $root 'scripts/maple-season-credential.ps1'
+
+. $credentialHelperPath
 $snapshotSql = @'
 create temporary table season_june_snapshot(table_name text primary key, state jsonb);
 do $snapshot$
@@ -38,20 +41,20 @@ select (
 )::text;
 '@
 
-if (-not $env:FARMRX_SEASON_OWNER_PASSWORD) { throw 'FARMRX_SEASON_OWNER_PASSWORD is required and must contain only the synthetic local fixture password.' }
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker CLI is required for the Maple June proof.' }
 if (-not (Get-Command npx -ErrorAction SilentlyContinue)) { throw 'Node.js/npm with npx is required for the Maple June browser proof.' }
 $supabase = if ($env:SUPABASE_GO_BINARY) { $env:SUPABASE_GO_BINARY } else { (Get-Command supabase -ErrorAction Stop).Source }
+$boundary = Assert-MapleSeasonLocalBoundary -Root $root -Supabase $supabase -ExpectedProjectId $expectedProjectId -ExpectedContainer $expectedContainer
 
 Push-Location $root
 try {
+  Enter-MapleSeasonCredential
   # May invokes April -> March -> February -> January. January remains the sole reset owner.
   & powershell -NoProfile -ExecutionPolicy Bypass -File $mayProof
   if ($LASTEXITCODE -ne 0) { throw 'Continuous Maple January-May prerequisite failed.' }
   $running = @(docker ps --format '{{.Names}}')
   if ($LASTEXITCODE -ne 0 -or $running -notcontains $expectedContainer) { throw "Refusing June proof: expected disposable database container $expectedContainer is not running." }
-  Get-Content -Raw -LiteralPath $maySql | docker exec -i $expectedContainer psql -U postgres -d postgres -v ON_ERROR_STOP=1 -At | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'May database proof did not pass immediately before June.' }
+  if (-not (Invoke-MapleSeasonSqlFile -Path $maySql -ExpectedContainer $expectedContainer)) { throw 'May database proof did not pass immediately before June.' }
   $pre = $preconditionSql | docker exec -i $expectedContainer psql -U postgres -d postgres -v ON_ERROR_STOP=1 -At
   if ($LASTEXITCODE -ne 0 -or ($pre -join '') -cne 'true') { throw "June prerequisite state is not exact: $($pre -join '')" }
   $before = $snapshotSql | docker exec -i $expectedContainer psql -U postgres -d postgres -v ON_ERROR_STOP=1 -At
@@ -70,12 +73,13 @@ try {
   $after = $snapshotSql | docker exec -i $expectedContainer psql -U postgres -d postgres -v ON_ERROR_STOP=1 -At
   if ($LASTEXITCODE -ne 0 -or -not $after) { throw 'Could not execute the post-June full unrelated-state snapshot.' }
   if (($before -join "`n") -cne ($after -join "`n")) { throw 'Maple June changed a row outside the exact application, application product, or derived on-hand allowance.' }
-  Get-Content -Raw -LiteralPath $juneSql | docker exec -i $expectedContainer psql -U postgres -d postgres -v ON_ERROR_STOP=1 -P pager=off
-  if ($LASTEXITCODE -ne 0) { throw 'Maple June post-browser database assertions failed.' }
+  if (-not (Invoke-MapleSeasonSqlFile -Path $juneSql -ExpectedContainer $expectedContainer)) { throw 'Maple June post-browser database assertions failed.' }
   Write-Output 'MAPLE_2027_JUNE_DISPOSABLE_PASS'
 } finally {
   Remove-Item Env:VITE_LOCAL_SUPABASE_PROJECT_REF -ErrorAction SilentlyContinue
   Remove-Item Env:VITE_LOCAL_SUPABASE_URL -ErrorAction SilentlyContinue
   Remove-Item Env:VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY -ErrorAction SilentlyContinue
+  Exit-MapleSeasonCredential
+  $boundary = $null
   Pop-Location
 }

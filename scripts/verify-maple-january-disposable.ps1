@@ -5,10 +5,10 @@ $expectedProjectId = 'farmrx-farmer-simplicity-2027-local'
 $expectedContainer = "supabase_db_$expectedProjectId"
 $startProof = Join-Path $root 'scripts/verify-maple-season-start-disposable.ps1'
 $januaryProof = Join-Path $root 'tests/season/maple-2027-january.verify.sql'
+$credentialHelperPath = Join-Path $root 'scripts/maple-season-credential.ps1'
 
-if (-not $env:FARMRX_SEASON_OWNER_PASSWORD) {
-  throw 'FARMRX_SEASON_OWNER_PASSWORD is required and must contain only the synthetic local fixture password.'
-}
+. $credentialHelperPath
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
   throw 'Docker CLI is required for the Maple January proof.'
 }
@@ -21,9 +21,11 @@ $supabase = if ($env:SUPABASE_GO_BINARY) {
 } else {
   (Get-Command supabase -ErrorAction Stop).Source
 }
+$boundary = Assert-MapleSeasonLocalBoundary -Root $root -Supabase $supabase -ExpectedProjectId $expectedProjectId -ExpectedContainer $expectedContainer
 
 Push-Location $root
 try {
+  Enter-MapleSeasonCredential
   & powershell -NoProfile -ExecutionPolicy Bypass -File $startProof
   if ($LASTEXITCODE -ne 0) { throw 'Canonical Maple start proof failed.' }
 
@@ -62,14 +64,14 @@ try {
   npx playwright test --config playwright.season.config.ts
   if ($LASTEXITCODE -ne 0) { throw 'Maple January browser scenario failed.' }
 
-  Get-Content -Raw -LiteralPath $januaryProof |
-    docker exec -i $expectedContainer psql -U postgres -d postgres -v ON_ERROR_STOP=1 -P pager=off
-  if ($LASTEXITCODE -ne 0) { throw 'Maple January post-browser database assertions failed.' }
+  if (-not (Invoke-MapleSeasonSqlFile -Path $januaryProof -ExpectedContainer $expectedContainer)) { throw 'Maple January post-browser database assertions failed.' }
 
   Write-Output 'MAPLE_2027_JANUARY_DISPOSABLE_PASS'
 } finally {
   Remove-Item Env:VITE_LOCAL_SUPABASE_PROJECT_REF -ErrorAction SilentlyContinue
   Remove-Item Env:VITE_LOCAL_SUPABASE_URL -ErrorAction SilentlyContinue
   Remove-Item Env:VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY -ErrorAction SilentlyContinue
+  Exit-MapleSeasonCredential
+  $boundary = $null
   Pop-Location
 }

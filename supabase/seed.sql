@@ -4,8 +4,10 @@
 
 begin;
 
--- Session-capable local email identity. The fixed bcrypt value is the hash of
--- the documented synthetic password; it is not a production secret.
+-- Auth-shaped local email identity. The default seed receives a fresh,
+-- unknowable verifier so it cannot become a reusable login credential;
+-- executable season runners replace this seed entirely and inject their
+-- process-only credential through the dedicated fixture.
 insert into auth.users (
   instance_id,
   id,
@@ -37,7 +39,7 @@ values (
   'authenticated',
   'authenticated',
   'maple.owner@farmrx.local.test',
-  '$2a$10$HU4qKAkUUTh8zudes1sqYu74RMeFZwIRb1tXxOxTFrV9COElPyXKm',
+  crypt(encode(gen_random_bytes(32), 'hex'), gen_salt('bf', 10)),
   '2027-01-12 14:00:00+00',
   '',
   '',

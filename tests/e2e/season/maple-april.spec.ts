@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { createSeasonRequestClassifier } from './season-request-classifier'
 
 const ownerEmail = 'maple.owner@farmrx.local.test'
 const localPorts = new Set(['4176', '55321'])
@@ -31,9 +32,8 @@ async function installAprilClock(page: Page) {
 }
 
 async function installAprilNetworkFence(page: Page) {
-  const unsafeLocalRequests: string[] = []
+  const localRequests = createSeasonRequestClassifier({ blockUnexpectedNonReadRequests: true })
   const externalRequests: string[] = []
-  let postSignIn = false
 
   await page.route('**/*', async (route) => {
     const request = route.request()
@@ -44,8 +44,7 @@ async function installAprilNetworkFence(page: Page) {
       await route.abort('blockedbyclient')
       return
     }
-    if (postSignIn && url.origin === 'http://127.0.0.1:55321' && !['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
-      unsafeLocalRequests.push(`${request.method()} ${url.pathname}`)
+    if (url.origin === 'http://127.0.0.1:55321' && localRequests.observe(request.method(), request.url()).block) {
       await route.abort('blockedbyclient')
       return
     }
@@ -63,22 +62,19 @@ async function installAprilNetworkFence(page: Page) {
   })
 
   return {
-    armPostSignIn: () => { postSignIn = true },
-    unsafeLocalRequests,
+    unexpectedRpcs: localRequests.unexpectedRpcs,
+    blockedNonReadRequests: localRequests.blockedNonReadRequests,
     externalRequests,
   }
 }
 
-async function signIn(page: Page, armPostSignIn: () => void) {
+async function signIn(page: Page) {
   const password = process.env.FARMRX_SEASON_OWNER_PASSWORD
   if (!password) throw new Error('FARMRX_SEASON_OWNER_PASSWORD is required for the local synthetic owner.')
   await page.goto('/login')
   await page.getByLabel('Email address').fill(ownerEmail)
   await page.getByLabel('Password').fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
-  // Arm immediately after the explicit authentication request is dispatched,
-  // before the first authenticated /fields load can issue any local API call.
-  armPostSignIn()
   await expect(page).toHaveURL(/\/fields(?:$|\/)/)
 }
 
@@ -106,7 +102,7 @@ async function assertAprilRecordEditor(page: Page) {
 test('@april-no-write inspects and cancels Maple records without writing', async ({ page }) => {
   await installAprilClock(page)
   const network = await installAprilNetworkFence(page)
-  await signIn(page, network.armPostSignIn)
+  await signIn(page)
 
   await expect(page.getByText('Maple East 160')).toBeVisible()
   await page.getByText('Maple East 160').first().click()
@@ -116,7 +112,15 @@ test('@april-no-write inspects and cancels Maple records without writing', async
   await page.reload()
   await expect(page.getByRole('heading', { name: 'Maple East 160' })).toBeVisible()
   await assertAprilRecordEditor(page)
-  expect(network.unsafeLocalRequests, 'post-sign-in browser attempted an unsafe method against the disposable API').toEqual([])
+  expect(
+    network.unexpectedRpcs,
+    'post-password-auth browser attempted a mutation-capable or unknown RPC against the disposable API',
+  ).toEqual([])
+  expect(
+    network.blockedNonReadRequests,
+    'post-password-auth browser attempted an unknown non-read request against the disposable API',
+  ).toEqual([])
   expect(network.externalRequests, 'browser attempted an external HTTP(S) or WS(S) destination').toEqual([])
-  expect(await page.evaluate(() => new Set(window.__farmRxAprilClockObservations))).toEqual(new Set([fixedInstant.toISOString()]))
+  const clockObservations = await page.evaluate(() => window.__farmRxAprilClockObservations)
+  expect(clockObservations.filter((value) => value !== fixedInstant.toISOString())).toEqual([])
 })

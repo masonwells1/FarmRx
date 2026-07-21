@@ -1,8 +1,11 @@
 import { supabase } from '../lib/supabaseClient'
 import { farmLocalCalendarDate } from './farmDates'
 import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
+import { parseDueGenerationReceipt, parseDueGenerationStatus } from './dueGenerationStatus'
 
 export interface DueProgramItemsGateway {
+  getDueGenerationStatus(farmId: string, context: FarmOperationContext): Promise<unknown>
+  generateDueProgramItemsV2(input: { farmId: string; operationId: string }, context: FarmOperationContext): Promise<unknown>
   generateDueProgramItems(input: { farmId: string; operationId: string; localDate: string }, context: FarmOperationContext): Promise<unknown>
 }
 
@@ -28,6 +31,19 @@ export class DueProgramItemsService {
   async generate() { return this.generateOperation(this.d.createId()) }
   async generateStrict() { return this.generateOperationStrict(this.d.createId()) }
 
+  async generateIfDueStrict(): Promise<'generated' | 'not-due'> {
+    const context = await this.d.getOperationContext()
+    await this.d.verifyOperationContext(context)
+    const status = parseDueGenerationStatus(await this.d.gateway.getDueGenerationStatus(context.farmId, context))
+    await this.d.verifyOperationContext(context)
+    if (!status.has_due) return 'not-due'
+    await this.d.verifyOperationContext(context)
+    const operationId = this.d.createId()
+    parseDueGenerationReceipt(await this.d.gateway.generateDueProgramItemsV2({ farmId: context.farmId, operationId }, context), 'generate_due_program_items_v2')
+    await this.d.verifyOperationContext(context)
+    return 'generated'
+  }
+
   async generateOperation(operationId: string): Promise<'generated' | 'skipped'> {
     try { return await this.generateOperationStrict(operationId) } catch { return 'skipped' }
   }
@@ -41,6 +57,16 @@ export class DueProgramItemsService {
 }
 
 export class SupabaseDueProgramItemsGateway implements DueProgramItemsGateway {
+  async getDueGenerationStatus(farmId: string, context: FarmOperationContext) {
+    const result = await bindFarmOperationRequest(supabase.rpc('program_due_generation_status', { p_farm_id: farmId }), context)
+    if (result.error) throw result.error
+    return result.data
+  }
+  async generateDueProgramItemsV2(input: { farmId: string; operationId: string }, context: FarmOperationContext) {
+    const result = await bindFarmOperationRequest(supabase.rpc('generate_due_program_items_v2', { p_farm_id: input.farmId, p_operation_id: input.operationId }), context)
+    if (result.error) throw result.error
+    return result.data
+  }
   async generateDueProgramItems(input: { farmId: string; operationId: string; localDate: string }, context: FarmOperationContext) {
     const result = await bindFarmOperationRequest(supabase.rpc('generate_due_program_items', { p_farm_id: input.farmId, p_operation_id: input.operationId, p_local_date: input.localDate }), context)
     if (result.error) throw result.error

@@ -5,6 +5,9 @@ $expectedProjectId = 'farmrx-farmer-simplicity-2027-local'
 $expectedContainer = "supabase_db_$expectedProjectId"
 $februaryProof = Join-Path $root 'scripts/verify-maple-february-disposable.ps1'
 $marchSql = Join-Path $root 'tests/season/maple-2027-march.verify.sql'
+$credentialHelperPath = Join-Path $root 'scripts/maple-season-credential.ps1'
+
+. $credentialHelperPath
 $retainedSnapshotSql = @'
 select jsonb_build_object(
   'farms', coalesce((select jsonb_agg(to_jsonb(t) order by id) from public.farms t), '[]'::jsonb),
@@ -41,16 +44,15 @@ select jsonb_build_object(
 )::text;
 '@
 
-if (-not $env:FARMRX_SEASON_OWNER_PASSWORD) {
-  throw 'FARMRX_SEASON_OWNER_PASSWORD is required and must contain only the synthetic local fixture password.'
-}
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker CLI is required for the Maple March proof.' }
 if (-not (Get-Command npx -ErrorAction SilentlyContinue)) { throw 'Node.js/npm with npx is required for the Maple March browser proof.' }
 
 $supabase = if ($env:SUPABASE_GO_BINARY) { $env:SUPABASE_GO_BINARY } else { (Get-Command supabase -ErrorAction Stop).Source }
+$boundary = Assert-MapleSeasonLocalBoundary -Root $root -Supabase $supabase -ExpectedProjectId $expectedProjectId -ExpectedContainer $expectedContainer
 
 Push-Location $root
 try {
+  Enter-MapleSeasonCredential
   # February invokes January, which owns the continuous-year database's only reset.
   & powershell -NoProfile -ExecutionPolicy Bypass -File $februaryProof
   if ($LASTEXITCODE -ne 0) { throw 'Continuous Maple January-February prerequisite failed.' }
@@ -97,14 +99,14 @@ try {
     throw 'Maple March changed canonical January-February rows (full-row retained-state snapshot mismatch).'
   }
 
-  Get-Content -Raw -LiteralPath $marchSql |
-    docker exec -i $expectedContainer psql -U postgres -d postgres -v ON_ERROR_STOP=1 -P pager=off
-  if ($LASTEXITCODE -ne 0) { throw 'Maple March post-browser database assertions failed.' }
+  if (-not (Invoke-MapleSeasonSqlFile -Path $marchSql -ExpectedContainer $expectedContainer)) { throw 'Maple March post-browser database assertions failed.' }
 
   Write-Output 'MAPLE_2027_MARCH_DISPOSABLE_PASS'
 } finally {
   Remove-Item Env:VITE_LOCAL_SUPABASE_PROJECT_REF -ErrorAction SilentlyContinue
   Remove-Item Env:VITE_LOCAL_SUPABASE_URL -ErrorAction SilentlyContinue
   Remove-Item Env:VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY -ErrorAction SilentlyContinue
+  Exit-MapleSeasonCredential
+  $boundary = $null
   Pop-Location
 }

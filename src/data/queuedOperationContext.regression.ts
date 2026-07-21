@@ -460,6 +460,8 @@ try {
   const noticeCalls = { save: 0, due: 0 }
   const unused = async () => { throw new Error('Unexpected Equipment gateway operation.') }
   const noticeGateway: EquipmentTasksDataGateway = {
+    async getDueServiceGenerationStatus() { return { has_due: true, task_needed: true, notification_needed: true, local_date: '2026-07-12' } },
+    async generateDueServiceTasksV2() { noticeCalls.due += 1; throw new TypeError('network timeout after replay') },
     async generateDueServiceTasks() { noticeCalls.due += 1; throw new TypeError('network timeout after replay') },
     async loadWorkspace() { return { viewer: { role: 'owner' }, equipment: [], meter_readings: [], intervals: [], service_log: [], service_due: [], members: [{ farm_id: farmA, user_id: userA, display_name: 'Notice Operator' }], tasks: [] } },
     async saveEquipment(farmId, value) { noticeCalls.save += 1; return { ...value, farm_id: farmId, created_by: userA, created_at: stamp, updated_at: stamp } },
@@ -502,6 +504,8 @@ try {
   const gateCalls = { save: 0, due: 0, install: 0 }
   const gateUnused = async () => { throw new Error('Unexpected gate Equipment operation.') }
   const gateGateway: EquipmentTasksDataGateway = {
+    async getDueServiceGenerationStatus() { return { has_due: true, task_needed: true, notification_needed: true, local_date: '2026-07-12' } },
+    async generateDueServiceTasksV2() { gateCalls.due += 1; if (gateCalls.due === 1) throw new TypeError('network timeout after replay'); if (gateCalls.due === 2) await gateRetryHold; return { operation_kind: 'generate_due_service_tasks_v2', task_created_count: 0, notification_created_count: 0, local_date: '2026-07-12' } },
     async generateDueServiceTasks() { gateCalls.due += 1; if (gateCalls.due === 1) throw new TypeError('network timeout after replay'); if (gateCalls.due === 2) await gateRetryHold; return { created_count: 0 } },
     async loadWorkspace() { return { viewer: { role: 'owner' }, equipment: [], meter_readings: [], intervals: [], service_log: [], service_due: [], members: [{ farm_id: farmA, user_id: userA, display_name: 'Gate Operator' }], tasks: [] } },
     async saveEquipment(farmId, value) { gateCalls.save += 1; return { ...value, farm_id: farmId, created_by: userA, created_at: stamp, updated_at: stamp } },
@@ -1552,6 +1556,8 @@ try {
   const switchAccess = { ...gateAccess, farms: [gateFarm, switchFarmB] }
   const switchCalls = { save: 0, due: 0, install: 0, select: 0 }
   const switchGateway: EquipmentTasksDataGateway = {
+    async getDueServiceGenerationStatus() { return { has_due: true, task_needed: true, notification_needed: true, local_date: '2026-07-12' } },
+    async generateDueServiceTasksV2() { switchCalls.due += 1; return { operation_kind: 'generate_due_service_tasks_v2', task_created_count: 0, notification_created_count: 0, local_date: '2026-07-12' } },
     async generateDueServiceTasks() { switchCalls.due += 1; return { created_count: 0 } },
     async loadWorkspace() { return { viewer: { role: 'owner' }, equipment: [], meter_readings: [], intervals: [], service_log: [], service_due: [], members: [{ farm_id: farmA, user_id: userA, display_name: 'Switch Operator' }], tasks: [] } },
     async saveEquipment(farmId, value) { switchCalls.save += 1; return { ...value, farm_id: farmId, created_by: userA, created_at: stamp, updated_at: stamp } },

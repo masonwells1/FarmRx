@@ -602,9 +602,11 @@ try {
 const realDateNow = Date.now
 try {
   ;(navigator as { onLine: boolean }).onLine = false
-  Date.now = () => Date.parse('2026-07-21T12:00:00.000Z')
-  assert.equal((await loadFarmAccess(userB)).source, 'offline')
   const userBClockKey = deviceClockHighWaterKey({ projectRef: supabaseConfig.projectRef, userId: userB })
+  const priorUserBHighWater = Date.parse(String((JSON.parse(storage.getItem(userBClockKey) ?? '{}') as { highWaterAt?: unknown }).highWaterAt ?? ''))
+  const controlledForwardMs = Math.max(Date.parse('2026-07-21T12:00:00.000Z'), Number.isFinite(priorUserBHighWater) ? priorUserBHighWater : 0)
+  Date.now = () => controlledForwardMs
+  assert.equal((await loadFarmAccess(userB)).source, 'offline')
   const userBClockBytes = storage.getItem(userBClockKey)
   Date.now = () => Date.parse('2026-07-15T12:00:00.000Z')
   await assert.rejects(() => loadFarmAccess(userB), /clock/i)
