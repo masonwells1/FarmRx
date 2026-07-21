@@ -1,16 +1,16 @@
 # Maple Ridge July-December mapping
 
-**Mapping snapshot:** `fc232173ba2cc8f6340e6cad2c390c54430dd308` on `codex/farmrx-2027-season-ready`
+**Mapping snapshot:** updated for static hardening through `dfc695c77ac6618d82e3b073f6fc2e17ef4867f7` on `codex/farmrx-2027-season-ready`
 **Controlling sources:** [`WORKFLOWS-AND-SCENARIOS.md`](WORKFLOWS-AND-SCENARIOS.md), [`ORCHESTRATOR-RUNBOOK.md`](ORCHESTRATOR-RUNBOOK.md), [`SCORECARD.md`](SCORECARD.md), and [`../GOAL.md`](../GOAL.md)
 **Fixture source:** [`../../tests/season/season-2027.manifest.json`](../../tests/season/season-2027.manifest.json)
 
 ## Evidence boundary
 
-This document is a read-only design map. It records source-derived UI paths, data ownership, expected writes and non-writes, known defects, fixture needs, and the proof still required for Maple Ridge July through December. It is **not** runtime evidence, an accepted evidence packet, a Sol verdict, or a claim that any month below has passed.
+This document began as a read-only design map and now also records the bounded static hardening implemented from it. It records source-derived UI paths, data ownership, expected writes and non-writes, repaired defects, fixture needs, and the proof still required for Maple Ridge July through December. It is **not** runtime evidence, an accepted evidence packet, or a claim that any month below has passed.
 
 The continuous Maple scenario must reset once before January and preserve the same disposable local database through December. A month cannot be upgraded to **PROVEN** from this mapping, a committed harness, chat-reported output, or a narrow test. The runbook's full evidence and fresh exact-SHA Sol review requirements still apply.
 
-No new module, integration, vendor, automatic coupling, year-end finalization entity, or proof-only product column is authorized. The mapped repairs are limited to honest save receipts on existing writes and the removal of a hidden zero-effect write.
+No new module, integration, vendor, automatic coupling, year-end finalization entity, or proof-only product column is authorized. The implemented repairs are limited to honest save receipts on existing writes and startup preflights that avoid hidden zero-effect generation writes.
 
 ## Shared fixture identity and retained state
 
@@ -29,14 +29,14 @@ Every later month must snapshot and retain all earlier manifest rows, versions, 
 
 | Month | Mapping status | Existing behavior decision | Executable proof state |
 |---|---|---|---|
-| July | **PRODUCT-BLOCKED** | Scouting save lacks an honest visible receipt; the separately created Task already has a form-save receipt. | No accepted July browser/SQL packet. |
-| August | **PRODUCT-BLOCKED** | Task quick actions (`Start`, `Done`, `Reopen`) save durably but do not publish the existing receipt to the Tasks page. | No accepted August browser/SQL packet. |
-| September | **PRODUCT-BLOCKED** | Harvest closes its editor after save but does not show the existing honest receipt states. | No accepted September browser/SQL packet. |
-| October | **PROOF-ONLY GO (mapping only)** | The explicit Grain estimate then Harvest-to-Grain reconciliation workflow is source-real; no product correction was identified by mapping. | No accepted October harness or runtime packet. |
-| November | **PRODUCT-BLOCKED** | Grain storage/contract/delivery writes lack action-specific honest receipt coverage; the generic saved timestamp can belong to a different action. | No accepted November browser/SQL packet. |
-| December | **PRODUCT-BLOCKED** | A zero-effect Program due-item check inserts a hidden repository receipt during live access restoration/reload. | No accepted closeout harness or zero-write packet. |
+| July | **RUNTIME-BLOCKED** | `170c5e4` implements honest Scouting receipt/recovery behavior; `073a1e8` adds a fail-closed desktop/phone browser and SQL harness. | The harness cannot accept July until the disposable Postgres date is governed as 2027. |
+| August | **STATIC-ACCEPTED** | `555b648` publishes operation-bound Task quick-action receipts with focused regression coverage. | No accepted August browser/SQL packet. |
+| September | **STATIC-ACCEPTED** | `5d59096` publishes operation-bound Harvest receipts with focused regression coverage. | No accepted September browser/SQL packet. |
+| October | **STATIC-ACCEPTED** | `0344058` adds trustworthy operation-bound receipts to the explicit Grain estimate and reconciliation actions. | No accepted October browser/SQL packet. |
+| November | **STATIC-ACCEPTED** | `7609d3e` adds action-owned receipts and durability handling for bins, movements, contracts, and deliveries. | No accepted November browser/SQL packet. |
+| December | **STATIC-ACCEPTED** | Startup read-only status preflights and v2 generation already exist at `53e8d2d`; `dfc695c` strengthens production-orchestration regression coverage. | No accepted closeout browser/SQL packet. |
 
-`PROOF-ONLY GO` means only that source inspection did not identify a required product repair for the stated workflow. It is not **PROVEN** or **STATIC-ACCEPTED**.
+`STATIC-ACCEPTED` records reviewed product or focused-test hardening only. It is not **PROVEN** and does not substitute for the continuous browser/database packet.
 
 ## July - scouting note and separate manual task
 
@@ -62,11 +62,11 @@ The source controls are owned by `src/ScoutingModule.tsx` and `src/EquipmentTask
 - No application, Program status, Inventory, Grain, field/crop, or cash-bid mutation.
 - Merely opening Scouting, opening Tasks, or opening either form is a non-write.
 
-### Existing defect and bounded repair
+### Implemented bounded repair
 
-`ScoutingFieldCard.save` closes the form and refreshes or projects pending data, but neither `QueuedScoutingRepository` nor the page publishes an entity-ID-bound `Saving`, `Saved`, `Queued offline`, or `Needs attention` state through the existing `SaveReceipt` mechanism. A busy farmer cannot distinguish a confirmed save from an uncertain close. This is an existing-workflow trust defect, not a request for a new workflow.
+Before `170c5e4`, `ScoutingFieldCard.save` closed the form and refreshed or projected pending data without publishing an entity-ID-bound `Saving`, `Saved`, `Queued offline`, or `Needs attention` state through the existing `SaveReceipt` mechanism. A busy farmer could not distinguish a confirmed save from an uncertain close. This was an existing-workflow trust defect, not a request for a new workflow.
 
-The bounded repair should reuse the shared receipt component and repository receipt identity. It must cover connected success, offline queueing, replay success, terminal failure, and double-submit locking without changing Scouting row shape or creating a follow-up task when the checkbox is off. The manual Task form already wires a receipt and should be asserted, not redesigned in the July tranche.
+Commit `170c5e4` reuses the shared receipt identity and hardens connected success, offline custody/replay, terminal failure, and submit locking without changing the Scouting row shape. Runtime confirmation in the continuous July lane remains required.
 
 ### Fixture and harness boundary
 
@@ -91,9 +91,9 @@ Open Tasks, locate `Inspect Maple south gate` in **To Do**, choose **Done**, and
 - No second task, notification, Program, scouting, Inventory, Grain, Fields, equipment, or service row changes.
 - Opening or reloading Tasks is a non-write in the continuous fixture.
 
-### Existing defect and bounded repair
+### Implemented bounded repair
 
-Task creation/editing exposes the page-level receipt, but `TaskColumn.move` discards the receipt identity returned by `saveTask`; the quick actions `Start`, `Done`, and `Reopen` therefore do not drive `SaveReceipt`. The bounded repair should route the existing operation/receipt ID to the Tasks page and preserve the submit lock. It must not change completion ownership, server time, task source rules, or Program-owned task restrictions.
+Commit `555b648` routes the quick action's operation/receipt identity to the Tasks page and preserves the submit lock without changing completion ownership, server time, task source rules, or Program-owned task restrictions. Runtime confirmation remains required.
 
 ### Fixture and harness boundary
 
@@ -117,9 +117,9 @@ Open Harvest, choose crop year `2027`, find Maple East 160, choose **Enter harve
 - Grain production remains absent/projected at this point; no production estimate, contract, delivery, bin, movement, lot, task, notification, Program, Inventory, or application mutation.
 - Visible derived results after save/reload are 192.5 bu/ac, 7.5 bu/ac under the 200 bu/ac plan, and $130,900.00 actual revenue.
 
-### Existing defect and bounded repair
+### Implemented bounded repair
 
-The Harvest form closes after a successful repository call and projects/reloads the saved crop, but it does not expose the shared honest save receipt. The bounded repair should wire the existing receipt states without changing crop arithmetic, optimistic versioning, queue semantics, or the form itself.
+Commit `5d59096` wires the shared honest receipt states without changing crop arithmetic, optimistic versioning, queue semantics, or the form's business fields. Runtime confirmation remains required.
 
 ### Fixture and harness boundary
 
@@ -148,9 +148,9 @@ The UI is owned by `src/GrainModule.tsx`; the write path is `QueuedGrainReposito
 - Harvest/crop row remains unchanged across both actions.
 - Cash bid, bins, bin inventory, bin movements, contracts, deliveries, lots, and unrelated rows remain unchanged; no storage or sale row is automatically created.
 
-### Mapping decision and risks to prove
+### Static hardening decision and risks to prove
 
-This lane is a **proof-only GO at mapping level**: the source contains the explicit two-step workflow and disclosure, and no required product correction was identified. Runtime proof must still defeat these risks:
+Commit `0344058` adds operation-bound receipts to the source-real explicit two-step workflow and preserves its disclosure and non-coupling boundaries. Runtime proof must still defeat these risks:
 
 - deterministic identity for the newly inserted production estimate;
 - exactly two ordered writes, including optimistic-version behavior and lost-response replay;
@@ -186,11 +186,9 @@ Perform five independent actions in contract order, capturing state after every 
 - Bin creation/In does not create a contract or delivery; contract creation does not move grain; Out does not record delivery.
 - No `bin_inventory` baseline, grain lot, second transaction, second delivery, notification, task, Inventory, Harvest, Program, Scouting, or cash-bid change.
 
-### Existing defect and bounded repair
+### Implemented bounded repair
 
-The Grain page uses a generic `Saved <time>` whisper shared across actions. It can remain visible from a prior storage or contract action and is not an honest action-specific receipt for bin creation, movement append, contract creation, or delivery recording. The November tranche should attach stable operation identities to the existing shared receipt states and render the receipt beside the action that owns it. It must preserve the deliberate independence of storage and delivery.
-
-This is one coherent trust tranche only if the implementation reuses the same receipt primitive without altering the five business operations. Otherwise split it into smaller immutable commits under the runbook.
+Commit `7609d3e` replaces reliance on the shared generic timestamp with stable, action-owned receipt states for bin creation, movement append, contract creation, and delivery recording. It preserves the deliberate independence of storage and delivery. Runtime confirmation of the five business operations remains required.
 
 ### Fixture and harness boundary
 
@@ -218,11 +216,11 @@ This is one coherent trust tranche only if the implementation reuses the same re
 
 Opening and reloading every view is expected to write nothing.
 
-### Existing hidden-write defect
+### Implemented startup guard and remaining runtime boundary
 
-Live farm-access restoration calls `replayAuthorizedFarmWork` in `src/App.tsx`, which invokes `generateDueProgramItems` through `src/data/index.ts` and `src/data/programDueItems.ts`. `generate_due_program_items` in migration `0024_programs.sql` unconditionally inserts a new `repository_write_receipts` row even when it creates zero tasks and zero notifications. A full document reload can therefore mutate the database during the required read-only closeout.
+The original startup path called `generate_due_program_items` during live farm-access restoration. That RPC can consume a `repository_write_receipts` row even when it creates zero tasks and zero notifications, so invoking it without a read-only status check could mutate the database during the required read-only closeout.
 
-Simply omitting a 0/0 receipt is not safe: today that receipt consumes the operation ID, while an unrecorded operation could be replayed after eligibility changes and then mutate a different result. The preferred bounded design is a read-only eligibility preflight used by startup so it skips the mutating RPC when nothing is due, while explicit generation keeps its existing operation-consumption and idempotency semantics. If implementation instead changes 0/0 receipt behavior, it must first define whether an operation ID is consumed and prove that the same ID cannot later produce a different result. This design remains unimplemented and unproven here.
+Commit `53e8d2d` implements authenticated, edit-gated, server-clock read-only status preflights and receipt-backed v2 generators for Program and Equipment startup. Commit `dfc695c` strengthens focused production-orchestration regression coverage for sequential false restorations, due work, queue ordering, read-only/offline skips, and zero local receipt custody on false status. These static checks do not prove the December browser/database closeout or concurrent production restoration.
 
 The RPC also rejects `p_local_date` outside Postgres `current_date ± 1`. A simulated December 2027 browser clock does not change Postgres `current_date`, so the disposable backend needs a governed database-date/time seam aligned with the contract before the closeout can reach the intended zero-effect path.
 
@@ -253,13 +251,13 @@ Required focused repair proof:
 
 ## Cross-month implementation and proof order
 
-1. Obtain Mason's approval for the multi-file receipt-hardening tranche before product edits.
-2. Repair the existing Scouting, Task quick-action, Harvest, and Grain action receipts in reviewable bounded commits; split where behavior ownership or proof differs.
-3. Give every repair focused connected/offline/replay/failure/double-submit proof, full relevant regressions/build, and fresh exact-SHA Sol adversarial review.
-4. Build July through November browser/SQL lanes in order, each chaining from the previous month without reset and each recording desktop plus phone-sized evidence.
-5. Repair the December zero-effect Program receipt in a separate migration tranche and adversarially prove idempotency.
-6. Build December closeout and run the full continuous January-December packet on one exact HEAD.
-7. Update [`SCORECARD.md`](SCORECARD.md) and append [`LEDGER.md`](LEDGER.md) only from durable executed evidence. Never promote a month from this mapping alone.
+1. Preserve the completed bounded receipt and startup-preflight hardening commits through `dfc695c`; do not expand their product scope.
+2. Establish a governed disposable Postgres clock seam for the fixed July–December 2027 instants.
+3. Run the committed fail-closed July browser/SQL lane continuously from June and record desktop plus phone-sized evidence.
+4. Build and run August through November browser/SQL lanes in order, each chaining from the previous month without reset.
+5. Build December closeout and run the full continuous January–December packet on one exact HEAD.
+6. Give each runtime tranche the required regressions/build, focused database proof, and fresh exact-SHA Sol adversarial review.
+7. Update [`SCORECARD.md`](SCORECARD.md) and append [`LEDGER.md`](LEDGER.md) only from durable executed evidence. Never promote a month from static hardening alone.
 
 ## Required evidence packet contents
 

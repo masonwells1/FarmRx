@@ -161,3 +161,16 @@ Copy this template below the last entry. Do not replace the template or modify a
 - **External actions actually performed:** none. No push, pull request, merge, deployment, live migration/data, live service access, secret/auth/permission change, customer action, or communication occurred.
 - **Remaining risk / next approval:** This accepts the local February–June tranche, not the season or release. February–April phone-sized lanes remain unbuilt; July–December, governed scenarios, physical iPhone/Safari and Android/Chrome installed-PWA journeys, custom SMTP, publication, production deployment, live migration/data, and live verification remain unproven or approval-gated. The next bounded local tranche is July receipt hardening and its continuous-season browser/database proof.
 - **Canonical status:** defer to [`docs/GOAL.md`](../GOAL.md); this entry does not claim `RELEASE CANDIDATE READY` or `COMPLETE`.
+
+## SR-006 — July–December static hardening checkpoint; runtime not accepted
+
+- **Date:** 2026-07-21 (`America/Chicago`)
+- **Actor/model:** Sol orchestration with bounded Terra/Sol implementation and separate read-only Sol review.
+- **Worktree/branch:** `C:\Users\mason\.codex\worktrees\farmrx-farmer-simplicity` / `codex/farmrx-2027-season-ready`
+- **Commit or state SHA:** documentation checkpoint begins from `dfc695c77ac6618d82e3b073f6fc2e17ef4867f7`; the accepted continuous runtime boundary remains `53e8d2d380907b7bf56da599362ec8254d3ef2a0` through June.
+- **Authority used:** bounded local product/test hardening, local commits, disposable local proof attempts, and read-only review only. No push, pull request, merge, deployment, live migration/data, secret, live auth/permission, customer action, or communication occurred.
+- **Static hardening chain:** `170c5e4` hardens Scouting receipt/recovery behavior; `073a1e8` adds the fail-closed July desktop/phone and SQL harness; `555b648` publishes Task quick-action receipts; `5d59096` publishes Harvest receipts; `0344058` adds operation-bound Grain estimate/reconciliation receipts; `7609d3e` adds action-owned bin, movement, contract, and delivery receipts; `dfc695c` strengthens startup production-orchestration regression coverage.
+- **Evidence boundary:** repository history and committed file changes establish that these product and focused-test surfaces exist. This entry does not reproduce command output or upgrade any month from an unrecorded run. Earlier working evidence and exact-commit reviews support bounded static acceptance, but the required continuous July–December browser/database packet has not been recorded.
+- **Runtime blocker:** the July harness intentionally refuses acceptance while the disposable Postgres clock is the current 2026 date. Browser clock control does not change database `current_date`/`now()`. A governed disposable 2027 database-clock seam is required; row patching, function replacement, weakened constraints, or a fabricated green result do not satisfy the contract.
+- **Canonical status:** January–June retain SR-003 through SR-005 runtime proof. July is **RUNTIME-BLOCKED**; August–December product/focused-test hardening is **STATIC-ACCEPTED** only. No July–December month is **PROVEN**, and this entry does not claim `RELEASE CANDIDATE READY` or `COMPLETE`.
+- **External actions actually performed:** none.
