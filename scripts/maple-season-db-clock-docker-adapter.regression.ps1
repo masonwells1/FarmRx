@@ -66,6 +66,8 @@ function New-Simulator {
         ContainerNotFound='container'; ImageNotFound='image'; SyntheticInspectFailure=$false
         ArtifactMissing=$false;ArtifactInspectFailure=$false;ArtifactMalformed=$false;ArtifactId='sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746'
         ArtifactLabels=@{'farmrx.synthetic-bootstrap'='225c197c34164c90b08a4c8b6b10e6c7';'farmrx.synthetic-owner'='maple-faketime-bootstrap';'farmrx.synthetic-role'='faketime-artifacts';'farmrx.source-digest'='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818';'farmrx.package-contract'='libfaketime=0.9.10-2.1;gcc;libc6-dev'}
+        ArtifactTagMissing=$false;ArtifactTagInspectFailure=$false;ArtifactTagMalformed=$false;ArtifactTagId='sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746'
+        ArtifactTagLabels=@{'farmrx.synthetic-bootstrap'='225c197c34164c90b08a4c8b6b10e6c7';'farmrx.synthetic-owner'='maple-faketime-bootstrap';'farmrx.synthetic-role'='faketime-artifacts';'farmrx.source-digest'='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818';'farmrx.package-contract'='libfaketime=0.9.10-2.1;gcc;libc6-dev'}
     }
     foreach ($key in $Overrides.Keys) { $state[$key] = $Overrides[$key] }
     $calls = [Collections.Generic.List[object]]::new()
@@ -127,6 +129,7 @@ function New-Simulator {
         if ($command -ceq 'image' -and $Argv[1] -ceq 'inspect') {
             $tag=$Argv[-1]; $exists=($tag -ceq $simInventory.snapshot_tag -and $state.Snapshot) -or ($tag -ceq $simInventory.derived_tag -and $state.Derived)
             if($tag-ceq$simProof.ArtifactImageRef){if($state.ArtifactInspectFailure){return [pscustomobject]@{ExitCode=1;Stdout='';Stderr='permission denied'}};if($state.ArtifactMissing){return [pscustomobject]@{ExitCode=1;Stdout='';Stderr="Error response from daemon: No such image: $tag"}};if($state.ArtifactMalformed){return [pscustomobject]@{ExitCode=0;Stdout='{';Stderr=''}};return [pscustomobject]@{ExitCode=0;Stdout=(@{Id=$state.ArtifactId;Labels=$state.ArtifactLabels}|ConvertTo-Json -Compress -Depth 5);Stderr=''}}
+            if($tag-ceq'maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7:synthetic'){if($state.ArtifactTagInspectFailure){return [pscustomobject]@{ExitCode=1;Stdout='';Stderr='permission denied'}};if($state.ArtifactTagMissing){return [pscustomobject]@{ExitCode=1;Stdout='';Stderr="Error response from daemon: No such image: $tag"}};if($state.ArtifactTagMalformed){return [pscustomobject]@{ExitCode=0;Stdout='{';Stderr=''}};return [pscustomobject]@{ExitCode=0;Stdout=(@{Id=$state.ArtifactTagId;Labels=$state.ArtifactTagLabels}|ConvertTo-Json -Compress -Depth 5);Stderr=''}}
             if (-not $exists) {$stderr=if($state.ImageNotFound-ceq'object'){"Error response from daemon: No such object: $tag"}else{"Error response from daemon: No such image: $tag"};return [pscustomobject]@{ ExitCode=1; Stdout=''; Stderr=$stderr } }
             $imageId=if ($tag -ceq $simInventory.snapshot_tag) { $state.SnapshotId } else { $state.DerivedId }
             $labels=@{'farmrx.maple-clock-swap'=$state.SimOwner;'farmrx.maple-original-id'=$simOriginalId;'farmrx.maple-contract-hash'=('a'*64)}
@@ -195,7 +198,7 @@ try {
     $snapshotChanges=@("LABEL farmrx.maple-clock-swap=$owner",'LABEL farmrx.maple-clock-role=ordinary-snapshot',"LABEL farmrx.maple-original-id=$originalId",("LABEL farmrx.maple-contract-hash="+('a'*64)))
     $expectedCommit=@('commit');foreach($change in $snapshotChanges){$expectedCommit+=@('--change',$change)};$expectedCommit+=@($namespace.Db,$inventory.snapshot_tag)
     Assert-ArgvSeen $sim.Calls $expectedCommit 'commit argv was not exact'
-    $expectedBuild=@('build','--network=none','--pull=false','--label',"farmrx.maple-clock-swap=$owner",'--label','farmrx.maple-clock-role=frozen-derived','--label',"farmrx.maple-original-id=$originalId",'--label',("farmrx.maple-contract-hash="+('a'*64)),'--label',"farmrx.maple-clock-snapshot-id=$($sim.State.SnapshotId)",'--build-arg',"BASE_IMAGE=$($inventory.snapshot_tag)",'--build-arg','FAKETIME_ARTIFACTS_IMAGE=sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746','--build-arg','FROZEN_INSTANT=2027-07-09 21:10:00+00:00','-f','tests/season/frozen-postgres-clock-spike.Dockerfile','-t',$inventory.derived_tag,'.')
+    $expectedBuild=@('build','--no-cache','--network=none','--pull=false','--label',"farmrx.maple-clock-swap=$owner",'--label','farmrx.maple-clock-role=frozen-derived','--label',"farmrx.maple-original-id=$originalId",'--label',("farmrx.maple-contract-hash="+('a'*64)),'--label',"farmrx.maple-clock-snapshot-id=$($sim.State.SnapshotId)",'--build-arg',"BASE_IMAGE=$($inventory.snapshot_tag)",'--build-arg','FAKETIME_ARTIFACTS_IMAGE=maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7:synthetic','--build-arg','FROZEN_INSTANT=2027-07-09 21:10:00+00:00','-f','tests/season/frozen-postgres-clock-spike.Dockerfile','-t',$inventory.derived_tag,'.')
     Assert-ArgvSeen $sim.Calls $expectedBuild 'build argv was not exact'
     $expectedCreate=@('create','--name',$namespace.Db,'--label',"farmrx.maple-clock-swap=$owner",'--label','com.docker.compose.project=maple-synthetic','--label','com.supabase.cli.project=maple-synthetic','--restart','no','--network',$namespace.Network,'--network-alias','db','--network-alias','db.supabase.internal','--publish','65432:5432','--volume',"$($namespace.Volume):/var/lib/postgresql/data:z",$inventory.derived_tag)
     Assert-ArgvSeen $sim.Calls $expectedCreate 'create argv was not exact'
@@ -212,7 +215,7 @@ try {
     $networkFormat='{"Id":{{json .Id}},"Labels":{{json .Labels}}}';$volumeFormat='{"Name":{{json .Name}},"Labels":{{json .Labels}}}'
     foreach($expected in @(
         @('inspect','--type','container','--format',$containerFormat,$namespace.Db),@('inspect','--type','container','--format',$containerFormat,$namespace.Parked),@('inspect','--type','container','--format',$containerFormat,$namespace.Rest),
-        @('image','inspect','--format',$imageFormat,$inventory.snapshot_tag),@('image','inspect','--format',$imageFormat,$inventory.derived_tag),@('image','inspect','--format',$imageFormat,$proof.ArtifactImageRef),
+        @('image','inspect','--format',$imageFormat,$inventory.snapshot_tag),@('image','inspect','--format',$imageFormat,$inventory.derived_tag),@('image','inspect','--format',$imageFormat,$proof.ArtifactImageRef),@('image','inspect','--format',$imageFormat,'maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7:synthetic'),
         @('network','inspect','--format',$networkFormat,$namespace.Network),@('volume','inspect','--format',$volumeFormat,$namespace.Volume)
     )){Assert-ArgvSeen $sim.Calls $expected "exact inspect argv missing: $($expected-join' ')"}
 
@@ -308,6 +311,9 @@ try {
     $exactArtifactLabels=@{'farmrx.synthetic-bootstrap'='225c197c34164c90b08a4c8b6b10e6c7';'farmrx.synthetic-owner'='maple-faketime-bootstrap';'farmrx.synthetic-role'='faketime-artifacts';'farmrx.source-digest'='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818';'farmrx.package-contract'='libfaketime=0.9.10-2.1;gcc;libc6-dev'}
     foreach($label in @($exactArtifactLabels.Keys)){foreach($mode in @('missing','wrong')){$labels=$exactArtifactLabels.Clone();if($mode-ceq'missing'){$labels.Remove($label)}else{$labels[$label]='wrong'};$artifactCases+=@{Name="$mode-$label";Overrides=@{Snapshot=$true;ArtifactLabels=$labels}}}}
     foreach($case in $artifactCases){$localSim=New-Simulator -Overrides $case.Overrides;$a=New-TestAdapter $localSim (Join-Path $temp ("artifact-"+$case.Name+'.json'));Assert-Throws{& $a.BuildDerived|Out-Null}"artifact inspect case accepted: $($case.Name)"}
+    $tagCases=@(@{Name='tag-missing';Overrides=@{Snapshot=$true;ArtifactTagMissing=$true}},@{Name='tag-wrong-id';Overrides=@{Snapshot=$true;ArtifactTagId='sha256:'+('a'*64)}},@{Name='tag-malformed';Overrides=@{Snapshot=$true;ArtifactTagMalformed=$true}},@{Name='tag-daemon';Overrides=@{Snapshot=$true;ArtifactTagInspectFailure=$true}})
+    foreach($label in @($exactArtifactLabels.Keys)){foreach($mode in @('missing','wrong')){$labels=$exactArtifactLabels.Clone();if($mode-ceq'missing'){$labels.Remove($label)}else{$labels[$label]='wrong'};$tagCases+=@{Name="tag-$mode-$label";Overrides=@{Snapshot=$true;ArtifactTagLabels=$labels}}}}
+    foreach($case in $tagCases){$localSim=New-Simulator -Overrides $case.Overrides;$a=New-TestAdapter $localSim (Join-Path $temp ($case.Name+'.json'));Assert-Throws{& $a.BuildDerived|Out-Null}"tag artifact inspect case accepted: $($case.Name)";Assert-True (@($localSim.Calls|Where-Object{$_.Kind-ceq'docker'-and$_.Argv[0]-ceq'build'}).Count-eq0)"build recorded after tag refusal: $($case.Name)"}
 
     # Route attestation is reset by every topology mutation.
     $route=New-Simulator;$routeAdapter=New-TestAdapter $route (Join-Path $temp 'route-reset.json');$null=&$routeAdapter.ProveRouteClockAndLineage

@@ -22,7 +22,7 @@ $textMutations=@(
 )
 foreach($m in $textMutations){$bad=$artifact.Replace($m.Old,$m.New);$refused=$false;try{Assert-ArtifactDockerfile $bad|Out-Null}catch{$refused=$true};A($refused)("Dockerfile mutation accepted: "+$m.N)}
 A($null-eq$plan.ExpectedImageId-and-not$plan.FrozenOfflineBuild.Resolved-and$plan.FrozenOfflineBuild.RequiresArtifactImageId)'future frozen build was treated as ready'
-A(($plan.FrozenOfflineBuild.ArgvTemplate-join'|')-ceq'build|--network=none|--pull=false|--build-arg|BASE_IMAGE=<verified-local-digest-ref>|--build-arg|FAKETIME_ARTIFACTS_IMAGE=<inspected-sha256-image-id>|-f|tests/season/frozen-postgres-clock-spike.Dockerfile|-t|<synthetic-derived-tag>|.')'offline argv drift'
+A(($plan.FrozenOfflineBuild.ArgvTemplate-join'|')-ceq'build|--no-cache|--network=none|--pull=false|--build-arg|BASE_IMAGE=<verified-local-digest-ref>|--build-arg|FAKETIME_ARTIFACTS_IMAGE=<preinspected-local-artifact-tag>|-f|tests/season/frozen-postgres-clock-spike.Dockerfile|-t|<synthetic-derived-tag>|.'-and$plan.FrozenOfflineBuild.RequiresPreinspectedLocalTag)'offline argv drift'
 $mutations=@(
  @{N='source ref';F={param($p)$p.SourceImage.Ref='debian:latest'}},@{N='observed id';F={param($p)$p.SourceImage.ObservedLocalImageId='sha256:invented'}},@{N='inspect type';F={param($p)$p.SourceImage.InspectBeforeBuild='true'}},
  @{N='labels';F={param($p)$p.ExpectedLabels.'farmrx.synthetic-role'='wrong'}},@{N='build argv';F={param($p)$p.BootstrapBuildArgv=@('build')}},@{N='evidence argv';F={param($p)$p.EvidenceArgv=@('inspect')}},
