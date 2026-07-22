@@ -442,7 +442,11 @@ function toDraft(
     expected_versions: field.updated_at && arrangement.updated_at ? {
       field_updated_at: field.updated_at,
       arrangement: { id: arrangement.id, updated_at: arrangement.updated_at },
-      crop_assignments: assignments.map((item) => ({ id: item.id, updated_at: item.updated_at })),
+      crop_assignments: assignments.map((item) => ({
+        id: item.id,
+        updated_at: item.updated_at,
+        crop_year: item.crop_year,
+      })),
     } : null,
     name: nextField.name,
     operating_entity_id: nextField.operating_entity_id,
@@ -2033,18 +2037,15 @@ export function FieldFormPage() {
       created_at: "",
       updated_at: "",
     };
-      const saved = await fieldsRepository.saveField(
-        toDraft(
-          {
-            ...base,
-            name: name.trim(),
-            total_acres: parsed,
-            county: county.trim() || null,
-          },
-          agreement,
-          existing ? cropRows(data, existing.id, moduleYear) : [],
-        ),
-      );
+      const fieldValues = {
+        name: name.trim(),
+        total_acres: parsed,
+        county: county.trim() || null,
+      };
+      const draft = existing
+        ? createFieldEditDraft(data, existing.id, { field: fieldValues })
+        : toDraft({ ...base, ...fieldValues }, agreement);
+      const saved = await fieldsRepository.saveField(draft);
       try {
         await refresh();
         navigate(`/fields/${saved.id}`);

@@ -1,0 +1,208 @@
+{
+  "schema": "farm-rx-season-contract",
+  "version": 1,
+  "year": 2027,
+  "timezone": "America/Chicago",
+  "fixtures": [
+    { "label": "owner user", "uuid": "27000000-0000-4000-8000-000000000001" },
+    { "label": "manager user", "uuid": "27000000-0000-4000-8000-000000000002" },
+    { "label": "worker user", "uuid": "27000000-0000-4000-8000-000000000003" },
+    { "label": "read-only user", "uuid": "27000000-0000-4000-8000-000000000004" },
+    { "label": "named Crop RX rep user", "uuid": "27000000-0000-4000-8000-000000000005" },
+    { "label": "outsider user", "uuid": "27000000-0000-4000-8000-000000000006" },
+    { "label": "Maple Ridge farm", "uuid": "27010000-0000-4000-8000-000000000001" },
+    { "label": "North Fork farm", "uuid": "27010000-0000-4000-8000-000000000002" },
+    { "label": "Prairie Spray farm", "uuid": "27010000-0000-4000-8000-000000000003" },
+    { "label": "Harvest Ridge farm", "uuid": "27010000-0000-4000-8000-000000000004" },
+    { "label": "Cedar Creek farm", "uuid": "27010000-0000-4000-8000-000000000005" },
+    { "label": "Pine Hill farm", "uuid": "27010000-0000-4000-8000-000000000006" },
+    { "label": "Maple Ridge operating entity", "uuid": "27011000-0000-4000-8000-000000000001" },
+    { "label": "North Fork operating entity", "uuid": "27011000-0000-4000-8000-000000000002" },
+    { "label": "Prairie Spray operating entity", "uuid": "27011000-0000-4000-8000-000000000003" },
+    { "label": "Harvest Ridge operating entity", "uuid": "27011000-0000-4000-8000-000000000004" },
+    { "label": "Cedar Creek operating entity", "uuid": "27011000-0000-4000-8000-000000000005" },
+    { "label": "Pine Hill operating entity", "uuid": "27011000-0000-4000-8000-000000000006" },
+    { "label": "Maple East 160 field", "uuid": "27020000-0000-4000-8000-000000000001" },
+    { "label": "North Home 80 field", "uuid": "27020000-0000-4000-8000-000000000002" },
+    { "label": "Prairie South 120 field", "uuid": "27020000-0000-4000-8000-000000000003" },
+    { "label": "Harvest Bottom 160 field", "uuid": "27020000-0000-4000-8000-000000000004" },
+    { "label": "Cedar West 40 field", "uuid": "27020000-0000-4000-8000-000000000005" },
+    { "label": "Pine North 60 field", "uuid": "27020000-0000-4000-8000-000000000006" },
+    { "label": "Maple East owned arrangement", "uuid": "27021000-0000-4000-8000-000000000001" },
+    { "label": "North Home owned arrangement", "uuid": "27021000-0000-4000-8000-000000000002" },
+    { "label": "Prairie South owned arrangement", "uuid": "27021000-0000-4000-8000-000000000003" },
+    { "label": "Harvest Bottom owned arrangement", "uuid": "27021000-0000-4000-8000-000000000004" },
+    { "label": "Cedar West owned arrangement", "uuid": "27021000-0000-4000-8000-000000000005" },
+    { "label": "Pine North owned arrangement", "uuid": "27021000-0000-4000-8000-000000000006" },
+    { "label": "Maple 2027 corn crop assignment", "uuid": "27030000-0000-4000-8000-000000000001" },
+    { "label": "North 2027 corn crop assignment", "uuid": "27030000-0000-4000-8000-000000000002" },
+    { "label": "Prairie 2027 soybean crop assignment", "uuid": "27030000-0000-4000-8000-000000000003" },
+    { "label": "Harvest 2027 corn crop assignment", "uuid": "27030000-0000-4000-8000-000000000004" },
+    { "label": "Cedar 2027 soybean crop assignment", "uuid": "27030000-0000-4000-8000-000000000005" },
+    { "label": "Pine 2027 corn crop assignment", "uuid": "27030000-0000-4000-8000-000000000006" },
+    { "label": "Maple known inventory product", "uuid": "27040000-0000-4000-8000-000000000000" },
+    { "label": "Prairie known inventory product", "uuid": "27040000-0000-4000-8000-000000000001" },
+    { "label": "Cedar known inventory product", "uuid": "27040000-0000-4000-8000-000000000005" },
+    { "label": "Maple receipt", "uuid": "27041000-0000-4000-8000-000000000000" },
+    { "label": "Prairie receipt", "uuid": "27041000-0000-4000-8000-000000000001" },
+    { "label": "Cedar receipt", "uuid": "27041000-0000-4000-8000-000000000005" },
+    { "label": "Maple receipt line", "uuid": "27042000-0000-4000-8000-000000000000" },
+    { "label": "Prairie receipt line", "uuid": "27042000-0000-4000-8000-000000000001" },
+    { "label": "Cedar receipt line", "uuid": "27042000-0000-4000-8000-000000000005" },
+    { "label": "Maple completed application record", "uuid": "27043000-0000-4000-8000-000000000000" },
+    { "label": "Prairie application record", "uuid": "27043000-0000-4000-8000-000000000001" },
+    { "label": "Cedar completed application record", "uuid": "27043000-0000-4000-8000-000000000005" },
+    { "label": "Maple completed application product", "uuid": "27044000-0000-4000-8000-000000000000" },
+    { "label": "Prairie application product", "uuid": "27044000-0000-4000-8000-000000000001" },
+    { "label": "Cedar completed application product", "uuid": "27044000-0000-4000-8000-000000000005" },
+    { "label": "Maple synthetic program", "uuid": "27050000-0000-4000-8000-000000000001" },
+    { "label": "Maple program pass", "uuid": "27051000-0000-4000-8000-000000000001" },
+    { "label": "Maple program-pass product", "uuid": "27051100-0000-4000-8000-000000000001" },
+    { "label": "Maple program assignment", "uuid": "27052000-0000-4000-8000-000000000001" },
+    { "label": "Maple assigned pass", "uuid": "27053000-0000-4000-8000-000000000001" },
+    { "label": "Maple assigned-program-pass product", "uuid": "27053100-0000-4000-8000-000000000001" },
+    { "label": "Maple draft application record", "uuid": "27054000-0000-4000-8000-000000000001" },
+    { "label": "Maple scouting note", "uuid": "27060000-0000-4000-8000-000000000001" },
+    { "label": "Maple farm task", "uuid": "27061000-0000-4000-8000-000000000001" },
+    { "label": "North permission-test farm task", "uuid": "27061000-0000-4000-8000-000000000002" },
+    { "label": "Cedar scouting note", "uuid": "27060000-0000-4000-8000-000000000005" },
+    { "label": "Maple Grain production estimate", "uuid": "27070000-0000-4000-8000-000000000001" },
+    { "label": "Harvest Grain production estimate", "uuid": "27070000-0000-4000-8000-000000000004" },
+    { "label": "Maple cash-bid setup fixture", "uuid": "27070500-0000-4000-8000-000000000001" },
+    { "label": "Maple grain contract", "uuid": "27071000-0000-4000-8000-000000000001" },
+    { "label": "Harvest grain contract", "uuid": "27071000-0000-4000-8000-000000000004" },
+    { "label": "Harvest proof-created grain contract", "uuid": "27071000-0000-4000-8000-000000000005" },
+    { "label": "Maple contract delivery", "uuid": "27072000-0000-4000-8000-000000000001" },
+    { "label": "Harvest contract delivery", "uuid": "27072000-0000-4000-8000-000000000004" },
+    { "label": "Harvest reverse-order contract delivery", "uuid": "27072000-0000-4000-8000-000000000005" },
+    { "label": "Maple grain bin", "uuid": "27073000-0000-4000-8000-000000000001" },
+    { "label": "Harvest grain bin", "uuid": "27073000-0000-4000-8000-000000000004" },
+    { "label": "Harvest proof-created grain bin", "uuid": "27073000-0000-4000-8000-000000000005" },
+    { "label": "Harvest bin inventory baseline", "uuid": "27073500-0000-4000-8000-000000000004" },
+    { "label": "Maple bin-in movement", "uuid": "27074000-0000-4000-8000-000000000000" },
+    { "label": "Maple bin-out movement", "uuid": "27074000-0000-4000-8000-000000000001" },
+    { "label": "Harvest bin-out movement", "uuid": "27074000-0000-4000-8000-000000000004" },
+    { "label": "Harvest proof bin-in movement", "uuid": "27074000-0000-4000-8000-000000000005" },
+    { "label": "Harvest reverse-order bin-out movement", "uuid": "27074000-0000-4000-8000-000000000006" },
+    { "label": "Harvest proof save operation", "uuid": "27076000-0000-4000-8000-000000000004" },
+    { "label": "Pine connected field note", "uuid": "27080000-0000-4000-8000-000000000001" },
+    { "label": "Pine revoked field note", "uuid": "27080000-0000-4000-8000-000000000002" },
+    { "label": "Pine connected queue operation", "uuid": "27090000-0000-4000-8000-000000000001" },
+    { "label": "Pine revoked queue operation", "uuid": "27090000-0000-4000-8000-000000000002" },
+    { "label": "Pine initial revocation-fence token", "uuid": "27091000-0000-4000-8000-000000000001" },
+    { "label": "Pine revoked revocation-fence token", "uuid": "27091000-0000-4000-8000-000000000002" }
+  ],
+  "scenarios": [
+    {
+      "id": "MR",
+      "fixedInstant": "2027-01-12T08:00:00-06:00",
+      "role": "owner",
+      "network": "online-local",
+      "expectedWrites": [
+        "fields.field-and-crop-setup",
+        "programs.assignment-and-draft",
+        "inventory.receipt-and-application",
+        "scouting.note",
+        "tasks.lifecycle",
+        "harvest.actuals",
+        "grain.reconciliation-and-ledgers"
+      ],
+      "expectedNonWrites": [
+        "navigation.read-only",
+        "planting.standalone-entity",
+        "programs.free-text-inventory",
+        "weather.provider-provenance",
+        "grain.hidden-coupling",
+        "year-end.finalization"
+      ]
+    },
+    {
+      "id": "NF",
+      "fixedInstant": "2027-02-09T08:00:00-06:00",
+      "role": "owner",
+      "network": "online-local",
+      "expectedWrites": [
+        "privacy.explicit-toggle",
+        "tasks.worker-create-manager-complete",
+        "access.epoch-advance"
+      ],
+      "expectedNonWrites": [
+        "permissions.denied-attempts",
+        "farm-switching.stale-content",
+        "private-data.cross-farm"
+      ]
+    },
+    {
+      "id": "PS",
+      "fixedInstant": "2027-06-15T14:10:00-05:00",
+      "role": "manager",
+      "network": "online-local",
+      "expectedWrites": [
+        "applications.completed-record-and-product",
+        "inventory.derived-on-hand"
+      ],
+      "expectedNonWrites": [
+        "programs.rows",
+        "weather.provider-provenance",
+        "crop-rx.delivery",
+        "tasks.rows",
+        "notifications.rows",
+        "grain.rows",
+        "scouting.rows"
+      ]
+    },
+    {
+      "id": "HR",
+      "fixedInstant": "2027-10-11T17:30:00-05:00",
+      "role": "owner",
+      "network": "online-local",
+      "expectedWrites": [
+        "harvest.actual-fields",
+        "grain.explicit-reconciliation",
+        "bins.manual-out",
+        "contracts.explicit-delivery"
+      ],
+      "expectedNonWrites": [
+        "grain.automatic-reconciliation",
+        "bins.contract-coupling",
+        "contracts.bin-coupling",
+        "lots.automatic-creation"
+      ]
+    },
+    {
+      "id": "CC",
+      "fixedInstant": "2027-07-07T13:20:00-05:00",
+      "role": "owner",
+      "network": "provider-double",
+      "expectedWrites": [
+        "applications.manual-weather-snapshot",
+        "inventory.derived-on-hand",
+        "scouting.note"
+      ],
+      "expectedNonWrites": [
+        "weather.product-database",
+        "weather.form-autofill",
+        "weather.provider-provenance",
+        "scouting.photos-tasks-notifications",
+        "inventory.unrelated-rows"
+      ]
+    },
+    {
+      "id": "PH",
+      "fixedInstant": "2027-08-04T14:00:00-05:00",
+      "role": "worker",
+      "network": "forced offline",
+      "expectedWrites": [
+        "queue.offline-custody",
+        "field-log.reconnect-once",
+        "access.revocation-fence"
+      ],
+      "expectedNonWrites": [
+        "field-log.offline-server-write",
+        "field-log.revoked-upload",
+        "queue.cross-account-replay",
+        "product.rows"
+      ]
+    }
+  ]
+}

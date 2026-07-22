@@ -37,7 +37,14 @@ const percent = (value: unknown) => nullableDecimal(value, 3, 2) && (value === n
 function isExpectedVersions(value: unknown): boolean {
   if (value === null) return true
   if (!isRecord(value) || !exact(value, ['field_updated_at', 'arrangement', 'crop_assignments']) || !timestamp(value.field_updated_at) || !isRecord(value.arrangement) || !exact(value.arrangement, ['id', 'updated_at']) || !isUuid(value.arrangement.id) || !timestamp(value.arrangement.updated_at) || !Array.isArray(value.crop_assignments)) return false
-  return value.crop_assignments.every((item) => isRecord(item) && exact(item, ['id', 'updated_at']) && isUuid(item.id) && timestamp(item.updated_at))
+  return value.crop_assignments.every((item) =>
+    isRecord(item) &&
+    (exact(item, ['id', 'updated_at']) || exact(item, ['id', 'updated_at', 'crop_year'])) &&
+    isUuid(item.id) &&
+    timestamp(item.updated_at) &&
+    (!Object.hasOwn(item, 'crop_year') ||
+      (Number.isInteger(item.crop_year) && Number(item.crop_year) >= 1900 && Number(item.crop_year) <= 2200)),
+  )
 }
 
 const legacyFlexTypes = ['price', 'yield', 'revenue']

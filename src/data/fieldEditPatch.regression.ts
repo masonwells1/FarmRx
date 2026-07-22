@@ -292,6 +292,84 @@ function regressionBlankUiIdsBecomeDurableIds() {
   );
 }
 
+function regressionExistingAgreementIdentitySurvivesCardEditDraft() {
+  const data = fieldsSeedForRegression();
+  const field = data.fields[1];
+  const current = data.arrangements.find(
+    (row) => row.field_id === field.id && row.effective_to === null,
+  )!;
+  const cardDraft = createFieldEditDraft(data, field.id, {
+    field: { state: "IL" },
+  });
+  assert(
+    cardDraft.arrangement.id === current.id,
+    "An existing-field card edit replaced the current agreement identity and would report a confirmed save as failed.",
+  );
+  const fieldCrops = data.crop_assignments.filter((row) => row.field_id === field.id);
+  assert(
+    cardDraft.crop_assignments.length === 0 &&
+      cardDraft.expected_versions?.crop_assignments.length === fieldCrops.length &&
+      fieldCrops.every((row) =>
+        cardDraft.expected_versions?.crop_assignments.some(
+          (version) =>
+            version.id === row.id && version.crop_year === row.crop_year,
+        ),
+      ),
+    "A field-only edit did not carry every loaded crop version while leaving crop rows unchanged.",
+  );
+}
+
+function regressionAgreementIdentityMatchesHistoryIntent() {
+  const data = fieldsSeedForRegression();
+  const field = data.fields[1];
+  const current = data.arrangements.find(
+    (row) => row.field_id === field.id && row.effective_to === null,
+  )!;
+  const correctedStart = createFieldEditDraft(data, field.id, {
+    arrangement: { effective_from: "1901-01-01" },
+  });
+  const futureSameTerms = createFieldEditDraft(data, field.id, {
+    arrangement: { effective_from: "2199-01-01" },
+  });
+  const sameDayChangedTerms = createFieldEditDraft(data, field.id, {
+    arrangement: {
+      effective_from: current.effective_from,
+      landlord_phone: "555-0100",
+    },
+  });
+  const futureChangedTerms = createFieldEditDraft(data, field.id, {
+    arrangement: {
+      effective_from: "2199-01-01",
+      landlord_phone: "555-0100",
+    },
+  });
+
+  assert(
+    correctedStart.arrangement.id === current.id &&
+      futureSameTerms.arrangement.id === current.id &&
+      sameDayChangedTerms.arrangement.id === current.id,
+    "An in-place agreement correction lost the current agreement identity.",
+  );
+  assert(
+    futureChangedTerms.arrangement.id === undefined,
+    "Future changed terms reused the current agreement identity instead of creating a history row.",
+  );
+
+  const flex = data.arrangements.find(
+    (row) => row.effective_to === null && row.flex_bonus_formula !== null,
+  )!;
+  const structurallyEqualFlex = createFieldEditDraft(data, flex.field_id, {
+    arrangement: {
+      effective_from: "2199-01-01",
+      flex_bonus_formula: structuredClone(flex.flex_bonus_formula),
+    },
+  });
+  assert(
+    structurallyEqualFlex.arrangement.id === flex.id,
+    "A structurally unchanged flex formula was misclassified as future changed terms.",
+  );
+}
+
 function regressionFieldDetailRecoveryStatesStayDistinct() {
   const data = fieldsSeedForRegression();
   const field = data.fields[1];
@@ -352,5 +430,7 @@ await regressionConfirmedReceiptSurvivesFailedRefresh();
 await regressionOfflineAgreementThenBasicsPreservesAgreement();
 regressionCancelledDraftsNeverReachTheLiveBundle();
 regressionBlankUiIdsBecomeDurableIds();
+regressionExistingAgreementIdentitySurvivesCardEditDraft();
+regressionAgreementIdentityMatchesHistoryIntent();
 regressionFieldDetailRecoveryStatesStayDistinct();
 console.log("Field edit patch regressions passed.");

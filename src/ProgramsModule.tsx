@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   canEditPrograms,
+  defaultProgramApplyRecordChoice,
   roundDecimalHalfUp,
   validateActualProgramProducts,
   validateProgramDraft,
@@ -14,6 +15,7 @@ import {
   type Program,
   type ProgramApplicationLink,
   type ProgramApplicationRecord,
+  type ProgramApplyRecordChoice,
   type ProgramAssignment,
   type ProgramCropCostRollup,
   type ProgramDraft,
@@ -1544,7 +1546,9 @@ function TrackerPass({
   const [reason, setReason] = useState("");
   const [due, setDue] = useState(pass.due_on ?? "");
   const [timing, setTiming] = useState(pass.timing_label ?? "");
-  const [recordChoice, setRecordChoice] = useState("none");
+  const [recordChoice, setRecordChoice] = useState<ProgramApplyRecordChoice>(
+    () => defaultProgramApplyRecordChoice(pass.activity_type),
+  );
   const [createId] = useState(() => crypto.randomUUID());
   const records = useMemo(
     () =>
@@ -1671,7 +1675,15 @@ function TrackerPass({
         </div>
         {canEdit && pass.status === "planned" && !pass.pending && (
           <div className="tracker-actions">
-            <button className="primary-action" onClick={() => setMode("apply")}>
+            <button
+              className="primary-action"
+              onClick={() => {
+                setRecordChoice(
+                  defaultProgramApplyRecordChoice(pass.activity_type),
+                );
+                setMode("apply");
+              }}
+            >
               Mark applied
             </button>
             <button
@@ -1738,7 +1750,7 @@ function TrackerPass({
             Application record (optional)
             <select
               value={recordChoice}
-              onChange={(e) => setRecordChoice(e.target.value)}
+              onChange={(e) => setRecordChoice(e.target.value as ProgramApplyRecordChoice)}
             >
               <option value="none">Do not add an application record</option>
               {records.map((record) => (
@@ -1747,7 +1759,12 @@ function TrackerPass({
                   {record.status}
                 </option>
               ))}
-              <option value="create">Create a new draft record</option>
+              <option value="create">
+                Create a new draft record
+                {pass.activity_type === "spray"
+                  ? " (recommended for spray records)"
+                  : ""}
+              </option>
             </select>
           </label>
           <p className="panel-note wide" role="status">

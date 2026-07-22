@@ -6,6 +6,7 @@ export const SAVE_RECEIPT_STATES = [
   "saved",
   "queued offline",
   "needs attention",
+  "confirmation needed",
 ] as const;
 export type SaveReceiptState = (typeof SAVE_RECEIPT_STATES)[number];
 
@@ -31,4 +32,5 @@ export const saveReceiptMessage: Record<SaveReceiptState, string> = {
   saved: "Saved",
   "queued offline": "Queued offline — will save when connected.",
   "needs attention": "Needs attention — this save was not applied. Reopen it to review.",
+  "confirmation needed": "Confirmation needed — this save may already be recorded. Retry or reload the same entry.",
 };

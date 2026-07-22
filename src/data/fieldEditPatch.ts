@@ -33,10 +33,53 @@ type EditableCropValues = Pick<
   | "notes"
 >;
 
+const agreementTermKeys = [
+  "arrangement_type",
+  "landlord_name",
+  "landlord_phone",
+  "landlord_contact_notes",
+  "cash_rent_per_acre",
+  "flex_bonus_formula",
+  "landlord_crop_pct",
+  "landlord_seed_pct",
+  "landlord_fertilizer_pct",
+  "landlord_chemical_pct",
+  "landlord_fuel_pct",
+  "landlord_labor_custom_pct",
+  "landlord_crop_insurance_pct",
+  "landlord_equipment_pct",
+  "landlord_interest_pct",
+  "landlord_other_input_pct",
+  "notes",
+] as const;
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalJson(entry)]),
+    );
+  }
+  return value;
+}
+
+function sameAgreementTerm(
+  key: (typeof agreementTermKeys)[number],
+  left: Arrangement,
+  right: Arrangement,
+) {
+  return key === "flex_bonus_formula"
+    ? JSON.stringify(canonicalJson(left[key])) ===
+        JSON.stringify(canonicalJson(right[key]))
+    : left[key] === right[key];
+}
+
 /** A card's intent, deliberately limited to the values that card can display. */
 export interface FieldEditPatch {
   field?: Partial<EditableFieldValues>;
-  arrangement?: Partial<FieldDraft["arrangement"]>;
+  arrangement?: Partial<Omit<FieldDraft["arrangement"], "id">>;
   cropAssignmentChanges?: Array<
     Pick<CropAssignment, "id"> & Partial<EditableCropValues>
   >;
@@ -143,15 +186,21 @@ export function createFieldEditDraft(
         ];
   const nextField = { ...field, ...patch.field };
   const nextArrangement = { ...arrangement, ...patch.arrangement };
+  const startsNewAgreementVersion =
+    nextArrangement.effective_from > arrangement.effective_from &&
+    agreementTermKeys.some(
+      (key) => !sameAgreementTerm(key, nextArrangement, arrangement),
+    );
   return {
     id: field.id,
     expected_versions: {
       field_updated_at: field.updated_at,
       arrangement: { id: arrangement.id, updated_at: arrangement.updated_at },
-      crop_assignments: crop_assignments.flatMap((draft) => {
-        const source = 'id' in draft && draft.id ? allRows.find((row) => row.id === draft.id) : undefined;
-        return source ? [{ id: source.id, updated_at: source.updated_at }] : [];
-      }),
+      crop_assignments: allRows.map((row) => ({
+        id: row.id,
+        updated_at: row.updated_at,
+        crop_year: row.crop_year,
+      })),
     },
     name: nextField.name,
     operating_entity_id: nextField.operating_entity_id,
@@ -163,6 +212,7 @@ export function createFieldEditDraft(
     fsa_tract_number: nextField.fsa_tract_number,
     soil_productivity_index: nextField.soil_productivity_index,
     arrangement: {
+      ...(startsNewAgreementVersion ? {} : { id: nextArrangement.id }),
       arrangement_type: nextArrangement.arrangement_type,
       landlord_name: nextArrangement.landlord_name,
       landlord_phone: nextArrangement.landlord_phone,

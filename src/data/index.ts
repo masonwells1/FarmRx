@@ -71,7 +71,7 @@ export const replayProgramsQueue = () => livePrograms.replayProgramsQueue()
 const dueProgramItems = new DueProgramItemsService({ gateway: new SupabaseDueProgramItemsGateway(), getFarmId: currentFarmId, getOperationContext: getFieldsOperationContext, verifyOperationContext: verifyFieldsOperationContext, createId: () => crypto.randomUUID() })
 /** Startup/reconnect must surface failure so the farmer receives the blocked
  * retry gate; opportunistic callers may still use DueProgramItemsService.generate. */
-export const generateDueProgramItems = () => dueProgramItems.generateStrict()
+export const generateDueProgramItems = () => dueProgramItems.generateIfDueStrict()
 const liveScouting = createSupabaseScoutingServices({ getFarmId: currentFarmId, getUserId: currentUserId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: farmReplayIsOffline })
 export const scoutingRepository = liveScouting.scoutingRepository
 export const replayScoutingQueue = () => liveScouting.replayScoutingQueue()

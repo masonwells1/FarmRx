@@ -6,6 +6,8 @@ dist/
 .npm-cache/
 .playwright-local/
 .agents/
+supabase/.temp/
+supabase/.branches/
 
 .vercel
 .env*

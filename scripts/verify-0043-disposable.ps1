@@ -161,7 +161,7 @@ begin
   with expected(proname, identity_args) as (
     values
       ('append_bin_movement','p_farm_id uuid, p_transaction jsonb'),
-      ('assign_program','p_farm_id uuid, p_operation_id uuid, p_program_id uuid, p_crop_assignment_ids uuid[]'),
+      ('assign_program','p_farm_id uuid, p_operation_id uuid, p_program_id uuid, p_assignment_plan jsonb'),
       ('bootstrap_first_farm','p_farm_name text, p_entity_name text, p_entity_type text'),
       ('can_access_farm','target_farm_id uuid'),
       ('can_edit_farm','target_farm_id uuid'),
@@ -179,8 +179,10 @@ begin
       ('delete_service_log_with_reversal','p_farm_id uuid, p_log_id uuid'),
       ('finalize_contract_price_leg','p_farm_id uuid, p_contract_id uuid, p_leg text, p_value numeric'),
       ('generate_due_program_items','p_farm_id uuid, p_operation_id uuid, p_local_date date'),
+      ('generate_due_program_items_v2','p_farm_id uuid, p_operation_id uuid'),
       ('generate_due_program_notifications','p_farm_id uuid, p_local_date date'),
       ('generate_due_service_tasks','p_farm_id uuid'),
+      ('generate_due_service_tasks_v2','p_farm_id uuid, p_operation_id uuid'),
       ('get_current_farm_access_epochs',''),
       ('get_member_display_name','target_user_id uuid'),
       ('has_explicit_rep_access','target_farm_id uuid'),
@@ -188,6 +190,7 @@ begin
       ('mark_notifications_read','p_ids uuid[]'),
       ('mark_program_pass_applied','p_farm_id uuid, p_operation_id uuid, p_assigned_pass_id uuid, p_applied_on date, p_applied_acres numeric, p_actual_products jsonb, p_application_record_id uuid, p_create_application_record boolean'),
       ('operational_integrity_capability_probe','p_farm_id uuid'),
+      ('program_due_generation_status','p_farm_id uuid'),
       ('reassign_program_assignment','p_farm_id uuid, p_operation_id uuid, p_assignment_id uuid, p_new_program_id uuid, p_reason text'),
       ('record_grain_contract_delivery','p_farm_id uuid, p_delivery jsonb'),
       ('record_marketing_alert_transition','p_farm_id uuid, p_rule_id uuid, p_condition_true boolean'),
@@ -205,6 +208,7 @@ begin
       ('save_push_subscription','p_farm_id uuid, p_endpoint text, p_p256dh text, p_auth text, p_user_agent text'),
       ('save_scouting_note','p_farm_id uuid, p_operation_id uuid, p_note jsonb'),
       ('save_service_log_entry','p_farm_id uuid, p_log jsonb, p_reading_id uuid'),
+      ('service_due_generation_status','p_farm_id uuid'),
       ('set_field_location','p_farm_id uuid, p_field_id uuid, p_latitude numeric, p_longitude numeric, p_source text'),
       ('skip_program_pass','p_farm_id uuid, p_operation_id uuid, p_assigned_pass_id uuid, p_skipped_on date, p_reason text'),
       ('unassign_program','p_farm_id uuid, p_operation_id uuid, p_assignment_id uuid, p_reason text')
@@ -227,8 +231,8 @@ begin
     and p.prosecdef
     and has_function_privilege('authenticated', p.oid, 'execute');
 
-  if v_allowed_definers <> 48 or v_actual_definers <> 48 then
-    raise exception 'authenticated SECURITY DEFINER ACL allowlist drift: expected 48, matched %, actual %',
+  if v_allowed_definers <> 52 or v_actual_definers <> 52 then
+    raise exception 'authenticated SECURITY DEFINER ACL allowlist drift: expected 52, matched %, actual %',
       v_allowed_definers, v_actual_definers;
   end if;
 

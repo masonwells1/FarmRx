@@ -128,12 +128,12 @@ export class QueuedFieldsRepository implements FieldsRepository {
     const next = structuredClone(this.workspace)
     next.fields = next.fields.some((row) => row.id === saved.field.id) ? next.fields.map((row) => row.id === saved.field.id ? saved.field : row) : [...next.fields, saved.field]
     this.replaceCurrentArrangement(next, saved.field.id, saved.arrangement)
-    if (draft.crop_assignments.length) { const years = new Set(draft.crop_assignments.map((row) => row.crop_year)); next.crop_assignments = [...next.crop_assignments.filter((row) => row.field_id !== saved.field.id || !years.has(row.crop_year)), ...saved.cropAssignments] }
+    if (draft.crop_assignments.length) { const years = new Set(draft.crop_assignments.map((row) => row.crop_year)); next.crop_assignments = [...next.crop_assignments.filter((row) => row.field_id !== saved.field.id || !years.has(row.crop_year)), ...saved.cropAssignments.filter((row) => years.has(row.crop_year))] }
     this.workspace = next
     this.receiptFieldIds.add(saved.field.id)
   }
-  private expectedVersions(saved: SavedFieldOperation): NonNullable<FieldDraft['expected_versions']> { return { field_updated_at: saved.field.updated_at, arrangement: { id: saved.arrangement.id, updated_at: saved.arrangement.updated_at }, crop_assignments: saved.cropAssignments.map((row) => ({ id: row.id, updated_at: row.updated_at })) } }
-  private rebaseExpected(original: FieldDraft['expected_versions'], chained: NonNullable<FieldDraft['expected_versions']>): NonNullable<FieldDraft['expected_versions']> { const changed = new Map(chained.crop_assignments.map((row) => [row.id, row])); return { ...chained, crop_assignments: (original?.crop_assignments ?? []).map((row) => changed.get(row.id) ?? row) } }
+  private expectedVersions(saved: SavedFieldOperation): NonNullable<FieldDraft['expected_versions']> { return { field_updated_at: saved.field.updated_at, arrangement: { id: saved.arrangement.id, updated_at: saved.arrangement.updated_at }, crop_assignments: saved.cropAssignments.map((row) => ({ id: row.id, updated_at: row.updated_at, crop_year: row.crop_year })) } }
+  private rebaseExpected(_original: FieldDraft['expected_versions'], chained: NonNullable<FieldDraft['expected_versions']>): NonNullable<FieldDraft['expected_versions']> { return chained }
   private overlayQueued(workspace: FieldsData, entries: FieldsQueueEntryV1[]): FieldsData {
     let next = structuredClone(workspace)
     for (const entry of entries) {

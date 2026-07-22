@@ -491,11 +491,11 @@ const resetSelectionAuthorization = beginFarmReplayAuthorization(selectionProfil
 const authClient = supabase.auth as unknown as { getSession: () => Promise<{ data: { session: { user: { id: string } } | null }; error: unknown }> }
 const priorGetSession = authClient.getSession
 authClient.getSession = async () => ({ data: { session: null }, error: new TypeError('network timeout while refreshing session') })
-const offlineIdentityProfile = { ...selectionProfile, source: 'offline' as const, operationContext: captureFarmRevocationFence(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: farmB }) }
 const userBStoredAccess = JSON.parse(storage.getItem(userBAccessKey)!) as { validatedAt: string }
+const offlineIdentityProfile = { ...selectionProfile, validatedAt: userBStoredAccess.validatedAt, source: 'offline' as const, operationContext: captureFarmRevocationFence(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: farmB }) }
 const userBProfileKey = `farm-rx-access-profile:v1:${supabaseConfig.projectRef}:${userB}:${farmB}`
 const { source: _offlineIdentitySource, operationContext: offlineIdentityFence, ...offlineIdentityStored } = offlineIdentityProfile
-storage.setItem(userBProfileKey, JSON.stringify({ ...offlineIdentityStored, version: 1, accessValidatedAt: userBStoredAccess.validatedAt, clockHighWaterAt: now, generation: offlineIdentityFence.generation, fenceToken: offlineIdentityFence.token }))
+storage.setItem(userBProfileKey, JSON.stringify({ ...offlineIdentityStored, version: 1, accessValidatedAt: userBStoredAccess.validatedAt, clockHighWaterAt: userBStoredAccess.validatedAt, generation: offlineIdentityFence.generation, fenceToken: offlineIdentityFence.token }))
 const offlineIdentityAuthorization = beginFarmReplayAuthorization(offlineIdentityProfile, storage)
 try {
   assert.equal(isFarmReplayAuthoritativelyOffline(storage), true, 'The exact offline replay grant did not override the unreliable browser connectivity hint.')
@@ -515,7 +515,7 @@ assert.equal(isFarmReplayAuthoritativelyOffline(storage), false, 'Offline replay
 // Once the startup replay ends, the ready shell keeps the same exact offline
 // account/farm grant. Ordinary reads must resolve it before any auth or farm
 // request, and a newer validation clears it synchronously.
-const readyOfflineProfile = { ...selectionProfile, source: 'offline' as const, operationContext: captureFarmRevocationFence(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: farmB }) }
+const readyOfflineProfile = { ...offlineIdentityProfile, operationContext: captureFarmRevocationFence(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: farmB }) }
 let readySessionCalls = 0
 authClient.getSession = async () => { readySessionCalls += 1; throw new Error('ready offline context touched auth') }
 publishFarmReadyAuthorization(readyOfflineProfile, storage)
@@ -602,9 +602,11 @@ try {
 const realDateNow = Date.now
 try {
   ;(navigator as { onLine: boolean }).onLine = false
-  Date.now = () => Date.parse('2026-07-21T12:00:00.000Z')
-  assert.equal((await loadFarmAccess(userB)).source, 'offline')
   const userBClockKey = deviceClockHighWaterKey({ projectRef: supabaseConfig.projectRef, userId: userB })
+  const priorUserBHighWater = Date.parse(String((JSON.parse(storage.getItem(userBClockKey) ?? '{}') as { highWaterAt?: unknown }).highWaterAt ?? ''))
+  const controlledForwardMs = Math.max(Date.parse('2026-07-21T12:00:00.000Z'), Number.isFinite(priorUserBHighWater) ? priorUserBHighWater : 0)
+  Date.now = () => controlledForwardMs
+  assert.equal((await loadFarmAccess(userB)).source, 'offline')
   const userBClockBytes = storage.getItem(userBClockKey)
   Date.now = () => Date.parse('2026-07-15T12:00:00.000Z')
   await assert.rejects(() => loadFarmAccess(userB), /clock/i)

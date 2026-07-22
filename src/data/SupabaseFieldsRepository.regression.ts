@@ -4,6 +4,7 @@ import { fieldsSeedForRegression } from './MockFieldsRepository'
 import { MockGrainRepository, writeGrainEnvelope } from './MockGrainRepository'
 import { QueuedFieldsRepository } from './QueuedFieldsRepository'
 import { normalizeFieldDraft, SupabaseFieldsRepository } from './SupabaseFieldsRepository'
+import { createFieldEditDraft } from './fieldEditPatch'
 import { getSyncStatus } from './syncStatus'
 import { FieldsWriteQueue, parseFieldsQueue, writeQueueKey, type FieldsQueueEntryV1 } from './writeQueue'
 import { moduleBackends } from './backends'
@@ -65,6 +66,30 @@ async function run() {
   // 1. all six result sets map numeric/null values, and an incomplete read rejects.
   assert(data.fields.length === gateway.data.fields.length && data.fields[0].total_acres === 422.5 && data.fields[0].legal_description !== undefined, 'getData did not map the workspace exactly.')
   gateway.failLoad = true; await rejects(() => live.getData(), 'Partial workspace reads must reject.'); gateway.failLoad = false
+  const noCropChangeGateway = new FakeFieldsDataGateway()
+  const noCropChangeData = await repository(noCropChangeGateway).getData()
+  const noCropChangeField = noCropChangeData.fields.find((field) =>
+    noCropChangeData.crop_assignments.some((crop) => crop.field_id === field.id),
+  )!
+  noCropChangeGateway.mutateSave = (reply) => ({
+    ...reply,
+    cropAssignments: noCropChangeGateway.data.crop_assignments.filter(
+      (crop) => crop.field_id === noCropChangeField.id,
+    ),
+  })
+  await repository(noCropChangeGateway).saveField(
+    createFieldEditDraft(noCropChangeData, noCropChangeField.id, {
+      field: { state: 'IL' },
+    }),
+  )
+  assert(
+    noCropChangeGateway.inputs[0]?.draft.crop_assignments.length === 0 &&
+      noCropChangeGateway.inputs[0]?.draft.expected_versions?.crop_assignments.length ===
+        noCropChangeGateway.data.crop_assignments.filter(
+          (crop) => crop.field_id === noCropChangeField.id,
+        ).length,
+    'A field-only save did not confirm the server\'s unchanged crop rows.',
+  )
   const optionalLiveFlexGateway = new FakeFieldsDataGateway(); Object.assign(optionalLiveFlexGateway.data.arrangements[0], { arrangement_type: 'flex_cash_rent', cash_rent_per_acre: 200, landlord_crop_pct: null, flex_bonus_formula: { method: 'pct_of_revenue', base_rent_per_acre: null, rate_pct: 30, trigger_revenue_per_acre: null, base_price_per_bu: null, base_yield_per_acre: null } })
   const optionalLiveFlex = (await repository(optionalLiveFlexGateway).getData()).arrangements[0].flex_bonus_formula as unknown as Record<string, unknown>
   assert(optionalLiveFlex.min_rent_per_acre === null && optionalLiveFlex.max_rent_per_acre === null && optionalLiveFlex.price_source_note === null, 'Live structured flex ingress did not canonicalize omitted optional keys.')
