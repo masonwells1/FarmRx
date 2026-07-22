@@ -193,3 +193,16 @@ Copy this template below the last entry. Do not replace the template or modify a
 - **External actions actually performed:** none.
 - **Remaining risk / next approval:** This is local runtime evidence at an uncommitted state, not an immutable accepted PS proof, release proof, or full-year proof. Promote only after an authorized immutable commit and fresh read-only Sol exact-SHA review. The id-bound shared Spray success receipt remains outside this proof slice and unresolved as a broader trust-hardening candidate.
 - **Canonical status:** defer to [`docs/GOAL.md`](../GOAL.md); this entry does not claim `RELEASE CANDIDATE READY` or `COMPLETE`.
+
+## SR-008 — Prairie Spray exact proof commit accepted and scenario closed
+
+- **Date/time:** 2026-07-21T23:14:20-05:00 (`America/Chicago`)
+- **Actor/model/effort:** fresh-context read-only `gpt-5.6-sol` adversarial review at `xhigh` effort, following bounded Terra implementation and independent root verification.
+- **Worktree/branch:** `C:\Users\mason\.codex\worktrees\farmrx-farmer-simplicity` / `codex/farmrx-2027-season-ready`
+- **Exact reviewed commit / parent:** `0753c5165116c6a8f25076dd4b036b9afb570d51` / `b8ce4bd8667c9e0300a1c8fedbc0be3bae131dc1`; reviewer confirmed the branch and worktree were exact and clean.
+- **Immutable proof content:** the five Prairie fixture/SQL/browser/runner files plus SR-007 and the scorecard's pre-acceptance state. Manifest blob `8821e601a994761246f609b59926860b58dd69bd`; migration head `20260720233500_startup_due_generation_preflight.sql` blob `b7b56d9b27f87e32c38e7c0e8350a5ecefa7b661`.
+- **Execution evidence accepted:** `PRAIRIE_SPRAY_2027_DISPOSABLE_PASS`; two Playwright lanes; exact manager UI save and captured same-payload RPC replay; one resulting manifest application/product; exact saved application and label snapshots; `100.00` to `92.50` gal derived on-hand; full public-table snapshot fence and named non-writes; loopback-only browser network; phone Compliance facts, no prohibited license claim, no overflow, and no writes. Focused regressions, forced TypeScript, full regression including postregression, build, and `git diff --check` passed.
+- **Review verdict/findings:** **ACCEPT**, no findings. Sol found the proof fail-closed and scope-complete and found no product, schema, migration, RPC, dependency, secret, live-service, or outward change.
+- **Known separate gate:** `npm audit --audit-level=high` still reports the pre-existing transitive `fast-uri@3.1.3` high advisory through `vite-plugin-pwa` → `workbox-build` → `ajv`; this proof changed no dependency or lockfile. The ID-bound shared Spray success receipt remains a separately mapped trust-hardening candidate and was not claimed.
+- **External actions actually performed:** none. No push, pull request, merge, deployment, live migration/data, production credential, live service, secret/auth/permission change, customer action, or communication occurred.
+- **Canonical status:** PS — Prairie Spray compliance presence and its disposable desktop/phone browser lane are **PROVEN** at exact commit `0753c5165116c6a8f25076dd4b036b9afb570d51`. This does not make current HEAD, Maple July–December, the full-year packet, `RELEASE CANDIDATE READY`, or `COMPLETE` proven.
