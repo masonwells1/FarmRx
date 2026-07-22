@@ -1,5 +1,7 @@
 Set-StrictMode -Version Latest
 
+Import-Module (Join-Path $PSScriptRoot 'maple-season-db-clock-swap-adapter.psm1')
+
 $script:ProductionNamespace = [ordered]@{
     Db      = 'supabase_db_farmrx-farmer-simplicity-2027-local'
     Rest    = 'supabase_rest_farmrx-farmer-simplicity-2027-local'
@@ -82,7 +84,9 @@ function New-MapleDockerSwapAdapter {
     $artifactExpectedLabels=[ordered]@{'farmrx.synthetic-bootstrap'='225c197c34164c90b08a4c8b6b10e6c7';'farmrx.synthetic-owner'='maple-faketime-bootstrap';'farmrx.synthetic-role'='faketime-artifacts';'farmrx.source-digest'='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818';'farmrx.package-contract'='libfaketime=0.9.10-2.1;gcc;libc6-dev'}
     if($ProofContract.ArtifactImageRef-cne$artifactRef-or$ProofContract.ArtifactImageId-cne$artifactId){throw 'MAPLE_DOCKER_ADAPTER_REFUSED: faketime artifact identity is not the reviewed literal.'}
 
-    $names = if ($null -eq $ResourceNamespace) { $script:ProductionNamespace.Clone() } else { Assert-SyntheticNamespace $ResourceNamespace; $ResourceNamespace.Clone() }
+    $names = if ($null -eq $ResourceNamespace) {
+        $copy=@{};foreach($key in $script:ProductionNamespace.Keys){$copy[$key]=$script:ProductionNamespace[$key]};$copy
+    } else { Assert-SyntheticNamespace $ResourceNamespace; $ResourceNamespace.Clone() }
     if ($Contract.Id -cne $Inventory.original_id -or $Contract.ImageId -cne $Inventory.original_image_id -or
         $Contract.NetworkId -cne $Inventory.network_id -or $Contract.VolumeName -cne $Inventory.volume_name -or
         $Contract.ContractHash -cne $Inventory.contract_hash) {
@@ -94,6 +98,7 @@ function New-MapleDockerSwapAdapter {
     $owner = if ($null -eq $ResourceNamespace) { $Inventory.original_id } else { $ResourceNamespace.OwnershipToken }
     $ownerLabel = "farmrx.maple-clock-swap=$owner"
     $route = @{ Attested = $false }
+    $shutdown = @{ OriginalAttested = $false }
     $metadata = @{
         Owner=$owner; Original=$Inventory.original_id; Contract=$Inventory.contract_hash
         SnapshotRole='ordinary-snapshot'; DerivedRole='frozen-derived'
@@ -135,7 +140,7 @@ function New-MapleDockerSwapAdapter {
         $true
     }.GetNewClosure()
 
-    $containerFormat = '{"Id":{{json .Id}},"Name":{{json .Name}},"Image":{{json .Image}},"Running":{{json .State.Running}},"ExitCode":{{json .State.ExitCode}},"OomKilled":{{json .State.OOMKilled}},"Pid":{{json .State.Pid}},"Health":{{json .State.Health.Status}},"RestartCount":{{json .RestartCount}},"RestartPolicy":{{json .HostConfig.RestartPolicy.Name}},"Labels":{{json .Config.Labels}},"Mounts":{{json .Mounts}},"Networks":{{json .NetworkSettings.Networks}},"Ports":{{json .HostConfig.PortBindings}},"Healthcheck":{{json .Config.Healthcheck}}}'
+    $containerFormat = '{"Id":{{json .Id}},"Name":{{json .Name}},"Image":{{json .Image}},"Running":{{json .State.Running}},"ExitCode":{{json .State.ExitCode}},"OomKilled":{{json .State.OOMKilled}},"Pid":{{json .State.Pid}},"Health":{{with index .State "Health"}}{{json (index . "Status")}}{{else}}null{{end}},"RestartCount":{{json .RestartCount}},"RestartPolicy":{{json .HostConfig.RestartPolicy.Name}},"Labels":{{json .Config.Labels}},"Mounts":{{json .Mounts}},"Networks":{{json .NetworkSettings.Networks}},"Ports":{{json .HostConfig.PortBindings}},"Healthcheck":{{with index .Config "Healthcheck"}}{{json .}}{{else}}null{{end}}}'
     $imageFormat = '{"Id":{{json .Id}},"Labels":{{json .Config.Labels}}}'
 
     $inspectContainer = {
@@ -184,9 +189,9 @@ function New-MapleDockerSwapAdapter {
     }.GetNewClosure()
 
     $assertNetwork = {
-        param($State)
+        param($State,[bool]$AllowPendingNetworkId=$false)
         $network = $State.Networks.($names.Network)
-        if ($null -eq $network -or $network.NetworkID -cne $Inventory.network_id) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: database network mismatch.' }
+        if ($null -eq $network -or ($network.NetworkID -cne $Inventory.network_id -and (-not$AllowPendingNetworkId-or$network.NetworkID-cne''))) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: database network mismatch.' }
         $aliases = @($network.Aliases | Sort-Object)
         if (($aliases -join '|') -cne ((@('db','db.supabase.internal') | Sort-Object) -join '|')) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: database aliases mismatch.' }
     }.GetNewClosure()
@@ -220,12 +225,11 @@ function New-MapleDockerSwapAdapter {
             throw 'MAPLE_DOCKER_ADAPTER_REFUSED: PostgREST network identity mismatch.'
         }
 
-        foreach ($db in @($canonical,$parked) | Where-Object { $null -ne $_ }) { & $assertMount $db; & $assertNetwork $db; & $assertHealth $db; & $assertPort $db }
         $canonicalOriginal = $null -ne $canonical -and $canonical.Id -ceq $Inventory.original_id
         $parkedOriginal = $null -ne $parked -and $parked.Id -ceq $Inventory.original_id
         if ($canonicalOriginal -and $null -ne $parked) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: canonical and parked ownership conflict.' }
         if ($null -ne $parked -and -not $parkedOriginal) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: parked ownership is ambiguous.' }
-        if ($canonicalOriginal -and ($canonical.Image -cne $Inventory.original_image_id -or $canonical.RestartPolicy -cne 'unless-stopped')) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: original runtime identity mismatch.' }
+        if ($canonicalOriginal -and ($canonical.Image -cne $Inventory.original_image_id -or $canonical.RestartPolicy -cnotin @('unless-stopped','no') -or ($canonical.RestartPolicy -ceq 'no' -and -not[IO.File]::Exists($JournalPath)))) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: original runtime identity mismatch.' }
 
         $snapshotOwned = $null -ne $snapshot -and
             (& $getLabel $snapshot 'farmrx.maple-clock-swap') -ceq $metadata.Owner -and
@@ -240,12 +244,11 @@ function New-MapleDockerSwapAdapter {
             (& $getLabel $derived 'farmrx.maple-clock-snapshot-id') -ceq $snapshot.Id -and $derived.Id -cne $snapshot.Id
 
         $replacement = $null -ne $canonical -and -not $canonicalOriginal
-        $replacementOwned = $false
+        $replacementOwned = $replacement-and(& $getLabel $canonical 'farmrx.maple-clock-swap')-ceq$owner-and$derivedOwned-and$canonical.Image-ceq$derived.Id-and$canonical.RestartPolicy-ceq'no'
+        $pendingOwnedNetwork=$replacementOwned-and-not$canonical.Running-and[IO.File]::Exists($JournalPath)-and$canonical.Networks.($names.Network).NetworkID-ceq''
+        foreach ($db in @($canonical,$parked) | Where-Object { $null -ne $_ }) { & $assertMount $db; & $assertNetwork $db ($pendingOwnedNetwork-and$db.Id-ceq$canonical.Id); & $assertHealth $db; & $assertPort $db }
         if ($replacement) {
-            if ((& $getLabel $canonical 'farmrx.maple-clock-swap') -cne $owner) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: replacement owner label mismatch.' }
-            if (-not $derivedOwned -or $canonical.Image -cne $derived.Id) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: replacement image identity mismatch.' }
-            if ($canonical.RestartPolicy -cne 'no') { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: replacement restart policy mismatch.' }
-            $replacementOwned = $true
+            if(-not$replacementOwned){throw 'MAPLE_DOCKER_ADAPTER_REFUSED: replacement owner/image/restart identity mismatch.'}
         }
 
         $volumeResult = & $checked docker @('ps','-aq','--no-trunc','--filter',"volume=$($names.Volume)") 'volume-user inspection'
@@ -264,6 +267,8 @@ function New-MapleDockerSwapAdapter {
             OriginalHealthy = [bool](($canonicalOriginal -and $canonical.Health -ceq 'healthy') -or ($parkedOriginal -and $parked.Health -ceq 'healthy'))
             OriginalExitCode = if ($canonicalOriginal) { $canonical.ExitCode } elseif ($parkedOriginal) { $parked.ExitCode } else { $null }
             OriginalOomKilled = if ($canonicalOriginal) { $canonical.OomKilled } elseif ($parkedOriginal) { $parked.OomKilled } else { $null }
+            OriginalRestartPolicy = if ($canonicalOriginal) { $canonical.RestartPolicy } elseif ($parkedOriginal) { $parked.RestartPolicy } else { $null }
+            OriginalStopAttested = [bool]$shutdown.OriginalAttested
             ExclusiveVolume = [bool]($volumeUsers.Count -eq 1 -and $volumeUsers[0] -ceq $Inventory.original_id)
             ReplacementExists = [bool]$replacement
             ReplacementOwned = [bool]$replacementOwned
@@ -274,7 +279,11 @@ function New-MapleDockerSwapAdapter {
             PostgrestId = if ($null -ne $rest) { $rest.Id } else { $null }
             PostgrestPid = if ($null -ne $rest) { $rest.Pid } else { 0 }
             PostgrestRestartCount = if ($null -ne $rest) { $rest.RestartCount } else { -1 }
-            PostgrestHealthy = [bool]($null -ne $rest -and $rest.Running -and $rest.Health -ceq 'healthy')
+            # The pinned local PostgREST image has no Docker healthcheck. Its
+            # exact running/PID state is only a readiness candidate; the
+            # backend-lineage and authenticated HTTP proofs below are the
+            # authoritative route check.
+            PostgrestHealthy = [bool]($null -ne $rest -and $rest.Running -and [int]$rest.Pid -gt 0)
             PostgrestRecovered = [bool]($null -ne $rest -and $rest.Running -and $route.Attested)
             SnapshotOwned = [bool]$snapshotOwned
             DerivedOwned = [bool]$derivedOwned
@@ -285,6 +294,24 @@ function New-MapleDockerSwapAdapter {
 
     $invokeTrue = { param([string[]]$Argv,[string]$Name); $null = & $checked docker $Argv $Name; return $true }.GetNewClosure()
     $resetRoute = { $route.Attested = $false }.GetNewClosure()
+
+    $stopDatabaseContainer = {
+        param([string]$Name,[string]$Operation,[string]$FinalRestartPolicy)
+        $null=&$checked docker @('update','--restart','no',$Name) "$Operation disable automatic restart"
+        $null=&$checked docker @('exec','--user','postgres',$Name,'pg_ctl','stop','-D','/var/lib/postgresql/data','-m','fast','-W') "$Operation PostgreSQL shutdown signal"
+        $containerStopped=$false
+        for($attempt=1;$attempt-le$ProofContract.PollAttempts;$attempt++){
+            $candidate=&$inspectContainer $Name
+            if($null-eq$candidate){throw "MAPLE_DOCKER_ADAPTER_FAILED: $Operation container disappeared during shutdown."}
+            if(-not$candidate.Running){$containerStopped=$true;break}
+            if($attempt-lt$ProofContract.PollAttempts-and(&$Wait $ProofContract.PollMilliseconds)-ne$true){throw "MAPLE_DOCKER_ADAPTER_FAILED: $Operation PostgreSQL shutdown wait failed."}
+        }
+        if(-not$containerStopped){throw "MAPLE_DOCKER_ADAPTER_FAILED: $Operation PostgreSQL shutdown timed out."}
+        if($FinalRestartPolicy-cne'no'){$null=&$checked docker @('update','--restart',$FinalRestartPolicy,$Name) "$Operation restore restart policy"}
+        $stopped=&$inspectContainer $Name
+        if($null-eq$stopped-or$stopped.Running-or$stopped.OomKilled-or[int]$stopped.ExitCode-ne0-or$stopped.RestartPolicy-cne$FinalRestartPolicy){throw "MAPLE_DOCKER_ADAPTER_FAILED: $Operation stopped state was not exact."}
+        return $true
+    }.GetNewClosure()
 
     $pollContainerHealthy = {
         param([string]$Name,[string]$Operation)
@@ -300,42 +327,48 @@ function New-MapleDockerSwapAdapter {
         $sql = "select pid||'|'||backend_start||'|'||datname||'|'||usename||'|'||client_addr from pg_stat_activity where application_name ilike '%postgrest%' order by pid;"
         $result = & $checked docker @('exec',$names.Db,'psql','-X','-At','-v','ON_ERROR_STOP=1','-U',$ProofContract.DbUser,'-d',$ProofContract.Database,'-c',$sql) 'PostgREST backend proof'
         $rows = @(([string]$result.Stdout -split "`r?`n") | Where-Object { $_ -ne '' })
-        if ($rows.Count -ne 1) { throw 'MAPLE_DOCKER_ADAPTER_FAILED: exact PostgREST backend cardinality failed.' }
-        $parts = @($rows[0] -split '\|')
-        if ($parts.Count -ne 5 -or $parts[0] -notmatch '^[1-9][0-9]*$' -or [string]::IsNullOrWhiteSpace($parts[1]) -or
-            $parts[2] -cne $ProofContract.Database -or $parts[3] -cne $ProofContract.ExpectedRestDbUser) { throw 'MAPLE_DOCKER_ADAPTER_FAILED: PostgREST backend identity failed.' }
-        [pscustomobject]@{ Pid=$parts[0]; BackendStart=$parts[1]; ClientIp=$parts[4] }
+        if ($rows.Count -lt 1) { throw 'MAPLE_DOCKER_ADAPTER_FAILED: PostgREST has no database backend.' }
+        $backends = foreach($row in $rows){
+            $parts = @($row -split '\|')
+            if ($parts.Count -ne 5 -or $parts[0] -notmatch '^[1-9][0-9]*$' -or [string]::IsNullOrWhiteSpace($parts[1]) -or
+                $parts[2] -cne $ProofContract.Database -or $parts[3] -cne $ProofContract.ExpectedRestDbUser -or
+                $parts[4] -notmatch '^(?<ip>[0-9]{1,3}(?:\.[0-9]{1,3}){3})(?:/32)?$') { throw 'MAPLE_DOCKER_ADAPTER_FAILED: PostgREST backend identity failed.' }
+            [pscustomobject]@{ Pid=$parts[0]; BackendStart=$parts[1]; ClientIp=$matches.ip; Key="$($parts[0])|$($parts[1])" }
+        }
+        $backendArray=@($backends)
+        if(@($backendArray.Pid|Select-Object -Unique).Count-ne$backendArray.Count){throw 'MAPLE_DOCKER_ADAPTER_FAILED: PostgREST backend PIDs are not unique.'}
+        return $backendArray
     }.GetNewClosure()
 
     $proveRoute = {
         param([bool]$IncludeClock)
         & $resetRoute
         $beforeState = & $inspectActualState
-        $beforeBackend = & $queryBackend
+        $beforeBackends = @(& $queryBackend)
         $null = & $checked docker @('restart','--time','60',$names.Rest) 'PostgREST restart'
-        $afterState=$null;$afterBackend=$null
+        $afterState=$null;$afterBackends=$null
         for($attempt=1;$attempt-le$ProofContract.PollAttempts;$attempt++){
             $candidateState=&$inspectActualState
             try{
-                $candidateBackend=&$queryBackend
-                $ready=$candidateState.PostgrestHealthy-and$candidateState.PostgrestId-ceq$beforeState.PostgrestId-and$candidateState.PostgrestPid-gt0-and$candidateState.PostgrestPid-ne$beforeState.PostgrestPid-and$candidateState.PostgrestRestartCount-gt$beforeState.PostgrestRestartCount-and
-                    -not($candidateBackend.Pid-ceq$beforeBackend.Pid-and$candidateBackend.BackendStart-ceq$beforeBackend.BackendStart)-and$candidateBackend.ClientIp-ceq$candidateState.RestIp
-                if($ready){$afterState=$candidateState;$afterBackend=$candidateBackend;break}
+                $candidateBackends=@(&$queryBackend)
+                $priorKeys=@($beforeBackends.Key)
+                $ready=$candidateState.PostgrestHealthy-and$candidateState.PostgrestId-ceq$beforeState.PostgrestId-and$candidateState.PostgrestPid-gt0-and$candidateState.PostgrestPid-ne$beforeState.PostgrestPid-and
+                    @($candidateBackends|Where-Object{$_.Key-cin$priorKeys}).Count-eq0-and@($candidateBackends|Where-Object{$_.ClientIp-cne$candidateState.RestIp}).Count-eq0
+                if($ready){$afterState=$candidateState;$afterBackends=$candidateBackends;break}
             }catch{}
             if($attempt-lt$ProofContract.PollAttempts-and(&$Wait $ProofContract.PollMilliseconds)-ne$true){throw 'MAPLE_DOCKER_ADAPTER_FAILED: PostgREST poll wait failed.'}
         }
-        if($null-eq$afterState-or$null-eq$afterBackend){throw'MAPLE_DOCKER_ADAPTER_FAILED: PostgREST readiness/backend lineage timed out.'}
-        foreach ($hostName in @($names.Db,'db','db.supabase.internal')) {
-            $dns = & $checked docker @('exec',$names.Rest,'getent','hosts',$hostName) "DNS proof for $hostName"
-            $tokens = @(([string]$dns.Stdout -split '\s+') | Where-Object { $_ -ne '' })
-            if ($tokens.Count -lt 2 -or $tokens[0] -cne $afterState.DbIp -or $tokens[1] -cne $hostName) { throw "MAPLE_DOCKER_ADAPTER_FAILED: exact DNS proof failed for $hostName." }
-        }
+        if($null-eq$afterState-or$null-eq$afterBackends){throw 'MAPLE_DOCKER_ADAPTER_FAILED: PostgREST readiness/backend lineage timed out.'}
+        # The pinned PostgREST image intentionally has no shell/getent. The
+        # exact Docker network IDs/DB aliases are inspected above; new backend
+        # identities from the exact Rest IP plus the authenticated gateway read
+        # below prove that the restarted service reached the current DB route.
         $api = & $checked http_get @("http://127.0.0.1:$($names.ApiPort)$($ProofContract.ApiPath)",'authenticated-expected-contract') 'authenticated API read'
         if ($api.StatusCode -lt 200 -or $api.StatusCode -ge 300 -or $api.Data.ContractHash -cne $Contract.ContractHash -or $api.Data.Result -cne $ProofContract.ExpectedApiResult) {
             throw 'MAPLE_DOCKER_ADAPTER_FAILED: authenticated API proof failed.'
         }
         if ($IncludeClock) {
-            $clockArgv = @('exec',$names.Db,'psql','-X','-At','-v','ON_ERROR_STOP=1','-U',$ProofContract.DbUser,'-d',$ProofContract.Database,'-c',$ProofContract.ClockProofSql)
+            $clockArgv = @('exec',$names.Db,'psql','-X','-q','-At','-v','ON_ERROR_STOP=1','-U',$ProofContract.DbUser,'-d',$ProofContract.Database,'-c',$ProofContract.ClockProofSql)
             $sampleOne = (& $checked docker $clockArgv 'first clock proof').Stdout.Trim()
             if ($sampleOne -cne $ProofContract.ExpectedClockSample) { throw 'MAPLE_DOCKER_ADAPTER_FAILED: first clock proof failed.' }
             if ((& $Wait $ProofContract.WaitMilliseconds) -ne $true) { throw 'MAPLE_DOCKER_ADAPTER_FAILED: bounded wait failed.' }
@@ -348,9 +381,10 @@ function New-MapleDockerSwapAdapter {
 
     $expectedInventory = $Inventory.Clone()
     if ($null -ne $ResourceNamespace) { $expectedInventory.test_only_expected_volume = $names.Volume }
+    $journalWriter=Get-Command Write-MapleSwapJournalAtomic -ErrorAction Stop
     $adapter = @{ ExpectedContract=$expectedInventory; InspectActualState=$inspectActualState }
-    $adapter.WriteJournal = { param($phase,$next,$inv); Write-MapleSwapJournalAtomic $JournalPath $phase $next $inv $expectedInventory }.GetNewClosure()
-    $adapter.StopOriginal = { & $resetRoute; & $invokeTrue @('stop','--time','60',$names.Db) 'graceful original stop' }.GetNewClosure()
+    $adapter.WriteJournal = { param($phase,$next,$inv); & $journalWriter $JournalPath $phase $next $inv $expectedInventory }.GetNewClosure()
+    $adapter.StopOriginal = { & $resetRoute; $shutdown.OriginalAttested=$false; if((&$stopDatabaseContainer $names.Db 'original' 'unless-stopped')-ne$true){throw 'MAPLE_DOCKER_ADAPTER_FAILED: original safe stop was not exactly true.'};$shutdown.OriginalAttested=$true;$true }.GetNewClosure()
     $adapter.SnapshotOriginal = {
         if ($null -ne (& $inspectImage $Inventory.snapshot_tag)) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: snapshot tag already exists.' }
         $changes=@(
@@ -388,12 +422,13 @@ function New-MapleDockerSwapAdapter {
         & $resetRoute
         $state = & $inspectActualState
         if (-not $state.ReplacementExists -or -not $state.ReplacementOwned) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: replacement removal ownership failed.' }
-        if ($state.ReplacementRunning) { $null = & $checked docker @('stop','--time','60',$names.Db) 'graceful replacement stop' }
+        if ($state.ReplacementRunning-and(&$stopDatabaseContainer $names.Db 'replacement' 'no')-ne$true){throw 'MAPLE_DOCKER_ADAPTER_FAILED: replacement safe stop was not exactly true.'}
         $null = & $checked docker @('rm',$names.Db) 'replacement removal'
         return $true
     }.GetNewClosure()
     $adapter.RestoreOriginalName = { & $resetRoute; & $invokeTrue @('rename',$names.Parked,$names.Db) 'original name restore' }.GetNewClosure()
-    $adapter.StartOriginal = { & $resetRoute; $null=&$invokeTrue @('start',$names.Db) 'original start'; &$pollContainerHealthy $names.Db 'original'; $true }.GetNewClosure()
+    $adapter.RestoreOriginalRestartPolicy = { & $resetRoute; & $invokeTrue @('update','--restart','unless-stopped',$names.Db) 'original restart policy restore' }.GetNewClosure()
+    $adapter.StartOriginal = { & $resetRoute; $null=&$invokeTrue @('start',$names.Db) 'original start'; &$pollContainerHealthy $names.Db 'original'|Out-Null;$shutdown.OriginalAttested=$false;$true }.GetNewClosure()
     $adapter.RestartPostgrest = { & $proveRoute $false }.GetNewClosure()
     $adapter.RemoveDerivedImageIfOwned = {
         if($null-eq(& $inspectImage $Inventory.derived_tag)){return $true}

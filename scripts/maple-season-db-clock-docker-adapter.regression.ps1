@@ -50,7 +50,7 @@ function New-Simulator {
     $simInventory = $inventory.Clone()
     $simProof = $proof.Clone()
     $state = @{
-        Canonical='original'; OriginalRunning=$true; Parked=$false; ReplacementRunning=$false
+        Canonical='original'; OriginalRunning=$true; Parked=$false; ReplacementRunning=$false; DatabaseStopped=$false
         Snapshot=$false; Derived=$false; RestPid=20; RestRestart=0; BackendPid=100
         BackendStart='2027-01-01 00:00:00+00'; ClockCalls=0; RouteProofs=0
         Fault=$Fault; FaultUsed=$false; FaultSeen=0; FaultAt=1; JournalWrites=0
@@ -60,7 +60,7 @@ function New-Simulator {
         OriginalRestart='unless-stopped'; ReplacementRestart='no'; DbAliases=@('db','db.supabase.internal')
         MountSource="/var/lib/docker/volumes/$($simNamespace.Volume)/_data"; MountName=$simNamespace.Volume
         NetworkId=$simNetworkId; HostPort=$simNamespace.Port; HealthTest=@('CMD','pg_isready','-U','postgres','-h','127.0.0.1','-p','5432')
-        VolumeExtra=@(); InspectDaemonFailure=$false; HttpStatus=200; StaleBackend=$false; DriftClock=$false
+        VolumeExtra=@(); InspectDaemonFailure=$false; HttpStatus=200; StaleBackend=$false; DriftClock=$false; BackendPool=1; BackendCidr=$false; NoRestHealth=$false
         DbReadyAfter=0; DbInspectAfterStart=0; RestReadyAfter=0; RestInspectAfterRestart=0; BackendReadyAfter=0; BackendPollAfterRestart=0; Restarted=$false
         SyntheticNetworkOwner=$simOwner; SyntheticVolumeOwner=$simOwner
         ContainerNotFound='container'; ImageNotFound='image'; SyntheticInspectFailure=$false
@@ -86,13 +86,13 @@ function New-Simulator {
         $ports = if ($isRest) { @{} } else { @{ '5432/tcp'=@(@{ HostIp=''; HostPort=$state.HostPort }) } }
         $health = if ($isRest) { $null } else { @{ Test=@($state.HealthTest); Interval=10000000000; Timeout=2000000000; Retries=3 } }
         $ip = if ($isRest) { '172.30.0.7' } elseif ($isReplacement) { '172.30.0.9' } else { '172.30.0.8' }
-        if(-not$isRest-and$running){$state.DbInspectAfterStart++;$healthy=$state.DbInspectAfterStart-gt$state.DbReadyAfter}
+        if(-not$isRest-and$running){$state.DbInspectAfterStart++;$healthy=-not$state.DatabaseStopped-and$state.DbInspectAfterStart-gt$state.DbReadyAfter}
         elseif($isRest-and$state.Restarted){$state.RestInspectAfterRestart++;$healthy=$state.RestInspectAfterRestart-gt$state.RestReadyAfter}
         else{$healthy=$running}
         return (@{
             Id=$id; Name="/$Kind"; Image=$image; Running=$running; ExitCode=0; OomKilled=$false
             Pid=if ($isRest) { $state.RestPid } elseif ($running) { 10 } else { 0 }
-            Health=if ($healthy) { 'healthy' } else { 'starting' }; RestartCount=if ($isRest) { $state.RestRestart } else { 0 }
+            Health=if ($isRest-and$state.NoRestHealth) { $null } elseif ($healthy) { 'healthy' } else { 'starting' }; RestartCount=if ($isRest) { $state.RestRestart } else { 0 }
             RestartPolicy=$restart; Labels=$labels; Mounts=$mounts
             Networks=@{ $simNamespace.Network=@{ NetworkID=$state.NetworkId; IPAddress=$ip; Aliases=$aliases } }
             Ports=$ports; Healthcheck=$health
@@ -154,17 +154,18 @@ function New-Simulator {
             'build' { $state.Derived=$true }
             'rename' { if ($Argv[1] -ceq $simNamespace.Db) { $state.Canonical='missing';$state.Parked=$true } else { $state.Parked=$false;$state.Canonical='original' } }
             'create' { $state.Canonical='replacement' }
-            'start' { $state.DbInspectAfterStart=0;if ($state.Canonical -ceq 'replacement') { $state.ReplacementRunning=$true } else { $state.OriginalRunning=$true } }
+            'start' { $state.DatabaseStopped=$false;$state.DbInspectAfterStart=0;if ($state.Canonical -ceq 'replacement') { $state.ReplacementRunning=$true } else { $state.OriginalRunning=$true } }
+            'update' { if($state.Canonical-ceq'replacement'){$state.ReplacementRestart=$Argv[2]}else{$state.OriginalRestart=$Argv[2]} }
             'restart' { $state.RestPid++;$state.RestRestart++;$state.Restarted=$true;$state.RestInspectAfterRestart=0;$state.BackendPollAfterRestart=0 }
             'rm' { $state.Canonical='missing';$state.ReplacementRunning=$false }
             'exec' {
-                if ($Argv[2] -ceq 'getent') {
-                    $dbIp = if ($state.Canonical -ceq 'replacement') { '172.30.0.9' } else { '172.30.0.8' }
-                    return [pscustomobject]@{ ExitCode=0; Stdout="$dbIp $($Argv[-1])"; Stderr='' }
+                if($Argv.Count-ge7-and$Argv[4]-ceq'pg_ctl'){
+                    if($Argv[5]-ceq'stop'){$state.DatabaseStopped=$true;if($state.Canonical-ceq'replacement'){$state.ReplacementRunning=$false}else{$state.OriginalRunning=$false};if(&$maybeFail 'stop'){return [pscustomobject]@{ExitCode=17;Stdout='';Stderr='simulated failure'}};return [pscustomobject]@{ExitCode=0;Stdout='server shutting down';Stderr=''}}
                 }
                 if (($Argv -join ' ') -match 'pg_stat_activity') {
-                    if($state.Restarted){$state.BackendPollAfterRestart++;if(-not$state.StaleBackend-and$state.BackendPollAfterRestart-gt$state.BackendReadyAfter){$state.BackendPid++;$state.BackendStart="2027-01-01 00:00:$($state.BackendPid)+00";$state.Restarted=$false}}
-                    return [pscustomobject]@{ ExitCode=0; Stdout="$($state.BackendPid)|$($state.BackendStart)|postgres|authenticator|172.30.0.7"; Stderr='' }
+                    if($state.Restarted){$state.BackendPollAfterRestart++;if(-not$state.StaleBackend-and$state.BackendPollAfterRestart-gt$state.BackendReadyAfter){$state.BackendPid+=[int]$state.BackendPool;$state.BackendStart="2027-01-01 00:00:$($state.BackendPid)+00";$state.Restarted=$false}}
+                    $suffix=if($state.BackendCidr){'/32'}else{''};$backendRows=for($poolIndex=0;$poolIndex-lt[int]$state.BackendPool;$poolIndex++){"$([int]$state.BackendPid+$poolIndex)|$($state.BackendStart).$poolIndex|postgres|authenticator|172.30.0.7$suffix"}
+                    return [pscustomobject]@{ ExitCode=0; Stdout=($backendRows-join"`n"); Stderr='' }
                 }
                 $state.ClockCalls++; $clock=if ($state.DriftClock -and $state.ClockCalls -ge 2) { 'drifted' } else { $simProof.ExpectedClockSample }
                 return [pscustomobject]@{ ExitCode=0; Stdout=$clock; Stderr='' }
@@ -204,13 +205,13 @@ try {
     Assert-ArgvSeen $sim.Calls $expectedCreate 'create argv was not exact'
     foreach($expected in @(@('restart','--time','60',$namespace.Rest),@('rm',$namespace.Db),@('image','rm',$inventory.derived_tag),@('image','rm',$inventory.snapshot_tag))){Assert-ArgvSeen $sim.Calls $expected "cleanup/restart argv missing: $($expected-join' ')"}
     foreach($expected in @(
-        @('stop','--time','60',$namespace.Db),@('rename',$namespace.Db,$namespace.Parked),@('rename',$namespace.Parked,$namespace.Db),@('start',$namespace.Db),
-        @('exec',$namespace.Rest,'getent','hosts',$namespace.Db),@('exec',$namespace.Rest,'getent','hosts','db'),@('exec',$namespace.Rest,'getent','hosts','db.supabase.internal'),
+        @('update','--restart','no',$namespace.Db),@('exec','--user','postgres',$namespace.Db,'pg_ctl','stop','-D','/var/lib/postgresql/data','-m','fast','-W'),@('update','--restart','unless-stopped',$namespace.Db),@('rename',$namespace.Db,$namespace.Parked),@('rename',$namespace.Parked,$namespace.Db),@('start',$namespace.Db),
         @('exec',$namespace.Db,'psql','-X','-At','-v','ON_ERROR_STOP=1','-U','postgres','-d','postgres','-c',"select pid||'|'||backend_start||'|'||datname||'|'||usename||'|'||client_addr from pg_stat_activity where application_name ilike '%postgrest%' order by pid;"),
-        @('exec',$namespace.Db,'psql','-X','-At','-v','ON_ERROR_STOP=1','-U','postgres','-d','postgres','-c',$proof.ClockProofSql)
+        @('exec',$namespace.Db,'psql','-X','-q','-At','-v','ON_ERROR_STOP=1','-U','postgres','-d','postgres','-c',$proof.ClockProofSql)
     )){Assert-ArgvSeen $sim.Calls $expected "exact lifecycle/proof argv missing: $($expected-join' ')"}
+    Assert-True (@($sim.Calls|Where-Object{$_.Argv.Count-ge3-and$_.Argv[0]-ceq'exec'-and$_.Argv[1]-ceq$namespace.Rest-and$_.Argv[2]-ceq'getent'}).Count-eq0) 'shell/getent was invoked in the shell-less PostgREST image'
     Assert-ArgvSeen (@($sim.Calls|Where-Object Kind -ceq 'http_get')) @("http://127.0.0.1:65431$($proof.ApiPath)",'authenticated-expected-contract') 'HTTP proof argv was not exact'
-    $containerFormat='{"Id":{{json .Id}},"Name":{{json .Name}},"Image":{{json .Image}},"Running":{{json .State.Running}},"ExitCode":{{json .State.ExitCode}},"OomKilled":{{json .State.OOMKilled}},"Pid":{{json .State.Pid}},"Health":{{json .State.Health.Status}},"RestartCount":{{json .RestartCount}},"RestartPolicy":{{json .HostConfig.RestartPolicy.Name}},"Labels":{{json .Config.Labels}},"Mounts":{{json .Mounts}},"Networks":{{json .NetworkSettings.Networks}},"Ports":{{json .HostConfig.PortBindings}},"Healthcheck":{{json .Config.Healthcheck}}}'
+    $containerFormat='{"Id":{{json .Id}},"Name":{{json .Name}},"Image":{{json .Image}},"Running":{{json .State.Running}},"ExitCode":{{json .State.ExitCode}},"OomKilled":{{json .State.OOMKilled}},"Pid":{{json .State.Pid}},"Health":{{with index .State "Health"}}{{json (index . "Status")}}{{else}}null{{end}},"RestartCount":{{json .RestartCount}},"RestartPolicy":{{json .HostConfig.RestartPolicy.Name}},"Labels":{{json .Config.Labels}},"Mounts":{{json .Mounts}},"Networks":{{json .NetworkSettings.Networks}},"Ports":{{json .HostConfig.PortBindings}},"Healthcheck":{{with index .Config "Healthcheck"}}{{json .}}{{else}}null{{end}}}'
     $imageFormat='{"Id":{{json .Id}},"Labels":{{json .Config.Labels}}}'
     $networkFormat='{"Id":{{json .Id}},"Labels":{{json .Labels}}}';$volumeFormat='{"Name":{{json .Name}},"Labels":{{json .Labels}}}'
     foreach($expected in @(
@@ -222,6 +223,8 @@ try {
     # Bounded readiness polling supports delayed readiness and fails closed at timeout.
     $delayed=New-Simulator -Overrides @{DbReadyAfter=2;RestReadyAfter=2;BackendReadyAfter=2};$delayedAdapter=New-TestAdapter $delayed (Join-Path $temp 'delayed.json')
     Assert-True ((Invoke-MapleSwapStateMachine $delayedAdapter $inventory)-ceq'MAPLE_DB_CLOCK_SWAP_ADAPTER_PASS') 'delayed readiness did not converge'
+    $pooled=New-Simulator -Overrides @{BackendPool=7;BackendCidr=$true;NoRestHealth=$true};$pooledAdapter=New-TestAdapter $pooled (Join-Path $temp 'pooled.json')
+    Assert-True ((Invoke-MapleSwapStateMachine $pooledAdapter $inventory)-ceq'MAPLE_DB_CLOCK_SWAP_ADAPTER_PASS') 'shell-less/no-healthcheck pooled PostgREST route did not pass'
     $timeout=New-Simulator -Overrides @{DbReadyAfter=99};$timeoutAdapter=New-TestAdapter $timeout (Join-Path $temp 'timeout.json')
     Assert-Throws{Invoke-MapleSwapStateMachine $timeoutAdapter $inventory|Out-Null}'database readiness timeout was accepted'
 
@@ -242,13 +245,13 @@ try {
     }
 
     # Every mutation may report failure after taking effect; recovery must still restore safely.
-    foreach ($fault in @('stop','commit','build','rename','create','start','restart','rm','image')) {
+    foreach ($fault in @('update','stop','commit','build','rename','create','start','restart','rm','image')) {
         $case=New-Simulator -Fault $fault; $journal=Join-Path $temp "fault-$fault.json"; $caseAdapter=New-TestAdapter $case $journal
         Assert-Throws { Invoke-MapleSwapStateMachine $caseAdapter $inventory | Out-Null } "after-mutation $fault failure was accepted"
         if ($fault -notin @('rm','image')) { Assert-True ($case.State.Canonical -ceq 'original' -and $case.State.OriginalRunning) "$fault failure did not recover original" }
     }
     foreach ($recoveryFault in @(
-        @{Command='stop';At=2}, @{Command='rename';At=2}, @{Command='start';At=2},
+        @{Command='update';At=3}, @{Command='stop';At=2}, @{Command='rename';At=2}, @{Command='start';At=2},
         @{Command='restart';At=2}, @{Command='rm';At=1}, @{Command='image';At=1}
     )) {
         $case=New-Simulator -Fault $recoveryFault.Command -Overrides @{FaultAt=$recoveryFault.At}

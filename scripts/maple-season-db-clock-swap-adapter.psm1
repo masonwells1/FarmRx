@@ -64,11 +64,15 @@ function Invoke-MapleSwapRecovery {
   $actual=&$Adapter['InspectActualState']
   if($actual.OriginalParked){try{$actual=Invoke-CheckedSwapMutation $Adapter $Inventory recovery_restore_name inspect_after_restore_name ($Adapter['RestoreOriginalName']) {param($s)$s.OriginalCanonical-and-not$s.OriginalParked}}catch{$failures.Add($_.Exception.Message)}}
   $actual=&$Adapter['InspectActualState']
+  if($actual.OriginalCanonical-and$actual.OriginalRestartPolicy-cne'unless-stopped'){try{$actual=Invoke-CheckedSwapMutation $Adapter $Inventory recovery_restore_restart_policy inspect_after_restart_policy_restore ($Adapter['RestoreOriginalRestartPolicy']) {param($s)$s.OriginalCanonical-and$s.OriginalRestartPolicy-ceq'unless-stopped'}}catch{$failures.Add($_.Exception.Message)}}
+  $actual=&$Adapter['InspectActualState']
+  if($actual.OriginalCanonical-and$actual.OriginalRunning-and-not$actual.OriginalHealthy){try{$actual=Invoke-CheckedSwapMutation $Adapter $Inventory recovery_stop_unhealthy_original inspect_after_unhealthy_stop ($Adapter['StopOriginal']) {param($s)$s.OriginalCanonical-and-not$s.OriginalRunning-and$s.OriginalRestartPolicy-ceq'unless-stopped'-and$s.OriginalStopAttested-and[int]$s.OriginalExitCode-eq0-and-not$s.OriginalOomKilled-and$s.ExclusiveVolume}}catch{$failures.Add($_.Exception.Message)}}
+  $actual=&$Adapter['InspectActualState']
   if($actual.OriginalCanonical-and-not$actual.OriginalRunning){try{$actual=Invoke-CheckedSwapMutation $Adapter $Inventory recovery_start_original inspect_after_original_start ($Adapter['StartOriginal']) {param($s)$s.OriginalCanonical-and$s.OriginalRunning-and$s.OriginalHealthy}}catch{$failures.Add($_.Exception.Message)}}
   $actual=&$Adapter['InspectActualState']
   if($actual.OriginalRunning){try{if((&$Adapter['WriteJournal'] 'recovery_restart_postgrest' 'inspect_postgrest_recovery' $Inventory)-ne$true){throw 'Journal callback was not exactly true.'};if((&$Adapter['RestartPostgrest'])-ne$true){throw 'PostgREST restart callback was not exactly true.'};$actual=&$Adapter['InspectActualState'];if(-not$actual.PostgrestRecovered){throw 'PostgREST recovery inspection failed.'}}catch{$failures.Add($_.Exception.Message)}}
   $actual=&$Adapter['InspectActualState']
-  $verified=$failures.Count-eq 0-and$actual.OriginalCanonical-and$actual.OriginalRunning-and$actual.OriginalHealthy-and$actual.PostgrestRecovered-and-not$actual.ReplacementExists
+  $verified=$failures.Count-eq 0-and$actual.OriginalCanonical-and$actual.OriginalRunning-and$actual.OriginalHealthy-and$actual.OriginalRestartPolicy-ceq'unless-stopped'-and$actual.PostgrestRecovered-and-not$actual.ReplacementExists
   if($verified){
     $cleanupChecks=@(
       [pscustomobject]@{Action='RemoveDerivedImageIfOwned';Property='DerivedOwned'},
@@ -95,19 +99,24 @@ function Invoke-MapleSwapRecovery {
 }
 
 function Invoke-MapleSwapStateMachine {
-  param([hashtable]$Adapter,[hashtable]$Inventory)
+  param([hashtable]$Adapter,[hashtable]$Inventory,[scriptblock]$WhileFrozen)
   Assert-MapleSwapInventory $Inventory $Adapter.ExpectedContract|Out-Null
   $primaryFailure=$null
   $completed=$false
   try {
-    $actual=&$Adapter['InspectActualState'];if(-not$actual.OriginalCanonical-or-not$actual.OriginalRunning-or$actual.ReplacementExists-or$actual.OriginalParked){throw 'MAPLE_DB_SWAP_REFUSED: initial actual state is not exact.'}
-    $actual=Invoke-CheckedSwapMutation $Adapter $Inventory stop_original inspect_stopped ($Adapter['StopOriginal']) {param($s)$s.OriginalCanonical-and-not$s.OriginalRunning-and$s.OriginalExitCode-eq 0-and-not$s.OriginalOomKilled-and$s.ExclusiveVolume}
+    $actual=&$Adapter['InspectActualState'];if(-not$actual.OriginalCanonical-or-not$actual.OriginalRunning-or$actual.OriginalRestartPolicy-cne'unless-stopped'-or$actual.ReplacementExists-or$actual.OriginalParked){throw 'MAPLE_DB_SWAP_REFUSED: initial actual state is not exact.'}
+    $actual=Invoke-CheckedSwapMutation $Adapter $Inventory stop_original inspect_stopped ($Adapter['StopOriginal']) {param($s)$s.OriginalCanonical-and-not$s.OriginalRunning-and$s.OriginalRestartPolicy-ceq'unless-stopped'-and$s.OriginalStopAttested-and[int]$s.OriginalExitCode-eq0-and-not$s.OriginalOomKilled-and$s.ExclusiveVolume}
     $actual=Invoke-CheckedSwapMutation $Adapter $Inventory snapshot_original inspect_snapshot ($Adapter['SnapshotOriginal']) {param($s)$s.SnapshotOwned}
     $actual=Invoke-CheckedSwapMutation $Adapter $Inventory build_derived inspect_derived ($Adapter['BuildDerived']) {param($s)$s.DerivedOwned}
     $actual=Invoke-CheckedSwapMutation $Adapter $Inventory park_original inspect_parked ($Adapter['ParkOriginal']) {param($s)$s.OriginalParked-and-not$s.OriginalCanonical}
     $actual=Invoke-CheckedSwapMutation $Adapter $Inventory create_replacement inspect_created ($Adapter['CreateReplacement']) {param($s)$s.ReplacementExists-and$s.ReplacementOwned}
     $actual=Invoke-CheckedSwapMutation $Adapter $Inventory start_replacement inspect_started ($Adapter['StartReplacement']) {param($s)$s.ReplacementRunning-and$s.ReplacementHealthy}
     if((&$Adapter['ProveRouteClockAndLineage'])-ne$true){throw 'MAPLE_DB_SWAP_FAILED: route/clock/lineage proof was not exactly true.'}
+    if($null-ne$WhileFrozen){
+      if((&$Adapter['WriteJournal'] 'run_frozen_action' 'prove_after_frozen_action' $Inventory)-ne$true){throw 'MAPLE_DB_SWAP_FAILED: frozen-action journal callback was not exactly true.'}
+      if((&$WhileFrozen)-ne$true){throw 'MAPLE_DB_SWAP_FAILED: frozen action did not return exactly true.'}
+      if((&$Adapter['ProveRouteClockAndLineage'])-ne$true){throw 'MAPLE_DB_SWAP_FAILED: post-action route/clock/lineage proof was not exactly true.'}
+    }
     $completed=$true
   } catch {
     $primaryFailure=$_.Exception

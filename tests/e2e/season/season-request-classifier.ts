@@ -8,6 +8,10 @@ export const readOnlySeasonAccessRpcs = new Set([
   'can_read_private_financials',
   'program_due_generation_status',
   'service_due_generation_status',
+  // The browser supplies an intentionally unscoped synthetic farm ID. A 400/403
+  // authorization response proves the capability boundary; the security-definer
+  // probe is read-only and has no business write path.
+  'operational_integrity_capability_probe',
 ])
 
 type RequestKind = 'pre-auth' | 'password-auth' | 'safe-read' | 'read-only-rpc' | 'target-mutation-rpc' | 'target-mutation-path' | 'unexpected-rpc' | 'unexpected-non-read'
@@ -16,10 +20,13 @@ export function createSeasonRequestClassifier(options: {
   targetMutationRpcs?: Iterable<string>
   /** Exact PostgREST paths for a deliberately direct, non-RPC target write. */
   targetMutationPaths?: Iterable<string>
+  /** Exact `METHOD /rest/v1/path` allowlist for direct target writes. */
+  targetMutationRequests?: Iterable<string>
   blockUnexpectedNonReadRequests?: boolean
 } = {}) {
   const targetMutationRpcs = new Set(options.targetMutationRpcs)
   const targetMutationPaths = new Set(options.targetMutationPaths)
+  const targetMutationRequests = new Set(options.targetMutationRequests)
   const observedTargetMutationRpcs: string[] = []
   const observedTargetMutationPaths: string[] = []
   const unexpectedRpcs: string[] = []
@@ -56,6 +63,11 @@ export function createSeasonRequestClassifier(options: {
 
       if (method === 'POST' && targetMutationPaths.has(url.pathname)) {
         observedTargetMutationPaths.push(url.pathname)
+        return { kind: 'target-mutation-path', block: false }
+      }
+      const directRequest = `${method} ${url.pathname}`
+      if (targetMutationRequests.has(directRequest)) {
+        observedTargetMutationPaths.push(directRequest)
         return { kind: 'target-mutation-path', block: false }
       }
 

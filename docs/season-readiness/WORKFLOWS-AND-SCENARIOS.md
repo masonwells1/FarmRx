@@ -91,14 +91,20 @@ This manifest is proof infrastructure, not product schema. IDs remain stable acr
 | Maple cash-bid setup fixture | `27070500-0000-4000-8000-000000000001` |
 | Maple grain contract | `27071000-0000-4000-8000-000000000001` |
 | Harvest grain contract | `27071000-0000-4000-8000-000000000004` |
+| Harvest proof-created grain contract | `27071000-0000-4000-8000-000000000005` |
 | Maple contract delivery | `27072000-0000-4000-8000-000000000001` |
 | Harvest contract delivery | `27072000-0000-4000-8000-000000000004` |
+| Harvest reverse-order contract delivery | `27072000-0000-4000-8000-000000000005` |
 | Maple grain bin | `27073000-0000-4000-8000-000000000001` |
 | Harvest grain bin | `27073000-0000-4000-8000-000000000004` |
+| Harvest proof-created grain bin | `27073000-0000-4000-8000-000000000005` |
 | Harvest bin inventory baseline | `27073500-0000-4000-8000-000000000004` |
 | Maple bin-in movement | `27074000-0000-4000-8000-000000000000` |
 | Maple bin-out movement | `27074000-0000-4000-8000-000000000001` |
 | Harvest bin-out movement | `27074000-0000-4000-8000-000000000004` |
+| Harvest proof bin-in movement | `27074000-0000-4000-8000-000000000005` |
+| Harvest reverse-order bin-out movement | `27074000-0000-4000-8000-000000000006` |
+| Harvest proof save operation | `27076000-0000-4000-8000-000000000004` |
 | Pine connected field note | `27080000-0000-4000-8000-000000000001` |
 | Pine revoked field note | `27080000-0000-4000-8000-000000000002` |
 | Pine connected queue operation | `27090000-0000-4000-8000-000000000001` |
@@ -183,6 +189,8 @@ This scenario proves only that compliance-related fields and saved snapshots are
 | HR-5 | `2027-11-06T09:05:00-06:00`: record the manifest 5,000.00 bu delivery dated `2027-11-06`, note `null`, against contract `HR-2027-001`. | Exactly one contract-delivery row is inserted and delivered total changes from 0.00 to 5,000.00 bu. | Bin on-hand remains 25,000.00 bu, no second bin transaction appears, and no automatic lot is created. |
 
 The two November actions must also pass in the opposite order after a clean scenario reset. Order may change the display sequence, but it must never introduce hidden coupled mutation.
+
+**Executable proof extension:** The HR baseline remains intact for HR-1 through HR-5. To prove the farmer-entered actions that a preseeded baseline cannot prove, the disposable browser lane also creates the manifest `Harvest proof-created grain bin` at `2027-11-06T08:50:00-06:00` (`2027-11-06T14:50:00.000Z`), adds the manifest manual In movement at `2027-11-06T08:55:00-06:00` (`2027-11-06T14:55:00.000Z`), and creates the manifest `Harvest proof-created grain contract` at `2027-11-06T08:58:00-06:00` (`2027-11-06T14:58:00.000Z`). These are explicit, independent writes; none creates or assigns the other, and neither substitutes for the canonical baseline bin-out or contract delivery. The proof asserts each write's server-owned timestamp at that fixed instant.
 
 ## Scenario CC — Cedar Creek weather and scouting
 

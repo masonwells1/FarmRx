@@ -13,6 +13,14 @@ assert.equal(directRestMutation.kind, 'unexpected-non-read')
 assert.equal(directRestMutation.block, true)
 assert.deepEqual(immediateRpc.blockedNonReadRequests, ['PATCH /rest/v1/farm_tasks'])
 
+const exactDirect = createSeasonRequestClassifier({ targetMutationRequests: ['PATCH /rest/v1/production_estimates'], blockUnexpectedNonReadRequests: true })
+exactDirect.observe('POST', 'http://127.0.0.1:55321/auth/v1/token?grant_type=password')
+assert.equal(exactDirect.observe('PATCH', 'http://127.0.0.1:55321/rest/v1/production_estimates?id=eq.synthetic').kind, 'target-mutation-path')
+assert.deepEqual(exactDirect.observedTargetMutationPaths, ['PATCH /rest/v1/production_estimates'])
+const wrongDirectMethod = exactDirect.observe('POST', 'http://127.0.0.1:55321/rest/v1/production_estimates')
+assert.equal(wrongDirectMethod.kind, 'unexpected-non-read')
+assert.equal(wrongDirectMethod.block, true)
+
 for (const statusRpc of ['program_due_generation_status', 'service_due_generation_status']) {
   const status = immediateRpc.observe('POST', `http://127.0.0.1:55321/rest/v1/rpc/${statusRpc}`)
   assert.equal(status.kind, 'read-only-rpc')

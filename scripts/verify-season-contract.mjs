@@ -13,7 +13,7 @@ const EXPECTED_SCHEMA = "farm-rx-season-contract";
 const EXPECTED_VERSION = 1;
 const EXPECTED_YEAR = 2027;
 const EXPECTED_TIMEZONE = "America/Chicago";
-const EXPECTED_FIXTURE_COUNT = 81;
+const EXPECTED_FIXTURE_COUNT = 87;
 const EXPECTED_PACKAGE_COMMAND = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-season.ps1";
 const EXPECTED_POWERSHELL_SHA256 = "419a68327bb080e63ea58ec48c06926c24ea9ebbb69a8022dea5e8723322a359";
 

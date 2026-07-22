@@ -447,7 +447,17 @@ const recordNoticeUnhandled = (error: unknown) => { noticeUnhandled.push(error) 
 const recordWindowUnhandled = (event: unknown) => { noticeUnhandled.push((event as { reason?: unknown }).reason) }
 process.on('unhandledRejection', recordNoticeUnhandled)
 noticeWindow.addEventListener('unhandledrejection', recordWindowUnhandled)
+const priorNoticeDate = Object.getOwnPropertyDescriptor(globalThis, 'Date')
+const NativeNoticeDate = Date
+class NoticeFixedDate extends NativeNoticeDate {
+  constructor(...args: [] | [string | number]) {
+    if (args.length === 0) { super(stamp); return }
+    super(...args)
+  }
+  static now() { return NativeNoticeDate.parse(stamp) }
+}
 try {
+  Object.defineProperty(globalThis, 'Date', { configurable: true, writable: true, value: NoticeFixedDate })
   const { createSupabaseEquipmentTasksServices } = await import('./createSupabaseEquipmentTasksServices')
   const { farmReplayIsOffline } = await import('./index')
   const { createRoot } = await import('react-dom/client')
@@ -1666,6 +1676,7 @@ try {
     assert(switchCalls.save === 1 && switchCalls.due === 1 && switchQueue.read().entries.length === 0 && noticeUnhandled.length === 0, 'Farm A retry did not recover exactly once after a failed switch, or the switch leaked an unhandled rejection.')
   } finally { confirmWindow.confirm = priorConfirm; await act(async () => { switchRoot.unmount() }); switchContainer.remove(); setModuleSyncRetryAction('equipment_tasks', null) }
 } finally {
+  if (priorNoticeDate) Object.defineProperty(globalThis, 'Date', priorNoticeDate); else Reflect.deleteProperty(globalThis, 'Date')
   process.off('unhandledRejection', recordNoticeUnhandled); noticeWindow.removeEventListener('unhandledrejection', recordWindowUnhandled); noticeWindow.close()
   for (const [name, descriptor] of priorDomGlobals) { if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name) }
   if (priorActEnvironment) Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', priorActEnvironment); else Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT')
