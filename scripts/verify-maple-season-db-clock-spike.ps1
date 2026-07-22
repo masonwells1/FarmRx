@@ -3,16 +3,16 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 $farmDb = 'supabase_db_farmrx-farmer-simplicity-2027-local'
-$baseImage = 'public.ecr.aws/supabase/postgres@sha256:9faa7279bcf1fd6834e65dc876b11e39cb53030bcb3d653beb7e5668200acbb5'
-$baseImageId = 'sha256:9faa7279bcf1fd6834e65dc876b11e39cb53030bcb3d653beb7e5668200acbb5'
-$builderImage = 'debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818'
-$derivedImage = 'farmrx-frozen-clock-spike:9faa7279-july-2027'
-$volume = 'farmrx_maple_clock_spike_9faa7279'
-$emptyVolume = 'farmrx_maple_clock_spike_empty_9faa7279'
-$initContainer = 'farmrx-maple-clock-spike-init-9faa7279'
-$clockContainer = 'farmrx-maple-clock-spike-db-9faa7279'
-$emptyContainer = 'farmrx-maple-clock-spike-empty-9faa7279'
-$label = 'farmrx.maple-clock-spike=9faa7279-july-2027'
+$baseImage = 'public.ecr.aws/supabase/postgres@sha256:ba10e934f0a59990379f78ab9ed93926f1c291dd61a12fe4026f4202f1b89770'
+$baseImageId = 'sha256:ba10e934f0a59990379f78ab9ed93926f1c291dd61a12fe4026f4202f1b89770'
+$artifactImage = 'maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7:synthetic'
+$derivedImage = 'farmrx-frozen-clock-spike:ba10e934-july-2027'
+$volume = 'farmrx_maple_clock_spike_ba10e934'
+$emptyVolume = 'farmrx_maple_clock_spike_empty_ba10e934'
+$initContainer = 'farmrx-maple-clock-spike-init-ba10e934'
+$clockContainer = 'farmrx-maple-clock-spike-db-ba10e934'
+$emptyContainer = 'farmrx-maple-clock-spike-empty-ba10e934'
+$label = 'farmrx.maple-clock-spike=ba10e934-july-2027'
 $instant = '2027-07-09 21:10:00+00:00'
 $created = @{ Image=$false; Volume=$false; EmptyVolume=$false; Init=$false; Clock=$false; Empty=$false }
 
@@ -40,10 +40,10 @@ function Wait-Healthy([string]$Name) {
   throw "MAPLE_CLOCK_SPIKE_FAILED: $Name did not become healthy."
 }
 function Remove-OwnedContainer([string]$Name,[string]$Key) {
-  if(-not $created[$Key]){ return }; $json=(Invoke-Docker @('inspect','--format','{{json .Config.Labels}}',$Name) -AllowFailure).Output -join ''; $owned=($json|ConvertFrom-Json).'farmrx.maple-clock-spike'; if($owned -cne '9faa7279-july-2027'){ throw "MAPLE_CLOCK_SPIKE_CLEANUP_REFUSED: $Name lost its ownership label." }; Invoke-Docker @('rm','-f',$Name) | Out-Null; $created[$Key]=$false
+  if(-not $created[$Key]){ return }; $json=(Invoke-Docker @('inspect','--format','{{json .Config.Labels}}',$Name) -AllowFailure).Output -join ''; $owned=($json|ConvertFrom-Json).'farmrx.maple-clock-spike'; if($owned -cne 'ba10e934-july-2027'){ throw "MAPLE_CLOCK_SPIKE_CLEANUP_REFUSED: $Name lost its ownership label." }; Invoke-Docker @('rm','-f',$Name) | Out-Null; $created[$Key]=$false
 }
 function Remove-OwnedVolume([string]$Name,[string]$Key) {
-  if(-not $created[$Key]){ return }; $json=(Invoke-Docker @('volume','inspect','--format','{{json .Labels}}',$Name) -AllowFailure).Output -join ''; $owned=($json|ConvertFrom-Json).'farmrx.maple-clock-spike'; if($owned -cne '9faa7279-july-2027'){ throw "MAPLE_CLOCK_SPIKE_CLEANUP_REFUSED: $Name lost its ownership label." }; Invoke-Docker @('volume','rm',$Name) | Out-Null; $created[$Key]=$false
+  if(-not $created[$Key]){ return }; $json=(Invoke-Docker @('volume','inspect','--format','{{json .Labels}}',$Name) -AllowFailure).Output -join ''; $owned=($json|ConvertFrom-Json).'farmrx.maple-clock-spike'; if($owned -cne 'ba10e934-july-2027'){ throw "MAPLE_CLOCK_SPIKE_CLEANUP_REFUSED: $Name lost its ownership label." }; Invoke-Docker @('volume','rm',$Name) | Out-Null; $created[$Key]=$false
 }
 
 if(-not (Get-Command docker -ErrorAction SilentlyContinue)){ throw 'Docker CLI is required.' }
@@ -55,7 +55,7 @@ Assert-Absent image $derivedImage
 
 Push-Location $root
 try {
-  Invoke-Docker @('build','--pull=false','--label',$label,'--build-arg',"BASE_IMAGE=$baseImage",'--build-arg',"FAKETIME_BUILDER=$builderImage",'--build-arg',"FROZEN_INSTANT=$instant",'-f','tests/season/frozen-postgres-clock-spike.Dockerfile','-t',$derivedImage,'.') | Out-Null; $created.Image=$true
+  Invoke-Docker @('build','--pull=false','--label',$label,'--build-arg',"BASE_IMAGE=$baseImage",'--build-arg',"FAKETIME_ARTIFACTS_IMAGE=$artifactImage",'--build-arg',"FROZEN_INSTANT=$instant",'-f','tests/season/frozen-postgres-clock-spike.Dockerfile','-t',$derivedImage,'.') | Out-Null; $created.Image=$true
   Invoke-Docker @('volume','create','--label',$label,$volume) | Out-Null; $created.Volume=$true
   Invoke-Docker @('run','-d','--name',$initContainer,'--label',$label,'--network','none','-e','POSTGRES_PASSWORD=maple-clock-spike-synthetic-only','-v',"${volume}:/var/lib/postgresql/data",$baseImage) | Out-Null; $created.Init=$true
   Wait-Healthy $initContainer
@@ -77,6 +77,11 @@ end;
 `$maple_clock_proof`$;
 "@
   $proofResult=@($proof | docker exec -i $clockContainer psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres 2>&1); if($LASTEXITCODE -ne 0){ throw 'MAPLE_CLOCK_SPIKE_FAILED: fail-closed PostgreSQL clock/default proof failed.' }
+  $persistentSql="create table public.maple_clock_persistent_probe(id integer primary key, stamped_at timestamptz not null default now()); insert into public.maple_clock_persistent_probe(id) values(1);"
+  Invoke-Docker @('exec',$clockContainer,'timeout','15','psql','-X','-v','ON_ERROR_STOP=1','-U','postgres','-d','postgres','-c',$persistentSql) | Out-Null
+  $persistent=((Invoke-Docker @('exec',$clockContainer,'timeout','15','psql','-X','-At','-v','ON_ERROR_STOP=1','-U','postgres','-d','postgres','-c',"select count(*)::text||'|'||min(stamped_at)::text from public.maple_clock_persistent_probe;")).Output -join '')
+  if($persistent-cne'1|2027-07-09 21:10:00+00'){throw 'MAPLE_CLOCK_SPIKE_FAILED: persistent commit/default timestamp proof failed.'}
+  Invoke-Docker @('exec',$clockContainer,'timeout','15','psql','-X','-v','ON_ERROR_STOP=1','-U','postgres','-d','postgres','-c','drop table public.maple_clock_persistent_probe;') | Out-Null
   $repeatSql="select current_date::text||'|'||statement_timestamp()::text||'|'||clock_timestamp()::text;"
   $first=((Invoke-Docker @('exec',$clockContainer,'psql','-X','-At','-v','ON_ERROR_STOP=1','-U','postgres','-d','postgres','-c',$repeatSql)).Output -join "`n"); Start-Sleep -Seconds 2
   $second=((Invoke-Docker @('exec',$clockContainer,'psql','-X','-At','-v','ON_ERROR_STOP=1','-U','postgres','-d','postgres','-c',$repeatSql)).Output -join "`n"); if($first -cne $second){ throw 'MAPLE_CLOCK_SPIKE_FAILED: frozen PostgreSQL output changed after two host seconds.' }
@@ -88,7 +93,7 @@ end;
   Write-Output 'MAPLE_SEASON_DB_CLOCK_SPIKE_PASS'
 } finally {
   try { Remove-OwnedContainer $emptyContainer 'Empty' } finally { try { Remove-OwnedContainer $clockContainer 'Clock' } finally { try { Remove-OwnedContainer $initContainer 'Init' } finally { try { Remove-OwnedVolume $emptyVolume 'EmptyVolume' } finally { Remove-OwnedVolume $volume 'Volume' } } } }
-  if($created.Image -and -not $PreserveDerivedImage){ $json=(Invoke-Docker @('image','inspect','--format','{{json .Config.Labels}}',$derivedImage) -AllowFailure).Output -join ''; $owned=($json|ConvertFrom-Json).'farmrx.maple-clock-spike'; if($owned -cne '9faa7279-july-2027'){ throw 'MAPLE_CLOCK_SPIKE_CLEANUP_REFUSED: derived image lost its ownership label.' }; Invoke-Docker @('image','rm',$derivedImage) | Out-Null; $created.Image=$false }
+  if($created.Image -and -not $PreserveDerivedImage){ $json=(Invoke-Docker @('image','inspect','--format','{{json .Config.Labels}}',$derivedImage) -AllowFailure).Output -join ''; $owned=($json|ConvertFrom-Json).'farmrx.maple-clock-spike'; if($owned -cne 'ba10e934-july-2027'){ throw 'MAPLE_CLOCK_SPIKE_CLEANUP_REFUSED: derived image lost its ownership label.' }; Invoke-Docker @('image','rm',$derivedImage) | Out-Null; $created.Image=$false }
   if((Get-FarmIdentity) -cne $farmBefore){ throw 'MAPLE_CLOCK_SPIKE_FAILED: the real FarmRx database identity or health changed during cleanup.' }
   Pop-Location
 }

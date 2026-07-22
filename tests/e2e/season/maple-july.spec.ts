@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { createSeasonRequestClassifier } from './season-request-classifier'
+import { seasonLoopbackPort } from './season-loopback-port'
 
 const ownerEmail = 'maple.owner@farmrx.local.test'
 const fixedInstant = new Date('2027-07-09T16:10:00-05:00')
@@ -23,7 +24,7 @@ declare global {
 }
 
 async function installDeterminismAndFence(page: Page, requests: ReturnType<typeof createSeasonRequestClassifier>) {
-  const localPorts = new Set(['4178', '55321'])
+  const localPorts = new Set([String(seasonLoopbackPort('FARMRX_SEASON_JULY_PORT', 4178)), '55321'])
   const external: string[] = []
   const taskBodies: unknown[] = []
   await page.route('**/*', async route => {
@@ -47,7 +48,7 @@ async function installDeterminismAndFence(page: Page, requests: ReturnType<typeo
     window.Date = new Proxy(RealDate, {
       construct(target, args) {
         const stack = new Error().stack ?? ''
-        const fixed = args.length === 0 && (stack.includes('/src/data/farmDates.ts') || stack.includes('/src/data/createSupabaseScoutingServices.ts') || stack.includes('/src/data/createSupabaseEquipmentTasksServices.ts'))
+        const fixed = args.length === 0 && (stack.includes('/src/data/farmDates.ts') || stack.includes('/src/data/scouting.ts') || stack.includes('/src/data/createSupabaseScoutingServices.ts') || stack.includes('/src/data/createSupabaseEquipmentTasksServices.ts'))
         const result = Reflect.construct(target, fixed ? [fixedMs] : args) as Date
         if (fixed) clocks.push(result.toISOString())
         return result
@@ -58,10 +59,10 @@ async function installDeterminismAndFence(page: Page, requests: ReturnType<typeo
     const observations: string[] = []; const consumptions = { note: 0, scoutingOperation: 0, task: 0, taskOperation: 0 }
     Object.defineProperty(crypto, 'randomUUID', { configurable: true, value: () => {
       const stack = new Error().stack ?? ''
-      if (phase === 'scouting' && stack.includes('/src/ScoutingModule.tsx') && consumptions.note++ === 0) { observations.push(`note:${note}`); return note }
-      if (phase === 'scouting' && stack.includes('/src/data/QueuedScoutingRepository.ts') && consumptions.scoutingOperation++ === 0) { observations.push(`scouting-operation:${scoutingOperation}`); return scoutingOperation }
-      if (phase === 'task' && stack.includes('/src/EquipmentTasksModule.tsx') && consumptions.task++ === 0) { observations.push(`task:${task}`); return task }
-      if (phase === 'task' && stack.includes('/src/data/QueuedEquipmentTasksRepository.ts') && consumptions.taskOperation++ === 0) { observations.push(`task-operation:${taskOperation}`); return taskOperation }
+      if (phase === 'scouting' && stack.includes('/src/ScoutingModule.tsx') && consumptions.note === 0) { consumptions.note = 1; observations.push(`note:${note}`); return note }
+      if (phase === 'scouting' && stack.includes('/src/data/QueuedScoutingRepository.ts') && consumptions.scoutingOperation === 0) { consumptions.scoutingOperation = 1; observations.push(`scouting-operation:${scoutingOperation}`); return scoutingOperation }
+      if (phase === 'task' && stack.includes('/src/EquipmentTasksModule.tsx') && consumptions.task === 0) { consumptions.task = 1; observations.push(`task:${task}`); return task }
+      if (phase === 'task' && stack.includes('/src/data/QueuedEquipmentTasksRepository.ts') && consumptions.taskOperation === 0) { consumptions.taskOperation = 1; observations.push(`task-operation:${taskOperation}`); return taskOperation }
       return original()
     } })
     Object.defineProperties(window, {
@@ -98,8 +99,11 @@ test('@july-scouting-write saves one exact note with a visible receipt and no fo
   const form = maple.locator('form.scouting-form')
   await form.getByLabel('Date').fill('2027-07-09'); await form.getByRole('button', { name: 'Weed' }).click(); await form.getByLabel('What did you find?').fill('Synthetic waterhemp at south gate')
   await expect(form.getByLabel('Add a follow-up task')).not.toBeChecked()
+  const saveResponsePromise = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/rest/v1/rpc/save_scouting_note')
   await page.evaluate(() => window.__farmRxJulyArm('scouting')); await form.getByRole('button', { name: 'Save scouting note' }).click()
-  await expect(maple.getByRole('status')).toHaveText('Saved'); await expect(maple.getByText('Synthetic waterhemp at south gate')).toBeVisible(); await expect(maple.getByText('Weed · 2027-07-09')).toBeVisible()
+  const saveResponse = await saveResponsePromise
+  expect(saveResponse.status(), await saveResponse.text()).toBe(200)
+  await expect(maple.getByRole('status')).toHaveText('Saved'); await expect(maple.getByText('Synthetic waterhemp at south gate')).toBeVisible(); await expect(maple.getByText('Weed', { exact: true })).toBeVisible(); await expect(maple.getByText('2027-07-09', { exact: true })).toBeVisible()
   await page.evaluate(() => window.__farmRxJulyLockManifestIds())
   expect(requests.observedTargetMutationRpcs).toEqual(['save_scouting_note'])
   assertFence(requests, network.external)
@@ -111,7 +115,7 @@ test('@july-scouting-write saves one exact note with a visible receipt and no fo
 test('@july-task-write saves one exact separate manual task with a visible receipt', async ({ page }) => {
   const requests = createSeasonRequestClassifier({ targetMutationPaths: [taskMutationPath], blockUnexpectedNonReadRequests: true })
   const network = await installDeterminismAndFence(page, requests); await signIn(page)
-  await page.getByRole('link', { name: 'Tasks' }).click(); await expect(page.getByRole('heading', { name: 'Tasks' })).toBeVisible()
+  await page.getByRole('link', { name: 'Tasks' }).click(); await expect(page.getByRole('heading', { name: 'Keep the next job clear for everyone.' })).toBeVisible()
   expect(requests.observedTargetMutationPaths, 'target Task write ran before the July task action').toEqual([])
   assertFence(requests, network.external)
   await page.getByRole('button', { name: 'Add task' }).click()
@@ -119,9 +123,9 @@ test('@july-task-write saves one exact separate manual task with a visible recei
   await form.getByLabel('Job').fill('Inspect Maple south gate'); await form.getByLabel('Details').fill('Check synthetic waterhemp patch.')
   await form.getByLabel('Assigned to').selectOption(ownerId); await form.getByLabel('Due date').fill('2027-07-10'); await form.getByLabel('Linked field').selectOption(fieldId)
   await page.evaluate(() => window.__farmRxJulyArm('task')); await form.getByRole('button', { name: 'Save task' }).click()
-  await expect(page.getByRole('status')).toHaveText('Saved')
+  await expect(page.locator('.save-receipt[role="status"]')).toHaveText('Saved')
   const todo = page.locator('section.task-column').filter({ hasText: 'To Do' })
-  await expect(todo.getByText('Inspect Maple south gate')).toBeVisible(); await expect(todo.getByText('Check synthetic waterhemp patch.')).toBeVisible()
+  await expect(todo.getByText('Inspect Maple south gate')).toBeVisible()
   await page.evaluate(() => window.__farmRxJulyLockManifestIds())
   expect(requests.observedTargetMutationRpcs).toEqual([]); expect(requests.observedTargetMutationPaths).toEqual([taskMutationPath])
   assertFence(requests, network.external)
@@ -137,10 +141,13 @@ test('@july-read-only-phone shows the scouting timeline and To Do task without w
   const network = await installDeterminismAndFence(page, requests); await signIn(page)
   await page.getByRole('navigation').getByRole('button', { name: 'More' }).click(); await page.getByRole('link', { name: 'Scouting' }).click()
   const maple = page.locator('article.scouting-card').filter({ hasText: 'Maple East 160' })
-  await expect(maple.getByText('Synthetic waterhemp at south gate')).toBeVisible(); await expect(maple.getByText('Weed · 2027-07-09')).toBeVisible()
+  await expect(maple.getByText('Synthetic waterhemp at south gate')).toBeVisible(); await expect(maple.getByText('Weed', { exact: true })).toBeVisible(); await expect(maple.getByText('2027-07-09', { exact: true })).toBeVisible()
   await page.getByRole('navigation').getByRole('button', { name: 'More' }).click(); await page.getByRole('link', { name: 'Tasks' }).click()
   const todo = page.locator('section.task-column').filter({ hasText: 'To Do' })
-  await expect(todo.getByText('Inspect Maple south gate')).toBeVisible(); await expect(todo.getByText('Check synthetic waterhemp patch.')).toBeVisible()
+  await expect(todo.getByText('Inspect Maple south gate')).toBeVisible()
+  const widths = await page.evaluate(() => ({ viewport: window.innerWidth, document: document.documentElement.scrollWidth, body: document.body.scrollWidth }))
+  expect(widths.document, 'July phone proof must not overflow the viewport horizontally').toBeLessThanOrEqual(widths.viewport)
+  expect(widths.body, 'July phone proof body must not overflow the viewport horizontally').toBeLessThanOrEqual(widths.viewport)
   expect(requests.observedTargetMutationRpcs).toEqual([]); expect(requests.observedTargetMutationPaths).toEqual([])
   assertFence(requests, network.external)
   expect(network.taskBodies).toEqual([])

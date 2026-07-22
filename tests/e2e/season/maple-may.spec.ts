@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createSeasonRequestClassifier } from './season-request-classifier'
+import { seasonLoopbackOrigin, seasonLoopbackPort } from './season-loopback-port'
 
 const manifest = JSON.parse(readFileSync(resolve('tests/season/season-2027.manifest.json'), 'utf8')) as { fixtures: Array<{ label: string; uuid: string }> }
 const fixtures = new Map(manifest.fixtures.map(({ label, uuid }) => [label, uuid]))
@@ -10,11 +11,13 @@ const ownerEmail = 'maple.owner@farmrx.local.test'
 const fixedInstant = new Date('2027-05-20T10:15:00-05:00')
 const draftId = fixture('Maple draft application record')
 const operationId = '27ff0000-0000-4000-8000-000000000005'
+const seasonOrigin = seasonLoopbackOrigin('FARMRX_SEASON_MAY_PORT', 4177)
+const seasonPort = String(seasonLoopbackPort('FARMRX_SEASON_MAY_PORT', 4177))
 
 declare global { interface Window { __farmRxMayArmManifestIds: () => void; __farmRxMayIdentityObservations: string[]; __farmRxMayIdentityConsumptions: { draft: number; operation: number }; __farmRxMayClockObservations: string[] } }
 
 async function installDeterminismAndFence(page: Page, requests: ReturnType<typeof createSeasonRequestClassifier>) {
-  const allowed = new Set(['http://127.0.0.1:4177', 'http://127.0.0.1:55321'])
+  const allowed = new Set([seasonOrigin, 'http://127.0.0.1:55321'])
   const forbidden: string[] = []
   await page.route('**/*', async route => {
     const url = new URL(route.request().url())
@@ -24,7 +27,7 @@ async function installDeterminismAndFence(page: Page, requests: ReturnType<typeo
   })
   await page.routeWebSocket(/^(?:ws|wss):\/\//, async route => {
     const url = new URL(route.url())
-    if (url.hostname !== '127.0.0.1' || !['4177', '55321'].includes(url.port)) { forbidden.push(route.url()); await route.close({ code: 1008, reason: 'May proof permits loopback only' }); return }
+    if (url.hostname !== '127.0.0.1' || ![seasonPort, '55321'].includes(url.port)) { forbidden.push(route.url()); await route.close({ code: 1008, reason: 'May proof permits loopback only' }); return }
     route.connectToServer()
   })
   await page.addInitScript(({ fixedMs, draft, operation }) => {

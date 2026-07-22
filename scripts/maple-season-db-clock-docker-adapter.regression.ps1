@@ -12,7 +12,7 @@ function Assert-ArgvSeen($Calls,[string[]]$Expected,[string]$Message){
     Assert-True ($match.Count-ge 1) $Message
 }
 
-$hash = '9faa7279bcf1fd6834e65dc876b11e39cb53030bcb3d653beb7e5668200acbb5'
+$hash = 'ba10e934f0a59990379f78ab9ed93926f1c291dd61a12fe4026f4202f1b89770'
 $originalId = 'c' * 64
 $networkId = 'b' * 64
 $owner = 'd' * 64
@@ -26,7 +26,7 @@ $inventory = @{
     base_digest="public.ecr.aws/supabase/postgres@sha256:$hash"; contract_hash=('a' * 64)
     network_id=$networkId; original_id=$originalId; original_image_id="sha256:$hash"
     snapshot_tag="farmrx-clock-snapshot:$($originalId.Substring(0,12))"
-    derived_tag='farmrx-frozen-clock-swap:20270709-9faa7279'; volume_name=$namespace.Volume
+    derived_tag='farmrx-frozen-clock-swap:20270709-ba10e934'; volume_name=$namespace.Volume
 }
 $contract = @{
     Id=$originalId; ImageId="sha256:$hash"; NetworkId=$networkId; VolumeName=$namespace.Volume

@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $root 'scripts/maple-season-browser.ps1')
 $expectedProjectId = 'farmrx-farmer-simplicity-2027-local'
 $expectedContainer = "supabase_db_$expectedProjectId"
 $mayProof = Join-Path $root 'scripts/verify-maple-may-disposable.ps1'
@@ -67,8 +68,7 @@ try {
   if ($status['API_URL'] -ne 'http://127.0.0.1:55321') { throw 'Refusing June proof: local API URL is not the expected loopback endpoint.' }
   if (-not $status['PUBLISHABLE_KEY'] -or $status['PUBLISHABLE_KEY'] -notmatch '^sb_publishable_') { throw 'Refusing June proof: no browser-safe local publishable key was found.' }
   $env:VITE_LOCAL_SUPABASE_PROJECT_REF='farmrxlocalsimplicity2027'; $env:VITE_LOCAL_SUPABASE_URL=$status['API_URL']; $env:VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY=$status['PUBLISHABLE_KEY']
-  npx playwright test --config playwright.season-june.config.ts
-  if ($LASTEXITCODE -ne 0) { throw 'Maple June browser scenario failed.' }
+  Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season-june.config.ts' -Scenario 'Maple June'
 
   $after = $snapshotSql | docker exec -i $expectedContainer psql -U postgres -d postgres -v ON_ERROR_STOP=1 -At
   if ($LASTEXITCODE -ne 0 -or -not $after) { throw 'Could not execute the post-June full unrelated-state snapshot.' }
