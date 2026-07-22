@@ -6,6 +6,11 @@ param(
   [string]$ConfirmationToken=''
 )
 $ErrorActionPreference='Stop'
+$runnerSyntheticId=$SyntheticId
+$runnerDbPort=$DbPort
+$runnerExecute=[bool]$Execute
+$runnerUnsafeReviewed=[bool]$UnsafeReviewed
+$runnerConfirmationToken=[string]$ConfirmationToken
 . (Join-Path $PSScriptRoot 'maple-synthetic-db-fixture-smoke.ps1')
 $script:MapleDbFixtureRunnerConfirmation='MAPLE_SYNTHETIC_DB_FIXTURE_LOCAL_ONLY_REVIEWED'
 
@@ -29,6 +34,6 @@ if($MyInvocation.InvocationName-ne'.'){
   $clock={[DateTimeOffset]::UtcNow}
   $wait={param([int]$Milliseconds);Start-Sleep -Milliseconds $Milliseconds;$true}
   $envFactory={param([string]$Name,[string]$Value);New-MaplePrivateDockerEnvFile $Name $Value}
-  $result=Invoke-MapleSyntheticDbFixtureRunnerCore $SyntheticId $DbPort -Run:$Execute -Reviewed:$UnsafeReviewed -Confirmation $ConfirmationToken -Smoke $smoke -DockerInvoke $dockerInvoke -PortProbe $portProbe -UtcClock $clock -BoundedWait $wait -PrivateEnvFileFactory $envFactory
-  if(-not$Execute){$result|ConvertTo-Json -Depth 6}else{$result}
+  $result=Invoke-MapleSyntheticDbFixtureRunnerCore $runnerSyntheticId $runnerDbPort -Run:$runnerExecute -Reviewed:$runnerUnsafeReviewed -Confirmation $runnerConfirmationToken -Smoke $smoke -DockerInvoke $dockerInvoke -PortProbe $portProbe -UtcClock $clock -BoundedWait $wait -PrivateEnvFileFactory $envFactory
+  if(-not$runnerExecute){$result|ConvertTo-Json -Depth 6}else{$result}
 }

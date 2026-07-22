@@ -27,4 +27,12 @@ $captured=$calls|ConvertTo-Json -Depth 5;Assert-True ($captured-notmatch'maple-[
 $source=Get-Content -Raw (Join-Path $PSScriptRoot 'run-maple-synthetic-db-fixture-smoke.ps1')
 foreach($required in @('Invoke-MapleDbFixtureProcess','Test-MapleLoopbackPortAvailable','[DateTimeOffset]::UtcNow','Start-Sleep -Milliseconds','New-MaplePrivateDockerEnvFile','-InternalReviewedGate')){Assert-True $source.Contains($required) "real callback missing: $required"}
 Assert-True (-not$script:MapleDbFixtureExecutionUnlocked) 'accepted harness public lock changed'
+
+$runnerPath=Join-Path $PSScriptRoot 'run-maple-synthetic-db-fixture-smoke.ps1'
+$planOutput=& powershell -NoProfile -ExecutionPolicy Bypass -File $runnerPath -SyntheticId $id.ToString() -DbPort 62347
+Assert-True ($LASTEXITCODE-eq0) 'fresh-process plan CLI failed'
+try{$cliPlan=($planOutput-join"`n")|ConvertFrom-Json -ErrorAction Stop}catch{throw 'fresh-process plan CLI returned malformed JSON'}
+Assert-True ($cliPlan.Token-ceq$id.ToString('N')-and$cliPlan.Port-eq62347-and$cliPlan.Container-ceq"maple-synthetic-dbfixture-$($id.ToString('N'))-db") 'dot-source replaced explicit CLI ID or port'
+$savedErrorAction=$ErrorActionPreference;$ErrorActionPreference='Continue';$wrongOutput=& powershell -NoProfile -ExecutionPolicy Bypass -File $runnerPath -SyntheticId $id.ToString() -DbPort 62347 -Execute -UnsafeReviewed -ConfirmationToken wrong 2>&1;$wrongExit=$LASTEXITCODE;$ErrorActionPreference=$savedErrorAction
+Assert-True ($wrongExit-ne0-and($wrongOutput-join"`n")-match'MAPLE_DBFIXTURE_RUNNER_REFUSED: exact reviewed local-only confirmation is required') 'fresh-process execute flags degraded into plan mode'
 Write-Output 'MAPLE_SYNTHETIC_DB_FIXTURE_RUNNER_REGRESSION_PASS'
