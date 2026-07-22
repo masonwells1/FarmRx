@@ -55,7 +55,7 @@ function New-MapleDockerSwapAdapter {
 
     if ($null -eq $Invoke -or $null -eq $Wait) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: reviewed argv invoker and bounded wait are required.' }
     $contractKeys = @('Id','ImageId','NetworkId','VolumeName','Project','ContractHash','FrozenInstant')
-    $proofKeys = @('ApiPath','ClockProofSql','Database','DbUser','ExpectedApiResult','ExpectedClockSample','ExpectedRestDbHost','ExpectedRestDbUser','PollAttempts','PollMilliseconds','WaitMilliseconds')
+    $proofKeys = @('ApiPath','ArtifactImageId','ArtifactImageRef','ClockProofSql','Database','DbUser','ExpectedApiResult','ExpectedClockSample','ExpectedRestDbHost','ExpectedRestDbUser','PollAttempts','PollMilliseconds','WaitMilliseconds')
     Assert-ExactKeys $Contract $contractKeys 'swap contract'
     Assert-ExactKeys $ProofContract $proofKeys 'proof contract'
     $frozen=[datetimeoffset]::MinValue
@@ -76,6 +76,9 @@ function New-MapleDockerSwapAdapter {
         if ([string]::IsNullOrWhiteSpace([string]$ProofContract[$key])) { throw "MAPLE_DOCKER_ADAPTER_REFUSED: blank proof $key." }
     }
     if ($ProofContract.ExpectedRestDbUser -cne 'authenticator') { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: PostgREST database user must be authenticator.' }
+    $artifactRef='maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7@sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746'
+    $artifactId='sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746'
+    if($ProofContract.ArtifactImageRef-cne$artifactRef-or$ProofContract.ArtifactImageId-cne$artifactId){throw 'MAPLE_DOCKER_ADAPTER_REFUSED: faketime artifact identity is not the reviewed literal.'}
 
     $names = if ($null -eq $ResourceNamespace) { $script:ProductionNamespace.Clone() } else { Assert-SyntheticNamespace $ResourceNamespace; $ResourceNamespace.Clone() }
     if ($Contract.Id -cne $Inventory.original_id -or $Contract.ImageId -cne $Inventory.original_image_id -or
@@ -358,8 +361,18 @@ function New-MapleDockerSwapAdapter {
         if ($null -ne (& $inspectImage $Inventory.derived_tag)) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: derived tag already exists.' }
         $snapshot=& $inspectImage $Inventory.snapshot_tag
         if ($null -eq $snapshot -or (& $getLabel $snapshot 'farmrx.maple-clock-role') -cne $metadata.SnapshotRole) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: owned snapshot missing before build.' }
+        $artifact=& $inspectImage $artifactRef
+        $artifactLabels=[ordered]@{
+            'farmrx.synthetic-bootstrap'='225c197c34164c90b08a4c8b6b10e6c7'
+            'farmrx.synthetic-owner'='maple-faketime-bootstrap'
+            'farmrx.synthetic-role'='faketime-artifacts'
+            'farmrx.source-digest'='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818'
+            'farmrx.package-contract'='libfaketime=0.9.10-2.1;gcc;libc6-dev'
+        }
+        if($null-eq$artifact-or$artifact.Id-cne$artifactId){throw 'MAPLE_DOCKER_ADAPTER_REFUSED: reviewed faketime artifact is missing or has the wrong ID.'}
+        foreach($name in $artifactLabels.Keys){if((& $getLabel $artifact $name)-cne$artifactLabels[$name]){throw "MAPLE_DOCKER_ADAPTER_REFUSED: reviewed faketime artifact label mismatch: $name."}}
         $labels=@($ownerLabel,"farmrx.maple-clock-role=$($metadata.DerivedRole)","farmrx.maple-original-id=$($metadata.Original)","farmrx.maple-contract-hash=$($metadata.Contract)","farmrx.maple-clock-snapshot-id=$($snapshot.Id)")
-        $argv=@('build','--pull=false');foreach($label in $labels){$argv+=@('--label',$label)};$argv+=@('--build-arg',"BASE_IMAGE=$($Inventory.snapshot_tag)",'--build-arg',"FROZEN_INSTANT=$($Contract.FrozenInstant)",'-f','tests/season/frozen-postgres-clock-spike.Dockerfile','-t',$Inventory.derived_tag,'.')
+        $argv=@('build','--network=none','--pull=false');foreach($label in $labels){$argv+=@('--label',$label)};$argv+=@('--build-arg',"BASE_IMAGE=$($Inventory.snapshot_tag)",'--build-arg',"FAKETIME_ARTIFACTS_IMAGE=$artifactId",'--build-arg',"FROZEN_INSTANT=$($Contract.FrozenInstant)",'-f','tests/season/frozen-postgres-clock-spike.Dockerfile','-t',$Inventory.derived_tag,'.')
         $null = & $checked docker $argv 'derived image build'
         $image = & $inspectImage $Inventory.derived_tag
         if ($null -eq $image -or (& $getLabel $image 'farmrx.maple-clock-swap') -cne $owner -or (& $getLabel $image 'farmrx.maple-clock-snapshot-id') -cne $snapshot.Id -or $image.Id -ceq $snapshot.Id) { throw 'MAPLE_DOCKER_ADAPTER_REFUSED: derived image identity is not exact.' }

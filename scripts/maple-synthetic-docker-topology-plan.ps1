@@ -26,6 +26,7 @@ function New-MapleSyntheticDockerTopologyPlan {
       SupabasePostgres=[ordered]@{Ref='public.ecr.aws/supabase/postgres@sha256:9faa7279bcf1fd6834e65dc876b11e39cb53030bcb3d653beb7e5668200acbb5';ExpectedLocalImageId='sha256:9faa7279bcf1fd6834e65dc876b11e39cb53030bcb3d653beb7e5668200acbb5';RequireLocalIdEqualsDigest=$true;PullAllowed=$false}
       Postgrest=[ordered]@{Ref='public.ecr.aws/supabase/postgrest@sha256:488093de819567422bc1d37cb79da6e84bca3726bac321daeed618f0ed957888';ExpectedLocalImageId='sha256:488093de819567422bc1d37cb79da6e84bca3726bac321daeed618f0ed957888';RequireLocalIdEqualsDigest=$true;PullAllowed=$false}
       FaketimeBuilder=[ordered]@{Ref='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818';ExpectedLocalImageId='sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818';RequireLocalIdEqualsDigest=$true;PullAllowed=$false}
+      FaketimeArtifacts=[ordered]@{Ref='maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7@sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746';ExpectedLocalImageId='sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746';RequireLocalIdEqualsDigest=$true;PullAllowed=$false;Observed=$true;LabelsVerified=$true}
       MutableTagsAllowed=$false
     }
     FixtureLineage=[ordered]@{Resolved=$false;SelectedExpectedImmutableLineage=$true;ExecutionTimeLocalInspectRequired=$true;ObservedLocalPresenceClaimed=$false;Reason='Expected immutable lineage is selected; execution-time local inspect must verify each exact image ID equals its digest. This plan makes no observed local-presence claim.'}
@@ -39,7 +40,7 @@ function New-MapleSyntheticDockerTopologyPlan {
       Revokes=@('revoke all on schema api from public','revoke all on api.fixture_proof from public')
     }
     PostgrestConfigurationContract=[ordered]@{EnvironmentKeyNames=@('PGRST_DB_URI','PGRST_DB_SCHEMAS','PGRST_DB_ANON_ROLE','PGRST_SERVER_PORT','PGRST_JWT_SECRET');ApplicationName="postgrest-synthetic-$token";SecretValuesIncluded=$false;JwtValuesIncluded=$false;EvidenceMayContainValues=$false}
-    FrozenBuildOfflineProof=[ordered]@{Resolved=$false;RequiredCommand='docker build --network=none <frozen-context>';Risk='Builder cache may hide the apt-get/libfaketime network dependency; a cold cache may fail.';Acceptance='Must pass before execution; this plan does not run it.'}
+    FrozenBuildOfflineProof=[ordered]@{Resolved=$false;RequiredCommand='docker build --network=none --pull=false with exact local base and faketime artifact identities';Risk='Artifact identity is observed, but the complete frozen PostgreSQL build has not yet passed offline.';Acceptance='Must pass before execution; artifact evidence alone is not runtime fixture lineage acceptance.'}
     Cleanup=$cleanup;EvidencePolicy='Retain nonsecret evidence on missing identity, ownership mismatch, ambiguity, or cleanup failure.'
   }
 }
@@ -47,13 +48,15 @@ function Assert-MapleSyntheticDockerTopologyPlan($Plan){
   $json=$Plan|ConvertTo-Json -Depth 12
   function ExactFalse($object,[string]$name){if($object-is[Collections.IDictionary]){if(-not$object.Contains($name)){return $false};$value=$object[$name]}else{$property=$object.PSObject.Properties[$name];if($null-eq$property){return $false};$value=$property.Value};$null-ne$value-and$value.GetType()-eq[bool]-and$value-eq$false}
   function ExactTrue($object,[string]$name){if($object-is[Collections.IDictionary]){if(-not$object.Contains($name)){return $false};$value=$object[$name]}else{$property=$object.PSObject.Properties[$name];if($null-eq$property){return $false};$value=$property.Value};$null-ne$value-and$value.GetType()-eq[bool]-and$value-eq$true}
+  function SameJson($a,$b){($a|ConvertTo-Json -Depth 8 -Compress)-ceq($b|ConvertTo-Json -Depth 8 -Compress)}
   if($Plan.Kind-cne'planning-topology-sketch'-or-not(ExactFalse $Plan 'Executable')-or-not(ExactFalse $Plan.PortPreflight 'Implemented')-or-not(ExactFalse $Plan.FrozenBuildOfflineProof 'Resolved')){throw'MAPLE_TOPOLOGY_REFUSED: sketch misstates readiness.'}
   $expectedImages=[ordered]@{
     SupabasePostgres=[ordered]@{Ref='public.ecr.aws/supabase/postgres@sha256:9faa7279bcf1fd6834e65dc876b11e39cb53030bcb3d653beb7e5668200acbb5';ExpectedLocalImageId='sha256:9faa7279bcf1fd6834e65dc876b11e39cb53030bcb3d653beb7e5668200acbb5';RequireLocalIdEqualsDigest=$true;PullAllowed=$false}
     Postgrest=[ordered]@{Ref='public.ecr.aws/supabase/postgrest@sha256:488093de819567422bc1d37cb79da6e84bca3726bac321daeed618f0ed957888';ExpectedLocalImageId='sha256:488093de819567422bc1d37cb79da6e84bca3726bac321daeed618f0ed957888';RequireLocalIdEqualsDigest=$true;PullAllowed=$false}
     FaketimeBuilder=[ordered]@{Ref='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818';ExpectedLocalImageId='sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818';RequireLocalIdEqualsDigest=$true;PullAllowed=$false}
+    FaketimeArtifacts=[ordered]@{Ref='maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7@sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746';ExpectedLocalImageId='sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746';RequireLocalIdEqualsDigest=$true;PullAllowed=$false;Observed=$true;LabelsVerified=$true}
   }
-  foreach($name in $expectedImages.Keys){$image=$Plan.Images.$name;if(-not(ExactTrue $image 'RequireLocalIdEqualsDigest')-or-not(ExactFalse $image 'PullAllowed')-or$image.Ref-cne$expectedImages[$name].Ref-or$image.ExpectedLocalImageId-cne$expectedImages[$name].ExpectedLocalImageId){throw 'MAPLE_TOPOLOGY_REFUSED: image lineage is not immutable and locally identity-gated.'}}
+  foreach($name in $expectedImages.Keys){$image=$Plan.Images.$name;if(-not(SameJson $image $expectedImages[$name])){throw 'MAPLE_TOPOLOGY_REFUSED: image lineage is not immutable and locally identity-gated.'}}
   if(-not(ExactFalse $Plan.Images 'MutableTagsAllowed')-or-not(ExactFalse $Plan.InitializationSchemaContract 'ContainsSecrets')-or-not(ExactFalse $Plan.PostgrestConfigurationContract 'SecretValuesIncluded')-or-not(ExactFalse $Plan.PostgrestConfigurationContract 'JwtValuesIncluded')-or-not(ExactFalse $Plan.PostgrestConfigurationContract 'EvidenceMayContainValues')){throw'MAPLE_TOPOLOGY_REFUSED: credential or mutable-image policy weakened.'}
   if(($Plan.PostgrestConfigurationContract.EnvironmentKeyNames-join'|')-cne'PGRST_DB_URI|PGRST_DB_SCHEMAS|PGRST_DB_ANON_ROLE|PGRST_SERVER_PORT|PGRST_JWT_SECRET'){throw'MAPLE_TOPOLOGY_REFUSED: PostgREST key contract changed.'}
   $token=([string]$Plan.Prefix)-replace'^maple-synthetic-',''
@@ -62,9 +65,10 @@ function Assert-MapleSyntheticDockerTopologyPlan($Plan){
   $expectedRow=[ordered]@{contract_hash=$Plan.Prefix;result='fixture-ready'}
   $expectedGrants=@('grant anon to authenticator','grant authenticated to authenticator','grant usage on schema api to anon, authenticated','grant select on api.fixture_proof to anon, authenticated')
   $expectedRevokes=@('revoke all on schema api from public','revoke all on api.fixture_proof from public')
-  function SameJson($a,$b){($a|ConvertTo-Json -Depth 6 -Compress)-ceq($b|ConvertTo-Json -Depth 6 -Compress)}
   $expectedLineage=[ordered]@{Resolved=$false;SelectedExpectedImmutableLineage=$true;ExecutionTimeLocalInspectRequired=$true;ObservedLocalPresenceClaimed=$false;Reason='Expected immutable lineage is selected; execution-time local inspect must verify each exact image ID equals its digest. This plan makes no observed local-presence claim.'}
   if(-not(SameJson $Plan.FixtureLineage $expectedLineage)){throw'MAPLE_TOPOLOGY_REFUSED: fixture lineage contract changed.'}
+  $expectedFrozen=[ordered]@{Resolved=$false;RequiredCommand='docker build --network=none --pull=false with exact local base and faketime artifact identities';Risk='Artifact identity is observed, but the complete frozen PostgreSQL build has not yet passed offline.';Acceptance='Must pass before execution; artifact evidence alone is not runtime fixture lineage acceptance.'}
+  if(-not(SameJson $Plan.FrozenBuildOfflineProof $expectedFrozen)){throw'MAPLE_TOPOLOGY_REFUSED: frozen offline proof contract changed.'}
   if($Plan.InitializationSchemaContract.Schema-cne'api'-or$Plan.InitializationSchemaContract.ProofRelation-cne'api.fixture_proof'-or-not(SameJson $Plan.InitializationSchemaContract.Roles $expectedRoles)-or-not(SameJson $Plan.InitializationSchemaContract.Columns $expectedColumns)-or-not(SameJson $Plan.InitializationSchemaContract.ExactSyntheticRow $expectedRow)-or-not(SameJson $Plan.InitializationSchemaContract.Grants $expectedGrants)-or-not(SameJson $Plan.InitializationSchemaContract.Revokes $expectedRevokes)){throw'MAPLE_TOPOLOGY_REFUSED: initialization schema contract changed.'}
   if($Plan.PostgrestConfigurationContract.ApplicationName-cne"postgrest-synthetic-$token"){throw'MAPLE_TOPOLOGY_REFUSED: PostgREST application name changed.'}
   if($json-match'supabase_db_|farmrx-farmer-simplicity|55321|55322|PGRST_JWT_SECRET\s*=|postgres(?:ql)?://[^"\s]*:[^@"\s]*@|docker\s+pull|rm\s+-f|\bkill\b'){throw'MAPLE_TOPOLOGY_REFUSED: reserved, secret, pull, destructive, or rehearsal claim found.'}
