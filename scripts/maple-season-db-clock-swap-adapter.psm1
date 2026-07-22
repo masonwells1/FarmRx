@@ -14,10 +14,14 @@ function Assert-MapleSwapInventory {
   if ($Inventory.original_image_id -notmatch '^sha256:[0-9a-f]{64}$') { throw 'MAPLE_DB_SWAP_REFUSED: invalid original_image_id.' }
   if($Inventory.base_digest-notmatch'^public\.ecr\.aws/supabase/postgres@sha256:[0-9a-f]{64}$'){throw'MAPLE_DB_SWAP_REFUSED: invalid base_digest.'}
   if ($Inventory.snapshot_tag -notmatch '^farmrx-clock-snapshot:[0-9a-f]{12}$' -or $Inventory.derived_tag -notmatch '^farmrx-frozen-clock-swap:2027(0[7-9]|1[0-2])[0-3][0-9]-[0-9a-f]{8}$') { throw 'MAPLE_DB_SWAP_REFUSED: invalid image tag.' }
-  if ($Inventory.volume_name -cne 'supabase_db_farmrx-farmer-simplicity-2027-local') { throw 'MAPLE_DB_SWAP_REFUSED: invalid volume.' }
+  $productionVolume='supabase_db_farmrx-farmer-simplicity-2027-local'
+  $expectedVolume=if($ExpectedContract.ContainsKey('test_only_expected_volume')){$ExpectedContract.test_only_expected_volume}else{$productionVolume}
+  if($ExpectedContract.ContainsKey('test_only_expected_volume')-and$expectedVolume-ceq$productionVolume){throw'MAPLE_DB_SWAP_REFUSED: synthetic mode cannot select the production volume.'}
+  if ($Inventory.volume_name -cne $expectedVolume) { throw 'MAPLE_DB_SWAP_REFUSED: invalid volume.' }
   $date=[datetime]::MinValue
   if(-not[datetime]::TryParseExact($Inventory.derived_tag.Split(':')[1].Split('-')[0],'yyyyMMdd',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None,[ref]$date)){throw'MAPLE_DB_SWAP_REFUSED: invalid derived date.'}
-  if ((@($ExpectedContract.Keys | Sort-Object) -join '|') -cne (@($required | Sort-Object) -join '|')) { throw 'MAPLE_DB_SWAP_REFUSED: expected contract schema is not exact.' }
+  $expectedKeys=@($required);if($ExpectedContract.ContainsKey('test_only_expected_volume')){$expectedKeys+='test_only_expected_volume'}
+  if ((@($ExpectedContract.Keys | Sort-Object) -join '|') -cne (@($expectedKeys | Sort-Object) -join '|')) { throw 'MAPLE_DB_SWAP_REFUSED: expected contract schema is not exact.' }
   foreach($key in $required){if($Inventory[$key]-cne$ExpectedContract[$key]){throw"MAPLE_DB_SWAP_REFUSED: $key does not match fresh attestation."}}
   $baseHash=$Inventory.base_digest.Split(':')[-1];if($Inventory.original_image_id-cne"sha256:$baseHash"-or-not$Inventory.derived_tag.EndsWith('-'+$baseHash.Substring(0,8))-or-not$Inventory.snapshot_tag.EndsWith(':'+$Inventory.original_id.Substring(0,12))){throw'MAPLE_DB_SWAP_REFUSED: attested image/tag lineage mismatch.'}
   return $true
@@ -111,7 +115,7 @@ function Invoke-MapleSwapStateMachine {
     try{$recovery=Invoke-MapleSwapRecovery $Adapter $Inventory}catch{$recovery=[pscustomobject]@{Restored=$false;Failures=@("recovery inspection/state failure: $($_.Exception.Message)");JournalRetained=$true;Exception=$_.Exception}}
   }
   if(-not$recovery.Restored){
-    $recoveryFailure=if($recovery.Exception){$recovery.Exception}else{[Exception]::new("MAPLE_DB_SWAP_RECOVERY_INCOMPLETE: $($recovery.Failures -join '; ')")}
+    $recoveryExceptionProperty=$recovery.PSObject.Properties['Exception'];$recoveryFailure=if($recoveryExceptionProperty-and$recoveryExceptionProperty.Value){$recoveryExceptionProperty.Value}else{[Exception]::new("MAPLE_DB_SWAP_RECOVERY_INCOMPLETE: $($recovery.Failures -join '; ')")}
     if($null-ne$primaryFailure){throw [AggregateException]::new('Swap failed and recovery was incomplete.',[Exception[]]@($primaryFailure,$recoveryFailure))}
     throw $recoveryFailure
   }
