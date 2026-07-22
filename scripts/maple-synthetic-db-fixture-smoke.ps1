@@ -10,13 +10,20 @@ function Invoke-MapleDbFixtureProcess {
   if($null-ne$PrivateStdin){$process.StandardInput.Write($PrivateStdin)};$process.StandardInput.Close();$process.WaitForExit();[Threading.Tasks.Task]::WaitAll(@($stdoutTask,$stderrTask))
   [pscustomobject]@{ExitCode=$process.ExitCode;Stdout=(Protect-MapleDbFixtureText $stdoutTask.Result $PrivateSensitiveValues);Stderr=(Protect-MapleDbFixtureText $stderrTask.Result $PrivateSensitiveValues)}
 }
-function New-MaplePrivateDockerEnvFile([string]$Name,[string]$Value,[scriptblock]$PostCreateProbe=$null){
+function New-MaplePrivateDockerEnvFile([string]$Name,[string]$Value,[scriptblock]$PostCreateProbe=$null,[scriptblock]$PreWriteProbe=$null){
   if($Name-cnotin@('POSTGRES_PASSWORD','PGOPTIONS')-or[string]::IsNullOrEmpty($Value)){throw 'MAPLE_DBFIXTURE_REFUSED: private env-file input invalid.'}
   $path=Join-Path ([IO.Path]::GetTempPath()) ('maple-dbfixture-'+[guid]::NewGuid().ToString('N')+'.env');$success=$false
   try{
     $expected="$Name=$Value`n";$bytes=[Text.UTF8Encoding]::new($false).GetBytes($expected)
     $security=[Security.AccessControl.FileSecurity]::new();$user=[Security.Principal.WindowsIdentity]::GetCurrent().User;$security.SetOwner($user);$security.SetAccessRuleProtection($true,$false);$security.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($user,'FullControl','Allow'))
-    $stream=[IO.FileStream]::new($path,[IO.FileMode]::CreateNew,[Security.AccessControl.FileSystemRights]::Write,[IO.FileShare]::Read,4096,[IO.FileOptions]::WriteThrough,$security);try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{if($null-ne$stream){$stream.Dispose()}}
+    $stream=[IO.FileStream]::new($path,[IO.FileMode]::CreateNew,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough)
+    try{
+      Set-Acl -LiteralPath $path -AclObject $security
+      $appliedAcl=Get-Acl -LiteralPath $path;$appliedRules=@($appliedAcl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+      if(-not$appliedAcl.AreAccessRulesProtected-or$appliedAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value-cne$user.Value-or$appliedRules.Count-ne1-or$appliedRules[0].IdentityReference.Value-cne$user.Value-or$appliedRules[0].AccessControlType-ne[Security.AccessControl.AccessControlType]::Allow-or($appliedRules[0].FileSystemRights-band[Security.AccessControl.FileSystemRights]::FullControl)-ne[Security.AccessControl.FileSystemRights]::FullControl){throw 'MAPLE_DBFIXTURE_REFUSED: private env-file ACL verification failed.'}
+      if($null-ne$PreWriteProbe-and(&$PreWriteProbe $path)-ne$true){throw 'MAPLE_DBFIXTURE_REFUSED: private env-file pre-write exclusivity probe failed.'}
+      $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)
+    }finally{if($null-ne$stream){$stream.Dispose()}}
     $readback=[IO.File]::ReadAllText($path);if($readback-cne$expected){throw 'MAPLE_DBFIXTURE_REFUSED: private env-file readback failed.'}
     if($null-ne$PostCreateProbe-and(&$PostCreateProbe $path)-ne$true){throw 'MAPLE_DBFIXTURE_REFUSED: private env-file post-create probe failed.'}
     $success=$true
