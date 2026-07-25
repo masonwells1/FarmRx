@@ -36,6 +36,7 @@ export const FIELD_LOG_OFFLINE_DELETE_MESSAGE = 'Deleted on this device. It will
 
 export interface FieldLogRepository {
   getData(fieldId?: string): Promise<FieldLogData>
+  getNeedsAttentionQueueKey?(): Promise<string>
   saveEntry(draft: FieldLogEntryDraft): Promise<FieldLogEntry>
   deleteEntry(id: string): Promise<FieldLogDeleteReceipt>
 }

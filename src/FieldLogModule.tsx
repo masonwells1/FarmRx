@@ -5,19 +5,20 @@ import { growingDegreeDays, weatherService } from './data/weatherService'
 import { farmerError } from './lib/farmerErrors'
 import { farmLocalCalendarDate } from './data/farmDates'
 import { createSubmitLock, createSubmitLockMap } from './lib/submitLock'
+import { NeedsAttentionList } from './components/NeedsAttentionList'
 
 const today = () => farmLocalCalendarDate()
 const editable = (role: string) => role === 'owner' || role === 'manager' || role === 'worker'
 const inches = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 export function FieldLogPage({ fieldLogRepository, fieldsRepository }: { fieldLogRepository: FieldLogRepository; fieldsRepository: FieldsRepository }) {
-  const [fieldsData, setFieldsData] = useState<FieldsData | null>(null); const [entries, setEntries] = useState<FieldLogEntry[]>([]); const [role, setRole] = useState<string>('read_only'); const [error, setError] = useState<string | null>(null); const [loading, setLoading] = useState(true)
-  const reload = async () => { setLoading(true); try { const [fields, log] = await Promise.all([fieldsRepository.getData(), fieldLogRepository.getData()]); setFieldsData(fields); setEntries(log.entries); setRole(log.viewer.role); setError(null) } catch (caught) { setError(farmerError(caught, 'open the field log')) } finally { setLoading(false) } }
+  const [fieldsData, setFieldsData] = useState<FieldsData | null>(null); const [entries, setEntries] = useState<FieldLogEntry[]>([]); const [role, setRole] = useState<string>('read_only'); const [attentionQueueKey, setAttentionQueueKey] = useState<string | null>(null); const [error, setError] = useState<string | null>(null); const [loading, setLoading] = useState(true)
+  const reload = async () => { setLoading(true); try { const [fields, log, queueKey] = await Promise.all([fieldsRepository.getData(), fieldLogRepository.getData(), fieldLogRepository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)]); setFieldsData(fields); setEntries(log.entries); setRole(log.viewer.role); setAttentionQueueKey(queueKey); setError(null) } catch (caught) { setError(farmerError(caught, 'open the field log')) } finally { setLoading(false) } }
   useEffect(() => { void reload() }, [])
   if (loading && !fieldsData) return <section className="page field-log-page"><p className="loading-state">Loading field log…</p></section>
   if (!fieldsData) return <section className="page field-log-page"><h1>Field Log</h1><p className="form-error">{error ?? 'Farm Rx could not load the field log.'}</p><button className="secondary-action" onClick={() => void reload()}>Try again</button></section>
   const activeFields = fieldsData.fields.filter((field) => field.is_active)
-  return <section className="page field-log-page"><header className="page-heading"><div><h1>Field Log</h1><p>Rainfall and field notes, kept with each field.</p></div></header>{error && <p className="form-error">{error}</p>}{!activeFields.length ? <section className="empty-state"><h2>Add your first field to start a field log.</h2><p>Rainfall and notes stay tied to the field where they happened.</p></section> : <div className="field-log-list">{activeFields.map((field) => <FieldCard key={field.id} field={field} entries={entries.filter((entry) => entry.field_id === field.id)} assignments={fieldsData.crop_assignments} canEdit={editable(role)} repository={fieldLogRepository} refresh={reload} />)}</div>}</section>
+  return <section className="page field-log-page"><header className="page-heading"><div><h1>Field Log</h1><p>Rainfall and field notes, kept with each field.</p></div></header>{error && <p className="form-error">{error}</p>}<NeedsAttentionList module="fieldLog" queueKey={attentionQueueKey} onChanged={reload} />{!activeFields.length ? <section className="empty-state"><h2>Add your first field to start a field log.</h2><p>Rainfall and notes stay tied to the field where they happened.</p></section> : <div className="field-log-list">{activeFields.map((field) => <FieldCard key={field.id} field={field} entries={entries.filter((entry) => entry.field_id === field.id)} assignments={fieldsData.crop_assignments} canEdit={editable(role)} repository={fieldLogRepository} refresh={reload} />)}</div>}</section>
 }
 
 function FieldCard({ field, entries, assignments, canEdit, repository, refresh }: { field: Field; entries: FieldLogEntry[]; assignments: FieldsData['crop_assignments']; canEdit: boolean; repository: FieldLogRepository; refresh: () => Promise<void> }) {

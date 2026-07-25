@@ -19,7 +19,7 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { on
 
 const { supabase } = await import('../lib/supabaseClient')
 const { beginFarmReplayAuthorization, canAccessFarmModule, canEditFarmModule, canReplayFarmModule, captureFarmReplayContextGuard, clearFarmAccess, clearFarmReadyAuthorization, createFarmAccessValidationGate, currentFarmContext, currentUserId, deriveFarmAccessProfile, FarmAccessStorageUnsafeError, isDefiniteTransportFailure, isFarmReplayAuthoritativelyOffline, loadFarmAccess, loadFarmAccessProfile, publishFarmReadyAuthorization, restoreOfflineFarmUserId, selectFarm } = await import('./farmContext')
-const { captureFarmRevocationFence, farmRevocationFenceKey, resetFarmGrantFromLive } = await import('../data/farmRevocationFence')
+const { captureFarmRevocationFence, farmRevocationFenceKey, inspectFarmRevocationState, resetFarmGrantFromLive } = await import('../data/farmRevocationFence')
 const { deviceClockHighWaterKey } = await import('../data/deviceClockFence')
 const { farmActiveContextKey, writeFarmAccessEpochs } = await import('./farmAccessEpoch')
 const { supabaseConfig } = await import('../lib/supabaseConfig')
@@ -53,10 +53,23 @@ type Query = PromiseLike<QueryResult> & { select: () => Query; order: () => Quer
 
 type EpochRpcResult = { data: Array<{ farm_id: string; access_epoch: number }>; error: null }
 type EpochRpcQuery = PromiseLike<EpochRpcResult> & { abortSignal: () => EpochRpcQuery }
-;(supabase as unknown as { rpc: (name: string) => EpochRpcQuery }).rpc = (name: string) => {
-  assert.equal(name, 'get_current_farm_access_epochs')
+const removedEpochTargets: string[] = []
+let afterRemovedEpochResponse: (() => void) | null = null
+;(supabase as unknown as { rpc: (name: string, args?: { target_farm_id?: string }) => EpochRpcQuery }).rpc = (name: string, args) => {
   assert.equal(currentUser, userB, 'User A reached the epoch RPC after the account switched.')
-  const result = Promise.resolve({ data: [{ farm_id: farmB, access_epoch: 1 }], error: null })
+  assert(['get_current_farm_access_epochs', 'get_removed_farm_access_epoch'].includes(name), `Unexpected farm-access RPC ${name}.`)
+  if (name === 'get_removed_farm_access_epoch') {
+    const targetFarmId = args?.target_farm_id
+    assert.equal(typeof targetFarmId, 'string')
+    removedEpochTargets.push(targetFarmId!)
+  }
+  const data = name === 'get_current_farm_access_epochs'
+    ? [{ farm_id: farmB, access_epoch: 1 }]
+    : [{ farm_id: String(args?.target_farm_id), access_epoch: 2 }]
+  const result = Promise.resolve({ data, error: null }).then((value) => {
+    if (name === 'get_removed_farm_access_epoch') { const hook = afterRemovedEpochResponse; afterRemovedEpochResponse = null; hook?.() }
+    return value
+  })
   const query = { abortSignal: () => query, then: result.then.bind(result) } as EpochRpcQuery
   return query
 }
@@ -72,6 +85,29 @@ await assert.rejects(userALoad, /no longer matches the signed-in account/)
 
 assert.equal(userBAccess.userId, userB)
 assert.deepEqual(userBAccess.farms.map(({ id }) => id), [farmB])
+assert.equal(removedEpochTargets.length, 1, 'The access refresh did not request one authoritative epoch for its one already-known removed farm.')
+const removedFence = inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedEpochTargets[0]! })
+assert.deepEqual(
+  removedFence,
+  { kind: 'revoked', generation: 3, serverEpoch: 2 },
+  'The removed farm was not reset from its authoritative server epoch.',
+)
+const removedFenceKey = farmRevocationFenceKey({ projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedEpochTargets[0]! })
+const removedFenceBytes = storage.getItem(removedFenceKey)
+await loadFarmAccess(userB, true)
+assert.equal(storage.getItem(removedFenceKey), removedFenceBytes, 'A repeated live refresh rotated an already-authoritative revoked fence.')
+assert.deepEqual(inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedEpochTargets[0]! }), removedFence, 'A repeated live refresh changed the removed farm generation or server epoch.')
+const removedFarmId = removedEpochTargets[0]!
+const removedQueueKey = `farm-rx-field-log-write-queue:v1:${supabaseConfig.projectRef}:${userB}:${removedFarmId}`
+const removedQueueBytes = JSON.stringify({ version: 1, entries: [{ version: 1, module: 'fieldLog', kind: 'saveEntry', operationId: '00000000-0000-4000-8000-000000000091', userId: userB, farmId: removedFarmId, enqueuedAt: now, draft: { id: '00000000-0000-4000-8000-000000000092', field_id: '00000000-0000-4000-8000-000000000093', entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Keep old-user custody' } }] })
+storage.setItem(removedQueueKey, removedQueueBytes)
+afterRemovedEpochResponse = () => { currentUser = userA; currentToken = 'session-user-a-replaced' }
+await assert.rejects(loadFarmAccess(userB, true), /no longer matches the signed-in account/, 'An account switch during the removed-epoch RPC was accepted.')
+assert.equal(storage.getItem(removedQueueKey), removedQueueBytes, 'An account switch during the removed-epoch RPC quarantined old-user work.')
+assert.equal(storage.getItem(removedFenceKey), removedFenceBytes, 'An account switch during the removed-epoch RPC reset the old-user fence.')
+currentUser = userB
+currentToken = 'session-user-b'
+storage.removeItem(removedQueueKey)
 assert.equal(storage.getItem(`farm-rx-access:v1:${supabaseConfig.projectRef}:${userA}`), null, 'User A access was persisted after switching to User B.')
 assert.notEqual(storage.getItem(`farm-rx-access:v1:${supabaseConfig.projectRef}:${userB}`), null, 'User B access was not persisted independently.')
 assert.equal(storage.getItem(farmRevocationFenceKey({ projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA })), null, 'User A farm fence was recreated after switching accounts.')
