@@ -3,7 +3,7 @@ import type { FieldLogDataGateway } from './FieldLogDataGateway'
 import { FieldLogWriteQueue, fieldLogWriteQueueKey } from './fieldLogWriteQueue'
 import { canEditFieldLog, SupabaseFieldLogRepository } from './SupabaseFieldLogRepository'
 import type { FarmOperationContext } from './farmOperationContext'
-import { resetFarmGrantFromLive } from './farmRevocationFence'
+import { captureFarmRevocationFence, resetFarmGrantFromLive } from './farmRevocationFence'
 import { readNeedsAttention } from './needsAttentionStore'
 import { quarantineRevokedFarmWork, readRevokedFarmRecovery } from './revokedFarmRecovery'
 import type { FieldLogEntryDraft } from './fieldLog'
@@ -84,6 +84,16 @@ async function run() {
   await rejects(async () => new FieldLogWriteQueue(crossProjectStore, crossKey).read(), 'A cross-project v2 item was accepted from the active queue.')
   await rejects(async () => quarantineRevokedFarmWork(crossProjectStore, { projectRef: crossProject, userId: actor, farmId: farm }, stamp), 'A cross-project v2 item was published to revoked recovery.')
   assert(crossProjectStore.getItem(crossKey) === crossBytes && readRevokedFarmRecovery(crossProjectStore, crossProject, actor).length === 0, 'Cross-project custody rejection must keep queue bytes exact and publish no recovery record.')
+  for (const mutation of ['generation', 'token', 'serverEpoch'] as const) {
+    const mutantStore = memory(); const mutantProject = `mutant-${mutation}`; const mutantScope = { projectRef: mutantProject, userId: actor, farmId: farm }; const mutantKey = fieldLogWriteQueueKey(mutantProject, actor, farm)
+    resetFarmGrantFromLive(mutantStore, mutantScope, 1, stamp)
+    const current = captureFarmRevocationFence(mutantStore, mutantScope)
+    const changed = mutation === 'token' ? uid(999) : current[mutation] + 1
+    const mutantEntry = { ...savedEntry, userId: actor, farmId: farm, operationContext: { ...current, [mutation]: changed } }
+    const mutantBytes = JSON.stringify({ version: 1, entries: [mutantEntry] }); mutantStore.setItem(mutantKey, mutantBytes)
+    await rejects(async () => quarantineRevokedFarmWork(mutantStore, mutantScope, stamp), `Mismatched ${mutation} custody was published to revoked recovery.`)
+    assert(mutantStore.getItem(mutantKey) === mutantBytes && readRevokedFarmRecovery(mutantStore, mutantProject, actor).length === 0, `Mismatched ${mutation} custody must preserve exact queue bytes and publish no recovery mutation.`)
+  }
 
   // Group 10: a lost response retains and replays the original operation-era context.
   const lostStore = memory(); const lostGateway = new FakeGateway(); lostGateway.saveFailure = new TypeError('Failed to fetch after commit'); let lostId = 600

@@ -2,7 +2,7 @@ import type { StorageLike } from './writeQueue'
 import { quarantineLegacyScoutingCleanup, scoutingCleanupOutboxKey, type ScoutingCleanupEntry } from './scoutingCleanupOutbox'
 import { parseFieldsQueue } from './writeQueue'
 import { parseFieldLocationQueue } from './fieldLocation'
-import { parseFieldLogQueueForScope } from './fieldLogWriteQueue'
+import { parseFieldLogQueueForScope, verifyFieldLogQueueCustody, type FieldLogQueueEnvelopeV1 } from './fieldLogWriteQueue'
 import { parseScoutingQueue } from './scoutingWriteQueue'
 import { parseHarvestQueue } from './harvestWriteQueue'
 import { parseInventoryQueue } from './inventoryWriteQueue'
@@ -19,14 +19,14 @@ type Scope = { projectRef: string; userId: string; farmId: string }
 type EnumeratedStorage = StorageLike & { readonly length: number; key(index: number): string | null }
 
 type QueueEntryScope = { operationId: string; userId: string; farmId: string; enqueuedAt: string; module: string }
-type QueueDefinition = { prefix: string; parse: (serialized: string, scope?: Scope) => unknown }
+type QueueDefinition = { prefix: string; parse: (serialized: string, scope?: Scope) => unknown; verifyForCapture?: (storage: StorageLike, parsed: unknown) => void }
 const queueDefinitions: readonly QueueDefinition[] = [
   { prefix: 'farm-rx-write-queue:v1:', parse: parseFieldsQueue },
   { prefix: 'farm-rx-field-location-queue:v1:', parse: parseFieldLocationQueue },
   { prefix: 'farm-rx-field-log-write-queue:v1:', parse: (serialized, scope) => {
     if (!scope) throw new Error('Saved Field Log work is missing its farm scope.')
     return parseFieldLogQueueForScope(serialized, scope)
-  } },
+  }, verifyForCapture: (storage, parsed) => verifyFieldLogQueueCustody(storage, parsed as FieldLogQueueEnvelopeV1) },
   { prefix: 'farm-rx-scouting-write-queue:v1:', parse: parseScoutingQueue },
   { prefix: 'farm-rx-harvest-write-queue:v1:', parse: parseHarvestQueue },
   { prefix: 'farm-rx-inventory-write-queue:v1:', parse: parseInventoryQueue },
@@ -52,14 +52,18 @@ function expectedQueueKey(key: string, scope: Scope) {
   if (!definition) return null
   return { definition, kind: key.endsWith(':needs-attention') ? 'needs_attention' as const : 'queue' as const }
 }
-function scopedEntries(definition: QueueDefinition, serialized: string, scope: Scope): QueueEntryScope[] {
+function scopedEntries(definition: QueueDefinition, serialized: string, scope: Scope, storage?: StorageLike, verifyForCapture = false): QueueEntryScope[] {
   const parsed = definition.parse(serialized, scope) as { entries?: unknown }
   if (!Array.isArray(parsed.entries)) throw new Error('Saved work has an invalid queue shape.')
   const entries = parsed.entries as QueueEntryScope[]
   if (!entries.every((entry) => entry.userId === scope.userId && entry.farmId === scope.farmId)) throw new Error('Saved work does not match the farm being secured.')
+  if (verifyForCapture && definition.verifyForCapture) {
+    if (!storage) throw new Error('Saved work is missing its custody state.')
+    definition.verifyForCapture(storage, parsed)
+  }
   return entries
 }
-function parseNeedsAttentionPayload(definition: QueueDefinition, raw: string, scope: Scope): unknown {
+function parseNeedsAttentionPayload(definition: QueueDefinition, raw: string, scope: Scope, storage?: StorageLike, verifyForCapture = false): unknown {
   const parsed: unknown = JSON.parse(raw)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error()
   const envelope = parsed as Record<string, unknown>
@@ -69,7 +73,7 @@ function parseNeedsAttentionPayload(definition: QueueDefinition, raw: string, sc
     const record = item as Record<string, unknown>
     const keys = Object.keys(record)
     if (!(keys.length === 5 || keys.length === 6) || !['id', 'module', 'createdAt', 'message', 'entry'].every((key) => Object.hasOwn(record, key)) || (keys.length === 6 && !Object.hasOwn(record, 'reason')) || typeof record.id !== 'string' || typeof record.module !== 'string' || typeof record.createdAt !== 'string' || Number.isNaN(Date.parse(record.createdAt)) || typeof record.message !== 'string' || !record.message.trim() || !plainJson(record.entry) || (Object.hasOwn(record, 'reason') && record.reason !== 'database_update_required')) throw new Error()
-    const entries = scopedEntries(definition, JSON.stringify({ version: 1, entries: [record.entry] }), scope)
+    const entries = scopedEntries(definition, JSON.stringify({ version: 1, entries: [record.entry] }), scope, storage, verifyForCapture)
     const entry = entries[0]
     if (!entry || record.id !== entry.operationId || record.module !== entry.module || record.createdAt !== entry.enqueuedAt) throw new Error()
   }
@@ -117,7 +121,6 @@ export function dismissRevokedFarmRecovery(storage: StorageLike, projectRef: str
 
 /** Moves revoked farm work to a separate recovery vault. It deliberately never writes to a live queue. */
 export function quarantineRevokedFarmWork(storage: EnumeratedStorage, scope: Scope, capturedAt = new Date().toISOString()): number {
-  quarantineLegacyScoutingCleanup(storage, scope.projectRef)
   const candidate: Array<{ key: string; kind: RevokedWorkKind; payload: unknown }> = []
   const emptyKeys: string[] = []
   for (let index = 0; index < storage.length; index += 1) {
@@ -125,8 +128,8 @@ export function quarantineRevokedFarmWork(storage: EnumeratedStorage, scope: Sco
     const expected = expectedQueueKey(key, scope); if (!expected) continue
     const raw = storage.getItem(key); if (raw === null) continue
     try {
-      const payload = expected.kind === 'queue' ? JSON.parse(raw) as unknown : parseNeedsAttentionPayload(expected.definition, raw, scope)
-      const entries = expected.kind === 'queue' ? scopedEntries(expected.definition, raw, scope) : (payload as { records: unknown[] }).records
+      const payload = expected.kind === 'queue' ? JSON.parse(raw) as unknown : parseNeedsAttentionPayload(expected.definition, raw, scope, storage, true)
+      const entries = expected.kind === 'queue' ? scopedEntries(expected.definition, raw, scope, storage, true) : (payload as { records: unknown[] }).records
       if (entries.length === 0) { emptyKeys.push(key); continue }
       candidate.push({ key, kind: expected.kind, payload })
     } catch { throw new Error('Farm Rx found unreadable or mismatched saved work for a farm you no longer can open. Nothing was cleared.') }
@@ -139,6 +142,7 @@ export function quarantineRevokedFarmWork(storage: EnumeratedStorage, scope: Sco
     const partition = cleanupAll.filter((entry) => entry.farmId === scope.farmId)
     if (partition.length) candidate.push({ key: cleanupKey, kind: 'scouting_cleanup', payload: partition })
   }
+  quarantineLegacyScoutingCleanup(storage, scope.projectRef)
   const recoveryKey = revokedFarmRecoveryKey(scope.projectRef, scope.userId)
   const prior = candidate.length ? parse(storage.getItem(recoveryKey)) : { version: 1 as const, records: [] }
   const additions: RevokedWorkItem[] = []

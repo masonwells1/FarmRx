@@ -1,5 +1,6 @@
 import { validateFieldLogDraft, type FieldLogEntryDraft } from './fieldLog'
 import type { FarmOperationContext } from './farmOperationContext'
+import { verifyFarmRevocationFence } from './farmRevocationFence'
 import { appendNeedsAttention, needsAttentionKey, readNeedsAttention } from './needsAttentionStore'
 import type { StorageLike } from './writeQueue'
 
@@ -41,6 +42,9 @@ export function parseFieldLogQueueForScope(serialized: string, scope: { projectR
   const parsed = parseFieldLogQueue(serialized)
   if (!parsed.entries.every((entry) => entry.userId === scope.userId && entry.farmId === scope.farmId && (entry.version === 1 || entry.operationContext.projectRef === scope.projectRef))) throw new Error(blocked)
   return parsed
+}
+export function verifyFieldLogQueueCustody(storage: StorageLike, envelope: FieldLogQueueEnvelopeV1): void {
+  for (const entry of envelope.entries) if (entry.version === 2) verifyFarmRevocationFence(storage, entry.operationContext)
 }
 export class FieldLogWriteQueue {
   constructor(private readonly storage: StorageLike, readonly key: string) {}
