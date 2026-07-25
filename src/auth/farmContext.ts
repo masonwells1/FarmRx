@@ -3,7 +3,7 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import type { Farm } from '../data/fields'
 import { deleteUserWorkspaceCaches, maximumClockSkewMs } from '../data/workspaceCache'
 import { quarantineRevokedFarmWork } from '../data/revokedFarmRecovery'
-import { captureFarmRevocationFence, inspectFarmRevocationState, listFarmRevocationScopes, markFarmGranted, resetFarmGrantFromLive, resetFarmRevokedFromLive, verifyFarmRevocationFence, type FarmRevocationSnapshot } from '../data/farmRevocationFence'
+import { captureFarmRevocationFence, inspectFarmRevocationState, listFarmRevocationScopes, markFarmGranted, markFarmRevoked, resetFarmGrantFromLive, resetFarmRevokedFromLive, verifyFarmRevocationFence, type FarmRevocationSnapshot } from '../data/farmRevocationFence'
 import { coordinatedDeviceTransaction } from '../data/queueTransaction'
 import { clearDeviceClockHighWater, DeviceClockRollbackError, observeDeviceTime, verifyObservedDeviceTime } from '../data/deviceClockFence'
 import { FarmReplayContextChangedError, type StorageLike } from '../data/writeQueue'
@@ -522,15 +522,16 @@ export function parseAccessibleFarmEpochs(data: unknown, farms: Farm[]): Record<
   return epochs
 }
 
-export function parseRemovedFarmEpoch(data: unknown, farmId: string): number {
+export function parseRemovedFarmEpoch(data: unknown, farmId: string): number | null {
   if (!Array.isArray(data)) throw new Error('Removed-farm access version was unavailable.')
-  if (data.length !== 1) throw new Error('You no longer have access to that farm.')
+  if (data.length === 0) return null
+  if (data.length !== 1) throw new Error('Removed-farm access version was malformed.')
   const row = parseFarmAccessEpochRow(data[0])
   if (row.farmId !== farmId) throw new Error('Removed-farm access version was malformed.')
   return row.epoch
 }
 
-async function loadRemovedServerEpoch(userId: string, farmId: string, signal?: AbortSignal): Promise<number> {
+async function loadRemovedServerEpoch(userId: string, farmId: string, signal?: AbortSignal): Promise<number | null> {
   await requireCurrentSession(userId, signal)
   const { data, error } = await supabase.rpc('get_removed_farm_access_epoch', { target_farm_id: farmId }).abortSignal(signal ?? new AbortController().signal)
   if (error) throw error
@@ -752,12 +753,23 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
       const scope = { projectRef: supabaseConfig.projectRef, userId, farmId }
       const serverEpoch = await loadRemovedServerEpoch(userId, farmId, deadline.signal)
       verifyValidation()
+      let localRevocationEpoch: number | null = null
+      if (serverEpoch === null) {
+        const priorRevocationState = inspectFarmRevocationState(target, scope)
+        if (priorRevocationState.kind === 'invalid') throw new Error('Farm access changed while it was being verified.')
+        localRevocationEpoch = priorRevocationState.serverEpoch ?? priorEpochs[farmId] ?? null
+        if (!localRevocationEpoch) throw new Error('Farm access changed while it was being verified.')
+      }
       quarantineRevokedFarmWork(target, scope)
       await deleteUserWorkspaceCaches(supabaseConfig.projectRef, userId, farmId)
       await requireCurrentSession(userId, deadline.signal)
       verifyValidation()
       const currentRevocationState = inspectFarmRevocationState(target, scope)
-      if (currentRevocationState.kind !== 'revoked' || currentRevocationState.serverEpoch !== serverEpoch) {
+      if (serverEpoch === null) {
+        if (currentRevocationState.kind !== 'revoked') {
+          markFarmRevoked(target, scope, validationStartedAt, localRevocationEpoch!)
+        }
+      } else if (currentRevocationState.kind !== 'revoked' || currentRevocationState.serverEpoch !== serverEpoch) {
         resetFarmRevokedFromLive(target, scope, serverEpoch, validationStartedAt)
       }
     }

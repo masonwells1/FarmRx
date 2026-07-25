@@ -74,7 +74,7 @@ export function queueFarmRevocationScope(key: string): FarmRevocationScope | nul
 export function listFarmRevocationScopes(storage: EnumeratedStorage, projectRef: string, userId: string): FarmRevocationScope[] {
   const farmIds = new Set<string>()
   for (let index = 0; index < storage.length; index += 1) {
-    const key = storage.key(index); if (!key) continue
+    const key = storage.key(index); if (!key || key.endsWith(':lease')) continue
     const match = queueKeyPattern.exec(key) ?? fenceKeyPattern.exec(key)
     if (match?.[1] === projectRef && match[2] === userId) farmIds.add(match[3]!)
   }

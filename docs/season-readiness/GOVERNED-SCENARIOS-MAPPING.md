@@ -370,6 +370,10 @@ proves reload/switch cannot show Pine as current or replay it.
    or revoked rep grant. The client parses that response separately and performs
    authoritative revoked reset only after saved-work quarantine and cache
    cleanup, yielding generation `3` and server epoch `2` from the Pine boundary.
+   If an allowed hard delete has removed the historical relationship row, an
+   exact empty response still quarantines work and clears cache before a local
+   revoked tombstone advances the last known generation/token; malformed,
+   failed, or unexpected responses remain blocked.
 3. **Remaining fixture/proof gap.** The manifest names Pine IDs, but no complete Pine
    disposable fixture, exact browser sequence, membership controller, or SQL
    verifier currently exists.

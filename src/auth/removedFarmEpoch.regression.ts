@@ -36,13 +36,13 @@ assert.throws(
 )
 
 assert.equal(parseRemovedFarmEpoch([{ farm_id: farmA.id, access_epoch: '2' }], farmA.id), 2)
-assert.throws(() => parseRemovedFarmEpoch([], farmA.id), /no longer have access/)
+assert.equal(parseRemovedFarmEpoch([], farmA.id), null)
 assert.throws(
   () => parseRemovedFarmEpoch([
     { farm_id: farmA.id, access_epoch: 2 },
     { farm_id: farmA.id, access_epoch: 2 },
   ], farmA.id),
-  /no longer have access/,
+  /malformed/,
 )
 assert.throws(
   () => parseRemovedFarmEpoch([{ farm_id: farmB.id, access_epoch: 2 }], farmA.id),

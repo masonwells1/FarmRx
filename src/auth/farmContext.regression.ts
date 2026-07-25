@@ -20,6 +20,7 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { on
 const { supabase } = await import('../lib/supabaseClient')
 const { beginFarmReplayAuthorization, canAccessFarmModule, canEditFarmModule, canReplayFarmModule, captureFarmReplayContextGuard, clearFarmAccess, clearFarmReadyAuthorization, createFarmAccessValidationGate, currentFarmContext, currentUserId, deriveFarmAccessProfile, FarmAccessStorageUnsafeError, isDefiniteTransportFailure, isFarmReplayAuthoritativelyOffline, loadFarmAccess, loadFarmAccessProfile, publishFarmReadyAuthorization, restoreOfflineFarmUserId, selectFarm } = await import('./farmContext')
 const { captureFarmRevocationFence, farmRevocationFenceKey, inspectFarmRevocationState, resetFarmGrantFromLive } = await import('../data/farmRevocationFence')
+const { readRevokedFarmRecovery } = await import('../data/revokedFarmRecovery')
 const { deviceClockHighWaterKey } = await import('../data/deviceClockFence')
 const { farmActiveContextKey, writeFarmAccessEpochs } = await import('./farmAccessEpoch')
 const { supabaseConfig } = await import('../lib/supabaseConfig')
@@ -55,6 +56,7 @@ type EpochRpcResult = { data: Array<{ farm_id: string; access_epoch: number }>; 
 type EpochRpcQuery = PromiseLike<EpochRpcResult> & { abortSignal: () => EpochRpcQuery }
 const removedEpochTargets: string[] = []
 let afterRemovedEpochResponse: (() => void) | null = null
+let removedEpochAvailable = true
 ;(supabase as unknown as { rpc: (name: string, args?: { target_farm_id?: string }) => EpochRpcQuery }).rpc = (name: string, args) => {
   assert.equal(currentUser, userB, 'User A reached the epoch RPC after the account switched.')
   assert(['get_current_farm_access_epochs', 'get_removed_farm_access_epoch'].includes(name), `Unexpected farm-access RPC ${name}.`)
@@ -65,7 +67,7 @@ let afterRemovedEpochResponse: (() => void) | null = null
   }
   const data = name === 'get_current_farm_access_epochs'
     ? [{ farm_id: farmB, access_epoch: 1 }]
-    : [{ farm_id: String(args?.target_farm_id), access_epoch: 2 }]
+    : removedEpochAvailable ? [{ farm_id: String(args?.target_farm_id), access_epoch: 2 }] : []
   const result = Promise.resolve({ data, error: null }).then((value) => {
     if (name === 'get_removed_farm_access_epoch') { const hook = afterRemovedEpochResponse; afterRemovedEpochResponse = null; hook?.() }
     return value
@@ -73,6 +75,11 @@ let afterRemovedEpochResponse: (() => void) | null = null
   const query = { abortSignal: () => query, then: result.then.bind(result) } as EpochRpcQuery
   return query
 }
+
+// Seed one real previously known User B farm. The live list below omits it,
+// making farmA the removed farm rather than the transaction coordinator's
+// localStorage lease key.
+resetFarmGrantFromLive(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: farmA }, 1, now)
 
 // Existing account-isolation regression: a paused User A refresh cannot publish into User B.
 const userALoad = loadFarmAccess(userA, true)
@@ -86,6 +93,7 @@ await assert.rejects(userALoad, /no longer matches the signed-in account/)
 assert.equal(userBAccess.userId, userB)
 assert.deepEqual(userBAccess.farms.map(({ id }) => id), [farmB])
 assert.equal(removedEpochTargets.length, 1, 'The access refresh did not request one authoritative epoch for its one already-known removed farm.')
+assert.equal(removedEpochTargets[0], farmA, 'A non-farm localStorage lease was mistaken for a removed farm.')
 const removedFence = inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedEpochTargets[0]! })
 assert.deepEqual(
   removedFence,
@@ -108,6 +116,30 @@ assert.equal(storage.getItem(removedFenceKey), removedFenceBytes, 'An account sw
 currentUser = userB
 currentToken = 'session-user-b'
 storage.removeItem(removedQueueKey)
+resetFarmGrantFromLive(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId }, 2, now)
+const hardDeleteActive = inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId })
+storage.setItem(removedQueueKey, removedQueueBytes)
+removedEpochAvailable = false
+const hardDeleteAccess = await loadFarmAccess(userB, true)
+removedEpochAvailable = true
+assert.deepEqual(hardDeleteAccess.farms.map(({ id }) => id), [farmB], 'A hard-deleted membership blocked the remaining accessible farm list.')
+assert.equal(storage.getItem(removedQueueKey), null, 'A hard-deleted membership left old work in an active queue.')
+assert(readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === removedQueueKey), 'A hard-deleted membership did not preserve old work in revoked recovery.')
+assert.deepEqual(
+  inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId }),
+  { kind: 'revoked', generation: hardDeleteActive.generation! + 1, serverEpoch: hardDeleteActive.serverEpoch },
+  'A hard-deleted membership did not install a local revoked tombstone from the last known epoch.',
+)
+const unknownRemovedFarm = '00000000-0000-4000-8000-000000000094'
+const unknownQueueKey = `farm-rx-field-log-write-queue:v1:${supabaseConfig.projectRef}:${userB}:${unknownRemovedFarm}`
+const unknownQueueBytes = removedQueueBytes.replaceAll(removedFarmId, unknownRemovedFarm)
+storage.setItem(unknownQueueKey, unknownQueueBytes)
+removedEpochAvailable = false
+await assert.rejects(loadFarmAccess(userB, true), /access changed while it was being verified/, 'A hard-delete fallback without prior local epoch evidence was accepted.')
+removedEpochAvailable = true
+assert.equal(storage.getItem(unknownQueueKey), unknownQueueBytes, 'A hard-delete fallback without prior local epoch evidence mutated the active queue.')
+assert(!readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === unknownQueueKey), 'A hard-delete fallback without prior local epoch evidence published false recovery work.')
+storage.removeItem(unknownQueueKey)
 assert.equal(storage.getItem(`farm-rx-access:v1:${supabaseConfig.projectRef}:${userA}`), null, 'User A access was persisted after switching to User B.')
 assert.notEqual(storage.getItem(`farm-rx-access:v1:${supabaseConfig.projectRef}:${userB}`), null, 'User B access was not persisted independently.')
 assert.equal(storage.getItem(farmRevocationFenceKey({ projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA })), null, 'User A farm fence was recreated after switching accounts.')

@@ -56,7 +56,8 @@ insert into public.farms(id,name,share_with_rep,created_by) values
   ('00000000-0000-4000-8000-000000000012','Suspended Member Farm',false,'00000000-0000-4000-8000-000000000001'),
   ('00000000-0000-4000-8000-000000000013','Revoked Rep Farm',true,'00000000-0000-4000-8000-000000000001'),
   ('00000000-0000-4000-8000-000000000014','Active Member Farm',false,'00000000-0000-4000-8000-000000000001'),
-  ('00000000-0000-4000-8000-000000000015','Dual Active Farm',true,'00000000-0000-4000-8000-000000000001');
+  ('00000000-0000-4000-8000-000000000015','Dual Active Farm',true,'00000000-0000-4000-8000-000000000001'),
+  ('00000000-0000-4000-8000-000000000016','Hard Deleted Member Farm',false,'00000000-0000-4000-8000-000000000001');
 select set_config(
   'request.headers',
   jsonb_build_object(
@@ -66,7 +67,8 @@ select set_config(
       '00000000-0000-4000-8000-000000000012',1,
       '00000000-0000-4000-8000-000000000013',1,
       '00000000-0000-4000-8000-000000000014',1,
-      '00000000-0000-4000-8000-000000000015',1
+      '00000000-0000-4000-8000-000000000015',1,
+      '00000000-0000-4000-8000-000000000016',1
     )::text
   )::text,
   false
@@ -74,7 +76,8 @@ select set_config(
 insert into public.farm_memberships(farm_id,user_id,role,status) values
   ('00000000-0000-4000-8000-000000000011','00000000-0000-4000-8000-000000000002','worker','active'),
   ('00000000-0000-4000-8000-000000000012','00000000-0000-4000-8000-000000000002','worker','active'),
-  ('00000000-0000-4000-8000-000000000014','00000000-0000-4000-8000-000000000002','worker','active');
+  ('00000000-0000-4000-8000-000000000014','00000000-0000-4000-8000-000000000002','worker','active'),
+  ('00000000-0000-4000-8000-000000000016','00000000-0000-4000-8000-000000000002','worker','active');
 insert into public.farm_rep_access(farm_id,rep_user_id,enabled,granted_by) values
   ('00000000-0000-4000-8000-000000000013','00000000-0000-4000-8000-000000000003',true,'00000000-0000-4000-8000-000000000001'),
   ('00000000-0000-4000-8000-000000000015','00000000-0000-4000-8000-000000000003',true,'00000000-0000-4000-8000-000000000001');
@@ -82,6 +85,8 @@ update public.farm_memberships set status='revoked'
 where farm_id='00000000-0000-4000-8000-000000000011' and user_id='00000000-0000-4000-8000-000000000002';
 update public.farm_memberships set status='suspended'
 where farm_id='00000000-0000-4000-8000-000000000012' and user_id='00000000-0000-4000-8000-000000000002';
+delete from public.farm_memberships
+where farm_id='00000000-0000-4000-8000-000000000016' and user_id='00000000-0000-4000-8000-000000000002';
 update public.farm_rep_access set enabled=false, revoked_at='2027-08-04T19:45:00Z'
 where rep_user_id='00000000-0000-4000-8000-000000000003';
 insert into public.farm_memberships(farm_id,user_id,role,status)
@@ -106,6 +111,9 @@ begin
   end if;
   if exists (select 1 from public.get_removed_farm_access_epoch('00000000-0000-4000-8000-000000000014')) then
     raise exception 'active access was exposed through the removed path';
+  end if;
+  if exists (select 1 from public.get_removed_farm_access_epoch('00000000-0000-4000-8000-000000000016')) then
+    raise exception 'hard-deleted membership unexpectedly retained an enumerable history row';
   end if;
 end
 $$;
