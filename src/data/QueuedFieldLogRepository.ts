@@ -15,7 +15,7 @@ function pendingEntry(entry: Extract<FieldLogQueueEntry, { kind: 'saveEntry' }>,
   return { id: entry.draft.id!, farm_id: context.farmId, field_id: entry.draft.field_id, entry_type: entry.draft.entry_type, observed_on: entry.draft.observed_on, rainfall_in: entry.draft.rainfall_in, note: entry.draft.note, created_by: context.userId, created_at: entry.enqueuedAt, updated_at: entry.enqueuedAt, pending: true }
 }
 export class QueuedFieldLogRepository implements FieldLogRepository {
-  constructor(private readonly live: SupabaseFieldLogRepository, private readonly d: { getContext: () => Promise<Context>; projectRef: string; storage: StorageLike; createId: () => string; clock: () => string; isOffline: () => boolean }) {}
+  constructor(private readonly live: SupabaseFieldLogRepository, private readonly d: { getContext: () => Promise<Context>; projectRef: string; storage: StorageLike; createId: () => string; clock: () => string; isOffline: () => boolean; readWorkspaceCache?: typeof readWorkspaceCache }) {}
   private async source() { const operationContext = await captureQueuedOperationContext(this.d); const context = { userId: operationContext.userId, farmId: operationContext.farmId }; return { context, operationContext, queue: new FieldLogWriteQueue(this.d.storage, fieldLogWriteQueueKey(this.d.projectRef, context.userId, context.farmId)) } }
   private locked<T>(storageKey: string, task: (verify: () => void) => Promise<T>) { return queueTransaction(storageKey, this.d.storage, this.d.createId, task) }
   async getNeedsAttentionQueueKey() { return (await this.source()).queue.key }
@@ -31,10 +31,11 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
     } catch (error) {
       await verifyRead()
       if (!isTransportFailure(error, this.d.isOffline())) throw error
-      const cached = await readWorkspaceCache<FieldLogData>(cacheScope, operationalCacheMaxAgeMs); await verifyRead()
+      const readCache = this.d.readWorkspaceCache ?? readWorkspaceCache
+      const cached = await readCache<FieldLogData>(cacheScope, operationalCacheMaxAgeMs); await verifyRead()
       if (!cached) throw error
       const data = structuredClone(cached.data)
-      for (const entry of queue.read().entries) { if (entry.version !== 2) continue; if (entry.kind === 'deleteEntry') data.entries = data.entries.filter((row) => row.id !== entry.entryId); else if (!fieldId || entry.draft.field_id === fieldId) { const row = pendingEntry(entry, context); data.entries = data.entries.some((item) => item.id === row.id) ? data.entries.map((item) => item.id === row.id ? row : item) : [...data.entries, row] } }
+      for (const entry of queue.read().entries) { if (entry.version !== 2) continue; await verifyQueuedOperationContext(this.d, entry.operationContext, entry); if (entry.kind === 'deleteEntry') data.entries = data.entries.filter((row) => row.id !== entry.entryId); else if (!fieldId || entry.draft.field_id === fieldId) { const row = pendingEntry(entry, context); data.entries = data.entries.some((item) => item.id === row.id) ? data.entries.map((item) => item.id === row.id ? row : item) : [...data.entries, row] } }
       await verifyRead(); return data
     }
   }

@@ -2,7 +2,7 @@ import type { StorageLike } from './writeQueue'
 import { quarantineLegacyScoutingCleanup, scoutingCleanupOutboxKey, type ScoutingCleanupEntry } from './scoutingCleanupOutbox'
 import { parseFieldsQueue } from './writeQueue'
 import { parseFieldLocationQueue } from './fieldLocation'
-import { parseFieldLogQueue } from './fieldLogWriteQueue'
+import { parseFieldLogQueueForScope } from './fieldLogWriteQueue'
 import { parseScoutingQueue } from './scoutingWriteQueue'
 import { parseHarvestQueue } from './harvestWriteQueue'
 import { parseInventoryQueue } from './inventoryWriteQueue'
@@ -19,11 +19,14 @@ type Scope = { projectRef: string; userId: string; farmId: string }
 type EnumeratedStorage = StorageLike & { readonly length: number; key(index: number): string | null }
 
 type QueueEntryScope = { operationId: string; userId: string; farmId: string; enqueuedAt: string; module: string }
-type QueueDefinition = { prefix: string; parse: (serialized: string) => unknown }
+type QueueDefinition = { prefix: string; parse: (serialized: string, scope?: Scope) => unknown }
 const queueDefinitions: readonly QueueDefinition[] = [
   { prefix: 'farm-rx-write-queue:v1:', parse: parseFieldsQueue },
   { prefix: 'farm-rx-field-location-queue:v1:', parse: parseFieldLocationQueue },
-  { prefix: 'farm-rx-field-log-write-queue:v1:', parse: parseFieldLogQueue },
+  { prefix: 'farm-rx-field-log-write-queue:v1:', parse: (serialized, scope) => {
+    if (!scope) throw new Error('Saved Field Log work is missing its farm scope.')
+    return parseFieldLogQueueForScope(serialized, scope)
+  } },
   { prefix: 'farm-rx-scouting-write-queue:v1:', parse: parseScoutingQueue },
   { prefix: 'farm-rx-harvest-write-queue:v1:', parse: parseHarvestQueue },
   { prefix: 'farm-rx-inventory-write-queue:v1:', parse: parseInventoryQueue },
@@ -50,7 +53,7 @@ function expectedQueueKey(key: string, scope: Scope) {
   return { definition, kind: key.endsWith(':needs-attention') ? 'needs_attention' as const : 'queue' as const }
 }
 function scopedEntries(definition: QueueDefinition, serialized: string, scope: Scope): QueueEntryScope[] {
-  const parsed = definition.parse(serialized) as { entries?: unknown }
+  const parsed = definition.parse(serialized, scope) as { entries?: unknown }
   if (!Array.isArray(parsed.entries)) throw new Error('Saved work has an invalid queue shape.')
   const entries = parsed.entries as QueueEntryScope[]
   if (!entries.every((entry) => entry.userId === scope.userId && entry.farmId === scope.farmId)) throw new Error('Saved work does not match the farm being secured.')

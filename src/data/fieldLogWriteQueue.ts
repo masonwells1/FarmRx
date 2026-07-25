@@ -11,6 +11,7 @@ const blocked = 'Saved changes on this device need attention. Nothing was delete
 const legacyBlocked = 'This saved Field Log change predates access custody tracking and cannot be sent automatically.'
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const token = /^[a-z0-9-]{16,128}$/i
+const queueKey = /^farm-rx-field-log-write-queue:v1:([^:]+):([^:]+):([^:]+)$/
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 const exact = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
 const validDraft = (value: unknown) => record(value) && exact(value, ['id', 'field_id', 'entry_type', 'observed_on', 'rainfall_in', 'note']) && typeof value.id === 'string' && uuid.test(value.id) && typeof value.field_id === 'string' && uuid.test(value.field_id) && (value.rainfall_in === null || typeof value.rainfall_in === 'number') && (value.note === null || typeof value.note === 'string') && validateFieldLogDraft(value as unknown as FieldLogEntryDraft) === null
@@ -36,9 +37,18 @@ function valid(value: unknown): value is FieldLogQueueEntry {
   return value.kind === 'saveEntry' ? exact(value, [...common, ...custody, 'draft']) && validDraft(value.draft) : value.kind === 'deleteEntry' && exact(value, [...common, ...custody, 'entryId']) && typeof value.entryId === 'string' && uuid.test(value.entryId)
 }
 export function parseFieldLogQueue(serialized: string): FieldLogQueueEnvelopeV1 { let parsed: unknown; try { parsed = JSON.parse(serialized) } catch { throw new Error(blocked) }; if (!record(parsed) || !exact(parsed, ['version', 'entries']) || parsed.version !== 1 || !Array.isArray(parsed.entries) || !parsed.entries.every(valid)) throw new Error(blocked); return parsed as unknown as FieldLogQueueEnvelopeV1 }
+export function parseFieldLogQueueForScope(serialized: string, scope: { projectRef: string; userId: string; farmId: string }): FieldLogQueueEnvelopeV1 {
+  const parsed = parseFieldLogQueue(serialized)
+  if (!parsed.entries.every((entry) => entry.userId === scope.userId && entry.farmId === scope.farmId && (entry.version === 1 || entry.operationContext.projectRef === scope.projectRef))) throw new Error(blocked)
+  return parsed
+}
 export class FieldLogWriteQueue {
   constructor(private readonly storage: StorageLike, readonly key: string) {}
-  read() { const raw = this.storage.getItem(this.key); return raw === null ? { version: 1 as const, entries: [] } : parseFieldLogQueue(raw) }
+  read() {
+    const raw = this.storage.getItem(this.key); if (raw === null) return { version: 1 as const, entries: [] }
+    const scope = queueKey.exec(this.key)
+    return scope ? parseFieldLogQueueForScope(raw, { projectRef: scope[1]!, userId: scope[2]!, farmId: scope[3]! }) : parseFieldLogQueue(raw)
+  }
   private persist(next: FieldLogQueueEnvelopeV1) { const raw = JSON.stringify(next); parseFieldLogQueue(raw); this.storage.setItem(this.key, raw); if (this.storage.getItem(this.key) !== raw) throw new Error('This log entry could not be saved on this device. Keep this screen open and try again.') }
   append(entry: FieldLogQueueEntry) { const current = this.read(); const next = { version: 1 as const, entries: current.entries.some((item) => item.operationId === entry.operationId) ? current.entries : [...current.entries, entry] }; this.persist(next); return next }
   removeConfirmedHead(operationId: string) { const current = this.read(); if (current.entries[0]?.operationId !== operationId) throw new Error(blocked); const next = { version: 1 as const, entries: current.entries.slice(1) }; this.persist(next); return next }
