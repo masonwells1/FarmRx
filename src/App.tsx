@@ -16,7 +16,7 @@ import {
   Routes,
   useLocation,
   useNavigate,
-} from "react-router-dom";
+} from "react-router";
 import type { User } from "@supabase/supabase-js";
 import { useAuth } from "./auth/AuthProvider";
 import { minimumPasswordLength, passwordEmailDeliveryEnabled, passwordResetPublicResponse, passwordStrength, passwordValidationMessage } from './auth/passwordRecovery';
