@@ -4,7 +4,7 @@ import type { Farm } from '../data/fields'
 import { deleteUserWorkspaceCaches, maximumClockSkewMs } from '../data/workspaceCache'
 import { quarantineRevokedFarmWork } from '../data/revokedFarmRecovery'
 import { captureFarmRevocationFence, inspectFarmRevocationState, listFarmRevocationScopes, markFarmGranted, markFarmRevoked, resetFarmGrantFromLive, resetFarmRevokedFromLive, verifyFarmRevocationFence, type FarmRevocationSnapshot } from '../data/farmRevocationFence'
-import { coordinatedDeviceTransaction } from '../data/queueTransaction'
+import { coordinatedDeviceTransaction, coordinatedFarmCustodyTransaction } from '../data/queueTransaction'
 import { clearDeviceClockHighWater, DeviceClockRollbackError, observeDeviceTime, verifyObservedDeviceTime } from '../data/deviceClockFence'
 import { FarmReplayContextChangedError, type StorageLike } from '../data/writeQueue'
 import { clearFarmAccessEpochs, farmActiveContextKey, readFarmAccessEpochs, writeFarmAccessEpochs } from './farmAccessEpoch'
@@ -760,21 +760,26 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
         localRevocationEpoch = priorRevocationState.serverEpoch ?? priorEpochs[farmId] ?? null
         if (!localRevocationEpoch) throw new Error('Farm access changed while it was being verified.')
       }
-      quarantineRevokedFarmWork(target, scope)
-      // Quarantine is synchronous, but cache cleanup yields. Revoke before that
-      // yield so a stale tab holding the old fence cannot append work after the
-      // queue scan has completed.
-      const currentRevocationState = inspectFarmRevocationState(target, scope)
-      if (serverEpoch === null) {
-        if (currentRevocationState.kind !== 'revoked') {
-          markFarmRevoked(target, scope, validationStartedAt, localRevocationEpoch!)
+      await coordinatedFarmCustodyTransaction(scope, target, createId, async (verifyCustody) => {
+        verifyValidation(); verifyCustody()
+        quarantineRevokedFarmWork(target, scope)
+        // Quarantine is synchronous, but cache cleanup yields. Revoke before that
+        // yield so a stale tab holding the old fence cannot append work after the
+        // queue scan has completed.
+        const currentRevocationState = inspectFarmRevocationState(target, scope)
+        if (serverEpoch === null) {
+          if (currentRevocationState.kind !== 'revoked') {
+            markFarmRevoked(target, scope, validationStartedAt, localRevocationEpoch!)
+          }
+        } else if (currentRevocationState.kind !== 'revoked' || currentRevocationState.serverEpoch !== serverEpoch) {
+          resetFarmRevokedFromLive(target, scope, serverEpoch, validationStartedAt)
         }
-      } else if (currentRevocationState.kind !== 'revoked' || currentRevocationState.serverEpoch !== serverEpoch) {
-        resetFarmRevokedFromLive(target, scope, serverEpoch, validationStartedAt)
-      }
-      await deleteUserWorkspaceCaches(supabaseConfig.projectRef, userId, farmId)
-      await requireCurrentSession(userId, deadline.signal)
-      verifyValidation()
+        verifyCustody()
+        await deleteUserWorkspaceCaches(supabaseConfig.projectRef, userId, farmId)
+        verifyCustody()
+        await requireCurrentSession(userId, deadline.signal)
+        verifyValidation(); verifyCustody()
+      })
     }
     for (const farm of farms) {
       verifyValidation()
@@ -795,10 +800,14 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
         throw new Error('Farm access changed while it was being verified.')
       }
       if (state.kind !== 'active' || state.serverEpoch !== serverEpoch) {
-        quarantineRevokedFarmWork(target, scope)
-        await deleteUserWorkspaceCaches(supabaseConfig.projectRef, userId, farm.id)
-        verifyValidation()
-        resetFarmGrantFromLive(target, scope, serverEpoch, validationStartedAt)
+        await coordinatedFarmCustodyTransaction(scope, target, createId, async (verifyCustody) => {
+          verifyValidation(); verifyCustody()
+          quarantineRevokedFarmWork(target, scope)
+          verifyCustody()
+          await deleteUserWorkspaceCaches(supabaseConfig.projectRef, userId, farm.id)
+          verifyValidation(); verifyCustody()
+          resetFarmGrantFromLive(target, scope, serverEpoch, validationStartedAt)
+        })
       }
     }
     verifyValidation()

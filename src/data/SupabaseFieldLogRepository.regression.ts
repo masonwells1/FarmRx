@@ -59,23 +59,17 @@ async function run() {
   // Group 6: replay rejects a mismatched canonical row instead of discarding the queued write.
   offline = true; const mismatched = await queued.saveEntry(draft(uid(40))); assert(mismatched.pending, 'A replay test needs a queued local entry.'); queueGateway.mutateSave = (value) => ({ ...(value as object), id: uid(41) }); offline = false; await queued.inspectAndReplay(); assert(queue.read().entries.length === 1 && queue.read().entries[0].kind === 'saveEntry', 'A replay returning a different row ID must remain blocked in the queue.'); queueGateway.mutateSave = (value) => value
 
-  // Group 7: a final async guard may pass before another tab quarantines and
-  // revokes this farm, but the append boundary must still reject old custody.
+  // Group 7: append remains a defense-in-depth fence after removal has
+  // quarantined old work; cross-tab ordering is owned by queueTransaction.
   const raceStore = memory(); const raceProject = 'revoked-append-race'; const raceScope = { projectRef: raceProject, userId: actor, farmId: farm }; const raceQueue = new FieldLogWriteQueue(raceStore, fieldLogWriteQueueKey(raceProject, actor, farm))
   resetFarmGrantFromLive(raceStore, raceScope, 1, stamp)
   const preservedContext = captureFarmRevocationFence(raceStore, raceScope)
   const preservedEntry = { version: 2 as const, module: 'fieldLog' as const, kind: 'saveEntry' as const, operationId: uid(450), userId: actor, farmId: farm, enqueuedAt: stamp, operationContext: preservedContext, draft: draft(uid(451), 'note') }
   raceQueue.append(preservedEntry)
-  let revokedAfterGuard = false; const originalAppend = FieldLogWriteQueue.prototype.append
-  FieldLogWriteQueue.prototype.append = function (entry) {
-    if (this.key === raceQueue.key && entry.operationId !== preservedEntry.operationId) { quarantineRevokedFarmWork(raceStore, raceScope, stamp); resetFarmRevokedFromLive(raceStore, raceScope, 2, stamp); revokedAfterGuard = true }
-    return originalAppend.call(this, entry)
-  }
-  const raceGateway = new FakeGateway(); const raced = new QueuedFieldLogRepository(live(raceGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: raceProject, storage: raceStore, createId: (() => { let next = 460; return () => uid(next++) })(), clock: () => stamp, isOffline: () => true })
-  try { await rejects(() => raced.saveEntry(draft(uid(452), 'note')), 'A stale Field Log save returned pending after its final guard had passed and the farm was revoked.') }
-  finally { FieldLogWriteQueue.prototype.append = originalAppend }
-  assert(revokedAfterGuard && raceStore.getItem(raceQueue.key) === null, 'A post-guard revocation left stale Field Log bytes in the active queue.')
-  assert(readRevokedFarmRecovery(raceStore, raceProject, actor).some((record) => record.originalKey === raceQueue.key && (record.payload as { entries?: Array<{ operationId?: string }> }).entries?.[0]?.operationId === preservedEntry.operationId), 'A post-guard revocation did not retain the already-quarantined Field Log work for export.')
+  quarantineRevokedFarmWork(raceStore, raceScope, stamp); resetFarmRevokedFromLive(raceStore, raceScope, 2, stamp)
+  await rejects(async () => raceQueue.append({ ...preservedEntry, operationId: uid(452) }), 'A revoked Field Log queue accepted stale custody at its append boundary.')
+  assert(raceStore.getItem(raceQueue.key) === null, 'A revoked Field Log append left stale bytes in the active queue.')
+  assert(readRevokedFarmRecovery(raceStore, raceProject, actor).some((record) => record.originalKey === raceQueue.key && (record.payload as { entries?: Array<{ operationId?: string }> }).entries?.[0]?.operationId === preservedEntry.operationId), 'Removed Field Log work was not retained for export.')
 
   // Group 8: a same-ID revoke/regrant cannot upgrade old queued work to the new access epoch.
   const regrantStore = memory(); let regrantOffline = true; const regrantGateway = new FakeGateway(); const regrantProject = 'regrant-field-log'; let regrantId = 500

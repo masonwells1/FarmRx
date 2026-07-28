@@ -1,5 +1,5 @@
 import type { StorageLike } from './writeQueue'
-import { captureFarmRevocationFence, ensureQueueFarmGrant, queueFarmRevocationScope, verifyFarmRevocationFence } from './farmRevocationFence'
+import { captureFarmRevocationFence, ensureQueueFarmGrant, queueFarmRevocationScope, verifyFarmRevocationFence, type FarmRevocationScope } from './farmRevocationFence'
 
 const blocked = 'Saved changes on this device need attention. Nothing was deleted.'
 const leaseTtlMs = 6_000
@@ -106,13 +106,24 @@ export function createDeviceTransactionCoordinator() {
 
 export const coordinatedDeviceTransaction = createDeviceTransactionCoordinator()
 
+/** All farm-scoped queue writers and access-removal cleanup use this one
+ * cross-tab boundary, so removal either waits to quarantine a completed write
+ * or revokes first and prevents the write from starting. */
+export function farmCustodyTransactionKey(scope: FarmRevocationScope) {
+  return `farm-rx-farm-custody:v1:${scope.projectRef}:${scope.userId}:${scope.farmId}`
+}
+export function coordinatedFarmCustodyTransaction<T>(scope: FarmRevocationScope, storage: StorageLike, createId: () => string, task: (verify: () => void) => Promise<T>): Promise<T> {
+  return coordinatedDeviceTransaction(farmCustodyTransactionKey(scope), storage, createId, task)
+}
+
 export async function queueTransaction<T>(key: string, storage: StorageLike, createId: () => string, task: (verify: () => void) => Promise<T>): Promise<T> {
   let touched = false
-  const result = await serial(key, async () => {
-    const scope = queueFarmRevocationScope(key)
+  const scope = queueFarmRevocationScope(key)
+  const run = async (verifyCustody: () => void) => serial(key, async () => {
     if (scope) ensureQueueFarmGrant(storage, scope)
     const fence = scope ? captureFarmRevocationFence(storage, scope) : null
     const verified = (coordination?: () => void) => {
+      verifyCustody()
       coordination?.()
       if (fence) verifyFarmRevocationFence(storage, fence)
       touched = true
@@ -121,6 +132,7 @@ export async function queueTransaction<T>(key: string, storage: StorageLike, cre
     if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(lockName, async () => { verified(); return task(() => verified()) })
     return leased(key, storage, createId, (verify) => { verified(verify); return task(() => verified(verify)) })
   })
+  const result = scope ? await coordinatedFarmCustodyTransaction(scope, storage, createId, run) : await run(() => undefined)
   if (touched) publish(key)
   return result
 }
