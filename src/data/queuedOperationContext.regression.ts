@@ -217,6 +217,38 @@ await rejectsChangedContext(() => new SupabaseProfitabilityRepository({ gateway:
 const boundRequest = bindFarmOperationRequest({ headers: new Headers() }, contextA)
 assert(boundRequest.headers.get('x-farm-rx-expected-user-id') === userA && boundRequest.headers.get('x-farm-rx-access-epochs') === JSON.stringify({ [farmA]: 1 }), 'Operation request headers did not preserve the captured user and server epoch.')
 
+// A stalled remote save holds farm custody while access removal has the
+// validation lock. Once removal publishes its durable fence, the post-I/O
+// catch must release custody without awaiting FarmContext again.
+const stalledCatchRef = `${projectRef}-stalled-post-io`
+const stalledCatchStorage = memory()
+resetFarmGrantFromLive(stalledCatchStorage, { projectRef: stalledCatchRef, userId: userA, farmId: farmA }, 1, stamp)
+let stalledCatchContextCalls = 0
+let releaseStalledRemote!: () => void
+let sawStalledRemote!: () => void
+const stalledRemoteStarted = new Promise<void>((resolve) => { sawStalledRemote = resolve })
+const stalledRemoteRelease = new Promise<void>((resolve) => { releaseStalledRemote = resolve })
+const stalledCatchQueue = new QueuedGrainRepository({
+  async deleteMarketingAlertRuleOperation() { sawStalledRemote(); await stalledRemoteRelease; throw new TypeError('network timeout after remote save') },
+} as never, {
+  getContext: async () => {
+    stalledCatchContextCalls += 1
+    if (stalledCatchContextCalls > 5) return new Promise<never>(() => undefined)
+    return { userId: userA, farmId: farmA }
+  },
+  projectRef: stalledCatchRef, storage: stalledCatchStorage, createId: () => id(24), clock: () => stamp, isOffline: () => false,
+})
+const stalledCatchSave = stalledCatchQueue.deleteMarketingAlertRule(rowId).then(() => 'resolved' as const).catch((error: unknown) => error)
+await stalledRemoteStarted
+const stalledCatchQueueKey = grainWriteQueueKey(stalledCatchRef, userA, farmA)
+const stalledCatchQueueBytes = stalledCatchStorage.getItem(stalledCatchQueueKey)
+resetFarmRevokedFromLive(stalledCatchStorage, { projectRef: stalledCatchRef, userId: userA, farmId: farmA }, 2, '2026-07-15T12:00:01.000000+00:00')
+releaseStalledRemote()
+const stalledCatchOutcome = await Promise.race([stalledCatchSave, new Promise<'STALLED'>((resolve) => setTimeout(() => resolve('STALLED'), 50))])
+assert(stalledCatchOutcome instanceof Error, 'A revoked post-I/O save waited for FarmContext instead of releasing farm custody for removal.')
+assert(stalledCatchContextCalls === 5, 'A revoked post-I/O save called FarmContext after its durable fence changed.')
+assert(stalledCatchStorage.getItem(stalledCatchQueueKey) === stalledCatchQueueBytes && getSaveReceipt(rowId) === 'saving', 'A revoked post-I/O save changed queue bytes or published a false Saved/pending receipt.')
+
 let activeFarm = farmA
 let releaseFarmARaw!: () => void
 let sawFarmARaw!: () => void
@@ -1731,6 +1763,22 @@ const actualRoutes = [...appSource.matchAll(/<Route\b[^>]*?\bpath="([^"]+)"/g)].
 assert(actualRoutes.length === expectedRoutes.length && actualRoutes.every((route, index) => route === expectedRoutes[index]), `The ordered route manifest changed. Expected ${expectedRoutes.join(',')}; received ${actualRoutes.join(',')}.`)
 assert(dataIndexSource.includes('const fieldsGetContext = currentFarmContext') && dataIndexSource.includes('getContext: currentFarmContext'), 'Fields or field-location production wiring still assembles user and farm identity in separate asynchronous lookups.')
 assert((dataIndexSource.match(/isOffline: farmReplayIsOffline/g) ?? []).length === 12, 'A production data lane still trusts only navigator.onLine instead of the exact offline replay grant.')
+const durableFenceOrderAudit = [
+  { file: './QueuedInventoryRepository.ts', verifier: 'verifyOperation' },
+  { file: './QueuedEquipmentTasksRepository.ts', verifier: 'verifyOperation' },
+  { file: './QueuedGrainRepository.ts', verifier: 'verifyDirect' },
+  { file: './QueuedProfitabilityRepository.ts', verifier: 'verifyDirect' },
+]
+for (const { file, verifier } of durableFenceOrderAudit) {
+  const source = readFileSync(new URL(file, import.meta.url), 'utf8')
+  const method = (name: string) => { const start = source.indexOf(`private async ${name}`); const end = source.indexOf('\n  private ', start + 1); return start >= 0 ? source.slice(start, end >= 0 ? end : source.length) : '' }
+  const write = method('write')
+  const verify = method(verifier)
+  const durableFence = verify.indexOf('verifyFarmOperationContext')
+  const memoryFence = verify.indexOf('memoryScope.verify')
+  const contextAwait = verify.indexOf('await this')
+  assert(write.includes(`await this.${verifier}`) && !write.includes('getContext') && durableFence >= 0 && memoryFence >= 0 && contextAwait >= 0 && durableFence < contextAwait && memoryFence < contextAwait, `${file} can await FarmContext before its durable revocation and memory fences on a write or post-I/O path.`)
+}
 for (const replayGuardFile of ['./QueuedEquipmentTasksRepository.ts', './QueuedFieldsRepository.ts', './QueuedGrainRepository.ts', './QueuedInventoryRepository.ts', './QueuedProfitabilityRepository.ts', './QueuedFieldLogRepository.ts', './QueuedHarvestRepository.ts', './QueuedProgramsRepository.ts', './QueuedScoutingRepository.ts', './QueuedNotificationsRepository.ts', './fieldLocation.ts']) {
   const replayGuardSource = readFileSync(new URL(replayGuardFile, import.meta.url), 'utf8')
   assert((replayGuardSource.match(/isFarmReplayContextChangedError\(error\)/g) ?? []).length >= 2, `${replayGuardFile} can still swallow a typed replay-context cancellation at its source or outer replay catch.`)

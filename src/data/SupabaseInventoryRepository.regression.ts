@@ -105,6 +105,8 @@ async function run() {
   gateway.fail = true; await rejects(() => live.getWorkspace(), 'A gateway failure must reject without a mock fallback.'); gateway.fail = false
   const bad = canonicalFixture(); row(bad.on_hand[0]).on_hand_quantity = '99'; gateway.state = bad; await rejects(() => live.getWorkspace(), 'Invalid view arithmetic must fail closed.'); gateway.state = canonicalFixture()
   const foreign = canonicalFixture(); row(foreign.products[0]).farm_id = uid(999); gateway.state = foreign; await rejects(() => live.getWorkspace(), 'Cross-farm rows must fail closed.'); gateway.state = canonicalFixture()
+  const foreignAdjustmentReader = new FakeGateway(); const foreignAdjustmentId = uid(23); foreignAdjustmentReader.state.adjustments = [{ id: foreignAdjustmentId, farm_id: uid(999), product_id: uid(501), adjustment_quantity_in_inventory_unit: -1, reason: 'correction', notes: 'Foreign adjustment', adjusted_at: '2026-07-11T00:00:00+00:00', created_at: micro, created_by: actor }]
+  await rejects(() => repo(foreignAdjustmentReader).getAdjustmentOperation(foreignAdjustmentId, operationContext), 'An adjustment point reader must reject a row from another farm.')
 
   // Writes hold their own farm-custody transaction. Their field validation must
   // use the side-effect-free fenced snapshot rather than getData(), which ends
@@ -184,15 +186,15 @@ async function run() {
   new InventoryWriteQueue(ambiguousAdjustmentStore, ambiguousAdjustmentKey).append({ ...base, operationId: uid(552), kind: 'addAdjustment', row: ambiguousAdjustment }); await ambiguousAdjustmentQueue.inspectAndReplay()
   assert(ambiguousAdjustmentWrites === 1 && ambiguousAdjustmentReads === 1 && new InventoryWriteQueue(ambiguousAdjustmentStore, ambiguousAdjustmentKey).read().entries.length === 0 && readNeedsAttention(ambiguousAdjustmentStore, ambiguousAdjustmentKey).length === 0 && getSaveReceipt(ambiguousAdjustment.id) === 'saved', 'An ambiguous adjustment replay must use its operation-context point reader, remove the confirmed head, publish Saved, and never duplicate or park the accepted adjustment.')
 
-  const mismatchedAdjustmentStore = memory(); const mismatchedAdjustmentGateway = new FakeGateway(); const mismatchedAdjustmentWriter = repo(mismatchedAdjustmentGateway); let mismatchedAdjustmentId = 560; let mismatchedAdjustmentWrites = 0
-  const mismatchedAdjustmentQueue = new QueuedInventoryRepository(mismatchedAdjustmentWriter, { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'mismatched-adjustment', storage: mismatchedAdjustmentStore, createId: () => uid(mismatchedAdjustmentId++), clock: () => micro, isOffline: () => false })
-  const mismatchedAdjustment = { ...ambiguousAdjustment, id: uid(561), notes: 'Must not claim saved' }
-  mismatchedAdjustmentWriter.addAdjustmentOperation = async () => { mismatchedAdjustmentWrites += 1; throw new TypeError('lost mismatched adjustment response') }
-  mismatchedAdjustmentWriter.getAdjustmentOperation = async (id) => id === mismatchedAdjustment.id ? { ...mismatchedAdjustment, farm_id: farm, notes: 'different persisted adjustment', created_at: micro } : null
-  mismatchedAdjustmentWriter.getWorkspace = async () => { throw new Error('mismatched adjustment replay must not call public getWorkspace') }
-  const mismatchedAdjustmentKey = inventoryWriteQueueKey('mismatched-adjustment', actor, farm)
-  new InventoryWriteQueue(mismatchedAdjustmentStore, mismatchedAdjustmentKey).append({ ...base, operationId: uid(562), kind: 'addAdjustment', row: mismatchedAdjustment }); await mismatchedAdjustmentQueue.inspectAndReplay()
-  assert(mismatchedAdjustmentWrites === 1 && new InventoryWriteQueue(mismatchedAdjustmentStore, mismatchedAdjustmentKey).read().entries.length === 1 && readNeedsAttention(mismatchedAdjustmentStore, mismatchedAdjustmentKey).length === 0 && getSaveReceipt(mismatchedAdjustment.id) !== 'saved', 'A mismatched adjustment point read must remain pending and never claim Saved or park a false failure.')
+  const wrongFarmAdjustmentStore = memory(); const wrongFarmAdjustmentGateway = new FakeGateway(); const wrongFarmAdjustmentWriter = repo(wrongFarmAdjustmentGateway); let wrongFarmAdjustmentId = 560; let wrongFarmAdjustmentWrites = 0
+  const wrongFarmAdjustmentQueue = new QueuedInventoryRepository(wrongFarmAdjustmentWriter, { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'wrong-farm-adjustment', storage: wrongFarmAdjustmentStore, createId: () => uid(wrongFarmAdjustmentId++), clock: () => micro, isOffline: () => false })
+  const wrongFarmAdjustment = { ...ambiguousAdjustment, id: uid(561), notes: 'Must not claim saved' }
+  wrongFarmAdjustmentWriter.addAdjustmentOperation = async () => { wrongFarmAdjustmentWrites += 1; throw new TypeError('lost wrong-farm adjustment response') }
+  wrongFarmAdjustmentWriter.getAdjustmentOperation = async (id) => id === wrongFarmAdjustment.id ? { ...wrongFarmAdjustment, farm_id: uid(999), created_at: micro } : null
+  wrongFarmAdjustmentWriter.getWorkspace = async () => { throw new Error('wrong-farm adjustment replay must not call public getWorkspace') }
+  const wrongFarmAdjustmentKey = inventoryWriteQueueKey('wrong-farm-adjustment', actor, farm)
+  new InventoryWriteQueue(wrongFarmAdjustmentStore, wrongFarmAdjustmentKey).append({ ...base, operationId: uid(562), kind: 'addAdjustment', row: wrongFarmAdjustment }); await wrongFarmAdjustmentQueue.inspectAndReplay()
+  assert(wrongFarmAdjustmentWrites === 1 && new InventoryWriteQueue(wrongFarmAdjustmentStore, wrongFarmAdjustmentKey).read().entries.length === 1 && readNeedsAttention(wrongFarmAdjustmentStore, wrongFarmAdjustmentKey).length === 0 && getSaveReceipt(wrongFarmAdjustment.id) !== 'saved', 'A wrong-farm adjustment point read must remain pending and never claim Saved or park a false failure.')
 
   const entries: InventoryQueueEntryV1[] = [
     { ...base, operationId: uid(60), kind: 'saveProduct', row: { ...product(uid(700), 'gal'), farm_id: farm } as InventoryProductWrite },

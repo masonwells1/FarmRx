@@ -765,6 +765,7 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
       // this fence before and after its transaction; cleanup below then waits
       // for custody and quarantines any bytes a writer had already persisted.
       const earlyRevocationState = inspectFarmRevocationState(target, scope)
+      const capturedPriorFieldLogFence = earlyRevocationState.kind === 'active' ? captureFarmRevocationFence(target, scope) : undefined
       if (serverEpoch === null) {
         if (earlyRevocationState.kind !== 'revoked') {
           markFarmRevoked(target, scope, validationStartedAt, localRevocationEpoch!)
@@ -774,7 +775,7 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
       }
       await coordinatedFarmCustodyTransaction(scope, target, createId, async (verifyCustody) => {
         verifyValidation(); verifyCustody()
-        quarantineRevokedFarmWork(target, scope)
+        quarantineRevokedFarmWork(target, scope, undefined, capturedPriorFieldLogFence)
         // Quarantine is synchronous, but cache cleanup yields. Revoke before that
         // yield so a stale tab holding the old fence cannot append work after the
         // queue scan has completed.

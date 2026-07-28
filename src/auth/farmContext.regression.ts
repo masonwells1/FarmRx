@@ -120,13 +120,15 @@ currentToken = 'session-user-b'
 storage.removeItem(removedQueueKey)
 resetFarmGrantFromLive(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId }, 2, now)
 const hardDeleteActive = inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId })
-storage.setItem(removedQueueKey, removedQueueBytes)
+const priorFieldLogFence = captureFarmRevocationFence(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId })
+const priorFenceQueueBytes = JSON.stringify({ version: 1, entries: [{ version: 2, module: 'fieldLog', kind: 'saveEntry', operationId: '00000000-0000-4000-8000-000000000091', userId: userB, farmId: removedFarmId, enqueuedAt: now, operationContext: priorFieldLogFence, draft: { id: '00000000-0000-4000-8000-000000000092', field_id: '00000000-0000-4000-8000-000000000093', entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Keep prior-fence custody' } }] })
+storage.setItem(removedQueueKey, priorFenceQueueBytes)
 removedEpochAvailable = false
 const hardDeleteAccess = await loadFarmAccess(userB, true)
 removedEpochAvailable = true
 assert.deepEqual(hardDeleteAccess.farms.map(({ id }) => id), [farmB], 'A hard-deleted membership blocked the remaining accessible farm list.')
 assert.equal(storage.getItem(removedQueueKey), null, 'A hard-deleted membership left old work in an active queue.')
-assert(readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === removedQueueKey), 'A hard-deleted membership did not preserve old work in revoked recovery.')
+assert(readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === removedQueueKey && JSON.stringify(record.payload) === priorFenceQueueBytes), 'A hard-deleted membership did not preserve its valid prior-fence Field Log work in revoked recovery.')
 assert.deepEqual(
   inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId }),
   { kind: 'revoked', generation: hardDeleteActive.generation! + 1, serverEpoch: hardDeleteActive.serverEpoch },

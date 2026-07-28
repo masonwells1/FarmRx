@@ -43,8 +43,15 @@ export function parseFieldLogQueueForScope(serialized: string, scope: { projectR
   if (!parsed.entries.every((entry) => entry.userId === scope.userId && entry.farmId === scope.farmId && (entry.version === 1 || entry.operationContext.projectRef === scope.projectRef))) throw new Error(blocked)
   return parsed
 }
-export function verifyFieldLogQueueCustody(storage: StorageLike, envelope: FieldLogQueueEnvelopeV1): void {
-  for (const entry of envelope.entries) if (entry.version === 2) verifyFarmRevocationFence(storage, entry.operationContext)
+export function verifyFieldLogQueueCustody(storage: StorageLike, envelope: FieldLogQueueEnvelopeV1, capturedPriorFence?: FarmOperationContext): void {
+  for (const entry of envelope.entries) {
+    if (entry.version !== 2) continue
+    if (capturedPriorFence) {
+      if (entry.operationContext.projectRef !== capturedPriorFence.projectRef || entry.operationContext.userId !== capturedPriorFence.userId || entry.operationContext.farmId !== capturedPriorFence.farmId || entry.operationContext.generation !== capturedPriorFence.generation || entry.operationContext.token !== capturedPriorFence.token || entry.operationContext.serverEpoch !== capturedPriorFence.serverEpoch) throw new Error(blocked)
+      continue
+    }
+    verifyFarmRevocationFence(storage, entry.operationContext)
+  }
 }
 export class FieldLogWriteQueue {
   constructor(private readonly storage: StorageLike, readonly key: string) {}
