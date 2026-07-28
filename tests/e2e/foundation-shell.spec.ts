@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page, type Route } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page, type Request, type Route } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 
 const projectRef = 'agvsozfbstpekuqxpqjr'
@@ -137,7 +137,13 @@ async function fulfillJson(route: Route, body: unknown) {
   await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(body) })
 }
 
-async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1, profile = ownerProfile, activeUser: string | (() => string) = userId, removedFarmEpochs: Readonly<Record<string, number>> = {}) {
+function bearerUserId(request: Request): string | null {
+  const bearer = /^Bearer ([^.]+\.([^.]+)\.[^.]+)$/i.exec(request.headers().authorization ?? '')
+  if (!bearer) return null
+  try { const payload = JSON.parse(Buffer.from(bearer[2]!, 'base64url').toString('utf8')) as { sub?: unknown; aud?: unknown }; return payload.aud === 'authenticated' && typeof payload.sub === 'string' ? payload.sub : null } catch { return null }
+}
+
+async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1, profile = ownerProfile, activeUser: string | (() => string) = userId, removedFarmEpochs: Readonly<Record<string, Readonly<Record<string, number>>>> = {}) {
   const unexpected: string[] = []
   await page.route('https://*.supabase.co/**', async (route) => {
     const url = new URL(route.request().url())
@@ -164,8 +170,10 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
       let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
       const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
       const targetFarmId = value?.target_farm_id
-      const removedEpoch = typeof targetFarmId === 'string' ? removedFarmEpochs[targetFarmId] : undefined
-      if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof targetFarmId !== 'string' || !farms.some((farm) => farm.id === targetFarmId) || accessible.some((farm) => farm.id === targetFarmId) || !Object.hasOwn(removedFarmEpochs, targetFarmId) || !Number.isSafeInteger(removedEpoch) || removedEpoch < 1) { await rejectShape('get_removed_farm_access_epoch body'); return }
+      const callerId = bearerUserId(route.request())
+      const callerEpochs = callerId && Object.hasOwn(removedFarmEpochs, callerId) ? removedFarmEpochs[callerId] : undefined
+      const removedEpoch = typeof targetFarmId === 'string' && callerEpochs ? callerEpochs[targetFarmId] : undefined
+      if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof targetFarmId !== 'string' || !farms.some((farm) => farm.id === targetFarmId) || accessible.some((farm) => farm.id === targetFarmId) || !callerId || !callerEpochs || !Object.hasOwn(callerEpochs, targetFarmId) || !Number.isSafeInteger(removedEpoch) || removedEpoch < 1) { await rejectShape('get_removed_farm_access_epoch body'); return }
       await fulfillJson(route, [{ farm_id: targetFarmId, access_epoch: removedEpoch }])
       return
     }
@@ -646,7 +654,7 @@ test('revoked farm work is quarantined, exportable, and never returned to an act
     targetUserId: userId,
     targetFarmId: farmA,
   })
-  const unexpected = await mockSupabase(page, [], [], false, 1, ownerProfile, userId, { [farmA]: 2 })
+  const unexpected = await mockSupabase(page, [], [], false, 1, ownerProfile, userId, { [userId]: { [farmA]: 2 } })
   await page.goto('/fields')
   await expect(page.getByRole('heading', { name: 'Saved work needs your review' })).toBeVisible()
   await expect(page.getByText(/will never send them automatically/i)).toBeVisible()
@@ -664,9 +672,13 @@ test('revoked farm work is quarantined, exportable, and never returned to an act
   await expect(page.getByRole('heading', { name: 'Saved work needs your review' })).toBeHidden()
   expect(await page.evaluate((key) => localStorage.getItem(key), queueKey)).toBeNull()
   expect(await page.evaluate((key) => (JSON.parse(localStorage.getItem(key) ?? '{}') as { records?: unknown[] }).records?.length, recoveryKey)).toBe(0)
-  const arbitraryKnownFarm = await page.evaluate(async ({ base, targetFarmId }) => (await fetch(`${base}/rest/v1/rpc/get_removed_farm_access_epoch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ target_farm_id: targetFarmId }) })).status, { base: `https://${projectRef}.supabase.co`, targetFarmId: farmB })
-  expect(arbitraryKnownFarm).toBe(400)
-  expect(unexpected).toEqual(['INVALID get_removed_farm_access_epoch body'])
+  const callerScopedStatuses = await page.evaluate(async ({ base, mappedFarmId, arbitraryFarmId, otherBearer }) => {
+    const request = (targetFarmId: string, headers?: HeadersInit) => fetch(`${base}/rest/v1/rpc/get_removed_farm_access_epoch`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ target_farm_id: targetFarmId }) })
+    const [arbitraryKnownFarm, missingBearer, otherCaller] = await Promise.all([request(arbitraryFarmId), request(mappedFarmId), request(mappedFarmId, { authorization: `Bearer ${otherBearer}` })])
+    return { arbitraryKnownFarm: arbitraryKnownFarm.status, missingBearer: missingBearer.status, otherCaller: otherCaller.status }
+  }, { base: `https://${projectRef}.supabase.co`, mappedFarmId: farmA, arbitraryFarmId: farmB, otherBearer: session(userBId).access_token })
+  expect(callerScopedStatuses).toEqual({ arbitraryKnownFarm: 400, missingBearer: 400, otherCaller: 400 })
+  expect(unexpected).toEqual(['INVALID get_removed_farm_access_epoch body', 'INVALID get_removed_farm_access_epoch body', 'INVALID get_removed_farm_access_epoch body'])
 })
 
 test('a stale tab cannot recreate revoked queue or readable cache work after regrant', async ({ page, context }) => {
@@ -705,7 +717,7 @@ test('a stale tab cannot recreate revoked queue or readable cache work after reg
   await patchStarted
 
   await page.unroute('https://*.supabase.co/**')
-  await mockSupabase(page, [], notifications, false, 1, ownerProfile, userId, { [farmA]: 2 })
+  await mockSupabase(page, [], notifications, false, 1, ownerProfile, userId, { [userId]: { [farmA]: 2 } })
   const accessKey = `farm-rx-access:v1:${projectRef}:${userId}`
   await page.evaluate((key) => { const value = JSON.parse(localStorage.getItem(key) ?? '{}'); value.validatedAt = '2020-01-01T00:00:00.000Z'; localStorage.setItem(key, JSON.stringify(value)) }, accessKey)
   await page.reload()
@@ -763,7 +775,7 @@ test('a delayed old farm read cannot overwrite the cache after revoke and regran
   const accessKey = `farm-rx-access:v1:${projectRef}:${userId}`
   const fenceKey = `farm-rx-revocation-fence:v1:${projectRef}:${userId}:${farmA}`
   await page.unroute('https://*.supabase.co/**')
-  await mockSupabase(page, [], [], false, 1, ownerProfile, userId, { [farmA]: 2 })
+  await mockSupabase(page, [], [], false, 1, ownerProfile, userId, { [userId]: { [farmA]: 2 } })
   await page.goto('/fields')
   await page.evaluate((key) => { const value = JSON.parse(localStorage.getItem(key) ?? '{}'); value.validatedAt = '2020-01-01T00:00:00.000Z'; localStorage.setItem(key, JSON.stringify(value)) }, accessKey)
   await page.reload()
