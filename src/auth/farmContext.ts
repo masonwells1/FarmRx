@@ -760,6 +760,18 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
         localRevocationEpoch = priorRevocationState.serverEpoch ?? priorEpochs[farmId] ?? null
         if (!localRevocationEpoch) throw new Error('Farm access changed while it was being verified.')
       }
+      // Access removal must become visible even when another tab is still
+      // finishing a remote operation inside farm custody. That tab rechecks
+      // this fence before and after its transaction; cleanup below then waits
+      // for custody and quarantines any bytes a writer had already persisted.
+      const earlyRevocationState = inspectFarmRevocationState(target, scope)
+      if (serverEpoch === null) {
+        if (earlyRevocationState.kind !== 'revoked') {
+          markFarmRevoked(target, scope, validationStartedAt, localRevocationEpoch!)
+        }
+      } else if (earlyRevocationState.kind !== 'revoked' || earlyRevocationState.serverEpoch !== serverEpoch) {
+        resetFarmRevokedFromLive(target, scope, serverEpoch, validationStartedAt)
+      }
       await coordinatedFarmCustodyTransaction(scope, target, createId, async (verifyCustody) => {
         verifyValidation(); verifyCustody()
         quarantineRevokedFarmWork(target, scope)

@@ -129,8 +129,18 @@ export async function queueTransaction<T>(key: string, storage: StorageLike, cre
       touched = true
     }
     const lockName = `farm-rx-queue:${key}`
-    if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(lockName, async () => { verified(); return task(() => verified()) })
-    return leased(key, storage, createId, (verify) => { verified(verify); return task(() => verified(verify)) })
+    if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(lockName, async () => {
+      verified()
+      const result = await task(() => verified())
+      verified()
+      return result
+    })
+    return leased(key, storage, createId, async (verify) => {
+      verified(verify)
+      const result = await task(() => verified(verify))
+      verified(verify)
+      return result
+    })
   })
   const result = scope ? await coordinatedFarmCustodyTransaction(scope, storage, createId, run) : await run(() => undefined)
   if (touched) publish(key)

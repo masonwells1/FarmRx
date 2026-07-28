@@ -24,7 +24,8 @@ import { SupabaseInventoryRepository } from './SupabaseInventoryRepository'
 import { SupabaseProfitabilityRepository } from './SupabaseProfitabilityRepository'
 import { FarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
 import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
-import { captureFarmRevocationFence, resetFarmGrantFromLive } from './farmRevocationFence'
+import { captureFarmRevocationFence, resetFarmGrantFromLive, resetFarmRevokedFromLive } from './farmRevocationFence'
+import { verifyQueuedOperationContext } from './queuedOperationGuard'
 import { createFieldLocationClient, parseFieldLocationQueue } from './fieldLocation'
 import { beginFarmReplayAuthorization, captureFarmReplayContextGuard, captureFarmReplayUserGuard, createFarmAccessValidationGate, currentFarmContext, type FarmAccess, type LoadedFarmAccessProfile } from '../auth/farmContext'
 import { farmActiveContextKey, writeFarmAccessEpochs } from '../auth/farmAccessEpoch'
@@ -86,6 +87,17 @@ async function rejects(action: () => Promise<unknown>, message: string) { let re
 async function rejectsChangedContext(action: () => Promise<unknown>, message: string) { try { await action() } catch (error) { assert(error instanceof Error && /signed-in account or selected farm changed/i.test(error.message), message); return } throw new Error(message) }
 async function settleCrossTabEvents() { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); await new Promise((resolve) => setTimeout(resolve, 0)) }) }
 const operationContext = (userId: string, farmId: string, generation = 1, serverEpoch = 1): FarmOperationContext => ({ projectRef, userId, farmId, generation, token: id(900 + generation), serverEpoch })
+
+// A writer can hold farm custody while access removal holds validation. The
+// durable revoked fence must reject that writer before it awaits getContext,
+// otherwise the two boundaries wait on each other indefinitely.
+const inversionStorage = memory()
+resetFarmGrantFromLive(inversionStorage, { projectRef, userId: userA, farmId: farmA }, 1, stamp)
+const inversionExpected = captureFarmRevocationFence(inversionStorage, { projectRef, userId: userA, farmId: farmA })
+let inversionContextCalls = 0
+resetFarmRevokedFromLive(inversionStorage, { projectRef, userId: userA, farmId: farmA }, 2, '2026-07-15T12:00:01.000000+00:00')
+await rejects(() => verifyQueuedOperationContext({ projectRef, storage: inversionStorage, getContext: async () => { inversionContextCalls += 1; return { userId: userA, farmId: farmA } } }, inversionExpected, { userId: userA, farmId: farmA }), 'A revoked writer waited for validation instead of failing at the durable fence.')
+assert(inversionContextCalls === 0, 'A revoked writer called getContext before checking its durable farm fence.')
 
 // A delayed startup validation cannot publish after a newer reconnect validation.
 const validationGate = createFarmAccessValidationGate()

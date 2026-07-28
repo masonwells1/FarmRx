@@ -61,6 +61,27 @@ assert(storage.getItem(scopedKey) === null, 'A stale transaction wrote after a m
 await queueTransaction(scopedKey, storage, createId, async (verify) => { verify(); storage.setItem(scopedKey, 'new-generation-write') })
 assert(storage.getItem(scopedKey) === 'new-generation-write', 'A newly granted transaction could not use the new generation.')
 
+// A remote operation can report success without its repository calling verify
+// again. The transaction boundary itself must reject that misleading success
+// if access was revoked while the operation was awaited.
+resetFarmGrantFromLive(storage, scope, 2, '2026-07-15T12:01:30.000Z')
+let releaseSuccessfulRemote!: () => void
+const successfulRemoteReleased = new Promise<void>((resolve) => { releaseSuccessfulRemote = resolve })
+let successfulRemoteEntered!: () => void
+const successfulRemoteStarted = new Promise<void>((resolve) => { successfulRemoteEntered = resolve })
+const misleadingSuccess = queueTransaction(scopedKey, storage, createId, async (verify) => {
+  verify()
+  successfulRemoteEntered()
+  await successfulRemoteReleased
+  return 'saved remotely'
+})
+await successfulRemoteStarted
+resetFarmRevokedFromLive(storage, scope, 3, '2026-07-15T12:02:00.000Z')
+releaseSuccessfulRemote()
+let misleadingSuccessBlocked = false
+try { await misleadingSuccess } catch (error) { misleadingSuccessBlocked = error instanceof Error && /Access to this farm changed/.test(error.message) }
+assert(misleadingSuccessBlocked, 'A queue transaction returned misleading success after its farm was revoked during a remote await.')
+
 // A writer and removed-farm cleanup run in separate agent-like coordinators.
 // Writer-first must retain its persisted work for removal recovery; removal-first
 // must reject a later writer before it can create an active queue.

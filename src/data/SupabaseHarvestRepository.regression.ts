@@ -83,7 +83,9 @@ async function run() {
     const raceRepository = new QueuedHarvestRepository(raceLive as unknown as SupabaseHarvestRepository, { getContext: async () => { const context = { userId: activeUser, farmId: farm }; captured(); return context }, projectRef, storage: raceStore, createId: () => uid(sequence++), clock: () => stamp, isOffline: () => false })
     const saving = raceRepository.saveHarvest(draft()); await capturedPromise
     if (scenario === 'account-switch') activeUser = uid(8); else resetFarmGrantFromLive(raceStore, scope, 1, stamp)
-    release(); await blocker
+    release()
+    if (scenario === 'same-scope-regrant') await rejects(() => blocker, 'A regranted Harvest queue blocker returned after its captured fence changed.')
+    else await blocker
     await rejects(() => saving, `Harvest must reject a delayed ${scenario} operation.`)
     assert(writerCalls === 0 && new HarvestWriteQueue(raceStore, queueKey).read().entries.length === 0, `Harvest ${scenario} race reached the writer or queue.`)
   }
