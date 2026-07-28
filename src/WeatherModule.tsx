@@ -6,7 +6,7 @@ import { bestWindowToday, compassLabel, evaluateSprayWindow, formatF, formatHour
 import type { DailyForecast, ForecastBundle, WeatherSample } from './data/weather'
 import { farmerError } from './lib/farmerErrors'
 import { createSubmitLock } from './lib/submitLock'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { manualSprayRecordIntent } from './data/weatherSprayHandoff'
 
 type CardState = { loading: boolean; bundle: ForecastBundle | null; error: string | null }
