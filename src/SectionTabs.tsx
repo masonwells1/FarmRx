@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink } from 'react-router'
 
 /** Header tab bar inside a section (Farm Profit Manager pattern, Mason-approved 2026-07-13):
  * the left sidebar picks the section, these tabs pick the page within it. */

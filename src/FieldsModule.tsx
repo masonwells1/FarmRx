@@ -7,7 +7,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { fieldsRepository, moduleYear } from "./data";
 import type {
   Arrangement,
