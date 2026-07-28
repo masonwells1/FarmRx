@@ -14,6 +14,7 @@ import { farmerError } from '../lib/farmerErrors'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from './binLedger'
 import { deriveBinOnHand } from './binLedger'
 import { FILLED_OFFER_DELETE_MESSAGE } from './firmOffers'
+import { readFileSync } from 'node:fs'
 import type { FieldsRepository } from './fields'
 import type { FarmOperationContext } from './farmOperationContext'
 import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainContract, GrainContractDelivery, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, ProductionEstimate } from './grain'
@@ -80,7 +81,7 @@ class FakeGateway implements GrainDataGateway {
   async finalizeContractPriceLegRpc(_farm: string, contractId: string, leg: 'futures_price' | 'basis', value: number) { const raw = this.state.bundle.grain_contracts.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId) as Record<string, unknown> | undefined; if (!raw) throw new Error('missing contract'); if (raw[leg] !== null) throw new Error('already finalized'); const future = leg === 'futures_price' ? value : Number(raw.futures_price); const basis = leg === 'basis' ? value : Number(raw.basis); const saved = { ...raw, futures_price: future, basis, cash_price: future + basis + Number(raw.premium_cents_per_bu) / 100, updated_at: stamp }; this.state.bundle.grain_contracts = this.state.bundle.grain_contracts.map((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId ? saved : item); const response = structuredClone(saved); this.afterOnlineMutation?.(); return response }
   async upsertGrainAlertSettings(_farm: string, row: GrainAlertSettings) { this.guard(); return structuredClone(row) }
 }
-function repository(gateway: FakeGateway, verifyOperationContext: (context: ReturnType<typeof operationContext>) => Promise<void> = async () => undefined) { const fields = gateway.state.fields; const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fields), saveField: async () => { throw new Error('not used') } }; return new SupabaseGrainRepository({ gateway, fieldsRepository, getFarmId: async () => fields.farm.id, getOperationContext: async () => operationContext(fields.farm.id), verifyOperationContext, createId: () => uid(99), clock: () => stamp }) }
+function repository(gateway: FakeGateway, verifyOperationContext: (context: ReturnType<typeof operationContext>) => Promise<void> = async () => undefined, fieldsRepository?: FieldsRepository) { const fields = gateway.state.fields; const configuredFields = fieldsRepository ?? { getData: async () => structuredClone(fields), getSnapshot: async (_context: FarmOperationContext) => ({ data: structuredClone(fields), source: 'live' as const, capturedAt: stamp }), saveField: async () => { throw new Error('not used') } }; return new SupabaseGrainRepository({ gateway, fieldsRepository: configuredFields, getFarmId: async () => fields.farm.id, getOperationContext: async () => operationContext(fields.farm.id), verifyOperationContext, createId: () => uid(99), clock: () => stamp }) }
 async function run() {
   const gateway = new FakeGateway(); const repo = repository(gateway); const data = await repo.getData()
   // 1-5: eight row sets map strictly, numeric strings/nulls survive, reconcile from injected Fields.
@@ -98,6 +99,33 @@ async function run() {
   const changed: MarketingPlanTarget = { ...data.marketing_plan_targets[0], target_pct_of_production: 25 }; await repo.saveMarketingPlanTarget(changed); assert(gateway.planInputs.at(-1)?.targets.length === 1 && gateway.planInputs.at(-1)?.targets[0].id === changed.id, 'Single target edit did not become a complete scoped plan.')
   await repo.replaceMarketingPlanTargets(data.marketing_plan_targets[0], []); assert(gateway.planInputs.at(-1)?.targets.length === 0, 'Empty plan replacement was not passed to the RPC.')
   await repo.saveCashBid(data.cash_bids[0]); assert(gateway.bidInputs[0].farm_id === data.fields.farm.id && gateway.bidInputs[0].notes === '[USDA MARS 2850]', 'Cash bid save lost farm/provenance.')
+  const snapshotGateway = new FakeGateway(); let mutableFieldReads = 0; let operationSnapshotReads = 0
+  const snapshotFields: FieldsRepository & { owner: string } = {
+    owner: 'grain-operation-snapshot',
+    getData: async () => { mutableFieldReads += 1; throw new Error('Queued Grain operations must not re-enter mutable Fields reads.') },
+    async getSnapshot(_context) {
+      assert(this.owner === 'grain-operation-snapshot', 'Grain operation snapshot lost its Fields receiver.')
+      operationSnapshotReads += 1
+      return { data: structuredClone(snapshotGateway.state.fields), source: 'live', capturedAt: stamp }
+    },
+    saveField: async () => { throw new Error('not used') },
+  }
+  const snapshotRepo = repository(snapshotGateway, undefined, snapshotFields); const snapshotData = structuredClone(data)
+  const snapshotOffer: FirmOffer = { ...snapshotGateway.state.scope, id: uid(970), buyer: 'Snapshot buyer', offer_type: 'cash', bushels: 500, price: 4.5, basis: null, contract_month: null, expires_on: null, delivery_location: null, notes: null, status: 'open', filled_contract_id: null, created_at: stamp, updated_at: stamp }
+  ;(snapshotGateway.state.bundle.firm_offers as unknown[]).push(structuredClone(snapshotOffer))
+  await snapshotRepo.saveProductionEstimateOperation(snapshotData.production_estimates[0], operationContext(snapshotData.fields.farm.id))
+  await snapshotRepo.reconcileHarvestActualOperation(snapshotData.production_estimates[0], 50_000, operationContext(snapshotData.fields.farm.id))
+  await snapshotRepo.saveContractOperation(snapshotData.grain_contracts[0], operationContext(snapshotData.fields.farm.id))
+  await snapshotRepo.replaceMarketingPlanOperation(snapshotData.marketing_plan_targets[0], [], operationContext(snapshotData.fields.farm.id))
+  await snapshotRepo.saveCashBidOperation(snapshotData.cash_bids[0], operationContext(snapshotData.fields.farm.id))
+  await snapshotRepo.saveFirmOfferOperation(snapshotOffer, operationContext(snapshotData.fields.farm.id))
+  await snapshotRepo.deleteFirmOfferOperation(snapshotOffer.id, operationContext(snapshotData.fields.farm.id))
+  await snapshotRepo.upsertGrainBinOperation(snapshotData.grain_bins[0], operationContext(snapshotData.fields.farm.id))
+  await snapshotRepo.appendBinTransactionOperation({ id: uid(971), farm_id: snapshotData.fields.farm.id, grain_bin_id: snapshotData.grain_bins[0].id, direction: 'in', bushels: 25, commodity_id: snapshotGateway.state.scope.commodity_id, occurred_on: '2026-07-12', note: null, source_kind: null, created_at: stamp }, operationContext(snapshotData.fields.farm.id))
+  const grainSource = readFileSync(new URL('./SupabaseGrainRepository.ts', import.meta.url), 'utf8')
+  for (const method of ['saveProductionEstimateOperation', 'reconcileHarvestActualOperation', 'saveContractOperation', 'replaceMarketingPlanOperation', 'saveCashBidOperation', 'saveMarketingAlertRuleOperation', 'fillFirmOfferOperation', 'saveFirmOfferOperation', 'upsertGrainBinOperation', 'appendBinTransactionOperation']) { const start = grainSource.indexOf(`async ${method}`); const end = grainSource.indexOf('\n  async ', start + 1); assert(start >= 0 && grainSource.slice(start, end < 0 ? undefined : end).includes('operationFields(context)'), `Grain ${method} bypassed the operation Fields snapshot.`) }
+  assert(/deleteFirmOfferOperation[^\n]*operationFields\(context\)[^\n]*operationWorkspace\(context, fields\)/.test(grainSource) && /appendBinTransactionOperation[^\n]*operationFields\(context\)[^\n]*operationWorkspace\(context, fields\)/.test(grainSource), 'Grain operation workspace reads bypassed the context-bound Fields snapshot.')
+  assert(mutableFieldReads === 0 && operationSnapshotReads === 9, 'Queued Grain operations did not use only the bound side-effect-free Fields snapshot.')
   // 11: live failure stays live and no mock storage is involved.
   gateway.fail = true; await rejects(() => repo.getData(), 'Live failure must never become a mock success.'); gateway.fail = false
   const queueKey = grainWriteQueueKey(supabaseConfig.projectRef, uid(10), data.fields.farm.id); assert(queueKey.startsWith('farm-rx-grain-write-queue:v1:') && !queueKey.includes('farm-rx-write-queue:v1:'), 'Grain queue key is not isolated.')

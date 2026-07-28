@@ -118,6 +118,32 @@ async function run() {
   await rejects(() => repo(refusedGateway, noPureFields).getSnapshot(operationContext), 'Equipment/Tasks snapshot fell back to mutation-capable Fields getData().')
   assert(refusedGateway.calls.load === 0 && refusedGateway.calls.generated === 0, 'Equipment/Tasks queried or generated data after its pure Fields dependency was refused.')
 
+  const operationSnapshotGateway = new FakeGateway(); let mutableFieldReads = 0; let operationSnapshotReads = 0
+  const operationSnapshotFields: FieldsRepository & { owner: string } = {
+    owner: 'operation-snapshot-fields',
+    getData: async () => { mutableFieldReads += 1; throw new Error('Queued Equipment/Tasks operations must not re-enter mutable Fields reads.') },
+    async getSnapshot(context) {
+      assert(this.owner === 'operation-snapshot-fields', 'Equipment/Tasks operation snapshot lost its Fields receiver.')
+      operationSnapshotReads += 1
+      return { data: structuredClone(fieldsFor(context.farmId)), source: 'live', capturedAt: micro }
+    },
+    saveField: async () => { throw new Error('not used') },
+  }
+  const operationSnapshotRepository = repo(operationSnapshotGateway, operationSnapshotFields)
+  const operationEquipment = equipmentWrite(uid(503), 'Snapshot tractor')
+  const operationInterval = intervalWrite(uid(504))
+  const operationService = { ...serviceWrite(uid(505)), reading_id: uid(506) }
+  const operationTask = taskWrite(uid(507))
+  await operationSnapshotRepository.saveEquipmentOperation(operationEquipment, operationContext)
+  await operationSnapshotRepository.addMeterReadingOperation(meterWrite(uid(508)), operationContext)
+  await operationSnapshotRepository.saveIntervalOperation(operationInterval, operationContext)
+  await operationSnapshotRepository.addServiceLogEntryOperation(operationService, operationContext)
+  await operationSnapshotRepository.saveTaskOperation(operationTask, operationContext)
+  await operationSnapshotRepository.deleteTaskOperation(operationTask.id, operationContext)
+  await operationSnapshotRepository.deleteServiceLogEntryOperation(operationService.id, operationContext)
+  await operationSnapshotRepository.deleteIntervalOperation(operationInterval.id, operationContext)
+  assert(mutableFieldReads === 0 && operationSnapshotReads === 9, 'Queued Equipment/Tasks operations did not use only the bound side-effect-free Fields snapshot.')
+
   const snapshotRef = 'snapshot-equipment'; const snapshotStore = memory(); resetFarmGrantFromLive(snapshotStore, { projectRef: snapshotRef, userId: actor, farmId: farm }, 1, micro); const snapshotContext = captureFarmRevocationFence(snapshotStore, { projectRef: snapshotRef, userId: actor, farmId: farm })
   const snapshotGateway = new FakeGateway(); let snapshotIds = 0; let snapshotContextResolutions = 0; const snapshotQueued = new QueuedEquipmentTasksRepository(repo(snapshotGateway), { getContext: async () => { snapshotContextResolutions += 1; throw new Error('pure snapshot resolved mutable farm access') }, projectRef: snapshotRef, storage: snapshotStore, createId: () => { snapshotIds += 1; return uid(800 + snapshotIds) }, clock: () => micro, isOffline: () => false })
   const pendingTask = taskWrite(uid(81)); new EquipmentTasksWriteQueue(snapshotStore, equipmentTasksWriteQueueKey(snapshotRef, actor, farm)).append({ version: 1, module: 'equipment_tasks', kind: 'saveTask', operationId: uid(810), userId: actor, farmId: farm, enqueuedAt: micro, value: pendingTask })
