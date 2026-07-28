@@ -137,7 +137,7 @@ async function fulfillJson(route: Route, body: unknown) {
   await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(body) })
 }
 
-async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1, profile = ownerProfile, activeUser: string | (() => string) = userId) {
+async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1, profile = ownerProfile, activeUser: string | (() => string) = userId, removedFarmEpochs: Readonly<Record<string, number>> = {}) {
   const unexpected: string[] = []
   await page.route('https://*.supabase.co/**', async (route) => {
     const url = new URL(route.request().url())
@@ -164,8 +164,9 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
       let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
       const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
       const targetFarmId = value?.target_farm_id
-      if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof targetFarmId !== 'string' || !farms.some((farm) => farm.id === targetFarmId) || accessible.some((farm) => farm.id === targetFarmId)) { await rejectShape('get_removed_farm_access_epoch body'); return }
-      await fulfillJson(route, [{ farm_id: targetFarmId, access_epoch: accessEpoch }])
+      const removedEpoch = typeof targetFarmId === 'string' ? removedFarmEpochs[targetFarmId] : undefined
+      if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof targetFarmId !== 'string' || !farms.some((farm) => farm.id === targetFarmId) || accessible.some((farm) => farm.id === targetFarmId) || !Object.hasOwn(removedFarmEpochs, targetFarmId) || !Number.isSafeInteger(removedEpoch) || removedEpoch < 1) { await rejectShape('get_removed_farm_access_epoch body'); return }
+      await fulfillJson(route, [{ farm_id: targetFarmId, access_epoch: removedEpoch }])
       return
     }
     if (['can_access_farm', 'is_active_farm_member', 'can_edit_farm', 'can_manage_farm', 'can_read_private_financials', 'has_explicit_rep_access'].some((name) => url.pathname === `/rest/v1/rpc/${name}`)) {
@@ -623,20 +624,35 @@ test('revoked farm work is quarantined, exportable, and never returned to an act
   const operationId = '00000000-0000-4000-8000-000000000043'
   const queueKey = `farm-rx-notifications-write-queue:v1:${projectRef}:${userId}:${farmA}`
   const recoveryKey = `farm-rx-revoked-work-recovery:v1:${projectRef}:${userId}`
-  await context.addInitScript(({ accessKey, access, queueKey: targetQueue, queue }) => {
+  const fenceKey = `farm-rx-revocation-fence:v1:${projectRef}:${userId}:${farmA}`
+  const generationKey = `farm-rx-revocation-generation:v1:${projectRef}:${userId}:${farmA}`
+  const epochKey = `farm-rx-server-access-epochs:v1:${projectRef}:${userId}`
+  await context.addInitScript(({ accessKey, access, queueKey: targetQueue, queue, fenceKey, generationKey, epochKey, changedAt, targetUserId, targetFarmId }) => {
     localStorage.setItem(accessKey, JSON.stringify(access))
     localStorage.setItem(targetQueue, JSON.stringify(queue))
+    const fence = { version: 2, generation: 1, token: '00000000-0000-4000-8000-000000000099', serverEpoch: 1, revoked: false, changedAt }
+    localStorage.setItem(fenceKey, JSON.stringify(fence))
+    localStorage.setItem(generationKey, JSON.stringify({ version: fence.version, generation: fence.generation, token: fence.token, serverEpoch: fence.serverEpoch, changedAt: fence.changedAt }))
+    localStorage.setItem(epochKey, JSON.stringify({ version: 1, userId: targetUserId, epochs: { [targetFarmId]: 1 }, validatedAt: changedAt }))
   }, {
     accessKey: `farm-rx-access:v1:${projectRef}:${userId}`,
     access: { version: 1, userId, farms: [farmRow(farms[0])], selectedFarmId: farmA, validatedAt: now },
     queueKey,
     queue: { version: 1, entries: [{ version: 1, module: 'notifications', kind: 'markRead', operationId, userId, farmId: farmA, enqueuedAt: now, ids: [notificationA] }] },
+    fenceKey,
+    generationKey,
+    epochKey,
+    changedAt: now,
+    targetUserId: userId,
+    targetFarmId: farmA,
   })
-  const unexpected = await mockSupabase(page, [])
+  const unexpected = await mockSupabase(page, [], [], false, 1, ownerProfile, userId, { [farmA]: 2 })
   await page.goto('/fields')
   await expect(page.getByRole('heading', { name: 'Saved work needs your review' })).toBeVisible()
   await expect(page.getByText(/will never send them automatically/i)).toBeVisible()
   expect(await page.evaluate((key) => localStorage.getItem(key), queueKey)).toBeNull()
+  await expect.poll(() => page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { revoked?: boolean; serverEpoch?: number }, fenceKey)).toMatchObject({ revoked: true, serverEpoch: 2 })
+  expect((await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { generation?: number }, fenceKey)).generation).toBeGreaterThan(1)
   const saved = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { records?: Array<{ payload?: { entries?: Array<{ operationId?: string }> } }> }, recoveryKey)
   expect(saved.records).toHaveLength(1)
   expect(saved.records?.[0]?.payload?.entries?.[0]?.operationId).toBe(operationId)
@@ -648,7 +664,9 @@ test('revoked farm work is quarantined, exportable, and never returned to an act
   await expect(page.getByRole('heading', { name: 'Saved work needs your review' })).toBeHidden()
   expect(await page.evaluate((key) => localStorage.getItem(key), queueKey)).toBeNull()
   expect(await page.evaluate((key) => (JSON.parse(localStorage.getItem(key) ?? '{}') as { records?: unknown[] }).records?.length, recoveryKey)).toBe(0)
-  expect(unexpected).toEqual([])
+  const arbitraryKnownFarm = await page.evaluate(async ({ base, targetFarmId }) => (await fetch(`${base}/rest/v1/rpc/get_removed_farm_access_epoch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ target_farm_id: targetFarmId }) })).status, { base: `https://${projectRef}.supabase.co`, targetFarmId: farmB })
+  expect(arbitraryKnownFarm).toBe(400)
+  expect(unexpected).toEqual(['INVALID get_removed_farm_access_epoch body'])
 })
 
 test('a stale tab cannot recreate revoked queue or readable cache work after regrant', async ({ page, context }) => {
@@ -687,12 +705,12 @@ test('a stale tab cannot recreate revoked queue or readable cache work after reg
   await patchStarted
 
   await page.unroute('https://*.supabase.co/**')
-  await mockSupabase(page, [], notifications)
+  await mockSupabase(page, [], notifications, false, 1, ownerProfile, userId, { [farmA]: 2 })
   const accessKey = `farm-rx-access:v1:${projectRef}:${userId}`
   await page.evaluate((key) => { const value = JSON.parse(localStorage.getItem(key) ?? '{}'); value.validatedAt = '2020-01-01T00:00:00.000Z'; localStorage.setItem(key, JSON.stringify(value)) }, accessKey)
   await page.reload()
   const fenceKey = `farm-rx-revocation-fence:v1:${projectRef}:${userId}:${farmA}`
-  await expect.poll(() => page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { revoked?: boolean; generation?: number }, fenceKey)).toMatchObject({ revoked: true })
+  await expect.poll(() => page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { revoked?: boolean; generation?: number; serverEpoch?: number }, fenceKey)).toMatchObject({ revoked: true, serverEpoch: 2 })
   await page.evaluate((key) => localStorage.removeItem(key), fenceKey)
 
   releasePatch()
@@ -745,11 +763,11 @@ test('a delayed old farm read cannot overwrite the cache after revoke and regran
   const accessKey = `farm-rx-access:v1:${projectRef}:${userId}`
   const fenceKey = `farm-rx-revocation-fence:v1:${projectRef}:${userId}:${farmA}`
   await page.unroute('https://*.supabase.co/**')
-  await mockSupabase(page, [], [], false, 2)
+  await mockSupabase(page, [], [], false, 1, ownerProfile, userId, { [farmA]: 2 })
   await page.goto('/fields')
   await page.evaluate((key) => { const value = JSON.parse(localStorage.getItem(key) ?? '{}'); value.validatedAt = '2020-01-01T00:00:00.000Z'; localStorage.setItem(key, JSON.stringify(value)) }, accessKey)
   await page.reload()
-  await expect.poll(() => page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { revoked?: boolean }, fenceKey)).toMatchObject({ revoked: true })
+  await expect.poll(() => page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { revoked?: boolean; serverEpoch?: number }, fenceKey)).toMatchObject({ revoked: true, serverEpoch: 2 })
 
   await page.unroute('https://*.supabase.co/**')
   await mockSupabase(page, [farms[0]], [], false, 3)
