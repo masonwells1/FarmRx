@@ -160,6 +160,14 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
       await fulfillJson(route, accessible.map((farm) => ({ farm_id: farm.id, access_epoch: accessEpoch })))
       return
     }
+    if (url.pathname === '/rest/v1/rpc/get_removed_farm_access_epoch') {
+      let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
+      const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
+      const targetFarmId = value?.target_farm_id
+      if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof targetFarmId !== 'string' || !farms.some((farm) => farm.id === targetFarmId) || accessible.some((farm) => farm.id === targetFarmId)) { await rejectShape('get_removed_farm_access_epoch body'); return }
+      await fulfillJson(route, [{ farm_id: targetFarmId, access_epoch: accessEpoch }])
+      return
+    }
     if (['can_access_farm', 'is_active_farm_member', 'can_edit_farm', 'can_manage_farm', 'can_read_private_financials', 'has_explicit_rep_access'].some((name) => url.pathname === `/rest/v1/rpc/${name}`)) {
       let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
       const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
