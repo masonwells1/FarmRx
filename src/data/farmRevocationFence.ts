@@ -4,6 +4,7 @@ export type FarmRevocationScope = { projectRef: string; userId: string; farmId: 
 export type FarmRevocationSnapshot = FarmRevocationScope & { generation: number; token: string; serverEpoch: number }
 type Fence = { version: 2; generation: number; token: string; serverEpoch: number; revoked: boolean; changedAt: string }
 type GenerationLedger = { version: 2; generation: number; token: string; serverEpoch: number; changedAt: string }
+type RevocationRecoveryFence = { version: 1; prior: FarmRevocationSnapshot }
 type EnumeratedStorage = StorageLike & { readonly length: number; key(index: number): string | null }
 
 const blocked = 'Access to this farm changed while work was being saved. Nothing was queued or replayed.'
@@ -20,6 +21,10 @@ export function farmRevocationFenceKey(scope: FarmRevocationScope) {
 
 export function farmRevocationGenerationKey(scope: FarmRevocationScope) {
   return `farm-rx-revocation-generation:v1:${scope.projectRef}:${scope.userId}:${scope.farmId}`
+}
+
+function farmRevocationRecoveryKey(scope: FarmRevocationScope) {
+  return `farm-rx-revocation-recovery:v1:${scope.projectRef}:${scope.userId}:${scope.farmId}`
 }
 
 function parseFence(raw: string): Fence {
@@ -51,6 +56,15 @@ function readFence(storage: StorageLike, scope: FarmRevocationScope): Fence {
   const { fence, ledger } = readState(storage, scope)
   if (!fence || !ledger) throw new Error(blocked)
   return fence
+}
+
+function parseRecoveryFence(raw: string, scope: FarmRevocationScope): FarmRevocationSnapshot {
+  try {
+    const value = JSON.parse(raw) as Partial<RevocationRecoveryFence>
+    const prior = value.prior
+    if (!prior || typeof prior !== 'object' || Array.isArray(prior) || Object.keys(value).length !== 2 || value.version !== 1 || Object.keys(prior).length !== 6 || prior.projectRef !== scope.projectRef || prior.userId !== scope.userId || prior.farmId !== scope.farmId || !Number.isSafeInteger(prior.generation) || prior.generation < 1 || typeof prior.token !== 'string' || !tokenPattern.test(prior.token) || !Number.isSafeInteger(prior.serverEpoch) || prior.serverEpoch < 1) throw new Error()
+    return prior
+  } catch { throw new Error(blocked) }
 }
 
 function writeFence(storage: StorageLike, scope: FarmRevocationScope, value: Fence) {
@@ -119,6 +133,44 @@ export function captureFarmRevocationFence(storage: StorageLike, scope: FarmRevo
   const current = readFence(storage, scope)
   if (current.revoked) throw new Error(blocked)
   return { ...scope, generation: current.generation, token: current.token, serverEpoch: current.serverEpoch }
+}
+
+/** Retain an active custody snapshot before publishing a revoked fence. It is
+ * not authorization: it can only prove which already-queued v2 Field Log
+ * bytes may be moved into recovery if custody acquisition is interrupted. */
+export function prepareFarmRevocationRecoveryFence(storage: StorageLike, scope: FarmRevocationScope): FarmRevocationSnapshot {
+  const prior = captureFarmRevocationFence(storage, scope)
+  const key = farmRevocationRecoveryKey(scope)
+  const bytes = JSON.stringify({ version: 1, prior } satisfies RevocationRecoveryFence)
+  storage.setItem(key, bytes)
+  if (storage.getItem(key) !== bytes || JSON.stringify({ version: 1, prior: parseRecoveryFence(bytes, scope) }) !== bytes) throw new Error(blocked)
+  return prior
+}
+
+/** A retained prior fence is usable only for the immediately following revoked
+ * generation. A removal may advance the server epoch; this never permits
+ * queue replay or a grant. */
+export function readFarmRevocationRecoveryFence(storage: StorageLike, scope: FarmRevocationScope): FarmRevocationSnapshot | undefined {
+  const raw = storage.getItem(farmRevocationRecoveryKey(scope))
+  if (raw === null) return undefined
+  let prior: FarmRevocationSnapshot
+  try { prior = parseRecoveryFence(raw, scope) } catch { return undefined }
+  let current: Fence
+  try { current = readFence(storage, scope) } catch { return undefined }
+  if (!current.revoked || current.generation !== prior.generation + 1 || current.token === prior.token) return undefined
+  return prior
+}
+
+export function clearFarmRevocationRecoveryFence(storage: StorageLike, scope: FarmRevocationScope, prior: FarmRevocationSnapshot): void {
+  const key = farmRevocationRecoveryKey(scope)
+  const raw = storage.getItem(key)
+  if (raw === null) return
+  try {
+    const stored = parseRecoveryFence(raw, scope)
+    if (stored.generation !== prior.generation || stored.token !== prior.token || stored.serverEpoch !== prior.serverEpoch) return
+  } catch { return }
+  storage.removeItem(key)
+  if (storage.getItem(key) !== null) throw new Error(blocked)
 }
 
 export function verifyFarmRevocationFence(storage: StorageLike, snapshot: FarmRevocationSnapshot): void {

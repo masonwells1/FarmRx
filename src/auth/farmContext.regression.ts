@@ -4,6 +4,7 @@ class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>()
   writes = 0
   beforeWrite: (() => void) | null = null
+  beforeSetItem: ((key: string) => void) | null = null
   beforeRemoveItem: ((key: string) => void) | null = null
   private onWrite() { const hook = this.beforeWrite; this.beforeWrite = null; hook?.() }
   get length() { return this.values.size }
@@ -11,7 +12,7 @@ class MemoryStorage implements Storage {
   getItem(key: string) { return this.values.get(key) ?? null }
   key(index: number) { return [...this.values.keys()][index] ?? null }
   removeItem(key: string) { this.beforeRemoveItem?.(key); this.onWrite(); this.values.delete(key); this.writes += 1 }
-  setItem(key: string, value: string) { this.onWrite(); this.values.set(key, value); this.writes += 1 }
+  setItem(key: string, value: string) { this.beforeSetItem?.(key); this.onWrite(); this.values.set(key, value); this.writes += 1 }
 }
 
 const storage = new MemoryStorage()
@@ -159,6 +160,25 @@ assert.deepEqual(staleGapAccess.farms.map(({ id }) => id), [farmB], 'Removed-far
 assert(staleAppendRejected, 'A stale Field Log append was accepted after removed-farm queue quarantine began.')
 assert.equal(storage.getItem(removedQueueKey), null, 'A stale Field Log append left old-custody bytes in the active queue.')
 assert(readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === removedQueueKey), 'Removed-farm cleanup did not retain exportable recovery for the quarantined Field Log work.')
+// Removal publishes its revoked tombstone before it obtains farm custody. If
+// custody acquisition is interrupted, a retry must retain the original v2
+// fence only to quarantine that already-saved work—not to revive the queue.
+resetFarmGrantFromLive(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId }, 1, now)
+const interruptedPriorFence = captureFarmRevocationFence(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId })
+const interruptedQueueBytes = JSON.stringify({ version: 1, entries: [{ version: 2, module: 'fieldLog', kind: 'saveEntry', operationId: '00000000-0000-4000-8000-000000000098', userId: userB, farmId: removedFarmId, enqueuedAt: now, operationContext: interruptedPriorFence, draft: { id: '00000000-0000-4000-8000-000000000099', field_id: '00000000-0000-4000-8000-000000000100', entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Retain retry custody for quarantine' } }] })
+storage.setItem(removedQueueKey, interruptedQueueBytes)
+storage.beforeSetItem = (key) => {
+  if (!key.startsWith(`farm-rx-farm-custody:v1:${supabaseConfig.projectRef}:${userB}:${removedFarmId}:lease`)) return
+  storage.beforeSetItem = null
+  throw new Error('Interrupted custody acquisition.')
+}
+await assert.rejects(loadFarmAccess(userB, true), /Interrupted custody acquisition/, 'The deterministic custody interruption did not stop removal after revocation.')
+const interruptedTombstone = inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId })
+assert.equal(interruptedTombstone.kind, 'revoked', 'The interrupted removal did not persist its early revoked tombstone.')
+assert.equal(interruptedTombstone.serverEpoch, 2, 'The interrupted removal did not preserve the authoritative removed-farm epoch.')
+await loadFarmAccess(userB, true)
+assert.equal(storage.getItem(removedQueueKey), null, 'Retry left valid prior-fence Field Log work active after interrupted custody acquisition.')
+assert(readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === removedQueueKey && JSON.stringify(record.payload) === interruptedQueueBytes), 'Retry did not preserve valid prior-fence Field Log work as exportable revoked-farm recovery.')
 const unknownRemovedFarm = '00000000-0000-4000-8000-000000000094'
 const unknownQueueKey = `farm-rx-field-log-write-queue:v1:${supabaseConfig.projectRef}:${userB}:${unknownRemovedFarm}`
 const unknownQueueBytes = removedQueueBytes.replaceAll(removedFarmId, unknownRemovedFarm)

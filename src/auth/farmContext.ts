@@ -3,7 +3,7 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import type { Farm } from '../data/fields'
 import { deleteUserWorkspaceCaches, maximumClockSkewMs } from '../data/workspaceCache'
 import { quarantineRevokedFarmWork } from '../data/revokedFarmRecovery'
-import { captureFarmRevocationFence, inspectFarmRevocationState, listFarmRevocationScopes, markFarmGranted, markFarmRevoked, resetFarmGrantFromLive, resetFarmRevokedFromLive, verifyFarmRevocationFence, type FarmRevocationSnapshot } from '../data/farmRevocationFence'
+import { captureFarmRevocationFence, clearFarmRevocationRecoveryFence, inspectFarmRevocationState, listFarmRevocationScopes, markFarmGranted, markFarmRevoked, prepareFarmRevocationRecoveryFence, readFarmRevocationRecoveryFence, resetFarmGrantFromLive, resetFarmRevokedFromLive, verifyFarmRevocationFence, type FarmRevocationSnapshot } from '../data/farmRevocationFence'
 import { coordinatedDeviceTransaction, coordinatedFarmCustodyTransaction } from '../data/queueTransaction'
 import { clearDeviceClockHighWater, DeviceClockRollbackError, observeDeviceTime, verifyObservedDeviceTime } from '../data/deviceClockFence'
 import { FarmReplayContextChangedError, type StorageLike } from '../data/writeQueue'
@@ -765,7 +765,9 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
       // this fence before and after its transaction; cleanup below then waits
       // for custody and quarantines any bytes a writer had already persisted.
       const earlyRevocationState = inspectFarmRevocationState(target, scope)
-      const capturedPriorFieldLogFence = earlyRevocationState.kind === 'active' ? captureFarmRevocationFence(target, scope) : undefined
+      const capturedPriorFieldLogFence = earlyRevocationState.kind === 'active'
+        ? prepareFarmRevocationRecoveryFence(target, scope)
+        : earlyRevocationState.kind === 'revoked' ? readFarmRevocationRecoveryFence(target, scope) : undefined
       if (serverEpoch === null) {
         if (earlyRevocationState.kind !== 'revoked') {
           markFarmRevoked(target, scope, validationStartedAt, localRevocationEpoch!)
@@ -776,6 +778,7 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
       await coordinatedFarmCustodyTransaction(scope, target, createId, async (verifyCustody) => {
         verifyValidation(); verifyCustody()
         quarantineRevokedFarmWork(target, scope, undefined, capturedPriorFieldLogFence)
+        if (capturedPriorFieldLogFence) clearFarmRevocationRecoveryFence(target, scope, capturedPriorFieldLogFence)
         // Quarantine is synchronous, but cache cleanup yields. Revoke before that
         // yield so a stale tab holding the old fence cannot append work after the
         // queue scan has completed.
