@@ -340,11 +340,20 @@ function New-MapleDockerSwapAdapter {
         return $backendArray
     }.GetNewClosure()
 
+    $pollBackend = {
+        param([string]$Operation)
+        for($attempt=1;$attempt-le$ProofContract.PollAttempts;$attempt++){
+            try { return @(& $queryBackend) } catch {}
+            if($attempt-lt$ProofContract.PollAttempts-and(&$Wait $ProofContract.PollMilliseconds)-ne$true){throw "MAPLE_DOCKER_ADAPTER_FAILED: $Operation poll wait failed."}
+        }
+        throw "MAPLE_DOCKER_ADAPTER_FAILED: $Operation readiness timed out."
+    }.GetNewClosure()
+
     $proveRoute = {
         param([bool]$IncludeClock)
         & $resetRoute
         $beforeState = & $inspectActualState
-        $beforeBackends = @(& $queryBackend)
+        $beforeBackends = @(& $pollBackend 'initial PostgREST backend')
         $null = & $checked docker @('restart','--time','60',$names.Rest) 'PostgREST restart'
         $afterState=$null;$afterBackends=$null
         for($attempt=1;$attempt-le$ProofContract.PollAttempts;$attempt++){
