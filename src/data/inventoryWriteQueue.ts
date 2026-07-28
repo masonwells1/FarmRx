@@ -14,6 +14,7 @@ export interface InventoryQueueEnvelopeV1 { version: 1; entries: InventoryQueueE
 const blocked = 'Saved changes on this device need attention. Nothing was deleted.'
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const stamp = (value: unknown) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) && !Number.isNaN(Date.parse(value))
+const date = (value: unknown) => { if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false; const parsed = new Date(`${value}T00:00:00.000Z`); return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value }
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 const exact = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
 const isId = (value: unknown) => typeof value === 'string' && uuid.test(value)
@@ -25,7 +26,7 @@ function entry(value: unknown): value is InventoryQueueEntryV1 {
   if (value.kind === 'saveProduct') { if (!exact(value, [...common, 'row']) || !row(value.row)) return false; const product = value.row as Record<string, unknown>; return isId(product.id) && isId(product.farm_id) }
   if (value.kind === 'saveReceiptBundle') return exact(value, [...common, 'write']) && record(value.write) && exact(value.write, ['farmId', 'receipt', 'lines']) && isId(value.write.farmId) && row(value.write.receipt) && Array.isArray(value.write.lines) && value.write.lines.length > 0 && value.write.lines.every(row)
   if (value.kind === 'cancelReceipt') return exact(value, [...common, 'write']) && record(value.write) && exact(value.write, ['farmId', 'id', 'reason', 'cancelledAt']) && isId(value.write.farmId) && isId(value.write.id) && typeof value.write.reason === 'string' && value.write.reason.trim().length > 0 && stamp(value.write.cancelledAt)
-  if (value.kind === 'addAdjustment') return exact(value, [...common, 'row']) && record(value.row) && exact(value.row, ['id', 'product_id', 'adjustment_quantity_in_inventory_unit', 'reason', 'notes', 'adjusted_at']) && isId(value.row.id) && isId(value.row.product_id) && finite(value.row.adjustment_quantity_in_inventory_unit) && value.row.adjustment_quantity_in_inventory_unit !== 0 && typeof value.row.notes === 'string' && value.row.notes.trim().length > 0 && stamp(value.row.adjusted_at)
+  if (value.kind === 'addAdjustment') return exact(value, [...common, 'row']) && record(value.row) && exact(value.row, ['id', 'product_id', 'adjustment_quantity_in_inventory_unit', 'reason', 'notes', 'adjusted_at']) && isId(value.row.id) && isId(value.row.product_id) && finite(value.row.adjustment_quantity_in_inventory_unit) && value.row.adjustment_quantity_in_inventory_unit !== 0 && typeof value.row.notes === 'string' && value.row.notes.trim().length > 0 && date(value.row.adjusted_at)
   if (value.kind === 'saveApplicationBundle') return exact(value, [...common, 'write']) && record(value.write) && exact(value.write, ['farmId', 'application', 'products']) && isId(value.write.farmId) && row(value.write.application) && Array.isArray(value.write.products) && value.write.products.length > 0 && value.write.products.every(row)
   return false
 }

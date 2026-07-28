@@ -54,7 +54,7 @@ export class QueuedGrainRepository implements GrainRepository {
     if (entry.kind !== 'appendBinTransaction') return false
     try {
       await this.verifyOperation(entry, operationContext, memoryGuard)
-      const saved = (await this.writer.getData()).bin_transactions.find((row) => row.id === entry.row.id)
+      const saved = await this.writer.getBinTransactionOperation(entry.row.id, operationContext)
       await this.verifyOperation(entry, operationContext, memoryGuard)
       return !!saved && saved.grain_bin_id === entry.row.grain_bin_id && saved.direction === entry.row.direction && saved.bushels === entry.row.bushels && saved.commodity_id === entry.row.commodity_id && saved.occurred_on === entry.row.occurred_on
     } catch (error) { if (isFarmReplayContextChangedError(error)) throw error; return false }

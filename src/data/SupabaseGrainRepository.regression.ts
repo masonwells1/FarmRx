@@ -1,6 +1,6 @@
 import type { GrainDataGateway, GrainRowBundle, ReplaceMarketingPlanInput } from './GrainDataGateway'
 import { productionActualColumns } from './SupabaseGrainDataGateway'
-import { GrainWriteQueue, grainWriteQueueKey, parseGrainQueue } from './grainWriteQueue'
+import { GrainWriteQueue, grainWriteQueueKey, parseGrainQueue, type GrainQueueEntryV1 } from './grainWriteQueue'
 import { QueuedGrainRepository } from './QueuedGrainRepository'
 import { fieldsSeedForRegression } from './MockFieldsRepository'
 import { SupabaseGrainRepository } from './SupabaseGrainRepository'
@@ -333,6 +333,17 @@ async function run() {
   const novemberStorage: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
   let novemberOnline = true; let novemberSequence = 1200; const novemberGateway = new FakeGateway(); const novemberWriter = repository(novemberGateway); const novemberQueue = new QueuedGrainRepository(novemberWriter, { getContext: async () => ({ userId: uid(10), farmId: novemberGateway.state.fields.farm.id }), projectRef: supabaseConfig.projectRef, storage: novemberStorage, createId: () => uid(novemberSequence++), clock: () => '2027-11-10T17:10:00.000Z', isOffline: () => !novemberOnline })
   const novemberQueueKey = grainWriteQueueKey(supabaseConfig.projectRef, uid(10), novemberGateway.state.fields.farm.id)
+  // Legacy append-movement entries must reconcile the exact persisted movement
+  // through the operation-context point reader instead of public getData().
+  const ambiguousMovementStore: StorageLike & { values: Map<string, string> } = { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } }
+  const ambiguousMovementGateway = new FakeGateway(); const ambiguousMovementWriter = repository(ambiguousMovementGateway); let ambiguousMovementId = 1190
+  const ambiguousMovementQueue = new QueuedGrainRepository(ambiguousMovementWriter, { getContext: async () => ({ userId: uid(10), farmId: ambiguousMovementGateway.state.fields.farm.id }), projectRef: 'ambiguous-movement', storage: ambiguousMovementStore, createId: () => uid(ambiguousMovementId++), clock: () => stamp, isOffline: () => false })
+  const ambiguousMovement: BinTransaction = { id: uid(1191), farm_id: ambiguousMovementGateway.state.fields.farm.id, grain_bin_id: String((ambiguousMovementGateway.state.bundle.grain_bins[0] as { id: string }).id), direction: 'in', bushels: 17, commodity_id: ambiguousMovementGateway.state.scope.commodity_id, occurred_on: '2026-07-12', note: 'Ambiguous legacy replay', source_kind: 'manual entry', created_at: stamp }
+  const ambiguousMovementEntry: GrainQueueEntryV1 = { version: 1, module: 'grain', kind: 'appendBinTransaction', operationId: uid(1192), userId: uid(10), farmId: ambiguousMovement.farm_id, enqueuedAt: stamp, row: ambiguousMovement }
+  const ambiguousMovementKey = grainWriteQueueKey('ambiguous-movement', uid(10), ambiguousMovement.farm_id); new GrainWriteQueue(ambiguousMovementStore, ambiguousMovementKey).append(ambiguousMovementEntry)
+  ambiguousMovementGateway.throwAfterMovementPersist = true; ambiguousMovementWriter.getData = async () => { throw new Error('ambiguous movement replay must not call public getData') }
+  await ambiguousMovementQueue.inspectAndReplay()
+  assert(ambiguousMovementGateway.movementInputs.filter((row) => row.id === ambiguousMovement.id).length === 1 && new GrainWriteQueue(ambiguousMovementStore, ambiguousMovementKey).read().entries.length === 0 && readNeedsAttention(ambiguousMovementStore, ambiguousMovementKey).length === 0 && getSaveReceipt(ambiguousMovement.id) === 'saved', 'An ambiguous legacy movement replay must use its operation-context point reader, remove the confirmed head, publish Saved, and never duplicate or park the accepted movement.')
   const novemberContract = async (id: string): Promise<GrainContract> => ({ ...(await novemberWriter.getData()).grain_contracts[0], id, crop_year: 2027, delivery_start: '2027-11-10', delivery_end: '2027-11-30', created_at: '2027-11-10T17:10:00.000Z', updated_at: '2027-11-10T17:10:00.000Z' })
   const novemberBin = async (id: string): Promise<GrainBin> => ({ ...(await novemberWriter.getData()).grain_bins[0], id, name: `November ${id.slice(-4)}`, capacity_bu: 60_000, created_at: '2027-11-10T17:10:00.000Z', updated_at: '2027-11-10T17:10:00.000Z' })
   const delayedContract = await novemberContract(uid(1201)); let releaseContract!: () => void; const contractGate = new Promise<void>((resolve) => { releaseContract = resolve }); novemberGateway.beforeContract = () => contractGate
