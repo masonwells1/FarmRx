@@ -4,12 +4,13 @@ class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>()
   writes = 0
   beforeWrite: (() => void) | null = null
+  beforeRemoveItem: ((key: string) => void) | null = null
   private onWrite() { const hook = this.beforeWrite; this.beforeWrite = null; hook?.() }
   get length() { return this.values.size }
   clear() { this.onWrite(); this.values.clear(); this.writes += 1 }
   getItem(key: string) { return this.values.get(key) ?? null }
   key(index: number) { return [...this.values.keys()][index] ?? null }
-  removeItem(key: string) { this.onWrite(); this.values.delete(key); this.writes += 1 }
+  removeItem(key: string) { this.beforeRemoveItem?.(key); this.onWrite(); this.values.delete(key); this.writes += 1 }
   setItem(key: string, value: string) { this.onWrite(); this.values.set(key, value); this.writes += 1 }
 }
 
@@ -19,8 +20,9 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { on
 
 const { supabase } = await import('../lib/supabaseClient')
 const { beginFarmReplayAuthorization, canAccessFarmModule, canEditFarmModule, canReplayFarmModule, captureFarmReplayContextGuard, clearFarmAccess, clearFarmReadyAuthorization, createFarmAccessValidationGate, currentFarmContext, currentUserId, deriveFarmAccessProfile, FarmAccessStorageUnsafeError, isDefiniteTransportFailure, isFarmReplayAuthoritativelyOffline, loadFarmAccess, loadFarmAccessProfile, publishFarmReadyAuthorization, restoreOfflineFarmUserId, selectFarm } = await import('./farmContext')
-const { captureFarmRevocationFence, farmRevocationFenceKey, inspectFarmRevocationState, resetFarmGrantFromLive } = await import('../data/farmRevocationFence')
+const { captureFarmRevocationFence, farmRevocationFenceKey, inspectFarmRevocationState, resetFarmGrantFromLive, verifyFarmRevocationFence } = await import('../data/farmRevocationFence')
 const { readRevokedFarmRecovery } = await import('../data/revokedFarmRecovery')
+const { FieldLogWriteQueue } = await import('../data/fieldLogWriteQueue')
 const { deviceClockHighWaterKey } = await import('../data/deviceClockFence')
 const { farmActiveContextKey, writeFarmAccessEpochs } = await import('./farmAccessEpoch')
 const { supabaseConfig } = await import('../lib/supabaseConfig')
@@ -130,6 +132,31 @@ assert.deepEqual(
   { kind: 'revoked', generation: hardDeleteActive.generation! + 1, serverEpoch: hardDeleteActive.serverEpoch },
   'A hard-deleted membership did not install a local revoked tombstone from the last known epoch.',
 )
+// A stale tab can hold the old custody snapshot while removal quarantines the
+// existing queue. It must not append after quarantine has yielded for cache
+// cleanup: either the append is rejected by the revoked fence or every saved
+// byte must be visible in recovery.
+resetFarmGrantFromLive(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId }, 2, now)
+const staleAppendQueue = new FieldLogWriteQueue(storage, removedQueueKey)
+const staleAppendContext = captureFarmRevocationFence(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId })
+const staleAppendBytes = JSON.stringify({ version: 1, entries: [{ version: 2, module: 'fieldLog', kind: 'saveEntry', operationId: '00000000-0000-4000-8000-000000000095', userId: userB, farmId: removedFarmId, enqueuedAt: now, operationContext: staleAppendContext, draft: { id: '00000000-0000-4000-8000-000000000096', field_id: '00000000-0000-4000-8000-000000000097', entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Stale-tab custody gap' } }] })
+storage.setItem(removedQueueKey, removedQueueBytes)
+let staleAppendRejected = false
+storage.beforeRemoveItem = (key) => {
+  if (key !== removedQueueKey) return
+  storage.beforeRemoveItem = null
+  queueMicrotask(() => {
+    try {
+      verifyFarmRevocationFence(storage, staleAppendContext)
+      staleAppendQueue.append(JSON.parse(staleAppendBytes).entries[0])
+    } catch { staleAppendRejected = true }
+  })
+}
+const staleGapAccess = await loadFarmAccess(userB, true)
+assert.deepEqual(staleGapAccess.farms.map(({ id }) => id), [farmB], 'Removed-farm cleanup did not retain the accessible farm list during the stale-tab race.')
+assert(staleAppendRejected, 'A stale Field Log append was accepted after removed-farm queue quarantine began.')
+assert.equal(storage.getItem(removedQueueKey), null, 'A stale Field Log append left old-custody bytes in the active queue.')
+assert(readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === removedQueueKey), 'Removed-farm cleanup did not retain exportable recovery for the quarantined Field Log work.')
 const unknownRemovedFarm = '00000000-0000-4000-8000-000000000094'
 const unknownQueueKey = `farm-rx-field-log-write-queue:v1:${supabaseConfig.projectRef}:${userB}:${unknownRemovedFarm}`
 const unknownQueueBytes = removedQueueBytes.replaceAll(removedFarmId, unknownRemovedFarm)

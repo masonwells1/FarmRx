@@ -761,9 +761,9 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
         if (!localRevocationEpoch) throw new Error('Farm access changed while it was being verified.')
       }
       quarantineRevokedFarmWork(target, scope)
-      await deleteUserWorkspaceCaches(supabaseConfig.projectRef, userId, farmId)
-      await requireCurrentSession(userId, deadline.signal)
-      verifyValidation()
+      // Quarantine is synchronous, but cache cleanup yields. Revoke before that
+      // yield so a stale tab holding the old fence cannot append work after the
+      // queue scan has completed.
       const currentRevocationState = inspectFarmRevocationState(target, scope)
       if (serverEpoch === null) {
         if (currentRevocationState.kind !== 'revoked') {
@@ -772,6 +772,9 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
       } else if (currentRevocationState.kind !== 'revoked' || currentRevocationState.serverEpoch !== serverEpoch) {
         resetFarmRevokedFromLive(target, scope, serverEpoch, validationStartedAt)
       }
+      await deleteUserWorkspaceCaches(supabaseConfig.projectRef, userId, farmId)
+      await requireCurrentSession(userId, deadline.signal)
+      verifyValidation()
     }
     for (const farm of farms) {
       verifyValidation()
