@@ -54,7 +54,7 @@ export class FieldLogWriteQueue {
     return scope ? parseFieldLogQueueForScope(raw, { projectRef: scope[1]!, userId: scope[2]!, farmId: scope[3]! }) : parseFieldLogQueue(raw)
   }
   private persist(next: FieldLogQueueEnvelopeV1) { const raw = JSON.stringify(next); parseFieldLogQueue(raw); this.storage.setItem(this.key, raw); if (this.storage.getItem(this.key) !== raw) throw new Error('This log entry could not be saved on this device. Keep this screen open and try again.') }
-  append(entry: FieldLogQueueEntry) { const current = this.read(); const next = { version: 1 as const, entries: current.entries.some((item) => item.operationId === entry.operationId) ? current.entries : [...current.entries, entry] }; this.persist(next); return next }
+  append(entry: FieldLogQueueEntry) { const current = this.read(); const next = { version: 1 as const, entries: current.entries.some((item) => item.operationId === entry.operationId) ? current.entries : [...current.entries, entry] }; verifyFieldLogQueueCustody(this.storage, next); this.persist(next); return next }
   removeConfirmedHead(operationId: string) { const current = this.read(); if (current.entries[0]?.operationId !== operationId) throw new Error(blocked); const next = { version: 1 as const, entries: current.entries.slice(1) }; this.persist(next); return next }
   parkLegacyHead(operationId: string) {
     const current = this.read(); const head = current.entries[0]

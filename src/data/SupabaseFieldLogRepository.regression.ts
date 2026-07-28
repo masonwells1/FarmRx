@@ -3,7 +3,7 @@ import type { FieldLogDataGateway } from './FieldLogDataGateway'
 import { FieldLogWriteQueue, fieldLogWriteQueueKey } from './fieldLogWriteQueue'
 import { canEditFieldLog, SupabaseFieldLogRepository } from './SupabaseFieldLogRepository'
 import type { FarmOperationContext } from './farmOperationContext'
-import { captureFarmRevocationFence, resetFarmGrantFromLive } from './farmRevocationFence'
+import { captureFarmRevocationFence, resetFarmGrantFromLive, resetFarmRevokedFromLive } from './farmRevocationFence'
 import { readNeedsAttention } from './needsAttentionStore'
 import { quarantineRevokedFarmWork, readRevokedFarmRecovery } from './revokedFarmRecovery'
 import type { FieldLogEntryDraft } from './fieldLog'
@@ -59,7 +59,25 @@ async function run() {
   // Group 6: replay rejects a mismatched canonical row instead of discarding the queued write.
   offline = true; const mismatched = await queued.saveEntry(draft(uid(40))); assert(mismatched.pending, 'A replay test needs a queued local entry.'); queueGateway.mutateSave = (value) => ({ ...(value as object), id: uid(41) }); offline = false; await queued.inspectAndReplay(); assert(queue.read().entries.length === 1 && queue.read().entries[0].kind === 'saveEntry', 'A replay returning a different row ID must remain blocked in the queue.'); queueGateway.mutateSave = (value) => value
 
-  // Group 7: a same-ID revoke/regrant cannot upgrade old queued work to the new access epoch.
+  // Group 7: a final async guard may pass before another tab quarantines and
+  // revokes this farm, but the append boundary must still reject old custody.
+  const raceStore = memory(); const raceProject = 'revoked-append-race'; const raceScope = { projectRef: raceProject, userId: actor, farmId: farm }; const raceQueue = new FieldLogWriteQueue(raceStore, fieldLogWriteQueueKey(raceProject, actor, farm))
+  resetFarmGrantFromLive(raceStore, raceScope, 1, stamp)
+  const preservedContext = captureFarmRevocationFence(raceStore, raceScope)
+  const preservedEntry = { version: 2 as const, module: 'fieldLog' as const, kind: 'saveEntry' as const, operationId: uid(450), userId: actor, farmId: farm, enqueuedAt: stamp, operationContext: preservedContext, draft: draft(uid(451), 'note') }
+  raceQueue.append(preservedEntry)
+  let revokedAfterGuard = false; const originalAppend = FieldLogWriteQueue.prototype.append
+  FieldLogWriteQueue.prototype.append = function (entry) {
+    if (this.key === raceQueue.key && entry.operationId !== preservedEntry.operationId) { quarantineRevokedFarmWork(raceStore, raceScope, stamp); resetFarmRevokedFromLive(raceStore, raceScope, 2, stamp); revokedAfterGuard = true }
+    return originalAppend.call(this, entry)
+  }
+  const raceGateway = new FakeGateway(); const raced = new QueuedFieldLogRepository(live(raceGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: raceProject, storage: raceStore, createId: (() => { let next = 460; return () => uid(next++) })(), clock: () => stamp, isOffline: () => true })
+  try { await rejects(() => raced.saveEntry(draft(uid(452), 'note')), 'A stale Field Log save returned pending after its final guard had passed and the farm was revoked.') }
+  finally { FieldLogWriteQueue.prototype.append = originalAppend }
+  assert(revokedAfterGuard && raceStore.getItem(raceQueue.key) === null, 'A post-guard revocation left stale Field Log bytes in the active queue.')
+  assert(readRevokedFarmRecovery(raceStore, raceProject, actor).some((record) => record.originalKey === raceQueue.key && (record.payload as { entries?: Array<{ operationId?: string }> }).entries?.[0]?.operationId === preservedEntry.operationId), 'A post-guard revocation did not retain the already-quarantined Field Log work for export.')
+
+  // Group 8: a same-ID revoke/regrant cannot upgrade old queued work to the new access epoch.
   const regrantStore = memory(); let regrantOffline = true; const regrantGateway = new FakeGateway(); const regrantProject = 'regrant-field-log'; let regrantId = 500
   const regrantQueued = new QueuedFieldLogRepository(live(regrantGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: regrantProject, storage: regrantStore, createId: () => uid(regrantId++), clock: () => stamp, isOffline: () => regrantOffline })
   await regrantQueued.saveEntry(draft(uid(501))); const regrantQueue = new FieldLogWriteQueue(regrantStore, fieldLogWriteQueueKey(regrantProject, actor, farm)); const regrantBytes = regrantStore.getItem(regrantQueue.key); const oldCustody = regrantQueue.read().entries[0]
@@ -67,7 +85,7 @@ async function run() {
   await rejects(() => regrantQueued.inspectAndReplay(), 'A same-ID regrant must reject replay under the new epoch.')
   assert(regrantGateway.saves.length === 0 && regrantStore.getItem(regrantQueue.key) === regrantBytes && oldCustody?.version === 2 && oldCustody.operationContext.serverEpoch === 1, 'A same-ID regrant must preserve the byte-exact old queue and make zero remote calls.')
 
-  // Group 8: cached projection verifies each saved custody snapshot before rendering.
+  // Group 9: cached projection verifies each saved custody snapshot before rendering.
   const renderStore = memory(); const renderGateway = new FakeGateway(); let renderOffline = true; let renderId = 550; const renderProject = 'stale-render-field-log'; let renderCacheReads = 0
   const readRenderCache = async <T>() => { renderCacheReads += 1; return { data: { entries: [], viewer: { user_id: actor, role: 'worker' } } as T, cachedAt: stamp } }
   const renderQueued = new QueuedFieldLogRepository(live(renderGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: renderProject, storage: renderStore, createId: () => uid(renderId++), clock: () => stamp, isOffline: () => renderOffline, readWorkspaceCache: readRenderCache })
@@ -77,7 +95,7 @@ async function run() {
   await rejects(() => renderQueued.getData(), 'A stale-generation v2 item was projected over cached Field Log data.')
   assert(renderCacheReads === 1 && renderStore.getItem(renderQueue.key) === renderBytes && renderGateway.saves.length === 0 && readRevokedFarmRecovery(renderStore, renderProject, actor).length === 0, 'Stale-generation cached projection must reach the cached overlay, preserve queue bytes, and make zero remote or recovery mutations.')
 
-  // Group 9: a cross-project v2 item is invalid for both active queue reads and revoked recovery.
+  // Group 10: a cross-project v2 item is invalid for both active queue reads and revoked recovery.
   assert(savedEntry.version === 2, 'The cross-project custody test needs a v2 queue item.')
   const crossProjectStore = memory(); const crossProject = 'cross-project-field-log'; const crossKey = fieldLogWriteQueueKey(crossProject, actor, farm); const crossEntry = { ...savedEntry, operationContext: { ...savedEntry.operationContext, projectRef: 'different-project' } }; const crossBytes = JSON.stringify({ version: 1, entries: [crossEntry] })
   crossProjectStore.setItem(crossKey, crossBytes)
@@ -95,7 +113,7 @@ async function run() {
     assert(mutantStore.getItem(mutantKey) === mutantBytes && readRevokedFarmRecovery(mutantStore, mutantProject, actor).length === 0, `Mismatched ${mutation} custody must preserve exact queue bytes and publish no recovery mutation.`)
   }
 
-  // Group 10: a lost response retains and replays the original operation-era context.
+  // Group 11: a lost response retains and replays the original operation-era context.
   const lostStore = memory(); const lostGateway = new FakeGateway(); lostGateway.saveFailure = new TypeError('Failed to fetch after commit'); let lostId = 600
   const lostQueued = new QueuedFieldLogRepository(live(lostGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'lost-field-log', storage: lostStore, createId: () => uid(lostId++), clock: () => stamp, isOffline: () => false })
   const lostPending = await lostQueued.saveEntry(draft(uid(601))); const lostQueue = new FieldLogWriteQueue(lostStore, fieldLogWriteQueueKey('lost-field-log', actor, farm)); const lostEntry = lostQueue.read().entries[0]
@@ -104,7 +122,7 @@ async function run() {
   lostGateway.saveFailure = null; await lostQueued.inspectAndReplay()
   assert(lostQueue.read().entries.length === 0 && [...lostGateway.saves].length === 2 && lostGateway.saves.every((call) => JSON.stringify(call.context) === JSON.stringify(lostCustody)), 'Lost-response replay must resend the same operation with the exact saved custody context.')
 
-  // Group 11: legacy work is durably parked without a remote call, while corrupt bytes stay untouched.
+  // Group 12: legacy work is durably parked without a remote call, while corrupt bytes stay untouched.
   const legacyStore = memory(); const legacyGateway = new FakeGateway(); const legacyProject = 'legacy-field-log'; const legacyKey = fieldLogWriteQueueKey(legacyProject, actor, farm); const legacyEntry = { version: 1 as const, module: 'fieldLog' as const, kind: 'saveEntry' as const, operationId: uid(700), userId: actor, farmId: farm, enqueuedAt: stamp, draft: draft(uid(701)) }
   legacyStore.setItem(legacyKey, JSON.stringify({ version: 1, entries: [legacyEntry] })); let legacyId = 710
   const legacyQueued = new QueuedFieldLogRepository(live(legacyGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: legacyProject, storage: legacyStore, createId: () => uid(legacyId++), clock: () => stamp, isOffline: () => true })
@@ -121,7 +139,7 @@ async function run() {
   await corruptRecoveryQueued.inspectAndReplay()
   assert(corruptRecoveryStore.getItem(corruptRecoveryKey) === corruptLegacyBytes && corruptRecoveryStore.getItem(`${corruptRecoveryKey}:needs-attention`) === corruptRecoveryBytes && corruptRecoveryGateway.saves.length === 0, 'A corrupt recovery record must preserve both corrupt recovery bytes and legacy queue custody without any remote call.')
 
-  // Group 12: queue bytes reject malformed DB-illegal shapes and season math excludes notes.
+  // Group 13: queue bytes reject malformed DB-illegal shapes and season math excludes notes.
   assert(new FieldLogWriteQueue(store, 'empty').read().entries.length === 0, 'An empty queue must remain valid.')
   await rejects(async () => { const bad = new FieldLogWriteQueue({ ...store, getItem: () => '{bad' }, 'bad'); bad.read() }, 'Corrupt queue bytes must fail closed.')
   const malformed = (entry: object) => new FieldLogWriteQueue({ ...store, getItem: () => JSON.stringify({ version: 1, entries: [entry] }) }, 'malformed').read()
@@ -134,6 +152,6 @@ async function run() {
   await rejects(async () => malformed({ ...queuedSave, version: 2, operationContext: { projectRef: 'test', userId: uid(999), farmId: farm, generation: 1, token: uid(998), serverEpoch: 1 } }), 'A v2 queue entry whose custody identity differs from its queue identity must fail closed.')
   const seasonEntries = [canonical({ ...draft(uid(30)), observed_on: '2026-01-01', rainfall_in: 0.2 }), canonical({ ...draft(uid(31)), observed_on: '2026-07-01', rainfall_in: 1.1 }), canonical({ ...draft(uid(32)), observed_on: '2025-12-31', rainfall_in: 9 }), canonical({ ...draft(uid(33), 'note'), observed_on: '2026-07-02' })] as Array<{ observed_on: string; rainfall_in: number | null; entry_type: string }>
   const total = seasonEntries.filter((entry) => entry.entry_type === 'rainfall' && entry.observed_on >= '2026-01-01' && entry.observed_on <= '2026-07-12').reduce((sum, entry) => sum + (entry.rainfall_in ?? 0), 0); assert(total === 1.3, 'Season rainfall must include only the current calendar year through today.')
-  console.log('SupabaseFieldLogRepository regression passed (12 coverage groups)')
+  console.log('SupabaseFieldLogRepository regression passed (13 coverage groups)')
 }
 void run()
