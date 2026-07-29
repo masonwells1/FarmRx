@@ -12,6 +12,7 @@ import { supabase } from '../lib/supabaseClient'
 import { getSyncStatus } from './syncStatus'
 import { readNeedsAttention } from './needsAttentionStore'
 import { getSaveReceipt } from '../lib/saveReceipt'
+import { readFileSync } from 'node:fs'
 import type { FieldsRepository } from './fields'
 import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, ProfitabilityMatrixStep } from './profitability'
 import type { StorageLike } from './writeQueue'
@@ -89,12 +90,12 @@ class FakeGateway implements ProfitabilityDataGateway {
     return this.mutate.copy ? this.mutate.copy(response) : response
   }
 }
-function repository(gateway: FakeGateway, verifyOperationContext: (context: import('./farmOperationContext').FarmOperationContext) => Promise<void> = async () => undefined) {
+function repository(gateway: FakeGateway, verifyOperationContext: (context: import('./farmOperationContext').FarmOperationContext) => Promise<void> = async () => undefined, fieldsRepository?: FieldsRepository) {
   const fields = gateway.state.fields
-  const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fields), saveField: async () => { throw new Error('not used') } }
+  const configuredFields = fieldsRepository ?? { getData: async () => structuredClone(fields), getSnapshot: async (_context: import('./farmOperationContext').FarmOperationContext) => ({ data: structuredClone(fields), source: 'live' as const, capturedAt: stamp }), saveField: async () => { throw new Error('not used') } }
   let n = 900
   const operationContext = { projectRef: 'test', userId: uid(10), farmId: fields.farm.id, generation: 1, token: uid(999), serverEpoch: 1 }
-  return new SupabaseProfitabilityRepository({ gateway, fieldsRepository, getFarmId: async () => fields.farm.id, getOperationContext: async () => operationContext, verifyOperationContext, createId: () => uid(n++), clock: () => stamp })
+  return new SupabaseProfitabilityRepository({ gateway, fieldsRepository: configuredFields, getFarmId: async () => fields.farm.id, getOperationContext: async () => operationContext, verifyOperationContext, createId: () => uid(n++), clock: () => stamp })
 }
 function memoryStorage(): StorageLike & { values: Map<string, string> } { return { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } } }
 
@@ -128,6 +129,28 @@ async function run() {
   const foreignBudget = structuredClone(gateway.state.bundle); (foreignBudget.budgets[0] as Record<string, unknown>).commodity_id = 'not-a-real-commodity'; gateway.state.bundle.budgets = foreignBudget.budgets; await rejects(() => repo.getWorkspace(), 'A budget with an unverifiable commodity must reject.'); gateway.state.bundle.budgets = fixture().bundle.budgets
   // 6: canonical-confirmation rejections — the repository must confirm the server's echoed rows, never trust its own request.
   const savedBudget = workspace.budgets[0]
+  const snapshotGateway = new FakeGateway(); let mutableFieldReads = 0; let operationSnapshotReads = 0
+  const snapshotFields: FieldsRepository & { owner: string } = {
+    owner: 'profitability-operation-snapshot',
+    getData: async () => { mutableFieldReads += 1; throw new Error('Queued Profitability operations must not re-enter mutable Fields reads.') },
+    async getSnapshot(_context) {
+      assert(this.owner === 'profitability-operation-snapshot', 'Profitability operation snapshot lost its Fields receiver.')
+      operationSnapshotReads += 1
+      return { data: structuredClone(snapshotGateway.state.fields), source: 'live', capturedAt: stamp }
+    },
+    saveField: async () => { throw new Error('not used') },
+  }
+  const snapshotRepo = repository(snapshotGateway, undefined, snapshotFields); const snapshotWorkspace = await repository(snapshotGateway).getWorkspace(); const snapshotContext = { projectRef: 'test', userId: uid(10), farmId: snapshotGateway.state.fields.farm.id, generation: 1, token: uid(999), serverEpoch: 1 }
+  const snapshotBudget = snapshotWorkspace.budgets[0]; const snapshotCopyId = uid(880); const snapshotCopy = { ...snapshotBudget, id: snapshotCopyId, name: 'Snapshot copy', copied_from_budget_id: snapshotBudget.id }
+  const snapshotSteps = snapshotWorkspace.matrix_steps.filter((step) => step.budget_id === snapshotBudget.id).map((step, index) => ({ ...step, id: uid(881 + index), budget_id: snapshotCopyId }))
+  await snapshotRepo.createBudgetOperation({ ...snapshotBudget, id: uid(890), name: 'Snapshot create', copied_from_budget_id: null }, snapshotWorkspace.matrix_steps.filter((step) => step.axis === 'price').map((step, index) => ({ ...step, id: uid(891 + index), budget_id: uid(890) })), snapshotWorkspace.matrix_steps.filter((step) => step.axis === 'yield').map((step, index) => ({ ...step, id: uid(894 + index), budget_id: uid(890) })), snapshotContext)
+  await snapshotRepo.saveBudgetInsuranceOperation(snapshotBudget.id, { rp_coverage_pct: 80, rp_aph_yield: 180, rp_projected_price: 4.62, rp_premium_per_acre: 0 }, snapshotBudget.updated_at, snapshotContext)
+  await snapshotRepo.saveBudgetOperation(snapshotBudget, snapshotContext)
+  await snapshotRepo.saveAllocationOperation(snapshotWorkspace.allocations[0], snapshotContext)
+  await snapshotRepo.copyBudgetOperation(snapshotBudget.id, snapshotCopy, [], snapshotSteps, snapshotContext)
+  const profitabilitySource = readFileSync(new URL('./SupabaseProfitabilityRepository.ts', import.meta.url), 'utf8')
+  for (const method of ['createBudgetOperation', 'saveBudgetInsuranceOperation', 'saveBudgetOperation', 'saveAllocationOperation', 'copyBudgetOperation']) { const start = profitabilitySource.indexOf(`async ${method}`); const end = profitabilitySource.indexOf('\n  async ', start + 1); assert(start >= 0 && profitabilitySource.slice(start, end < 0 ? undefined : end).includes('operationFields(context)'), `Profitability ${method} bypassed the operation Fields snapshot.`) }
+  assert(mutableFieldReads === 0 && operationSnapshotReads === 5, 'Queued Profitability operations did not use only the bound side-effect-free Fields snapshot.')
   let insuranceError: unknown = null
   const insuranceCallsBefore = gateway.insuranceCalls
   try { await repo.saveBudgetInsurance(savedBudget.id, { rp_coverage_pct: 80, expected_price_per_bushel: 5 } as unknown as import('./profitability').InsuranceBudgetPatch) } catch (error) { insuranceError = error }

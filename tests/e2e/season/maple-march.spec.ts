@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createSeasonRequestClassifier } from './season-request-classifier'
+import { seasonLoopbackOrigin, seasonLoopbackPort } from './season-loopback-port'
 
 const manifest = JSON.parse(readFileSync(resolve('tests/season/season-2027.manifest.json'), 'utf8')) as {
   fixtures: Array<{ label: string; uuid: string }>
@@ -20,6 +21,8 @@ const receiptId = fixture('Maple receipt')
 const lineId = fixture('Maple receipt line')
 const operationId = '27ff0000-0000-4000-8000-000000000003'
 const expectedMarchMutationRpcs = ['save_inventory_receipt_bundle']
+const seasonOrigin = seasonLoopbackOrigin('FARMRX_SEASON_MARCH_PORT', 4175)
+const seasonPort = String(seasonLoopbackPort('FARMRX_SEASON_MARCH_PORT', 4175))
 
 declare global {
   interface Window {
@@ -29,7 +32,7 @@ declare global {
 }
 
 async function installDeterminism(page: Page, requests: ReturnType<typeof createSeasonRequestClassifier>) {
-  const allowedNetworkOrigins = new Set(['http://127.0.0.1:4175', 'http://127.0.0.1:55321'])
+  const allowedNetworkOrigins = new Set([seasonOrigin, 'http://127.0.0.1:55321'])
   const forbiddenDestinations: string[] = []
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url())
@@ -47,7 +50,7 @@ async function installDeterminism(page: Page, requests: ReturnType<typeof create
   })
   await page.routeWebSocket(/^(?:ws|wss):\/\//, async (route) => {
     const url = new URL(route.url())
-    if (url.hostname !== '127.0.0.1' || !['4175', '55321'].includes(url.port)) { forbiddenDestinations.push(route.url()); await route.close({ code: 1008, reason: 'March proof permits loopback only' }); return }
+    if (url.hostname !== '127.0.0.1' || ![seasonPort, '55321'].includes(url.port)) { forbiddenDestinations.push(route.url()); await route.close({ code: 1008, reason: 'March proof permits loopback only' }); return }
     route.connectToServer()
   })
   page.on('response', (response) => {

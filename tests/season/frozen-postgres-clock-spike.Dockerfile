@@ -1,5 +1,5 @@
 ARG FAKETIME_ARTIFACTS_IMAGE
-ARG BASE_IMAGE=public.ecr.aws/supabase/postgres@sha256:9faa7279bcf1fd6834e65dc876b11e39cb53030bcb3d653beb7e5668200acbb5
+ARG BASE_IMAGE=public.ecr.aws/supabase/postgres@sha256:ba10e934f0a59990379f78ab9ed93926f1c291dd61a12fe4026f4202f1b89770
 FROM ${FAKETIME_ARTIFACTS_IMAGE} AS faketime-artifacts
 
 FROM ${BASE_IMAGE}

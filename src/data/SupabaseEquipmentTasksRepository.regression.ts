@@ -118,6 +118,32 @@ async function run() {
   await rejects(() => repo(refusedGateway, noPureFields).getSnapshot(operationContext), 'Equipment/Tasks snapshot fell back to mutation-capable Fields getData().')
   assert(refusedGateway.calls.load === 0 && refusedGateway.calls.generated === 0, 'Equipment/Tasks queried or generated data after its pure Fields dependency was refused.')
 
+  const operationSnapshotGateway = new FakeGateway(); let mutableFieldReads = 0; let operationSnapshotReads = 0
+  const operationSnapshotFields: FieldsRepository & { owner: string } = {
+    owner: 'operation-snapshot-fields',
+    getData: async () => { mutableFieldReads += 1; throw new Error('Queued Equipment/Tasks operations must not re-enter mutable Fields reads.') },
+    async getSnapshot(context) {
+      assert(this.owner === 'operation-snapshot-fields', 'Equipment/Tasks operation snapshot lost its Fields receiver.')
+      operationSnapshotReads += 1
+      return { data: structuredClone(fieldsFor(context.farmId)), source: 'live', capturedAt: micro }
+    },
+    saveField: async () => { throw new Error('not used') },
+  }
+  const operationSnapshotRepository = repo(operationSnapshotGateway, operationSnapshotFields)
+  const operationEquipment = equipmentWrite(uid(503), 'Snapshot tractor')
+  const operationInterval = intervalWrite(uid(504))
+  const operationService = { ...serviceWrite(uid(505)), reading_id: uid(506) }
+  const operationTask = taskWrite(uid(507))
+  await operationSnapshotRepository.saveEquipmentOperation(operationEquipment, operationContext)
+  await operationSnapshotRepository.addMeterReadingOperation(meterWrite(uid(508)), operationContext)
+  await operationSnapshotRepository.saveIntervalOperation(operationInterval, operationContext)
+  await operationSnapshotRepository.addServiceLogEntryOperation(operationService, operationContext)
+  await operationSnapshotRepository.saveTaskOperation(operationTask, operationContext)
+  await operationSnapshotRepository.deleteTaskOperation(operationTask.id, operationContext)
+  await operationSnapshotRepository.deleteServiceLogEntryOperation(operationService.id, operationContext)
+  await operationSnapshotRepository.deleteIntervalOperation(operationInterval.id, operationContext)
+  assert(mutableFieldReads === 0 && operationSnapshotReads === 9, 'Queued Equipment/Tasks operations did not use only the bound side-effect-free Fields snapshot.')
+
   const snapshotRef = 'snapshot-equipment'; const snapshotStore = memory(); resetFarmGrantFromLive(snapshotStore, { projectRef: snapshotRef, userId: actor, farmId: farm }, 1, micro); const snapshotContext = captureFarmRevocationFence(snapshotStore, { projectRef: snapshotRef, userId: actor, farmId: farm })
   const snapshotGateway = new FakeGateway(); let snapshotIds = 0; let snapshotContextResolutions = 0; const snapshotQueued = new QueuedEquipmentTasksRepository(repo(snapshotGateway), { getContext: async () => { snapshotContextResolutions += 1; throw new Error('pure snapshot resolved mutable farm access') }, projectRef: snapshotRef, storage: snapshotStore, createId: () => { snapshotIds += 1; return uid(800 + snapshotIds) }, clock: () => micro, isOffline: () => false })
   const pendingTask = taskWrite(uid(81)); new EquipmentTasksWriteQueue(snapshotStore, equipmentTasksWriteQueueKey(snapshotRef, actor, farm)).append({ version: 1, module: 'equipment_tasks', kind: 'saveTask', operationId: uid(810), userId: actor, farmId: farm, enqueuedAt: micro, value: pendingTask })
@@ -263,6 +289,17 @@ async function run() {
   assert(await queued.getNeedsAttentionQueueKey() === key, 'Equipment attention discovery must use only the exact current user and farm queue key.')
   await queued.addServiceLogEntry(serviceWrite(uid(60))); const serviceEntry = queue.read().entries[0] as Extract<EquipmentTasksQueueEntryV1, { kind: 'addServiceLogEntry' }>; queue.append(serviceEntry); assert(queue.read().entries.length === 1 && serviceEntry.value.reading_id === uid(601), 'Appending the same Equipment Tasks operationId twice must retain exactly one queue entry.')
   offline = false; await queued.inspectAndReplay(); queue.append(serviceEntry); await queued.inspectAndReplay(); assert(queue.read().entries.length === 0 && replayGateway.calls.service === 2, 'Exact service-log replay must reuse the same reading ID and be idempotent.')
+
+  // A persisted meter reading with a lost response must be confirmed by the
+  // operation-context point reader, not the public workspace read.
+  const ambiguousMeterStore = memory(); const ambiguousMeterGateway = new FakeGateway(); const ambiguousMeterWriter = repo(ambiguousMeterGateway); let ambiguousMeterOffline = true; let ambiguousMeterId = 615
+  const ambiguousMeterQueue = new QueuedEquipmentTasksRepository(ambiguousMeterWriter, { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'ambiguous-meter', storage: ambiguousMeterStore, createId: () => uid(ambiguousMeterId++), clock: () => micro, isOffline: () => ambiguousMeterOffline })
+  const ambiguousMeter = meterWrite(uid(616)); await ambiguousMeterQueue.addMeterReading(ambiguousMeter)
+  const addAmbiguousMeter = ambiguousMeterGateway.addMeterReading.bind(ambiguousMeterGateway); ambiguousMeterGateway.addMeterReading = async (farmId, value) => { await addAmbiguousMeter(farmId, value); throw new TypeError('lost meter response') }
+  ambiguousMeterWriter.getWorkspace = async () => { throw new Error('ambiguous meter replay must not call public getWorkspace') }
+  ambiguousMeterOffline = false; await ambiguousMeterQueue.inspectAndReplay()
+  const ambiguousMeterKey = equipmentTasksWriteQueueKey('ambiguous-meter', actor, farm)
+  assert(ambiguousMeterGateway.calls.meter === 1 && ambiguousMeterGateway.calls.load === 1 && new EquipmentTasksWriteQueue(ambiguousMeterStore, ambiguousMeterKey).read().entries.length === 0 && readNeedsAttention(ambiguousMeterStore, ambiguousMeterKey).length === 0 && getSaveReceipt(ambiguousMeter.id) === 'saved', 'An ambiguous meter replay must use its operation-context point reader, drain the confirmed head, publish Saved, and never duplicate or park the accepted reading.')
 
   const atomicDeleteRef = 'equipment-atomic-service-delete'; const atomicDeleteStore = memory(); resetFarmGrantFromLive(atomicDeleteStore, { projectRef: atomicDeleteRef, userId: actor, farmId: farm }, 1, micro); const atomicDeleteGateway = new FakeGateway(); const atomicDeleteLogId = uid(63); await repo(atomicDeleteGateway).addServiceLogEntry(serviceWrite(atomicDeleteLogId)); const atomicDeleteReadingId = String(row(atomicDeleteGateway.state.meter_readings[0]).id); let atomicDeleteOffline = false; let atomicDeleteId = 630
   const atomicDeleteQueue = new EquipmentTasksWriteQueue(atomicDeleteStore, equipmentTasksWriteQueueKey(atomicDeleteRef, actor, farm)); const atomicDeleteRepository = new QueuedEquipmentTasksRepository(repo(atomicDeleteGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: atomicDeleteRef, storage: atomicDeleteStore, createId: () => uid(atomicDeleteId++), clock: () => micro, isOffline: () => atomicDeleteOffline })

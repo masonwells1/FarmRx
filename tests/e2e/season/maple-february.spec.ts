@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createSeasonRequestClassifier } from './season-request-classifier'
+import { seasonLoopbackOrigin, seasonLoopbackPort } from './season-loopback-port'
 
 const manifest = JSON.parse(readFileSync(resolve('tests/season/season-2027.manifest.json'), 'utf8')) as {
   fixtures: Array<{ label: string; uuid: string }>
@@ -22,6 +23,8 @@ const assignmentId = fixture('Maple program assignment')
 const assignedPassId = fixture('Maple assigned pass')
 const assignedProductId = fixture('Maple assigned-program-pass product')
 const expectedFebruaryMutationRpcs = ['save_program', 'save_program_pass', 'assign_program']
+const seasonOrigin = seasonLoopbackOrigin('FARMRX_SEASON_JANUARY_PORT', 4174)
+const seasonPort = String(seasonLoopbackPort('FARMRX_SEASON_JANUARY_PORT', 4174))
 
 declare global {
   interface Window {
@@ -31,7 +34,7 @@ declare global {
 }
 
 async function installDeterminism(page: Page, requests: ReturnType<typeof createSeasonRequestClassifier>) {
-  const allowedOrigins = new Set(['http://127.0.0.1:4174', 'http://127.0.0.1:55321'])
+  const allowedOrigins = new Set([seasonOrigin, 'http://127.0.0.1:55321'])
   const forbiddenDestinations: string[] = []
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url())
@@ -41,7 +44,7 @@ async function installDeterminism(page: Page, requests: ReturnType<typeof create
   })
   await page.routeWebSocket(/^(?:ws|wss):\/\//, async (route) => {
     const url = new URL(route.url())
-    if (url.hostname !== '127.0.0.1' || !['4174', '55321'].includes(url.port)) { forbiddenDestinations.push(route.url()); await route.close({ code: 1008, reason: 'February proof permits loopback only' }); return }
+    if (url.hostname !== '127.0.0.1' || ![seasonPort, '55321'].includes(url.port)) { forbiddenDestinations.push(route.url()); await route.close({ code: 1008, reason: 'February proof permits loopback only' }); return }
     route.connectToServer()
   })
   page.on('response', (response) => {

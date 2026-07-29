@@ -12,7 +12,7 @@ function Assert-ArgvSeen($Calls,[string[]]$Expected,[string]$Message){
     Assert-True ($match.Count-ge 1) $Message
 }
 
-$hash = '9faa7279bcf1fd6834e65dc876b11e39cb53030bcb3d653beb7e5668200acbb5'
+$hash = 'ba10e934f0a59990379f78ab9ed93926f1c291dd61a12fe4026f4202f1b89770'
 $originalId = 'c' * 64
 $networkId = 'b' * 64
 $owner = 'd' * 64
@@ -26,7 +26,7 @@ $inventory = @{
     base_digest="public.ecr.aws/supabase/postgres@sha256:$hash"; contract_hash=('a' * 64)
     network_id=$networkId; original_id=$originalId; original_image_id="sha256:$hash"
     snapshot_tag="farmrx-clock-snapshot:$($originalId.Substring(0,12))"
-    derived_tag='farmrx-frozen-clock-swap:20270709-9faa7279'; volume_name=$namespace.Volume
+    derived_tag='farmrx-frozen-clock-swap:20270709-ba10e934'; volume_name=$namespace.Volume
 }
 $contract = @{
     Id=$originalId; ImageId="sha256:$hash"; NetworkId=$networkId; VolumeName=$namespace.Volume
@@ -61,7 +61,7 @@ function New-Simulator {
         MountSource="/var/lib/docker/volumes/$($simNamespace.Volume)/_data"; MountName=$simNamespace.Volume
         NetworkId=$simNetworkId; HostPort=$simNamespace.Port; HealthTest=@('CMD','pg_isready','-U','postgres','-h','127.0.0.1','-p','5432')
         VolumeExtra=@(); InspectDaemonFailure=$false; HttpStatus=200; StaleBackend=$false; DriftClock=$false; BackendPool=1; BackendCidr=$false; NoRestHealth=$false
-        DbReadyAfter=0; DbInspectAfterStart=0; RestReadyAfter=0; RestInspectAfterRestart=0; BackendReadyAfter=0; BackendPollAfterRestart=0; Restarted=$false
+        DbReadyAfter=0; DbInspectAfterStart=0; RestReadyAfter=0; RestInspectAfterRestart=0; BackendReadyAfter=0; BackendPollAfterRestart=0; InitialBackendReadyAfter=0; InitialBackendPoll=0; Restarted=$false
         SyntheticNetworkOwner=$simOwner; SyntheticVolumeOwner=$simOwner
         ContainerNotFound='container'; ImageNotFound='image'; SyntheticInspectFailure=$false
         ArtifactMissing=$false;ArtifactInspectFailure=$false;ArtifactMalformed=$false;ArtifactId='sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746'
@@ -163,6 +163,7 @@ function New-Simulator {
                     if($Argv[5]-ceq'stop'){$state.DatabaseStopped=$true;if($state.Canonical-ceq'replacement'){$state.ReplacementRunning=$false}else{$state.OriginalRunning=$false};if(&$maybeFail 'stop'){return [pscustomobject]@{ExitCode=17;Stdout='';Stderr='simulated failure'}};return [pscustomobject]@{ExitCode=0;Stdout='server shutting down';Stderr=''}}
                 }
                 if (($Argv -join ' ') -match 'pg_stat_activity') {
+                    if($state.Canonical-ceq'replacement'-and-not$state.Restarted){$state.InitialBackendPoll++;if($state.InitialBackendPoll-le$state.InitialBackendReadyAfter){return [pscustomobject]@{ExitCode=0;Stdout='';Stderr=''}}}
                     if($state.Restarted){$state.BackendPollAfterRestart++;if(-not$state.StaleBackend-and$state.BackendPollAfterRestart-gt$state.BackendReadyAfter){$state.BackendPid+=[int]$state.BackendPool;$state.BackendStart="2027-01-01 00:00:$($state.BackendPid)+00";$state.Restarted=$false}}
                     $suffix=if($state.BackendCidr){'/32'}else{''};$backendRows=for($poolIndex=0;$poolIndex-lt[int]$state.BackendPool;$poolIndex++){"$([int]$state.BackendPid+$poolIndex)|$($state.BackendStart).$poolIndex|postgres|authenticator|172.30.0.7$suffix"}
                     return [pscustomobject]@{ ExitCode=0; Stdout=($backendRows-join"`n"); Stderr='' }
@@ -223,6 +224,9 @@ try {
     # Bounded readiness polling supports delayed readiness and fails closed at timeout.
     $delayed=New-Simulator -Overrides @{DbReadyAfter=2;RestReadyAfter=2;BackendReadyAfter=2};$delayedAdapter=New-TestAdapter $delayed (Join-Path $temp 'delayed.json')
     Assert-True ((Invoke-MapleSwapStateMachine $delayedAdapter $inventory)-ceq'MAPLE_DB_CLOCK_SWAP_ADAPTER_PASS') 'delayed readiness did not converge'
+    $delayedInitialBackend=New-Simulator -Overrides @{InitialBackendReadyAfter=2};$delayedInitialBackendAdapter=New-TestAdapter $delayedInitialBackend (Join-Path $temp 'delayed-initial-backend.json')
+    Assert-True ((Invoke-MapleSwapStateMachine $delayedInitialBackendAdapter $inventory)-ceq'MAPLE_DB_CLOCK_SWAP_ADAPTER_PASS') 'delayed initial PostgREST backend did not converge'
+    Assert-True ($delayedInitialBackend.State.InitialBackendPoll -eq 3) 'initial backend readiness was not boundedly polled before restart'
     $pooled=New-Simulator -Overrides @{BackendPool=7;BackendCidr=$true;NoRestHealth=$true};$pooledAdapter=New-TestAdapter $pooled (Join-Path $temp 'pooled.json')
     Assert-True ((Invoke-MapleSwapStateMachine $pooledAdapter $inventory)-ceq'MAPLE_DB_CLOCK_SWAP_ADAPTER_PASS') 'shell-less/no-healthcheck pooled PostgREST route did not pass'
     $timeout=New-Simulator -Overrides @{DbReadyAfter=99};$timeoutAdapter=New-TestAdapter $timeout (Join-Path $temp 'timeout.json')

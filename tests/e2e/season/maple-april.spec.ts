@@ -1,8 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 import { createSeasonRequestClassifier } from './season-request-classifier'
+import { seasonLoopbackPort } from './season-loopback-port'
 
 const ownerEmail = 'maple.owner@farmrx.local.test'
-const localPorts = new Set(['4176', '55321'])
+const localPorts = new Set([String(seasonLoopbackPort('FARMRX_SEASON_APRIL_PORT', 4176)), '55321'])
 const fixedInstant = new Date('2027-04-16T06:45:00-05:00')
 
 declare global {

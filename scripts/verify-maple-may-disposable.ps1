@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $root 'scripts/maple-season-browser.ps1')
 $expectedProjectId = 'farmrx-farmer-simplicity-2027-local'
 $expectedContainer = "supabase_db_$expectedProjectId"
 $aprilProof = Join-Path $root 'scripts/verify-maple-april-disposable.ps1'
@@ -83,8 +84,7 @@ try {
   if (-not $status['PUBLISHABLE_KEY'] -or $status['PUBLISHABLE_KEY'] -notmatch '^sb_publishable_') { throw 'Refusing May proof: no browser-safe local publishable key was found.' }
   $env:VITE_LOCAL_SUPABASE_PROJECT_REF='farmrxlocalsimplicity2027'; $env:VITE_LOCAL_SUPABASE_URL=$status['API_URL']; $env:VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY=$status['PUBLISHABLE_KEY']
 
-  npx playwright test --config playwright.season-may.config.ts
-  if ($LASTEXITCODE -ne 0) { throw 'Maple May browser scenario failed.' }
+  Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season-may.config.ts' -Scenario 'Maple May'
 
   $after = $snapshotSql | docker exec -i $expectedContainer psql -U postgres -d postgres -v ON_ERROR_STOP=1 -At
   if ($LASTEXITCODE -ne 0 -or ($before -join "`n") -cne ($after -join "`n")) { throw 'Maple May changed an unrelated continuous-year table or row.' }

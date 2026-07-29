@@ -184,6 +184,7 @@ begin
       ('generate_due_service_tasks','p_farm_id uuid'),
       ('generate_due_service_tasks_v2','p_farm_id uuid, p_operation_id uuid'),
       ('get_current_farm_access_epochs',''),
+      ('get_removed_farm_access_epoch','target_farm_id uuid'),
       ('get_member_display_name','target_user_id uuid'),
       ('has_explicit_rep_access','target_farm_id uuid'),
       ('is_active_farm_member','target_farm_id uuid'),
@@ -231,8 +232,8 @@ begin
     and p.prosecdef
     and has_function_privilege('authenticated', p.oid, 'execute');
 
-  if v_allowed_definers <> 52 or v_actual_definers <> 52 then
-    raise exception 'authenticated SECURITY DEFINER ACL allowlist drift: expected 52, matched %, actual %',
+  if v_allowed_definers <> 53 or v_actual_definers <> 53 then
+    raise exception 'authenticated SECURITY DEFINER ACL allowlist drift: expected 53, matched %, actual %',
       v_allowed_definers, v_actual_definers;
   end if;
 

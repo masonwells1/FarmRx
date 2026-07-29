@@ -59,7 +59,7 @@ const dispatchRace = await recordMarketingAlertTransitionsGuarded(context.farmId
   },
 })
 assert(dispatchRace?.size === 0 && remoteTransitions === 0, 'A later authenticated user changed alert state for an earlier captured operation.')
-const migrationSource = readFileSync(fileURLToPath(new URL('../../supabase/migrations/0041_unscoped_authenticated_write_fencing.sql', import.meta.url)), 'utf8')
+const migrationSource = readFileSync(fileURLToPath(new URL('../../supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql', import.meta.url)), 'utf8')
 const transitionStart = migrationSource.indexOf('create or replace function public.record_marketing_alert_transition')
 const serverFence = migrationSource.indexOf('perform public.assert_current_farm_access_epoch(p_farm_id);', transitionStart)
 const stateLock = migrationSource.indexOf('perform pg_advisory_xact_lock', transitionStart)

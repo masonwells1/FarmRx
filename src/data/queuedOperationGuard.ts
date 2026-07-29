@@ -24,6 +24,11 @@ export async function verifyQueuedOperationContext(
   entry?: FarmSelectionContext,
 ): Promise<void> {
   if (entry && (entry.userId !== expected.userId || entry.farmId !== expected.farmId)) throw new Error(changed)
+  // Do this durable, synchronous fence check before asking FarmContext for
+  // the current selection. Access removal may hold its validation boundary
+  // while waiting for farm custody; a writer that already holds custody must
+  // see the revocation and release instead of waiting for that validation.
+  ensureQueueFarmGrant(dependencies.storage, { projectRef: dependencies.projectRef, userId: expected.userId, farmId: expected.farmId })
   const current = await captureQueuedOperationContext(dependencies)
   verifyFarmOperationContext(dependencies.storage, expected, current)
 }

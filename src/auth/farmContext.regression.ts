@@ -4,13 +4,15 @@ class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>()
   writes = 0
   beforeWrite: (() => void) | null = null
+  beforeSetItem: ((key: string) => void) | null = null
+  beforeRemoveItem: ((key: string) => void) | null = null
   private onWrite() { const hook = this.beforeWrite; this.beforeWrite = null; hook?.() }
   get length() { return this.values.size }
   clear() { this.onWrite(); this.values.clear(); this.writes += 1 }
   getItem(key: string) { return this.values.get(key) ?? null }
   key(index: number) { return [...this.values.keys()][index] ?? null }
-  removeItem(key: string) { this.onWrite(); this.values.delete(key); this.writes += 1 }
-  setItem(key: string, value: string) { this.onWrite(); this.values.set(key, value); this.writes += 1 }
+  removeItem(key: string) { this.beforeRemoveItem?.(key); this.onWrite(); this.values.delete(key); this.writes += 1 }
+  setItem(key: string, value: string) { this.beforeSetItem?.(key); this.onWrite(); this.values.set(key, value); this.writes += 1 }
 }
 
 const storage = new MemoryStorage()
@@ -19,7 +21,9 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { on
 
 const { supabase } = await import('../lib/supabaseClient')
 const { beginFarmReplayAuthorization, canAccessFarmModule, canEditFarmModule, canReplayFarmModule, captureFarmReplayContextGuard, clearFarmAccess, clearFarmReadyAuthorization, createFarmAccessValidationGate, currentFarmContext, currentUserId, deriveFarmAccessProfile, FarmAccessStorageUnsafeError, isDefiniteTransportFailure, isFarmReplayAuthoritativelyOffline, loadFarmAccess, loadFarmAccessProfile, publishFarmReadyAuthorization, restoreOfflineFarmUserId, selectFarm } = await import('./farmContext')
-const { captureFarmRevocationFence, farmRevocationFenceKey, resetFarmGrantFromLive } = await import('../data/farmRevocationFence')
+const { captureFarmRevocationFence, farmRevocationFenceKey, farmRevocationGenerationKey, inspectFarmRevocationState, markFarmRevoked, prepareFarmRevocationRecoveryFence, readFarmRevocationRecoveryFence, resetFarmGrantFromLive, resetFarmRevokedFromLive, verifyFarmRevocationFence } = await import('../data/farmRevocationFence')
+const { quarantineRevokedFarmWork, readRevokedFarmRecovery } = await import('../data/revokedFarmRecovery')
+const { FieldLogWriteQueue } = await import('../data/fieldLogWriteQueue')
 const { deviceClockHighWaterKey } = await import('../data/deviceClockFence')
 const { farmActiveContextKey, writeFarmAccessEpochs } = await import('./farmAccessEpoch')
 const { supabaseConfig } = await import('../lib/supabaseConfig')
@@ -53,13 +57,32 @@ type Query = PromiseLike<QueryResult> & { select: () => Query; order: () => Quer
 
 type EpochRpcResult = { data: Array<{ farm_id: string; access_epoch: number }>; error: null }
 type EpochRpcQuery = PromiseLike<EpochRpcResult> & { abortSignal: () => EpochRpcQuery }
-;(supabase as unknown as { rpc: (name: string) => EpochRpcQuery }).rpc = (name: string) => {
-  assert.equal(name, 'get_current_farm_access_epochs')
+const removedEpochTargets: string[] = []
+let afterRemovedEpochResponse: (() => void) | null = null
+let removedEpochAvailable = true
+;(supabase as unknown as { rpc: (name: string, args?: { target_farm_id?: string }) => EpochRpcQuery }).rpc = (name: string, args) => {
   assert.equal(currentUser, userB, 'User A reached the epoch RPC after the account switched.')
-  const result = Promise.resolve({ data: [{ farm_id: farmB, access_epoch: 1 }], error: null })
+  assert(['get_current_farm_access_epochs', 'get_removed_farm_access_epoch'].includes(name), `Unexpected farm-access RPC ${name}.`)
+  if (name === 'get_removed_farm_access_epoch') {
+    const targetFarmId = args?.target_farm_id
+    assert.equal(typeof targetFarmId, 'string')
+    removedEpochTargets.push(targetFarmId!)
+  }
+  const data = name === 'get_current_farm_access_epochs'
+    ? [{ farm_id: farmB, access_epoch: 1 }]
+    : removedEpochAvailable ? [{ farm_id: String(args?.target_farm_id), access_epoch: 2 }] : []
+  const result = Promise.resolve({ data, error: null }).then((value) => {
+    if (name === 'get_removed_farm_access_epoch') { const hook = afterRemovedEpochResponse; afterRemovedEpochResponse = null; hook?.() }
+    return value
+  })
   const query = { abortSignal: () => query, then: result.then.bind(result) } as EpochRpcQuery
   return query
 }
+
+// Seed one real previously known User B farm. The live list below omits it,
+// making farmA the removed farm rather than the transaction coordinator's
+// localStorage lease key.
+resetFarmGrantFromLive(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: farmA }, 1, now)
 
 // Existing account-isolation regression: a paused User A refresh cannot publish into User B.
 const userALoad = loadFarmAccess(userA, true)
@@ -72,6 +95,179 @@ await assert.rejects(userALoad, /no longer matches the signed-in account/)
 
 assert.equal(userBAccess.userId, userB)
 assert.deepEqual(userBAccess.farms.map(({ id }) => id), [farmB])
+assert.equal(removedEpochTargets.length, 1, 'The access refresh did not request one authoritative epoch for its one already-known removed farm.')
+assert.equal(removedEpochTargets[0], farmA, 'A non-farm localStorage lease was mistaken for a removed farm.')
+const removedFence = inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedEpochTargets[0]! })
+assert.deepEqual(
+  removedFence,
+  { kind: 'revoked', generation: 3, serverEpoch: 2 },
+  'The removed farm was not reset from its authoritative server epoch.',
+)
+const removedFenceKey = farmRevocationFenceKey({ projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedEpochTargets[0]! })
+const removedFenceBytes = storage.getItem(removedFenceKey)
+await loadFarmAccess(userB, true)
+assert.equal(storage.getItem(removedFenceKey), removedFenceBytes, 'A repeated live refresh rotated an already-authoritative revoked fence.')
+assert.deepEqual(inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedEpochTargets[0]! }), removedFence, 'A repeated live refresh changed the removed farm generation or server epoch.')
+const removedFarmId = removedEpochTargets[0]!
+const removedQueueKey = `farm-rx-field-log-write-queue:v1:${supabaseConfig.projectRef}:${userB}:${removedFarmId}`
+const removedQueueBytes = JSON.stringify({ version: 1, entries: [{ version: 1, module: 'fieldLog', kind: 'saveEntry', operationId: '00000000-0000-4000-8000-000000000091', userId: userB, farmId: removedFarmId, enqueuedAt: now, draft: { id: '00000000-0000-4000-8000-000000000092', field_id: '00000000-0000-4000-8000-000000000093', entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Keep old-user custody' } }] })
+storage.setItem(removedQueueKey, removedQueueBytes)
+afterRemovedEpochResponse = () => { currentUser = userA; currentToken = 'session-user-a-replaced' }
+await assert.rejects(loadFarmAccess(userB, true), /no longer matches the signed-in account/, 'An account switch during the removed-epoch RPC was accepted.')
+assert.equal(storage.getItem(removedQueueKey), removedQueueBytes, 'An account switch during the removed-epoch RPC quarantined old-user work.')
+assert.equal(storage.getItem(removedFenceKey), removedFenceBytes, 'An account switch during the removed-epoch RPC reset the old-user fence.')
+currentUser = userB
+currentToken = 'session-user-b'
+storage.removeItem(removedQueueKey)
+resetFarmGrantFromLive(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId }, 2, now)
+const hardDeleteActive = inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId })
+const priorFieldLogFence = captureFarmRevocationFence(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId })
+const priorFenceQueueBytes = JSON.stringify({ version: 1, entries: [{ version: 2, module: 'fieldLog', kind: 'saveEntry', operationId: '00000000-0000-4000-8000-000000000091', userId: userB, farmId: removedFarmId, enqueuedAt: now, operationContext: priorFieldLogFence, draft: { id: '00000000-0000-4000-8000-000000000092', field_id: '00000000-0000-4000-8000-000000000093', entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Keep prior-fence custody' } }] })
+storage.setItem(removedQueueKey, priorFenceQueueBytes)
+removedEpochAvailable = false
+const hardDeleteAccess = await loadFarmAccess(userB, true)
+removedEpochAvailable = true
+assert.deepEqual(hardDeleteAccess.farms.map(({ id }) => id), [farmB], 'A hard-deleted membership blocked the remaining accessible farm list.')
+assert.equal(storage.getItem(removedQueueKey), null, 'A hard-deleted membership left old work in an active queue.')
+assert(readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === removedQueueKey && JSON.stringify(record.payload) === priorFenceQueueBytes), 'A hard-deleted membership did not preserve its valid prior-fence Field Log work in revoked recovery.')
+assert.deepEqual(
+  inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId }),
+  { kind: 'revoked', generation: hardDeleteActive.generation! + 1, serverEpoch: hardDeleteActive.serverEpoch },
+  'A hard-deleted membership did not install a local revoked tombstone from the last known epoch.',
+)
+// A stale tab can hold the old custody snapshot while removal quarantines the
+// existing queue. It must not append after quarantine has yielded for cache
+// cleanup: either the append is rejected by the revoked fence or every saved
+// byte must be visible in recovery.
+resetFarmGrantFromLive(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId }, 2, now)
+const staleAppendQueue = new FieldLogWriteQueue(storage, removedQueueKey)
+const staleAppendContext = captureFarmRevocationFence(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId })
+const staleAppendBytes = JSON.stringify({ version: 1, entries: [{ version: 2, module: 'fieldLog', kind: 'saveEntry', operationId: '00000000-0000-4000-8000-000000000095', userId: userB, farmId: removedFarmId, enqueuedAt: now, operationContext: staleAppendContext, draft: { id: '00000000-0000-4000-8000-000000000096', field_id: '00000000-0000-4000-8000-000000000097', entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Stale-tab custody gap' } }] })
+storage.setItem(removedQueueKey, removedQueueBytes)
+let staleAppendRejected = false
+storage.beforeRemoveItem = (key) => {
+  if (key !== removedQueueKey) return
+  storage.beforeRemoveItem = null
+  queueMicrotask(() => {
+    try {
+      verifyFarmRevocationFence(storage, staleAppendContext)
+      staleAppendQueue.append(JSON.parse(staleAppendBytes).entries[0])
+    } catch { staleAppendRejected = true }
+  })
+}
+const staleGapAccess = await loadFarmAccess(userB, true)
+assert.deepEqual(staleGapAccess.farms.map(({ id }) => id), [farmB], 'Removed-farm cleanup did not retain the accessible farm list during the stale-tab race.')
+assert(staleAppendRejected, 'A stale Field Log append was accepted after removed-farm queue quarantine began.')
+assert.equal(storage.getItem(removedQueueKey), null, 'A stale Field Log append left old-custody bytes in the active queue.')
+assert(readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === removedQueueKey), 'Removed-farm cleanup did not retain exportable recovery for the quarantined Field Log work.')
+// Removal publishes its revoked tombstone before it obtains farm custody. If
+// custody acquisition is interrupted, a retry must retain the original v2
+// fence only to quarantine that already-saved work—not to revive the queue.
+resetFarmGrantFromLive(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId }, 1, now)
+const interruptedPriorFence = captureFarmRevocationFence(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId })
+const interruptedQueueBytes = JSON.stringify({ version: 1, entries: [{ version: 2, module: 'fieldLog', kind: 'saveEntry', operationId: '00000000-0000-4000-8000-000000000098', userId: userB, farmId: removedFarmId, enqueuedAt: now, operationContext: interruptedPriorFence, draft: { id: '00000000-0000-4000-8000-000000000099', field_id: '00000000-0000-4000-8000-000000000100', entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Retain retry custody for quarantine' } }] })
+storage.setItem(removedQueueKey, interruptedQueueBytes)
+storage.beforeSetItem = (key) => {
+  if (!key.startsWith(`farm-rx-farm-custody:v1:${supabaseConfig.projectRef}:${userB}:${removedFarmId}:lease`)) return
+  storage.beforeSetItem = null
+  throw new Error('Interrupted custody acquisition.')
+}
+await assert.rejects(loadFarmAccess(userB, true), /Interrupted custody acquisition/, 'The deterministic custody interruption did not stop removal after revocation.')
+const interruptedTombstone = inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedFarmId })
+assert.equal(interruptedTombstone.kind, 'revoked', 'The interrupted removal did not persist its early revoked tombstone.')
+assert.equal(interruptedTombstone.serverEpoch, 2, 'The interrupted removal did not preserve the authoritative removed-farm epoch.')
+await loadFarmAccess(userB, true)
+assert.equal(storage.getItem(removedQueueKey), null, 'Retry left valid prior-fence Field Log work active after interrupted custody acquisition.')
+assert(readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === removedQueueKey && JSON.stringify(record.payload) === interruptedQueueBytes), 'Retry did not preserve valid prior-fence Field Log work as exportable revoked-farm recovery.')
+// A live server epoch may jump farther than one. Its valid prior receipt must
+// still bind only to the exact generation the live reset computes.
+const epochJumpFarm = '00000000-0000-4000-8000-000000000101'
+const epochJumpScope = { projectRef: supabaseConfig.projectRef, userId: userB, farmId: epochJumpFarm }
+const epochJumpQueueKey = `farm-rx-field-log-write-queue:v1:${supabaseConfig.projectRef}:${userB}:${epochJumpFarm}`
+resetFarmGrantFromLive(storage, epochJumpScope, 1, now)
+const epochJumpPrior = prepareFarmRevocationRecoveryFence(storage, epochJumpScope)
+const epochJumpQueueBytes = JSON.stringify({ version: 1, entries: [{ version: 2, module: 'fieldLog', kind: 'saveEntry', operationId: '00000000-0000-4000-8000-000000000102', userId: userB, farmId: epochJumpFarm, enqueuedAt: now, operationContext: epochJumpPrior, draft: { id: '00000000-0000-4000-8000-000000000103', field_id: '00000000-0000-4000-8000-000000000104', entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Retain jumped-epoch custody for quarantine' } }] })
+storage.setItem(epochJumpQueueKey, epochJumpQueueBytes)
+resetFarmRevokedFromLive(storage, epochJumpScope, 5, now)
+assert.deepEqual(inspectFarmRevocationState(storage, epochJumpScope), { kind: 'revoked', generation: Math.max(5, epochJumpPrior.generation) + 1, serverEpoch: 5 }, 'A live epoch jump did not retain the exact reset generation.')
+const epochJumpReceipt = readFarmRevocationRecoveryFence(storage, epochJumpScope)
+assert.deepEqual(epochJumpReceipt, epochJumpPrior, 'A valid prior receipt was stranded by a larger live server-epoch jump.')
+assert.equal(quarantineRevokedFarmWork(storage, epochJumpScope, now, epochJumpReceipt), 1, 'A valid jumped-epoch v2 queue was not quarantined.')
+assert.equal(storage.getItem(epochJumpQueueKey), null, 'A valid jumped-epoch v2 queue remained active.')
+assert(readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === epochJumpQueueKey && JSON.stringify(record.payload) === epochJumpQueueBytes), 'A valid jumped-epoch v2 queue was not retained for recovery.')
+// A failure after the next generation ledger is durable but before the fence
+// is durable must resume that exact intended revoked generation. Otherwise
+// the retained v2 prior-fence receipt can never authorize quarantine.
+const partialFenceFarm = '00000000-0000-4000-8000-000000000105'
+const partialFenceScope = { projectRef: supabaseConfig.projectRef, userId: userB, farmId: partialFenceFarm }
+const partialFenceQueueKey = `farm-rx-field-log-write-queue:v1:${supabaseConfig.projectRef}:${userB}:${partialFenceFarm}`
+resetFarmGrantFromLive(storage, partialFenceScope, 1, now)
+const partialFencePrior = prepareFarmRevocationRecoveryFence(storage, partialFenceScope)
+const partialFenceQueueBytes = JSON.stringify({ version: 1, entries: [{ version: 2, module: 'fieldLog', kind: 'saveEntry', operationId: '00000000-0000-4000-8000-000000000106', userId: userB, farmId: partialFenceFarm, enqueuedAt: now, operationContext: partialFencePrior, draft: { id: '00000000-0000-4000-8000-000000000107', field_id: '00000000-0000-4000-8000-000000000108', entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Retain partial-fence custody for quarantine' } }] })
+storage.setItem(partialFenceQueueKey, partialFenceQueueBytes)
+const partialFenceKey = farmRevocationFenceKey(partialFenceScope)
+storage.beforeSetItem = (key) => {
+  if (key !== partialFenceKey) return
+  storage.beforeSetItem = null
+  throw new Error('Interrupted after durable generation ledger.')
+}
+assert.throws(() => resetFarmRevokedFromLive(storage, partialFenceScope, 2, now), /Interrupted after durable generation ledger/, 'The deterministic fence interruption did not stop after the ledger write.')
+assert.deepEqual(inspectFarmRevocationState(storage, partialFenceScope), { kind: 'invalid', generation: partialFencePrior.generation + 1, serverEpoch: 2 }, 'The interruption did not retain the independently durable next generation.')
+assert.equal(JSON.parse(storage.getItem(farmRevocationGenerationKey(partialFenceScope)) ?? '{}').generation, partialFencePrior.generation + 1, 'The fault injection did not occur after the durable generation ledger write.')
+await loadFarmAccess(userB, true)
+assert.deepEqual(inspectFarmRevocationState(storage, partialFenceScope), { kind: 'revoked', generation: partialFencePrior.generation + 1, serverEpoch: 2 }, 'Partial-fence recovery did not retain the exact intended revoked generation.')
+assert.equal(storage.getItem(partialFenceQueueKey), null, 'Partial-fence recovery stranded valid v2 Field Log work in the active queue.')
+assert(readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === partialFenceQueueKey && JSON.stringify(record.payload) === partialFenceQueueBytes), 'Partial-fence recovery did not preserve valid v2 Field Log work as exportable recovery.')
+// The hard-delete fallback has no live epoch. It may resume only its exact
+// ledger-first mark, then must rebind the retained receipt before quarantine.
+const localPartialFarm = '00000000-0000-4000-8000-000000000114'
+const localPartialScope = { projectRef: supabaseConfig.projectRef, userId: userB, farmId: localPartialFarm }
+const localPartialQueueKey = `farm-rx-field-log-write-queue:v1:${supabaseConfig.projectRef}:${userB}:${localPartialFarm}`
+resetFarmGrantFromLive(storage, localPartialScope, 1, now)
+const localPartialPrior = prepareFarmRevocationRecoveryFence(storage, localPartialScope)
+const localPartialQueueBytes = JSON.stringify({ version: 1, entries: [{ version: 2, module: 'fieldLog', kind: 'saveEntry', operationId: '00000000-0000-4000-8000-000000000115', userId: userB, farmId: localPartialFarm, enqueuedAt: now, operationContext: localPartialPrior, draft: { id: '00000000-0000-4000-8000-000000000116', field_id: '00000000-0000-4000-8000-000000000117', entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Retain local-fallback partial custody for quarantine' } }] })
+storage.setItem(localPartialQueueKey, localPartialQueueBytes)
+const localPartialFenceKey = farmRevocationFenceKey(localPartialScope)
+storage.beforeSetItem = (key) => {
+  if (key !== localPartialFenceKey) return
+  storage.beforeSetItem = null
+  throw new Error('Interrupted local mark after durable generation ledger.')
+}
+assert.throws(() => markFarmRevoked(storage, localPartialScope, now, 1), /Interrupted local mark after durable generation ledger/, 'The deterministic local mark interruption did not stop after the ledger write.')
+assert.deepEqual(inspectFarmRevocationState(storage, localPartialScope), { kind: 'invalid', generation: localPartialPrior.generation + 1, serverEpoch: 1 }, 'The local fallback interruption did not retain its independently durable next generation.')
+removedEpochAvailable = false
+await loadFarmAccess(userB, true)
+removedEpochAvailable = true
+assert.deepEqual(inspectFarmRevocationState(storage, localPartialScope), { kind: 'revoked', generation: localPartialPrior.generation + 1, serverEpoch: 1 }, 'The local fallback retry did not complete its exact partial mark generation.')
+assert.equal(storage.getItem(localPartialQueueKey), null, 'The local fallback retry stranded valid v2 Field Log work in the active queue.')
+assert(readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === localPartialQueueKey && JSON.stringify(record.payload) === localPartialQueueBytes), 'The local fallback retry did not retain valid v2 Field Log work as exportable recovery.')
+// Equal-generation ledger/token mismatches are not interrupted writes. Advance
+// the fence but leave the receipt and queue fail-closed and byte-stable.
+const mismatchFarm = '00000000-0000-4000-8000-000000000109'
+const mismatchScope = { projectRef: supabaseConfig.projectRef, userId: userB, farmId: mismatchFarm }
+const mismatchQueueKey = `farm-rx-field-log-write-queue:v1:${supabaseConfig.projectRef}:${userB}:${mismatchFarm}`
+resetFarmGrantFromLive(storage, mismatchScope, 1, now)
+const mismatchPrior = prepareFarmRevocationRecoveryFence(storage, mismatchScope)
+const mismatchQueueBytes = JSON.stringify({ version: 1, entries: [{ version: 2, module: 'fieldLog', kind: 'saveEntry', operationId: '00000000-0000-4000-8000-000000000110', userId: userB, farmId: mismatchFarm, enqueuedAt: now, operationContext: mismatchPrior, draft: { id: '00000000-0000-4000-8000-000000000111', field_id: '00000000-0000-4000-8000-000000000112', entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Do not accept mismatched partial custody' } }] })
+storage.setItem(mismatchQueueKey, mismatchQueueBytes)
+storage.setItem(farmRevocationGenerationKey(mismatchScope), JSON.stringify({ version: 2, generation: mismatchPrior.generation, token: '00000000-0000-4000-8000-000000000113', serverEpoch: 2, changedAt: now }))
+resetFarmRevokedFromLive(storage, mismatchScope, 2, now)
+assert.deepEqual(inspectFarmRevocationState(storage, mismatchScope), { kind: 'revoked', generation: Math.max(2, mismatchPrior.generation) + 2, serverEpoch: 2 }, 'An equal-generation ledger/token mismatch did not advance past the retained receipt formula.')
+assert.equal(readFarmRevocationRecoveryFence(storage, mismatchScope), undefined, 'An equal-generation ledger/token mismatch consumed a retained recovery receipt.')
+assert.throws(() => quarantineRevokedFarmWork(storage, mismatchScope, now), 'An equal-generation ledger/token mismatch published v2 work to recovery.')
+assert.equal(storage.getItem(mismatchQueueKey), mismatchQueueBytes, 'An equal-generation ledger/token mismatch mutated active v2 queue bytes.')
+assert(!readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === mismatchQueueKey), 'An equal-generation ledger/token mismatch published recovery work.')
+storage.removeItem(mismatchQueueKey)
+const unknownRemovedFarm = '00000000-0000-4000-8000-000000000094'
+const unknownQueueKey = `farm-rx-field-log-write-queue:v1:${supabaseConfig.projectRef}:${userB}:${unknownRemovedFarm}`
+const unknownQueueBytes = removedQueueBytes.replaceAll(removedFarmId, unknownRemovedFarm)
+storage.setItem(unknownQueueKey, unknownQueueBytes)
+removedEpochAvailable = false
+await assert.rejects(loadFarmAccess(userB, true), /access changed while it was being verified/, 'A hard-delete fallback without prior local epoch evidence was accepted.')
+removedEpochAvailable = true
+assert.equal(storage.getItem(unknownQueueKey), unknownQueueBytes, 'A hard-delete fallback without prior local epoch evidence mutated the active queue.')
+assert(!readRevokedFarmRecovery(storage, supabaseConfig.projectRef, userB).some((record) => record.originalKey === unknownQueueKey), 'A hard-delete fallback without prior local epoch evidence published false recovery work.')
+storage.removeItem(unknownQueueKey)
 assert.equal(storage.getItem(`farm-rx-access:v1:${supabaseConfig.projectRef}:${userA}`), null, 'User A access was persisted after switching to User B.')
 assert.notEqual(storage.getItem(`farm-rx-access:v1:${supabaseConfig.projectRef}:${userB}`), null, 'User B access was not persisted independently.')
 assert.equal(storage.getItem(farmRevocationFenceKey({ projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA })), null, 'User A farm fence was recreated after switching accounts.')

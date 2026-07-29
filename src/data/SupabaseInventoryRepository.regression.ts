@@ -1,6 +1,7 @@
 import { fieldsSeedForRegression } from './MockFieldsRepository'
 import type { FieldsData, FieldsRepository } from './fields'
 import type { AdjustmentWrite, ApplicationBundleWrite, CancelReceiptWrite, InventoryDataGateway, InventoryProductWrite, InventoryRowBundle, ReceiptBundleWrite } from './InventoryDataGateway'
+import type { InventoryAdjustment } from './inventory'
 import { inventoryWriteQueueKey, InventoryWriteQueue, parseInventoryQueue, type InventoryQueueEntryV1 } from './inventoryWriteQueue'
 import { QueuedInventoryRepository } from './QueuedInventoryRepository'
 import { deriveProgramApplicationRecordCards } from '../InventoryModule'
@@ -10,6 +11,7 @@ import { moduleBackends } from './backends'
 import type { StorageLike } from './writeQueue'
 import { supabase } from '../lib/supabaseClient'
 import { readNeedsAttention } from './needsAttentionStore'
+import { getSaveReceipt } from '../lib/saveReceipt'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const farm = uid(1); const actor = uid(2); const micro = '2026-07-11T23:35:28.807722+00:00'
@@ -82,7 +84,7 @@ class FakeGateway implements InventoryDataGateway {
   private product(id: unknown) { const found = this.state.products.find((item) => row(item).id === id); if (!found) throw new Error('server product not found'); return row(found) }
 }
 const operationContext = { projectRef: 'test', userId: actor, farmId: farm, generation: 1, token: uid(999), serverEpoch: 1 }
-function repo(gateway: FakeGateway) { const fields = fieldsFor(farm); const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fields), saveField: async () => { throw new Error('not used') } }; let next = 900; return new SupabaseInventoryRepository({ gateway, fieldsRepository, getFarmId: async () => farm, getOperationContext: async () => operationContext, verifyOperationContext: async () => undefined, createId: () => uid(next++), clock: () => micro }) }
+function repo(gateway: FakeGateway) { const fields = fieldsFor(farm); const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fields), getSnapshot: async () => ({ data: structuredClone(fields), source: 'live', capturedAt: micro }), saveField: async () => { throw new Error('not used') } }; let next = 900; return new SupabaseInventoryRepository({ gateway, fieldsRepository, getFarmId: async () => farm, getOperationContext: async () => operationContext, verifyOperationContext: async () => undefined, createId: () => uid(next++), clock: () => micro }) }
 function memory(): StorageLike & { values: Map<string, string> } { return { values: new Map(), getItem(key) { return this.values.get(key) ?? null }, setItem(key, value) { this.values.set(key, value) }, removeItem(key) { this.values.delete(key) } } }
 function receiptWrite(id: string, lineId: string, productId = uid(501)): ReceiptBundleWrite { return { farmId: farm, receipt: { id, source: 'other_vendor', status: 'received', vendor_name: 'Acme Supply', purchase_date: '2026-07-11', received_at: micro, invoice_number: null, notes: null }, lines: [{ id: lineId, product_id: productId, entered_quantity: 4, entered_unit: 'gal', inventory_units_per_entered_unit: null, unit_cost_per_inventory_unit: 18.5, lot_number: null, expiration_date: null, external_delivery_line_id: null, notes: null }] } }
 function applicationInput(id: string) { const fields = fieldsFor(farm); const assignment = fields.crop_assignments[0]; return { id, field_id: assignment.field_id, crop_assignment_id: assignment.id, status: 'completed' as const, application_date: '2026-07-11', start_time: '08:30', applied_acres: 10, target_pest: 'Waterhemp', applicator_name: 'A. Applicator', applicator_license_number: 'IL-123', wind_speed_mph: 8, wind_direction: 'NW', temperature_f: 75, relative_humidity_pct: 55, products: [{ id: uid(601), product_id: uid(501), rate: 1, rate_unit: 'gal' as const, rate_basis: 'acre' as const, total_quantity: 10, total_unit: 'gal' as const }, { id: uid(602), product_id: uid(502), rate: 2, rate_unit: 'lb' as const, rate_basis: 'each' as const, total_quantity: 5, total_unit: 'lb' as const }] } }
@@ -103,6 +105,28 @@ async function run() {
   gateway.fail = true; await rejects(() => live.getWorkspace(), 'A gateway failure must reject without a mock fallback.'); gateway.fail = false
   const bad = canonicalFixture(); row(bad.on_hand[0]).on_hand_quantity = '99'; gateway.state = bad; await rejects(() => live.getWorkspace(), 'Invalid view arithmetic must fail closed.'); gateway.state = canonicalFixture()
   const foreign = canonicalFixture(); row(foreign.products[0]).farm_id = uid(999); gateway.state = foreign; await rejects(() => live.getWorkspace(), 'Cross-farm rows must fail closed.'); gateway.state = canonicalFixture()
+  const foreignAdjustmentReader = new FakeGateway(); const foreignAdjustmentId = uid(23); foreignAdjustmentReader.state.adjustments = [{ id: foreignAdjustmentId, farm_id: uid(999), product_id: uid(501), adjustment_quantity_in_inventory_unit: -1, reason: 'correction', notes: 'Foreign adjustment', adjusted_at: '2026-07-11T00:00:00+00:00', created_at: micro, created_by: actor }]
+  await rejects(() => repo(foreignAdjustmentReader).getAdjustmentOperation(foreignAdjustmentId, operationContext), 'An adjustment point reader must reject a row from another farm.')
+
+  // Writes hold their own farm-custody transaction. Their field validation must
+  // use the side-effect-free fenced snapshot rather than getData(), which ends
+  // by taking a second queue transaction for the same farm.
+  const snapshotGateway = new FakeGateway(); let mutableReadCalls = 0; let snapshotCalls = 0
+  const snapshotOnlyFields: FieldsRepository & { owner: string } = { owner: 'snapshot-only', getData: async () => { mutableReadCalls += 1; throw new Error('operation write must not call Fields getData') }, async getSnapshot(context) { assert(this.owner === 'snapshot-only', 'Inventory operation lost the Fields snapshot receiver.'); snapshotCalls += 1; return { data: structuredClone(fieldsFor(context.farmId)), source: 'live' as const, capturedAt: micro } }, saveField: async () => { throw new Error('not used') } }
+  const snapshotOnly = new SupabaseInventoryRepository({ gateway: snapshotGateway, fieldsRepository: snapshotOnlyFields, getFarmId: async () => farm, getOperationContext: async () => operationContext, verifyOperationContext: async () => undefined, createId: () => uid(901), clock: () => micro })
+  await snapshotOnly.saveProduct({ ...product(uid(503), 'gal'), farm_id: farm } as import('./inventory').InventoryProduct)
+  await snapshotOnly.saveApplication(applicationInput(uid(504)))
+  assert(mutableReadCalls === 0 && snapshotCalls === 2 && snapshotGateway.calls.application === 1, 'Inventory operations must use the fenced Fields snapshot and never re-enter Fields getData.')
+  for (const invalidSnapshot of [{ source: 'offline' as const, data: fieldsFor(farm) }, { source: 'live' as const, data: fieldsFor(uid(505)) }]) {
+    const invalidGateway = new FakeGateway()
+    const invalidRepository = new SupabaseInventoryRepository({ gateway: invalidGateway, fieldsRepository: { getData: async () => { throw new Error('operation write must not call Fields getData') }, getSnapshot: async () => ({ ...invalidSnapshot, capturedAt: micro }), saveField: async () => { throw new Error('not used') } }, getFarmId: async () => farm, getOperationContext: async () => operationContext, verifyOperationContext: async () => undefined, createId: () => uid(906), clock: () => micro })
+    await rejects(() => invalidRepository.saveApplication(applicationInput(uid(507))), 'An offline or wrong-farm Inventory Fields snapshot reached a gateway write.')
+    assert(invalidGateway.calls.application === 0, 'An invalid Inventory Fields snapshot performed a gateway write.')
+  }
+  const changedSnapshotGateway = new FakeGateway(); let changedContext = operationContext
+  const changedSnapshotRepository = new SupabaseInventoryRepository({ gateway: changedSnapshotGateway, fieldsRepository: { getData: async () => { throw new Error('operation write must not call Fields getData') }, getSnapshot: async () => { changedContext = { ...operationContext, token: uid(508) }; return { data: fieldsFor(farm), source: 'live' as const, capturedAt: micro } }, saveField: async () => { throw new Error('not used') } }, getFarmId: async () => farm, getOperationContext: async () => operationContext, verifyOperationContext: async (expected) => { if (expected !== changedContext) throw new Error('context changed') }, createId: () => uid(509), clock: () => micro })
+  await rejects(() => changedSnapshotRepository.saveApplication(applicationInput(uid(510))), 'An Inventory context change during Fields snapshot reached a gateway write.')
+  assert(changedSnapshotGateway.calls.application === 0, 'An Inventory context change during Fields snapshot performed a gateway write.')
 
   // Receipt lifecycle: draft save, draft edit, received save, and server-side cancellation identity.
   await live.receiveReceipt({ id: uid(10), product_id: uid(501), quantity: 4, unit: 'gal', unit_cost: 18.5, date: '2026-07-11', status: 'draft', vendor_name: 'Acme Supply' })
@@ -149,15 +173,41 @@ async function run() {
   queue.append(queuedReceipt(uid(53))); await queued.inspectAndReplay(); assert(queue.read().entries.length === 0 && replayGateway.calls.receipt === 2, 'An idempotent second replay with the exact canonical echo must be accepted.')
   replayGateway.mutate.receipt = (reply) => ({ ...reply, lines: reply.lines.map((line) => ({ ...line, entered_quantity: 7, quantity_in_inventory_unit: 7 })) }); const conflictingReceipt = queuedReceipt(uid(54)); queue.append(conflictingReceipt); const callsBeforeConflict = replayGateway.calls.receipt; await queued.inspectAndReplay(); const receiptConflictParked = readNeedsAttention(store, key); assert(replayGateway.calls.receipt === callsBeforeConflict + 1 && queue.read().entries.length === 0 && receiptConflictParked.length === 1 && receiptConflictParked[0]?.id === conflictingReceipt.operationId, 'A conflicting receipt replay must drain the queue and park exactly one needs-attention record for that operation.')
 
+  // An adjustment that reached the server before its response was lost must be
+  // reconciled through the fenced point reader, never through getWorkspace().
+  const ambiguousAdjustmentStore = memory(); const ambiguousAdjustmentGateway = new FakeGateway(); const ambiguousAdjustmentWriter = repo(ambiguousAdjustmentGateway); let ambiguousAdjustmentId = 550; let ambiguousAdjustmentWrites = 0; let ambiguousAdjustmentReads = 0
+  const ambiguousAdjustmentQueue = new QueuedInventoryRepository(ambiguousAdjustmentWriter, { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'ambiguous-adjustment', storage: ambiguousAdjustmentStore, createId: () => uid(ambiguousAdjustmentId++), clock: () => micro, isOffline: () => false })
+  const ambiguousAdjustment = { id: uid(551), product_id: uid(501), adjustment_quantity_in_inventory_unit: -3, reason: 'correction' as const, notes: 'Ambiguous count correction', adjusted_at: '2027-07-09' }
+  const persistedAmbiguousAdjustments: InventoryAdjustment[] = []
+  ambiguousAdjustmentWriter.addAdjustmentOperation = async (value, context) => { assert(context.farmId === farm && value.id === ambiguousAdjustment.id, 'The adjustment replay lost its operation context.'); ambiguousAdjustmentWrites += 1; const persisted = { ...value, farm_id: farm, created_at: micro }; persistedAmbiguousAdjustments.push(persisted); ambiguousAdjustmentGateway.state.adjustments = [...ambiguousAdjustmentGateway.state.adjustments, persisted]; throw new TypeError('lost adjustment response') }
+  ambiguousAdjustmentWriter.getAdjustmentOperation = async (id, context) => { assert(context.farmId === farm, 'The adjustment point reader lost its operation context.'); ambiguousAdjustmentReads += 1; return persistedAmbiguousAdjustments.find((row) => row.id === id) ?? null }
+  ambiguousAdjustmentWriter.getWorkspace = async () => { throw new Error('ambiguous adjustment replay must not call public getWorkspace') }
+  const ambiguousAdjustmentKey = inventoryWriteQueueKey('ambiguous-adjustment', actor, farm)
+  new InventoryWriteQueue(ambiguousAdjustmentStore, ambiguousAdjustmentKey).append({ ...base, operationId: uid(552), kind: 'addAdjustment', row: ambiguousAdjustment }); await ambiguousAdjustmentQueue.inspectAndReplay()
+  assert(ambiguousAdjustmentWrites === 1 && ambiguousAdjustmentReads === 1 && new InventoryWriteQueue(ambiguousAdjustmentStore, ambiguousAdjustmentKey).read().entries.length === 0 && readNeedsAttention(ambiguousAdjustmentStore, ambiguousAdjustmentKey).length === 0 && getSaveReceipt(ambiguousAdjustment.id) === 'saved', 'An ambiguous adjustment replay must use its operation-context point reader, remove the confirmed head, publish Saved, and never duplicate or park the accepted adjustment.')
+
+  const wrongFarmAdjustmentStore = memory(); const wrongFarmAdjustmentGateway = new FakeGateway(); const wrongFarmAdjustmentWriter = repo(wrongFarmAdjustmentGateway); let wrongFarmAdjustmentId = 560; let wrongFarmAdjustmentWrites = 0
+  const wrongFarmAdjustmentQueue = new QueuedInventoryRepository(wrongFarmAdjustmentWriter, { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'wrong-farm-adjustment', storage: wrongFarmAdjustmentStore, createId: () => uid(wrongFarmAdjustmentId++), clock: () => micro, isOffline: () => false })
+  const wrongFarmAdjustment = { ...ambiguousAdjustment, id: uid(561), notes: 'Must not claim saved' }
+  wrongFarmAdjustmentWriter.addAdjustmentOperation = async () => { wrongFarmAdjustmentWrites += 1; throw new TypeError('lost wrong-farm adjustment response') }
+  wrongFarmAdjustmentWriter.getAdjustmentOperation = async (id) => id === wrongFarmAdjustment.id ? { ...wrongFarmAdjustment, farm_id: uid(999), created_at: micro } : null
+  wrongFarmAdjustmentWriter.getWorkspace = async () => { throw new Error('wrong-farm adjustment replay must not call public getWorkspace') }
+  const wrongFarmAdjustmentKey = inventoryWriteQueueKey('wrong-farm-adjustment', actor, farm)
+  new InventoryWriteQueue(wrongFarmAdjustmentStore, wrongFarmAdjustmentKey).append({ ...base, operationId: uid(562), kind: 'addAdjustment', row: wrongFarmAdjustment }); await wrongFarmAdjustmentQueue.inspectAndReplay()
+  assert(wrongFarmAdjustmentWrites === 1 && new InventoryWriteQueue(wrongFarmAdjustmentStore, wrongFarmAdjustmentKey).read().entries.length === 1 && readNeedsAttention(wrongFarmAdjustmentStore, wrongFarmAdjustmentKey).length === 0 && getSaveReceipt(wrongFarmAdjustment.id) !== 'saved', 'A wrong-farm adjustment point read must remain pending and never claim Saved or park a false failure.')
+
   const entries: InventoryQueueEntryV1[] = [
     { ...base, operationId: uid(60), kind: 'saveProduct', row: { ...product(uid(700), 'gal'), farm_id: farm } as InventoryProductWrite },
     queuedReceipt(uid(61)),
     { ...base, operationId: uid(62), kind: 'cancelReceipt', write: { farmId: farm, id: uid(50), reason: 'Damaged', cancelledAt: micro } },
-    { ...base, operationId: uid(63), kind: 'addAdjustment', row: { id: uid(64), product_id: uid(501), adjustment_quantity_in_inventory_unit: -1, reason: 'correction', notes: 'count', adjusted_at: micro } },
+    { ...base, operationId: uid(63), kind: 'addAdjustment', row: { id: uid(64), product_id: uid(501), adjustment_quantity_in_inventory_unit: -1, reason: 'correction', notes: 'count', adjusted_at: '2027-07-09' } },
     { ...base, operationId: uid(65), kind: 'saveApplicationBundle', write: { farmId: farm, application: { id: uid(66), field_id: fieldsFor(farm).fields[0].id, crop_assignment_id: fieldsFor(farm).crop_assignments[0].id, status: 'draft', application_date: '2026-07-11', start_time: null, end_time: null, applied_acres: 1, target_pest: null, applicator_user_id: null, applicator_name_snapshot: null, applicator_license_number_snapshot: null, applicator_license_state_snapshot: null, wind_speed_mph: null, wind_direction: null, temperature_f: null, relative_humidity_pct: null, corrects_application_id: null, correction_reason: null, completed_at: null, notes: null }, products: [{ id: uid(67), product_id: uid(501), rate: 1, rate_unit: 'gal', rate_basis: 'acre', total_quantity: 1, total_unit: 'gal', inventory_units_per_total_unit: null, lot_number_snapshot: null, notes: null }] } },
   ]
   const parserStore = memory(); const parserQueue = new InventoryWriteQueue(parserStore, key); entries.forEach((entry) => parserQueue.append(entry)); parserQueue.append(entries[0]!)
-  assert(parserQueue.read().entries.length === 5 && key.startsWith('farm-rx-inventory-write-queue:v1:'), 'Appending the same Inventory operationId twice must retain exactly one queue entry.')
+  const datedAdjustment = { ...base, operationId: uid(68), kind: 'addAdjustment' as const, row: { id: uid(69), product_id: uid(501), adjustment_quantity_in_inventory_unit: -1, reason: 'correction' as const, notes: 'Offline physical count', adjusted_at: '2027-07-09' } }
+  parserQueue.append(datedAdjustment)
+  assert(parserQueue.read().entries.some((entry) => entry.operationId === datedAdjustment.operationId), 'The Inventory queue must accept the YYYY-MM-DD adjustment date produced by the real form.')
+  assert(parserQueue.read().entries.length === 6 && key.startsWith('farm-rx-inventory-write-queue:v1:'), 'Appending the same Inventory operationId twice must retain exactly one queue entry while a valid date-only adjustment remains queued.')
   await rejects(async () => { parseInventoryQueue('{"version":2,"entries":[]}') }, 'Unknown queue versions must fail closed.')
   parserStore.setItem(key, '{bad'); await rejects(async () => { parserQueue.read() }, 'Corrupt inventory queue bytes must fail closed and remain untouched.')
   assert(moduleBackends.inventory === 'supabase', 'The backend manifest must select the live inventory repository.')

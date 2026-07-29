@@ -97,7 +97,7 @@ export interface FirmOffer extends PositionScope { id: string; buyer: string; of
 export interface FirmOfferFill { contract: GrainContract; offer: FirmOffer }
 export interface GrainAlertSettings { farm_id: string; alert_emails: string[]; updated_at: string }
 
-/** Mirrors public.usda_report_dates in 0004_module2_grain.sql. */
+/** Mirrors public.usda_report_dates in 20260711222703_module2_grain.sql. */
 export interface UsdaReportDate { id: string; report_name: string; report_date: string; release_at: string | null; source_url: string | null; notes: string | null; created_at: string; updated_at: string }
 
 export interface FuturesQuote { symbol: 'ZC' | 'ZS' | 'ZW'; contract: string; label: string; price: number; crop_year: number; new_crop: boolean; delayed: true; as_of: string }

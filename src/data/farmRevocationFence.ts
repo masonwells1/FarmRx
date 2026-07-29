@@ -4,6 +4,7 @@ export type FarmRevocationScope = { projectRef: string; userId: string; farmId: 
 export type FarmRevocationSnapshot = FarmRevocationScope & { generation: number; token: string; serverEpoch: number }
 type Fence = { version: 2; generation: number; token: string; serverEpoch: number; revoked: boolean; changedAt: string }
 type GenerationLedger = { version: 2; generation: number; token: string; serverEpoch: number; changedAt: string }
+type RevocationRecoveryFence = { version: 1; prior: FarmRevocationSnapshot }
 type EnumeratedStorage = StorageLike & { readonly length: number; key(index: number): string | null }
 
 const blocked = 'Access to this farm changed while work was being saved. Nothing was queued or replayed.'
@@ -20,6 +21,10 @@ export function farmRevocationFenceKey(scope: FarmRevocationScope) {
 
 export function farmRevocationGenerationKey(scope: FarmRevocationScope) {
   return `farm-rx-revocation-generation:v1:${scope.projectRef}:${scope.userId}:${scope.farmId}`
+}
+
+function farmRevocationRecoveryKey(scope: FarmRevocationScope) {
+  return `farm-rx-revocation-recovery:v1:${scope.projectRef}:${scope.userId}:${scope.farmId}`
 }
 
 function parseFence(raw: string): Fence {
@@ -47,10 +52,37 @@ function readState(storage: StorageLike, scope: FarmRevocationScope) {
   return { fence, ledger }
 }
 
+/** Read each durable half independently only while repairing an interrupted
+ * write. Normal authorization continues to require the matching pair. */
+function readIndependentState(storage: StorageLike, scope: FarmRevocationScope) {
+  let fence: Fence | null = null; let ledger: GenerationLedger | null = null
+  try { const raw = storage.getItem(farmRevocationFenceKey(scope)); if (raw !== null) fence = parseFence(raw) } catch { /* not independently valid */ }
+  try { const raw = storage.getItem(farmRevocationGenerationKey(scope)); if (raw !== null) ledger = parseLedger(raw) } catch { /* not independently valid */ }
+  return { fence, ledger }
+}
+
+/** The local removed-epoch fallback may finish only this exact interrupted
+ * mark: an active fence followed by its one-generation ledger at the same
+ * authoritative epoch. Every other invalid state remains blocked. */
+function readExactLocalRevocationPartial(storage: StorageLike, scope: FarmRevocationScope, serverEpoch: number): GenerationLedger | undefined {
+  const { fence, ledger } = readIndependentState(storage, scope)
+  if (!fence || !ledger || fence.revoked || fence.serverEpoch !== serverEpoch || ledger.serverEpoch !== serverEpoch || ledger.generation !== fence.generation + 1) return undefined
+  return ledger
+}
+
 function readFence(storage: StorageLike, scope: FarmRevocationScope): Fence {
   const { fence, ledger } = readState(storage, scope)
   if (!fence || !ledger) throw new Error(blocked)
   return fence
+}
+
+function parseRecoveryFence(raw: string, scope: FarmRevocationScope): FarmRevocationSnapshot {
+  try {
+    const value = JSON.parse(raw) as Partial<RevocationRecoveryFence>
+    const prior = value.prior
+    if (!prior || typeof prior !== 'object' || Array.isArray(prior) || Object.keys(value).length !== 2 || value.version !== 1 || Object.keys(prior).length !== 6 || prior.projectRef !== scope.projectRef || prior.userId !== scope.userId || prior.farmId !== scope.farmId || !Number.isSafeInteger(prior.generation) || prior.generation < 1 || typeof prior.token !== 'string' || !tokenPattern.test(prior.token) || !Number.isSafeInteger(prior.serverEpoch) || prior.serverEpoch < 1) throw new Error()
+    return prior
+  } catch { throw new Error(blocked) }
 }
 
 function writeFence(storage: StorageLike, scope: FarmRevocationScope, value: Fence) {
@@ -74,7 +106,7 @@ export function queueFarmRevocationScope(key: string): FarmRevocationScope | nul
 export function listFarmRevocationScopes(storage: EnumeratedStorage, projectRef: string, userId: string): FarmRevocationScope[] {
   const farmIds = new Set<string>()
   for (let index = 0; index < storage.length; index += 1) {
-    const key = storage.key(index); if (!key) continue
+    const key = storage.key(index); if (!key || key.endsWith(':lease')) continue
     const match = queueKeyPattern.exec(key) ?? fenceKeyPattern.exec(key)
     if (match?.[1] === projectRef && match[2] === userId) farmIds.add(match[3]!)
   }
@@ -110,7 +142,29 @@ export function resetFarmGrantFromLive(storage: StorageLike, scope: FarmRevocati
 export function resetFarmRevokedFromLive(storage: StorageLike, scope: FarmRevocationScope, serverEpoch: number, changedAt = new Date().toISOString()): number {
   if (!Number.isSafeInteger(serverEpoch) || serverEpoch < 1 || Number.isNaN(Date.parse(changedAt))) throw new Error(blocked)
   let generation = serverEpoch
-  try { const state = readState(storage, scope); generation = Math.max(serverEpoch, state.fence?.generation ?? 0, state.ledger?.generation ?? 0) + 1 } catch { /* see resetFarmGrantFromLive */ }
+  try { const state = readState(storage, scope); generation = Math.max(serverEpoch, state.fence?.generation ?? 0, state.ledger?.generation ?? 0) + 1 } catch {
+    const { fence, ledger } = readIndependentState(storage, scope)
+    const highestEpoch = Math.max(fence?.serverEpoch ?? 0, ledger?.serverEpoch ?? 0)
+    if (highestEpoch > serverEpoch) throw new Error(blocked)
+    // The ledger is written first. Resume it only when it is exactly the next
+    // authoritative revoked generation from an active, non-regressing fence.
+    // Equal-generation token mismatches are corrupt state, never an intent.
+    const expectedGeneration = fence && !fence.revoked && fence.serverEpoch <= serverEpoch
+      ? Math.max(serverEpoch, fence.generation) + 1
+      : null
+    if (ledger && expectedGeneration !== null && ledger.serverEpoch === serverEpoch && ledger.generation === expectedGeneration) {
+      writeFence(storage, scope, { version: 2, generation: ledger.generation, token: ledger.token, serverEpoch, revoked: true, changedAt: ledger.changedAt })
+      return ledger.generation
+    }
+    generation = Math.max(serverEpoch, fence?.generation ?? 0, ledger?.generation ?? 0) + 1
+    // A non-exact partial state is not eligible to consume a retained receipt.
+    // Advance past its formula so only an exact ledger-before-fence resume can
+    // quarantine already-saved v2 work.
+    try {
+      const prior = parseRecoveryFence(storage.getItem(farmRevocationRecoveryKey(scope)) ?? '', scope)
+      if (generation === Math.max(serverEpoch, prior.generation) + 1) generation += 1
+    } catch { /* no independently valid retained receipt */ }
+  }
   writeFence(storage, scope, { version: 2, generation, token: nextToken(), serverEpoch, revoked: true, changedAt })
   return generation
 }
@@ -121,13 +175,58 @@ export function captureFarmRevocationFence(storage: StorageLike, scope: FarmRevo
   return { ...scope, generation: current.generation, token: current.token, serverEpoch: current.serverEpoch }
 }
 
+/** Retain an active custody snapshot before publishing a revoked fence. It is
+ * not authorization: it can only prove which already-queued v2 Field Log
+ * bytes may be moved into recovery if custody acquisition is interrupted. */
+export function prepareFarmRevocationRecoveryFence(storage: StorageLike, scope: FarmRevocationScope): FarmRevocationSnapshot {
+  const prior = captureFarmRevocationFence(storage, scope)
+  const key = farmRevocationRecoveryKey(scope)
+  const bytes = JSON.stringify({ version: 1, prior } satisfies RevocationRecoveryFence)
+  storage.setItem(key, bytes)
+  if (storage.getItem(key) !== bytes || JSON.stringify({ version: 1, prior: parseRecoveryFence(bytes, scope) }) !== bytes) throw new Error(blocked)
+  return prior
+}
+
+/** A retained prior fence is usable only for the exact revoked generation a
+ * live reset would create. A removal may advance the server epoch; this never permits
+ * queue replay or a grant. */
+export function readFarmRevocationRecoveryFence(storage: StorageLike, scope: FarmRevocationScope): FarmRevocationSnapshot | undefined {
+  const raw = storage.getItem(farmRevocationRecoveryKey(scope))
+  if (raw === null) return undefined
+  let prior: FarmRevocationSnapshot
+  try { prior = parseRecoveryFence(raw, scope) } catch { return undefined }
+  let current: Fence
+  try { current = readFence(storage, scope) } catch { return undefined }
+  if (!current.revoked || current.serverEpoch < prior.serverEpoch || current.generation !== Math.max(current.serverEpoch, prior.generation) + 1 || current.token === prior.token) return undefined
+  return prior
+}
+
+export function clearFarmRevocationRecoveryFence(storage: StorageLike, scope: FarmRevocationScope, prior: FarmRevocationSnapshot): void {
+  const key = farmRevocationRecoveryKey(scope)
+  const raw = storage.getItem(key)
+  if (raw === null) return
+  try {
+    const stored = parseRecoveryFence(raw, scope)
+    if (stored.generation !== prior.generation || stored.token !== prior.token || stored.serverEpoch !== prior.serverEpoch) return
+  } catch { return }
+  storage.removeItem(key)
+  if (storage.getItem(key) !== null) throw new Error(blocked)
+}
+
 export function verifyFarmRevocationFence(storage: StorageLike, snapshot: FarmRevocationSnapshot): void {
   const current = readFence(storage, snapshot)
   if (current.revoked || current.generation !== snapshot.generation || current.token !== snapshot.token || current.serverEpoch !== snapshot.serverEpoch) throw new Error(blocked)
 }
 
 export function markFarmRevoked(storage: StorageLike, scope: FarmRevocationScope, changedAt = new Date().toISOString(), serverEpoch?: number): number {
-  const { fence, ledger } = readState(storage, scope)
+  let fence: Fence | null; let ledger: GenerationLedger | null
+  try { ({ fence, ledger } = readState(storage, scope)) } catch {
+    if (!serverEpoch || !Number.isSafeInteger(serverEpoch) || serverEpoch < 1) throw new Error(blocked)
+    const partial = readExactLocalRevocationPartial(storage, scope, serverEpoch)
+    if (!partial) throw new Error(blocked)
+    writeFence(storage, scope, { version: 2, generation: partial.generation, token: partial.token, serverEpoch, revoked: true, changedAt: partial.changedAt })
+    return partial.generation
+  }
   if (fence?.revoked && ledger) return fence.generation
   const generation = Math.max(fence?.generation ?? 0, ledger?.generation ?? 0) + 1
   const authoritativeEpoch = serverEpoch ?? fence?.serverEpoch ?? ledger?.serverEpoch

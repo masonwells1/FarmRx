@@ -20,7 +20,7 @@ try {
 
   Invoke-Probe "create role anon nologin; create role authenticated nologin; create role service_role nologin; create schema auth; create table auth.users (id uuid primary key, email text); create function auth.uid() returns uuid language sql stable as `$`$ select coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub', nullif(current_setting('request.jwt.claim.sub', true), ''))::uuid `$`$; create schema storage; create table storage.buckets (id text primary key, name text not null, public boolean not null default false, file_size_limit bigint, allowed_mime_types text[]); create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text not null, name text not null, owner uuid); alter table storage.objects enable row level security;" 'Disposable bootstrap failed.'
   $migrations = Get-ChildItem (Join-Path $root 'supabase/migrations') -Filter '*.sql' | Sort-Object Name
-  $repairMigration = $migrations | Where-Object Name -EQ '0038_modern_postgrest_service_role_claims.sql'
+  $repairMigration = $migrations | Where-Object Name -EQ '20260716122205_0038_modern_postgrest_service_role_claims.sql'
   if (!$repairMigration) { throw 'Migration 0038 modern PostgREST service-role repair is missing.' }
   $migrations | Where-Object Name -LT $repairMigration.Name | ForEach-Object { Invoke-Probe (Get-Content -Raw $_.FullName) "Migration failed: $($_.Name)" }
 
@@ -80,7 +80,7 @@ end $$;
 '@ 'Before-state JSON-only rejection proof failed.'
   Write-Output 'BEFORE 0038 JSON-only service role rejected by legacy check: PASS'
 
-  Invoke-Probe (Get-Content -Raw $repairMigration.FullName) 'Migration failed: 0038_modern_postgrest_service_role_claims.sql'
+  Invoke-Probe (Get-Content -Raw $repairMigration.FullName) 'Migration failed: 20260716122205_0038_modern_postgrest_service_role_claims.sql'
 
   Invoke-Probe @'
 do $$ begin

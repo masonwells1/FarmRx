@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { dismissRevokedFarmRecovery, quarantineRevokedFarmWork, readRevokedFarmRecovery, revokedFarmRecoveryKey } from './revokedFarmRecovery'
 import { legacyScoutingCleanupOutboxKey, scoutingCleanupOutboxKey, unownedScoutingCleanupRecoveryKey } from './scoutingCleanupOutbox'
+import { captureFarmRevocationFence, resetFarmGrantFromLive, resetFarmRevokedFromLive } from './farmRevocationFence'
 
 class MemoryStorage {
   values = new Map<string, string>(); failWrites = false
@@ -39,6 +40,13 @@ const notificationEntry = (targetFarm = farm) => ({ version: 1, module: 'notific
 
 // A queue whose contents do not match its scoped key is corrupt and stays active for manual recovery.
 { const storage = new MemoryStorage(); const active = key('farm-rx-notifications-write-queue'); storage.setItem(active, JSON.stringify({ version: 1, entries: [notificationEntry(otherFarm)] })); assert.throws(() => quarantineRevokedFarmWork(storage, { projectRef: project, userId: user, farmId: farm }, stamp)); assert.notEqual(storage.getItem(active), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }
+
+// A valid v2 Field Log entry is captured with its pre-revocation fence, while
+// changed or foreign custody remains byte-stable and never becomes recovery.
+{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const active = key('farm-rx-field-log-write-queue'); resetFarmGrantFromLive(storage, scope, 1, stamp); const priorFence = captureFarmRevocationFence(storage, scope); const entry = { version: 2 as const, module: 'fieldLog' as const, kind: 'saveEntry' as const, operationId: operation, userId: user, farmId: farm, enqueuedAt: stamp, operationContext: priorFence, draft: { id: note, field_id: field, entry_type: 'note', observed_on: '2026-07-15', rainfall_in: null, note: 'Saved before access removal' } }; const bytes = JSON.stringify({ version: 1, entries: [entry] }); storage.setItem(active, bytes); resetFarmRevokedFromLive(storage, scope, 1, stamp); assert.equal(quarantineRevokedFarmWork(storage, scope, stamp, priorFence), 1); assert.equal(storage.getItem(active), null); assert.equal(JSON.stringify(readRevokedFarmRecovery(storage, project, user)[0]?.payload), bytes)
+  const invalidStorage = new MemoryStorage(); resetFarmGrantFromLive(invalidStorage, scope, 1, stamp); const invalidPriorFence = captureFarmRevocationFence(invalidStorage, scope); const invalidBytes = JSON.stringify({ version: 1, entries: [{ ...entry, operationContext: { ...invalidPriorFence, generation: invalidPriorFence.generation + 1 } }] }); invalidStorage.setItem(active, invalidBytes); resetFarmRevokedFromLive(invalidStorage, scope, 1, stamp); assert.throws(() => quarantineRevokedFarmWork(invalidStorage, scope, stamp, invalidPriorFence)); assert.equal(invalidStorage.getItem(active), invalidBytes); assert.equal(invalidStorage.getItem(revokedFarmRecoveryKey(project, user)), null)
+  const foreignStorage = new MemoryStorage(); resetFarmGrantFromLive(foreignStorage, scope, 1, stamp); const foreignPriorFence = captureFarmRevocationFence(foreignStorage, scope); const foreignBytes = JSON.stringify({ version: 1, entries: [{ ...entry, operationContext: { ...foreignPriorFence, projectRef: 'other-project' } }] }); foreignStorage.setItem(active, foreignBytes); resetFarmRevokedFromLive(foreignStorage, scope, 1, stamp); assert.throws(() => quarantineRevokedFarmWork(foreignStorage, scope, stamp, foreignPriorFence)); assert.equal(foreignStorage.getItem(active), foreignBytes); assert.equal(foreignStorage.getItem(revokedFarmRecoveryKey(project, user)), null)
+}
 
 // Recovery belongs to exactly one project/user and is never a live queue.
 { const storage = new MemoryStorage(); storage.setItem(key('farm-rx-write-queue'), envelope()); quarantineRevokedFarmWork(storage, { projectRef: project, userId: user, farmId: farm }, stamp); assert.equal(readRevokedFarmRecovery(storage, project, 'user-b').length, 0); assert.equal(readRevokedFarmRecovery(storage, 'other-project', user).length, 0); assert.equal(storage.getItem(key('farm-rx-write-queue')), null) }

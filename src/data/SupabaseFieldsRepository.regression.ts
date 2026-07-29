@@ -272,7 +272,10 @@ async function run() {
     const guardedGateway = new FakeFieldsDataGateway(); const guarded = new QueuedFieldsRepository(repository(guardedGateway), { getContext: async () => { const value = { userId: guardedUser, farmId: data.farm.id }; captured(); return value }, projectRef: guardedRef, storage: guardedStorage, createId: () => `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`, clock: () => '2026-07-15T00:00:00.000Z', isOffline: () => true })
     const saving = guarded.saveField({ ...draft(data), crop_assignments: [] }); await capturedPromise
     if (scenario === 'account-switch') guardedUser = userB; else resetFarmGrantFromLive(guardedStorage, scope, 1, '2026-07-15T00:01:00.000Z')
-    release(); await blocker; await rejects(() => saving, `Fields must reject a delayed ${scenario} save.`)
+    release()
+    if (scenario === 'same-scope-regrant') await rejects(() => blocker, 'A regranted Fields queue blocker returned after its captured fence changed.')
+    else await blocker
+    await rejects(() => saving, `Fields must reject a delayed ${scenario} save.`)
     assert(guardedGateway.inputs.length === 0 && new FieldsWriteQueue(guardedStorage, guardedKey).read().entries.length === 0, `Fields ${scenario} race reached the writer or queue.`)
   }
   // 14. Grain reads injected Fields and preserves its own storage slice.
