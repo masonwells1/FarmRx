@@ -61,7 +61,7 @@ foreach ($config in @('playwright.season.config.ts','playwright.season-february.
   Assert-True ($source.Contains('seasonLoopback') -and $source.Contains('127.0.0.1')) "Season config does not retain dynamic loopback-only port handling: $config"
 }
 $browserHelper = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'scripts/maple-season-browser.ps1')
-Assert-True ($browserHelper.Contains('Get-Command npx.cmd') -and $browserHelper.Contains('System.Diagnostics.ProcessStartInfo') -and $browserHelper.Contains('$process.WaitForExit($TimeoutMilliseconds)') -and $browserHelper.Contains('$process.ExitCode')) 'Continuous browser helper does not use a bounded native process and exact exit code.'
+Assert-True ($browserHelper.Contains('Get-Command npx.cmd') -and $browserHelper.Contains('$startInfo.FileName = $npx') -and $browserHelper.Contains('$startInfo.CreateNoWindow = $true') -and $browserHelper.Contains('System.Diagnostics.ProcessStartInfo') -and $browserHelper.Contains('$process.WaitForExit($TimeoutMilliseconds)') -and $browserHelper.Contains('$process.ExitCode')) 'Continuous browser helper does not use a bounded direct native process and exact exit code.'
 Assert-True ($browserHelper.Contains('Get-NetTCPConnection -LocalPort $Port -State Listen') -and $browserHelper.Contains('Stop-Process -Id $listener.OwningProcess') -and $browserHelper.Contains('$killExitCode = $LASTEXITCODE') -and $browserHelper.Contains('browser server cleanup did not release governed port')) 'Continuous browser helper does not terminate and verify its proof-owned browser server.'
 foreach ($month in @('january','february','march','april','may','june')) {
   $runner = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root "scripts/verify-maple-$month-disposable.ps1")

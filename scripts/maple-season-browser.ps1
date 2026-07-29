@@ -47,21 +47,23 @@ function Invoke-MapleSeasonBrowserProof {
     'playwright.season-may.config.ts' { @('FARMRX_SEASON_MAY_PORT', 4177) }
     'playwright.season-june.config.ts' { @('FARMRX_SEASON_JUNE_PORT', 4178) }
     'playwright.season-july.config.ts' { @('FARMRX_SEASON_JULY_PORT', 4178) }
+    'playwright.season-august-december.config.ts' { @('FARMRX_SEASON_AUGUST_DECEMBER_PORT', 4280) }
     default { throw "$Scenario browser scenario has no governed port contract for $Config." }
   }
   $configuredPort = [Environment]::GetEnvironmentVariable($portContract[0], [EnvironmentVariableTarget]::Process)
   $port = if ([string]::IsNullOrWhiteSpace($configuredPort)) { [int]$portContract[1] } else { [int]$configuredPort }
   $npx = (Get-Command npx.cmd -ErrorAction Stop).Source
-  $commandLine = 'call "{0}" playwright test --config "{1}"' -f $npx, $Config
+  $arguments = 'playwright test --config "{0}"' -f $Config
   if (-not [string]::IsNullOrWhiteSpace($Grep)) {
     if ($Grep -notmatch '^@[a-z0-9-]+$') { throw "$Scenario browser scenario has an invalid grep contract." }
-    $commandLine += ' --grep "{0}"' -f $Grep
+    $arguments += ' --grep "{0}"' -f $Grep
   }
   $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-  $startInfo.FileName = $env:ComSpec
-  $startInfo.Arguments = '/d /s /c "{0}"' -f $commandLine
+  $startInfo.FileName = $npx
+  $startInfo.Arguments = $arguments
   $startInfo.WorkingDirectory = $Root
   $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
   $process = New-Object System.Diagnostics.Process
   $process.StartInfo = $startInfo
   if (-not $process.Start()) { throw "$Scenario browser process did not start." }
