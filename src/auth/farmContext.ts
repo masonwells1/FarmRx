@@ -756,7 +756,6 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
       let localRevocationEpoch: number | null = null
       if (serverEpoch === null) {
         const priorRevocationState = inspectFarmRevocationState(target, scope)
-        if (priorRevocationState.kind === 'invalid') throw new Error('Farm access changed while it was being verified.')
         localRevocationEpoch = priorRevocationState.serverEpoch ?? priorEpochs[farmId] ?? null
         if (!localRevocationEpoch) throw new Error('Farm access changed while it was being verified.')
       }
@@ -765,15 +764,23 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
       // this fence before and after its transaction; cleanup below then waits
       // for custody and quarantines any bytes a writer had already persisted.
       const earlyRevocationState = inspectFarmRevocationState(target, scope)
-      const capturedPriorFieldLogFence = earlyRevocationState.kind === 'active'
+      let capturedPriorFieldLogFence = earlyRevocationState.kind === 'active'
         ? prepareFarmRevocationRecoveryFence(target, scope)
         : earlyRevocationState.kind === 'revoked' ? readFarmRevocationRecoveryFence(target, scope) : undefined
       if (serverEpoch === null) {
         if (earlyRevocationState.kind !== 'revoked') {
           markFarmRevoked(target, scope, validationStartedAt, localRevocationEpoch!)
+          // A local removed-epoch retry may complete only an exact partial
+          // mark. Rebind its already-retained receipt for quarantine, never
+          // replay, after the matching revoked fence is durable.
+          if (!capturedPriorFieldLogFence) capturedPriorFieldLogFence = readFarmRevocationRecoveryFence(target, scope)
         }
       } else if (earlyRevocationState.kind !== 'revoked' || earlyRevocationState.serverEpoch !== serverEpoch) {
         resetFarmRevokedFromLive(target, scope, serverEpoch, validationStartedAt)
+        // A prior attempt can have durably advanced only the ledger. Once the
+        // exact revoked fence is completed, re-read its retained prior receipt
+        // so valid v2 Field Log bytes can be quarantined, never replayed.
+        if (!capturedPriorFieldLogFence) capturedPriorFieldLogFence = readFarmRevocationRecoveryFence(target, scope)
       }
       await coordinatedFarmCustodyTransaction(scope, target, createId, async (verifyCustody) => {
         verifyValidation(); verifyCustody()
