@@ -452,14 +452,15 @@ function OfflineDataNotice() {
 }
 
 function FarmAccessGate({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { signOut, user } = useAuth();
+  const navigate = useNavigate();
   if (!user)
     return (
       <main className="login-page">
         <p className="opening-farm">Opening your farm…</p>
       </main>
     );
-  return <FarmAccessGateForUser key={user.id} user={user}>{children}</FarmAccessGateForUser>;
+  return <FarmAccessGateForUser key={user.id} user={user} onSignOut={async () => { await signOut(); navigate("/login", { replace: true }); }}>{children}</FarmAccessGateForUser>;
 }
 
 const farmRetryModules = ["fields", "grain", "profitability", "inventory", "equipment_tasks", "weather", "fieldLog", "scouting", "harvest", "programs", "notifications"] as const;
@@ -599,7 +600,7 @@ async function restoreCurrentFarmAfterFailedSwitch(latestProfile: LoadedFarmAcce
   }
 }
 
-export function FarmAccessGateForUser({ children, user, dependencies = defaultFarmAccessGateDependencies }: { children: ReactNode; user: User; dependencies?: FarmAccessGateDependencies }) {
+export function FarmAccessGateForUser({ children, user, dependencies = defaultFarmAccessGateDependencies, onSignOut }: { children: ReactNode; user: User; dependencies?: FarmAccessGateDependencies; onSignOut?: () => Promise<void> }) {
   const [state, setState] = useState<
     "checking" | "choose" | "ready" | "setup" | "blocked"
   >("checking");
@@ -607,11 +608,13 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
   const [profile, setProfile] = useState<LoadedFarmAccessProfile | null>(null);
   const [message, setMessage] = useState("");
   const [retrying, setRetrying] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const mounted = useRef(true);
   const validationGate = useRef(createFarmAccessValidationGate());
   const openFarmRef = useRef<null | (() => Promise<FarmAccess["source"]>)>(null);
   const liveRevalidationRef = useRef<null | (() => Promise<void>)>(null);
   const retryLock = useRef(createSubmitLock());
+  const signOutLock = useRef(createSubmitLock());
   const beginValidation = () => {
     const isLatestGeneration = validationGate.current.begin();
     return () => mounted.current && isLatestGeneration();
@@ -713,6 +716,18 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
       retryLock.current.release();
     }
   };
+  const leaveBlockedFarm = async () => {
+    if (!onSignOut || !signOutLock.current.acquire()) return;
+    setSigningOut(true);
+    try {
+      await onSignOut();
+    } catch {
+      if (mounted.current) setMessage("Farm Rx could not sign you out right now. Please try again.");
+    } finally {
+      if (mounted.current) setSigningOut(false);
+      signOutLock.current.release();
+    }
+  };
   const completeInitialFarmSetup = async () => {
     const isCurrent = beginValidation();
     const latest = await dependencies.loadAccess(user.id, true);
@@ -751,6 +766,7 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
           <button className="primary-action" type="button" disabled={retrying} onClick={() => { void retryOpenFarm() }}>
             {retrying ? "Trying again…" : "Try again"}
           </button>
+          {onSignOut && <button className="secondary-action" type="button" disabled={signingOut} onClick={() => { void leaveBlockedFarm() }}>{signingOut ? "Signing out…" : "Sign out"}</button>}
           <RevokedFarmRecovery userId={user.id} />
         </section>
       </main>

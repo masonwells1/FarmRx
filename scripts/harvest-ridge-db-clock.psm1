@@ -22,6 +22,8 @@ $script:HrFarmId='27010000-0000-4000-8000-000000000004'
 $script:HrFarmName='Harvest Ridge'
 $script:MapleFarmId='27010000-0000-4000-8000-000000000001'
 $script:MapleFarmName='Maple Ridge'
+$script:PineFarmId='27010000-0000-4000-8000-000000000006'
+$script:PineFarmName='Pine Hill'
 
 function ConvertTo-HrClockWindowsCommandLine {
   param([Parameter(Mandatory)][string[]]$Argv)
@@ -84,7 +86,8 @@ function Assert-HrClockPhaseInput {
   if($ApiUrl-cne'http://127.0.0.1:55321'-or$PublishableKey-notmatch'^sb_publishable_'-or[string]::IsNullOrWhiteSpace($AccessToken)){throw 'HARVEST_RIDGE_CLOCK_REFUSED: local API credentials/boundary are not exact.'}
   $approved=@(
     [pscustomobject]@{Id=$script:HrFarmId;Name=$script:HrFarmName},
-    [pscustomobject]@{Id=$script:MapleFarmId;Name=$script:MapleFarmName}
+    [pscustomobject]@{Id=$script:MapleFarmId;Name=$script:MapleFarmName},
+    [pscustomobject]@{Id=$script:PineFarmId;Name=$script:PineFarmName}
   )
   if(@($approved|Where-Object{$_.Id-ceq$ProofFarmId-and$_.Name-ceq$ProofFarmName}).Count-ne1){throw 'HARVEST_RIDGE_CLOCK_REFUSED: proof farm identity is not an approved synthetic fixture.'}
   $instant=[datetimeoffset]::MinValue

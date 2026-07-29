@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert'
 import { dismissRevokedFarmRecovery, quarantineRevokedFarmWork, readRevokedFarmRecovery, revokedFarmRecoveryKey } from './revokedFarmRecovery'
 import { legacyScoutingCleanupOutboxKey, scoutingCleanupOutboxKey, unownedScoutingCleanupRecoveryKey } from './scoutingCleanupOutbox'
 import { captureFarmRevocationFence, resetFarmGrantFromLive, resetFarmRevokedFromLive } from './farmRevocationFence'
+import { farmerError } from '../lib/farmerErrors'
 
 class MemoryStorage {
   values = new Map<string, string>(); failWrites = false
@@ -39,7 +40,7 @@ const notificationEntry = (targetFarm = farm) => ({ version: 1, module: 'notific
 { const storage = new MemoryStorage(); const active = key('farm-rx-notifications-write-queue'); const work = JSON.stringify({ version: 1, entries: [notificationEntry()] }); storage.setItem(active, work); storage.failWrites = true; assert.throws(() => quarantineRevokedFarmWork(storage, { projectRef: project, userId: user, farmId: farm }, stamp)); assert.equal(storage.getItem(active), work) }
 
 // A queue whose contents do not match its scoped key is corrupt and stays active for manual recovery.
-{ const storage = new MemoryStorage(); const active = key('farm-rx-notifications-write-queue'); storage.setItem(active, JSON.stringify({ version: 1, entries: [notificationEntry(otherFarm)] })); assert.throws(() => quarantineRevokedFarmWork(storage, { projectRef: project, userId: user, farmId: farm }, stamp)); assert.notEqual(storage.getItem(active), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }
+{ const storage = new MemoryStorage(); const active = key('farm-rx-notifications-write-queue'); storage.setItem(active, JSON.stringify({ version: 1, entries: [notificationEntry(otherFarm)] })); assert.throws(() => quarantineRevokedFarmWork(storage, { projectRef: project, userId: user, farmId: farm }, stamp), (caught) => { assert.equal(farmerError(caught, 'open your farm'), 'Farm Rx found unreadable or mismatched saved work for a farm you can no longer open. Nothing was cleared.'); return true }); assert.notEqual(storage.getItem(active), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }
 
 // A valid v2 Field Log entry is captured with its pre-revocation fence, while
 // changed or foreign custody remains byte-stable and never becomes recovery.

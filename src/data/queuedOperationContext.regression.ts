@@ -674,10 +674,12 @@ try {
   function BlockedOfflineProbe() { const value = useFarmAccess(); return createElement('div', null, `${value.source} recovered farm`) }
   const blockedOfflineContainer = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(blockedOfflineContainer); const blockedOfflineRoot = createRoot(blockedOfflineContainer as unknown as HTMLElement)
   try {
-    await act(async () => { blockedOfflineRoot.render(createElement(FarmAccessGateForUser, { user: gateUser as never, dependencies: blockedOfflineDependencies, children: createElement(BlockedOfflineProbe) })) })
+    await act(async () => { blockedOfflineRoot.render(createElement(FarmAccessGateForUser, { user: gateUser as never, dependencies: blockedOfflineDependencies, onSignOut: async () => undefined, children: createElement(BlockedOfflineProbe) })) })
     for (let attempt = 0; attempt < 100 && !blockedOfflineContainer.textContent?.includes('Try again'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const blockedOfflineRetry = [...blockedOfflineContainer.querySelectorAll('button')].find((button) => button.textContent === 'Try again') as unknown as HTMLButtonElement | undefined
+    const blockedOfflineSignOut = [...blockedOfflineContainer.querySelectorAll('button')].find((button) => button.textContent === 'Sign out') as unknown as HTMLButtonElement | undefined
     assert(blockedOfflineRetry, 'The live startup failure did not expose a gate retry action.')
+    assert(blockedOfflineSignOut, 'The blocked farm gate trapped the current account without a sign-out action.')
     await act(async () => { blockedOfflineRetry.click(); await Promise.resolve() })
     for (let attempt = 0; attempt < 100 && !blockedOfflineContainer.textContent?.includes('offline recovered farm'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     assert(blockedOfflineContainer.textContent?.includes('offline recovered farm') && blockedOfflineLoads === 2 && blockedOfflineReplays === 2, 'A blocked live startup could not recover to an offline-ready farm without returning to the blocked gate.')

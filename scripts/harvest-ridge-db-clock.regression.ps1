@@ -5,6 +5,9 @@ $module=Get-Module harvest-ridge-db-clock
 if($null-eq$module){throw 'HARVEST_RIDGE_CLOCK_PS5_REGRESSION_FAILED: module was not loaded.'}
 & $module {
   param($repoRoot)
+  $pine=Assert-HrClockPhaseInput 'http://127.0.0.1:55321' 'sb_publishable_test' 'synthetic-token' '27010000-0000-4000-8000-000000000006' 'Pine Hill' '2027-08-04 19:10:00+00:00'
+  if($pine.ToString('o')-notmatch'^2027-08-04T19:10:00'){throw 'HARVEST_RIDGE_CLOCK_PS5_REGRESSION_FAILED: Pine Hill synthetic proof identity was not accepted.'}
+  try{Assert-HrClockPhaseInput 'http://127.0.0.1:55321' 'sb_publishable_test' 'synthetic-token' '27010000-0000-4000-8000-000000000006' 'Pine Ridge' '2027-08-04 19:10:00+00:00'|Out-Null;throw 'HARVEST_RIDGE_CLOCK_PS5_REGRESSION_FAILED: mismatched Pine proof identity was accepted.'}catch{if($_.Exception.Message-notmatch'HARVEST_RIDGE_CLOCK_REFUSED'){throw}}
   $db=Get-HrClockContainer $repoRoot 'supabase_db_farmrx-farmer-simplicity-2027-local'
   $rest=Get-HrClockContainer $repoRoot 'supabase_rest_farmrx-farmer-simplicity-2027-local'
   if($db.Id-notmatch'^[0-9a-f]{64}$'-or-not$db.Running-or$db.Health-cne'healthy'-or$null-eq$db.Healthcheck){throw 'HARVEST_RIDGE_CLOCK_PS5_REGRESSION_FAILED: DB embedded-quote template did not round-trip.'}

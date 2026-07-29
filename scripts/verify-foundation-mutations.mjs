@@ -29,7 +29,7 @@ try {
   mutate('src/App.tsx', (source) => source.replace('path="/grain/*"', 'path="/grain-broken/*"'))
   detected('ordered route manifest change', 'routes:exact-ordered-manifest')
   reset()
-  mutate('src/App.tsx', (source) => source.replace('<FarmAccessGateForUser key={user.id} user={user}>', '<FarmAccessGateForUser key="shared-account" user={user}>'))
+  mutate('src/App.tsx', (source) => source.replace('key={user.id} user={user}', 'key="shared-account" user={user}'))
   detected('cross-account farm gate reuse', 'identity:keyed-farm-access-gate')
   reset()
   mutate('supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql', (source) => source.replace('perform public.assert_current_farm_access_epoch(p_farm_id);', 'perform null;'))
