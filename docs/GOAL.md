@@ -1,6 +1,6 @@
 # STANDING GOAL — Farm Rx 2027 Season-Ready
 
-**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** January–July runtime accepted; August–December statically hardened and runtime-blocked
+**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** Maple Ridge January–December continuous runtime accepted; remaining scenario, physical-device, and outward gates open
 
 ## Owner directive
 
@@ -91,4 +91,4 @@ No real farmer account may be provisioned and no customer communication may be s
 
 ## Current next step
 
-Build and run August–December continuously from the accepted July boundary, promoting statuses only from exact-commit browser/database evidence plus fresh Sol review. The governed disposable Postgres clock seam and continuous January–July proof are accepted at exact commit `021b5875dc6d96ddc1b018f672a204ce1066ec9b`; this does not prove the remaining months, a full-year packet, physical-device journeys, or release readiness. No push, pull request, merge, deployment, live service change, or customer action is authorized by this document.
+Build and run the governed Pine Hill offline/revocation/recovery gauntlet against a fresh clean worktree from current `origin/main`, then continue the remaining unproven North Fork and Cedar Creek runtime gauntlets. The one-reset continuous Maple Ridge January–December disposable packet is accepted at exact commit `feb3ea7b0b4cc72cef61df45706916f1a83a41f6`; this does not prove the remaining scenarios, physical-device journeys, release readiness, or any live/outward action. No push, pull request, merge, deployment, live service change, or customer action is authorized by this document.
