@@ -43,6 +43,12 @@ const userA = id(1); const userB = id(2); const userC = id(7); const farmA = id(
 const projectRef = 'queued-context-regression'
 const stamp = '2026-07-15T12:00:00.000000+00:00'
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+function waitForSignal<T>(signal: Promise<T>, stage: string, timeoutMs = 1_000) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${stage} after ${timeoutMs}ms.`)), timeoutMs)
+    void signal.then((value) => { clearTimeout(timer); resolve(value) }, (error) => { clearTimeout(timer); reject(error) })
+  })
+}
 function isReadContextError(error: unknown) { return error instanceof Error && (error.name === 'WorkspaceMemoryChangedError' || /signed-in account or selected farm changed/i.test(error.message)) }
 function memory(): StorageLike { const values = new Map<string, string>(); return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: (key) => values.delete(key) } }
 class SharedTabStorageHub {
@@ -87,6 +93,10 @@ async function rejects(action: () => Promise<unknown>, message: string) { let re
 async function rejectsChangedContext(action: () => Promise<unknown>, message: string) { try { await action() } catch (error) { assert(error instanceof Error && /signed-in account or selected farm changed/i.test(error.message), message); return } throw new Error(message) }
 async function settleCrossTabEvents() { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); await new Promise((resolve) => setTimeout(resolve, 0)) }) }
 const operationContext = (userId: string, farmId: string, generation = 1, serverEpoch = 1): FarmOperationContext => ({ projectRef, userId, farmId, generation, token: id(900 + generation), serverEpoch })
+
+let absentSignalError: unknown
+try { await waitForSignal(new Promise<void>(() => undefined), 'a deliberately absent regression signal', 25) } catch (error) { absentSignalError = error }
+assert(absentSignalError instanceof Error && absentSignalError.message === 'Timed out waiting for a deliberately absent regression signal after 25ms.', 'A deliberately absent bounded-wait signal did not fail promptly with its stage-specific message.')
 
 // A writer can hold farm custody while access removal holds validation. The
 // durable revoked fence must reject that writer before it awaits getContext,
@@ -516,6 +526,9 @@ try {
   const noticeDueReached = new Promise<void>((resolve) => { reachNoticeDue = resolve })
   let rejectNoticeDue!: (reason: unknown) => void
   const noticeDueFailure = new Promise<never>((_, reject) => { rejectNoticeDue = reject })
+  void noticeDueFailure.catch(() => undefined)
+  let noticeDueReleased = false
+  const failNoticeDue = (reason: unknown) => { if (!noticeDueReleased) { noticeDueReleased = true; rejectNoticeDue(reason) } }
   const unused = async () => { throw new Error('Unexpected Equipment gateway operation.') }
   const noticeGateway: EquipmentTasksDataGateway = {
     async getDueServiceGenerationStatus() { return { has_due: true, task_needed: true, notification_needed: true, local_date: '2026-07-12' } },
@@ -533,7 +546,9 @@ try {
   setModuleSyncStatus('equipment_tasks', { kind: 'blocked', pending: 1, message: 'Retry the saved Equipment change.' })
   let finishNoticeRetryAction!: () => void
   const noticeRetryActionFinished = new Promise<void>((resolve) => { finishNoticeRetryAction = resolve })
-  setModuleSyncRetryAction('equipment_tasks', async () => { try { await noticeServices.replayEquipmentTasksQueue() } finally { finishNoticeRetryAction() } })
+  let noticeRetryActionStarted = false
+  let noticeRetryActionSettled = false
+  setModuleSyncRetryAction('equipment_tasks', async () => { noticeRetryActionStarted = true; try { await noticeServices.replayEquipmentTasksQueue() } finally { noticeRetryActionSettled = true; finishNoticeRetryAction() } })
   const container = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(container); const root = createRoot(container as unknown as HTMLElement)
   try {
     const noticeProfile: LoadedFarmAccessProfile = { ...staleProfileA, userId: userA, farmId: farmA, operationContext: captureFarmRevocationFence(noticeStorage, { projectRef: noticeRef, userId: userA, farmId: farmA }) }
@@ -542,18 +557,25 @@ try {
     const retryButton = container.querySelector('button') as unknown as HTMLButtonElement | null
     assert(retryButton?.textContent === 'Try again', 'The mounted SyncNotice did not expose its real retry button.')
     const expectedNoticeError = 'We could not reach Farm Rx. Check your signal and try again.'
-    await act(async () => { retryButton.click(); await noticeDueReached })
+    await act(async () => { retryButton.click(); await waitForSignal(noticeDueReached, 'the Equipment retry to reach due generation') })
     const replayBeforeDueFailure = `save=${noticeCalls.save}; due=${noticeCalls.due}; queued=${noticeQueue.read().entries.length}; status=${JSON.stringify(getSyncStatus())}`
     assert(noticeCalls.save === 1 && noticeCalls.due === 1 && noticeQueue.read().entries.length === 0 && getSyncStatus().kind === 'synced', `The real Equipment retry action did not replay the queue before due generation began (${replayBeforeDueFailure}).`)
-    rejectNoticeDue(new TypeError('network timeout after replay'))
-    await act(async () => { await noticeRetryActionFinished; await Promise.resolve() })
+    failNoticeDue(new TypeError('network timeout after replay'))
+    await act(async () => { await waitForSignal(noticeRetryActionFinished, 'the Equipment retry action to settle after its late due-generation failure'); await Promise.resolve() })
     launchReplayInBackground(async () => { throw new FarmReplayContextChangedError('The signed-in account or selected farm changed before this operation could finish.') })
     await act(async () => { await new Promise<void>((resolve) => setImmediate(resolve)) })
     const replayAfterDueFailure = `save=${noticeCalls.save}; due=${noticeCalls.due}; queued=${noticeQueue.read().entries.length}; status=${JSON.stringify(getSyncStatus())}`
     assert(noticeCalls.save === 1 && noticeCalls.due === 1 && noticeQueue.read().entries.length === 0 && getSyncStatus().kind === 'synced', `The real Equipment retry action did not preserve the replayed queue state after its late due-generation failure (${replayAfterDueFailure}).`)
     assert(container.textContent?.includes(expectedNoticeError) && !container.textContent.includes('All changes synced') && container.textContent.includes('Try again'), 'The mounted SyncNotice hid a late retry failure or removed its recovery action.')
     assert(noticeUnhandled.length === 0, 'The mounted retry click or background cancellation leaked an unhandled rejection.')
-  } finally { await act(async () => { root.unmount() }); container.remove(); setModuleSyncRetryAction('equipment_tasks', null) }
+  } finally {
+    failNoticeDue(new Error('Equipment retry fixture cleanup released the controlled due-generation failure.'))
+    try {
+      if (noticeRetryActionStarted && !noticeRetryActionSettled) await waitForSignal(noticeRetryActionFinished, 'Equipment retry fixture cleanup to settle')
+    } finally {
+      await act(async () => { root.unmount() }); container.remove(); setModuleSyncRetryAction('equipment_tasks', null)
+    }
+  }
 
   const gateStorage = noticeWindow.localStorage as unknown as StorageLike
   resetFarmGrantFromLive(gateStorage, { projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA }, 1, stamp)
