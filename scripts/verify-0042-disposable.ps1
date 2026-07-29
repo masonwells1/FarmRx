@@ -1,8 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $name = "farmrx-0042-$PID"
 $root = Split-Path -Parent $PSScriptRoot
-$provenanceMigrationName = '20260717023021_repair_service_log_meter_provenance.sql'
-$hardeningMigrationName = '20260717105500_harden_operational_write_boundaries.sql'
+$provenanceMigrationName = '20260717202617_repair_service_log_meter_provenance.sql'
+$hardeningMigrationName = '20260717202637_harden_operational_write_boundaries.sql'
 $advisorMigrationName = '20260718124337_harden_database_advisor_findings.sql'
 $provenanceMigrationPath = Join-Path $root "supabase/migrations/$provenanceMigrationName"
 $hardeningMigrationPath = Join-Path $root "supabase/migrations/$hardeningMigrationName"

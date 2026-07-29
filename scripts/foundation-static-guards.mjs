@@ -17,7 +17,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, app, '<FarmAccessGateForUser key={user.id} user={user}>', 'identity:keyed-farm-access-gate')
   requireText(errors, app, 'access?.userId !== user.id', 'identity:farm-access-render-fence')
 
-  const unscopedWriteFencing = read(root, 'supabase/migrations/0041_unscoped_authenticated_write_fencing.sql')
+  const unscopedWriteFencing = read(root, 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql')
   if ((unscopedWriteFencing.match(/perform public\.assert_current_farm_access_epoch\(p_farm_id\);/g) ?? []).length !== 3) errors.push('rpc:unscoped-write-fences')
   requireText(errors, unscopedWriteFencing, 'revoke all on function public.save_push_subscription(text, text, text, text)', 'rpc:legacy-push-save-retired')
   requireText(errors, unscopedWriteFencing, 'revoke all on function public.delete_push_subscription(text)', 'rpc:legacy-push-delete-retired')
@@ -69,7 +69,7 @@ export function foundationStaticGuard(root = process.cwd()) {
     if ((source.match(/await verifyRead\(\)/g) ?? []).length < 4) errors.push(`read-boundaries:${path}`)
   }
 
-  const rls = read(root, 'supabase/migrations/0002_module1_rls.sql')
+  const rls = read(root, 'supabase/migrations/20260711154325_module1_rls.sql')
   const fieldsSelect = rls.slice(rls.indexOf('create policy fields_select'), rls.indexOf('create policy fields_insert'))
   requireText(errors, fieldsSelect, 'public.can_access_farm(farm_id)', 'rls:fields-select-farm-scope')
   requireText(errors, rls, 'alter table public.fields enable row level security;', 'rls:fields-enabled')
@@ -99,7 +99,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const frameHash = createHash('sha256').update(inline).digest('base64')
   if (!frameCsp?.includes(`'sha256-${frameHash}'`)) errors.push('csp:frame-inline-hash')
 
-  const scheduler = read(root, 'supabase/migrations/0037_scheduled_alert_foundation.sql')
+  const scheduler = read(root, 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql')
   requireText(errors, scheduler, "current_setting('request.jwt.claim.role',true),'') <> 'service_role'", 'scheduler:service-role-check')
   requireText(errors, scheduler, 'b.bid_date between v_local_date-2 and v_local_date', 'scheduler:bid-freshness')
   requireText(errors, scheduler, 'is not distinct from v_rule.operating_entity_id', 'scheduler:entity-scope')
