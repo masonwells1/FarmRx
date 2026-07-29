@@ -1,0 +1,5 @@
+# Hook scripts are POSIX sh. This repo runs with core.autocrlf=true on Windows,
+# which would rewrite them to CRLF on checkout and break `sh` ("\r: command not
+# found"). Pin everything in this folder to LF so the hooks are byte-identical
+# and runnable on every machine.
+* text eol=lf

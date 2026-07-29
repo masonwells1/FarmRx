@@ -1,0 +1,77 @@
+#!/usr/bin/env sh
+#
+# FarmRx pre-push guard.
+#
+# Runs before anything is sent to the remote. Two checks, in order:
+#   1. PROTECT MAIN  - refuse any push that targets refs/heads/main.
+#                      main IS production: Vercel auto-deploys it.
+#   2. TYPECHECK     - run the forced TypeScript check FarmRx requires.
+#
+# Git feeds this hook one line per ref being pushed, on stdin:
+#   <local_ref> <local_sha> <remote_ref> <remote_sha>
+# A local_sha of all zeros means "delete this remote ref".
+#
+# Escape hatch (use deliberately, and only with Mason's OK):
+#   HUSKY=0 git push ...
+
+# ---------------------------------------------------------------------------
+# 1. PROTECT MAIN
+# ---------------------------------------------------------------------------
+
+main_targeted=0
+main_delete=0
+
+while read -r local_ref local_sha remote_ref remote_sha
+do
+  case "$remote_ref" in
+    refs/heads/main)
+      main_targeted=1
+      case "$local_sha" in
+        *[!0]*) ;;
+        ?*) main_delete=1 ;;
+      esac
+      ;;
+  esac
+done
+
+if [ "$main_targeted" -eq 1 ]; then
+  echo ""
+  echo "PUSH BLOCKED -- this push targets main."
+  echo ""
+  if [ "$main_delete" -eq 1 ]; then
+    echo "You are trying to DELETE the main branch on the remote."
+    echo "Deleting main is blocked for the same reason as pushing to it."
+  else
+    echo "Direct pushes to main are blocked -- main IS production"
+    echo "(Vercel auto-deploys every commit on main). Open a pull request instead."
+  fi
+  echo ""
+  echo "What to do:"
+  echo "  1. Put your work on a branch:   git switch -c my-change"
+  echo "  2. Push that branch:            git push -u origin my-change"
+  echo "  3. Open a pull request and merge it once the checks are green."
+  echo ""
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 2. TYPECHECK (forced -- a cached/incremental pass is not good enough here)
+# ---------------------------------------------------------------------------
+
+echo "Pre-push: running TypeScript check (tsc -b --force)..."
+
+if ! npx tsc -b --force; then
+  echo ""
+  echo "PUSH BLOCKED -- the TypeScript check failed."
+  echo ""
+  echo "The errors listed above are real problems in the code. Pushing now would"
+  echo "send code that does not compile, and the build would fail."
+  echo ""
+  echo "What to do: fix the errors above, then push again."
+  echo "Re-run the same check yourself with:   npx tsc -b --force"
+  echo ""
+  exit 1
+fi
+
+echo "Pre-push: TypeScript check passed. Pushing."
+exit 0
