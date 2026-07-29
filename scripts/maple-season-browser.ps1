@@ -37,7 +37,9 @@ function Invoke-MapleSeasonBrowserProof {
     [Parameter(Mandatory)][string]$Config,
     [Parameter(Mandatory)][string]$Scenario,
     [string]$Grep,
-    [ValidateRange(500, 300000)][int]$TimeoutMilliseconds = 300000
+    [ValidateRange(500, 300000)][int]$TimeoutMilliseconds = 300000,
+    [string]$RunnerFile,
+    [string]$OwnedCommandMarker
   )
   $portContract = switch ($Config) {
     'playwright.season.config.ts' { @('FARMRX_SEASON_JANUARY_PORT', 4174) }
@@ -52,14 +54,18 @@ function Invoke-MapleSeasonBrowserProof {
   }
   $configuredPort = [Environment]::GetEnvironmentVariable($portContract[0], [EnvironmentVariableTarget]::Process)
   $port = if ([string]::IsNullOrWhiteSpace($configuredPort)) { [int]$portContract[1] } else { [int]$configuredPort }
-  $npx = (Get-Command npx.cmd -ErrorAction Stop).Source
-  $arguments = 'playwright test --config "{0}"' -f $Config
+  $node = (Get-Command node.exe -ErrorAction Stop).Source
+  $runner = if ([string]::IsNullOrWhiteSpace($RunnerFile)) { Join-Path $Root 'node_modules/@playwright/test/cli.js' } else { $RunnerFile }
+  $runner = [IO.Path]::GetFullPath($runner)
+  if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "$Scenario browser runner is unavailable." }
+  $ownedMarker = if ([string]::IsNullOrWhiteSpace($OwnedCommandMarker)) { $Root } else { $OwnedCommandMarker }
+  $arguments = '"{0}" test --config "{1}"' -f $runner, $Config
   if (-not [string]::IsNullOrWhiteSpace($Grep)) {
     if ($Grep -notmatch '^@[a-z0-9-]+$') { throw "$Scenario browser scenario has an invalid grep contract." }
     $arguments += ' --grep "{0}"' -f $Grep
   }
   $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-  $startInfo.FileName = $npx
+  $startInfo.FileName = $node
   $startInfo.Arguments = $arguments
   $startInfo.WorkingDirectory = $Root
   $startInfo.UseShellExecute = $false
@@ -72,7 +78,7 @@ function Invoke-MapleSeasonBrowserProof {
     & taskkill.exe /PID $process.Id /T /F 2>&1 | Out-Null
     $killExitCode = $LASTEXITCODE
     $terminated = $process.WaitForExit(10000)
-    Clear-MapleSeasonBrowserPort -Port $port -Root $Root -Scenario $Scenario
+    Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
     if ($killExitCode -ne 0 -or -not $terminated -or -not $process.HasExited) {
       throw "$Scenario browser timeout cleanup did not terminate its owned process tree."
     }
@@ -83,6 +89,6 @@ function Invoke-MapleSeasonBrowserProof {
   }
   $exitCode = [int]$process.ExitCode
 
-  Clear-MapleSeasonBrowserPort -Port $port -Root $Root -Scenario $Scenario
+  Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
   if ($exitCode -ne 0) { throw "$Scenario browser scenario failed with exit code $exitCode." }
 }

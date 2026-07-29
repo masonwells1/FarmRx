@@ -26,7 +26,7 @@ function Assert-MapleNovemberStep([string]$Step, [string]$Sql) {
   if ($LASTEXITCODE -ne 0 -or ($result -join '') -cne 't') { throw "Maple November canonical SQL fence failed after $Step." }
 }
 function Get-MapleCanonicalSnapshot([string]$Phase = 'none') {
-  if ($Phase -notin @('none','august','september','october','november')) { throw "Unknown Maple snapshot phase: $Phase" }
+  if ($Phase -notin @('none','august','september','october','november-bin','november-in','november-contract','november-out','november-delivery')) { throw "Unknown Maple snapshot phase: $Phase" }
   $sql = @"
 create temporary table maple_december_snapshot(table_name text primary key, state text);
 do `$snapshot`$
@@ -34,14 +34,15 @@ declare r record; projection text; predicate text;
 begin
   for r in select tablename from pg_tables where schemaname='public' order by tablename loop
     projection := 'to_jsonb(t)'; predicate := '';
-    if '$Phase' = 'august' and r.tablename = 'farm_tasks' then projection := 'to_jsonb(t) - array[''status'',''completed_by'',''completed_at'',''version'',''updated_at'']'; end if;
+    if '$Phase' = 'august' and r.tablename = 'farm_tasks' then projection := 'to_jsonb(t) - array[''status'',''completed_by'',''completed_at'',''updated_at'']'; end if;
     if '$Phase' = 'september' and r.tablename = 'crop_assignments' then projection := 'to_jsonb(t) - array[''harvested_bushels'',''harvest_date'',''actual_price_per_bu'',''version'',''updated_at'']'; end if;
     if '$Phase' = 'september' and r.tablename = 'repository_write_receipts' then predicate := 'where operation_id <> ''27030000-0000-4000-8000-000000000001'''; end if;
     if '$Phase' = 'october' and r.tablename = 'production_estimates' then predicate := 'where id <> ''27070000-0000-4000-8000-000000000001'''; end if;
-    if '$Phase' = 'november' and r.tablename = 'grain_bins' then predicate := 'where id <> ''27073000-0000-4000-8000-000000000001'''; end if;
-    if '$Phase' = 'november' and r.tablename = 'bin_transactions' then predicate := 'where id not in (''27074000-0000-4000-8000-000000000000'',''27074000-0000-4000-8000-000000000001'')'; end if;
-    if '$Phase' = 'november' and r.tablename = 'grain_contracts' then predicate := 'where id <> ''27071000-0000-4000-8000-000000000001'''; end if;
-    if '$Phase' = 'november' and r.tablename = 'grain_contract_deliveries' then predicate := 'where id <> ''27072000-0000-4000-8000-000000000001'''; end if;
+    if '$Phase' = 'november-bin' and r.tablename = 'grain_bins' then predicate := 'where id <> ''27073000-0000-4000-8000-000000000001'''; end if;
+    if '$Phase' = 'november-in' and r.tablename = 'bin_transactions' then predicate := 'where id <> ''27074000-0000-4000-8000-000000000000'''; end if;
+    if '$Phase' = 'november-contract' and r.tablename = 'grain_contracts' then predicate := 'where id <> ''27071000-0000-4000-8000-000000000001'''; end if;
+    if '$Phase' = 'november-out' and r.tablename = 'bin_transactions' then predicate := 'where id <> ''27074000-0000-4000-8000-000000000001'''; end if;
+    if '$Phase' = 'november-delivery' and r.tablename = 'grain_contract_deliveries' then predicate := 'where id <> ''27072000-0000-4000-8000-000000000001'''; end if;
     execute format('insert into maple_december_snapshot select %L, coalesce(jsonb_agg(%s order by (%s)::text), ''[]''::jsonb)::text from public.%I t %s', r.tablename, projection, projection, r.tablename, predicate);
   end loop;
 end
@@ -88,28 +89,33 @@ function Invoke-MaplePhase([string]$Name, [string]$FrozenUtc, [string]$ClientIns
 function Invoke-MapleNovemberPhase {
   Assert-MaplePortFree
   $action = {
-    $before = Get-MapleCanonicalSnapshot 'november'
     $prior = [Environment]::GetEnvironmentVariable('FARMRX_MAPLE_CLIENT_INSTANT', [EnvironmentVariableTarget]::Process)
     try {
       [Environment]::SetEnvironmentVariable('FARMRX_MAPLE_CLIENT_INSTANT', '2027-11-10T11:25:00-06:00', [EnvironmentVariableTarget]::Process)
+      $before = Get-MapleCanonicalSnapshot 'november-bin'
       Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season-august-december.config.ts' -Scenario 'Maple November bin' -Grep '@maple-november-bin'
       Assert-MapleNovemberStep 'bin' "select (select count(*) from public.grain_bins where id='27073000-0000-4000-8000-000000000001' and name='Maple North Bin' and capacity_bu=40000 and location_type='on_farm' and location_name='Maple Ridge')=1 and not exists(select 1 from public.bin_transactions) and not exists(select 1 from public.grain_contracts);"
-      Assert-MapleSnapshot $before 'november' 'bin'
+      Assert-MapleSnapshot $before 'november-bin' 'bin'
+      $before = Get-MapleCanonicalSnapshot 'november-in'
       Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season-august-december.config.ts' -Scenario 'Maple November inbound' -Grep '@maple-november-in'
       Assert-MapleNovemberStep 'in' "select (select count(*) from public.bin_transactions where id='27074000-0000-4000-8000-000000000000' and direction='in' and bushels=30800)=1 and not exists(select 1 from public.grain_contracts) and not exists(select 1 from public.grain_contract_deliveries);"
-      Assert-MapleSnapshot $before 'november' 'inbound movement'
+      Assert-MapleSnapshot $before 'november-in' 'inbound movement'
+      $before = Get-MapleCanonicalSnapshot 'november-contract'
       Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season-august-december.config.ts' -Scenario 'Maple November contract' -Grep '@maple-november-contract'
       Assert-MapleNovemberStep 'contract' "select (select count(*) from public.grain_contracts where id='27071000-0000-4000-8000-000000000001' and contract_type='cash_spot' and buyer='Synthetic Elevator' and bushels=5000 and cash_price=4.25 and delivery_start='2027-11-10' and delivery_end='2027-12-15' and contract_number='MR-2027-001' and premium_cents_per_bu=0 and notes is null)=1 and (select count(*) from public.bin_transactions)=1 and not exists(select 1 from public.grain_contract_deliveries);"
-      Assert-MapleSnapshot $before 'november' 'contract'
+      Assert-MapleSnapshot $before 'november-contract' 'contract'
+      $before = Get-MapleCanonicalSnapshot 'november-out'
       Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season-august-december.config.ts' -Scenario 'Maple November outbound' -Grep '@maple-november-out'
       Assert-MapleNovemberStep 'out' "select (select count(*) from public.bin_transactions where grain_bin_id='27073000-0000-4000-8000-000000000001')=2 and (select coalesce(sum(case direction when 'in' then bushels else -bushels end),0) from public.bin_transactions where grain_bin_id='27073000-0000-4000-8000-000000000001')=25800 and not exists(select 1 from public.grain_contract_deliveries);"
-      Assert-MapleSnapshot $before 'november' 'outbound movement'
+      Assert-MapleSnapshot $before 'november-out' 'outbound movement'
+      $before = Get-MapleCanonicalSnapshot 'november-delivery'
       Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season-august-december.config.ts' -Scenario 'Maple November delivery' -Grep '@maple-november-delivery'
       Invoke-MapleSql (Join-Path $root 'tests/season/maple-2027-november.verify.sql')
-      Assert-MapleSnapshot $before 'november' 'contract delivery'
+      Assert-MapleSnapshot $before 'november-delivery' 'contract delivery'
+      $before = Get-MapleCanonicalSnapshot
       Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season-august-december.config.ts' -Scenario 'Maple November phone' -Grep '@maple-november-phone'
       Invoke-MapleSql (Join-Path $root 'tests/season/maple-2027-november.verify.sql')
-      Assert-MapleSnapshot $before 'november' 'phone proof'
+      Assert-MapleSnapshot $before 'none' 'phone proof'
       $true
     } finally { [Environment]::SetEnvironmentVariable('FARMRX_MAPLE_CLIENT_INSTANT', $prior, [EnvironmentVariableTarget]::Process) }
   }.GetNewClosure()
