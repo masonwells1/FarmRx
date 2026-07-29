@@ -734,7 +734,7 @@ export async function validateHarnessIsolation(root = REPOSITORY_ROOT) {
   );
 
   const powershellContent = await readFile(resolve(root, "scripts/verify-season.ps1"), "utf8");
-  const powershellHash = createHash("sha256").update(powershellContent).digest("hex");
+  const powershellHash = createHash("sha256").update(powershellContent.replace(/\r\n/g, "\n")).digest("hex");
   assert(
     powershellHash === EXPECTED_POWERSHELL_SHA256,
     "scripts/verify-season.ps1 does not match the pinned SHA-256.",
