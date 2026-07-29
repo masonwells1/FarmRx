@@ -512,11 +512,15 @@ try {
   const noticeRef = supabaseConfig.projectRef; const noticeStorage = memory(); resetFarmGrantFromLive(noticeStorage, { projectRef: noticeRef, userId: userA, farmId: farmA }, 1, stamp)
   const noticeFields = fieldsSeedForRegression(); noticeFields.farm.id = farmA; for (const row of [...noticeFields.entities, ...noticeFields.fields, ...noticeFields.crop_assignments, ...noticeFields.arrangements]) row.farm_id = farmA
   const noticeCalls = { save: 0, due: 0 }
+  let reachNoticeDue!: () => void
+  const noticeDueReached = new Promise<void>((resolve) => { reachNoticeDue = resolve })
+  let rejectNoticeDue!: (reason: unknown) => void
+  const noticeDueFailure = new Promise<never>((_, reject) => { rejectNoticeDue = reject })
   const unused = async () => { throw new Error('Unexpected Equipment gateway operation.') }
   const noticeGateway: EquipmentTasksDataGateway = {
     async getDueServiceGenerationStatus() { return { has_due: true, task_needed: true, notification_needed: true, local_date: '2026-07-12' } },
-    async generateDueServiceTasksV2() { noticeCalls.due += 1; throw new TypeError('network timeout after replay') },
-    async generateDueServiceTasks() { noticeCalls.due += 1; throw new TypeError('network timeout after replay') },
+    async generateDueServiceTasksV2() { noticeCalls.due += 1; reachNoticeDue(); return noticeDueFailure },
+    async generateDueServiceTasks() { noticeCalls.due += 1; reachNoticeDue(); return noticeDueFailure },
     async loadWorkspace() { return { viewer: { role: 'owner' }, equipment: [], meter_readings: [], intervals: [], service_log: [], service_due: [], members: [{ farm_id: farmA, user_id: userA, display_name: 'Notice Operator' }], tasks: [] } },
     async saveEquipment(farmId, value) { noticeCalls.save += 1; return { ...value, farm_id: farmId, created_by: userA, created_at: stamp, updated_at: stamp } },
     addMeterReading: unused, saveInterval: unused, addServiceLogEntry: unused, saveTask: unused, deleteTask: unused, deleteServiceLogEntry: unused, deleteInterval: unused,
@@ -527,7 +531,9 @@ try {
   noticeQueue.append({ version: 1, module: 'equipment_tasks', kind: 'saveEquipment', operationId: id(886), userId: userA, farmId: farmA, enqueuedAt: stamp, value: { id: id(887), farm_id: farmA, name: 'Notice retry machine', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null } })
   for (const module of ['fields', 'grain', 'profitability', 'inventory', 'equipment_tasks', 'weather', 'fieldLog', 'scouting', 'harvest', 'programs', 'notifications'] as const) setModuleSyncStatus(module, { kind: 'synced', pending: 0 })
   setModuleSyncStatus('equipment_tasks', { kind: 'blocked', pending: 1, message: 'Retry the saved Equipment change.' })
-  setModuleSyncRetryAction('equipment_tasks', noticeServices.replayEquipmentTasksQueue)
+  let finishNoticeRetryAction!: () => void
+  const noticeRetryActionFinished = new Promise<void>((resolve) => { finishNoticeRetryAction = resolve })
+  setModuleSyncRetryAction('equipment_tasks', async () => { try { await noticeServices.replayEquipmentTasksQueue() } finally { finishNoticeRetryAction() } })
   const container = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(container); const root = createRoot(container as unknown as HTMLElement)
   try {
     const noticeProfile: LoadedFarmAccessProfile = { ...staleProfileA, userId: userA, farmId: farmA, operationContext: captureFarmRevocationFence(noticeStorage, { projectRef: noticeRef, userId: userA, farmId: farmA }) }
@@ -535,12 +541,16 @@ try {
     await act(async () => { root.render(createElement(FarmAccessProvider, { value: { farms: [noticeFarm], activeFarm: noticeFarm, profile: noticeProfile, source: 'live', chooseFarm: async () => undefined, checkSignal: async () => undefined }, children: createElement(SyncNotice) })) })
     const retryButton = container.querySelector('button') as unknown as HTMLButtonElement | null
     assert(retryButton?.textContent === 'Try again', 'The mounted SyncNotice did not expose its real retry button.')
-    await act(async () => { retryButton.click(); await Promise.resolve() })
     const expectedNoticeError = 'We could not reach Farm Rx. Check your signal and try again.'
-    for (let attempt = 0; attempt < 50 && !container.textContent?.includes(expectedNoticeError); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    await act(async () => { retryButton.click(); await noticeDueReached })
+    const replayBeforeDueFailure = `save=${noticeCalls.save}; due=${noticeCalls.due}; queued=${noticeQueue.read().entries.length}; status=${JSON.stringify(getSyncStatus())}`
+    assert(noticeCalls.save === 1 && noticeCalls.due === 1 && noticeQueue.read().entries.length === 0 && getSyncStatus().kind === 'synced', `The real Equipment retry action did not replay the queue before due generation began (${replayBeforeDueFailure}).`)
+    rejectNoticeDue(new TypeError('network timeout after replay'))
+    await act(async () => { await noticeRetryActionFinished; await Promise.resolve() })
     launchReplayInBackground(async () => { throw new FarmReplayContextChangedError('The signed-in account or selected farm changed before this operation could finish.') })
     await act(async () => { await new Promise<void>((resolve) => setImmediate(resolve)) })
-    assert(noticeCalls.save === 1 && noticeCalls.due === 1 && noticeQueue.read().entries.length === 0 && getSyncStatus().kind === 'synced', 'The real Equipment retry action did not replay the queue before its late due-generation failure.')
+    const replayAfterDueFailure = `save=${noticeCalls.save}; due=${noticeCalls.due}; queued=${noticeQueue.read().entries.length}; status=${JSON.stringify(getSyncStatus())}`
+    assert(noticeCalls.save === 1 && noticeCalls.due === 1 && noticeQueue.read().entries.length === 0 && getSyncStatus().kind === 'synced', `The real Equipment retry action did not preserve the replayed queue state after its late due-generation failure (${replayAfterDueFailure}).`)
     assert(container.textContent?.includes(expectedNoticeError) && !container.textContent.includes('All changes synced') && container.textContent.includes('Try again'), 'The mounted SyncNotice hid a late retry failure or removed its recovery action.')
     assert(noticeUnhandled.length === 0, 'The mounted retry click or background cancellation leaked an unhandled rejection.')
   } finally { await act(async () => { root.unmount() }); container.remove(); setModuleSyncRetryAction('equipment_tasks', null) }
