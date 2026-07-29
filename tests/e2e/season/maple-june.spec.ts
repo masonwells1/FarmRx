@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { createSeasonRequestClassifier } from './season-request-classifier'
+import { seasonLoopbackPort } from './season-loopback-port'
 
 const ownerEmail = 'maple.owner@farmrx.local.test'
 const fixedInstant = new Date('2027-06-18T08:20:00-05:00')
@@ -18,7 +19,7 @@ declare global {
 }
 
 async function installDeterminismAndFence(page: Page, requests: ReturnType<typeof createSeasonRequestClassifier>) {
-  const localPorts = new Set(['4178', '55321'])
+  const localPorts = new Set([String(seasonLoopbackPort('FARMRX_SEASON_JUNE_PORT', 4178)), '55321'])
   const external: string[] = []
   await page.route('**/*', async route => {
     const request = route.request(); const url = new URL(request.url())

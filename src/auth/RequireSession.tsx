@@ -1,5 +1,5 @@
 import { useRef, type ReactNode } from 'react'
-import { Navigate, useLocation } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router'
 import { useAuth, wasIntentionalSignOut } from './AuthProvider'
 
 export function RequireSession({ children }: { children: ReactNode }) {

@@ -8,7 +8,7 @@ import { createSubmitLock, createSubmitLockMap } from './lib/submitLock'
 import { SaveReceipt } from './components/SaveReceipt'
 import { useSaveReceipt } from './lib/saveReceipt'
 import { NeedsAttentionList } from './components/NeedsAttentionList'
-import { useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router'
 import { isManualSprayRecordIntent } from './data/weatherSprayHandoff'
 
 const units: InventoryUnit[] = ['gal', 'qt', 'pt', 'fl_oz', 'l', 'ml', 'lb', 'oz', 'ton', 'kg', 'g', 'each', 'bag', 'case', 'tote', 'seed_unit', 'bulk_unit']

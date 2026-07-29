@@ -359,20 +359,22 @@ revoked true, changed at 14:45. The pending work must be exportable from the
 recovery surface and must never become another account/farm's queue. PH-6
 proves reload/switch cannot show Pine as current or replay it.
 
-### Current product defects
+### Product repair status
 
-1. **Operation-era authorization is not persisted.** The v1 Field Log queue
-   stores operation ID, user, farm, timestamp, and draft, but not captured fence
-   generation, token, or server epoch. Replay captures the current fence anew.
-   The contract's exact PH-1/PH-3 custody and same-ID revoke/regrant guarantee
-   therefore cannot be proven.
-2. **Revoked epoch is not observable.** `get_current_farm_access_epochs()`
-   filters rows through `can_access_farm`, and client `loadServerEpochs` accepts
-   only currently accessible farms. After membership revocation, Pine vanishes
-   from the farm list and the removal path knows only prior epoch `1`.
-   `markFarmRevoked` consequently produces generation `2`, a random token, and
-   server epoch `1`, not required generation `3`/manifest token/epoch `2`.
-3. **Fixture/proof gap.** The manifest names Pine IDs, but no complete Pine
+1. **Repaired — operation-era authorization custody.** New Field Log queue
+   entries persist the exact captured farm-operation context. Replay uses that
+   saved context, same-ID regrant fails closed without a remote call, and
+   legacy v1 work is parked for review without being upgraded or auto-sent.
+2. **Repaired — authoritative removed-farm epoch.** A signed-in user can request
+   one exact removed-farm epoch only for their own revoked/suspended membership
+   or revoked rep grant. The client parses that response separately and performs
+   authoritative revoked reset only after saved-work quarantine and cache
+   cleanup, yielding generation `3` and server epoch `2` from the Pine boundary.
+   If an allowed hard delete has removed the historical relationship row, an
+   exact empty response still quarantines work and clears cache before a local
+   revoked tombstone advances the last known generation/token; malformed,
+   failed, or unexpected responses remain blocked.
+3. **Remaining fixture/proof gap.** The manifest names Pine IDs, but no complete Pine
    disposable fixture, exact browser sequence, membership controller, or SQL
    verifier currently exists.
 

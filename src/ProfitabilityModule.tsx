@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router";
 import { profitabilityRepository, programsRepository } from "./data";
 import { BankerReport, calculateReportFieldRows, LandlordReport } from "./ProfitabilityReport";
 import { SectionTabs } from "./SectionTabs";

@@ -30,7 +30,7 @@ try {
 
   Invoke-Probe "create role anon nologin; create role authenticated nologin; create role service_role nologin; create schema auth; create table auth.users (id uuid primary key, email text); create function auth.uid() returns uuid language sql stable as `$`$ select coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub', nullif(current_setting('request.jwt.claim.sub', true), ''))::uuid `$`$; create schema storage; create table storage.buckets (id text primary key, name text not null, public boolean not null default false, file_size_limit bigint, allowed_mime_types text[]); create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text not null, name text not null, owner uuid); alter table storage.objects enable row level security;" 'Disposable bootstrap failed.'
   $migrations = Get-ChildItem (Join-Path $root 'supabase/migrations') -Filter '*.sql' | Sort-Object Name
-  $repairMigration = $migrations | Where-Object Name -EQ '0039_scheduler_weather_push_semantics.sql'
+  $repairMigration = $migrations | Where-Object Name -EQ '20260716122213_0039_scheduler_weather_push_semantics.sql'
   if (!$repairMigration) { throw 'Migration 0039 scheduler/weather/push repair is missing.' }
   $migrations | Where-Object Name -LT $repairMigration.Name | ForEach-Object { Invoke-Probe (Get-Content -Raw $_.FullName) "Migration failed: $($_.Name)" }
 
@@ -47,7 +47,7 @@ update public.push_deliveries set status='pending',attempts=1,claimed_at=now() w
 '@ 'Ambiguous legacy rollout fixture failed.'
   Invoke-ExpectedFailure (Get-Content -Raw $repairMigration.FullName) '0039 rollout blocked: 2 ambiguous legacy push deliveries require adjudication' '0039 did not refuse failed and in-flight legacy parent deliveries.'
   Invoke-Probe "delete from public.notifications where id in ('00000000-0000-4000-8000-0000000000e3','00000000-0000-4000-8000-0000000000e4'); delete from public.farm_memberships where farm_id='00000000-0000-4000-8000-0000000000e2'; delete from public.farms where id='00000000-0000-4000-8000-0000000000e2'; delete from auth.users where id='00000000-0000-4000-8000-0000000000e1';" 'Ambiguous legacy rollout fixture cleanup failed.'
-  Invoke-Probe (Get-Content -Raw $repairMigration.FullName) 'Migration failed: 0039_scheduler_weather_push_semantics.sql'
+  Invoke-Probe (Get-Content -Raw $repairMigration.FullName) 'Migration failed: 20260716122213_0039_scheduler_weather_push_semantics.sql'
   $migrations | Where-Object Name -GT $repairMigration.Name | ForEach-Object { Invoke-Probe (Get-Content -Raw $_.FullName) "Migration failed: $($_.Name)" }
 
   Invoke-Probe @'

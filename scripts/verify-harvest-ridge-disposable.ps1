@@ -85,7 +85,7 @@ function Assert-HarvestRidgeNoClockResidue {
     $images=@(docker image ls --format '{{.Repository}}:{{.Tag}}'|Where-Object{$_-match'^farmrx-(?:clock-snapshot|frozen-clock-swap):'})
   }finally{$ErrorActionPreference=$priorPreference}
   $journals=@(Get-ChildItem ([IO.Path]::GetTempPath()) -Filter 'farmrx-harvest-ridge-clock-*.json' -ErrorAction SilentlyContinue)
-  if($ordinaryExit-ne0-or$ordinary.Count-ne1-or$ordinary[0]-notmatch'^[0-9a-f]{64}\|sha256:9faa7279bcf1fd6834e65dc876b11e39cb53030bcb3d653beb7e5668200acbb5\|true\|healthy\|unless-stopped$'-or$parkedExists-or$images.Count-ne0-or$journals.Count-ne0){throw 'HARVEST_RIDGE_CLOCK_RECOVERY_INCOMPLETE: swapped, parked, image, journal, or restart-policy residue remains.'}
+  if($ordinaryExit-ne0-or$ordinary.Count-ne1-or$ordinary[0]-notmatch'^[0-9a-f]{64}\|sha256:ba10e934f0a59990379f78ab9ed93926f1c291dd61a12fe4026f4202f1b89770\|true\|healthy\|unless-stopped$'-or$parkedExists-or$images.Count-ne0-or$journals.Count-ne0){throw 'HARVEST_RIDGE_CLOCK_RECOVERY_INCOMPLETE: swapped, parked, image, journal, or restart-policy residue remains.'}
 }
 
 if(-not(Get-Command docker -ErrorAction SilentlyContinue)){throw 'Docker CLI is required for Harvest Ridge proof.'}

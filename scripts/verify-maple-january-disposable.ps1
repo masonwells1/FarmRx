@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $root 'scripts/maple-season-browser.ps1')
 $expectedProjectId = 'farmrx-farmer-simplicity-2027-local'
 $expectedContainer = "supabase_db_$expectedProjectId"
 $startProof = Join-Path $root 'scripts/verify-maple-season-start-disposable.ps1'
@@ -61,8 +62,7 @@ try {
   $env:VITE_LOCAL_SUPABASE_URL = $status['API_URL']
   $env:VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY = $status['PUBLISHABLE_KEY']
 
-  npx playwright test --config playwright.season.config.ts
-  if ($LASTEXITCODE -ne 0) { throw 'Maple January browser scenario failed.' }
+  Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season.config.ts' -Scenario 'Maple January'
 
   if (-not (Invoke-MapleSeasonSqlFile -Path $januaryProof -ExpectedContainer $expectedContainer)) { throw 'Maple January post-browser database assertions failed.' }
 

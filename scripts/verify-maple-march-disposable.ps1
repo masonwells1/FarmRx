@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $root 'scripts/maple-season-browser.ps1')
 $expectedProjectId = 'farmrx-farmer-simplicity-2027-local'
 $expectedContainer = "supabase_db_$expectedProjectId"
 $februaryProof = Join-Path $root 'scripts/verify-maple-february-disposable.ps1'
@@ -89,8 +90,7 @@ try {
   $env:VITE_LOCAL_SUPABASE_URL = $status['API_URL']
   $env:VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY = $status['PUBLISHABLE_KEY']
 
-  npx playwright test --config playwright.season-march.config.ts
-  if ($LASTEXITCODE -ne 0) { throw 'Maple March browser scenario failed.' }
+  Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season-march.config.ts' -Scenario 'Maple March'
 
   $retainedAfter = $retainedSnapshotSql |
     docker exec -i $expectedContainer psql -U postgres -d postgres -v ON_ERROR_STOP=1 -At

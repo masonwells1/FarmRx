@@ -24,7 +24,8 @@ import { SupabaseInventoryRepository } from './SupabaseInventoryRepository'
 import { SupabaseProfitabilityRepository } from './SupabaseProfitabilityRepository'
 import { FarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
 import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
-import { captureFarmRevocationFence, resetFarmGrantFromLive } from './farmRevocationFence'
+import { captureFarmRevocationFence, resetFarmGrantFromLive, resetFarmRevokedFromLive } from './farmRevocationFence'
+import { verifyQueuedOperationContext } from './queuedOperationGuard'
 import { createFieldLocationClient, parseFieldLocationQueue } from './fieldLocation'
 import { beginFarmReplayAuthorization, captureFarmReplayContextGuard, captureFarmReplayUserGuard, createFarmAccessValidationGate, currentFarmContext, type FarmAccess, type LoadedFarmAccessProfile } from '../auth/farmContext'
 import { farmActiveContextKey, writeFarmAccessEpochs } from '../auth/farmAccessEpoch'
@@ -42,6 +43,12 @@ const userA = id(1); const userB = id(2); const userC = id(7); const farmA = id(
 const projectRef = 'queued-context-regression'
 const stamp = '2026-07-15T12:00:00.000000+00:00'
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+function waitForSignal<T>(signal: Promise<T>, stage: string, timeoutMs = 1_000) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${stage} after ${timeoutMs}ms.`)), timeoutMs)
+    void signal.then((value) => { clearTimeout(timer); resolve(value) }, (error) => { clearTimeout(timer); reject(error) })
+  })
+}
 function isReadContextError(error: unknown) { return error instanceof Error && (error.name === 'WorkspaceMemoryChangedError' || /signed-in account or selected farm changed/i.test(error.message)) }
 function memory(): StorageLike { const values = new Map<string, string>(); return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: (key) => values.delete(key) } }
 class SharedTabStorageHub {
@@ -86,6 +93,21 @@ async function rejects(action: () => Promise<unknown>, message: string) { let re
 async function rejectsChangedContext(action: () => Promise<unknown>, message: string) { try { await action() } catch (error) { assert(error instanceof Error && /signed-in account or selected farm changed/i.test(error.message), message); return } throw new Error(message) }
 async function settleCrossTabEvents() { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); await new Promise((resolve) => setTimeout(resolve, 0)) }) }
 const operationContext = (userId: string, farmId: string, generation = 1, serverEpoch = 1): FarmOperationContext => ({ projectRef, userId, farmId, generation, token: id(900 + generation), serverEpoch })
+
+let absentSignalError: unknown
+try { await waitForSignal(new Promise<void>(() => undefined), 'a deliberately absent regression signal', 25) } catch (error) { absentSignalError = error }
+assert(absentSignalError instanceof Error && absentSignalError.message === 'Timed out waiting for a deliberately absent regression signal after 25ms.', 'A deliberately absent bounded-wait signal did not fail promptly with its stage-specific message.')
+
+// A writer can hold farm custody while access removal holds validation. The
+// durable revoked fence must reject that writer before it awaits getContext,
+// otherwise the two boundaries wait on each other indefinitely.
+const inversionStorage = memory()
+resetFarmGrantFromLive(inversionStorage, { projectRef, userId: userA, farmId: farmA }, 1, stamp)
+const inversionExpected = captureFarmRevocationFence(inversionStorage, { projectRef, userId: userA, farmId: farmA })
+let inversionContextCalls = 0
+resetFarmRevokedFromLive(inversionStorage, { projectRef, userId: userA, farmId: farmA }, 2, '2026-07-15T12:00:01.000000+00:00')
+await rejects(() => verifyQueuedOperationContext({ projectRef, storage: inversionStorage, getContext: async () => { inversionContextCalls += 1; return { userId: userA, farmId: farmA } } }, inversionExpected, { userId: userA, farmId: farmA }), 'A revoked writer waited for validation instead of failing at the durable fence.')
+assert(inversionContextCalls === 0, 'A revoked writer called getContext before checking its durable farm fence.')
 
 // A delayed startup validation cannot publish after a newer reconnect validation.
 const validationGate = createFarmAccessValidationGate()
@@ -204,6 +226,38 @@ await rejectsChangedContext(() => new SupabaseInventoryRepository({ gateway: nev
 await rejectsChangedContext(() => new SupabaseProfitabilityRepository({ gateway: neverGateway as never, fieldsRepository: neverFields as never, getFarmId: async () => farmA, getOperationContext: async () => contextB, verifyOperationContext: verifyAsB, createId: () => id(23), clock: () => stamp }).deleteAllocationOperation(rowId, contextA), 'Profitability live writer did not bind the queued user before resolving its gateway operation.')
 const boundRequest = bindFarmOperationRequest({ headers: new Headers() }, contextA)
 assert(boundRequest.headers.get('x-farm-rx-expected-user-id') === userA && boundRequest.headers.get('x-farm-rx-access-epochs') === JSON.stringify({ [farmA]: 1 }), 'Operation request headers did not preserve the captured user and server epoch.')
+
+// A stalled remote save holds farm custody while access removal has the
+// validation lock. Once removal publishes its durable fence, the post-I/O
+// catch must release custody without awaiting FarmContext again.
+const stalledCatchRef = `${projectRef}-stalled-post-io`
+const stalledCatchStorage = memory()
+resetFarmGrantFromLive(stalledCatchStorage, { projectRef: stalledCatchRef, userId: userA, farmId: farmA }, 1, stamp)
+let stalledCatchContextCalls = 0
+let releaseStalledRemote!: () => void
+let sawStalledRemote!: () => void
+const stalledRemoteStarted = new Promise<void>((resolve) => { sawStalledRemote = resolve })
+const stalledRemoteRelease = new Promise<void>((resolve) => { releaseStalledRemote = resolve })
+const stalledCatchQueue = new QueuedGrainRepository({
+  async deleteMarketingAlertRuleOperation() { sawStalledRemote(); await stalledRemoteRelease; throw new TypeError('network timeout after remote save') },
+} as never, {
+  getContext: async () => {
+    stalledCatchContextCalls += 1
+    if (stalledCatchContextCalls > 5) return new Promise<never>(() => undefined)
+    return { userId: userA, farmId: farmA }
+  },
+  projectRef: stalledCatchRef, storage: stalledCatchStorage, createId: () => id(24), clock: () => stamp, isOffline: () => false,
+})
+const stalledCatchSave = stalledCatchQueue.deleteMarketingAlertRule(rowId).then(() => 'resolved' as const).catch((error: unknown) => error)
+await stalledRemoteStarted
+const stalledCatchQueueKey = grainWriteQueueKey(stalledCatchRef, userA, farmA)
+const stalledCatchQueueBytes = stalledCatchStorage.getItem(stalledCatchQueueKey)
+resetFarmRevokedFromLive(stalledCatchStorage, { projectRef: stalledCatchRef, userId: userA, farmId: farmA }, 2, '2026-07-15T12:00:01.000000+00:00')
+releaseStalledRemote()
+const stalledCatchOutcome = await Promise.race([stalledCatchSave, new Promise<'STALLED'>((resolve) => setTimeout(() => resolve('STALLED'), 50))])
+assert(stalledCatchOutcome instanceof Error, 'A revoked post-I/O save waited for FarmContext instead of releasing farm custody for removal.')
+assert(stalledCatchContextCalls === 5, 'A revoked post-I/O save called FarmContext after its durable fence changed.')
+assert(stalledCatchStorage.getItem(stalledCatchQueueKey) === stalledCatchQueueBytes && getSaveReceipt(rowId) === 'saving', 'A revoked post-I/O save changed queue bytes or published a false Saved/pending receipt.')
 
 let activeFarm = farmA
 let releaseFarmARaw!: () => void
@@ -468,22 +522,33 @@ try {
   const noticeRef = supabaseConfig.projectRef; const noticeStorage = memory(); resetFarmGrantFromLive(noticeStorage, { projectRef: noticeRef, userId: userA, farmId: farmA }, 1, stamp)
   const noticeFields = fieldsSeedForRegression(); noticeFields.farm.id = farmA; for (const row of [...noticeFields.entities, ...noticeFields.fields, ...noticeFields.crop_assignments, ...noticeFields.arrangements]) row.farm_id = farmA
   const noticeCalls = { save: 0, due: 0 }
+  let reachNoticeDue!: () => void
+  const noticeDueReached = new Promise<void>((resolve) => { reachNoticeDue = resolve })
+  let rejectNoticeDue!: (reason: unknown) => void
+  const noticeDueFailure = new Promise<never>((_, reject) => { rejectNoticeDue = reject })
+  void noticeDueFailure.catch(() => undefined)
+  let noticeDueReleased = false
+  const failNoticeDue = (reason: unknown) => { if (!noticeDueReleased) { noticeDueReleased = true; rejectNoticeDue(reason) } }
   const unused = async () => { throw new Error('Unexpected Equipment gateway operation.') }
   const noticeGateway: EquipmentTasksDataGateway = {
     async getDueServiceGenerationStatus() { return { has_due: true, task_needed: true, notification_needed: true, local_date: '2026-07-12' } },
-    async generateDueServiceTasksV2() { noticeCalls.due += 1; throw new TypeError('network timeout after replay') },
-    async generateDueServiceTasks() { noticeCalls.due += 1; throw new TypeError('network timeout after replay') },
+    async generateDueServiceTasksV2() { noticeCalls.due += 1; reachNoticeDue(); return noticeDueFailure },
+    async generateDueServiceTasks() { noticeCalls.due += 1; reachNoticeDue(); return noticeDueFailure },
     async loadWorkspace() { return { viewer: { role: 'owner' }, equipment: [], meter_readings: [], intervals: [], service_log: [], service_due: [], members: [{ farm_id: farmA, user_id: userA, display_name: 'Notice Operator' }], tasks: [] } },
     async saveEquipment(farmId, value) { noticeCalls.save += 1; return { ...value, farm_id: farmId, created_by: userA, created_at: stamp, updated_at: stamp } },
     addMeterReading: unused, saveInterval: unused, addServiceLogEntry: unused, saveTask: unused, deleteTask: unused, deleteServiceLogEntry: unused, deleteInterval: unused,
   }
   let noticeId = 880
-  const noticeServices = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(noticeFields), saveField: async () => { throw new Error('Unexpected field save.') } }, getFarmId: async () => farmA, getContext: async () => ({ userId: userA, farmId: farmA }), projectRef: noticeRef, storage: noticeStorage, createId: () => id(noticeId++), isOffline: () => false, gateway: noticeGateway })
+  const noticeServices = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(noticeFields), getSnapshot: async () => ({ data: structuredClone(noticeFields), source: 'live', capturedAt: stamp }), saveField: async () => { throw new Error('Unexpected field save.') } }, getFarmId: async () => farmA, getContext: async () => ({ userId: userA, farmId: farmA }), projectRef: noticeRef, storage: noticeStorage, createId: () => id(noticeId++), isOffline: () => false, gateway: noticeGateway })
   const noticeQueue = new EquipmentTasksWriteQueue(noticeStorage, equipmentTasksWriteQueueKey(noticeRef, userA, farmA))
   noticeQueue.append({ version: 1, module: 'equipment_tasks', kind: 'saveEquipment', operationId: id(886), userId: userA, farmId: farmA, enqueuedAt: stamp, value: { id: id(887), farm_id: farmA, name: 'Notice retry machine', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null } })
   for (const module of ['fields', 'grain', 'profitability', 'inventory', 'equipment_tasks', 'weather', 'fieldLog', 'scouting', 'harvest', 'programs', 'notifications'] as const) setModuleSyncStatus(module, { kind: 'synced', pending: 0 })
   setModuleSyncStatus('equipment_tasks', { kind: 'blocked', pending: 1, message: 'Retry the saved Equipment change.' })
-  setModuleSyncRetryAction('equipment_tasks', noticeServices.replayEquipmentTasksQueue)
+  let finishNoticeRetryAction!: () => void
+  const noticeRetryActionFinished = new Promise<void>((resolve) => { finishNoticeRetryAction = resolve })
+  let noticeRetryActionStarted = false
+  let noticeRetryActionSettled = false
+  setModuleSyncRetryAction('equipment_tasks', async () => { noticeRetryActionStarted = true; try { await noticeServices.replayEquipmentTasksQueue() } finally { noticeRetryActionSettled = true; finishNoticeRetryAction() } })
   const container = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(container); const root = createRoot(container as unknown as HTMLElement)
   try {
     const noticeProfile: LoadedFarmAccessProfile = { ...staleProfileA, userId: userA, farmId: farmA, operationContext: captureFarmRevocationFence(noticeStorage, { projectRef: noticeRef, userId: userA, farmId: farmA }) }
@@ -491,15 +556,26 @@ try {
     await act(async () => { root.render(createElement(FarmAccessProvider, { value: { farms: [noticeFarm], activeFarm: noticeFarm, profile: noticeProfile, source: 'live', chooseFarm: async () => undefined, checkSignal: async () => undefined }, children: createElement(SyncNotice) })) })
     const retryButton = container.querySelector('button') as unknown as HTMLButtonElement | null
     assert(retryButton?.textContent === 'Try again', 'The mounted SyncNotice did not expose its real retry button.')
-    await act(async () => { retryButton.click(); await Promise.resolve() })
     const expectedNoticeError = 'We could not reach Farm Rx. Check your signal and try again.'
-    for (let attempt = 0; attempt < 50 && !container.textContent?.includes(expectedNoticeError); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    await act(async () => { retryButton.click(); await waitForSignal(noticeDueReached, 'the Equipment retry to reach due generation') })
+    const replayBeforeDueFailure = `save=${noticeCalls.save}; due=${noticeCalls.due}; queued=${noticeQueue.read().entries.length}; status=${JSON.stringify(getSyncStatus())}`
+    assert(noticeCalls.save === 1 && noticeCalls.due === 1 && noticeQueue.read().entries.length === 0 && getSyncStatus().kind === 'synced', `The real Equipment retry action did not replay the queue before due generation began (${replayBeforeDueFailure}).`)
+    failNoticeDue(new TypeError('network timeout after replay'))
+    await act(async () => { await waitForSignal(noticeRetryActionFinished, 'the Equipment retry action to settle after its late due-generation failure'); await Promise.resolve() })
     launchReplayInBackground(async () => { throw new FarmReplayContextChangedError('The signed-in account or selected farm changed before this operation could finish.') })
     await act(async () => { await new Promise<void>((resolve) => setImmediate(resolve)) })
-    assert(noticeCalls.save === 1 && noticeCalls.due === 1 && noticeQueue.read().entries.length === 0 && getSyncStatus().kind === 'synced', 'The real Equipment retry action did not replay the queue before its late due-generation failure.')
+    const replayAfterDueFailure = `save=${noticeCalls.save}; due=${noticeCalls.due}; queued=${noticeQueue.read().entries.length}; status=${JSON.stringify(getSyncStatus())}`
+    assert(noticeCalls.save === 1 && noticeCalls.due === 1 && noticeQueue.read().entries.length === 0 && getSyncStatus().kind === 'synced', `The real Equipment retry action did not preserve the replayed queue state after its late due-generation failure (${replayAfterDueFailure}).`)
     assert(container.textContent?.includes(expectedNoticeError) && !container.textContent.includes('All changes synced') && container.textContent.includes('Try again'), 'The mounted SyncNotice hid a late retry failure or removed its recovery action.')
     assert(noticeUnhandled.length === 0, 'The mounted retry click or background cancellation leaked an unhandled rejection.')
-  } finally { await act(async () => { root.unmount() }); container.remove(); setModuleSyncRetryAction('equipment_tasks', null) }
+  } finally {
+    failNoticeDue(new Error('Equipment retry fixture cleanup released the controlled due-generation failure.'))
+    try {
+      if (noticeRetryActionStarted && !noticeRetryActionSettled) await waitForSignal(noticeRetryActionFinished, 'Equipment retry fixture cleanup to settle')
+    } finally {
+      await act(async () => { root.unmount() }); container.remove(); setModuleSyncRetryAction('equipment_tasks', null)
+    }
+  }
 
   const gateStorage = noticeWindow.localStorage as unknown as StorageLike
   resetFarmGrantFromLive(gateStorage, { projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA }, 1, stamp)
@@ -522,7 +598,7 @@ try {
     addMeterReading: gateUnused, saveInterval: gateUnused, addServiceLogEntry: gateUnused, saveTask: gateUnused, deleteTask: gateUnused, deleteServiceLogEntry: gateUnused, deleteInterval: gateUnused,
   }
   let gateId = 910
-  const gateServices = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(gateFields), saveField: async () => { throw new Error('Unexpected gate field save.') } }, getFarmId: async () => farmA, getContext: async () => ({ userId: userA, farmId: farmA }), projectRef: supabaseConfig.projectRef, storage: gateStorage, createId: () => id(gateId++), isOffline: () => false, gateway: gateGateway })
+  const gateServices = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(gateFields), getSnapshot: async () => ({ data: structuredClone(gateFields), source: 'live', capturedAt: stamp }), saveField: async () => { throw new Error('Unexpected gate field save.') } }, getFarmId: async () => farmA, getContext: async () => ({ userId: userA, farmId: farmA }), projectRef: supabaseConfig.projectRef, storage: gateStorage, createId: () => id(gateId++), isOffline: () => false, gateway: gateGateway })
   const gateQueue = new EquipmentTasksWriteQueue(gateStorage, equipmentTasksWriteQueueKey(supabaseConfig.projectRef, userA, farmA))
   gateQueue.append({ version: 1, module: 'equipment_tasks', kind: 'saveEquipment', operationId: id(911), userId: userA, farmId: farmA, enqueuedAt: stamp, value: { id: id(912), farm_id: farmA, name: 'Gate retry machine', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null } })
   const gateDependencies = {
@@ -1509,7 +1585,7 @@ try {
     async getDueServiceGenerationStatus() { falseEquipmentStatus += 1; return { has_due: false, task_needed: false, notification_needed: false, local_date: '2026-12-01' } },
     async generateDueServiceTasksV2() { falseEquipmentV2 += 1; return null },
   }
-  const falseEquipment = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(decemberFields), saveField: async () => { throw new Error('Unexpected December field save.') } }, getFarmId: async () => decemberFarm, getContext: async () => ({ userId: userA, farmId: decemberFarm }), projectRef: supabaseConfig.projectRef, storage: decemberStorage, createId: () => { falseIds += 1; return id(978) }, isOffline: () => false, gateway: falseEquipmentGateway })
+  const falseEquipment = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(decemberFields), getSnapshot: async () => ({ data: structuredClone(decemberFields), source: 'live', capturedAt: stamp }), saveField: async () => { throw new Error('Unexpected December field save.') } }, getFarmId: async () => decemberFarm, getContext: async () => ({ userId: userA, farmId: decemberFarm }), projectRef: supabaseConfig.projectRef, storage: decemberStorage, createId: () => { falseIds += 1; return id(978) }, isOffline: () => false, gateway: falseEquipmentGateway })
   const falseEvents: string[] = []
   await replayAuthorizedFarmWork(decemberProfile, () => true, actionSet(falseEvents, () => falsePrograms.generateIfDueStrict(), falseEquipment.generateDueEquipmentTasks))
   await replayAuthorizedFarmWork(decemberProfile, () => true, actionSet(falseEvents, () => falsePrograms.generateIfDueStrict(), falseEquipment.generateDueEquipmentTasks))
@@ -1526,7 +1602,7 @@ try {
     async getDueServiceGenerationStatus() { trueEquipmentStatus += 1; return { has_due: true, task_needed: true, notification_needed: true, local_date: '2026-12-01' } },
     async generateDueServiceTasksV2() { trueEquipmentV2 += 1; return { operation_kind: 'generate_due_service_tasks_v2', task_created_count: 1, notification_created_count: 1, local_date: '2026-12-01' } },
   }
-  const trueEquipment = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(decemberFields), saveField: async () => { throw new Error('Unexpected December field save.') } }, getFarmId: async () => decemberFarm, getContext: async () => ({ userId: userA, farmId: decemberFarm }), projectRef: supabaseConfig.projectRef, storage: decemberStorage, createId: () => { trueIds += 1; return id(980) }, isOffline: () => false, gateway: trueEquipmentGateway })
+  const trueEquipment = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(decemberFields), getSnapshot: async () => ({ data: structuredClone(decemberFields), source: 'live', capturedAt: stamp }), saveField: async () => { throw new Error('Unexpected December field save.') } }, getFarmId: async () => decemberFarm, getContext: async () => ({ userId: userA, farmId: decemberFarm }), projectRef: supabaseConfig.projectRef, storage: decemberStorage, createId: () => { trueIds += 1; return id(980) }, isOffline: () => false, gateway: trueEquipmentGateway })
   const trueEvents: string[] = []
   await replayAuthorizedFarmWork(decemberProfile, () => true, actionSet(trueEvents, () => truePrograms.generateIfDueStrict(), trueEquipment.generateDueEquipmentTasks))
   assert(trueProgramStatus === 1 && trueEquipmentStatus === 1 && trueIds === 2 && trueProgramV2 === 1 && trueEquipmentV2 === 1, 'A true December startup did not execute exactly one Program and Equipment status/v2 call with two IDs total.')
@@ -1567,7 +1643,7 @@ try {
     assert(!offlineReplayEvents.includes('programs-due-server') && !offlineReplayEvents.includes('equipment-due-server'), 'Offline startup attempted a server due-generation RPC.')
     assert(farmReplayIsOffline(), 'The mounted ready shell lost its exact offline authorization after startup replay ended.')
     const readySaveCallsBefore = gateCalls.save
-    const readySaveServices = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(gateFields), saveField: async () => { throw new Error('Unexpected ready-save field operation.') } }, getFarmId: async () => farmA, getContext: currentFarmContext, projectRef: supabaseConfig.projectRef, storage: gateStorage, createId: () => id(gateId++), isOffline: farmReplayIsOffline, gateway: gateGateway })
+    const readySaveServices = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(gateFields), getSnapshot: async () => ({ data: structuredClone(gateFields), source: 'live', capturedAt: stamp }), saveField: async () => { throw new Error('Unexpected ready-save field operation.') } }, getFarmId: async () => farmA, getContext: currentFarmContext, projectRef: supabaseConfig.projectRef, storage: gateStorage, createId: () => id(gateId++), isOffline: farmReplayIsOffline, gateway: gateGateway })
     const readySaveQueueKey = equipmentTasksWriteQueueKey(supabaseConfig.projectRef, userA, farmA)
     await act(async () => {
       await readySaveServices.equipmentTasksRepository.saveEquipment({ id: id(918), farm_id: farmA, name: 'Ready offline machine', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null })
@@ -1645,7 +1721,7 @@ try {
     addMeterReading: gateUnused, saveInterval: gateUnused, addServiceLogEntry: gateUnused, saveTask: gateUnused, deleteTask: gateUnused, deleteServiceLogEntry: gateUnused, deleteInterval: gateUnused,
   }
   let switchId = 920
-  const switchServices = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(gateFields), saveField: async () => { throw new Error('Unexpected switch field save.') } }, getFarmId: async () => farmA, getContext: async () => ({ userId: userA, farmId: farmA }), projectRef: supabaseConfig.projectRef, storage: gateStorage, createId: () => id(switchId++), isOffline: () => false, gateway: switchGateway })
+  const switchServices = createSupabaseEquipmentTasksServices({ fieldsRepository: { getData: async () => structuredClone(gateFields), getSnapshot: async () => ({ data: structuredClone(gateFields), source: 'live', capturedAt: stamp }), saveField: async () => { throw new Error('Unexpected switch field save.') } }, getFarmId: async () => farmA, getContext: async () => ({ userId: userA, farmId: farmA }), projectRef: supabaseConfig.projectRef, storage: gateStorage, createId: () => id(switchId++), isOffline: () => false, gateway: switchGateway })
   const switchQueue = new EquipmentTasksWriteQueue(gateStorage, equipmentTasksWriteQueueKey(supabaseConfig.projectRef, userA, farmA))
   switchQueue.append({ version: 1, module: 'equipment_tasks', kind: 'saveEquipment', operationId: id(921), userId: userA, farmId: farmA, enqueuedAt: stamp, value: { id: id(922), farm_id: farmA, name: 'Switch recovery machine', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null } })
   const switchQueueBytes = gateStorage.getItem(equipmentTasksWriteQueueKey(supabaseConfig.projectRef, userA, farmA))
@@ -1719,6 +1795,22 @@ const actualRoutes = [...appSource.matchAll(/<Route\b[^>]*?\bpath="([^"]+)"/g)].
 assert(actualRoutes.length === expectedRoutes.length && actualRoutes.every((route, index) => route === expectedRoutes[index]), `The ordered route manifest changed. Expected ${expectedRoutes.join(',')}; received ${actualRoutes.join(',')}.`)
 assert(dataIndexSource.includes('const fieldsGetContext = currentFarmContext') && dataIndexSource.includes('getContext: currentFarmContext'), 'Fields or field-location production wiring still assembles user and farm identity in separate asynchronous lookups.')
 assert((dataIndexSource.match(/isOffline: farmReplayIsOffline/g) ?? []).length === 12, 'A production data lane still trusts only navigator.onLine instead of the exact offline replay grant.')
+const durableFenceOrderAudit = [
+  { file: './QueuedInventoryRepository.ts', verifier: 'verifyOperation' },
+  { file: './QueuedEquipmentTasksRepository.ts', verifier: 'verifyOperation' },
+  { file: './QueuedGrainRepository.ts', verifier: 'verifyDirect' },
+  { file: './QueuedProfitabilityRepository.ts', verifier: 'verifyDirect' },
+]
+for (const { file, verifier } of durableFenceOrderAudit) {
+  const source = readFileSync(new URL(file, import.meta.url), 'utf8')
+  const method = (name: string) => { const start = source.indexOf(`private async ${name}`); const end = source.indexOf('\n  private ', start + 1); return start >= 0 ? source.slice(start, end >= 0 ? end : source.length) : '' }
+  const write = method('write')
+  const verify = method(verifier)
+  const durableFence = verify.indexOf('verifyFarmOperationContext')
+  const memoryFence = verify.indexOf('memoryScope.verify')
+  const contextAwait = verify.indexOf('await this')
+  assert(write.includes(`await this.${verifier}`) && !write.includes('getContext') && durableFence >= 0 && memoryFence >= 0 && contextAwait >= 0 && durableFence < contextAwait && memoryFence < contextAwait, `${file} can await FarmContext before its durable revocation and memory fences on a write or post-I/O path.`)
+}
 for (const replayGuardFile of ['./QueuedEquipmentTasksRepository.ts', './QueuedFieldsRepository.ts', './QueuedGrainRepository.ts', './QueuedInventoryRepository.ts', './QueuedProfitabilityRepository.ts', './QueuedFieldLogRepository.ts', './QueuedHarvestRepository.ts', './QueuedProgramsRepository.ts', './QueuedScoutingRepository.ts', './QueuedNotificationsRepository.ts', './fieldLocation.ts']) {
   const replayGuardSource = readFileSync(new URL(replayGuardFile, import.meta.url), 'utf8')
   assert((replayGuardSource.match(/isFarmReplayContextChangedError\(error\)/g) ?? []).length >= 2, `${replayGuardFile} can still swallow a typed replay-context cancellation at its source or outer replay catch.`)

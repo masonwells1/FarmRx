@@ -1,6 +1,6 @@
 # STANDING GOAL — Farm Rx 2027 Season-Ready
 
-**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** January–June runtime accepted; July–December statically hardened and runtime-blocked
+**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** January–July runtime accepted; August–December statically hardened and runtime-blocked
 
 ## Owner directive
 
@@ -91,4 +91,4 @@ No real farmer account may be provisioned and no customer communication may be s
 
 ## Current next step
 
-Establish a governed disposable Postgres clock seam for fixed 2027 instants, then run July–December continuously from the accepted June boundary and promote statuses only from exact-commit browser/database evidence plus fresh Sol review. The committed July harness intentionally fails closed while the database clock remains in 2026. No push, pull request, merge, deployment, live service change, or customer action is authorized by this document.
+Build and run August–December continuously from the accepted July boundary, promoting statuses only from exact-commit browser/database evidence plus fresh Sol review. The governed disposable Postgres clock seam and continuous January–July proof are accepted at exact commit `021b5875dc6d96ddc1b018f672a204ce1066ec9b`; this does not prove the remaining months, a full-year packet, physical-device journeys, or release readiness. No push, pull request, merge, deployment, live service change, or customer action is authorized by this document.

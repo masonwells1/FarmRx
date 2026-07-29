@@ -131,6 +131,15 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
   constructor(private readonly dependencies: { gateway: ProfitabilityDataGateway; fieldsRepository: FieldsRepository; getFarmId: () => Promise<string>; getOperationContext: () => Promise<FarmOperationContext>; verifyOperationContext: (expected: FarmOperationContext) => Promise<void>; createId: () => string; clock: () => string }) {}
   private async operationFarmId(expected: FarmOperationContext) { await this.dependencies.verifyOperationContext(expected); return expected.farmId }
   private async fields() { return this.dependencies.fieldsRepository.getData() }
+  private async operationFields(context: FarmOperationContext) {
+    await this.dependencies.verifyOperationContext(context)
+    const snapshot = this.dependencies.fieldsRepository.getSnapshot
+    if (!snapshot) fail('Profitability requires a side-effect-free Fields snapshot before saving.')
+    const result = await snapshot!.call(this.dependencies.fieldsRepository, context)
+    await this.dependencies.verifyOperationContext(context)
+    if (result.source !== 'live' || result.data.farm.id !== context.farmId) fail('Profitability could not load a current Fields snapshot before saving.')
+    return result.data
+  }
   async getSaveDurabilityCapability() { return this.dependencies.gateway.getSaveDurabilityCapability ? this.dependencies.gateway.getSaveDurabilityCapability() : false }
   private async loadRaw(farmId: string) {
     let bundle: ProfitabilityRowBundle
@@ -206,7 +215,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     await this.createBudgetOperation(normalized, priceSteps, yieldSteps, context)
   }
   async createBudgetOperation(value: CropBudget, priceSteps: ProfitabilityMatrixStep[], yieldSteps: ProfitabilityMatrixStep[], context: FarmOperationContext) {
-    const farmId = await this.operationFarmId(context); const fields = await this.fields()
+    const farmId = await this.operationFarmId(context); const fields = await this.operationFields(context)
     const normalized: CropBudget = normalizeBudgetDecimals({ ...value, farm_id: farmId, copied_from_budget_id: null })
     this.validateBudget(normalized, farmId, fields)
     const steps = [...priceSteps, ...yieldSteps].map((step) => normalizeMatrixStepDecimals({ ...step, budget_id: normalized.id }))
@@ -222,7 +231,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
   async saveBudgetInsuranceOperation(budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt: string | null | undefined, context: FarmOperationContext): Promise<CropBudget> {
     insuranceColumns(patch)
     const normalizedPatch = normalizeInsurancePatchDecimals(patch)
-    const farmId = await this.operationFarmId(context); const fields = await this.fields()
+    const farmId = await this.operationFarmId(context); const fields = await this.operationFields(context)
     if (!uuid.test(budgetId)) fail('Farm Rx could not save this insurance detail.')
     const current = (await this.loadRaw(farmId)).budgets.find((item) => item.id === budgetId)
     await this.dependencies.verifyOperationContext(context)
@@ -235,7 +244,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     return saved
   }
   async saveBudgetOperation(value: CropBudget, context: FarmOperationContext): Promise<CropBudget> {
-    const farmId = await this.operationFarmId(context); const fields = await this.fields()
+    const farmId = await this.operationFarmId(context); const fields = await this.operationFields(context)
     const normalized: CropBudget = normalizeBudgetDecimals({ ...value, farm_id: farmId })
     this.validateBudget(normalized, farmId, fields)
     const raw = await this.loadRaw(farmId)
@@ -295,7 +304,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
 
   async saveAllocation(value: BudgetFieldAllocation) { await this.saveAllocationOperation(value, await this.dependencies.getOperationContext()) }
   async saveAllocationOperation(value: BudgetFieldAllocation, context: FarmOperationContext): Promise<BudgetFieldAllocation> {
-    const farmId = await this.operationFarmId(context); const fields = await this.fields(); const raw = await this.loadRaw(farmId)
+    const farmId = await this.operationFarmId(context); const fields = await this.operationFields(context); const raw = await this.loadRaw(farmId)
     const budgetRow = raw.budgets.find((item) => item.id === value.budget_id)
     const assignmentRow = fields.crop_assignments.find((item) => item.id === value.crop_assignment_id && item.farm_id === farmId)
     if (!budgetRow || !assignmentRow) fail('That field crop does not match this budget.')
@@ -330,7 +339,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     await this.copyBudgetOperation(sourceBudgetId, { ...copy, copied_from_budget_id: sourceBudgetId }, costLines, matrixSteps, context)
   }
   async copyBudgetOperation(sourceBudgetId: string, value: CropBudget, costLines: BudgetCostLineWrite[], matrixSteps: ProfitabilityMatrixStep[], context: FarmOperationContext): Promise<CropBudget> {
-    const farmId = await this.operationFarmId(context); const fields = await this.fields()
+    const farmId = await this.operationFarmId(context); const fields = await this.operationFields(context)
     const normalized: CropBudget = normalizeBudgetDecimals({ ...value, farm_id: farmId, copied_from_budget_id: sourceBudgetId })
     this.validateBudget(normalized, farmId, fields)
     if (!uuid.test(sourceBudgetId) || normalized.id === sourceBudgetId) fail('Farm Rx could not copy this budget.')

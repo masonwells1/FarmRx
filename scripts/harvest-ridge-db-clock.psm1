@@ -13,12 +13,15 @@ $script:HrClockNames = [ordered]@{
   Volume='supabase_db_farmrx-farmer-simplicity-2027-local'
   DbPort='55322';ApiPort='55321'
 }
-$script:HrBaseId='sha256:9faa7279bcf1fd6834e65dc876b11e39cb53030bcb3d653beb7e5668200acbb5'
-$script:HrBaseDigest='public.ecr.aws/supabase/postgres@sha256:9faa7279bcf1fd6834e65dc876b11e39cb53030bcb3d653beb7e5668200acbb5'
+$script:HrBaseId='sha256:ba10e934f0a59990379f78ab9ed93926f1c291dd61a12fe4026f4202f1b89770'
+$script:HrBaseDigest='public.ecr.aws/supabase/postgres@sha256:ba10e934f0a59990379f78ab9ed93926f1c291dd61a12fe4026f4202f1b89770'
 $script:HrArtifactRef='maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7@sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746'
 $script:HrArtifactTag='maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7:synthetic'
 $script:HrArtifactId='sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746'
 $script:HrFarmId='27010000-0000-4000-8000-000000000004'
+$script:HrFarmName='Harvest Ridge'
+$script:MapleFarmId='27010000-0000-4000-8000-000000000001'
+$script:MapleFarmName='Maple Ridge'
 
 function ConvertTo-HrClockWindowsCommandLine {
   param([Parameter(Mandatory)][string[]]$Argv)
@@ -76,8 +79,21 @@ function Get-HrClockContainer {
   throw "HARVEST_RIDGE_CLOCK_REFUSED: container inspection failed for $Name after bounded retries (exit $($result.ExitCode), stderr '$diagnostic', stdout length $(([string]$result.Stdout).Length))."
 }
 
+function Assert-HrClockPhaseInput {
+  param([string]$ApiUrl,[string]$PublishableKey,[string]$AccessToken,[string]$ProofFarmId,[string]$ProofFarmName,[string]$FrozenInstant)
+  if($ApiUrl-cne'http://127.0.0.1:55321'-or$PublishableKey-notmatch'^sb_publishable_'-or[string]::IsNullOrWhiteSpace($AccessToken)){throw 'HARVEST_RIDGE_CLOCK_REFUSED: local API credentials/boundary are not exact.'}
+  $approved=@(
+    [pscustomobject]@{Id=$script:HrFarmId;Name=$script:HrFarmName},
+    [pscustomobject]@{Id=$script:MapleFarmId;Name=$script:MapleFarmName}
+  )
+  if(@($approved|Where-Object{$_.Id-ceq$ProofFarmId-and$_.Name-ceq$ProofFarmName}).Count-ne1){throw 'HARVEST_RIDGE_CLOCK_REFUSED: proof farm identity is not an approved synthetic fixture.'}
+  $instant=[datetimeoffset]::MinValue
+  if(-not[datetimeoffset]::TryParseExact($FrozenInstant,'yyyy-MM-dd HH:mm:sszzz',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None,[ref]$instant)-or$instant.Offset-ne[timespan]::Zero){throw 'HARVEST_RIDGE_CLOCK_REFUSED: phase instant is not exact UTC.'}
+  return $instant
+}
+
 function Assert-HrClockAttestation {
-  param([string]$Root,[string]$Phase,[string]$FrozenInstant,[string]$JournalPath,[switch]$AllowExistingJournal)
+  param([string]$Root,[string]$Phase,[string]$FrozenInstant,[string]$JournalPath,[string]$ProofFarmId,[string]$ProofFarmName,[switch]$AllowExistingJournal)
   $n=$script:HrClockNames
   if($Phase-notmatch'^[a-z0-9-]{2,40}$'){throw 'HARVEST_RIDGE_CLOCK_REFUSED: invalid phase name.'}
   if(-not$AllowExistingJournal-and[IO.File]::Exists($JournalPath)){throw 'HARVEST_RIDGE_CLOCK_REFUSED: a pre-existing phase journal is ambiguous.'}
@@ -105,7 +121,7 @@ function Assert-HrClockAttestation {
     $artifact=ConvertFrom-HrClockJson (Invoke-HrClockProcess $Root @('image','inspect','--format','{"Id":{{json .Id}},"Labels":{{json .Config.Labels}}}',$artifactName)) 'faketime artifact'
     if($artifact.Id-cne$script:HrArtifactId-or$artifact.Labels.'farmrx.synthetic-bootstrap'-cne'225c197c34164c90b08a4c8b6b10e6c7'-or$artifact.Labels.'farmrx.synthetic-owner'-cne'maple-faketime-bootstrap'-or$artifact.Labels.'farmrx.synthetic-role'-cne'faketime-artifacts'-or$artifact.Labels.'farmrx.source-digest'-cne'debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818'-or$artifact.Labels.'farmrx.package-contract'-cne'libfaketime=0.9.10-2.1;gcc;libc6-dev'){throw 'HARVEST_RIDGE_CLOCK_REFUSED: reviewed faketime artifact identity changed.'}
   }
-  $contractHash=Get-HrClockHash ([ordered]@{Phase=$Phase;FrozenInstant=$FrozenInstant;DbId=$ordinary.Id;DbImage=$ordinary.Image;RestId=$rest.Id;RestImage=$rest.Image;RestPid=[int]$rest.Pid;GatewayId=$gateway.Id;GatewayImage=$gateway.Image;NetworkId=$network.Id;Volume=$volume.Name;Project=$n.Project})
+  $contractHash=Get-HrClockHash ([ordered]@{Phase=$Phase;FrozenInstant=$FrozenInstant;ProofFarmId=$ProofFarmId;ProofFarmName=$ProofFarmName;DbId=$ordinary.Id;DbImage=$ordinary.Image;RestId=$rest.Id;RestImage=$rest.Image;RestPid=[int]$rest.Pid;GatewayId=$gateway.Id;GatewayImage=$gateway.Image;NetworkId=$network.Id;Volume=$volume.Name;Project=$n.Project})
   [pscustomobject]@{Db=$ordinary;Rest=$rest;Gateway=$gateway;Network=$network;Volume=$volume;ContractHash=$contractHash}
 }
 
@@ -128,15 +144,15 @@ function Invoke-HarvestRidgeClockPhase {
     [Parameter(Mandatory)][string]$PublishableKey,
     [Parameter(Mandatory)][string]$AccessToken,
     [Parameter(Mandatory)][scriptblock]$Action,
+    [string]$ProofFarmId=$script:HrFarmId,
+    [string]$ProofFarmName=$script:HrFarmName,
     [switch]$ResumeRecovery
   )
-  if($ApiUrl-cne'http://127.0.0.1:55321'-or$PublishableKey-notmatch'^sb_publishable_'-or[string]::IsNullOrWhiteSpace($AccessToken)){throw 'HARVEST_RIDGE_CLOCK_REFUSED: local API credentials/boundary are not exact.'}
-  $instant=[datetimeoffset]::MinValue
-  if(-not[datetimeoffset]::TryParseExact($FrozenInstant,'yyyy-MM-dd HH:mm:sszzz',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None,[ref]$instant)-or$instant.Offset-ne[timespan]::Zero){throw 'HARVEST_RIDGE_CLOCK_REFUSED: phase instant is not exact UTC.'}
+  $instant=Assert-HrClockPhaseInput $ApiUrl $PublishableKey $AccessToken $ProofFarmId $ProofFarmName $FrozenInstant
   $journal=Join-Path ([IO.Path]::GetTempPath()) "farmrx-harvest-ridge-clock-$Phase.json"
   if($ResumeRecovery-and-not[IO.File]::Exists($journal)){throw 'HARVEST_RIDGE_CLOCK_REFUSED: resume recovery requires the exact retained phase journal.'}
-  $attested=Assert-HrClockAttestation $Root $Phase $FrozenInstant $journal -AllowExistingJournal:$ResumeRecovery;$n=$script:HrClockNames
-  $inventory=@{base_digest=$script:HrBaseDigest;contract_hash=$attested.ContractHash;network_id=$attested.Network.Id;original_id=$attested.Db.Id;original_image_id=$script:HrBaseId;snapshot_tag="farmrx-clock-snapshot:$($attested.Db.Id.Substring(0,12))";derived_tag="farmrx-frozen-clock-swap:$($instant.ToString('yyyyMMdd'))-9faa7279";volume_name=$n.Volume}
+  $attested=Assert-HrClockAttestation $Root $Phase $FrozenInstant $journal $ProofFarmId $ProofFarmName -AllowExistingJournal:$ResumeRecovery;$n=$script:HrClockNames
+  $inventory=@{base_digest=$script:HrBaseDigest;contract_hash=$attested.ContractHash;network_id=$attested.Network.Id;original_id=$attested.Db.Id;original_image_id=$script:HrBaseId;snapshot_tag="farmrx-clock-snapshot:$($attested.Db.Id.Substring(0,12))";derived_tag="farmrx-frozen-clock-swap:$($instant.ToString('yyyyMMdd'))-ba10e934";volume_name=$n.Volume}
   if($ResumeRecovery){
     try{$retained=Get-Content -Raw -Encoding UTF8 -LiteralPath $journal|ConvertFrom-Json -ErrorAction Stop}catch{throw 'HARVEST_RIDGE_CLOCK_REFUSED: retained phase journal is malformed.'}
     $topKeys=@($retained.PSObject.Properties.Name|Sort-Object);if(($topKeys-join'|')-cne'intended_next_action|inventory|phase|version'-or[int]$retained.version-ne1-or$retained.phase-cnotin@('stop_original','snapshot_original','build_derived','park_original','create_replacement','start_replacement','run_frozen_action','recovery_remove_replacement','recovery_restore_name','recovery_stop_unhealthy_original','recovery_start_original','recovery_restart_postgrest','recovery_RemoveDerivedImageIfOwned','recovery_RemoveSnapshotImageIfOwned','recovery_remove_journal')-or$retained.intended_next_action-notmatch'^[A-Za-z0-9_]{3,80}$'){throw 'HARVEST_RIDGE_CLOCK_REFUSED: retained phase journal contract is not exact.'}
@@ -147,16 +163,16 @@ function Invoke-HarvestRidgeClockPhase {
   }
   $contract=@{Id=$attested.Db.Id;ImageId=$script:HrBaseId;NetworkId=$attested.Network.Id;VolumeName=$n.Volume;Project=$n.Project;ContractHash=$inventory.contract_hash;FrozenInstant=$FrozenInstant}
   $clock=New-HrClockProofSql $instant
-  $proof=@{ApiPath="/rest/v1/farms?id=eq.$($script:HrFarmId)&select=id,name";ArtifactImageId=$script:HrArtifactId;ArtifactImageRef=$script:HrArtifactRef;ClockProofSql=$clock.Sql;Database='postgres';DbUser='postgres';ExpectedApiResult='Harvest Ridge';ExpectedClockSample=$clock.Expected;ExpectedRestDbHost=$n.Db;ExpectedRestDbUser='authenticator';PollAttempts=[int]60;PollMilliseconds=[int]500;WaitMilliseconds=[int]500}
-  $processInvoker=${function:Invoke-HrClockProcess};$farmId=$script:HrFarmId;$contractHash=$inventory.contract_hash
+  $proof=@{ApiPath="/rest/v1/farms?id=eq.$ProofFarmId&select=id,name";ArtifactImageId=$script:HrArtifactId;ArtifactImageRef=$script:HrArtifactRef;ClockProofSql=$clock.Sql;Database='postgres';DbUser='postgres';ExpectedApiResult=$ProofFarmName;ExpectedClockSample=$clock.Expected;ExpectedRestDbHost=$n.Db;ExpectedRestDbUser='authenticator';PollAttempts=[int]60;PollMilliseconds=[int]500;WaitMilliseconds=[int]500}
+  $processInvoker=${function:Invoke-HrClockProcess};$farmId=$ProofFarmId;$farmName=$ProofFarmName;$contractHash=$inventory.contract_hash
   $invoke={
     param([string]$Kind,[string[]]$Argv)
     if($Kind-ceq'docker'){return &$processInvoker $Root $Argv}
     if($Kind-cne'http_get'-or$Argv.Count-ne2-or$Argv[0]-cne"$ApiUrl$($proof.ApiPath)"-or$Argv[1]-cne'authenticated-expected-contract'){return [pscustomobject]@{ExitCode=64;Stdout='';Stderr=''}}
     try{
       $response=Invoke-WebRequest -UseBasicParsing -Method Get -Uri $Argv[0] -Headers @{apikey=$PublishableKey;Authorization="Bearer $AccessToken"} -TimeoutSec 10
-      $data=@($response.Content|ConvertFrom-Json -ErrorAction Stop);$valid=$data.Count-eq1-and$data[0].id-ceq$farmId-and$data[0].name-ceq'Harvest Ridge'
-      [pscustomobject]@{ExitCode=0;Stdout='';Stderr='';StatusCode=[int]$response.StatusCode;Data=[pscustomobject]@{ContractHash=if($valid){$contractHash}else{''};Result=if($valid){'Harvest Ridge'}else{''}}}
+      $data=@($response.Content|ConvertFrom-Json -ErrorAction Stop);$valid=$data.Count-eq1-and$data[0].id-ceq$farmId-and$data[0].name-ceq$farmName
+      [pscustomobject]@{ExitCode=0;Stdout='';Stderr='';StatusCode=[int]$response.StatusCode;Data=[pscustomobject]@{ContractHash=if($valid){$contractHash}else{''};Result=if($valid){$farmName}else{''}}}
     }catch{[pscustomobject]@{ExitCode=69;Stdout='';Stderr=''}}
   }.GetNewClosure()
   $wait={param([int]$Milliseconds);Start-Sleep -Milliseconds $Milliseconds;$true}
