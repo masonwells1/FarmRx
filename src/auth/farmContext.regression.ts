@@ -83,6 +83,8 @@ let removedEpochAvailable = true
 // making farmA the removed farm rather than the transaction coordinator's
 // localStorage lease key.
 resetFarmGrantFromLive(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: farmA }, 1, now)
+const removedProfileKey = `farm-rx-access-profile:v1:${supabaseConfig.projectRef}:${userB}:${farmA}`
+storage.setItem(removedProfileKey, JSON.stringify({ privateAuthorization: 'stale removed-farm profile' }))
 
 // Existing account-isolation regression: a paused User A refresh cannot publish into User B.
 const userALoad = loadFarmAccess(userA, true)
@@ -97,6 +99,7 @@ assert.equal(userBAccess.userId, userB)
 assert.deepEqual(userBAccess.farms.map(({ id }) => id), [farmB])
 assert.equal(removedEpochTargets.length, 1, 'The access refresh did not request one authoritative epoch for its one already-known removed farm.')
 assert.equal(removedEpochTargets[0], farmA, 'A non-farm localStorage lease was mistaken for a removed farm.')
+assert.equal(storage.getItem(removedProfileKey), null, 'A removed farm retained its stale access profile.')
 const removedFence = inspectFarmRevocationState(storage, { projectRef: supabaseConfig.projectRef, userId: userB, farmId: removedEpochTargets[0]! })
 assert.deepEqual(
   removedFence,

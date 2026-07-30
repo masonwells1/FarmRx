@@ -257,6 +257,7 @@ $boundary = $null
 $token = $null
 $runFailure = $null
 $cleanupFailure = $null
+$passMarker = $null
 
 Push-Location $root
 try {
@@ -285,10 +286,10 @@ try {
     Invoke-NorthForkSequence phone $boundary.PublishableKey $token
   }
 
-  if ($Only -eq 'all') {
-    Write-Output 'NORTH_FORK_2027_DISPOSABLE_PASS'
+  $passMarker = if ($Only -eq 'all') {
+    'NORTH_FORK_2027_DISPOSABLE_PASS'
   } else {
-    Write-Output ("NORTH_FORK_2027_{0}_DISPOSABLE_PASS" -f $Only.ToUpperInvariant())
+    "NORTH_FORK_2027_$($Only.ToUpperInvariant())_DISPOSABLE_PASS"
   }
 } catch {
   $runFailure = $_
@@ -317,3 +318,4 @@ if ($null -ne $runFailure) {
   throw $runFailure
 }
 if ($null -ne $cleanupFailure) { throw $cleanupFailure }
+Write-Output $passMarker

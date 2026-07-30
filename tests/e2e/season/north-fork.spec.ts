@@ -202,13 +202,14 @@ async function setTaskIds(page: Page, taskIds: string[], operationIds: string[])
 }
 
 async function scopeStorage(page: Page, user: string) {
-  return page.evaluate(async ({ project, user, farm, fence, generation, queue, recovery, active, epochs }) => {
+  return page.evaluate(async ({ project, user, farm, fence, generation, queue, recovery, access, active, epochs }) => {
     const local: Record<string, string> = {}
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index)
       if (key && (
         key.includes(`${project}:${user}:${farm}`)
         || key === recovery
+        || key === access
         || key === active
         || key === epochs
       )) local[key] = localStorage.getItem(key)!
@@ -237,6 +238,7 @@ async function scopeStorage(page: Page, user: string) {
       generation: JSON.parse(localStorage.getItem(generation) ?? 'null'),
       queue: localStorage.getItem(queue),
       recovery: localStorage.getItem(recovery),
+      access: localStorage.getItem(access),
       workspaces: workspaces.filter(value => {
         const row = value as { projectRef?: string; userId?: string; farmId?: string }
         return row.projectRef === project && row.userId === user && row.farmId === farm
@@ -250,15 +252,17 @@ async function scopeStorage(page: Page, user: string) {
     generation: generationKey(user),
     queue: queueKey(user),
     recovery: recoveryKey(user),
+    access: `farm-rx-access:v1:${ids.project}:${user}`,
     active: `farm-rx-active-context:v1:${ids.project}`,
     epochs: `farm-rx-server-access-epochs:v1:${ids.project}:${user}`,
   })
 }
 
 function expectNoPendingStorage(storage: Awaited<ReturnType<typeof scopeStorage>>) {
-  if (storage.queue !== null) expect(JSON.parse(storage.queue).entries).toEqual([])
   for (const [key, value] of Object.entries(storage.local)) {
-    if (key.endsWith(':needs-attention')) expect(JSON.parse(value).records).toEqual([])
+    const parsed = JSON.parse(value) as { entries?: unknown[]; records?: unknown[] }
+    if (Array.isArray(parsed.entries)) expect(parsed.entries, `${key} retained queued work`).toEqual([])
+    if (key.endsWith(':needs-attention')) expect(parsed.records, `${key} retained needs-attention work`).toEqual([])
   }
   expect(storage.recovery).toBeNull()
 }
@@ -290,10 +294,27 @@ test('@north-fork-nf1 owner baseline, farm switching, rep/outsider denial', asyn
   await expect(page.getByText('Private', { exact: true })).toBeVisible()
   await page.goto('/grain'); await expect(page.getByText(/15,200 bu/).first()).toBeVisible()
   await page.goto('/profitability'); await expect(page.getByText('Synthetic North 2027 Base').first()).toBeVisible()
-  await page.goto('/fields')
+  let mapleRequestStarted = false
+  let releaseMapleRequest = () => {}
+  const mapleRequestGate = new Promise<void>(resolve => { releaseMapleRequest = resolve })
+  await page.route('**/rest/v1/farms?**', async route => {
+    const url = new URL(route.request().url())
+    if (route.request().method() === 'GET' && url.searchParams.get('id') === `eq.${ids.maple}`) {
+      mapleRequestStarted = true
+      await mapleRequestGate
+    }
+    await route.continue()
+  })
   await page.getByLabel('Active farm').selectOption(ids.maple)
+  await expect.poll(() => mapleRequestStarted).toBe(true)
+  await expect(page.getByText('Synthetic North 2027 Base')).toHaveCount(0)
+  await expect(page.getByText(/15,200 bu/)).toHaveCount(0)
+  await expect(page.getByLabel('Active farm')).toBeHidden()
+  await expect(page.getByText('Opening your farm…')).toBeVisible()
+  releaseMapleRequest()
   await expect(page).toHaveURL(/\/fields/)
   await expect(page.getByLabel('Active farm')).toHaveValue(ids.maple)
+  await expect(page.getByText('Total fields').locator('..').getByText('0', { exact: true })).toBeVisible()
   await expect(page.getByText('North Home 80')).toHaveCount(0)
   await page.getByLabel('Active farm').selectOption(ids.north)
   await expect(page.getByText('North Home 80')).toBeVisible()
@@ -324,12 +345,20 @@ test('@north-fork-nf2 owner explicitly enables rep sharing once', async ({ conte
   const network = await fenceNetwork(context)
   await signIn(page, emails.owner, 'North Fork')
   await page.goto('/privacy')
+  const before = await scopeStorage(page, ids.owner)
+  expect(before.access).not.toBeNull()
+  expectNoPendingStorage(before)
   const sharing = page.getByRole('switch', { name: 'Share my grain position with my Crop RX rep' })
   await expect(sharing).toHaveAttribute('aria-checked', 'false')
   page.once('dialog', dialog => { expect(dialog.message()).toContain('private financial information'); void dialog.accept() })
   await sharing.click()
   await expect(sharing).toHaveAttribute('aria-checked', 'true')
   await expect(page.getByText('Shared with your assigned rep')).toBeVisible()
+  const after = await scopeStorage(page, ids.owner)
+  expect(after.access).not.toBeNull()
+  expect(JSON.parse(after.access!)).toMatchObject({ version: 1, userId: ids.owner, selectedFarmId: ids.north })
+  expect(after.workspaces.length).toBeGreaterThan(0)
+  expectNoPendingStorage(after)
   expect(network.writes.filter(item => item === 'PATCH /rest/v1/farms')).toEqual(['PATCH /rest/v1/farms'])
   expect(network.external).toEqual([]); await noOverflow(page, 'NF-2')
 })
@@ -363,6 +392,8 @@ test('@north-fork-nf4 worker creates only the manifest task', async ({ context, 
   await signIn(page, emails.worker)
   await page.goto('/grain'); await expect(page).toHaveURL(/\/fields/)
   await page.goto('/profitability'); await expect(page).toHaveURL(/\/fields/)
+  expectDenied(await directRest(page, 'GET', `/rest/v1/production_estimates?id=eq.${ids.estimate}&select=id`))
+  expectDenied(await directRest(page, 'GET', `/rest/v1/crop_budgets?id=eq.${ids.budget}&select=id`))
   await page.goto('/tasks')
   await setTaskIds(page, [ids.task], [ids.createOperation])
   await page.getByRole('button', { name: 'Add task' }).click()
@@ -392,6 +423,8 @@ test('@north-fork-nf5 read-only member reads but direct writes fail closed', asy
   await expect(page.locator('fieldset[aria-label="Read-only farm data"]')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Add task' })).toBeDisabled()
   await page.goto('/grain'); await expect(page).toHaveURL(/\/fields/)
+  expectDenied(await directRest(page, 'GET', `/rest/v1/production_estimates?id=eq.${ids.estimate}&select=id`))
+  expectDenied(await directRest(page, 'GET', `/rest/v1/crop_budgets?id=eq.${ids.budget}&select=id`))
   expectDenied(await directRest(page, 'POST', '/rest/v1/farm_tasks?select=id', {
     id: ids.deniedTask, farm_id: ids.north, title: 'Denied read-only task', details: null, status: 'todo', priority: 'normal',
     assigned_to: ids.readOnly, due_on: null, field_id: ids.field, equipment_id: null, source: 'manual', interval_id: null, interval_cycle_key: null,
@@ -454,10 +487,18 @@ test('@north-fork-nf7 concurrent owner disables sharing and stale rep loses priv
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
 
   const after = await scopeStorage(page, ids.rep)
+  expect(JSON.parse(after.access!)).toEqual({
+    version: 1,
+    userId: ids.rep,
+    farms: [],
+    selectedFarmId: null,
+    validatedAt: '2027-02-09T16:00:00.000Z',
+  })
   expect(after.fence).toEqual({ version: 2, generation: 4, token: ids.repRevokedToken, serverEpoch: 2, revoked: true, changedAt: '2027-02-09T16:00:00.000Z' })
   expect(after.generation).toEqual({ version: 2, generation: 4, token: ids.repRevokedToken, serverEpoch: 2, changedAt: '2027-02-09T16:00:00.000Z' })
   expect(await page.evaluate(() => window.__nfFenceTokens)).toEqual([])
   expect(after.workspaces).toEqual([])
+  expect(Object.keys(after.local).filter(key => key.startsWith(`farm-rx-access-profile:v1:${ids.project}:${ids.rep}:`))).toEqual([])
   expectNoPendingStorage(after)
   const active = await page.evaluate(project => localStorage.getItem(`farm-rx-active-context:v1:${project}`), ids.project)
   expect(active).toBeNull()
