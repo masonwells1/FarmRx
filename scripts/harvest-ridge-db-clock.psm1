@@ -26,6 +26,8 @@ $script:PineFarmId='27010000-0000-4000-8000-000000000006'
 $script:PineFarmName='Pine Hill'
 $script:NorthFarmId='27010000-0000-4000-8000-000000000002'
 $script:NorthFarmName='North Fork'
+$script:CedarFarmId='27010000-0000-4000-8000-000000000005'
+$script:CedarFarmName='Cedar Creek'
 
 function ConvertTo-HrClockWindowsCommandLine {
   param([Parameter(Mandatory)][string[]]$Argv)
@@ -90,7 +92,8 @@ function Assert-HrClockPhaseInput {
     [pscustomobject]@{Id=$script:HrFarmId;Name=$script:HrFarmName},
     [pscustomobject]@{Id=$script:MapleFarmId;Name=$script:MapleFarmName},
     [pscustomobject]@{Id=$script:PineFarmId;Name=$script:PineFarmName},
-    [pscustomobject]@{Id=$script:NorthFarmId;Name=$script:NorthFarmName}
+    [pscustomobject]@{Id=$script:NorthFarmId;Name=$script:NorthFarmName},
+    [pscustomobject]@{Id=$script:CedarFarmId;Name=$script:CedarFarmName}
   )
   if(@($approved|Where-Object{$_.Id-ceq$ProofFarmId-and$_.Name-ceq$ProofFarmName}).Count-ne1){throw 'HARVEST_RIDGE_CLOCK_REFUSED: proof farm identity is not an approved synthetic fixture.'}
   $instant=[datetimeoffset]::MinValue
