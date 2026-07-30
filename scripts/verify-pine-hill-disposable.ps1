@@ -111,16 +111,16 @@ function Invoke-PineSequence {
   $ph2={
     $before=Get-PineSnapshot @{
       field_log_entries="id <> '27080000-0000-4000-8000-000000000001'::uuid"
-      repository_write_receipts="operation_id <> '27090000-0000-4000-8000-000000000001'::uuid"
+      repository_write_receipts="not (farm_id='27010000-0000-4000-8000-000000000006'::uuid and operation_id='27090000-0000-4000-8000-000000000001'::uuid)"
     }
     Invoke-PineBrowser ph2 '2027-08-04T14:10:00-05:00' $s2 $s1 '' $Viewport
     $after=Get-PineSnapshot @{
       field_log_entries="id <> '27080000-0000-4000-8000-000000000001'::uuid"
-      repository_write_receipts="operation_id <> '27090000-0000-4000-8000-000000000001'::uuid"
+      repository_write_receipts="not (farm_id='27010000-0000-4000-8000-000000000006'::uuid and operation_id='27090000-0000-4000-8000-000000000001'::uuid)"
     }
     if($before-cne$after){throw 'Pine PH-2 changed a row outside the exact note/receipt allowance.'}
-    $proof=Invoke-PineSql "select count(*)||'|'||min(created_at)::text||'|'||(select count(*) from public.repository_write_receipts where operation_id='27090000-0000-4000-8000-000000000001') from public.field_log_entries where id='27080000-0000-4000-8000-000000000001';"
-    if($proof-cnotmatch'^1\|2027-08-04 19:10:00\+00\|1$'){throw "Pine PH-2 exact write proof failed: $proof"}
+    $proof=Invoke-PineSql "select count(*)||'|'||min(created_at)::text||'|'||(select count(*) from public.repository_write_receipts where operation_id='27090000-0000-4000-8000-000000000001')||'|'||(select count(*) from public.repository_write_receipts r join public.field_log_entries e on e.id='27080000-0000-4000-8000-000000000001' where r.farm_id='27010000-0000-4000-8000-000000000006' and r.operation_id='27090000-0000-4000-8000-000000000001' and r.user_id='27000000-0000-4000-8000-000000000003' and r.completed_at='2027-08-04 19:10:00+00' and r.result=to_jsonb(e)) from public.field_log_entries where id='27080000-0000-4000-8000-000000000001';"
+    if($proof-cnotmatch'^1\|2027-08-04 19:10:00\+00\|1\|1$'){throw "Pine PH-2 exact write proof failed: $proof"}
     return $true
   }.GetNewClosure()
   $result=@(Invoke-HarvestRidgeClockPhase -Root $root -Phase "$Prefix-ph2" -FrozenInstant '2027-08-04 19:10:00+00:00' -ApiUrl $apiUrl -PublishableKey $PublishableKey -AccessToken $AccessToken -ProofFarmId '27010000-0000-4000-8000-000000000006' -ProofFarmName 'Pine Hill' -Action $ph2)

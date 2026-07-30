@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
 
 const ids = {
   project: 'farmrxlocalsimplicity2027',
@@ -199,6 +200,7 @@ test('@pine-hill-ph5 quarantines exact revoked work and exports it', async ({ pa
     queue: localStorage.getItem(queue),
     fence: JSON.parse(localStorage.getItem(fence) ?? 'null'),
     generation: JSON.parse(localStorage.getItem(generation) ?? 'null'),
+    recoveryRaw: localStorage.getItem(recovery),
     recovery: JSON.parse(localStorage.getItem(recovery) ?? 'null'),
   }), { queue: queueKey, fence: fenceKey, generation: generationKey, recovery: recoveryKey })
   expect(storage.queue).toBeNull()
@@ -219,6 +221,13 @@ test('@pine-hill-ph5 quarantines exact revoked work and exports it', async ({ pa
   expect(pineCacheCount).toBe(0)
   const download = page.waitForEvent('download'); await page.getByRole('button', { name: 'Export copy' }).click()
   const exported = await download; expect(exported.suggestedFilename()).toMatch(/^farm-rx-recovery-/)
+  const exportedPath = await exported.path(); expect(exportedPath).not.toBeNull()
+  const exportedBytes = await readFile(exportedPath!, 'utf8')
+  expect(exportedBytes).toBe(JSON.stringify(JSON.parse(storage.recoveryRaw!).records[0], null, 2))
+  const priorState = JSON.parse(await readFile(process.env.FARMRX_PH_STATE_IN!, 'utf8')) as { origins: Array<{ localStorage: Array<{ name: string; value: string }> }> }
+  const originalQueueBytes = priorState.origins.flatMap(origin => origin.localStorage).find(item => item.name === queueKey)?.value
+  expect(originalQueueBytes).toBeTruthy()
+  expect(JSON.stringify(JSON.parse(exportedBytes).payload)).toBe(originalQueueBytes)
   expect(network.restWrites.filter(item => item.includes('save_field_log_entry'))).toEqual([])
   expect(network.external).toEqual([]); await noOverflow(page, 'PH-5'); await saveState(context)
 })

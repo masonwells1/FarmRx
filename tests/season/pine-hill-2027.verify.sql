@@ -17,12 +17,14 @@ begin
      or exists(select 1 from public.field_log_entries where note='Synthetic revoked-user note') then
     raise exception 'revoked Pine note reached the database';
   end if;
-  if (select count(*) from public.repository_write_receipts
-      where operation_id='27090000-0000-4000-8000-000000000001'
-        and farm_id='27010000-0000-4000-8000-000000000006'
-        and user_id='27000000-0000-4000-8000-000000000003'
-        and completed_at='2027-08-04 19:10:00+00'
-        and result->>'id'='27080000-0000-4000-8000-000000000001') <> 1 then
+  if (select count(*) from public.repository_write_receipts where operation_id='27090000-0000-4000-8000-000000000001') <> 1
+     or (select count(*) from public.repository_write_receipts receipt
+         join public.field_log_entries entry on entry.id='27080000-0000-4000-8000-000000000001'
+         where receipt.operation_id='27090000-0000-4000-8000-000000000001'
+           and receipt.farm_id='27010000-0000-4000-8000-000000000006'
+           and receipt.user_id='27000000-0000-4000-8000-000000000003'
+           and receipt.completed_at='2027-08-04 19:10:00+00'
+           and receipt.result=to_jsonb(entry)) <> 1 then
     raise exception 'connected Pine receipt is not exact';
   end if;
   if exists(select 1 from public.repository_write_receipts where operation_id='27090000-0000-4000-8000-000000000002') then
