@@ -1,6 +1,6 @@
 # STANDING GOAL — Farm Rx 2027 Season-Ready
 
-**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** Maple Ridge, North Fork, and Pine Hill jointly runtime-proven; Cedar Creek product-blocked
+**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** all six required scenarios are locally proven at identified immutable commits; no exact-current-HEAD full-matrix proof
 
 ## Owner directive
 
@@ -91,6 +91,6 @@ No real farmer account may be provisioned and no customer communication may be s
 
 ## Current next step
 
-Repair and prove Cedar Creek in bounded immutable tranches, starting with one truthful spray save disposition and duplicate-submit retirement. The accepted local integration commit `e7efe9a6bc02bbdf603735d8f23ed977ec6d5279` jointly preserves and proves the continuous January–December Maple Ridge packet, the North Fork permissions/privacy packet, and the Pine Hill offline-custody packet; fresh-context read-only Sol accepted that exact SHA with no P1/P2 finding.
+Assemble and run the complete six-scenario verification matrix on one immutable current commit, then obtain fresh-context read-only Sol review for that exact SHA. Maple Ridge, North Fork, and Pine Hill remain jointly proven at `e7efe9a6bc02bbdf603735d8f23ed977ec6d5279`; Cedar Creek is locally proven at `26b161df92fc8ce55d6cfabd4cec278644656767`; Prairie Spray remains proven at `0753c5165116c6a8f25076dd4b036b9afb570d51`; and Harvest Ridge remains proven at `a39b4cd4cf6a7bb8b03ba7dd1ee4c8dce98a4fec`.
 
-This does not make the initiative **RELEASE CANDIDATE READY**. Prairie Spray and Harvest Ridge remain accepted only at their separately identified proof SHAs, Cedar Creek still has product defects and no accepted runtime packet, and the physical-device and operational gates remain open. Weather-to-spray remains manual transcription with no provenance link. No push, pull request, merge, deployment, live migration/data/auth change, customer action, or other outward action is authorized by this document.
+This does not make the initiative **RELEASE CANDIDATE READY** or **COMPLETE**. The six scenario lanes have not all run and received fresh Sol acceptance on one exact current SHA, and the physical-device and operational gates remain open. Weather-to-spray remains manual transcription with no provenance link. No push, pull request, merge, deployment, live migration/data/auth change, customer action, or other outward action is authorized by this document.
