@@ -1,6 +1,6 @@
 # STANDING GOAL — Farm Rx 2027 Season-Ready
 
-**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** January–July runtime accepted; August–December statically hardened and runtime-blocked
+**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** Maple Ridge, North Fork, and Pine Hill jointly runtime-proven; Cedar Creek product-blocked
 
 ## Owner directive
 
@@ -91,4 +91,6 @@ No real farmer account may be provisioned and no customer communication may be s
 
 ## Current next step
 
-Build and run August–December continuously from the accepted July boundary, promoting statuses only from exact-commit browser/database evidence plus fresh Sol review. The governed disposable Postgres clock seam and continuous January–July proof are accepted at exact commit `021b5875dc6d96ddc1b018f672a204ce1066ec9b`; this does not prove the remaining months, a full-year packet, physical-device journeys, or release readiness. No push, pull request, merge, deployment, live service change, or customer action is authorized by this document.
+Repair and prove Cedar Creek in bounded immutable tranches, starting with one truthful spray save disposition and duplicate-submit retirement. The accepted local integration commit `e7efe9a6bc02bbdf603735d8f23ed977ec6d5279` jointly preserves and proves the continuous January–December Maple Ridge packet, the North Fork permissions/privacy packet, and the Pine Hill offline-custody packet; fresh-context read-only Sol accepted that exact SHA with no P1/P2 finding.
+
+This does not make the initiative **RELEASE CANDIDATE READY**. Prairie Spray and Harvest Ridge remain accepted only at their separately identified proof SHAs, Cedar Creek still has product defects and no accepted runtime packet, and the physical-device and operational gates remain open. Weather-to-spray remains manual transcription with no provenance link. No push, pull request, merge, deployment, live migration/data/auth change, customer action, or other outward action is authorized by this document.
