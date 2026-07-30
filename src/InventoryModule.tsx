@@ -44,8 +44,12 @@ export function InventoryPage({ repository }: { repository: InventoryRepository 
     if (!tabList || !activeTab) return
     const tabListRect = tabList.getBoundingClientRect()
     const activeTabRect = activeTab.getBoundingClientRect()
-    if (activeTabRect.left < tabListRect.left) tabList.scrollLeft -= tabListRect.left - activeTabRect.left
-    else if (activeTabRect.right > tabListRect.right) tabList.scrollLeft += activeTabRect.right - tabListRect.right
+    const visibleLeft = tabList.scrollLeft
+    const visibleRight = visibleLeft + tabList.clientWidth
+    const activeLeft = activeTabRect.left - tabListRect.left + visibleLeft
+    const activeRight = activeLeft + activeTabRect.width
+    if (activeLeft < visibleLeft) tabList.scrollLeft = activeLeft
+    else if (activeRight > visibleRight) tabList.scrollLeft = activeRight - tabList.clientWidth
   }, [view, workspaceReady])
   const done = (notice: string) => { setMessage(notice); setError(''); void refresh() }
   const failed = (caught: unknown) => { setError(farmerError(caught)); setMessage('') }
