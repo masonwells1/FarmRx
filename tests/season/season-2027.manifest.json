@@ -67,6 +67,7 @@
     { "label": "North permission-test farm task", "uuid": "27061000-0000-4000-8000-000000000002" },
     { "label": "North denied permission-test farm task", "uuid": "27061000-0000-4000-8000-000000000003" },
     { "label": "Cedar scouting note", "uuid": "27060000-0000-4000-8000-000000000005" },
+    { "label": "Cedar scouting save operation", "uuid": "27094000-0000-4000-8000-000000000005" },
     { "label": "Maple Grain production estimate", "uuid": "27070000-0000-4000-8000-000000000001" },
     { "label": "North Grain production estimate", "uuid": "27070000-0000-4000-8000-000000000002" },
     { "label": "Harvest Grain production estimate", "uuid": "27070000-0000-4000-8000-000000000004" },

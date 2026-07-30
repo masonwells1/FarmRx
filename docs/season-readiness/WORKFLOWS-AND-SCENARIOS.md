@@ -87,6 +87,7 @@ This manifest is proof infrastructure, not product schema. IDs remain stable acr
 | North permission-test farm task | `27061000-0000-4000-8000-000000000002` |
 | North denied permission-test farm task | `27061000-0000-4000-8000-000000000003` |
 | Cedar scouting note | `27060000-0000-4000-8000-000000000005` |
+| Cedar scouting save operation | `27094000-0000-4000-8000-000000000005` |
 | Maple Grain production estimate | `27070000-0000-4000-8000-000000000001` |
 | North Grain production estimate | `27070000-0000-4000-8000-000000000002` |
 | Harvest Grain production estimate | `27070000-0000-4000-8000-000000000004` |
