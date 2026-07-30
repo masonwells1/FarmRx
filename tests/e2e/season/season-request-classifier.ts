@@ -29,6 +29,7 @@ export function createSeasonRequestClassifier(options: {
   const targetMutationRequests = new Set(options.targetMutationRequests)
   const observedTargetMutationRpcs: string[] = []
   const observedTargetMutationPaths: string[] = []
+  const observedReadOnlyRpcs: string[] = []
   const unexpectedRpcs: string[] = []
   const blockedNonReadRequests: string[] = []
   let armed = false
@@ -36,6 +37,7 @@ export function createSeasonRequestClassifier(options: {
   return {
     observedTargetMutationRpcs,
     observedTargetMutationPaths,
+    observedReadOnlyRpcs,
     unexpectedRpcs,
     blockedNonReadRequests,
     observe(methodValue: string, urlValue: string): { kind: RequestKind; block: boolean } {
@@ -52,7 +54,10 @@ export function createSeasonRequestClassifier(options: {
       const rpcMatch = url.pathname.match(/^\/rest\/v1\/rpc\/([^/]+)$/)
       const rpcName = rpcMatch?.[1]
       if (rpcName) {
-        if (method === 'POST' && readOnlySeasonAccessRpcs.has(rpcName)) return { kind: 'read-only-rpc', block: false }
+        if (method === 'POST' && readOnlySeasonAccessRpcs.has(rpcName)) {
+          observedReadOnlyRpcs.push(rpcName)
+          return { kind: 'read-only-rpc', block: false }
+        }
         if (method === 'POST' && targetMutationRpcs.has(rpcName)) {
           observedTargetMutationRpcs.push(rpcName)
           return { kind: 'target-mutation-rpc', block: false }

@@ -98,6 +98,20 @@ const goodResult = validateSeasonContract(manifest, workflowMarkdown);
 await validateHarnessIsolation();
 console.log(`Season contract good fixture: PASS (${goodResult.fixtureCount} fixtures)`);
 
+{
+  const root = await createTemporaryHarness();
+  try {
+    const target = join(root, "scripts/verify-season.ps1");
+    const content = await readFile(target, "utf8");
+    await writeFile(target, content.replace(/\r?\n/g, "\r\n"), "utf8");
+    await validateHarnessIsolation(root);
+    console.log("Season isolation CRLF-only PowerShell copy: PASS");
+  } finally {
+    assert(root.startsWith(join(tmpdir(), "farmrx-season-regression-")), "Refusing to clean an unexpected regression path.");
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
 let candidate = clone(manifest);
 candidate.fixtures[1].uuid = candidate.fixtures[0].uuid;
 expectContractFailure("duplicate UUID", candidate, workflowMarkdown, /^Duplicate fixture UUID at manifest\.fixtures\[1\]\.$/);
