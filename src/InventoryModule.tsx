@@ -25,8 +25,9 @@ const newSprayLine = (product_id = ''): SprayLine => ({ key: crypto.randomUUID()
 
 export function InventoryPage({ repository }: { repository: InventoryRepository }) {
   const location = useLocation()
+  const manualSprayRecord = isManualSprayRecordIntent(location.state)
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
-  const [view, setView] = useState<'shelf' | 'receive' | 'adjust' | 'spray' | 'compliance'>(() => isManualSprayRecordIntent(location.state) ? 'spray' : 'shelf')
+  const [view, setView] = useState<'shelf' | 'receive' | 'adjust' | 'spray' | 'compliance'>(() => manualSprayRecord ? 'spray' : 'shelf')
   const [search, setSearch] = useState('')
   const [selectedProduct, setSelectedProduct] = useState('')
   const [message, setMessage] = useState('')
@@ -38,6 +39,10 @@ export function InventoryPage({ repository }: { repository: InventoryRepository 
   const workspaceReady = workspace !== null
   const refresh = async () => { try { const [next, queueKey] = await Promise.all([repository.getWorkspace(), repository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)]); setWorkspace(next); setAttentionQueueKey(queueKey); setSelectedProduct((current) => current || next.products[0]?.id || '') } catch (caught) { setError(farmerError(caught)) } }
   useEffect(() => { void refresh() }, [])
+  useLayoutEffect(() => {
+    if (!manualSprayRecord) return
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+  }, [location.key, manualSprayRecord])
   useLayoutEffect(() => {
     const tabList = tabListRef.current
     const activeTab = activeTabRef.current
