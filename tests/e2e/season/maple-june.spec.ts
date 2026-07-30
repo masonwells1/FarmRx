@@ -56,7 +56,7 @@ async function installDeterminismAndFence(page: Page, requests: ReturnType<typeo
       if (phase === 'locked') return original()
       const target = stack.includes('/src/data/QueuedInventoryRepository.ts') && stack.includes('base')
         ? 'operation'
-        : stack.includes('/src/InventoryModule.tsx') && stack.includes('submit') ? consumptions.product === 0 ? 'product' : 'application' : null
+        : stack.includes('/src/InventoryModule.tsx') && stack.includes('submit') ? consumptions.application === 0 ? 'application' : 'product' : null
       if (!target) return original()
       if (phase !== 'armed') { observations.push(`${phase}:${target}`); throw new Error(`June manifest identity requested while ${phase}`) }
       if (target === 'product' && consumptions.product++ === 0) { observations.push(`product:${product}`); return product }
@@ -121,8 +121,8 @@ test('@june-write records one exact manual Maple application after a read-only W
   expect(requests.unexpectedRpcs, 'unexpected RPC ran after password authentication').toEqual([])
   expect(requests.blockedNonReadRequests, 'unexpected non-read request ran after password authentication').toEqual([])
   expect(network.external).toEqual([])
-  expect(await page.evaluate(() => window.__farmRxJuneIdentityObservations)).toEqual([`product:${applicationProductId}`, `application:${applicationId}`, `operation:${operationId}`])
-  expect(await page.evaluate(() => window.__farmRxJuneIdentityConsumptions)).toEqual({ product: 1, application: 1, operation: 1 })
+  expect(await page.evaluate(() => window.__farmRxJuneIdentityObservations)).toEqual([`application:${applicationId}`, `product:${applicationProductId}`, `operation:${operationId}`])
+  expect(await page.evaluate(() => window.__farmRxJuneIdentityConsumptions)).toEqual({ application: 1, product: 1, operation: 1 })
   expect(new Set(await page.evaluate(() => window.__farmRxJuneClockObservations))).toEqual(new Set([fixedInstant.toISOString()]))
 })
 
@@ -138,5 +138,5 @@ test('@june-write-phone shows 90 gallons and completed compliance without writin
   expect(requests.blockedNonReadRequests, 'unexpected non-read request ran after password authentication').toEqual([])
   expect(network.external).toEqual([])
   expect(await page.evaluate(() => window.__farmRxJuneIdentityObservations)).toEqual([])
-  expect(await page.evaluate(() => window.__farmRxJuneIdentityConsumptions)).toEqual({ product: 0, application: 0, operation: 0 })
+  expect(await page.evaluate(() => window.__farmRxJuneIdentityConsumptions)).toEqual({ application: 0, product: 0, operation: 0 })
 })
