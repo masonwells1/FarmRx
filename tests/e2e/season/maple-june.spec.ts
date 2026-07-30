@@ -111,7 +111,7 @@ test('@june-write records one exact manual Maple application after a read-only W
     const identity = await page.evaluate(() => ({ observations: window.__farmRxJuneIdentityObservations, consumptions: window.__farmRxJuneIdentityConsumptions }))
     throw new Error(`June save failed before durable confirmation: ${JSON.stringify({ identity, targetRpcs: requests.observedTargetMutationRpcs, unexpectedRpcs: requests.unexpectedRpcs, blocked: requests.blockedNonReadRequests })}`)
   }
-  await expect(page.locator('.inventory-success')).toHaveText('Spray record saved. Product and label facts are copied into this record.')
+  await expect(page.locator('.inventory-success')).toHaveText('Spray record confirmed on Farm Rx. Product and label facts are copied into this record.')
   await page.evaluate(() => window.__farmRxJuneLockManifestIds())
   await page.getByRole('button', { name: 'On-hand shelf' }).click(); await expect(page.getByText('90 gal', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Spray record' }).click()

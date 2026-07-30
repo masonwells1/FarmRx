@@ -107,7 +107,7 @@ test('@prairie-spray manager saves the exact completed application through the l
     const identity = await page.evaluate(() => ({ observations: window.__farmRxPrairieIdentityObservations, consumptions: window.__farmRxPrairieIdentityConsumptions }))
     throw new Error(`Prairie save failed before durable confirmation: ${JSON.stringify({ identity, targetRpcs: requests.observedTargetMutationRpcs, unexpectedRpcs: requests.unexpectedRpcs, blocked: requests.blockedNonReadRequests })}`)
   }
-  await expect(page.locator('.inventory-success')).toHaveText('Spray record saved. Product and label facts are copied into this record.')
+  await expect(page.locator('.inventory-success')).toHaveText('Spray record confirmed on Farm Rx. Product and label facts are copied into this record.')
   if (!retry || !retry.body) throw new Error('Prairie proof did not capture the exact completed-application request for idempotent replay.')
   const retryResult = await page.evaluate(async ({ url, headers, body }) => {
     const safeHeaders = Object.fromEntries(Object.entries(headers).filter(([name]) => ['apikey', 'authorization', 'content-type', 'x-client-info', 'x-farm-rx-expected-user-id', 'x-farm-rx-access-epochs'].includes(name.toLowerCase())))
