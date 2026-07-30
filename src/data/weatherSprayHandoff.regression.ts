@@ -11,6 +11,7 @@ assert.equal(isManualSprayRecordIntent({ kind: 'manual-spray-record', version: 2
 
 const weatherModule = readFileSync(new URL('../WeatherModule.tsx', import.meta.url), 'utf8')
 const inventoryModule = readFileSync(new URL('../InventoryModule.tsx', import.meta.url), 'utf8')
+const appCss = readFileSync(new URL('../styles/app.css', import.meta.url), 'utf8')
 const standingGoal = readFileSync(new URL('../../docs/GOAL.md', import.meta.url), 'utf8')
 
 assert.match(weatherModule, /navigate\('\/inventory', \{ state: manualSprayRecordIntent \}\)/, 'Weather must navigate with the exact payload-free manual intent.')
@@ -20,6 +21,8 @@ assert.match(weatherModule, /type what you observed at application time/, 'The W
 assert.doesNotMatch(weatherModule, /createWeatherSprayHandoff|kind: 'weather-spray-handoff'/, 'Weather must not construct a field or forecast payload for Inventory.')
 assert.doesNotMatch(weatherModule, /notificationsRepository|raiseNotification|notification/i, 'The manual Weather-to-spray route must not retain a browser notification write path.')
 assert.match(inventoryModule, /isManualSprayRecordIntent\(location\.state\) \? 'spray' : 'shelf'/, 'The payload-free intent must open the Spray tab.')
+assert.match(inventoryModule, /className=\{view === key \? 'active' : ''\} aria-current=\{view === key \? 'page' : undefined\}/, 'The selected Inventory section must expose both its visible active class and current-page semantics.')
+assert.match(appCss, /\.inventory-tabs button\.active \{[^}]*border-color: var\(--deep-green\);[^}]*background: var\(--deep-green\);[^}]*color: var\(--on-dark\);/, 'The active Inventory section must retain a high-contrast visible style on desktop and phone.')
 assert.doesNotMatch(inventoryModule, /weatherPrefill|parseWeatherSprayHandoff|weather-prefill-warning/, 'The spray form must preserve its original manual defaults with no route prefill or warning.')
 assert.match(standingGoal, /A farmer manually transcribes weather into a spray record; there is no weather-to-spray provenance link\./, 'The standing goal must continue to define weather entry as manual transcription with no provenance link.')
 
