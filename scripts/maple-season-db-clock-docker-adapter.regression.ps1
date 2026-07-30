@@ -188,6 +188,11 @@ function New-TestAdapter($Simulator, [string]$JournalPath) {
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('maple-docker-adapter-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($temp) | Out-Null
 try {
+    # The shared 2027 clock adapter accepts exact winter scenario instants, but never another year.
+    $winterContract=$contract.Clone();$winterContract.FrozenInstant='2027-02-09 14:15:00+00:00';$winterSim=New-Simulator
+    New-MapleDockerSwapAdapter -Contract $winterContract -Inventory $inventory -ProofContract $proof -JournalPath (Join-Path $temp 'winter.json') -Invoke $winterSim.Invoke -Wait $winterSim.Wait -ResourceNamespace $namespace|Out-Null
+    foreach($outsideYear in @('2026-12-31 23:59:59+00:00','2028-01-01 00:00:00+00:00')){$badContract=$contract.Clone();$badContract.FrozenInstant=$outsideYear;$badSim=New-Simulator;Assert-Throws{New-MapleDockerSwapAdapter -Contract $badContract -Inventory $inventory -ProofContract $proof -JournalPath (Join-Path $temp 'outside-year.json') -Invoke $badSim.Invoke -Wait $badSim.Wait -ResourceNamespace $namespace|Out-Null}"outside-2027 instant accepted: $outsideYear"}
+
     # Complete swap and recovery proves exact argv, stable two-sample clock, and journal-last cleanup.
     $sim=New-Simulator; $adapter=New-TestAdapter $sim (Join-Path $temp 'success.json')
     $successResult=Invoke-MapleSwapStateMachine $adapter $inventory

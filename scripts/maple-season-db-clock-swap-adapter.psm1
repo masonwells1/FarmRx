@@ -13,7 +13,7 @@ function Assert-MapleSwapInventory {
   foreach ($key in @('contract_hash','network_id','original_id')) { if ($Inventory[$key] -notmatch '^[0-9a-f]{64}$') { throw "MAPLE_DB_SWAP_REFUSED: invalid $key." } }
   if ($Inventory.original_image_id -notmatch '^sha256:[0-9a-f]{64}$') { throw 'MAPLE_DB_SWAP_REFUSED: invalid original_image_id.' }
   if($Inventory.base_digest-notmatch'^public\.ecr\.aws/supabase/postgres@sha256:[0-9a-f]{64}$'){throw'MAPLE_DB_SWAP_REFUSED: invalid base_digest.'}
-  if ($Inventory.snapshot_tag -notmatch '^farmrx-clock-snapshot:[0-9a-f]{12}$' -or $Inventory.derived_tag -notmatch '^farmrx-frozen-clock-swap:2027(0[7-9]|1[0-2])[0-3][0-9]-[0-9a-f]{8}$') { throw 'MAPLE_DB_SWAP_REFUSED: invalid image tag.' }
+  if ($Inventory.snapshot_tag -notmatch '^farmrx-clock-snapshot:[0-9a-f]{12}$' -or $Inventory.derived_tag -notmatch '^farmrx-frozen-clock-swap:2027(0[1-9]|1[0-2])[0-3][0-9]-[0-9a-f]{8}$') { throw 'MAPLE_DB_SWAP_REFUSED: invalid image tag.' }
   $productionVolume='supabase_db_farmrx-farmer-simplicity-2027-local'
   $expectedVolume=if($ExpectedContract.ContainsKey('test_only_expected_volume')){$ExpectedContract.test_only_expected_volume}else{$productionVolume}
   if($ExpectedContract.ContainsKey('test_only_expected_volume')-and$expectedVolume-ceq$productionVolume){throw'MAPLE_DB_SWAP_REFUSED: synthetic mode cannot select the production volume.'}
