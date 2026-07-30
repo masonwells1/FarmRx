@@ -1,6 +1,6 @@
 # STANDING GOAL — Farm Rx 2027 Season-Ready
 
-**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** all six required scenarios are locally proven at identified immutable commits; no exact-current-HEAD full-matrix proof
+**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** RELEASE CANDIDATE READY for local synthetic/emulated proof at exact commit `551d45e6181aad09d9b86150b7209e23324d9651`; not COMPLETE
 
 ## Owner directive
 
@@ -91,6 +91,6 @@ No real farmer account may be provisioned and no customer communication may be s
 
 ## Current next step
 
-Assemble and run the complete six-scenario verification matrix on one immutable current commit, then obtain fresh-context read-only Sol review for that exact SHA. Maple Ridge, North Fork, and Pine Hill remain jointly proven at `e7efe9a6bc02bbdf603735d8f23ed977ec6d5279`; Cedar Creek is locally proven at `26b161df92fc8ce55d6cfabd4cec278644656767`; Prairie Spray remains proven at `0753c5165116c6a8f25076dd4b036b9afb570d51`; and Harvest Ridge remains proven at `a39b4cd4cf6a7bb8b03ba7dd1ee4c8dce98a4fec`.
+Keep the accepted local release candidate at exact immutable source/runtime commit `551d45e6181aad09d9b86150b7209e23324d9651` parked until Mason explicitly chooses and authorizes any outward action. SR-032/SR-033 record the complete sequential Maple Ridge, North Fork, Prairie Spray, Harvest Ridge, Cedar Creek, and Pine Hill disposable packets, full repository/foundation proof, cleanup, and fresh-context read-only Sol **ACCEPT** with no P1/P2 on that exact SHA.
 
-This does not make the initiative **RELEASE CANDIDATE READY** or **COMPLETE**. The six scenario lanes have not all run and received fresh Sol acceptance on one exact current SHA, and the physical-device and operational gates remain open. Weather-to-spray remains manual transcription with no provenance link. No push, pull request, merge, deployment, live migration/data/auth change, customer action, or other outward action is authorized by this document.
+The initiative is **RELEASE CANDIDATE READY** only for the recorded local disposable-backend, synthetic-data, and browser-emulation evidence. It is explicitly **not COMPLETE**: physical iPhone/Safari and Android/Chrome installed-PWA journeys, custom SMTP and real password-email proof, publication, push/pull request/merge, production deployment, live migration/data/auth/permission work, customer accounts, and customer communication remain unperformed, open, or approval-gated. Weather-to-spray remains manual payload-free transcription with no provenance link, integration, or automatic prefill. No outward action occurred or is authorized by this document.
