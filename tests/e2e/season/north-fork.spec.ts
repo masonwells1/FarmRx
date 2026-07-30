@@ -202,12 +202,13 @@ async function setTaskIds(page: Page, taskIds: string[], operationIds: string[])
 }
 
 async function scopeStorage(page: Page, user: string) {
-  return page.evaluate(async ({ project, user, farm, fence, generation, queue, recovery, access, active, epochs }) => {
+  return page.evaluate(async ({ project, user, farm, fence, generation, queue, cleanup, recovery, access, active, epochs }) => {
     const local: Record<string, string> = {}
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index)
       if (key && (
         key.includes(`${project}:${user}:${farm}`)
+        || key === cleanup
         || key === recovery
         || key === access
         || key === active
@@ -233,6 +234,7 @@ async function scopeStorage(page: Page, user: string) {
       } finally { database.close() }
     }
     return {
+      user,
       local,
       fence: JSON.parse(localStorage.getItem(fence) ?? 'null'),
       generation: JSON.parse(localStorage.getItem(generation) ?? 'null'),
@@ -251,6 +253,7 @@ async function scopeStorage(page: Page, user: string) {
     fence: fenceKey(user),
     generation: generationKey(user),
     queue: queueKey(user),
+    cleanup: `farm-rx-scouting-cleanup:v2:${ids.project}:${user}`,
     recovery: recoveryKey(user),
     access: `farm-rx-access:v1:${ids.project}:${user}`,
     active: `farm-rx-active-context:v1:${ids.project}`,
@@ -260,8 +263,13 @@ async function scopeStorage(page: Page, user: string) {
 
 function expectNoPendingStorage(storage: Awaited<ReturnType<typeof scopeStorage>>) {
   for (const [key, value] of Object.entries(storage.local)) {
-    const parsed = JSON.parse(value) as { entries?: unknown[]; records?: unknown[] }
-    if (Array.isArray(parsed.entries)) expect(parsed.entries, `${key} retained queued work`).toEqual([])
+    const parsed = JSON.parse(value) as { entries?: Array<{ userId?: unknown; farmId?: unknown }>; records?: unknown[] }
+    if (Array.isArray(parsed.entries)) {
+      const pending = key.startsWith('farm-rx-scouting-cleanup:v2:')
+        ? parsed.entries.filter(entry => entry.userId === storage.user && entry.farmId === ids.north)
+        : parsed.entries
+      expect(pending, `${key} retained North Fork queued work`).toEqual([])
+    }
     if (key.endsWith(':needs-attention')) expect(parsed.records, `${key} retained needs-attention work`).toEqual([])
   }
   expect(storage.recovery).toBeNull()
