@@ -14,9 +14,11 @@ const inventoryModule = readFileSync(new URL('../InventoryModule.tsx', import.me
 const standingGoal = readFileSync(new URL('../../docs/GOAL.md', import.meta.url), 'utf8')
 
 assert.match(weatherModule, /navigate\('\/inventory', \{ state: manualSprayRecordIntent \}\)/, 'Weather must navigate with the exact payload-free manual intent.')
+assert.doesNotMatch(weatherModule, /navigate\('\/inventory', \{ state: \{[^}]+\} \}\)/, 'Weather must not construct any inline handoff payload.')
 assert.match(weatherModule, /Open blank spray record/, 'The Weather action must tell the farmer it opens a blank record.')
 assert.match(weatherModule, /type what you observed at application time/, 'The Weather copy must require manual transcription of observed conditions.')
 assert.doesNotMatch(weatherModule, /createWeatherSprayHandoff|kind: 'weather-spray-handoff'/, 'Weather must not construct a field or forecast payload for Inventory.')
+assert.doesNotMatch(weatherModule, /notificationsRepository|raiseNotification|notification/i, 'The manual Weather-to-spray route must not retain a browser notification write path.')
 assert.match(inventoryModule, /isManualSprayRecordIntent\(location\.state\) \? 'spray' : 'shelf'/, 'The payload-free intent must open the Spray tab.')
 assert.doesNotMatch(inventoryModule, /weatherPrefill|parseWeatherSprayHandoff|weather-prefill-warning/, 'The spray form must preserve its original manual defaults with no route prefill or warning.')
 assert.match(standingGoal, /A farmer manually transcribes weather into a spray record; there is no weather-to-spray provenance link\./, 'The standing goal must continue to define weather entry as manual transcription with no provenance link.')
