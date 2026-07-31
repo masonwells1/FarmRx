@@ -222,7 +222,7 @@ export function FarmSwitcher({ farms, activeFarm, chooseFarm }: { farms: FarmAcc
     }
   }
   return (
-    <div>
+    <div className="farm-switcher-wrap">
       <label className="farm-switcher">Farm
         <select value={activeFarm.id} disabled={switching} onChange={(event) => { void switchTo(event.target.value) }} aria-label="Active farm">
           {farms.map((farm) => <option key={farm.id} value={farm.id}>{farm.name}</option>)}
@@ -452,14 +452,15 @@ function OfflineDataNotice() {
 }
 
 function FarmAccessGate({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { signOut, user } = useAuth();
+  const navigate = useNavigate();
   if (!user)
     return (
       <main className="login-page">
         <p className="opening-farm">Opening your farm…</p>
       </main>
     );
-  return <FarmAccessGateForUser key={user.id} user={user}>{children}</FarmAccessGateForUser>;
+  return <FarmAccessGateForUser key={user.id} user={user} onSignOut={async () => { await signOut(); navigate("/login", { replace: true }); }}>{children}</FarmAccessGateForUser>;
 }
 
 const farmRetryModules = ["fields", "grain", "profitability", "inventory", "equipment_tasks", "weather", "fieldLog", "scouting", "harvest", "programs", "notifications"] as const;
@@ -599,7 +600,7 @@ async function restoreCurrentFarmAfterFailedSwitch(latestProfile: LoadedFarmAcce
   }
 }
 
-export function FarmAccessGateForUser({ children, user, dependencies = defaultFarmAccessGateDependencies }: { children: ReactNode; user: User; dependencies?: FarmAccessGateDependencies }) {
+export function FarmAccessGateForUser({ children, user, dependencies = defaultFarmAccessGateDependencies, onSignOut }: { children: ReactNode; user: User; dependencies?: FarmAccessGateDependencies; onSignOut?: () => Promise<void> }) {
   const [state, setState] = useState<
     "checking" | "choose" | "ready" | "setup" | "blocked"
   >("checking");
@@ -607,11 +608,12 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
   const [profile, setProfile] = useState<LoadedFarmAccessProfile | null>(null);
   const [message, setMessage] = useState("");
   const [retrying, setRetrying] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const mounted = useRef(true);
   const validationGate = useRef(createFarmAccessValidationGate());
   const openFarmRef = useRef<null | (() => Promise<FarmAccess["source"]>)>(null);
   const liveRevalidationRef = useRef<null | (() => Promise<void>)>(null);
-  const retryLock = useRef(createSubmitLock());
+  const blockedActionLock = useRef(createSubmitLock());
   const beginValidation = () => {
     const isLatestGeneration = validationGate.current.begin();
     return () => mounted.current && isLatestGeneration();
@@ -700,7 +702,8 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
     };
   }, [dependencies, user?.app_metadata.initial_farm_owner, user?.id]);
   const retryOpenFarm = async () => {
-    if (!retryLock.current.acquire()) return;
+    if (!blockedActionLock.current.acquire()) return;
+    setMessage("");
     setRetrying(true);
     try {
       const openFarm = openFarmRef.current;
@@ -710,7 +713,20 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
       if (mounted.current) { setMessage(farmerError(error, "open your farm")); setState("blocked"); }
     } finally {
       setRetrying(false);
-      retryLock.current.release();
+      blockedActionLock.current.release();
+    }
+  };
+  const leaveBlockedFarm = async () => {
+    if (!onSignOut || !blockedActionLock.current.acquire()) return;
+    setMessage("");
+    setSigningOut(true);
+    try {
+      await onSignOut();
+    } catch {
+      if (mounted.current) setMessage("Farm Rx could not sign you out right now. Please try again.");
+    } finally {
+      if (mounted.current) setSigningOut(false);
+      blockedActionLock.current.release();
     }
   };
   const completeInitialFarmSetup = async () => {
@@ -748,9 +764,10 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
       <main className="login-page">
         <section className="login-panel">
           <p className="opening-farm">{message}</p>
-          <button className="primary-action" type="button" disabled={retrying} onClick={() => { void retryOpenFarm() }}>
+          <button className="primary-action" type="button" disabled={retrying || signingOut} onClick={() => { void retryOpenFarm() }}>
             {retrying ? "Trying again…" : "Try again"}
           </button>
+          {onSignOut && <button className="secondary-action" type="button" disabled={retrying || signingOut} onClick={() => { void leaveBlockedFarm() }}>{signingOut ? "Signing out…" : "Sign out"}</button>}
           <RevokedFarmRecovery userId={user.id} />
         </section>
       </main>

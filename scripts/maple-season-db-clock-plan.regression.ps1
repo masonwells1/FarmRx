@@ -17,7 +17,7 @@ $restChecks=@($plan.Steps[4].Checks)
 foreach($required in @('reinspect-rest-image-digest','reinspect-rest-image-id','reinspect-rest-process','reinspect-rest-network','reinspect-rest-db-uri-host','resolve-db-host-to-replacement-container','prove-loopback-rest-endpoint-reaches-replacement-db')){ Assert-True ($restChecks -ccontains $required) "PostgREST identity proof is missing: $required" }
 $sql=$plan.Steps[5].Sql
 foreach($required in @("raise exception 'MAPLE_CLOCK_PROOF_FAILED: current_date'","raise exception 'MAPLE_CLOCK_PROOF_FAILED: statement_timestamp'","raise exception 'MAPLE_CLOCK_PROOF_FAILED: clock_timestamp'","raise exception 'MAPLE_CLOCK_PROOF_FAILED: default inserted timestamp'",'insert into maple_clock_default_probe default values returning stamped_at')){ Assert-True $sql.Contains($required) "Fail-closed SQL is missing: $required" }
-Assert-True ($sql.Contains("end;`n`$maple_clock_proof`$;")) 'The fail-closed PostgreSQL block must terminate as executable SQL.'
+Assert-True ($sql.Replace("`r`n","`n").Contains("end;`n`$maple_clock_proof`$;")) 'The fail-closed PostgreSQL block must terminate as executable SQL.'
 Assert-True ($plan.Steps[2].BaseImage -ceq $valid.DbImage -and $plan.Steps[2].FrozenInstant -ceq '2027-07-09 21:10:00+00:00') 'Derived image contract is not exact.'
 $seasonDir=Join-Path (Split-Path $PSScriptRoot -Parent) 'tests/season'
 $root=Split-Path $PSScriptRoot -Parent

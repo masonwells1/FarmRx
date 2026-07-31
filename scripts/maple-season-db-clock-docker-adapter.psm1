@@ -63,9 +63,9 @@ function New-MapleDockerSwapAdapter {
     $frozen=[datetimeoffset]::MinValue
     $frozenFormat='yyyy-MM-dd HH:mm:sszzz'
     $frozenParsed=[datetimeoffset]::TryParseExact($Contract.FrozenInstant,$frozenFormat,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None,[ref]$frozen)
-    if (-not $frozenParsed -or $frozen.Year -ne 2027 -or $frozen.Month -lt 7 -or $frozen.Month -gt 12 -or $frozen.Offset -ne [timespan]::Zero -or
+    if (-not $frozenParsed -or $frozen.Year -ne 2027 -or $frozen.Offset -ne [timespan]::Zero -or
         $Contract.FrozenInstant -cne $frozen.ToString($frozenFormat,[Globalization.CultureInfo]::InvariantCulture)) {
-        throw 'MAPLE_DOCKER_ADAPTER_REFUSED: frozen instant must be an exact July-December 2027 UTC value.'
+        throw 'MAPLE_DOCKER_ADAPTER_REFUSED: frozen instant must be an exact 2027 UTC value.'
     }
     if ($ProofContract.WaitMilliseconds -isnot [int] -or $ProofContract.WaitMilliseconds -lt 250 -or $ProofContract.WaitMilliseconds -gt 5000) {
         throw 'MAPLE_DOCKER_ADAPTER_REFUSED: proof wait is not bounded.'

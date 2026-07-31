@@ -1,6 +1,6 @@
 # STANDING GOAL — Farm Rx 2027 Season-Ready
 
-**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** January–July runtime accepted; August–December statically hardened and runtime-blocked
+**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** RELEASE CANDIDATE READY for local synthetic/emulated proof at exact accepted source/runtime commit `8a9565a08a760e0ec920170bfacee1d9132cba47`, an ancestor of this documentation history; not COMPLETE
 
 ## Owner directive
 
@@ -91,4 +91,6 @@ No real farmer account may be provisioned and no customer communication may be s
 
 ## Current next step
 
-Build and run August–December continuously from the accepted July boundary, promoting statuses only from exact-commit browser/database evidence plus fresh Sol review. The governed disposable Postgres clock seam and continuous January–July proof are accepted at exact commit `021b5875dc6d96ddc1b018f672a204ce1066ec9b`; this does not prove the remaining months, a full-year packet, physical-device journeys, or release readiness. No push, pull request, merge, deployment, live service change, or customer action is authorized by this document.
+Keep the accepted local release candidate at exact immutable source/runtime commit `8a9565a08a760e0ec920170bfacee1d9132cba47` and this documentation closeout local until the documentation commit receives fresh exact-SHA Sol acceptance. SR-035/SR-036 record the repaired PR-review findings, complete sequential Maple Ridge, North Fork, Prairie Spray, Harvest Ridge, Cedar Creek, and Pine Hill disposable packets, mutation probes, full repository/foundation proof, cleanup, and fresh-context read-only Sol **ACCEPT** with no P1/P2 on the source/runtime SHA.
+
+The initiative is **RELEASE CANDIDATE READY** only for the recorded local disposable-backend, synthetic-data, and browser-emulation evidence. It is explicitly **not COMPLETE**: physical iPhone/Safari and Android/Chrome installed-PWA journeys, custom SMTP and real password-email proof, publication, push/pull request/merge, production deployment, live migration/data/auth/permission work, customer accounts, and customer communication remain unperformed. Weather-to-spray remains manual payload-free transcription with no provenance link, integration, or automatic prefill. PR #14 is ready, open, and unmerged; its remote branch remains at `87d0c7a28e9327cfefa062ebe7ec8ca2e3867d68` until this documentation commit is accepted and published. Mason separately authorized branch publication, PR babysitting, and merge if clean, but this document records none of those outward actions as performed and authorizes no deployment or live change.

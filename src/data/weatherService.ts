@@ -6,10 +6,16 @@ const cacheAgeMs = 30 * 60 * 1000
 /** Spray-window calls need near-real-time data; a two-hour ceiling preserves a
  * short outage fallback without ever presenting an old forecast as actionable. */
 export const sprayJudgmentMaxAgeMs = 2 * 60 * 60 * 1000
+/** A future cache stamp can result from a clock rollback. It is never usable. */
+function nonnegativeCacheAge(fetchedAt: string, nowMs: number) {
+  const age = nowMs - Date.parse(fetchedAt)
+  return Number.isFinite(age) && age >= 0 ? age : null
+}
 /** The ONE freshness gate every spray-verdict render must pass — a stale or
  * over-age bundle must never produce an actionable (green) judgment anywhere. */
 export function isActionablyFresh(bundle: Pick<ForecastBundle, 'stale' | 'fetched_at'>, nowMs = Date.now()) {
-  return !bundle.stale && nowMs - Date.parse(bundle.fetched_at) <= sprayJudgmentMaxAgeMs
+  const age = nonnegativeCacheAge(bundle.fetched_at, nowMs)
+  return !bundle.stale && age !== null && age <= sprayJudgmentMaxAgeMs
 }
 type Deps = { fetch: typeof fetch; clock: () => Date; storage: StorageLike }
 type CacheEnvelope = { version: 1; fetched_at: string; bundle: Omit<ForecastBundle, 'stale'> }
@@ -72,9 +78,10 @@ export function createWeatherService(deps: Deps) {
     if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180) throw new Error('Enter a valid field location.')
     const key = weatherCacheKey(lat, lon); const now = deps.clock(); let cached: Omit<ForecastBundle, 'stale'> | null = null
     try { const raw = deps.storage.getItem(key); if (raw) { const envelope = parseCache(raw); cached = validateBundle(envelope.bundle, envelope.fetched_at) } } catch { cached = null }
-    if (cached && now.getTime() - at(cached.fetched_at) < cacheAgeMs) return { ...cached, stale: false }
+    const cachedAge = cached ? nonnegativeCacheAge(cached.fetched_at, now.getTime()) : null
+    if (cached && cachedAge !== null && cachedAge < cacheAgeMs) return { ...cached, stale: false }
     const query = new URLSearchParams({ latitude: String(lat), longitude: String(lon), current: 'temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover', hourly: 'temperature_2m,relative_humidity_2m,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover', daily: 'precipitation_sum,precipitation_probability_max,temperature_2m_max,temperature_2m_min,sunrise,sunset', temperature_unit: 'fahrenheit', wind_speed_unit: 'mph', precipitation_unit: 'inch', timezone: 'auto', forecast_days: '7' })
-    try { const response = await deps.fetch(`https://api.open-meteo.com/v1/forecast?${query}`); if (!response.ok) throw new Error('Weather service did not respond.'); const fetched_at = now.toISOString(); const bundle = normalize(await response.json(), fetched_at); const envelope: CacheEnvelope = { version: 1, fetched_at, bundle }; try { deps.storage.setItem(key, JSON.stringify(envelope)) } catch { /* Caching is optional; live weather remains usable. */ } return { ...bundle, stale: false } } catch (error) { if (cached && now.getTime() - at(cached.fetched_at) <= sprayJudgmentMaxAgeMs) return { ...cached, stale: true }; throw new Error('Forecast unavailable — reconnect for the latest.') }
+    try { const response = await deps.fetch(`https://api.open-meteo.com/v1/forecast?${query}`); if (!response.ok) throw new Error('Weather service did not respond.'); const fetched_at = now.toISOString(); const bundle = normalize(await response.json(), fetched_at); const envelope: CacheEnvelope = { version: 1, fetched_at, bundle }; try { deps.storage.setItem(key, JSON.stringify(envelope)) } catch { /* Caching is optional; live weather remains usable. */ } return { ...bundle, stale: false } } catch (error) { if (cached && cachedAge !== null && cachedAge <= sprayJudgmentMaxAgeMs) return { ...cached, stale: true }; throw new Error('Forecast unavailable — reconnect for the latest.') }
   }
   async function fetchDailyHistory(lat: number, lon: number, startISODate: string, endISODate: string): Promise<DailyHistoryBundle> {
     if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180 || !validDate(startISODate) || !validDate(endISODate) || startISODate > endISODate) throw new Error('Enter a valid field location and date range.')
@@ -82,9 +89,10 @@ export function createWeatherService(deps: Deps) {
     if (startISODate > cappedEnd) throw new Error('Weather history is not available yet.')
     const key = weatherHistoryCacheKey(lat, lon, startISODate, cappedEnd); let cached: HistoryCacheEnvelope | null = null
     try { const raw = deps.storage.getItem(key); if (raw) cached = validateHistoryCache(JSON.parse(raw), startISODate, cappedEnd) } catch { cached = null }
-    if (cached && now.getTime() - at(cached.fetched_at) < cacheAgeMs) return { daily: cached.daily, fetched_at: cached.fetched_at, stale: false }
+    const cachedAge = cached ? nonnegativeCacheAge(cached.fetched_at, now.getTime()) : null
+    if (cached && cachedAge !== null && cachedAge < cacheAgeMs) return { daily: cached.daily, fetched_at: cached.fetched_at, stale: false }
     const query = new URLSearchParams({ latitude: String(lat), longitude: String(lon), start_date: startISODate, end_date: cappedEnd, daily: 'temperature_2m_max,temperature_2m_min', temperature_unit: 'fahrenheit', timezone: 'auto' })
-    try { const response = await deps.fetch(`https://archive-api.open-meteo.com/v1/archive?${query}`); if (!response.ok) throw new Error('Weather history service did not respond.'); const fetched_at = now.toISOString(); const daily = normalizeHistory(await response.json(), fetched_at); if (!hasContinuousDailyHistory(daily, startISODate, cappedEnd)) throw new Error('Weather history is not available yet.'); const envelope: HistoryCacheEnvelope = { version: 1, fetched_at, daily }; try { deps.storage.setItem(key, JSON.stringify(envelope)) } catch { /* Caching is optional. */ } return { daily, fetched_at, stale: false } } catch { if (cached) return { daily: cached.daily, fetched_at: cached.fetched_at, stale: true }; throw new Error('Weather history is not available yet — reconnect and try again.') }
+    try { const response = await deps.fetch(`https://archive-api.open-meteo.com/v1/archive?${query}`); if (!response.ok) throw new Error('Weather history service did not respond.'); const fetched_at = now.toISOString(); const daily = normalizeHistory(await response.json(), fetched_at); if (!hasContinuousDailyHistory(daily, startISODate, cappedEnd)) throw new Error('Weather history is not available yet.'); const envelope: HistoryCacheEnvelope = { version: 1, fetched_at, daily }; try { deps.storage.setItem(key, JSON.stringify(envelope)) } catch { /* Caching is optional. */ } return { daily, fetched_at, stale: false } } catch { if (cached && cachedAge !== null) return { daily: cached.daily, fetched_at: cached.fetched_at, stale: true }; throw new Error('Weather history is not available yet — reconnect and try again.') }
   }
   return { fetchForecast, fetchDailyHistory }
 }

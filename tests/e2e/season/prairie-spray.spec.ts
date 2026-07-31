@@ -56,7 +56,7 @@ async function installDeterminismAndFence(page: Page, requests: ReturnType<typeo
       if (phase === 'locked') return original()
       const target = stack.includes('/src/data/QueuedInventoryRepository.ts') && stack.includes('base')
         ? 'operation'
-        : stack.includes('/src/InventoryModule.tsx') && stack.includes('submit') ? consumptions.product === 0 ? 'product' : 'application' : null
+        : stack.includes('/src/InventoryModule.tsx') && stack.includes('submit') ? consumptions.application === 0 ? 'application' : 'product' : null
       if (!target) return original()
       if (phase !== 'armed') { observations.push(`${phase}:${target}`); throw new Error(`Prairie manifest identity requested while ${phase}`) }
       if (target === 'product' && consumptions.product++ === 0) { observations.push(`product:${product}`); return product }
@@ -107,7 +107,7 @@ test('@prairie-spray manager saves the exact completed application through the l
     const identity = await page.evaluate(() => ({ observations: window.__farmRxPrairieIdentityObservations, consumptions: window.__farmRxPrairieIdentityConsumptions }))
     throw new Error(`Prairie save failed before durable confirmation: ${JSON.stringify({ identity, targetRpcs: requests.observedTargetMutationRpcs, unexpectedRpcs: requests.unexpectedRpcs, blocked: requests.blockedNonReadRequests })}`)
   }
-  await expect(page.locator('.inventory-success')).toHaveText('Spray record saved. Product and label facts are copied into this record.')
+  await expect(page.locator('.inventory-success')).toHaveText('Spray record confirmed on Farm Rx. Product and label facts are copied into this record.')
   if (!retry || !retry.body) throw new Error('Prairie proof did not capture the exact completed-application request for idempotent replay.')
   const retryResult = await page.evaluate(async ({ url, headers, body }) => {
     const safeHeaders = Object.fromEntries(Object.entries(headers).filter(([name]) => ['apikey', 'authorization', 'content-type', 'x-client-info', 'x-farm-rx-expected-user-id', 'x-farm-rx-access-epochs'].includes(name.toLowerCase())))
@@ -123,8 +123,8 @@ test('@prairie-spray manager saves the exact completed application through the l
   expect(requests.unexpectedRpcs, 'unexpected RPC ran after manager authentication').toEqual([])
   expect(requests.blockedNonReadRequests, 'unexpected non-read request ran after manager authentication').toEqual([])
   expect(network.external).toEqual([])
-  expect(await page.evaluate(() => window.__farmRxPrairieIdentityObservations)).toEqual([`product:${applicationProductId}`, `application:${applicationId}`, `operation:${operationId}`])
-  expect(await page.evaluate(() => window.__farmRxPrairieIdentityConsumptions)).toEqual({ product: 1, application: 1, operation: 1 })
+  expect(await page.evaluate(() => window.__farmRxPrairieIdentityObservations)).toEqual([`application:${applicationId}`, `product:${applicationProductId}`, `operation:${operationId}`])
+  expect(await page.evaluate(() => window.__farmRxPrairieIdentityConsumptions)).toEqual({ application: 1, product: 1, operation: 1 })
   expect(new Set(await page.evaluate(() => window.__farmRxPrairieClockObservations))).toEqual(new Set([fixedInstant.toISOString()]))
   expect(farmId).toBe('27010000-0000-4000-8000-000000000003'); expect(productId).toBe('27040000-0000-4000-8000-000000000001')
 })
@@ -146,5 +146,5 @@ test('@prairie-spray phone-sized Compliance shows saved facts without writing or
   expect(requests.blockedNonReadRequests, 'unexpected non-read request ran during phone Compliance read').toEqual([])
   expect(network.external).toEqual([])
   expect(await page.evaluate(() => window.__farmRxPrairieIdentityObservations)).toEqual([])
-  expect(await page.evaluate(() => window.__farmRxPrairieIdentityConsumptions)).toEqual({ product: 0, application: 0, operation: 0 })
+  expect(await page.evaluate(() => window.__farmRxPrairieIdentityConsumptions)).toEqual({ application: 0, product: 0, operation: 0 })
 })

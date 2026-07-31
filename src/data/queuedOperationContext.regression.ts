@@ -624,6 +624,70 @@ try {
     assert(noticeUnhandled.length === 0, 'The farm gate retry leaked an unhandled rejection.')
   } finally { await act(async () => { gateRoot.unmount() }); gateContainer.remove() }
 
+  // The blocked gate's retry and sign-out actions share one synchronous lock.
+  // Controlled promises prove either click order excludes the other action and
+  // cannot publish a stale result from a path that never acquired the lock.
+  let retryFirstReplayCalls = 0
+  let retryFirstSignOutCalls = 0
+  let reachRetryFirst!: () => void
+  const retryFirstStarted = new Promise<void>((resolve) => { reachRetryFirst = resolve })
+  let releaseRetryFirst!: () => void
+  const retryFirstHold = new Promise<void>((resolve) => { releaseRetryFirst = resolve })
+  const retryFirstDependencies = {
+    loadAccess: async () => gateAccess,
+    loadProfile: async () => gateProfile,
+    replayWork: async () => {
+      retryFirstReplayCalls += 1
+      if (retryFirstReplayCalls === 1) throw new TypeError('retry-first startup failure')
+      reachRetryFirst()
+      await retryFirstHold
+    },
+    installRetryActions: () => undefined,
+    clearRetryActions: () => undefined,
+    selectFarm: async () => undefined,
+  }
+  const retryFirstContainer = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(retryFirstContainer); const retryFirstRoot = createRoot(retryFirstContainer as unknown as HTMLElement)
+  try {
+    await act(async () => { retryFirstRoot.render(createElement(FarmAccessGateForUser, { user: gateUser as never, dependencies: retryFirstDependencies, onSignOut: async () => { retryFirstSignOutCalls += 1 }, children: createElement('div', null, 'Retry-first farm ready') })) })
+    for (let attempt = 0; attempt < 100 && !retryFirstContainer.textContent?.includes('Try again'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const retryFirstButton = [...retryFirstContainer.querySelectorAll('button')].find((button) => button.textContent === 'Try again') as unknown as HTMLButtonElement | undefined
+    const retryFirstSignOut = [...retryFirstContainer.querySelectorAll('button')].find((button) => button.textContent === 'Sign out') as unknown as HTMLButtonElement | undefined
+    assert(retryFirstButton && retryFirstSignOut, 'The retry-first lock fixture did not reach the blocked gate.')
+    await act(async () => { retryFirstButton.click(); retryFirstSignOut.click(); await waitForSignal(retryFirstStarted, 'the retry-first controlled action') })
+    assert(retryFirstSignOutCalls === 0 && retryFirstButton.disabled && retryFirstSignOut.disabled && retryFirstContainer.querySelector('.opening-farm')?.textContent === '', 'Retry-first did not synchronously block sign-out, cross-disable both actions, and clear the stale error.')
+    releaseRetryFirst()
+    for (let attempt = 0; attempt < 100 && !retryFirstContainer.textContent?.includes('Retry-first farm ready'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    assert(retryFirstContainer.textContent?.includes('Retry-first farm ready') && retryFirstReplayCalls === 2 && retryFirstSignOutCalls === 0, 'Retry-first published a stale sign-out result or failed to publish ready.')
+  } finally { releaseRetryFirst(); await act(async () => { retryFirstRoot.unmount() }); retryFirstContainer.remove() }
+
+  let signOutFirstReplayCalls = 0
+  let signOutFirstCalls = 0
+  let reachSignOutFirst!: () => void
+  const signOutFirstStarted = new Promise<void>((resolve) => { reachSignOutFirst = resolve })
+  let releaseSignOutFirst!: () => void
+  const signOutFirstHold = new Promise<void>((resolve) => { releaseSignOutFirst = resolve })
+  const signOutFirstDependencies = {
+    loadAccess: async () => gateAccess,
+    loadProfile: async () => gateProfile,
+    replayWork: async () => { signOutFirstReplayCalls += 1; throw new TypeError('sign-out-first startup failure') },
+    installRetryActions: () => undefined,
+    clearRetryActions: () => undefined,
+    selectFarm: async () => undefined,
+  }
+  const signOutFirstContainer = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(signOutFirstContainer); const signOutFirstRoot = createRoot(signOutFirstContainer as unknown as HTMLElement)
+  try {
+    await act(async () => { signOutFirstRoot.render(createElement(FarmAccessGateForUser, { user: gateUser as never, dependencies: signOutFirstDependencies, onSignOut: async () => { signOutFirstCalls += 1; reachSignOutFirst(); await signOutFirstHold; throw new TypeError('controlled sign-out failure') }, children: createElement('div', null, 'Sign-out-first farm ready') })) })
+    for (let attempt = 0; attempt < 100 && !signOutFirstContainer.textContent?.includes('Try again'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const signOutFirstRetry = [...signOutFirstContainer.querySelectorAll('button')].find((button) => button.textContent === 'Try again') as unknown as HTMLButtonElement | undefined
+    const signOutFirstButton = [...signOutFirstContainer.querySelectorAll('button')].find((button) => button.textContent === 'Sign out') as unknown as HTMLButtonElement | undefined
+    assert(signOutFirstRetry && signOutFirstButton, 'The sign-out-first lock fixture did not reach the blocked gate.')
+    await act(async () => { signOutFirstButton.click(); signOutFirstRetry.click(); await waitForSignal(signOutFirstStarted, 'the sign-out-first controlled action') })
+    assert(signOutFirstCalls === 1 && signOutFirstReplayCalls === 1 && signOutFirstRetry.disabled && signOutFirstButton.disabled && signOutFirstContainer.querySelector('.opening-farm')?.textContent === '', 'Sign-out-first did not synchronously block retry, cross-disable both actions, and clear the stale error.')
+    releaseSignOutFirst()
+    for (let attempt = 0; attempt < 100 && !signOutFirstContainer.textContent?.includes('could not sign you out'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    assert(signOutFirstContainer.textContent?.includes('could not sign you out') && !signOutFirstContainer.textContent.includes('Sign-out-first farm ready') && signOutFirstReplayCalls === 1, 'Sign-out-first allowed a stale retry result to replace the controlled sign-out failure.')
+  } finally { releaseSignOutFirst(); await act(async () => { signOutFirstRoot.unmount() }); signOutFirstContainer.remove() }
+
   // A sibling tab may publish an equivalent fresh access snapshot after this
   // tab loads access but before it loads permissions. Retry the whole live
   // validation once instead of leaving the farmer on a recoverable error gate.
@@ -674,10 +738,12 @@ try {
   function BlockedOfflineProbe() { const value = useFarmAccess(); return createElement('div', null, `${value.source} recovered farm`) }
   const blockedOfflineContainer = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(blockedOfflineContainer); const blockedOfflineRoot = createRoot(blockedOfflineContainer as unknown as HTMLElement)
   try {
-    await act(async () => { blockedOfflineRoot.render(createElement(FarmAccessGateForUser, { user: gateUser as never, dependencies: blockedOfflineDependencies, children: createElement(BlockedOfflineProbe) })) })
+    await act(async () => { blockedOfflineRoot.render(createElement(FarmAccessGateForUser, { user: gateUser as never, dependencies: blockedOfflineDependencies, onSignOut: async () => undefined, children: createElement(BlockedOfflineProbe) })) })
     for (let attempt = 0; attempt < 100 && !blockedOfflineContainer.textContent?.includes('Try again'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const blockedOfflineRetry = [...blockedOfflineContainer.querySelectorAll('button')].find((button) => button.textContent === 'Try again') as unknown as HTMLButtonElement | undefined
+    const blockedOfflineSignOut = [...blockedOfflineContainer.querySelectorAll('button')].find((button) => button.textContent === 'Sign out') as unknown as HTMLButtonElement | undefined
     assert(blockedOfflineRetry, 'The live startup failure did not expose a gate retry action.')
+    assert(blockedOfflineSignOut, 'The blocked farm gate trapped the current account without a sign-out action.')
     await act(async () => { blockedOfflineRetry.click(); await Promise.resolve() })
     for (let attempt = 0; attempt < 100 && !blockedOfflineContainer.textContent?.includes('offline recovered farm'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     assert(blockedOfflineContainer.textContent?.includes('offline recovered farm') && blockedOfflineLoads === 2 && blockedOfflineReplays === 2, 'A blocked live startup could not recover to an offline-ready farm without returning to the blocked gate.')

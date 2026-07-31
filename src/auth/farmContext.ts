@@ -798,6 +798,7 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
           resetFarmRevokedFromLive(target, scope, serverEpoch, validationStartedAt)
         }
         verifyCustody()
+        removeStoredProfiles(target, userId, farmId)
         await deleteUserWorkspaceCaches(supabaseConfig.projectRef, userId, farmId)
         verifyCustody()
         await requireCurrentSession(userId, deadline.signal)

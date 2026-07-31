@@ -85,8 +85,11 @@ This manifest is proof infrastructure, not product schema. IDs remain stable acr
 | Maple scouting note | `27060000-0000-4000-8000-000000000001` |
 | Maple farm task | `27061000-0000-4000-8000-000000000001` |
 | North permission-test farm task | `27061000-0000-4000-8000-000000000002` |
+| North denied permission-test farm task | `27061000-0000-4000-8000-000000000003` |
 | Cedar scouting note | `27060000-0000-4000-8000-000000000005` |
+| Cedar scouting save operation | `27094000-0000-4000-8000-000000000005` |
 | Maple Grain production estimate | `27070000-0000-4000-8000-000000000001` |
+| North Grain production estimate | `27070000-0000-4000-8000-000000000002` |
 | Harvest Grain production estimate | `27070000-0000-4000-8000-000000000004` |
 | Maple cash-bid setup fixture | `27070500-0000-4000-8000-000000000001` |
 | Maple grain contract | `27071000-0000-4000-8000-000000000001` |
@@ -105,12 +108,23 @@ This manifest is proof infrastructure, not product schema. IDs remain stable acr
 | Harvest proof bin-in movement | `27074000-0000-4000-8000-000000000005` |
 | Harvest reverse-order bin-out movement | `27074000-0000-4000-8000-000000000006` |
 | Harvest proof save operation | `27076000-0000-4000-8000-000000000004` |
+| North profitability budget | `27077000-0000-4000-8000-000000000002` |
+| North profitability cost line | `27077100-0000-4000-8000-000000000002` |
 | Pine connected field note | `27080000-0000-4000-8000-000000000001` |
 | Pine revoked field note | `27080000-0000-4000-8000-000000000002` |
 | Pine connected queue operation | `27090000-0000-4000-8000-000000000001` |
 | Pine revoked queue operation | `27090000-0000-4000-8000-000000000002` |
 | Pine initial revocation-fence token | `27091000-0000-4000-8000-000000000001` |
 | Pine revoked revocation-fence token | `27091000-0000-4000-8000-000000000002` |
+| North task-create queue operation | `27092000-0000-4000-8000-000000000001` |
+| North task-completion queue operation | `27092000-0000-4000-8000-000000000002` |
+| North owner Maple fence token | `27093000-0000-4000-8000-000000000001` |
+| North owner North fence token | `27093000-0000-4000-8000-000000000002` |
+| North manager fence token | `27093000-0000-4000-8000-000000000003` |
+| North worker fence token | `27093000-0000-4000-8000-000000000004` |
+| North read-only fence token | `27093000-0000-4000-8000-000000000005` |
+| North rep initial fence token | `27093000-0000-4000-8000-000000000006` |
+| North rep revoked fence token | `27093000-0000-4000-8000-000000000007` |
 
 Membership, access-epoch, baseline, and snapshot rows must also be deterministic. A fixture implementation tranche must extend this external table before using additional UUIDs; it must not improvise IDs at runtime or add proof-only identity columns to Farm Rx.
 

@@ -16,6 +16,7 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (/connect to the internet before recording a delivery/.test(message)) return 'Connect to the internet before recording a delivery.'
   if (/connect to the internet before filling this offer|firm offer must be filled while connected/.test(message)) return 'Connect to the internet before filling this offer.'
   if (/offline copy is too old/.test(message)) return 'This offline copy is too old to show safely. Connect to update it.'
+  if (/unreadable or mismatched saved work.*nothing was cleared/.test(message)) return 'Farm Rx found unreadable or mismatched saved work for a farm you can no longer open. Nothing was cleared.'
   if (/network|fetch|timeout|connection|econn/.test(message)) return 'We could not reach Farm Rx. Check your signal and try again.'
   if (/sign-in ended|jwt|auth|unauthori[sz]ed|\b401\b/.test(message)) return 'Your sign-in ended. Please sign in again.'
   if (/permission|rls|forbidden|\b403\b/.test(message)) return 'You do not have permission to make that change.'

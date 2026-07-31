@@ -22,6 +22,12 @@ $script:HrFarmId='27010000-0000-4000-8000-000000000004'
 $script:HrFarmName='Harvest Ridge'
 $script:MapleFarmId='27010000-0000-4000-8000-000000000001'
 $script:MapleFarmName='Maple Ridge'
+$script:PineFarmId='27010000-0000-4000-8000-000000000006'
+$script:PineFarmName='Pine Hill'
+$script:NorthFarmId='27010000-0000-4000-8000-000000000002'
+$script:NorthFarmName='North Fork'
+$script:CedarFarmId='27010000-0000-4000-8000-000000000005'
+$script:CedarFarmName='Cedar Creek'
 
 function ConvertTo-HrClockWindowsCommandLine {
   param([Parameter(Mandatory)][string[]]$Argv)
@@ -84,7 +90,10 @@ function Assert-HrClockPhaseInput {
   if($ApiUrl-cne'http://127.0.0.1:55321'-or$PublishableKey-notmatch'^sb_publishable_'-or[string]::IsNullOrWhiteSpace($AccessToken)){throw 'HARVEST_RIDGE_CLOCK_REFUSED: local API credentials/boundary are not exact.'}
   $approved=@(
     [pscustomobject]@{Id=$script:HrFarmId;Name=$script:HrFarmName},
-    [pscustomobject]@{Id=$script:MapleFarmId;Name=$script:MapleFarmName}
+    [pscustomobject]@{Id=$script:MapleFarmId;Name=$script:MapleFarmName},
+    [pscustomobject]@{Id=$script:PineFarmId;Name=$script:PineFarmName},
+    [pscustomobject]@{Id=$script:NorthFarmId;Name=$script:NorthFarmName},
+    [pscustomobject]@{Id=$script:CedarFarmId;Name=$script:CedarFarmName}
   )
   if(@($approved|Where-Object{$_.Id-ceq$ProofFarmId-and$_.Name-ceq$ProofFarmName}).Count-ne1){throw 'HARVEST_RIDGE_CLOCK_REFUSED: proof farm identity is not an approved synthetic fixture.'}
   $instant=[datetimeoffset]::MinValue
@@ -185,7 +194,7 @@ function Invoke-HarvestRidgeClockPhase {
     if($ResumeRecovery){$resume=Invoke-MapleSwapRecovery $adapter $inventory;if(-not$resume.Restored){throw "HARVEST_RIDGE_CLOCK_RECOVERY_INCOMPLETE: $($resume.Failures-join'; ')"}}
     elseif((Invoke-MapleSwapStateMachine $adapter $inventory $Action)-cne'MAPLE_DB_CLOCK_SWAP_ADAPTER_PASS'){throw 'HARVEST_RIDGE_CLOCK_FAILED: state machine result was not exact.'}
   }
-  catch{$primary=$_.Exception;try{$retry=Invoke-MapleSwapRecovery $adapter $inventory}catch{$retry=[pscustomobject]@{Restored=$false;Failures=@($_.Exception.Message)}};if(-not$retry.Restored){throw [AggregateException]::new('Harvest Ridge clock phase failed and recovery remained incomplete.',[Exception[]]@($primary,[Exception]::new(($retry.Failures-join'; '))))}}
+  catch{$primary=$_.Exception;try{$retry=Invoke-MapleSwapRecovery $adapter $inventory}catch{$retry=[pscustomobject]@{Restored=$false;Failures=@($_.Exception.Message)}};if(-not$retry.Restored){throw [AggregateException]::new("Harvest Ridge clock phase failed: $($primary.Message) Recovery remained incomplete: $($retry.Failures-join'; ')",[Exception[]]@($primary,[Exception]::new(($retry.Failures-join'; '))))}}
   $ordinary=Get-HrClockContainer $Root $n.Db;$parked=Get-HrClockContainer $Root $n.Parked
   if($null-eq$ordinary-or$ordinary.Id-cne$attested.Db.Id-or$ordinary.Image-cne$script:HrBaseId-or-not$ordinary.Running-or$ordinary.Health-cne'healthy'-or$ordinary.RestartPolicy-cne'unless-stopped'-or$null-ne$parked-or[IO.File]::Exists($journal)){throw 'HARVEST_RIDGE_CLOCK_FAILED: ordinary database identity/recovery is not exact.'}
   foreach($tag in @($inventory.snapshot_tag,$inventory.derived_tag)){if((Invoke-HrClockProcess $Root @('image','inspect',$tag)).ExitCode-eq0){throw 'HARVEST_RIDGE_CLOCK_FAILED: owned temporary image survived recovery.'}}

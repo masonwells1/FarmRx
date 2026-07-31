@@ -14,7 +14,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   if (actualRoutes.length !== expectedRoutes.length || actualRoutes.some((route, index) => route !== expectedRoutes[index])) errors.push('routes:exact-ordered-manifest')
   requireText(errors, app, 'mobilePrimaryPaths = new Set(["/fields", "/grain", "/tasks", "/weather"])', 'mobile:primary-destinations')
   requireText(errors, app, 'mobileMoreNavigation', 'mobile:more-destinations')
-  requireText(errors, app, '<FarmAccessGateForUser key={user.id} user={user}>', 'identity:keyed-farm-access-gate')
+  if (!/<FarmAccessGateForUser\b[^>]*\bkey=\{user\.id\}[^>]*\buser=\{user\}[^>]*>/.test(app)) errors.push('identity:keyed-farm-access-gate')
   requireText(errors, app, 'access?.userId !== user.id', 'identity:farm-access-render-fence')
 
   const unscopedWriteFencing = read(root, 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql')
