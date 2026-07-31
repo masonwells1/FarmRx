@@ -1,6 +1,6 @@
 # Farm Rx 2027 season-readiness scorecard
 
-**Snapshot:** **RELEASE CANDIDATE READY** for local synthetic/disposable-backend and browser-emulation proof at exact immutable accepted source/runtime commit `8a9565a08a760e0ec920170bfacee1d9132cba47`; SR-035/SR-036 record all six sequential scenario packets, mutation proof, cleanup, and fresh Sol **ACCEPT** with no P1/P2; explicitly not **COMPLETE**
+**Snapshot:** **RELEASE CANDIDATE READY** for local synthetic/disposable-backend and browser-emulation proof at exact immutable accepted source/runtime commit `8a9565a08a760e0ec920170bfacee1d9132cba47`, published through PR #14 and `main` merge `5c202f0dac0bfc3bfa0b9c92bdffba892caed15b`; SR-035/SR-036 record all six sequential scenario packets, mutation proof, cleanup, and fresh Sol **ACCEPT** with no P1/P2; SR-037 records publication and production HTTP health; explicitly not **COMPLETE**
 **Controlling contract:** [`../GOAL.md`](../GOAL.md), [`WORKFLOWS-AND-SCENARIOS.md`](WORKFLOWS-AND-SCENARIOS.md), [`ORCHESTRATOR-RUNBOOK.md`](ORCHESTRATOR-RUNBOOK.md), and append-only [`LEDGER.md`](LEDGER.md)
 
 This file is a current-state index, not proof by itself. It must never upgrade a lane based on chat, intent, a committed test that was not run, or a result from a different HEAD.
@@ -80,10 +80,10 @@ The required Maple run resets once before January and preserves the same disposa
 | Gate | Status | Current truth |
 |---|---|---|
 | Custom SMTP and real password-email delivery | **APPROVAL-GATED** | Unconfigured/unproven for customer onboarding; requires separate approval, safe configuration, and end-to-end proof. |
-| Push / pull request / merge | **APPROVAL-GATED** | Mason separately authorized branch publication, PR babysitting, and merge if clean. PR #14 remains ready, open, and unmerged, and the remote branch remains at `87d0c7a28e9327cfefa062ebe7ec8ca2e3867d68`; no outward action is credited until it actually occurs. |
-| Production deploy / promotion / rollback | **APPROVAL-GATED** | `main` is production-coupled; no action is authorized. |
+| Push / pull request / merge | **PROVEN** | SR-037 records the authorized publication of documentation head `72502a206994b2234d4318bff67e9ddee6c98928`, successful required checks, and PR #14 merging to `main` as `5c202f0dac0bfc3bfa0b9c92bdffba892caed15b` on 2026-07-31. This credits that exact action only; any later outward mutation remains approval-gated. |
+| Production deploy / promotion / rollback | **PROVEN** | The production-coupled `main` merge automatically produced Vercel deployment `dpl_4Phq5PnB8dgDjQzPJaY6EJAwD3g2` from exact merge SHA `5c202f0dac0bfc3bfa0b9c92bdffba892caed15b`; it reached `READY`/`PROMOTED`, and `https://farm-rx.vercel.app` returned HTTP `200`. No manual promotion or rollback occurred; any later deployment action remains approval-gated. |
 | Live migration, live data, secrets, auth, permissions, customer accounts or communication | **APPROVAL-GATED** | Each specific outward action requires Mason's explicit approval. |
-| Publication and live verification | **APPROVAL-GATED** | Cannot be credited until actually performed and durably recorded. |
+| Publication and live verification | **PROVEN** | SR-037 records repository publication, exact production deployment identity, and public HTTP `200` for the PR #14 merge. This is availability proof only, not a physical-device, authenticated-customer, SMTP, live-data, or live-permission workflow. |
 
 ## Update procedure
 
@@ -94,4 +94,4 @@ The required Maple run resets once before January and preserves the same disposa
 5. Re-evaluate the full 11-step verification ladder on the resulting exact HEAD. Month passes do not imply full-year or release readiness.
 6. Never convert **APPROVAL-GATED** based on silence or prior local authority. Record the exact approved action and its actual result after it occurs.
 
-The initiative is **RELEASE CANDIDATE READY** only for the accepted local synthetic/disposable-backend and browser-emulation evidence at exact source/runtime commit `8a9565a08a760e0ec920170bfacee1d9132cba47`. It remains explicitly below **COMPLETE** as defined in [`../GOAL.md`](../GOAL.md); every unperformed outward, live-service, and physical-device gate remains open, uncredited, or approval-gated.
+The initiative is **RELEASE CANDIDATE READY** for the accepted local synthetic/disposable-backend and browser-emulation evidence at exact source/runtime commit `8a9565a08a760e0ec920170bfacee1d9132cba47`, now published through `main` merge `5c202f0dac0bfc3bfa0b9c92bdffba892caed15b`. It remains explicitly below **COMPLETE** as defined in [`../GOAL.md`](../GOAL.md): the two physical installed-PWA journeys, custom SMTP, and real password-email delivery remain unperformed, and every later live-service/customer action remains approval-gated.
