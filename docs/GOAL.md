@@ -1,6 +1,6 @@
 # STANDING GOAL — Farm Rx 2027 Season-Ready
 
-**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** RELEASE CANDIDATE READY for local synthetic/emulated proof at exact commit `551d45e6181aad09d9b86150b7209e23324d9651`; not COMPLETE
+**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** RELEASE CANDIDATE READY for local synthetic/emulated proof at exact source/runtime commit `551d45e6181aad09d9b86150b7209e23324d9651`, an ancestor of documentation head `bf3fc5f48f14b14d6c1087862e30194b20a176ab`; not COMPLETE
 
 ## Owner directive
 
