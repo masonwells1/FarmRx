@@ -463,6 +463,59 @@ test('multi-farm access requires an explicit choice and keeps both farms usable'
   expect(unexpected).toEqual([])
 })
 
+test('a long valid farm name keeps the phone farm switcher inside its summary', async ({ page, context }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-phone', 'Phone layout proof runs in the phone browser project.')
+  await page.setViewportSize({ width: 390, height: 844 })
+  await seedSession(context)
+  const longName = 'North Prairie Conservation Partnership Family Farm Operations and Stewardship Cooperative Holdings and Central Illinois Multigenerational Agricultural Partners.'
+  expect(longName).toHaveLength(160)
+  const longFarm = { ...farms[1], name: longName }
+  const unexpected = await mockSupabase(page, [farms[0], longFarm])
+  await page.goto('/fields')
+  await page.getByRole('button', { name: 'Prairie View' }).click()
+  await expect(page.getByText('North Forty')).toBeVisible()
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready
+    if (!navigator.serviceWorker.controller) await new Promise<void>((resolve) => navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), { once: true }))
+  })
+  await context.setOffline(true)
+  try {
+    await page.reload()
+    await expect(page.getByText('North Forty')).toBeVisible()
+    await expect(page.getByText('Offline access')).toBeVisible()
+    const select = page.getByLabel('Active farm')
+    await expect(select).toBeVisible()
+    expect(await select.locator('option').allTextContents()).toContain(longName)
+    const widths = await page.locator('.farm-summary').evaluate((summary) => {
+      const wrapper = summary.querySelector<HTMLElement>('.farm-switcher-wrap')
+      const control = summary.querySelector<HTMLElement>('select')
+      if (!wrapper || !control) throw new Error('Farm switcher layout nodes are missing.')
+      const summaryBox = summary.getBoundingClientRect()
+      const wrapperBox = wrapper.getBoundingClientRect()
+      const controlBox = control.getBoundingClientRect()
+      return {
+        summary: Number.parseFloat(getComputedStyle(summary).width),
+        wrapper: Number.parseFloat(getComputedStyle(wrapper).width),
+        control: Number.parseFloat(getComputedStyle(control).width),
+        controlHeight: controlBox.height,
+        wrapperRight: wrapperBox.right,
+        controlRight: controlBox.right,
+        summaryRight: summaryBox.right,
+        documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      }
+    })
+    expect(widths.wrapper).toBeLessThanOrEqual(widths.summary + 1)
+    expect(widths.control).toBeLessThanOrEqual(widths.wrapper + 1)
+    expect(widths.controlHeight).toBeGreaterThanOrEqual(44)
+    expect(widths.wrapperRight).toBeLessThanOrEqual(widths.summaryRight + 1)
+    expect(widths.controlRight).toBeLessThanOrEqual(widths.summaryRight + 1)
+    expect(widths.documentOverflow).toBeLessThanOrEqual(1)
+    expect(unexpected).toEqual([])
+  } finally {
+    await context.setOffline(false)
+  }
+})
+
 test('a named rep receives only proven rep-safe navigation and direct routes', async ({ page, context }, testInfo) => {
   await seedSession(context)
   const pendingKeys = await seedPendingWriteQueues(context)

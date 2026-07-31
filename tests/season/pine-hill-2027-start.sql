@@ -3,13 +3,15 @@
 -- controller owns only the one worker-membership revocation in PH-4.
 begin;
 
+select set_config('farmrx.season_owner_password', :'season_owner_password', true);
+
 insert into auth.users (
   instance_id,id,aud,role,email,encrypted_password,email_confirmed_at,
   confirmation_token,recovery_token,email_change_token_new,email_change,
   raw_app_meta_data,raw_user_meta_data,is_super_admin,created_at,updated_at,
   phone,phone_change,phone_change_token,reauthentication_token,is_sso_user,is_anonymous
 ) values
-  ('00000000-0000-0000-0000-000000000000','27000000-0000-4000-8000-000000000001','authenticated','authenticated','pine.owner@farmrx.local.test',crypt(set_config('farmrx.season_owner_password', :'season_owner_password', true),gen_salt('bf',10)),'2027-08-04 18:55:00+00','','','','','{"provider":"email","providers":["email"]}','{"email_verified":true,"synthetic_local_fixture":true}',false,'2027-08-04 18:55:00+00','2027-08-04 18:55:00+00',null,'','','',false,false),
+  ('00000000-0000-0000-0000-000000000000','27000000-0000-4000-8000-000000000001','authenticated','authenticated','pine.owner@farmrx.local.test',crypt(current_setting('farmrx.season_owner_password'),gen_salt('bf',10)),'2027-08-04 18:55:00+00','','','','','{"provider":"email","providers":["email"]}','{"email_verified":true,"synthetic_local_fixture":true}',false,'2027-08-04 18:55:00+00','2027-08-04 18:55:00+00',null,'','','',false,false),
   ('00000000-0000-0000-0000-000000000000','27000000-0000-4000-8000-000000000002','authenticated','authenticated','pine.control@farmrx.local.test',crypt(current_setting('farmrx.season_owner_password'),gen_salt('bf',10)),'2027-08-04 18:55:00+00','','','','','{"provider":"email","providers":["email"]}','{"email_verified":true,"synthetic_local_fixture":true}',false,'2027-08-04 18:55:00+00','2027-08-04 18:55:00+00',null,'','','',false,false),
   ('00000000-0000-0000-0000-000000000000','27000000-0000-4000-8000-000000000003','authenticated','authenticated','pine.worker@farmrx.local.test',crypt(current_setting('farmrx.season_owner_password'),gen_salt('bf',10)),'2027-08-04 18:55:00+00','','','','','{"provider":"email","providers":["email"]}','{"email_verified":true,"synthetic_local_fixture":true}',false,'2027-08-04 18:55:00+00','2027-08-04 18:55:00+00',null,'','','',false,false);
 

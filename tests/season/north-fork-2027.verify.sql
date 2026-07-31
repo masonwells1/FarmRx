@@ -115,7 +115,7 @@ begin
     select 1 from public.farm_memberships
     where farm_id='27010000-0000-4000-8000-000000000002'
       and user_id='27000000-0000-4000-8000-000000000001'
-      and (created_at<>updated_at or updated_at>='2027-02-09 13:55:00+00')
+      and (created_at<>'2027-02-09 13:55:00+00' or updated_at<>'2027-02-09 13:55:00+00')
   ) or (select count(*) from public.farm_rep_access
         where farm_id='27010000-0000-4000-8000-000000000002')<>1
   or exists (

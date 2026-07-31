@@ -4,6 +4,8 @@
 
 begin;
 
+select set_config('farmrx.season_owner_password', :'season_owner_password', true);
+
 insert into auth.users (
   instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
   confirmation_token, recovery_token, email_change_token_new, email_change,
@@ -15,7 +17,7 @@ insert into auth.users (
   '00000000-0000-0000-0000-000000000000',
   '27000000-0000-4000-8000-000000000001',
   'authenticated', 'authenticated', 'prairie.owner@farmrx.local.test',
-  crypt(set_config('farmrx.season_owner_password', :'season_owner_password', true), gen_salt('bf', 10)),
+  crypt(current_setting('farmrx.season_owner_password'), gen_salt('bf', 10)),
   '2027-06-15 19:10:00+00', '', '', '', '',
   '{"provider":"email","providers":["email"]}'::jsonb,
   '{"email_verified":true,"synthetic_local_fixture":true}'::jsonb,

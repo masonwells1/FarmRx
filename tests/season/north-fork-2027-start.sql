@@ -2,13 +2,15 @@
 -- Synthetic-only. Browser actions own the two sharing changes and task lifecycle.
 begin;
 
+select set_config('farmrx.season_owner_password', :'season_owner_password', true);
+
 insert into auth.users (
   instance_id,id,aud,role,email,encrypted_password,email_confirmed_at,
   confirmation_token,recovery_token,email_change_token_new,email_change,
   raw_app_meta_data,raw_user_meta_data,is_super_admin,created_at,updated_at,
   phone,phone_change,phone_change_token,reauthentication_token,is_sso_user,is_anonymous
 ) values
-  ('00000000-0000-0000-0000-000000000000','27000000-0000-4000-8000-000000000001','authenticated','authenticated','north.owner@farmrx.local.test',crypt(set_config('farmrx.season_owner_password', :'season_owner_password', true),gen_salt('bf',10)),'2027-02-09 13:55:00+00','','','','','{"provider":"email","providers":["email"]}','{"email_verified":true,"full_name":"North Owner","synthetic_local_fixture":true}',false,'2027-02-09 13:55:00+00','2027-02-09 13:55:00+00',null,'','','',false,false),
+  ('00000000-0000-0000-0000-000000000000','27000000-0000-4000-8000-000000000001','authenticated','authenticated','north.owner@farmrx.local.test',crypt(current_setting('farmrx.season_owner_password'),gen_salt('bf',10)),'2027-02-09 13:55:00+00','','','','','{"provider":"email","providers":["email"]}','{"email_verified":true,"full_name":"North Owner","synthetic_local_fixture":true}',false,'2027-02-09 13:55:00+00','2027-02-09 13:55:00+00',null,'','','',false,false),
   ('00000000-0000-0000-0000-000000000000','27000000-0000-4000-8000-000000000002','authenticated','authenticated','north.manager@farmrx.local.test',crypt(current_setting('farmrx.season_owner_password'),gen_salt('bf',10)),'2027-02-09 13:55:00+00','','','','','{"provider":"email","providers":["email"]}','{"email_verified":true,"full_name":"North Manager","synthetic_local_fixture":true}',false,'2027-02-09 13:55:00+00','2027-02-09 13:55:00+00',null,'','','',false,false),
   ('00000000-0000-0000-0000-000000000000','27000000-0000-4000-8000-000000000003','authenticated','authenticated','north.worker@farmrx.local.test',crypt(current_setting('farmrx.season_owner_password'),gen_salt('bf',10)),'2027-02-09 13:55:00+00','','','','','{"provider":"email","providers":["email"]}','{"email_verified":true,"full_name":"North Worker","synthetic_local_fixture":true}',false,'2027-02-09 13:55:00+00','2027-02-09 13:55:00+00',null,'','','',false,false),
   ('00000000-0000-0000-0000-000000000000','27000000-0000-4000-8000-000000000004','authenticated','authenticated','north.readonly@farmrx.local.test',crypt(current_setting('farmrx.season_owner_password'),gen_salt('bf',10)),'2027-02-09 13:55:00+00','','','','','{"provider":"email","providers":["email"]}','{"email_verified":true,"full_name":"North Read Only","synthetic_local_fixture":true}',false,'2027-02-09 13:55:00+00','2027-02-09 13:55:00+00',null,'','','',false,false),
@@ -40,6 +42,13 @@ select set_config(
 insert into public.farms (id,name,share_with_rep,created_by,time_zone,created_at,updated_at) values
   ('27010000-0000-4000-8000-000000000002','North Fork',false,'27000000-0000-4000-8000-000000000001','America/Chicago','2027-02-09 13:55:00+00','2027-02-09 13:55:00+00'),
   ('27010000-0000-4000-8000-000000000001','Maple Ridge',false,'27000000-0000-4000-8000-000000000001','America/Chicago','2027-02-09 13:55:00+00','2027-02-09 13:55:00+00');
+
+alter table public.farm_memberships disable trigger farm_memberships_set_updated_at;
+update public.farm_memberships
+set created_at='2027-02-09 13:55:00+00', updated_at='2027-02-09 13:55:00+00'
+where farm_id='27010000-0000-4000-8000-000000000002'
+  and user_id='27000000-0000-4000-8000-000000000001';
+alter table public.farm_memberships enable trigger farm_memberships_set_updated_at;
 
 insert into public.farm_memberships (farm_id,user_id,role,status,can_view_financials,created_at,updated_at) values
   ('27010000-0000-4000-8000-000000000002','27000000-0000-4000-8000-000000000002','manager','active',false,'2027-02-09 13:55:00+00','2027-02-09 13:55:00+00'),
@@ -77,6 +86,15 @@ begin
     '27000000-0000-4000-8000-000000000003:worker:active:false,'||
     '27000000-0000-4000-8000-000000000004:read_only:active:false' then
     raise exception 'North membership matrix is not exact: %', role_matrix;
+  end if;
+  if not exists (
+    select 1 from public.farm_memberships
+    where farm_id='27010000-0000-4000-8000-000000000002'
+      and user_id='27000000-0000-4000-8000-000000000001'
+      and created_at='2027-02-09 13:55:00+00'
+      and updated_at='2027-02-09 13:55:00+00'
+  ) then
+    raise exception 'North owner membership timestamps are not exact';
   end if;
   if (select access_epoch from public.farm_access_epochs where farm_id='27010000-0000-4000-8000-000000000002' and user_id='27000000-0000-4000-8000-000000000005') is distinct from 1 then
     raise exception 'North rep did not start at epoch 1';

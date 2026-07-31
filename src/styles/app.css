@@ -75,9 +75,10 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .app-main { min-width: 0; flex: 1; }
 .topbar { position: sticky; top: 0; z-index: 10; min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 15px 32px; border-bottom: 1px solid var(--hairline); background: rgb(249 247 242 / 82%); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .topbar-actions { display: flex; align-items: center; gap: 12px; }
-.farm-summary { display: flex; align-items: center; gap: 10px; }
-.farm-switcher { display: flex; align-items: center; gap: 8px; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
-.farm-switcher select { max-width: 260px; min-height: 44px; padding: 7px 34px 7px 10px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); }
+.farm-summary { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.farm-switcher-wrap { min-width: 0; max-width: 100%; flex: 1 1 0; }
+.farm-switcher { min-width: 0; max-width: 100%; display: flex; align-items: center; gap: 8px; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
+.farm-switcher select { min-width: 0; max-width: 260px; min-height: 44px; padding: 7px 34px 7px 10px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); }
 .offline-context { display: inline-flex; align-items: center; min-height: 32px; padding: 4px 10px; border-radius: 99px; background: var(--warn-bg); color: #604a22; font-size: 18px; font-weight: 700; white-space: nowrap; }
 .offline-data-notice { padding: 10px 24px; border-bottom: 1px solid #e8d39d; background: var(--warn-bg); color: #604a22; font-size: 18px; font-weight: 650; text-align: center; }
 .alert-bell { position: relative; min-width: 48px; min-height: 48px; border: 1px solid var(--hairline); border-radius: 12px; background: rgb(255 255 255 / 65%); color: var(--matte-gray); font: inherit; font-size: 25px; transition: background-color 150ms ease-out, box-shadow 150ms ease-out; }
@@ -546,8 +547,9 @@ tbody tr:nth-child(even) td { background: var(--cream); }
   .topbar { min-height: 64px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 12px 16px; }
   .product-name { font-size: 22px; }
   .farm-summary { grid-column: 1 / -1; grid-row: 2; min-width: 0; font-size: 18px; text-align: left; }
+  .farm-switcher-wrap { min-width: 0; max-width: 100%; flex: 1 1 0; }
   .farm-switcher { min-width: 0; width: 100%; }
-  .farm-switcher select { min-width: 0; max-width: none; flex: 1 1 auto; }
+  .farm-switcher select { min-width: 0; width: 0; max-width: none; flex: 1 1 0; }
   .topbar-actions { grid-column: 2; grid-row: 1; }
   .content-area { padding: 24px 16px; }
   .page-heading { align-items: start; flex-direction: column; margin-bottom: 24px; }
