@@ -1,6 +1,6 @@
 # STANDING GOAL — Farm Rx 2027 Season-Ready
 
-**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** RELEASE CANDIDATE READY for local synthetic/emulated proof at exact source/runtime commit `551d45e6181aad09d9b86150b7209e23324d9651`, an ancestor of this documentation history; not COMPLETE
+**Owner:** Mason Wells · **Directed:** 2026-07-18 · **Current state:** RELEASE CANDIDATE READY for local synthetic/emulated proof at exact accepted source/runtime commit `8a9565a08a760e0ec920170bfacee1d9132cba47`, an ancestor of this documentation history; not COMPLETE
 
 ## Owner directive
 
@@ -91,6 +91,6 @@ No real farmer account may be provisioned and no customer communication may be s
 
 ## Current next step
 
-Keep the accepted local release candidate at exact immutable source/runtime commit `551d45e6181aad09d9b86150b7209e23324d9651` parked until Mason explicitly chooses and authorizes any outward action. SR-032/SR-033 record the complete sequential Maple Ridge, North Fork, Prairie Spray, Harvest Ridge, Cedar Creek, and Pine Hill disposable packets, full repository/foundation proof, cleanup, and fresh-context read-only Sol **ACCEPT** with no P1/P2 on that exact SHA.
+Keep the accepted local release candidate at exact immutable source/runtime commit `8a9565a08a760e0ec920170bfacee1d9132cba47` and this documentation closeout local until the documentation commit receives fresh exact-SHA Sol acceptance. SR-035/SR-036 record the repaired PR-review findings, complete sequential Maple Ridge, North Fork, Prairie Spray, Harvest Ridge, Cedar Creek, and Pine Hill disposable packets, mutation probes, full repository/foundation proof, cleanup, and fresh-context read-only Sol **ACCEPT** with no P1/P2 on the source/runtime SHA.
 
-The initiative is **RELEASE CANDIDATE READY** only for the recorded local disposable-backend, synthetic-data, and browser-emulation evidence. It is explicitly **not COMPLETE**: physical iPhone/Safari and Android/Chrome installed-PWA journeys, custom SMTP and real password-email proof, publication, push/pull request/merge, production deployment, live migration/data/auth/permission work, customer accounts, and customer communication remain unperformed, open, or approval-gated. Weather-to-spray remains manual payload-free transcription with no provenance link, integration, or automatic prefill. No outward action occurred or is authorized by this document.
+The initiative is **RELEASE CANDIDATE READY** only for the recorded local disposable-backend, synthetic-data, and browser-emulation evidence. It is explicitly **not COMPLETE**: physical iPhone/Safari and Android/Chrome installed-PWA journeys, custom SMTP and real password-email proof, publication, push/pull request/merge, production deployment, live migration/data/auth/permission work, customer accounts, and customer communication remain unperformed. Weather-to-spray remains manual payload-free transcription with no provenance link, integration, or automatic prefill. PR #14 is ready, open, and unmerged; its remote branch remains at `87d0c7a28e9327cfefa062ebe7ec8ca2e3867d68` until this documentation commit is accepted and published. Mason separately authorized branch publication, PR babysitting, and merge if clean, but this document records none of those outward actions as performed and authorizes no deployment or live change.
