@@ -298,7 +298,6 @@ try {
   authWindow.history.replaceState({}, '', '/login')
   authWindow.localStorage.setItem(authSessionKey, JSON.stringify(otherSession))
   authWindow.localStorage.setItem(authIntentKey, JSON.stringify({ version: 1, nonce: 'offline-cleanup-session', phase: 'accepted', userId: otherSession.user.id, sessionLineage: 'other-session-lineage', startedAtMs: Date.now() }))
-  persistPasswordRecoveryCleanupRequest(authWindow.localStorage, otherSession.user.email!, null, otherSession.user.id, 'offline-cleanup-request', Date.now())
   const offlineCleanupUsers: string[] = []
   const offlineCurrent = { value: null as ProbeAuth | null }
   function OfflineProbe() { offlineCurrent.value = useAuth() as ProbeAuth; return createElement('div', null, `${offlineCurrent.value.phase}:${offlineCurrent.value.user?.id ?? 'none'}`) }
@@ -314,18 +313,41 @@ try {
       onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => undefined } } }),
     },
     restoreOfflineFarmUserId: () => otherSession.user.id,
-    clearFarmAccess: async (cleanupUserId: string) => { offlineCleanupUsers.push(cleanupUserId) },
+    clearFarmAccess: async (cleanupUserId: string) => {
+      offlineCleanupUsers.push(cleanupUserId)
+      if (offlineCleanupUsers.length === 1) throw new Error('controlled recovery cleanup failure')
+    },
   } as unknown as AuthProviderDependencies
   await act(async () => {
     offlineRoot.render(createElement(AuthProvider, { dependencies: offlineDependencies, children: createElement(OfflineProbe) }))
     await new Promise((resolve) => setTimeout(resolve, 0))
   })
   assert(offlineCurrent.value?.phase === 'signed_in' && offlineCurrent.value.user?.id === otherSession.user.id, 'The completion fixture did not restore its offline-only identity.')
+  const offlineSessionBytes = authWindow.localStorage.getItem(authSessionKey)
+  const nakedOfflineAuthority = passwordRecoveryCleanupAuthority(authWindow.localStorage, null, offlineCurrent.value.user.id, Date.now())
+  assert(nakedOfflineAuthority === null
+    && offlineCurrent.value.phase === 'signed_in'
+    && authWindow.localStorage.getItem(authSessionKey) === offlineSessionBytes,
+  'A naked completion URL cleared or altered an offline-only identity without a local reset request marker.')
+  persistPasswordRecoveryCleanupRequest(authWindow.localStorage, otherSession.user.email!, null, otherSession.user.id, 'offline-cleanup-request', Date.now())
   const offlineAuthority = passwordRecoveryCleanupAuthority(authWindow.localStorage, null, offlineCurrent.value.user.id, Date.now())
   assert(offlineAuthority !== null, 'An exact persisted offline lineage was not accepted as completion cleanup authority.')
+  let firstOfflineCleanupRejected = false
+  await act(async () => {
+    try { await offlineCurrent.value!.completePasswordRecoveryCleanup(offlineAuthority) } catch { firstOfflineCleanupRejected = true }
+    await Promise.resolve()
+  })
+  assert(firstOfflineCleanupRejected
+    && String(offlineCurrent.value?.phase) === 'signed_out'
+    && offlineCleanupUsers.length === 1
+    && offlineCleanupUsers[0] === otherSession.user.id,
+  'Recovery completion did not surface its controlled farm cleanup failure after fencing Auth.')
   let offlineCleanupApplied = false
   await act(async () => { offlineCleanupApplied = await offlineCurrent.value!.completePasswordRecoveryCleanup(offlineAuthority); await Promise.resolve() })
-  assert(offlineCleanupApplied && String(offlineCurrent.value?.phase) === 'signed_out' && offlineCleanupUsers.length === 1 && offlineCleanupUsers[0] === otherSession.user.id, 'Offline-only completion did not clear the exact restored identity and farm access.')
+  assert(offlineCleanupApplied
+    && Number(offlineCleanupUsers.length) === 2
+    && offlineCleanupUsers.every((id) => id === otherSession.user.id),
+  'Recovery completion retry did not retain and clear the exact offline user after Auth became signed out.')
   await act(async () => { offlineRoot.unmount() })
   offlineContainer.remove()
   authWindow.localStorage.clear()

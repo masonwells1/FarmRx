@@ -80,7 +80,16 @@ try {
   reset()
   mutate('src/auth/AuthProvider.tsx', (source) => source.replaceAll('persistedPasswordRecoveryCleanupAuthority(d.storage, cleanupUserId, d.now()) !== authority', 'false'))
   detected('completed recovery loses transactional lineage revalidation', 'auth:completion-revalidates-persisted-lineage-in-transaction')
-  console.log('Foundation mutation drill: PASS (18/18 controlled mutations turned the gate red)')
+  reset()
+  mutate('src/auth/AuthProvider.tsx', (source) => source.replace('pendingSignOutCleanupUserIds.current.add(cleanupUserId)', 'void cleanupUserId'))
+  detected('completed recovery loses cleanup user retry state', 'auth:completion-retains-cleanup-user')
+  reset()
+  mutate('src/auth/AuthProvider.tsx', (source) => source.replace('appliedRecoveryCompletionAuthority.current = authority', 'appliedRecoveryCompletionAuthority.current = null'))
+  detected('completed recovery loses applied authority retry state', 'auth:completion-retains-retry-authority')
+  reset()
+  mutate('src/App.tsx', (source) => source.replace("passwordRecoveryPhase === 'complete' || passwordRecoveryPhase === 'complete_with_warning'", "passwordRecoveryPhase === 'complete'"))
+  detected('completed recovery warning loses automatic handoff', 'auth:completion-auto-handoff-terminal-phases')
+  console.log('Foundation mutation drill: PASS (21/21 controlled mutations turned the gate red)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

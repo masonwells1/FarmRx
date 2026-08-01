@@ -341,6 +341,29 @@ test('successful recovery returns to the canonical app origin', async ({ page },
   expect(completed.unexpected).toEqual([])
 })
 
+test('successful recovery with a local cleanup warning still returns automatically', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'One real terminal warning handoff is sufficient.')
+  const completed = await mockRecoveryAuth(page)
+  await page.evaluate(() => {
+    const originalRemoveItem = Storage.prototype.removeItem
+    let failedRecoveryFenceCleanup = false
+    Storage.prototype.removeItem = function removeItem(key: string) {
+      if (!failedRecoveryFenceCleanup && key.includes('farm-rx-password-recovery:v2:')) {
+        failedRecoveryFenceCleanup = true
+        throw new Error('controlled recovery-fence cleanup warning')
+      }
+      originalRemoveItem.call(this, key)
+    }
+  })
+  await page.getByRole('textbox', { name: 'New password', exact: true }).fill('A secure recovery passphrase 2027!')
+  await page.getByRole('textbox', { name: 'Confirm new password', exact: true }).fill('A secure recovery passphrase 2027!')
+  await page.getByRole('button', { name: 'Update password' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
+  await expect(page.getByLabel('Email address')).toBeVisible()
+  expect(completed.passwordUpdates()).toBe(1)
+  expect(completed.unexpected).toEqual([])
+})
+
 test('completed recovery clears an older canonical session before route adoption', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'One real cross-origin session cleanup is sufficient.')
   await page.goto('/login')
