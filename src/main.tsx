@@ -9,6 +9,11 @@ import './styles/tokens.css'
 import './styles/app.css'
 import { App } from './App'
 import { AuthProvider } from './auth/AuthProvider'
+import { passwordRecoveryHostname } from './auth/passwordRecovery'
+
+if ('serviceWorker' in navigator && ![passwordRecoveryHostname, 'recovery.localhost'].includes(window.location.hostname)) {
+  window.addEventListener('load', () => { void navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => undefined) })
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

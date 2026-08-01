@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext, type Page, type Request, type Route } from '@playwright/test'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 
 const projectRef = 'agvsozfbstpekuqxpqjr'
 const userId = '00000000-0000-4000-8000-000000000001'
@@ -233,38 +233,19 @@ test('password recovery fails closed after a page refresh or missing current-lin
   }
 })
 
-test('a legacy controlling worker upgrades the first unconsumed recovery entry through the network shell', async ({ page }, testInfo) => {
-  test.setTimeout(60_000)
-  test.skip(testInfo.project.name !== 'chromium-desktop', 'One real service-worker lifecycle is sufficient; phone coverage exercises the resulting recovery UI separately.')
-  const workerPath = new URL('../../dist/sw.js', import.meta.url)
-  const currentWorker = readFileSync(workerPath, 'utf8')
-  const legacyWorker = `
-    const legacyShell = '<!doctype html><html><body><main data-legacy-shell>Legacy cached Farm Rx shell</main><script>navigator.serviceWorker.ready.then((registration) => registration.update())<\\/script></body></html>'
-    self.addEventListener('install', (event) => event.waitUntil(caches.open('farm-rx-legacy-recovery-test').then((cache) => cache.put('/index.html', new Response(legacyShell, { headers: { 'content-type': 'text/html' } })))))
-    self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
-    self.addEventListener('fetch', (event) => { if (event.request.mode === 'navigate') event.respondWith(caches.match('/index.html')) })
-  `
-  writeFileSync(workerPath, legacyWorker)
-  try {
-    await page.goto('/login')
-    await page.evaluate(async () => { await navigator.serviceWorker.ready })
-    await page.reload()
-    await expect(page.locator('[data-legacy-shell]')).toBeVisible()
-    expect(await page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true)
+test('the dedicated recovery origin is outside an installed main-app worker scope', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'One real cross-origin service-worker boundary is sufficient.')
+  await page.goto('/login')
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready
+    if (!navigator.serviceWorker.controller) await new Promise<void>((resolve) => navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), { once: true }))
+  })
+  expect(await page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true)
 
-    writeFileSync(workerPath, currentWorker)
-    const token = 'a'.repeat(64)
-    await page.goto(`/update-password?recovery_entry=1#token_hash=${token}&type=recovery`)
-    await expect(page.locator('[data-legacy-shell]')).toBeVisible()
-    await page.evaluate(() => { void navigator.serviceWorker.register('/sw.js?recovery-upgrade=1', { scope: '/', updateViaCache: 'none' }) })
-    await expect(page.getByRole('alert')).toContainText('invalid, expired, already used, or was interrupted', { timeout: 20_000 })
-    expect(new URL(page.url()).pathname).toBe('/update-password')
-    expect(new URL(page.url()).search).toBe('')
-    expect(new URL(page.url()).hash).toBe('')
-    await expect(page.locator('[data-legacy-shell]')).toHaveCount(0)
-  } finally {
-    writeFileSync(workerPath, currentWorker)
-  }
+  await page.goto('http://recovery.localhost:4173/update-password')
+  await expect(page.getByRole('alert')).toContainText('interrupted when the page closed or refreshed')
+  expect(await page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(false)
+  expect(await page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length)).toBe(0)
 })
 
 test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks are unavailable', async ({ page, context }, testInfo) => {

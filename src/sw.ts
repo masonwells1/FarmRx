@@ -13,23 +13,6 @@ clientsClaim()
 // precached app shell handle that redirect: recovery must load the current network shell.
 registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html'), { denylist: [/^\/update-password(?:[/?]|$)/] }))
 
-// Recovery email uses an unconsumed token hash in the fragment. If a legacy worker served its
-// cached shell first, the new worker claims that window and reloads it through the network route.
-self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim())
-  // WindowClient.navigate is valid only after activation completes. Queue the recovery handoff
-  // as the next worker task; the unconsumed fragment remains on the legacy page until then.
-  setTimeout(() => { void (async () => {
-    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-    await Promise.all(windows.map(async (client) => {
-      const url = new URL(client.url)
-      if (url.origin === self.location.origin && url.pathname === '/update-password' && url.search === '?recovery_entry=1' && 'navigate' in client) {
-        await client.navigate(client.url)
-      }
-    }))
-  })() }, 0)
-})
-
 const plainObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
 const notificationText = (value: unknown, maximum: number, fallback = '') => typeof value === 'string' ? value.slice(0, maximum) : fallback
 
