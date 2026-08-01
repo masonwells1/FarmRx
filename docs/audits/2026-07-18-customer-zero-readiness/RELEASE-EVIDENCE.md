@@ -211,10 +211,24 @@ exact original user. The final full foundation run passed 62 browser tests with 
 the six-scenario season contract again passed 101 fixtures and all 9 contract plus 14 isolation
 rejections. Fresh-context read-only Sol returned **ACCEPT — no merge blockers** on exact `2c4fadb1`.
 
+The next PR review on remote documentation head `54775ea67e92122c99fd677249cc1cef8d7cea32`
+found two additional release blockers: a ready deployment alone could not retire an already-loaded
+pre-deployment PWA, and cleanup-marker storage failure could prevent the provider request while the
+form still showed the generic sent-email response. Exact local source
+`9ecc6cba7bbaa9bea063054fe3b996cd22ea9555` now surfaces a visible device-storage error and makes zero
+provider calls when the marker cannot be safely stored; ordinary provider/account outcomes remain
+non-enumerating. The runbook permits enablement only as a customer-zero transition after proving no
+real farmer has used Farm Rx and retiring every known operator/disposable tab, PWA, worker, and site
+data instance; it stops if any client cannot be accounted for. The complete foundation packet passed
+with 62 browser passes and 14 intentional skips, 25/25 controlled mutations, and every disposable
+database/provenance/RLS lane. Focused enabled-email recovery passed 11/11; the six-scenario season
+contract passed 101 fixtures and all 9 contract plus 14 isolation rejections. Fresh-context read-only
+Sol returned **ACCEPT — no merge blockers** on exact `9ecc6cb`.
+
 At closeout, remote and production `main` remain
 `45dc52f425ee844a0ddc473d514cce748e61c559`; deployment
 `dpl_Fe9UHdAiwoF8ucczm8kgHnZYczrJ` is `READY` and the canonical URL returns HTTP `200`. Accepted
-recovery commit `2c4fadb1` is local/unpublished while PR #17 remains at older `102f69d4`;
+recovery commit `9ecc6cb` is local/unpublished while PR #17 remains at older `54775ea`;
 `recovery.croprxsolutions.app` is NXDOMAIN/unbound, and the exact
 Supabase redirect is not configured. Final release proof therefore still requires separately
 authorized publication/automatic deployment, same-project recovery-domain and DNS binding, exact
