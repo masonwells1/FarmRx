@@ -4,11 +4,27 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 export const passwordRecoveryRoute = '/update-password'
 export const passwordRecoveryOrigin = 'https://recovery.croprxsolutions.app'
 export const passwordRecoveryHostname = 'recovery.croprxsolutions.app'
+export const canonicalFarmRxOrigin = 'https://farm-rx.vercel.app'
 export const passwordResetPublicResponse = 'If that email is in Farm Rx, we sent a password reset link. Check your inbox and spam folder.'
 export const minimumPasswordLength = 12
 export const passwordEmailDeliveryEnabled = import.meta.env?.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED === 'true'
 
 export type PasswordStrength = 'too_short' | 'okay' | 'strong'
+
+type RecoveryLocation = Pick<Location, 'hostname' | 'origin' | 'port' | 'protocol'>
+
+export function isPasswordRecoveryHostname(hostname: string): boolean {
+  return hostname === passwordRecoveryHostname || hostname === 'recovery.localhost'
+}
+
+export function passwordRecoveryExitUrl(location: RecoveryLocation): string {
+  const base = location.hostname === passwordRecoveryHostname
+    ? canonicalFarmRxOrigin
+    : location.hostname === 'recovery.localhost'
+      ? `${location.protocol}//127.0.0.1${location.port ? `:${location.port}` : ''}`
+      : location.origin
+  return new URL('/login', base).toString()
+}
 
 export function passwordRecoveryRedirectTo(origin: string): string {
   const base = new URL(origin)

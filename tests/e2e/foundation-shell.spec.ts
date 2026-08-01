@@ -47,7 +47,7 @@ function session(id = userId) {
   const expiresAt = Math.floor(Date.now() / 1000) + 86_400
   const payload = btoa(JSON.stringify({ sub: id, aud: 'authenticated', exp: expiresAt, session_id: `session-${id}` })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
   return {
-    access_token: `eyJhbGciOiJub25lIn0.${payload}.signature`, refresh_token: `offline-test-refresh-${id}`, expires_in: 86_400, expires_at: expiresAt, token_type: 'bearer',
+    access_token: `eyJhbGciOiJub25lIn0.${payload}.c2lnbmF0dXJl`, refresh_token: `offline-test-refresh-${id}`, expires_in: 86_400, expires_at: expiresAt, token_type: 'bearer',
     user: { id, aud: 'authenticated', role: 'authenticated', email: id === userId ? 'farmer@example.test' : 'other-farmer@example.test', app_metadata: {}, user_metadata: {}, identities: [], created_at: now },
   }
 }
@@ -229,7 +229,7 @@ test('password recovery fails closed after a page refresh or missing current-lin
     await expect(page.getByRole('heading', { name: 'Reset your password' })).toBeVisible()
   } else {
     await expect(page.getByRole('link', { name: 'Request a new link' })).toHaveCount(0)
-    await expect(page.getByRole('link', { name: 'Return to sign in' })).toHaveAttribute('href', '/login')
+    await expect(page.getByRole('link', { name: 'Return to sign in' })).toHaveAttribute('href', 'http://127.0.0.1:4173/login')
   }
 })
 
@@ -246,6 +246,72 @@ test('the dedicated recovery origin is outside an installed main-app worker scop
   await expect(page.getByRole('alert')).toContainText('interrupted when the page closed or refreshed')
   expect(await page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(false)
   expect(await page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length)).toBe(0)
+
+  const exitLink = page.getByRole('link', { name: process.env.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED === 'true' ? 'Request a new link' : 'Return to sign in' })
+  await expect(exitLink).toHaveAttribute('href', 'http://127.0.0.1:4173/login')
+  await exitLink.click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
+
+  await page.goto('http://recovery.localhost:4173/login')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
+})
+
+async function mockRecoveryAuth(page: Page) {
+  const recovery = session()
+  let passwordUpdates = 0
+  const unexpected: string[] = []
+  await page.unroute('https://*.supabase.co/**')
+  await page.route('https://*.supabase.co/**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (request.method() === 'OPTIONS') {
+      await route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET,POST,PUT,OPTIONS' } })
+      return
+    }
+    if (url.pathname === '/auth/v1/user' && ['GET', 'PUT'].includes(request.method())) {
+      if (request.method() === 'PUT') passwordUpdates += 1
+      await fulfillJson(route, recovery.user)
+      return
+    }
+    if (url.pathname === '/auth/v1/logout') { await fulfillJson(route, {}); return }
+    unexpected.push(`${request.method()} ${url.pathname}`)
+    await route.abort('blockedbyclient')
+  })
+  const fragment = new URLSearchParams({
+    access_token: recovery.access_token,
+    refresh_token: recovery.refresh_token,
+    expires_at: String(recovery.expires_at),
+    expires_in: String(recovery.expires_in),
+    token_type: recovery.token_type,
+    type: 'recovery',
+  })
+  await page.goto(`http://recovery.localhost:4173/update-password#${fragment}`)
+  await expect(page.getByRole('textbox', { name: 'New password', exact: true })).toBeVisible()
+  return { unexpected, passwordUpdates: () => passwordUpdates }
+}
+
+test('recovery cancellation returns to the canonical app origin', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'One real cross-origin recovery cancellation is sufficient.')
+  const cancelled = await mockRecoveryAuth(page)
+  await page.getByRole('button', { name: 'Cancel and return to sign in' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
+  expect(cancelled.passwordUpdates()).toBe(0)
+  expect(cancelled.unexpected).toEqual([])
+})
+
+test('successful recovery returns to the canonical app origin', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'One real cross-origin recovery completion is sufficient.')
+  const completed = await mockRecoveryAuth(page)
+  await page.getByRole('textbox', { name: 'New password', exact: true }).fill('A secure recovery passphrase 2027!')
+  await page.getByRole('textbox', { name: 'Confirm new password', exact: true }).fill('A secure recovery passphrase 2027!')
+  await page.getByRole('button', { name: 'Update password' }).click()
+  await expect(page.getByRole('status')).toContainText('Your password has been updated')
+  const signIn = page.getByRole('link', { name: 'Go to sign in' })
+  await expect(signIn).toHaveAttribute('href', 'http://127.0.0.1:4173/login')
+  expect(completed.passwordUpdates()).toBe(1)
+  expect(completed.unexpected).toEqual([])
+  await signIn.click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
 })
 
 test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks are unavailable', async ({ page, context }, testInfo) => {

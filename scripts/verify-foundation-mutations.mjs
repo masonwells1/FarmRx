@@ -59,9 +59,12 @@ try {
   mutate('src/data/workspaceCache.ts', (source) => source.replace('`${scope.projectRef}:${scope.userId}:${scope.farmId}:${scope.module}`', '`${scope.projectRef}:shared-user:${scope.farmId}:${scope.module}`'))
   detected('private cache user-scope removal', 'cache:user-farm-module-key')
   reset()
-  mutate('src/main.tsx', (source) => source.replace("![passwordRecoveryHostname, 'recovery.localhost'].includes(window.location.hostname)", 'true'))
+  mutate('src/main.tsx', (source) => source.replace("'serviceWorker' in navigator && !isPasswordRecoveryHostname(window.location.hostname)", "'serviceWorker' in navigator && true"))
   detected('recovery-origin service-worker registration', 'service-worker:recovery-origin-registration-denied')
-  console.log('Foundation mutation drill: PASS (12/12 controlled mutations turned the gate red)')
+  reset()
+  mutate('src/main.tsx', (source) => source.replace('isPasswordRecoveryHostname(window.location.hostname) && window.location.pathname !== passwordRecoveryRoute', 'false && window.location.pathname !== passwordRecoveryRoute'))
+  detected('recovery-host route confinement removal', 'auth:recovery-host-route-confinement')
+  console.log('Foundation mutation drill: PASS (13/13 controlled mutations turned the gate red)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

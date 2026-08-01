@@ -7,7 +7,9 @@ import type { AuthProviderDependencies } from './AuthProvider'
 import { createAuthSessionStorage } from './authSessionStorage'
 import {
   isPasswordRecoveryEvent,
+  isPasswordRecoveryHostname,
   minimumPasswordLength,
+  passwordRecoveryExitUrl,
   passwordRecoveryRedirectTo,
   passwordResetPublicResponse,
   requestPasswordResetNonEnumerating,
@@ -40,6 +42,9 @@ assert(resetOutcomes.every((outcome) => outcome === passwordResetPublicResponse)
 assert(resetCalls.length === 3 && resetCalls[0]?.email === 'known@example.test' && resetCalls.every((call) => call.redirectTo === 'https://recovery.croprxsolutions.app/update-password'), 'Password reset requests did not use one trimmed-email and exact worker-free production redirect contract.')
 assert(passwordRecoveryRedirectTo('https://farm-rx.vercel.app') === 'https://recovery.croprxsolutions.app/update-password', 'Production password reset did not use the worker-free recovery origin.')
 assert(passwordRecoveryRedirectTo('http://localhost:5173') === 'http://localhost:5173/update-password', 'Local password reset redirect was malformed.')
+assert(isPasswordRecoveryHostname('recovery.croprxsolutions.app') && isPasswordRecoveryHostname('recovery.localhost') && !isPasswordRecoveryHostname('farm-rx.vercel.app'), 'Recovery-host confinement did not recognize the exact production and local mirror hostnames.')
+assert(passwordRecoveryExitUrl({ hostname: 'recovery.croprxsolutions.app', origin: 'https://recovery.croprxsolutions.app', port: '', protocol: 'https:' }) === 'https://farm-rx.vercel.app/login', 'Production recovery did not exit to the canonical Farm Rx sign-in origin.')
+assert(passwordRecoveryExitUrl({ hostname: 'recovery.localhost', origin: 'http://recovery.localhost:4173', port: '4173', protocol: 'http:' }) === 'http://127.0.0.1:4173/login', 'Local recovery proof did not exit to the main-app origin.')
 assert(acceptsRecoveryEvent('PASSWORD_RECOVERY', recoverySession, '/update-password'), 'A valid password recovery event was not accepted.')
 assert(!acceptsRecoveryEvent('SIGNED_IN', recoverySession, '/update-password'), 'An ordinary signed-in event enabled password recovery.')
 assert(!acceptsRecoveryEvent('PASSWORD_RECOVERY', recoverySession, '/fields'), 'A recovery event outside the public update route was accepted.')
