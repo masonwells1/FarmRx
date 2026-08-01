@@ -3,11 +3,61 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 
 export const passwordRecoveryRoute = '/update-password'
 export const passwordRecoveryOrigin = 'https://recovery.croprxsolutions.app'
-export const passwordRecoveryHostname = 'recovery.croprxsolutions.app'
+export const passwordRecoveryHostname = new URL(passwordRecoveryOrigin).hostname
 export const canonicalFarmRxOrigin = 'https://farm-rx.vercel.app'
 export const passwordResetPublicResponse = 'If that email is in Farm Rx, we sent a password reset link. Check your inbox and spam folder.'
 export const minimumPasswordLength = 12
 export const passwordEmailDeliveryEnabled = import.meta.env?.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED === 'true'
+export const passwordRecoveryCleanupRequestKey = `farm-rx-password-recovery-cleanup:v1:${supabaseConfig.projectRef}`
+
+const maximumPasswordRecoveryCleanupRequestAgeMs = 60 * 60 * 1000
+type PasswordRecoveryCleanupRequest = { version: 1; requestId: string; email: string; sessionLineage: string | null; requestedAtMs: number }
+
+function normalizedRecoveryEmail(email: string) {
+  return email.trim().toLowerCase()
+}
+
+function recoverySessionLineage(session: Session | null): string | null {
+  if (!session) return null
+  try {
+    const encoded = session.access_token.split('.')[1]
+    if (!encoded) return null
+    const normalized = encoded.replace(/-/g, '+').replace(/_/g, '/')
+    const payload = JSON.parse(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '='))) as { session_id?: unknown; sub?: unknown }
+    return typeof payload.session_id === 'string' && payload.session_id.length > 0 && payload.sub === session.user.id ? payload.session_id : null
+  } catch { return null }
+}
+
+export function persistPasswordRecoveryCleanupRequest(storage: Storage, email: string, session: Session | null, requestId: string, nowMs: number) {
+  const request = { version: 1, requestId, email: normalizedRecoveryEmail(email), sessionLineage: recoverySessionLineage(session), requestedAtMs: nowMs } satisfies PasswordRecoveryCleanupRequest
+  const serialized = JSON.stringify(request)
+  storage.setItem(passwordRecoveryCleanupRequestKey, serialized)
+  if (storage.getItem(passwordRecoveryCleanupRequestKey) !== serialized) throw new Error('Farm Rx could not protect this password reset on this device.')
+}
+
+export function passwordRecoveryCleanupAuthority(storage: Storage, currentSession: Session | null, nowMs: number): string | null {
+  try {
+    const serialized = storage.getItem(passwordRecoveryCleanupRequestKey)
+    const request = JSON.parse(serialized ?? 'null') as Partial<PasswordRecoveryCleanupRequest> | null
+    const valid = request?.version === 1
+      && typeof request.requestId === 'string' && request.requestId.length > 0
+      && typeof request.email === 'string' && request.email.length > 0
+      && (request.sessionLineage === null || typeof request.sessionLineage === 'string')
+      && typeof request.requestedAtMs === 'number' && Number.isFinite(request.requestedAtMs)
+      && request.requestedAtMs <= nowMs
+      && nowMs - request.requestedAtMs <= maximumPasswordRecoveryCleanupRequestAgeMs
+      && request.sessionLineage !== null
+      && request.sessionLineage === recoverySessionLineage(currentSession)
+      && request.email === normalizedRecoveryEmail(currentSession?.user.email ?? '')
+    if (valid) return serialized
+    if (storage.getItem(passwordRecoveryCleanupRequestKey) === serialized) storage.removeItem(passwordRecoveryCleanupRequestKey)
+  } catch { /* unreadable storage is never cleanup authority */ }
+  return null
+}
+
+export function clearPasswordRecoveryCleanupAuthority(storage: Storage, authority: string) {
+  if (storage.getItem(passwordRecoveryCleanupRequestKey) === authority) storage.removeItem(passwordRecoveryCleanupRequestKey)
+}
 
 export type PasswordStrength = 'too_short' | 'okay' | 'strong'
 

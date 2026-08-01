@@ -43,9 +43,9 @@ test('login blocks empty credentials and keeps the login brand legible on dark g
   }
 })
 
-function session(id = userId) {
+function session(id = userId, lineage = `session-${id}`) {
   const expiresAt = Math.floor(Date.now() / 1000) + 86_400
-  const payload = btoa(JSON.stringify({ sub: id, aud: 'authenticated', exp: expiresAt, session_id: `session-${id}` })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+  const payload = btoa(JSON.stringify({ sub: id, aud: 'authenticated', exp: expiresAt, session_id: lineage })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
   return {
     access_token: `eyJhbGciOiJub25lIn0.${payload}.c2lnbmF0dXJl`, refresh_token: `offline-test-refresh-${id}`, expires_in: 86_400, expires_at: expiresAt, token_type: 'bearer',
     user: { id, aud: 'authenticated', role: 'authenticated', email: id === userId ? 'farmer@example.test' : 'other-farmer@example.test', app_metadata: {}, user_metadata: {}, identities: [], created_at: now },
@@ -335,17 +335,46 @@ test('successful recovery returns to the canonical app origin', async ({ page },
   await page.getByRole('textbox', { name: 'New password', exact: true }).fill('A secure recovery passphrase 2027!')
   await page.getByRole('textbox', { name: 'Confirm new password', exact: true }).fill('A secure recovery passphrase 2027!')
   await page.getByRole('button', { name: 'Update password' }).click()
-  await expect(page.getByRole('status')).toContainText('Your password has been updated')
-  const signIn = page.getByRole('link', { name: 'Go to sign in' })
-  await expect(signIn).toHaveAttribute('href', 'http://127.0.0.1:4173/login?recoveryComplete=1')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
+  await expect(page.getByLabel('Email address')).toBeVisible()
   expect(completed.passwordUpdates()).toBe(1)
   expect(completed.unexpected).toEqual([])
-  await signIn.click()
-  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
 })
 
 test('completed recovery clears an older canonical session before route adoption', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'One real cross-origin session cleanup is sufficient.')
+  await page.goto('/login')
+  const authSessionKey = `farm-rx-auth:${projectRef}`
+  await page.evaluate(({ sessionKey, intentKey, cleanupKey, value, intent, cleanup }) => {
+    localStorage.setItem(intentKey, JSON.stringify(intent))
+    localStorage.setItem(sessionKey, JSON.stringify(value))
+    localStorage.setItem(cleanupKey, JSON.stringify(cleanup))
+  }, {
+    sessionKey: authSessionKey,
+    intentKey: `farm-rx-auth-intent:v1:${projectRef}`,
+    cleanupKey: `farm-rx-password-recovery-cleanup:v1:${projectRef}`,
+    value: session(),
+    intent: { version: 1, nonce: 'pre-recovery-ordinary-session', phase: 'accepted', userId, sessionLineage: `session-${userId}`, startedAtMs: Date.now() },
+    cleanup: { version: 1, requestId: 'playwright-recovery-request', email: 'farmer@example.test', sessionLineage: `session-${userId}`, requestedAtMs: Date.now() },
+  })
+
+  const completed = await mockRecoveryAuth(page)
+  await page.getByRole('textbox', { name: 'New password', exact: true }).fill('A secure recovery passphrase 2027!')
+  await page.getByRole('textbox', { name: 'Confirm new password', exact: true }).fill('A secure recovery passphrase 2027!')
+  await page.getByRole('button', { name: 'Update password' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
+  await expect(page.getByRole('heading', { name: 'Farm Rx' })).toBeVisible()
+  await expect(page.getByLabel('Email address')).toBeVisible()
+  await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), authSessionKey)).toBeNull()
+  expect(completed.passwordUpdates()).toBe(1)
+  expect(completed.unexpected).toEqual([])
+  await page.goto('/fields')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
+})
+
+test('a forged recovery-completion URL cannot clear an ordinary canonical session', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'One real canonical-origin authorization boundary is sufficient.')
+  const unexpected = await mockSupabase(page)
   await page.goto('/login')
   const authSessionKey = `farm-rx-auth:${projectRef}`
   await page.evaluate(({ sessionKey, intentKey, value, intent }) => {
@@ -355,22 +384,45 @@ test('completed recovery clears an older canonical session before route adoption
     sessionKey: authSessionKey,
     intentKey: `farm-rx-auth-intent:v1:${projectRef}`,
     value: session(),
-    intent: { version: 1, nonce: 'pre-recovery-ordinary-session', phase: 'accepted', userId, sessionLineage: `session-${userId}`, startedAtMs: Date.now() },
+    intent: { version: 1, nonce: 'ordinary-session-without-reset-request', phase: 'accepted', userId, sessionLineage: `session-${userId}`, startedAtMs: Date.now() },
   })
 
-  const completed = await mockRecoveryAuth(page)
-  await page.getByRole('textbox', { name: 'New password', exact: true }).fill('A secure recovery passphrase 2027!')
-  await page.getByRole('textbox', { name: 'Confirm new password', exact: true }).fill('A secure recovery passphrase 2027!')
-  await page.getByRole('button', { name: 'Update password' }).click()
-  await page.getByRole('link', { name: 'Go to sign in' }).click()
-  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
-  await expect(page.getByRole('heading', { name: 'Farm Rx' })).toBeVisible()
-  await expect(page.getByLabel('Email address')).toBeVisible()
-  expect(await page.evaluate((key) => localStorage.getItem(key), authSessionKey)).toBeNull()
-  expect(completed.passwordUpdates()).toBe(1)
-  expect(completed.unexpected).toEqual([])
-  await page.goto('/fields')
-  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
+  await page.goto('/login?recoveryComplete=1')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/fields')
+  await expect(page.getByRole('heading', { name: 'Choose a farm' })).toBeVisible()
+  expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null')?.user?.id, authSessionKey)).toBe(userId)
+  expect(unexpected).toEqual([])
+})
+
+test('an older recovery request cannot clear a newer accepted same-user session', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'One real same-user lineage boundary is sufficient.')
+  const unexpected = await mockSupabase(page)
+  await page.goto('/login')
+  const authSessionKey = `farm-rx-auth:${projectRef}`
+  const newerLineage = 'newer-same-user-session'
+  await page.evaluate(({ sessionKey, intentKey, cleanupKey, value, intent, cleanup }) => {
+    localStorage.setItem(intentKey, JSON.stringify(intent))
+    localStorage.setItem(sessionKey, JSON.stringify(value))
+    localStorage.setItem(cleanupKey, JSON.stringify(cleanup))
+  }, {
+    sessionKey: authSessionKey,
+    intentKey: `farm-rx-auth-intent:v1:${projectRef}`,
+    cleanupKey: `farm-rx-password-recovery-cleanup:v1:${projectRef}`,
+    value: session(userId, newerLineage),
+    intent: { version: 1, nonce: 'newer-same-user-intent', phase: 'accepted', userId, sessionLineage: newerLineage, startedAtMs: Date.now() },
+    cleanup: { version: 1, requestId: 'older-reset-request', email: 'farmer@example.test', sessionLineage: `session-${userId}`, requestedAtMs: Date.now() },
+  })
+
+  await page.goto('/login?recoveryComplete=1')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/fields')
+  await expect(page.getByRole('heading', { name: 'Choose a farm' })).toBeVisible()
+  const storedLineage = await page.evaluate((key) => {
+    const token = JSON.parse(localStorage.getItem(key) ?? 'null')?.access_token as string | undefined
+    if (!token) return null
+    return JSON.parse(atob(token.split('.')[1]!.replaceAll('-', '+').replaceAll('_', '/'))).session_id as string
+  }, authSessionKey)
+  expect(storedLineage).toBe(newerLineage)
+  expect(unexpected).toEqual([])
 })
 
 test('cancelling recovery preserves an older canonical session', async ({ page }, testInfo) => {

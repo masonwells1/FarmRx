@@ -5,7 +5,7 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import { coordinatedDeviceTransaction } from '../data/queueTransaction'
 import { clearFarmAccess, isDefiniteTransportFailure, restoreOfflineFarmUserId } from './farmContext'
 import { consumeAuthSessionRemovalTicket, type AuthSessionRemovalTicket } from './authSessionStorage'
-import { isPasswordRecoveryEvent, passwordEmailDeliveryEnabled, passwordRecoveryRoute, requestPasswordResetNonEnumerating, updatePasswordWithIsolatedRecoverySession } from './passwordRecovery'
+import { isPasswordRecoveryEvent, passwordEmailDeliveryEnabled, passwordRecoveryRoute, persistPasswordRecoveryCleanupRequest, requestPasswordResetNonEnumerating, updatePasswordWithIsolatedRecoverySession } from './passwordRecovery'
 
 export type AuthPhase = 'restoring' | 'signed_out' | 'signed_in'
 export type PasswordRecoveryPhase = 'idle' | 'checking' | 'ready' | 'invalid' | 'complete' | 'complete_with_warning'
@@ -382,6 +382,7 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
   const trustedAuthSnapshot = useRef<PersistedAuthSnapshot | null>(null)
   const recoverySession = useRef<Session | null>(null)
   const recoveryConflictDuringSignIn = useRef(false)
+  const pendingSignOutCleanupUserIds = useRef(new Set<string>())
   const recoveryCompleted = useRef(false)
   const recoveryOwnerId = useRef<string | null>(null)
   if (recoveryOwnerId.current === null) recoveryOwnerId.current = d.createId()
@@ -832,6 +833,7 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
     async requestPasswordReset(email) {
       if (!passwordEmailDeliveryEnabled) throw new Error('Farm Rx password email delivery is not enabled yet.')
       const origin = typeof window === 'undefined' ? '' : window.location.origin
+      persistPasswordRecoveryCleanupRequest(d.storage, email, session, d.createId(), d.now())
       return requestPasswordResetNonEnumerating(email, origin, d.auth.resetPasswordForEmail.bind(d.auth))
     },
     async updatePassword(password) {
@@ -1130,6 +1132,7 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
       signInInFlight.current = false
       blockAuthEventsUntilManualSignIn.current = true
       const userId = session?.user.id ?? offlineUser?.id
+      if (userId) pendingSignOutCleanupUserIds.current.add(userId)
       // Fence shared auth as one cross-tab transaction before any IndexedDB or
       // cache cleanup can yield. A later sign-in can then safely follow it.
       await d.coordinateAuthState(async (verify) => {
@@ -1145,7 +1148,14 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
       setSession(null)
       setOfflineUser(null)
       setPhase('signed_out')
-      if (userId) await d.clearFarmAccess(userId)
+      let cleanupError: unknown = null
+      for (const cleanupUserId of [...pendingSignOutCleanupUserIds.current]) {
+        try {
+          await d.clearFarmAccess(cleanupUserId)
+          pendingSignOutCleanupUserIds.current.delete(cleanupUserId)
+        } catch (error) { cleanupError ??= error }
+      }
+      if (cleanupError) throw cleanupError
       // Do not enqueue auth-js cleanup behind a half-open refresh. If that old
       // lock were released after a new password sign-in, the queued cleanup
       // could sign out the new account. Removing the shared storage key already

@@ -112,7 +112,7 @@ const previousReact = Object.getOwnPropertyDescriptor(globalThis, 'React')
 Object.defineProperty(globalThis, 'React', { configurable: true, writable: true, value: React })
 try {
   const { createRoot } = await import('react-dom/client')
-  type ProbeAuth = { phase: string; user: { id: string } | null; passwordRecoveryPhase: string; signIn(email: string, password: string): Promise<void>; updatePassword(password: string): Promise<void>; cancelPasswordRecovery(): Promise<void> }
+  type ProbeAuth = { phase: string; user: { id: string } | null; passwordRecoveryPhase: string; signIn(email: string, password: string): Promise<void>; signOut(): Promise<void>; updatePassword(password: string): Promise<void>; cancelPasswordRecovery(): Promise<void> }
   const current = { value: null as ProbeAuth | null }
   let authEvent: ((event: string, session: typeof recoverySession | null) => void) | null = null
   let updateCalls = 0
@@ -244,6 +244,50 @@ try {
   await act(async () => { authEvent?.('TOKEN_REFRESHED', recoverySession); authEvent?.('USER_UPDATED', recoverySession); await new Promise((resolve) => setTimeout(resolve, 0)) })
   assert(currentAuth().phase === 'signed_out' && currentAuth().user === null && currentAuth().passwordRecoveryPhase === 'complete', 'A later refresh/update event resurrected a completed recovery session.')
   await act(async () => { root.unmount() })
+
+  // A local sign-out fences Auth before clearing farm storage. If that later
+  // cleanup fails, retry must retain the original user identity even though
+  // the visible Auth session is already null.
+  authWindow.localStorage.clear()
+  authWindow.history.replaceState({}, '', '/login')
+  authWindow.localStorage.setItem(authSessionKey, JSON.stringify(otherSession))
+  authWindow.localStorage.setItem(authIntentKey, JSON.stringify({ version: 1, nonce: 'cleanup-retry-session', phase: 'accepted', userId: otherSession.user.id, sessionLineage: 'other-session-lineage', startedAtMs: Date.now() }))
+  const retryCleanupUsers: string[] = []
+  const retryCurrent = { value: null as ProbeAuth | null }
+  function RetryProbe() { retryCurrent.value = useAuth() as ProbeAuth; return createElement('div', null, retryCurrent.value.phase) }
+  const retryContainer = authWindow.document.createElement('div')
+  authWindow.document.body.append(retryContainer)
+  const retryRoot = createRoot(retryContainer as unknown as HTMLElement)
+  const retryDependencies = {
+    ...dependencies,
+    pathname: () => '/login',
+    auth: {
+      ...client,
+      getSession: async () => ({ data: { session: otherSession }, error: null }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => undefined } } }),
+    },
+    clearFarmAccess: async (cleanupUserId: string) => {
+      retryCleanupUsers.push(cleanupUserId)
+      if (retryCleanupUsers.length === 1) throw new Error('controlled farm cleanup failure')
+    },
+  } as unknown as AuthProviderDependencies
+  await act(async () => {
+    retryRoot.render(createElement(AuthProvider, { dependencies: retryDependencies, children: createElement(RetryProbe) }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  assert(retryCurrent.value?.phase === 'signed_in', 'The sign-out cleanup retry fixture did not restore its ordinary session.')
+  let firstCleanupRejected = false
+  await act(async () => {
+    try { await retryCurrent.value!.signOut() } catch { firstCleanupRejected = true }
+    await Promise.resolve()
+  })
+  assert(firstCleanupRejected && String(retryCurrent.value?.phase) === 'signed_out', 'The controlled farm cleanup failure did not leave Auth fenced and retryable.')
+  await act(async () => { await retryCurrent.value!.signOut(); await Promise.resolve() })
+  assert(retryCleanupUsers.length === 2 && retryCleanupUsers.every((id) => id === otherSession.user.id), 'A sign-out cleanup retry lost the original user identity.')
+  await act(async () => { retryRoot.unmount() })
+  retryContainer.remove()
+  authWindow.localStorage.clear()
+  authWindow.history.replaceState({}, '', '/update-password')
 
   // Exercise all four primary cleanup verifiers and all four coordinated
   // retry verifiers after the isolated server update. At each point a newer

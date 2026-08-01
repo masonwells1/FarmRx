@@ -18,7 +18,7 @@ import {
 } from "react-router";
 import type { User } from "@supabase/supabase-js";
 import { useAuth } from "./auth/AuthProvider";
-import { minimumPasswordLength, passwordEmailDeliveryEnabled, passwordRecoveryExitUrl, passwordResetPublicResponse, passwordStrength, passwordValidationMessage } from './auth/passwordRecovery';
+import { clearPasswordRecoveryCleanupAuthority, minimumPasswordLength, passwordEmailDeliveryEnabled, passwordRecoveryCleanupAuthority, passwordRecoveryExitUrl, passwordResetPublicResponse, passwordStrength, passwordValidationMessage } from './auth/passwordRecovery';
 import {
   bootstrapInitialOwnerFarm,
 } from "./auth/bootstrapFarm";
@@ -940,7 +940,7 @@ function MobileNavigation() {
 }
 
 function LoginPage() {
-  const { phase, signIn, signOut, requestPasswordReset } = useAuth();
+  const { phase, session, signIn, signOut, requestPasswordReset } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const recoveryCompleted = new URLSearchParams(location.search).get('recoveryComplete') === '1';
@@ -955,6 +955,7 @@ function LoginPage() {
   const [resetResponse, setResetResponse] = useState<string | null>(null);
   const signInLock = useRef(createSubmitLock());
   const recoveryCompletionStarted = useRef(false);
+  const recoveryCompletionAuthority = useRef<string | null | undefined>(undefined);
   const [recoveryCompletionAttempt, setRecoveryCompletionAttempt] = useState(0);
   const [recoveryCompletionError, setRecoveryCompletionError] = useState(false);
 
@@ -962,10 +963,18 @@ function LoginPage() {
     if (!recoveryCompleted || phase === 'restoring' || recoveryCompletionStarted.current) return;
     recoveryCompletionStarted.current = true;
     setRecoveryCompletionError(false);
+    recoveryCompletionAuthority.current ??= passwordRecoveryCleanupAuthority(window.localStorage, session, Date.now());
+    if (!recoveryCompletionAuthority.current) {
+      navigate('/login', { replace: true });
+      return;
+    }
     void signOut()
-      .then(() => navigate('/login', { replace: true }))
+      .then(() => {
+        clearPasswordRecoveryCleanupAuthority(window.localStorage, recoveryCompletionAuthority.current!);
+        navigate('/login', { replace: true });
+      })
       .catch(() => setRecoveryCompletionError(true));
-  }, [navigate, phase, recoveryCompleted, recoveryCompletionAttempt, signOut]);
+  }, [navigate, phase, recoveryCompleted, recoveryCompletionAttempt, session, signOut]);
 
   if (recoveryCompleted) {
     return <main className="login-page"><section className="login-panel" aria-labelledby="recovery-completion-title">
@@ -1135,6 +1144,10 @@ function UpdatePasswordPage() {
   const signInUrl = passwordRecoveryExitUrl(window.location);
   const requestNewLinkUrl = passwordRecoveryExitUrl(window.location, 'request-new-link');
   const recoveryCompleteUrl = passwordRecoveryExitUrl(window.location, 'completed');
+
+  useEffect(() => {
+    if (passwordRecoveryPhase === 'complete' || passwordRecoveryPhase === 'complete_with_warning') window.location.replace(recoveryCompleteUrl);
+  }, [passwordRecoveryPhase, recoveryCompleteUrl]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
