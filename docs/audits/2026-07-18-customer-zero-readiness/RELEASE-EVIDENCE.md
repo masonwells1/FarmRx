@@ -180,8 +180,9 @@ email delivery is a separate production action with its own proof; this release 
 ## 2026-08-01 recovery-origin hardening update
 
 The July evidence above remains historical for its exact release. A later approved operator tranche
-configured the SMTP provider and guarded Vercel email flag and received disposable recovery
-messages. The real Chrome journey then exposed a stale service-worker interception defect; that
+configured the SMTP provider; an authenticated read-only production Vercel check on 2026-08-01
+returned exact `VITE_PASSWORD_EMAIL_DELIVERY_ENABLED=true`, and disposable recovery messages
+arrived. The real Chrome journey then exposed a stale service-worker interception defect; that
 pre-repair delivery is evidence that mail arrived, not final customer-zero recovery proof.
 
 The bounded local repair was accepted at exact commit
@@ -198,10 +199,23 @@ disposable database/RLS lanes, 59 Playwright passes with 9 intentional configura
 6/6 default and 7/7 enabled-email focused Chromium journeys, the green season contract, and a
 fresh-context read-only Sol **ACCEPT** with no merge blocker. This is source/runtime proof only.
 
+PR #17 review then found that completion depended on an optional link, a naked completion query
+could clear ordinary local state, and a cleanup retry could lose its original user identity. The
+repair chain preserved rejected commits and ended at exact source
+`2c4fadb1d8f4bbffe025dc92aa1a79caa02efba4`. Completion now automatically returns for both terminal
+success states; cleanup requires a recent local request marker bound to the exact persisted accepted
+session lineage and restored user identity; offline-only access is cleared; a newer lineage arriving
+after the UI check is preserved by transactional revalidation; and failed farm cleanup retries the
+exact original user. The final full foundation run passed 62 browser tests with 12 intentional skips,
+21/21 controlled mutations, zero audit findings, and every disposable database/provenance/RLS lane;
+the six-scenario season contract again passed 101 fixtures and all 9 contract plus 14 isolation
+rejections. Fresh-context read-only Sol returned **ACCEPT — no merge blockers** on exact `2c4fadb1`.
+
 At closeout, remote and production `main` remain
 `45dc52f425ee844a0ddc473d514cce748e61c559`; deployment
-`dpl_Fe9UHdAiwoF8ucczm8kgHnZYczrJ` is `READY` and the canonical URL returns HTTP `200`. The accepted
-recovery commit is unpublished, `recovery.croprxsolutions.app` is NXDOMAIN/unbound, and the exact
+`dpl_Fe9UHdAiwoF8ucczm8kgHnZYczrJ` is `READY` and the canonical URL returns HTTP `200`. Accepted
+recovery commit `2c4fadb1` is local/unpublished while PR #17 remains at older `102f69d4`;
+`recovery.croprxsolutions.app` is NXDOMAIN/unbound, and the exact
 Supabase redirect is not configured. Final release proof therefore still requires separately
 authorized publication/automatic deployment, same-project recovery-domain and DNS binding, exact
 Auth allowlisting, a no-bypass disposable real-email Chrome journey, and both physical-phone

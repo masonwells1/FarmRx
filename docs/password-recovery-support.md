@@ -7,6 +7,10 @@ password?**, and `/update-password`. It does not use public sign-up or invite co
 
 Before releasing the feature:
 
+0. Obtain Mason's explicit approval for the exact branch push, pull-request mutation, main/production
+   merge, automatic deployment, domain/DNS change, Supabase Auth or SMTP change, disposable-account
+   action, and real email communication being performed. This runbook records the sequence; it is
+   not approval by itself.
 1. Deploy the worker-suppression build to the existing Farm Rx Vercel project and verify the
    canonical application remains `https://farm-rx.vercel.app`.
 2. Only after that deployment is ready, bind `recovery.croprxsolutions.app` and its DNS to that
@@ -30,7 +34,11 @@ recovery-host design and must not be used as the current release configuration. 
 wildcard does not authorize `recovery.croprxsolutions.app`. Do not change live Auth or Vercel domain
 settings without a separate approved production action.
 
-Until that action and a real delivery test pass, the production-safe defaults are:
+The authenticated read-only Vercel check on 2026-08-01 found
+`VITE_PASSWORD_EMAIL_DELIVERY_ENABLED=true` in production. The configured SMTP provider delivered
+disposable messages before the worker-free repair, but that exposed the stale-worker defect and is
+not final proof. Environments without separately approved and proven delivery must retain these
+safe defaults:
 
 - `VITE_PASSWORD_EMAIL_DELIVERY_ENABLED` is absent or not `true`, so sign-in shows honest help
   guidance instead of a reset form that cannot deliver.
@@ -56,8 +64,12 @@ post-change proof; merging frontend code does not configure them.
   browser-cached copy revalidates the exact owner lease and fails closed after that lease was revoked.
 - Other Farm Rx tabs receive Supabase's recovery notification but cannot adopt it or clear the
   recovery page's owner lease; an existing ordinary session remains unchanged.
-- Completing recovery returns the farmer to canonical `https://farm-rx.vercel.app/login`, clears
-  any older canonical-app session on that device, and requires sign-in with the new password.
+- Completing recovery automatically returns the farmer to canonical
+  `https://farm-rx.vercel.app/login`. A recent local reset-request marker must match the exact older
+  canonical-app session lineage before Farm Rx clears that session and its offline workspace; a
+  naked completion URL cannot trigger cleanup. A newer accepted sibling session is preserved.
+  Cleanup failure remains retryable for the exact older user, and successful cleanup requires
+  sign-in with the new password.
   Cancelling recovery returns to the canonical app without clearing a pre-existing ordinary
   session. An invalid link's **Request a new link** action preserves that ordinary session while
   opening the canonical reset form. The recovery session is never treated as an ordinary Farm Rx
