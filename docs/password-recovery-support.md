@@ -13,18 +13,26 @@ Before releasing the feature:
    not approval by itself.
 1. Deploy the worker-suppression build to the existing Farm Rx Vercel project and verify the
    canonical application remains `https://farm-rx.vercel.app`.
-2. Only after that deployment is ready, bind `recovery.croprxsolutions.app` and its DNS to that
+2. Before enabling the recovery redirect or sending any recovery email, prove the customer-zero
+   stale-client gate: no real farmer has ever used Farm Rx; every known operator/disposable Farm Rx
+   tab or installed PWA from before the deployment is closed; and its canonical-origin service
+   worker and site data are removed in every known proof browser. A ready deployment alone does not
+   retire already-loaded JavaScript or an incumbent worker. If any prior farmer client exists or any
+   known proof client cannot be enumerated and retired, stop and keep recovery unavailable. This
+   customer-zero gate is not a general upgrade path for an installed customer population.
+3. Only after that deployment and stale-client gate are proven, bind
+   `recovery.croprxsolutions.app` and its DNS to that
    same Vercel project. Never point the recovery hostname at a separate application or project.
-3. In the Farm Rx Supabase project (`agvsozfbstpekuqxpqjr`), allow the exact redirect
+4. In the Farm Rx Supabase project (`agvsozfbstpekuqxpqjr`), allow the exact redirect
    `https://recovery.croprxsolutions.app/update-password`. Confirm the Auth site URL remains
    `https://farm-rx.vercel.app`; the main-origin wildcard does not cover the recovery hostname.
-4. Verify that every recovery-host path except `/update-password` and every completed, cancelled,
+5. Verify that every recovery-host path except `/update-password` and every completed, cancelled,
    or failed recovery journey returns to `https://farm-rx.vercel.app/login`.
-5. Configure and verify custom SMTP. Supabase's default sender is test-rate-limited and is not a
+6. Configure and verify custom SMTP. Supabase's default sender is test-rate-limited and is not a
    dependable customer support channel.
-6. Send a recovery message to a disposable non-production customer account and verify the link,
+7. Send a recovery message to a disposable non-production customer account and verify the link,
    sender, subject, delivery time, and mobile rendering.
-7. Never place SMTP credentials, service-role keys, or customer passwords in this repository.
+8. Never place SMTP credentials, service-role keys, or customer passwords in this repository.
 
 Historical read-only production evidence from 2026-07-18: the Auth site URL was
 `https://farm-rx.vercel.app`; the redirect allowlist contains that origin, its wildcard, and local

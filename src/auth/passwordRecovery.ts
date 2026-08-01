@@ -6,6 +6,7 @@ export const passwordRecoveryOrigin = 'https://recovery.croprxsolutions.app'
 export const passwordRecoveryHostname = new URL(passwordRecoveryOrigin).hostname
 export const canonicalFarmRxOrigin = 'https://farm-rx.vercel.app'
 export const passwordResetPublicResponse = 'If that email is in Farm Rx, we sent a password reset link. Check your inbox and spam folder.'
+export const passwordRecoveryStorageErrorMessage = 'Farm Rx cannot safely start password recovery in this browser. Allow site storage or use another browser, then try again.'
 export const minimumPasswordLength = 12
 export const passwordEmailDeliveryEnabled = import.meta.env?.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED === 'true'
 export const passwordRecoveryCleanupRequestKey = `farm-rx-password-recovery-cleanup:v1:${supabaseConfig.projectRef}`
@@ -13,6 +14,17 @@ export const passwordRecoveryCleanupRequestKey = `farm-rx-password-recovery-clea
 const maximumPasswordRecoveryCleanupRequestAgeMs = 60 * 60 * 1000
 const persistedAuthSessionKey = `farm-rx-auth:${supabaseConfig.projectRef}`
 type PasswordRecoveryCleanupRequest = { version: 1; requestId: string; email: string; sessionLineage: string | null; requestedAtMs: number }
+
+export class PasswordRecoveryStorageError extends Error {
+  constructor() {
+    super(passwordRecoveryStorageErrorMessage)
+    this.name = 'PasswordRecoveryStorageError'
+  }
+}
+
+export function isPasswordRecoveryStorageError(error: unknown): error is PasswordRecoveryStorageError {
+  return error instanceof PasswordRecoveryStorageError
+}
 
 function normalizedRecoveryEmail(email: string) {
   return email.trim().toLowerCase()
@@ -49,8 +61,13 @@ export function persistPasswordRecoveryCleanupRequest(storage: Storage, email: s
   const cleanupSession = recoveryCleanupSession(storage, session, currentUserId)
   const request = { version: 1, requestId, email: normalizedRecoveryEmail(email), sessionLineage: recoverySessionLineage(cleanupSession), requestedAtMs: nowMs } satisfies PasswordRecoveryCleanupRequest
   const serialized = JSON.stringify(request)
-  storage.setItem(passwordRecoveryCleanupRequestKey, serialized)
-  if (storage.getItem(passwordRecoveryCleanupRequestKey) !== serialized) throw new Error('Farm Rx could not protect this password reset on this device.')
+  try {
+    storage.setItem(passwordRecoveryCleanupRequestKey, serialized)
+    if (storage.getItem(passwordRecoveryCleanupRequestKey) !== serialized) throw new PasswordRecoveryStorageError()
+  } catch (error) {
+    if (isPasswordRecoveryStorageError(error)) throw error
+    throw new PasswordRecoveryStorageError()
+  }
 }
 
 export function passwordRecoveryCleanupAuthority(storage: Storage, currentSession: Session | null, currentUserId: string | null | undefined, nowMs: number): string | null {

@@ -18,7 +18,7 @@ import {
 } from "react-router";
 import type { User } from "@supabase/supabase-js";
 import { useAuth } from "./auth/AuthProvider";
-import { minimumPasswordLength, passwordEmailDeliveryEnabled, passwordRecoveryCleanupAuthority, passwordRecoveryExitUrl, passwordResetPublicResponse, passwordStrength, passwordValidationMessage } from './auth/passwordRecovery';
+import { isPasswordRecoveryStorageError, minimumPasswordLength, passwordEmailDeliveryEnabled, passwordRecoveryCleanupAuthority, passwordRecoveryExitUrl, passwordRecoveryStorageErrorMessage, passwordResetPublicResponse, passwordStrength, passwordValidationMessage } from './auth/passwordRecovery';
 import {
   bootstrapInitialOwnerFarm,
 } from "./auth/bootstrapFarm";
@@ -1050,9 +1050,15 @@ function LoginPage() {
       setError(null);
       const form = new FormData(event.currentTarget);
       setResetResponse(await requestPasswordReset(String(form.get('email') ?? '')));
-    } catch {
-      // Account existence and delivery details are intentionally never shown.
-      setResetResponse(passwordResetPublicResponse);
+    } catch (error) {
+      // A local fail-closed preflight is safe to name; provider/account
+      // outcomes remain deliberately non-enumerating.
+      if (isPasswordRecoveryStorageError(error)) {
+        setResetResponse(null);
+        setError(passwordRecoveryStorageErrorMessage);
+      } else {
+        setResetResponse(passwordResetPublicResponse);
+      }
     } finally {
       setSubmitting(false);
       signInLock.current.release();
@@ -1077,6 +1083,7 @@ function LoginPage() {
           <label htmlFor="reset-email">Email address</label>
           <input id="reset-email" name="email" type="email" autoComplete="email" placeholder="you@farm.com" required disabled={submitting || Boolean(resetResponse)} />
           {resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}
+          {error && <p className="auth-error" role="alert">{error}</p>}
           <button className="primary-action" type="submit" disabled={submitting || Boolean(resetResponse)}>{submitting ? 'Sending…' : 'Send reset link'}</button>
           <button className="auth-link" type="button" onClick={() => { setForgotPassword(false); setError(null); setResetResponse(null) }} disabled={submitting}>Back to sign in</button>
         </form> : <form className="login-card" onSubmit={handleSubmit}>

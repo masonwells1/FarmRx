@@ -43,6 +43,25 @@ test('login blocks empty credentials and keeps the login brand legible on dark g
   }
 })
 
+test('password recovery reports a failed storage preflight without claiming an email was sent', async ({ page }) => {
+  test.skip(process.env.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED !== 'true', 'This journey requires the guarded email-delivery configuration.')
+  const resetRequests: string[] = []
+  page.on('request', (request) => { if (request.url().includes('/auth/v1/recover')) resetRequests.push(request.url()) })
+  await page.addInitScript(({ key }) => {
+    const setItem = Storage.prototype.setItem
+    Storage.prototype.setItem = function guardedSetItem(storageKey: string, value: string) {
+      if (storageKey === key) throw new DOMException('Storage denied', 'QuotaExceededError')
+      return setItem.call(this, storageKey, value)
+    }
+  }, { key: `farm-rx-password-recovery-cleanup:v1:${projectRef}` })
+  await page.goto('/login?forgotPassword=1')
+  await page.getByLabel('Email address').fill('farmer@example.test')
+  await page.getByRole('button', { name: 'Send reset link' }).click()
+  await expect(page.getByRole('alert')).toContainText('cannot safely start password recovery in this browser')
+  await expect(page.getByRole('status')).toHaveCount(0)
+  expect(resetRequests).toEqual([])
+})
+
 function session(id = userId, lineage = `session-${id}`) {
   const expiresAt = Math.floor(Date.now() / 1000) + 86_400
   const payload = btoa(JSON.stringify({ sub: id, aud: 'authenticated', exp: expiresAt, session_id: lineage })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')

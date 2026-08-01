@@ -8,11 +8,13 @@ import { createAuthSessionStorage } from './authSessionStorage'
 import {
   passwordRecoveryCleanupAuthority,
   persistPasswordRecoveryCleanupRequest,
+  isPasswordRecoveryStorageError,
   isPasswordRecoveryEvent,
   isPasswordRecoveryHostname,
   minimumPasswordLength,
   passwordRecoveryExitUrl,
   passwordRecoveryRedirectTo,
+  passwordRecoveryStorageErrorMessage,
   passwordResetPublicResponse,
   requestPasswordResetNonEnumerating,
   passwordStrength,
@@ -42,6 +44,14 @@ const resetOutcomes = await Promise.all([
 ])
 assert(resetOutcomes.every((outcome) => outcome === passwordResetPublicResponse), 'Password reset outcomes exposed account or delivery state.')
 assert(resetCalls.length === 3 && resetCalls[0]?.email === 'known@example.test' && resetCalls.every((call) => call.redirectTo === 'https://recovery.croprxsolutions.app/update-password'), 'Password reset requests did not use one trimmed-email and exact worker-free production redirect contract.')
+for (const storage of [
+  { setItem() { throw new Error('storage denied') }, getItem() { return null } },
+  { setItem() { /* discarded */ }, getItem() { return null } },
+]) {
+  let storageError: unknown = null
+  try { persistPasswordRecoveryCleanupRequest(storage as unknown as Storage, 'farmer@example.test', null, null, 'storage-preflight', Date.now()) } catch (error) { storageError = error }
+  assert(isPasswordRecoveryStorageError(storageError) && storageError.message === passwordRecoveryStorageErrorMessage, 'A failed cleanup-marker preflight did not surface the honest device-storage error.')
+}
 assert(passwordRecoveryRedirectTo('https://farm-rx.vercel.app') === 'https://recovery.croprxsolutions.app/update-password', 'Production password reset did not use the worker-free recovery origin.')
 assert(passwordRecoveryRedirectTo('http://localhost:5173') === 'http://localhost:5173/update-password', 'Local password reset redirect was malformed.')
 assert(isPasswordRecoveryHostname('recovery.croprxsolutions.app') && isPasswordRecoveryHostname('recovery.localhost') && !isPasswordRecoveryHostname('farm-rx.vercel.app'), 'Recovery-host confinement did not recognize the exact production and local mirror hostnames.')
@@ -92,6 +102,7 @@ const css = readFileSync(new URL('../styles/app.css', import.meta.url), 'utf8')
 assert(/name="email"[\s\S]*?required/.test(app) && /name="password"[\s\S]*?required/.test(app), 'Sign-in fields are missing native required validation.')
 assert(tokens.includes('--on-dark-accent: #BCEFCF;') && css.includes('.slogan {') && css.includes('color: var(--on-dark-accent)'), 'Login slogan does not use the accessible on-dark brand token.')
 assert(app.includes('keep this page open until your password is updated') && app.includes('Request a fresh link or contact your Crop RX representative'), 'The recovery UI does not explain fail-closed refresh behavior and the support path.')
+assert(app.includes('if (isPasswordRecoveryStorageError(error))') && app.includes('setError(passwordRecoveryStorageErrorMessage)'), 'The reset form could still report email success after its local cleanup-marker preflight failed.')
 
 // Exercise the provider, not just its helpers: auth-js persists recovery
 // sessions before PASSWORD_RECOVERY. A recovery marker must therefore block a
