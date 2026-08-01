@@ -6,6 +6,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
 const files = [
+  'docs/password-recovery-support.md',
   'src/App.tsx', 'src/main.tsx', 'src/sw.ts', 'src/auth/passwordRecovery.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json', 'vite.config.ts',
   'scripts/verify-foundation.ps1',
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
@@ -64,7 +65,10 @@ try {
   reset()
   mutate('src/main.tsx', (source) => source.replace('isPasswordRecoveryHostname(window.location.hostname) && window.location.pathname !== passwordRecoveryRoute', 'false && window.location.pathname !== passwordRecoveryRoute'))
   detected('recovery-host route confinement removal', 'auth:recovery-host-route-confinement')
-  console.log('Foundation mutation drill: PASS (13/13 controlled mutations turned the gate red)')
+  reset()
+  mutate('docs/password-recovery-support.md', (source) => source.replace('allow the exact redirect\n   `https://recovery.croprxsolutions.app/update-password`', 'allow the exact redirect\n   `https://farm-rx.vercel.app/update-password`'))
+  detected('stale main-origin recovery allowlist instruction', 'auth:runbook-exact-recovery-redirect')
+  console.log('Foundation mutation drill: PASS (14/14 controlled mutations turned the gate red)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }
