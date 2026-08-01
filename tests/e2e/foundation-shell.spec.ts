@@ -262,6 +262,30 @@ test('the dedicated recovery origin is outside an installed main-app worker scop
   await expect(page).toHaveURL('http://127.0.0.1:4173/login')
 })
 
+test('requesting a new link survives recovery-origin handoff with an ordinary session', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'One real cross-origin session boundary is sufficient.')
+  test.skip(process.env.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED !== 'true', 'This journey requires the guarded email-delivery configuration.')
+  const unexpected = await mockSupabase(page)
+  await page.goto('/login')
+  const ordinarySession = session()
+  await page.evaluate(({ sessionKey, intentKey, value, intent }) => {
+    localStorage.setItem(intentKey, JSON.stringify(intent))
+    localStorage.setItem(sessionKey, JSON.stringify(value))
+  }, {
+    sessionKey: `farm-rx-auth:${projectRef}`,
+    intentKey: `farm-rx-auth-intent:v1:${projectRef}`,
+    value: ordinarySession,
+    intent: { version: 1, nonce: 'recovery-retry-existing-session', phase: 'accepted', userId, sessionLineage: `session-${userId}`, startedAtMs: Date.now() },
+  })
+
+  await page.goto('http://recovery.localhost:4173/update-password')
+  await page.getByRole('link', { name: 'Request a new link' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/login?forgotPassword=1')
+  await expect(page.getByRole('heading', { name: 'Reset your password' })).toBeVisible()
+  expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null')?.user?.id, `farm-rx-auth:${projectRef}`)).toBe(userId)
+  expect(unexpected).toEqual([])
+})
+
 async function mockRecoveryAuth(page: Page) {
   const recovery = session()
   let passwordUpdates = 0

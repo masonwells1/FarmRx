@@ -71,7 +71,10 @@ try {
   reset()
   mutate('scripts/provision-customer-lib.mjs', (source) => source.replace("firstPasswordRedirectTo = 'https://recovery.croprxsolutions.app/update-password'", "firstPasswordRedirectTo = 'https://farm-rx.vercel.app/update-password'"))
   detected('stale main-origin provisioning redirect', 'auth:provisioning-exact-recovery-redirect')
-  console.log('Foundation mutation drill: PASS (15/15 controlled mutations turned the gate red)')
+  reset()
+  mutate('src/App.tsx', (source) => source.replace('phase === "signed_in" && !forgotPassword', 'phase === "signed_in"'))
+  detected('signed-in redirect overrides reset intent', 'auth:reset-intent-before-signed-in-redirect')
+  console.log('Foundation mutation drill: PASS (16/16 controlled mutations turned the gate red)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

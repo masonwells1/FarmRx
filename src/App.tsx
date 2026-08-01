@@ -960,7 +960,7 @@ function LoginPage() {
         <p className="opening-farm">Opening your farm…</p>
       </main>
     );
-  if (phase === "signed_in") {
+  if (phase === "signed_in" && !forgotPassword) {
     const from = (location.state as { from?: string } | null)?.from;
     return (
       <Navigate
