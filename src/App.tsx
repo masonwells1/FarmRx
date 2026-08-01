@@ -10,7 +10,6 @@ import {
 } from "react";
 import {
   Navigate,
-  Link,
   NavLink,
   Route,
   Routes,
@@ -19,7 +18,7 @@ import {
 } from "react-router";
 import type { User } from "@supabase/supabase-js";
 import { useAuth } from "./auth/AuthProvider";
-import { minimumPasswordLength, passwordEmailDeliveryEnabled, passwordResetPublicResponse, passwordStrength, passwordValidationMessage } from './auth/passwordRecovery';
+import { isPasswordRecoveryStorageError, minimumPasswordLength, passwordEmailDeliveryEnabled, passwordRecoveryCleanupAuthority, passwordRecoveryExitUrl, passwordRecoveryStorageErrorMessage, passwordResetPublicResponse, passwordStrength, passwordValidationMessage } from './auth/passwordRecovery';
 import {
   bootstrapInitialOwnerFarm,
 } from "./auth/bootstrapFarm";
@@ -941,16 +940,49 @@ function MobileNavigation() {
 }
 
 function LoginPage() {
-  const { phase, signIn, requestPasswordReset } = useAuth();
+  const { phase, session, user, signIn, completePasswordRecoveryCleanup, requestPasswordReset } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const recoveryCompleted = new URLSearchParams(location.search).get('recoveryComplete') === '1';
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [forgotPassword, setForgotPassword] = useState(
-    () => passwordEmailDeliveryEnabled && (location.state as { forgotPassword?: boolean } | null)?.forgotPassword === true,
+    () => passwordEmailDeliveryEnabled && (
+      (location.state as { forgotPassword?: boolean } | null)?.forgotPassword === true
+      || new URLSearchParams(location.search).get('forgotPassword') === '1'
+    ),
   );
   const [resetResponse, setResetResponse] = useState<string | null>(null);
   const signInLock = useRef(createSubmitLock());
+  const recoveryCompletionStarted = useRef(false);
+  const recoveryCompletionAuthority = useRef<string | null | undefined>(undefined);
+  const [recoveryCompletionAttempt, setRecoveryCompletionAttempt] = useState(0);
+  const [recoveryCompletionError, setRecoveryCompletionError] = useState(false);
+
+  useEffect(() => {
+    if (!recoveryCompleted || phase === 'restoring' || recoveryCompletionStarted.current) return;
+    recoveryCompletionStarted.current = true;
+    setRecoveryCompletionError(false);
+    recoveryCompletionAuthority.current ??= passwordRecoveryCleanupAuthority(window.localStorage, session, user?.id, Date.now());
+    if (!recoveryCompletionAuthority.current) {
+      navigate('/login', { replace: true });
+      return;
+    }
+    void completePasswordRecoveryCleanup(recoveryCompletionAuthority.current)
+      .then(() => navigate('/login', { replace: true }))
+      .catch(() => setRecoveryCompletionError(true));
+  }, [completePasswordRecoveryCleanup, navigate, phase, recoveryCompleted, recoveryCompletionAttempt, session, user?.id]);
+
+  if (recoveryCompleted) {
+    return <main className="login-page"><section className="login-panel" aria-labelledby="recovery-completion-title">
+      <div className="login-brand"><div className="rx-mark" aria-hidden="true">℞</div><h1 id="recovery-completion-title">Securing your sign-in</h1><p>Farm records made clear.</p></div>
+      <div className="login-card">
+        {recoveryCompletionError
+          ? <><p className="auth-error" role="alert">Farm Rx could not clear the previous sign-in on this device. Try again before signing in with your new password.</p><button className="primary-action" type="button" onClick={() => { recoveryCompletionStarted.current = false; setRecoveryCompletionAttempt((attempt) => attempt + 1) }}>Try again</button></>
+          : <p className="opening-farm" role="status">Clearing the previous sign-in…</p>}
+      </div>
+    </section></main>;
+  }
 
   if (phase === "restoring")
     return (
@@ -958,7 +990,7 @@ function LoginPage() {
         <p className="opening-farm">Opening your farm…</p>
       </main>
     );
-  if (phase === "signed_in") {
+  if (phase === "signed_in" && !forgotPassword) {
     const from = (location.state as { from?: string } | null)?.from;
     return (
       <Navigate
@@ -1018,9 +1050,15 @@ function LoginPage() {
       setError(null);
       const form = new FormData(event.currentTarget);
       setResetResponse(await requestPasswordReset(String(form.get('email') ?? '')));
-    } catch {
-      // Account existence and delivery details are intentionally never shown.
-      setResetResponse(passwordResetPublicResponse);
+    } catch (error) {
+      // A local fail-closed preflight is safe to name; provider/account
+      // outcomes remain deliberately non-enumerating.
+      if (isPasswordRecoveryStorageError(error)) {
+        setResetResponse(null);
+        setError(passwordRecoveryStorageErrorMessage);
+      } else {
+        setResetResponse(passwordResetPublicResponse);
+      }
     } finally {
       setSubmitting(false);
       signInLock.current.release();
@@ -1045,6 +1083,7 @@ function LoginPage() {
           <label htmlFor="reset-email">Email address</label>
           <input id="reset-email" name="email" type="email" autoComplete="email" placeholder="you@farm.com" required disabled={submitting || Boolean(resetResponse)} />
           {resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}
+          {error && <p className="auth-error" role="alert">{error}</p>}
           <button className="primary-action" type="submit" disabled={submitting || Boolean(resetResponse)}>{submitting ? 'Sending…' : 'Send reset link'}</button>
           <button className="auth-link" type="button" onClick={() => { setForgotPassword(false); setError(null); setResetResponse(null) }} disabled={submitting}>Back to sign in</button>
         </form> : <form className="login-card" onSubmit={handleSubmit}>
@@ -1099,7 +1138,6 @@ function LoginPage() {
 
 function UpdatePasswordPage() {
   const { passwordRecoveryPhase, updatePassword, cancelPasswordRecovery } = useAuth();
-  const navigate = useNavigate();
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -1107,6 +1145,13 @@ function UpdatePasswordPage() {
   const updateLock = useRef(createSubmitLock());
   const validationMessage = passwordValidationMessage(password, confirmation);
   const strength = passwordStrength(password);
+  const signInUrl = passwordRecoveryExitUrl(window.location);
+  const requestNewLinkUrl = passwordRecoveryExitUrl(window.location, 'request-new-link');
+  const recoveryCompleteUrl = passwordRecoveryExitUrl(window.location, 'completed');
+
+  useEffect(() => {
+    if (passwordRecoveryPhase === 'complete' || passwordRecoveryPhase === 'complete_with_warning') window.location.replace(recoveryCompleteUrl);
+  }, [passwordRecoveryPhase, recoveryCompleteUrl]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1129,7 +1174,7 @@ function UpdatePasswordPage() {
       setSubmitting(true);
       setError(null);
       await cancelPasswordRecovery();
-      navigate('/login', { replace: true });
+      window.location.replace(signInUrl);
     } catch (caught) {
       setError(farmerError(caught, 'cancel password recovery'));
       setSubmitting(false);
@@ -1140,9 +1185,9 @@ function UpdatePasswordPage() {
   return <main className="login-page"><section className="login-panel" aria-labelledby="update-password-title">
     <div className="login-brand"><div className="rx-mark" aria-hidden="true">℞</div><h1 id="update-password-title">Choose a new password</h1><p>Keep your Farm Rx account secure.</p></div>
     {passwordRecoveryPhase === 'checking' && <p className="opening-farm" role="status">Checking your password-reset link…</p>}
-    {passwordRecoveryPhase === 'invalid' && <div className="login-card"><p className="auth-error" role="alert">This password-reset link is invalid, expired, already used, or was interrupted when the page closed or refreshed. Request a fresh link or contact your Crop RX representative.</p>{passwordEmailDeliveryEnabled ? <Link className="primary-action" to="/login" state={{ forgotPassword: true }}>Request a new link</Link> : <Link className="primary-action" to="/login">Return to sign in</Link>}</div>}
-    {passwordRecoveryPhase === 'complete' && <div className="login-card"><p className="reset-confirmation" role="status">Your password has been updated. Sign in with your new password.</p><Link className="primary-action" to="/login">Go to sign in</Link></div>}
-    {passwordRecoveryPhase === 'complete_with_warning' && <div className="login-card"><p className="auth-error" role="alert">Your password was updated, but this device could not completely clear the reset session. Close every Farm Rx tab, reopen the app, and sign in with your new password. If that still fails, contact your Farm Rx administrator.</p></div>}
+    {passwordRecoveryPhase === 'invalid' && <div className="login-card"><p className="auth-error" role="alert">This password-reset link is invalid, expired, already used, or was interrupted when the page closed or refreshed. Request a fresh link or contact your Crop RX representative.</p><a className="primary-action" href={passwordEmailDeliveryEnabled ? requestNewLinkUrl : signInUrl}>{passwordEmailDeliveryEnabled ? 'Request a new link' : 'Return to sign in'}</a></div>}
+    {passwordRecoveryPhase === 'complete' && <div className="login-card"><p className="reset-confirmation" role="status">Your password has been updated. Sign in with your new password.</p><a className="primary-action" href={recoveryCompleteUrl}>Go to sign in</a></div>}
+    {passwordRecoveryPhase === 'complete_with_warning' && <div className="login-card"><p className="auth-error" role="alert">Your password was updated, but this device could not completely clear the reset session. Close every Farm Rx tab, reopen the app, and sign in with your new password. If that still fails, contact your Farm Rx administrator.</p><a className="primary-action" href={recoveryCompleteUrl}>Go to sign in</a></div>}
     {passwordRecoveryPhase === 'ready' && <form className="login-card" onSubmit={submit}>
       <p className="auth-help" role="note">For your security, keep this page open until your password is updated. Closing or refreshing it invalidates this reset session.</p>
       <label htmlFor="new-password">New password</label>

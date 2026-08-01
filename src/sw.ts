@@ -9,7 +9,9 @@ cleanupOutdatedCaches()
 precacheAndRoute(self.__WB_MANIFEST)
 self.skipWaiting()
 clientsClaim()
-registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html')))
+// A one-time recovery token is consumed before Supabase redirects here. Never let an older
+// precached app shell handle that redirect: recovery must load the current network shell.
+registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html'), { denylist: [/^\/update-password(?:[/?]|$)/] }))
 
 const plainObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
 const notificationText = (value: unknown, maximum: number, fallback = '') => typeof value === 'string' ? value.slice(0, maximum) : fallback

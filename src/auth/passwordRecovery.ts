@@ -2,16 +2,129 @@ import { createClient, type Session } from '@supabase/supabase-js'
 import { supabaseConfig } from '../lib/supabaseConfig'
 
 export const passwordRecoveryRoute = '/update-password'
+export const passwordRecoveryOrigin = 'https://recovery.croprxsolutions.app'
+export const passwordRecoveryHostname = new URL(passwordRecoveryOrigin).hostname
+export const canonicalFarmRxOrigin = 'https://farm-rx.vercel.app'
 export const passwordResetPublicResponse = 'If that email is in Farm Rx, we sent a password reset link. Check your inbox and spam folder.'
+export const passwordRecoveryStorageErrorMessage = 'Farm Rx cannot safely start password recovery in this browser. Allow site storage or use another browser, then try again.'
 export const minimumPasswordLength = 12
 export const passwordEmailDeliveryEnabled = import.meta.env?.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED === 'true'
+export const passwordRecoveryCleanupRequestKey = `farm-rx-password-recovery-cleanup:v1:${supabaseConfig.projectRef}`
+
+const maximumPasswordRecoveryCleanupRequestAgeMs = 60 * 60 * 1000
+const persistedAuthSessionKey = `farm-rx-auth:${supabaseConfig.projectRef}`
+type PasswordRecoveryCleanupRequest = { version: 1; requestId: string; email: string; sessionLineage: string | null; requestedAtMs: number }
+
+export class PasswordRecoveryStorageError extends Error {
+  constructor() {
+    super(passwordRecoveryStorageErrorMessage)
+    this.name = 'PasswordRecoveryStorageError'
+  }
+}
+
+export function isPasswordRecoveryStorageError(error: unknown): error is PasswordRecoveryStorageError {
+  return error instanceof PasswordRecoveryStorageError
+}
+
+function normalizedRecoveryEmail(email: string) {
+  return email.trim().toLowerCase()
+}
+
+function recoverySessionLineage(session: Session | null): string | null {
+  if (!session) return null
+  try {
+    const encoded = session.access_token.split('.')[1]
+    if (!encoded) return null
+    const normalized = encoded.replace(/-/g, '+').replace(/_/g, '/')
+    const payload = JSON.parse(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '='))) as { session_id?: unknown; sub?: unknown }
+    return typeof payload.session_id === 'string' && payload.session_id.length > 0 && payload.sub === session.user.id ? payload.session_id : null
+  } catch { return null }
+}
+
+function persistedRecoverySession(storage: Storage): Session | null {
+  try {
+    const value = JSON.parse(storage.getItem(persistedAuthSessionKey) ?? 'null') as Partial<Session> | null
+    return value
+      && typeof value.access_token === 'string'
+      && value.user && typeof value.user.id === 'string' && typeof value.user.email === 'string'
+      ? value as Session
+      : null
+  } catch { return null }
+}
+
+function recoveryCleanupSession(storage: Storage, currentSession: Session | null, currentUserId: string | null | undefined) {
+  const candidate = currentSession ?? persistedRecoverySession(storage)
+  return candidate && candidate.user.id === currentUserId ? candidate : null
+}
+
+export function persistPasswordRecoveryCleanupRequest(storage: Storage, email: string, session: Session | null, currentUserId: string | null | undefined, requestId: string, nowMs: number) {
+  const cleanupSession = recoveryCleanupSession(storage, session, currentUserId)
+  const request = { version: 1, requestId, email: normalizedRecoveryEmail(email), sessionLineage: recoverySessionLineage(cleanupSession), requestedAtMs: nowMs } satisfies PasswordRecoveryCleanupRequest
+  const serialized = JSON.stringify(request)
+  try {
+    storage.setItem(passwordRecoveryCleanupRequestKey, serialized)
+    if (storage.getItem(passwordRecoveryCleanupRequestKey) !== serialized) throw new PasswordRecoveryStorageError()
+  } catch (error) {
+    if (isPasswordRecoveryStorageError(error)) throw error
+    throw new PasswordRecoveryStorageError()
+  }
+}
+
+export function passwordRecoveryCleanupAuthority(storage: Storage, currentSession: Session | null, currentUserId: string | null | undefined, nowMs: number): string | null {
+  try {
+    const serialized = storage.getItem(passwordRecoveryCleanupRequestKey)
+    const request = JSON.parse(serialized ?? 'null') as Partial<PasswordRecoveryCleanupRequest> | null
+    const cleanupSession = recoveryCleanupSession(storage, currentSession, currentUserId)
+    const valid = request?.version === 1
+      && typeof request.requestId === 'string' && request.requestId.length > 0
+      && typeof request.email === 'string' && request.email.length > 0
+      && (request.sessionLineage === null || typeof request.sessionLineage === 'string')
+      && typeof request.requestedAtMs === 'number' && Number.isFinite(request.requestedAtMs)
+      && request.requestedAtMs <= nowMs
+      && nowMs - request.requestedAtMs <= maximumPasswordRecoveryCleanupRequestAgeMs
+      && request.sessionLineage !== null
+      && request.sessionLineage === recoverySessionLineage(cleanupSession)
+      && request.email === normalizedRecoveryEmail(cleanupSession?.user.email ?? '')
+    if (valid) return serialized
+    if (storage.getItem(passwordRecoveryCleanupRequestKey) === serialized) storage.removeItem(passwordRecoveryCleanupRequestKey)
+  } catch { /* unreadable storage is never cleanup authority */ }
+  return null
+}
+
+export function persistedPasswordRecoveryCleanupAuthority(storage: Storage, currentUserId: string | null | undefined, nowMs: number): string | null {
+  return passwordRecoveryCleanupAuthority(storage, null, currentUserId, nowMs)
+}
+
+export function clearPasswordRecoveryCleanupAuthority(storage: Storage, authority: string) {
+  if (storage.getItem(passwordRecoveryCleanupRequestKey) === authority) storage.removeItem(passwordRecoveryCleanupRequestKey)
+}
 
 export type PasswordStrength = 'too_short' | 'okay' | 'strong'
+
+type RecoveryLocation = Pick<Location, 'hostname' | 'origin' | 'port' | 'protocol'>
+type PasswordRecoveryExitIntent = 'sign-in' | 'request-new-link' | 'completed'
+
+export function isPasswordRecoveryHostname(hostname: string): boolean {
+  return hostname === passwordRecoveryHostname || hostname === 'recovery.localhost'
+}
+
+export function passwordRecoveryExitUrl(location: RecoveryLocation, intent: PasswordRecoveryExitIntent = 'sign-in'): string {
+  const base = location.hostname === passwordRecoveryHostname
+    ? canonicalFarmRxOrigin
+    : location.hostname === 'recovery.localhost'
+      ? `${location.protocol}//127.0.0.1${location.port ? `:${location.port}` : ''}`
+      : location.origin
+  const target = new URL('/login', base)
+  if (intent === 'request-new-link') target.searchParams.set('forgotPassword', '1')
+  if (intent === 'completed') target.searchParams.set('recoveryComplete', '1')
+  return target.toString()
+}
 
 export function passwordRecoveryRedirectTo(origin: string): string {
   const base = new URL(origin)
   if (base.protocol !== 'https:' && base.protocol !== 'http:') throw new Error('Farm Rx could not create a password reset link for this site.')
-  return new URL(passwordRecoveryRoute, base).toString()
+  const recoveryBase = ['localhost', '127.0.0.1'].includes(base.hostname) ? base : new URL(passwordRecoveryOrigin)
+  return new URL(passwordRecoveryRoute, recoveryBase).toString()
 }
 
 export async function requestPasswordResetNonEnumerating(

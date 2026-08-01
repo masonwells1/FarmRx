@@ -7,24 +7,46 @@ password?**, and `/update-password`. It does not use public sign-up or invite co
 
 Before releasing the feature:
 
-1. In the Farm Rx Supabase project (`agvsozfbstpekuqxpqjr`), allow the exact redirect
-   `https://farm-rx.vercel.app/update-password`.
-2. Confirm the Auth site URL remains `https://farm-rx.vercel.app`.
-3. Configure and verify custom SMTP. Supabase's default sender is test-rate-limited and is not a
+0. Obtain Mason's explicit approval for the exact branch push, pull-request mutation, main/production
+   merge, automatic deployment, domain/DNS change, Supabase Auth or SMTP change, disposable-account
+   action, and real email communication being performed. This runbook records the sequence; it is
+   not approval by itself.
+1. Deploy the worker-suppression build to the existing Farm Rx Vercel project and verify the
+   canonical application remains `https://farm-rx.vercel.app`.
+2. Before enabling the recovery redirect or sending any recovery email, prove the customer-zero
+   stale-client gate: no real farmer has ever used Farm Rx; every known operator/disposable Farm Rx
+   tab or installed PWA from before the deployment is closed; and its canonical-origin service
+   worker and site data are removed in every known proof browser. A ready deployment alone does not
+   retire already-loaded JavaScript or an incumbent worker. If any prior farmer client exists or any
+   known proof client cannot be enumerated and retired, stop and keep recovery unavailable. This
+   customer-zero gate is not a general upgrade path for an installed customer population.
+3. Only after that deployment and stale-client gate are proven, bind
+   `recovery.croprxsolutions.app` and its DNS to that
+   same Vercel project. Never point the recovery hostname at a separate application or project.
+4. In the Farm Rx Supabase project (`agvsozfbstpekuqxpqjr`), allow the exact redirect
+   `https://recovery.croprxsolutions.app/update-password`. Confirm the Auth site URL remains
+   `https://farm-rx.vercel.app`; the main-origin wildcard does not cover the recovery hostname.
+5. Verify that every recovery-host path except `/update-password` and every completed, cancelled,
+   or failed recovery journey returns to `https://farm-rx.vercel.app/login`.
+6. Configure and verify custom SMTP. Supabase's default sender is test-rate-limited and is not a
    dependable customer support channel.
-4. Send a recovery message to a disposable non-production customer account and verify the link,
+7. Send a recovery message to a disposable non-production customer account and verify the link,
    sender, subject, delivery time, and mobile rendering.
-5. Never place SMTP credentials, service-role keys, or customer passwords in this repository.
+8. Never place SMTP credentials, service-role keys, or customer passwords in this repository.
 
-Current read-only production evidence from 2026-07-18: the Auth site URL is
+Historical read-only production evidence from 2026-07-18: the Auth site URL was
 `https://farm-rx.vercel.app`; the redirect allowlist contains that origin, its wildcard, and local
-development entries; public sign-up is disabled; email auth is enabled; automatic confirmation is
-off; and SMTP host, user, and sender are all unconfigured. The wildcard covers `/update-password`,
-but missing custom SMTP blocks enabling email delivery and onboarding a real customer. It does not
-block merging the default-off code guards. Do not change live Auth settings without a separate
-approved production action.
+development entries; public sign-up was disabled; email auth was enabled; automatic confirmation
+was off; and SMTP host, user, and sender were all unconfigured. That evidence predates the dedicated
+recovery-host design and must not be used as the current release configuration. The main-origin
+wildcard does not authorize `recovery.croprxsolutions.app`. Do not change live Auth or Vercel domain
+settings without a separate approved production action.
 
-Until that action and a real delivery test pass, the production-safe defaults are:
+The authenticated read-only Vercel check on 2026-08-01 found
+`VITE_PASSWORD_EMAIL_DELIVERY_ENABLED=true` in production. The configured SMTP provider delivered
+disposable messages before the worker-free repair, but that exposed the stale-worker defect and is
+not final proof. Environments without separately approved and proven delivery must retain these
+safe defaults:
 
 - `VITE_PASSWORD_EMAIL_DELIVERY_ENABLED` is absent or not `true`, so sign-in shows honest help
   guidance instead of a reset form that cannot deliver.
@@ -50,8 +72,16 @@ post-change proof; merging frontend code does not configure them.
   browser-cached copy revalidates the exact owner lease and fails closed after that lease was revoked.
 - Other Farm Rx tabs receive Supabase's recovery notification but cannot adopt it or clear the
   recovery page's owner lease; an existing ordinary session remains unchanged.
-- Completing recovery returns the farmer to normal sign-in. The recovery session is never treated
-  as an ordinary Farm Rx session.
+- Completing recovery automatically returns the farmer to canonical
+  `https://farm-rx.vercel.app/login`. A recent local reset-request marker must match the exact older
+  canonical-app session lineage before Farm Rx clears that session and its offline workspace; a
+  naked completion URL cannot trigger cleanup. A newer accepted sibling session is preserved.
+  Cleanup failure remains retryable for the exact older user, and successful cleanup requires
+  sign-in with the new password.
+  Cancelling recovery returns to the canonical app without clearing a pre-existing ordinary
+  session. An invalid link's **Request a new link** action preserves that ordinary session while
+  opening the canonical reset form. The recovery session is never treated as an ordinary Farm Rx
+  session, and ordinary Farm Rx routes must never remain on the recovery hostname.
 - A newly provisioned owner uses the same narrow recovery capability to choose the first known
   password. The script's bootstrap secret is never printed, returned, emailed, or relayed.
 - Resetting a password does not create or restore farm membership. Revoked farm access stays

@@ -6,9 +6,15 @@ import type { Session } from '@supabase/supabase-js'
 import type { AuthProviderDependencies } from './AuthProvider'
 import { createAuthSessionStorage } from './authSessionStorage'
 import {
+  passwordRecoveryCleanupAuthority,
+  persistPasswordRecoveryCleanupRequest,
+  isPasswordRecoveryStorageError,
   isPasswordRecoveryEvent,
+  isPasswordRecoveryHostname,
   minimumPasswordLength,
+  passwordRecoveryExitUrl,
   passwordRecoveryRedirectTo,
+  passwordRecoveryStorageErrorMessage,
   passwordResetPublicResponse,
   requestPasswordResetNonEnumerating,
   passwordStrength,
@@ -25,7 +31,7 @@ function assert(value: unknown, message: string): asserts value {
 const recoveryPayload = btoa(JSON.stringify({ sub: 'recovery-user', session_id: 'recovery-session-lineage' })).replaceAll('=', '')
 const recoverySession = { access_token: `header.${recoveryPayload}.signature`, refresh_token: 'recovery-refresh-token', user: { id: 'recovery-user' } } as unknown as Session
 const otherPayload = btoa(JSON.stringify({ sub: 'other-user', session_id: 'other-session-lineage' })).replaceAll('=', '')
-const otherSession = { access_token: `header.${otherPayload}.signature`, refresh_token: 'other-refresh-token', user: { id: 'other-user' } } as unknown as Session
+const otherSession = { access_token: `header.${otherPayload}.signature`, refresh_token: 'other-refresh-token', user: { id: 'other-user', email: 'other@example.test' } } as unknown as Session
 function acceptsRecoveryEvent(event: string, session: Session | null, pathname: string): boolean { return isPasswordRecoveryEvent(event, session, pathname) }
 
 // Known, unknown/provider-error, and thrown/network-error cases must leave
@@ -37,9 +43,22 @@ const resetOutcomes = await Promise.all([
   requestPasswordResetNonEnumerating('network@example.test', 'https://farm-rx.vercel.app', async (email, options) => { resetCalls.push({ email, redirectTo: options.redirectTo }); throw new TypeError('network unavailable') }),
 ])
 assert(resetOutcomes.every((outcome) => outcome === passwordResetPublicResponse), 'Password reset outcomes exposed account or delivery state.')
-assert(resetCalls.length === 3 && resetCalls[0]?.email === 'known@example.test' && resetCalls.every((call) => call.redirectTo === 'https://farm-rx.vercel.app/update-password'), 'Password reset requests did not use one trimmed-email and exact same-origin redirect contract.')
-assert(passwordRecoveryRedirectTo('https://farm-rx.vercel.app') === 'https://farm-rx.vercel.app/update-password', 'Password reset redirect was not the exact public update-password route.')
+assert(resetCalls.length === 3 && resetCalls[0]?.email === 'known@example.test' && resetCalls.every((call) => call.redirectTo === 'https://recovery.croprxsolutions.app/update-password'), 'Password reset requests did not use one trimmed-email and exact worker-free production redirect contract.')
+for (const storage of [
+  { setItem() { throw new Error('storage denied') }, getItem() { return null } },
+  { setItem() { /* discarded */ }, getItem() { return null } },
+]) {
+  let storageError: unknown = null
+  try { persistPasswordRecoveryCleanupRequest(storage as unknown as Storage, 'farmer@example.test', null, null, 'storage-preflight', Date.now()) } catch (error) { storageError = error }
+  assert(isPasswordRecoveryStorageError(storageError) && storageError.message === passwordRecoveryStorageErrorMessage, 'A failed cleanup-marker preflight did not surface the honest device-storage error.')
+}
+assert(passwordRecoveryRedirectTo('https://farm-rx.vercel.app') === 'https://recovery.croprxsolutions.app/update-password', 'Production password reset did not use the worker-free recovery origin.')
 assert(passwordRecoveryRedirectTo('http://localhost:5173') === 'http://localhost:5173/update-password', 'Local password reset redirect was malformed.')
+assert(isPasswordRecoveryHostname('recovery.croprxsolutions.app') && isPasswordRecoveryHostname('recovery.localhost') && !isPasswordRecoveryHostname('farm-rx.vercel.app'), 'Recovery-host confinement did not recognize the exact production and local mirror hostnames.')
+assert(passwordRecoveryExitUrl({ hostname: 'recovery.croprxsolutions.app', origin: 'https://recovery.croprxsolutions.app', port: '', protocol: 'https:' }) === 'https://farm-rx.vercel.app/login', 'Production recovery did not exit to the canonical Farm Rx sign-in origin.')
+assert(passwordRecoveryExitUrl({ hostname: 'recovery.croprxsolutions.app', origin: 'https://recovery.croprxsolutions.app', port: '', protocol: 'https:' }, 'request-new-link') === 'https://farm-rx.vercel.app/login?forgotPassword=1', 'Production recovery did not preserve the request-new-link intent across origins.')
+assert(passwordRecoveryExitUrl({ hostname: 'recovery.croprxsolutions.app', origin: 'https://recovery.croprxsolutions.app', port: '', protocol: 'https:' }, 'completed') === 'https://farm-rx.vercel.app/login?recoveryComplete=1', 'Completed recovery did not signal canonical-session cleanup.')
+assert(passwordRecoveryExitUrl({ hostname: 'recovery.localhost', origin: 'http://recovery.localhost:4173', port: '4173', protocol: 'http:' }) === 'http://127.0.0.1:4173/login', 'Local recovery proof did not exit to the main-app origin.')
 assert(acceptsRecoveryEvent('PASSWORD_RECOVERY', recoverySession, '/update-password'), 'A valid password recovery event was not accepted.')
 assert(!acceptsRecoveryEvent('SIGNED_IN', recoverySession, '/update-password'), 'An ordinary signed-in event enabled password recovery.')
 assert(!acceptsRecoveryEvent('PASSWORD_RECOVERY', recoverySession, '/fields'), 'A recovery event outside the public update route was accepted.')
@@ -83,6 +102,7 @@ const css = readFileSync(new URL('../styles/app.css', import.meta.url), 'utf8')
 assert(/name="email"[\s\S]*?required/.test(app) && /name="password"[\s\S]*?required/.test(app), 'Sign-in fields are missing native required validation.')
 assert(tokens.includes('--on-dark-accent: #BCEFCF;') && css.includes('.slogan {') && css.includes('color: var(--on-dark-accent)'), 'Login slogan does not use the accessible on-dark brand token.')
 assert(app.includes('keep this page open until your password is updated') && app.includes('Request a fresh link or contact your Crop RX representative'), 'The recovery UI does not explain fail-closed refresh behavior and the support path.')
+assert(app.includes('if (isPasswordRecoveryStorageError(error))') && app.includes('setError(passwordRecoveryStorageErrorMessage)'), 'The reset form could still report email success after its local cleanup-marker preflight failed.')
 
 // Exercise the provider, not just its helpers: auth-js persists recovery
 // sessions before PASSWORD_RECOVERY. A recovery marker must therefore block a
@@ -105,7 +125,7 @@ const previousReact = Object.getOwnPropertyDescriptor(globalThis, 'React')
 Object.defineProperty(globalThis, 'React', { configurable: true, writable: true, value: React })
 try {
   const { createRoot } = await import('react-dom/client')
-  type ProbeAuth = { phase: string; user: { id: string } | null; passwordRecoveryPhase: string; signIn(email: string, password: string): Promise<void>; updatePassword(password: string): Promise<void>; cancelPasswordRecovery(): Promise<void> }
+  type ProbeAuth = { phase: string; user: { id: string } | null; passwordRecoveryPhase: string; signIn(email: string, password: string): Promise<void>; signOut(): Promise<void>; completePasswordRecoveryCleanup(authority: string): Promise<boolean>; updatePassword(password: string): Promise<void>; cancelPasswordRecovery(): Promise<void> }
   const current = { value: null as ProbeAuth | null }
   let authEvent: ((event: string, session: typeof recoverySession | null) => void) | null = null
   let updateCalls = 0
@@ -237,6 +257,156 @@ try {
   await act(async () => { authEvent?.('TOKEN_REFRESHED', recoverySession); authEvent?.('USER_UPDATED', recoverySession); await new Promise((resolve) => setTimeout(resolve, 0)) })
   assert(currentAuth().phase === 'signed_out' && currentAuth().user === null && currentAuth().passwordRecoveryPhase === 'complete', 'A later refresh/update event resurrected a completed recovery session.')
   await act(async () => { root.unmount() })
+
+  // A local sign-out fences Auth before clearing farm storage. If that later
+  // cleanup fails, retry must retain the original user identity even though
+  // the visible Auth session is already null.
+  authWindow.localStorage.clear()
+  authWindow.history.replaceState({}, '', '/login')
+  authWindow.localStorage.setItem(authSessionKey, JSON.stringify(otherSession))
+  authWindow.localStorage.setItem(authIntentKey, JSON.stringify({ version: 1, nonce: 'cleanup-retry-session', phase: 'accepted', userId: otherSession.user.id, sessionLineage: 'other-session-lineage', startedAtMs: Date.now() }))
+  const retryCleanupUsers: string[] = []
+  const retryCurrent = { value: null as ProbeAuth | null }
+  function RetryProbe() { retryCurrent.value = useAuth() as ProbeAuth; return createElement('div', null, retryCurrent.value.phase) }
+  const retryContainer = authWindow.document.createElement('div')
+  authWindow.document.body.append(retryContainer)
+  const retryRoot = createRoot(retryContainer as unknown as HTMLElement)
+  const retryDependencies = {
+    ...dependencies,
+    pathname: () => '/login',
+    auth: {
+      ...client,
+      getSession: async () => ({ data: { session: otherSession }, error: null }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => undefined } } }),
+    },
+    clearFarmAccess: async (cleanupUserId: string) => {
+      retryCleanupUsers.push(cleanupUserId)
+      if (retryCleanupUsers.length === 1) throw new Error('controlled farm cleanup failure')
+    },
+  } as unknown as AuthProviderDependencies
+  await act(async () => {
+    retryRoot.render(createElement(AuthProvider, { dependencies: retryDependencies, children: createElement(RetryProbe) }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  assert(retryCurrent.value?.phase === 'signed_in', 'The sign-out cleanup retry fixture did not restore its ordinary session.')
+  let firstCleanupRejected = false
+  await act(async () => {
+    try { await retryCurrent.value!.signOut() } catch { firstCleanupRejected = true }
+    await Promise.resolve()
+  })
+  assert(firstCleanupRejected && String(retryCurrent.value?.phase) === 'signed_out', 'The controlled farm cleanup failure did not leave Auth fenced and retryable.')
+  await act(async () => { await retryCurrent.value!.signOut(); await Promise.resolve() })
+  assert(retryCleanupUsers.length === 2 && retryCleanupUsers.every((id) => id === otherSession.user.id), 'A sign-out cleanup retry lost the original user identity.')
+  await act(async () => { retryRoot.unmount() })
+  retryContainer.remove()
+  authWindow.localStorage.clear()
+  authWindow.history.replaceState({}, '', '/update-password')
+
+  // A transport failure may restore only offlineUser while the exact accepted
+  // session remains persisted. Completion must authorize against that exact
+  // persisted lineage and clear both Auth and farm access under one provider
+  // transaction, rather than treating session=null as an unsigned URL.
+  authWindow.history.replaceState({}, '', '/login')
+  authWindow.localStorage.setItem(authSessionKey, JSON.stringify(otherSession))
+  authWindow.localStorage.setItem(authIntentKey, JSON.stringify({ version: 1, nonce: 'offline-cleanup-session', phase: 'accepted', userId: otherSession.user.id, sessionLineage: 'other-session-lineage', startedAtMs: Date.now() }))
+  const offlineCleanupUsers: string[] = []
+  const offlineCurrent = { value: null as ProbeAuth | null }
+  function OfflineProbe() { offlineCurrent.value = useAuth() as ProbeAuth; return createElement('div', null, `${offlineCurrent.value.phase}:${offlineCurrent.value.user?.id ?? 'none'}`) }
+  const offlineContainer = authWindow.document.createElement('div')
+  authWindow.document.body.append(offlineContainer)
+  const offlineRoot = createRoot(offlineContainer as unknown as HTMLElement)
+  const offlineDependencies = {
+    ...dependencies,
+    pathname: () => '/login',
+    auth: {
+      ...client,
+      getSession: async () => ({ data: { session: null }, error: new TypeError('controlled offline transport failure') }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => undefined } } }),
+    },
+    restoreOfflineFarmUserId: () => otherSession.user.id,
+    clearFarmAccess: async (cleanupUserId: string) => {
+      offlineCleanupUsers.push(cleanupUserId)
+      if (offlineCleanupUsers.length === 1) throw new Error('controlled recovery cleanup failure')
+    },
+  } as unknown as AuthProviderDependencies
+  await act(async () => {
+    offlineRoot.render(createElement(AuthProvider, { dependencies: offlineDependencies, children: createElement(OfflineProbe) }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  assert(offlineCurrent.value?.phase === 'signed_in' && offlineCurrent.value.user?.id === otherSession.user.id, 'The completion fixture did not restore its offline-only identity.')
+  const offlineSessionBytes = authWindow.localStorage.getItem(authSessionKey)
+  const nakedOfflineAuthority = passwordRecoveryCleanupAuthority(authWindow.localStorage, null, offlineCurrent.value.user.id, Date.now())
+  assert(nakedOfflineAuthority === null
+    && offlineCurrent.value.phase === 'signed_in'
+    && authWindow.localStorage.getItem(authSessionKey) === offlineSessionBytes,
+  'A naked completion URL cleared or altered an offline-only identity without a local reset request marker.')
+  persistPasswordRecoveryCleanupRequest(authWindow.localStorage, otherSession.user.email!, null, otherSession.user.id, 'offline-cleanup-request', Date.now())
+  const offlineAuthority = passwordRecoveryCleanupAuthority(authWindow.localStorage, null, offlineCurrent.value.user.id, Date.now())
+  assert(offlineAuthority !== null, 'An exact persisted offline lineage was not accepted as completion cleanup authority.')
+  let firstOfflineCleanupRejected = false
+  await act(async () => {
+    try { await offlineCurrent.value!.completePasswordRecoveryCleanup(offlineAuthority) } catch { firstOfflineCleanupRejected = true }
+    await Promise.resolve()
+  })
+  assert(firstOfflineCleanupRejected
+    && String(offlineCurrent.value?.phase) === 'signed_out'
+    && offlineCleanupUsers.length === 1
+    && offlineCleanupUsers[0] === otherSession.user.id,
+  'Recovery completion did not surface its controlled farm cleanup failure after fencing Auth.')
+  let offlineCleanupApplied = false
+  await act(async () => { offlineCleanupApplied = await offlineCurrent.value!.completePasswordRecoveryCleanup(offlineAuthority); await Promise.resolve() })
+  assert(offlineCleanupApplied
+    && Number(offlineCleanupUsers.length) === 2
+    && offlineCleanupUsers.every((id) => id === otherSession.user.id),
+  'Recovery completion retry did not retain and clear the exact offline user after Auth became signed out.')
+  await act(async () => { offlineRoot.unmount() })
+  offlineContainer.remove()
+  authWindow.localStorage.clear()
+  authWindow.history.replaceState({}, '', '/update-password')
+
+  // The UI may read a valid authority just before another tab publishes a
+  // newer accepted session. Transactional completion must re-read persisted
+  // lineage and preserve that newer tuple instead of clearing it.
+  authWindow.history.replaceState({}, '', '/login')
+  authWindow.localStorage.setItem(authSessionKey, JSON.stringify(otherSession))
+  authWindow.localStorage.setItem(authIntentKey, JSON.stringify({ version: 1, nonce: 'pre-race-session', phase: 'accepted', userId: otherSession.user.id, sessionLineage: 'other-session-lineage', startedAtMs: Date.now() }))
+  persistPasswordRecoveryCleanupRequest(authWindow.localStorage, otherSession.user.email!, otherSession, otherSession.user.id, 'pre-race-cleanup-request', Date.now())
+  const raceCurrent = { value: null as ProbeAuth | null }
+  function RaceProbe() { raceCurrent.value = useAuth() as ProbeAuth; return createElement('div', null, raceCurrent.value.phase) }
+  const raceContainer = authWindow.document.createElement('div')
+  authWindow.document.body.append(raceContainer)
+  const raceRoot = createRoot(raceContainer as unknown as HTMLElement)
+  const raceDependencies = {
+    ...dependencies,
+    pathname: () => '/login',
+    auth: {
+      ...client,
+      getSession: async () => ({ data: { session: otherSession }, error: null }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => undefined } } }),
+    },
+  } as unknown as AuthProviderDependencies
+  await act(async () => {
+    raceRoot.render(createElement(AuthProvider, { dependencies: raceDependencies, children: createElement(RaceProbe) }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  const preRaceAuthority = passwordRecoveryCleanupAuthority(authWindow.localStorage, otherSession, otherSession.user.id, Date.now())
+  assert(preRaceAuthority !== null, 'The post-authority race fixture did not capture its older cleanup authority.')
+  const newerPayload = btoa(JSON.stringify({ sub: otherSession.user.id, session_id: 'newer-post-authority-lineage' })).replaceAll('=', '')
+  const newerSameUserSession = { ...otherSession, access_token: `header.${newerPayload}.signature`, refresh_token: 'newer-post-authority-refresh' }
+  const newerSessionBytes = JSON.stringify(newerSameUserSession)
+  const newerIntentBytes = JSON.stringify({ version: 1, nonce: 'newer-post-authority-intent', phase: 'accepted', userId: otherSession.user.id, sessionLineage: 'newer-post-authority-lineage', startedAtMs: Date.now() })
+  authWindow.localStorage.setItem(authSessionKey, newerSessionBytes)
+  authWindow.localStorage.setItem(authIntentKey, newerIntentBytes)
+  let postRaceCleanupApplied = true
+  await act(async () => { postRaceCleanupApplied = await raceCurrent.value!.completePasswordRecoveryCleanup(preRaceAuthority); await Promise.resolve() })
+  assert(!postRaceCleanupApplied
+    && authWindow.localStorage.getItem(authSessionKey) === newerSessionBytes
+    && authWindow.localStorage.getItem(authIntentKey) === newerIntentBytes,
+  'Completion cleanup cleared or rewrote a newer session published after the UI authority check.')
+  await act(async () => { raceRoot.unmount() })
+  raceContainer.remove()
+  authWindow.localStorage.clear()
+  authWindow.history.replaceState({}, '', '/update-password')
 
   // Exercise all four primary cleanup verifiers and all four coordinated
   // retry verifiers after the isolated server update. At each point a newer

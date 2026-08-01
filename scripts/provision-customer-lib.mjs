@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 
 export const farmRxSupabaseUrl = 'https://agvsozfbstpekuqxpqjr.supabase.co'
-export const firstPasswordRedirectTo = 'https://farm-rx.vercel.app/update-password'
+export const firstPasswordRedirectTo = 'https://recovery.croprxsolutions.app/update-password'
 
 function normalizedEmail(value) {
   const email = value.trim().toLowerCase()

@@ -176,3 +176,61 @@ replace.
 
 The default-off email guards make this code publication safe while SMTP remains absent. Enabling
 email delivery is a separate production action with its own proof; this release did not enable it.
+
+## 2026-08-01 recovery-origin hardening update
+
+The July evidence above remains historical for its exact release. A later approved operator tranche
+configured the SMTP provider; an authenticated read-only production Vercel check on 2026-08-01
+returned exact `VITE_PASSWORD_EMAIL_DELIVERY_ENABLED=true`, and disposable recovery messages
+arrived. The real Chrome journey then exposed a stale service-worker interception defect; that
+pre-repair delivery is evidence that mail arrived, not final customer-zero recovery proof.
+
+The bounded local repair was accepted at exact commit
+`e012e718aec1f5492894891a3df92544c1c4951f`. It moves both reset and first-password links to
+`https://recovery.croprxsolutions.app/update-password`, suppresses service-worker registration on
+that origin, confines the hostname to the recovery route, preserves the normal Supabase
+`PASSWORD_RECOVERY` event, and returns farmers to canonical `https://farm-rx.vercel.app`. Invalid
+link retry and cancellation preserve a pre-existing canonical session; confirmed completion waits
+for canonical restoration, clears that older session, lands at sign-in, and prevents stale session
+bytes from reopening `/fields`.
+
+Exact local proof included the full foundation gate, 17/17 controlled mutation rejections,
+disposable database/RLS lanes, 59 Playwright passes with 9 intentional configuration/project skips,
+6/6 default and 7/7 enabled-email focused Chromium journeys, the green season contract, and a
+fresh-context read-only Sol **ACCEPT** with no merge blocker. This is source/runtime proof only.
+
+PR #17 review then found that completion depended on an optional link, a naked completion query
+could clear ordinary local state, and a cleanup retry could lose its original user identity. The
+repair chain preserved rejected commits and ended at exact source
+`2c4fadb1d8f4bbffe025dc92aa1a79caa02efba4`. Completion now automatically returns for both terminal
+success states; cleanup requires a recent local request marker bound to the exact persisted accepted
+session lineage and restored user identity; offline-only access is cleared; a newer lineage arriving
+after the UI check is preserved by transactional revalidation; and failed farm cleanup retries the
+exact original user. The final full foundation run passed 62 browser tests with 12 intentional skips,
+21/21 controlled mutations, zero audit findings, and every disposable database/provenance/RLS lane;
+the six-scenario season contract again passed 101 fixtures and all 9 contract plus 14 isolation
+rejections. Fresh-context read-only Sol returned **ACCEPT — no merge blockers** on exact `2c4fadb1`.
+
+The next PR review on remote documentation head `54775ea67e92122c99fd677249cc1cef8d7cea32`
+found two additional release blockers: a ready deployment alone could not retire an already-loaded
+pre-deployment PWA, and cleanup-marker storage failure could prevent the provider request while the
+form still showed the generic sent-email response. Exact local source
+`9ecc6cba7bbaa9bea063054fe3b996cd22ea9555` now surfaces a visible device-storage error and makes zero
+provider calls when the marker cannot be safely stored; ordinary provider/account outcomes remain
+non-enumerating. The runbook permits enablement only as a customer-zero transition after proving no
+real farmer has used Farm Rx and retiring every known operator/disposable tab, PWA, worker, and site
+data instance; it stops if any client cannot be accounted for. The complete foundation packet passed
+with 62 browser passes and 14 intentional skips, 25/25 controlled mutations, and every disposable
+database/provenance/RLS lane. Focused enabled-email recovery passed 11/11; the six-scenario season
+contract passed 101 fixtures and all 9 contract plus 14 isolation rejections. Fresh-context read-only
+Sol returned **ACCEPT — no merge blockers** on exact `9ecc6cb`.
+
+At closeout, remote and production `main` remain
+`45dc52f425ee844a0ddc473d514cce748e61c559`; deployment
+`dpl_Fe9UHdAiwoF8ucczm8kgHnZYczrJ` is `READY` and the canonical URL returns HTTP `200`. Accepted
+recovery commit `9ecc6cb` is local/unpublished while PR #17 remains at older `54775ea`;
+`recovery.croprxsolutions.app` is NXDOMAIN/unbound, and the exact
+Supabase redirect is not configured. Final release proof therefore still requires separately
+authorized publication/automatic deployment, same-project recovery-domain and DNS binding, exact
+Auth allowlisting, a no-bypass disposable real-email Chrome journey, and both physical-phone
+journeys. No customer account or communication receives credit from this update.

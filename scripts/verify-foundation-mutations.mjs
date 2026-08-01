@@ -6,8 +6,9 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
 const files = [
-  'src/App.tsx', 'src/sw.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json',
-  'scripts/verify-foundation.ps1',
+  'docs/password-recovery-support.md',
+  'src/App.tsx', 'src/main.tsx', 'src/sw.ts', 'src/auth/AuthProvider.tsx', 'src/auth/passwordRecovery.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json', 'vite.config.ts',
+  'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1',
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
   'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/queuedOperationGuard.ts',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -58,7 +59,49 @@ try {
   reset()
   mutate('src/data/workspaceCache.ts', (source) => source.replace('`${scope.projectRef}:${scope.userId}:${scope.farmId}:${scope.module}`', '`${scope.projectRef}:shared-user:${scope.farmId}:${scope.module}`'))
   detected('private cache user-scope removal', 'cache:user-farm-module-key')
-  console.log('Foundation mutation drill: PASS (11/11 controlled mutations turned the gate red)')
+  reset()
+  mutate('src/main.tsx', (source) => source.replace("'serviceWorker' in navigator && !isPasswordRecoveryHostname(window.location.hostname)", "'serviceWorker' in navigator && true"))
+  detected('recovery-origin service-worker registration', 'service-worker:recovery-origin-registration-denied')
+  reset()
+  mutate('src/main.tsx', (source) => source.replace('isPasswordRecoveryHostname(window.location.hostname) && window.location.pathname !== passwordRecoveryRoute', 'false && window.location.pathname !== passwordRecoveryRoute'))
+  detected('recovery-host route confinement removal', 'auth:recovery-host-route-confinement')
+  reset()
+  mutate('docs/password-recovery-support.md', (source) => source.replace('allow the exact redirect\n   `https://recovery.croprxsolutions.app/update-password`', 'allow the exact redirect\n   `https://farm-rx.vercel.app/update-password`'))
+  detected('stale main-origin recovery allowlist instruction', 'auth:runbook-exact-recovery-redirect')
+  reset()
+  mutate('scripts/provision-customer-lib.mjs', (source) => source.replace("firstPasswordRedirectTo = 'https://recovery.croprxsolutions.app/update-password'", "firstPasswordRedirectTo = 'https://farm-rx.vercel.app/update-password'"))
+  detected('stale main-origin provisioning redirect', 'auth:provisioning-exact-recovery-redirect')
+  reset()
+  mutate('src/App.tsx', (source) => source.replace('phase === "signed_in" && !forgotPassword', 'phase === "signed_in"'))
+  detected('signed-in redirect overrides reset intent', 'auth:reset-intent-before-signed-in-redirect')
+  reset()
+  mutate('src/auth/passwordRecovery.ts', (source) => source.replace("if (intent === 'completed') target.searchParams.set('recoveryComplete', '1')", "if (intent === 'completed') target.searchParams.set('forgotPassword', '1')"))
+  detected('completed recovery loses canonical cleanup signal', 'auth:completion-canonical-session-signal')
+  reset()
+  mutate('src/auth/AuthProvider.tsx', (source) => source.replaceAll('persistedPasswordRecoveryCleanupAuthority(d.storage, cleanupUserId, d.now()) !== authority', 'false'))
+  detected('completed recovery loses transactional lineage revalidation', 'auth:completion-revalidates-persisted-lineage-in-transaction')
+  reset()
+  mutate('src/auth/AuthProvider.tsx', (source) => source.replace('pendingSignOutCleanupUserIds.current.add(cleanupUserId)', 'void cleanupUserId'))
+  detected('completed recovery loses cleanup user retry state', 'auth:completion-retains-cleanup-user')
+  reset()
+  mutate('src/auth/AuthProvider.tsx', (source) => source.replace('appliedRecoveryCompletionAuthority.current = authority', 'appliedRecoveryCompletionAuthority.current = null'))
+  detected('completed recovery loses applied authority retry state', 'auth:completion-retains-retry-authority')
+  reset()
+  mutate('src/App.tsx', (source) => source.replace("passwordRecoveryPhase === 'complete' || passwordRecoveryPhase === 'complete_with_warning'", "passwordRecoveryPhase === 'complete'"))
+  detected('completed recovery warning loses automatic handoff', 'auth:completion-auto-handoff-terminal-phases')
+  reset()
+  mutate('src/auth/passwordRecovery.ts', (source) => source.replaceAll('throw new PasswordRecoveryStorageError()', 'return'))
+  detected('reset storage preflight suppresses its honest failure', 'auth:reset-storage-preflight-fails-honestly')
+  reset()
+  mutate('src/App.tsx', (source) => source.replace('if (isPasswordRecoveryStorageError(error))', 'if (false)'))
+  detected('reset storage failure falls through to public email success', 'auth:reset-storage-error-distinguished')
+  reset()
+  mutate('docs/password-recovery-support.md', (source) => source.replace('If any prior farmer client exists or any\n   known proof client cannot be enumerated and retired, stop and keep recovery unavailable.', 'Proceed after deployment readiness alone.'))
+  detected('stale-client customer-zero transition gate removal', 'auth:runbook-stale-client-customer-zero-gate')
+  reset()
+  mutate('src/App.tsx', (source) => source.replace('{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}\n          {error && <p className="auth-error" role="alert">{error}</p>}', '{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}'))
+  detected('reset storage failure loses visible error', 'auth:reset-storage-error-rendered')
+  console.log('Foundation mutation drill: PASS (25/25 controlled mutations turned the gate red)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

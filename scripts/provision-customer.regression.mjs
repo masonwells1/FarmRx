@@ -20,6 +20,7 @@ const client = {
 }
 const createClientImpl = () => client
 const bootstrapSecret = 'fixture-bootstrap-secret-that-must-never-escape-Aa1!'
+assert(firstPasswordRedirectTo === 'https://recovery.croprxsolutions.app/update-password', 'Provisioning did not pin the exact worker-free first-password redirect.')
 
 const created = await provisionCustomer({ email: ' OWNER@example.test ', serviceKey: 'fixture-service-key', emailDeliveryReady: true, createClientImpl, createSecret: () => bootstrapSecret })
 assert(created.mode === 'create' && created.email === email && created.initialFarmOwner, 'Create mode did not return the approved owner identity.')

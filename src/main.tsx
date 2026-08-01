@@ -9,11 +9,20 @@ import './styles/tokens.css'
 import './styles/app.css'
 import { App } from './App'
 import { AuthProvider } from './auth/AuthProvider'
+import { isPasswordRecoveryHostname, passwordRecoveryExitUrl, passwordRecoveryRoute } from './auth/passwordRecovery'
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <BrowserRouter>
-      <AuthProvider><App /></AuthProvider>
-    </BrowserRouter>
-  </StrictMode>,
-)
+if (isPasswordRecoveryHostname(window.location.hostname) && window.location.pathname !== passwordRecoveryRoute) {
+  window.location.replace(passwordRecoveryExitUrl(window.location))
+} else {
+  if ('serviceWorker' in navigator && !isPasswordRecoveryHostname(window.location.hostname)) {
+    window.addEventListener('load', () => { void navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => undefined) })
+  }
+
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <BrowserRouter>
+        <AuthProvider><App /></AuthProvider>
+      </BrowserRouter>
+    </StrictMode>,
+  )
+}
