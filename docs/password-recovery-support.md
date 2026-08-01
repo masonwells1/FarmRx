@@ -56,9 +56,12 @@ post-change proof; merging frontend code does not configure them.
   browser-cached copy revalidates the exact owner lease and fails closed after that lease was revoked.
 - Other Farm Rx tabs receive Supabase's recovery notification but cannot adopt it or clear the
   recovery page's owner lease; an existing ordinary session remains unchanged.
-- Completing, cancelling, or failing recovery returns the farmer to the canonical
-  `https://farm-rx.vercel.app/login` sign-in. The recovery session is never treated as an ordinary
-  Farm Rx session, and ordinary Farm Rx routes must never remain on the recovery hostname.
+- Completing recovery returns the farmer to canonical `https://farm-rx.vercel.app/login`, clears
+  any older canonical-app session on that device, and requires sign-in with the new password.
+  Cancelling recovery returns to the canonical app without clearing a pre-existing ordinary
+  session. An invalid link's **Request a new link** action preserves that ordinary session while
+  opening the canonical reset form. The recovery session is never treated as an ordinary Farm Rx
+  session, and ordinary Farm Rx routes must never remain on the recovery hostname.
 - A newly provisioned owner uses the same narrow recovery capability to choose the first known
   password. The script's bootstrap secret is never printed, returned, emailed, or relayed.
 - Resetting a password does not create or restore farm membership. Revoked farm access stays

@@ -74,7 +74,10 @@ try {
   reset()
   mutate('src/App.tsx', (source) => source.replace('phase === "signed_in" && !forgotPassword', 'phase === "signed_in"'))
   detected('signed-in redirect overrides reset intent', 'auth:reset-intent-before-signed-in-redirect')
-  console.log('Foundation mutation drill: PASS (16/16 controlled mutations turned the gate red)')
+  reset()
+  mutate('src/auth/passwordRecovery.ts', (source) => source.replace("if (intent === 'completed') target.searchParams.set('recoveryComplete', '1')", "if (intent === 'completed') target.searchParams.set('forgotPassword', '1')"))
+  detected('completed recovery loses canonical cleanup signal', 'auth:completion-canonical-session-signal')
+  console.log('Foundation mutation drill: PASS (17/17 controlled mutations turned the gate red)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

@@ -12,19 +12,21 @@ export const passwordEmailDeliveryEnabled = import.meta.env?.VITE_PASSWORD_EMAIL
 export type PasswordStrength = 'too_short' | 'okay' | 'strong'
 
 type RecoveryLocation = Pick<Location, 'hostname' | 'origin' | 'port' | 'protocol'>
+type PasswordRecoveryExitIntent = 'sign-in' | 'request-new-link' | 'completed'
 
 export function isPasswordRecoveryHostname(hostname: string): boolean {
   return hostname === passwordRecoveryHostname || hostname === 'recovery.localhost'
 }
 
-export function passwordRecoveryExitUrl(location: RecoveryLocation, requestNewLink = false): string {
+export function passwordRecoveryExitUrl(location: RecoveryLocation, intent: PasswordRecoveryExitIntent = 'sign-in'): string {
   const base = location.hostname === passwordRecoveryHostname
     ? canonicalFarmRxOrigin
     : location.hostname === 'recovery.localhost'
       ? `${location.protocol}//127.0.0.1${location.port ? `:${location.port}` : ''}`
       : location.origin
   const target = new URL('/login', base)
-  if (requestNewLink) target.searchParams.set('forgotPassword', '1')
+  if (intent === 'request-new-link') target.searchParams.set('forgotPassword', '1')
+  if (intent === 'completed') target.searchParams.set('recoveryComplete', '1')
   return target.toString()
 }
 

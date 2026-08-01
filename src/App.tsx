@@ -940,9 +940,10 @@ function MobileNavigation() {
 }
 
 function LoginPage() {
-  const { phase, signIn, requestPasswordReset } = useAuth();
+  const { phase, signIn, signOut, requestPasswordReset } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const recoveryCompleted = new URLSearchParams(location.search).get('recoveryComplete') === '1';
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [forgotPassword, setForgotPassword] = useState(
@@ -953,6 +954,29 @@ function LoginPage() {
   );
   const [resetResponse, setResetResponse] = useState<string | null>(null);
   const signInLock = useRef(createSubmitLock());
+  const recoveryCompletionStarted = useRef(false);
+  const [recoveryCompletionAttempt, setRecoveryCompletionAttempt] = useState(0);
+  const [recoveryCompletionError, setRecoveryCompletionError] = useState(false);
+
+  useEffect(() => {
+    if (!recoveryCompleted || phase === 'restoring' || recoveryCompletionStarted.current) return;
+    recoveryCompletionStarted.current = true;
+    setRecoveryCompletionError(false);
+    void signOut()
+      .then(() => navigate('/login', { replace: true }))
+      .catch(() => setRecoveryCompletionError(true));
+  }, [navigate, phase, recoveryCompleted, recoveryCompletionAttempt, signOut]);
+
+  if (recoveryCompleted) {
+    return <main className="login-page"><section className="login-panel" aria-labelledby="recovery-completion-title">
+      <div className="login-brand"><div className="rx-mark" aria-hidden="true">℞</div><h1 id="recovery-completion-title">Securing your sign-in</h1><p>Farm records made clear.</p></div>
+      <div className="login-card">
+        {recoveryCompletionError
+          ? <><p className="auth-error" role="alert">Farm Rx could not clear the previous sign-in on this device. Try again before signing in with your new password.</p><button className="primary-action" type="button" onClick={() => { recoveryCompletionStarted.current = false; setRecoveryCompletionAttempt((attempt) => attempt + 1) }}>Try again</button></>
+          : <p className="opening-farm" role="status">Clearing the previous sign-in…</p>}
+      </div>
+    </section></main>;
+  }
 
   if (phase === "restoring")
     return (
@@ -1109,7 +1133,8 @@ function UpdatePasswordPage() {
   const validationMessage = passwordValidationMessage(password, confirmation);
   const strength = passwordStrength(password);
   const signInUrl = passwordRecoveryExitUrl(window.location);
-  const requestNewLinkUrl = passwordRecoveryExitUrl(window.location, true);
+  const requestNewLinkUrl = passwordRecoveryExitUrl(window.location, 'request-new-link');
+  const recoveryCompleteUrl = passwordRecoveryExitUrl(window.location, 'completed');
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1144,8 +1169,8 @@ function UpdatePasswordPage() {
     <div className="login-brand"><div className="rx-mark" aria-hidden="true">℞</div><h1 id="update-password-title">Choose a new password</h1><p>Keep your Farm Rx account secure.</p></div>
     {passwordRecoveryPhase === 'checking' && <p className="opening-farm" role="status">Checking your password-reset link…</p>}
     {passwordRecoveryPhase === 'invalid' && <div className="login-card"><p className="auth-error" role="alert">This password-reset link is invalid, expired, already used, or was interrupted when the page closed or refreshed. Request a fresh link or contact your Crop RX representative.</p><a className="primary-action" href={passwordEmailDeliveryEnabled ? requestNewLinkUrl : signInUrl}>{passwordEmailDeliveryEnabled ? 'Request a new link' : 'Return to sign in'}</a></div>}
-    {passwordRecoveryPhase === 'complete' && <div className="login-card"><p className="reset-confirmation" role="status">Your password has been updated. Sign in with your new password.</p><a className="primary-action" href={signInUrl}>Go to sign in</a></div>}
-    {passwordRecoveryPhase === 'complete_with_warning' && <div className="login-card"><p className="auth-error" role="alert">Your password was updated, but this device could not completely clear the reset session. Close every Farm Rx tab, reopen the app, and sign in with your new password. If that still fails, contact your Farm Rx administrator.</p><a className="primary-action" href={signInUrl}>Go to sign in</a></div>}
+    {passwordRecoveryPhase === 'complete' && <div className="login-card"><p className="reset-confirmation" role="status">Your password has been updated. Sign in with your new password.</p><a className="primary-action" href={recoveryCompleteUrl}>Go to sign in</a></div>}
+    {passwordRecoveryPhase === 'complete_with_warning' && <div className="login-card"><p className="auth-error" role="alert">Your password was updated, but this device could not completely clear the reset session. Close every Farm Rx tab, reopen the app, and sign in with your new password. If that still fails, contact your Farm Rx administrator.</p><a className="primary-action" href={recoveryCompleteUrl}>Go to sign in</a></div>}
     {passwordRecoveryPhase === 'ready' && <form className="login-card" onSubmit={submit}>
       <p className="auth-help" role="note">For your security, keep this page open until your password is updated. Closing or refreshing it invalidates this reset session.</p>
       <label htmlFor="new-password">New password</label>

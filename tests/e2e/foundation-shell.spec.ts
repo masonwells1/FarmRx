@@ -337,11 +337,60 @@ test('successful recovery returns to the canonical app origin', async ({ page },
   await page.getByRole('button', { name: 'Update password' }).click()
   await expect(page.getByRole('status')).toContainText('Your password has been updated')
   const signIn = page.getByRole('link', { name: 'Go to sign in' })
-  await expect(signIn).toHaveAttribute('href', 'http://127.0.0.1:4173/login')
+  await expect(signIn).toHaveAttribute('href', 'http://127.0.0.1:4173/login?recoveryComplete=1')
   expect(completed.passwordUpdates()).toBe(1)
   expect(completed.unexpected).toEqual([])
   await signIn.click()
   await expect(page).toHaveURL('http://127.0.0.1:4173/login')
+})
+
+test('completed recovery clears an older canonical session before route adoption', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'One real cross-origin session cleanup is sufficient.')
+  await page.goto('/login')
+  const authSessionKey = `farm-rx-auth:${projectRef}`
+  await page.evaluate(({ sessionKey, intentKey, value, intent }) => {
+    localStorage.setItem(intentKey, JSON.stringify(intent))
+    localStorage.setItem(sessionKey, JSON.stringify(value))
+  }, {
+    sessionKey: authSessionKey,
+    intentKey: `farm-rx-auth-intent:v1:${projectRef}`,
+    value: session(),
+    intent: { version: 1, nonce: 'pre-recovery-ordinary-session', phase: 'accepted', userId, sessionLineage: `session-${userId}`, startedAtMs: Date.now() },
+  })
+
+  const completed = await mockRecoveryAuth(page)
+  await page.getByRole('textbox', { name: 'New password', exact: true }).fill('A secure recovery passphrase 2027!')
+  await page.getByRole('textbox', { name: 'Confirm new password', exact: true }).fill('A secure recovery passphrase 2027!')
+  await page.getByRole('button', { name: 'Update password' }).click()
+  await page.getByRole('link', { name: 'Go to sign in' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
+  await expect(page.getByRole('heading', { name: 'Farm Rx' })).toBeVisible()
+  await expect(page.getByLabel('Email address')).toBeVisible()
+  expect(await page.evaluate((key) => localStorage.getItem(key), authSessionKey)).toBeNull()
+  expect(completed.passwordUpdates()).toBe(1)
+  expect(completed.unexpected).toEqual([])
+  await page.goto('/fields')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
+})
+
+test('cancelling recovery preserves an older canonical session', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'One real cross-origin cancellation boundary is sufficient.')
+  await page.goto('/login')
+  const authSessionKey = `farm-rx-auth:${projectRef}`
+  await page.evaluate(({ sessionKey, intentKey, value, intent }) => {
+    localStorage.setItem(intentKey, JSON.stringify(intent))
+    localStorage.setItem(sessionKey, JSON.stringify(value))
+  }, {
+    sessionKey: authSessionKey,
+    intentKey: `farm-rx-auth-intent:v1:${projectRef}`,
+    value: session(),
+    intent: { version: 1, nonce: 'pre-cancel-ordinary-session', phase: 'accepted', userId, sessionLineage: `session-${userId}`, startedAtMs: Date.now() },
+  })
+
+  await mockRecoveryAuth(page)
+  await page.getByRole('button', { name: 'Cancel and return to sign in' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/fields')
+  expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null')?.user?.id, authSessionKey)).toBe(userId)
 })
 
 test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks are unavailable', async ({ page, context }, testInfo) => {
