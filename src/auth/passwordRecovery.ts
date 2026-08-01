@@ -17,13 +17,15 @@ export function isPasswordRecoveryHostname(hostname: string): boolean {
   return hostname === passwordRecoveryHostname || hostname === 'recovery.localhost'
 }
 
-export function passwordRecoveryExitUrl(location: RecoveryLocation): string {
+export function passwordRecoveryExitUrl(location: RecoveryLocation, requestNewLink = false): string {
   const base = location.hostname === passwordRecoveryHostname
     ? canonicalFarmRxOrigin
     : location.hostname === 'recovery.localhost'
       ? `${location.protocol}//127.0.0.1${location.port ? `:${location.port}` : ''}`
       : location.origin
-  return new URL('/login', base).toString()
+  const target = new URL('/login', base)
+  if (requestNewLink) target.searchParams.set('forgotPassword', '1')
+  return target.toString()
 }
 
 export function passwordRecoveryRedirectTo(origin: string): string {

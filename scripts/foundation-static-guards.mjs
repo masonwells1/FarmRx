@@ -90,6 +90,8 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, passwordRecoverySupport, 'Only after that deployment is ready', 'auth:runbook-deploy-before-domain')
   requireText(errors, passwordRecoverySupport, '`https://farm-rx.vercel.app/login`', 'auth:runbook-canonical-return')
   if (/allow the exact redirect\s+`https:\/\/farm-rx\.vercel\.app\/update-password`/.test(passwordRecoverySupport)) errors.push('auth:runbook-stale-main-origin-redirect')
+  const provisioning = read(root, 'scripts/provision-customer-lib.mjs')
+  requireText(errors, provisioning, "firstPasswordRedirectTo = 'https://recovery.croprxsolutions.app/update-password'", 'auth:provisioning-exact-recovery-redirect')
   requireText(errors, app, 'window.location.replace(signInUrl)', 'auth:recovery-cancel-canonical-exit')
   requireText(errors, app, 'href={signInUrl}', 'auth:recovery-result-canonical-exit')
   const main = read(root, 'src/main.tsx')

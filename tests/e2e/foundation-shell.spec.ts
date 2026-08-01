@@ -248,9 +248,15 @@ test('the dedicated recovery origin is outside an installed main-app worker scop
   expect(await page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length)).toBe(0)
 
   const exitLink = page.getByRole('link', { name: process.env.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED === 'true' ? 'Request a new link' : 'Return to sign in' })
-  await expect(exitLink).toHaveAttribute('href', 'http://127.0.0.1:4173/login')
+  const expectedExitUrl = process.env.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED === 'true'
+    ? 'http://127.0.0.1:4173/login?forgotPassword=1'
+    : 'http://127.0.0.1:4173/login'
+  await expect(exitLink).toHaveAttribute('href', expectedExitUrl)
   await exitLink.click()
-  await expect(page).toHaveURL('http://127.0.0.1:4173/login')
+  await expect(page).toHaveURL(expectedExitUrl)
+  if (process.env.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED === 'true') {
+    await expect(page.getByRole('heading', { name: 'Reset your password' })).toBeVisible()
+  }
 
   await page.goto('http://recovery.localhost:4173/login')
   await expect(page).toHaveURL('http://127.0.0.1:4173/login')
