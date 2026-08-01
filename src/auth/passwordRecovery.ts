@@ -2,6 +2,7 @@ import { createClient, type Session } from '@supabase/supabase-js'
 import { supabaseConfig } from '../lib/supabaseConfig'
 
 export const passwordRecoveryRoute = '/update-password'
+export const passwordRecoveryEntryParameter = 'recovery_entry'
 export const passwordResetPublicResponse = 'If that email is in Farm Rx, we sent a password reset link. Check your inbox and spam folder.'
 export const minimumPasswordLength = 12
 export const passwordEmailDeliveryEnabled = import.meta.env?.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED === 'true'
@@ -12,6 +13,16 @@ export function passwordRecoveryRedirectTo(origin: string): string {
   const base = new URL(origin)
   if (base.protocol !== 'https:' && base.protocol !== 'http:') throw new Error('Farm Rx could not create a password reset link for this site.')
   return new URL(passwordRecoveryRoute, base).toString()
+}
+
+export function takePasswordRecoveryTokenHash(location: Location, history: History): string | null {
+  if (location.pathname !== passwordRecoveryRoute || location.search !== `?${passwordRecoveryEntryParameter}=1`) return null
+  const fragment = new URLSearchParams(location.hash.startsWith('#') ? location.hash.slice(1) : location.hash)
+  history.replaceState(history.state, '', passwordRecoveryRoute)
+  if ([...fragment.keys()].sort().join(',') !== 'token_hash,type' || fragment.get('type') !== 'recovery') return null
+  const tokenHash = fragment.get('token_hash')
+  if (!tokenHash || !/^[A-Za-z0-9_-]{32,256}$/.test(tokenHash)) return null
+  return tokenHash
 }
 
 export async function requestPasswordResetNonEnumerating(
@@ -98,4 +109,20 @@ export async function updatePasswordWithIsolatedRecoverySession(
     throw new Error('This password-reset link no longer matches the verified recovery session. Request a new link and try again.')
   }
   await updatePasswordFromRecovery(recoverySession, password, isolated.auth.updateUser.bind(isolated.auth))
+}
+
+export async function verifyPasswordRecoveryTokenHash(
+  tokenHash: string,
+  createClientImpl: typeof createClient = createClient,
+): Promise<Session> {
+  const isolated = createClientImpl(supabaseConfig.url, supabaseConfig.publishableKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  })
+  const { data, error } = await isolated.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' })
+  if (error || !data.session) throw new Error('This password-reset link is invalid or has expired. Request a new link and try again.')
+  return data.session
 }

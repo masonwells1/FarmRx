@@ -5,7 +5,7 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import { coordinatedDeviceTransaction } from '../data/queueTransaction'
 import { clearFarmAccess, isDefiniteTransportFailure, restoreOfflineFarmUserId } from './farmContext'
 import { consumeAuthSessionRemovalTicket, type AuthSessionRemovalTicket } from './authSessionStorage'
-import { isPasswordRecoveryEvent, passwordEmailDeliveryEnabled, passwordRecoveryRoute, requestPasswordResetNonEnumerating, updatePasswordWithIsolatedRecoverySession } from './passwordRecovery'
+import { isPasswordRecoveryEvent, passwordEmailDeliveryEnabled, passwordRecoveryRoute, requestPasswordResetNonEnumerating, takePasswordRecoveryTokenHash, updatePasswordWithIsolatedRecoverySession, verifyPasswordRecoveryTokenHash } from './passwordRecovery'
 
 export type AuthPhase = 'restoring' | 'signed_out' | 'signed_in'
 export type PasswordRecoveryPhase = 'idle' | 'checking' | 'ready' | 'invalid' | 'complete' | 'complete_with_warning'
@@ -27,6 +27,8 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export interface AuthProviderDependencies {
   auth: Pick<typeof supabase.auth, 'getSession' | 'onAuthStateChange' | 'signInWithPassword' | 'resetPasswordForEmail'>
   updateRecoveryPassword(session: Session, password: string): Promise<void>
+  takeRecoveryTokenHash?(): string | null
+  verifyRecoveryTokenHash?(tokenHash: string): Promise<Session>
   storage: Storage
   addStorageListener(listener: (event: StorageEvent) => void): void
   removeStorageListener(listener: (event: StorageEvent) => void): void
@@ -132,6 +134,8 @@ function browserDependencies(): AuthProviderDependencies {
   return {
     auth: supabase.auth,
     updateRecoveryPassword: updatePasswordWithIsolatedRecoverySession,
+    takeRecoveryTokenHash: () => takePasswordRecoveryTokenHash(window.location, window.history),
+    verifyRecoveryTokenHash: verifyPasswordRecoveryTokenHash,
     storage: window.localStorage,
     addStorageListener: (listener) => window.addEventListener('storage', listener),
     removeStorageListener: (listener) => window.removeEventListener('storage', listener),
@@ -393,7 +397,8 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
     const initialIntentPhase = readPersistedAuthIntentRecord(d.storage)?.phase
     const initialIntentMalformed = hasMalformedPersistedAuthIntent(d.storage)
     const initialRecoveryFence = isUpdatePasswordRoute(currentPathname()) && hasPasswordRecoveryFence(d.storage, d.now())
-    if (initialIntentPhase === 'signed_out' || initialIntentPhase === 'pending' || initialIntentMalformed || initialRecoveryFence) blockAuthEventsUntilManualSignIn.current = true
+    const recoveryTokenHash = d.takeRecoveryTokenHash?.() ?? null
+    if (initialIntentPhase === 'signed_out' || initialIntentPhase === 'pending' || initialIntentMalformed || initialRecoveryFence || recoveryTokenHash) blockAuthEventsUntilManualSignIn.current = true
     const applySession = (next: Session | null) => {
       if (!active) return
       acceptedSession.current = next
@@ -498,6 +503,23 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
         applySession(nextSession)
       }).catch(() => { void applySignedOutFence() })
     }
+    const acceptPasswordRecoverySession = async (nextSession: Session) => {
+      eventVersion += 1
+      await d.coordinateAuthState(async (verify) => {
+        verify()
+        const claimedOwnerId = persistPasswordRecoveryFence(d.storage, nextSession, recoveryOwnerId.current!, d.now())
+        verify()
+        if (claimedOwnerId !== recoveryOwnerId.current
+          || !passwordRecoveryFenceMatches(d.storage, nextSession, recoveryOwnerId.current!, d.now())) {
+          throw new Error('Another Farm Rx tab already owns this password-reset link.')
+        }
+        recoveryCompleted.current = false
+        recoverySession.current = nextSession
+        if (signInInFlight.current) recoveryConflictDuringSignIn.current = true
+        applySession(null)
+        setPasswordRecoveryPhase('ready')
+      })
+    }
     if (initialIntentPhase === 'signed_out' || initialIntentMalformed) void applySignedOutFence()
     const { data: listener } = d.auth.onAuthStateChange((event, nextSession) => {
       if (event === 'PASSWORD_RECOVERY') {
@@ -505,20 +527,7 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
         // update form can use it only while it is held in memory on its exact
         // public route; arbitrary SIGNED_IN broadcasts stay fenced below.
         if (isPasswordRecoveryEvent(event, nextSession, currentPathname())) {
-          eventVersion += 1
-          void d.coordinateAuthState(async (verify) => {
-            verify()
-            const claimedOwnerId = persistPasswordRecoveryFence(d.storage, nextSession, recoveryOwnerId.current!, d.now())
-            verify()
-            if (claimedOwnerId !== recoveryOwnerId.current
-              || !passwordRecoveryFenceMatches(d.storage, nextSession, recoveryOwnerId.current!, d.now())) {
-              throw new Error('Another Farm Rx tab already owns this password-reset link.')
-            }
-            recoveryCompleted.current = false
-            recoverySession.current = nextSession
-            if (signInInFlight.current) recoveryConflictDuringSignIn.current = true
-            setPasswordRecoveryPhase('ready')
-          }).catch(() => {
+          void acceptPasswordRecoverySession(nextSession).catch(() => {
             recoverySession.current = null
             setPasswordRecoveryPhase('invalid')
             try { abandonOwnedPasswordRecoveryFence(d.storage, recoveryOwnerId.current!) } catch { /* signed-out fence below */ }
@@ -770,7 +779,7 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
       const offlineUserId = isDefiniteTransportFailure(error) ? d.restoreOfflineFarmUserId() : null
       if (offlineUserId) applyOfflineUser(offlineUserId); else applySession(null)
     }
-    void restoreSessionWithDeadline(d.auth).then(({ data, error }) => {
+    const restore = () => restoreSessionWithDeadline(d.auth).then(({ data, error }) => {
       if (eventVersion !== restoreVersion || authActionVersion.current !== restoreActionVersion) return
       if (!error) {
         if (isUpdatePasswordRoute(currentPathname())) {
@@ -811,6 +820,17 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
       if (eventVersion !== restoreVersion || authActionVersion.current !== restoreActionVersion) return
       settleRestoreFailure(error)
     })
+    if (recoveryTokenHash && d.verifyRecoveryTokenHash) {
+      void d.verifyRecoveryTokenHash(recoveryTokenHash)
+        .then((nextSession) => acceptPasswordRecoverySession(nextSession))
+        .catch(() => {
+          recoverySession.current = null
+          setPasswordRecoveryPhase('invalid')
+          void applySignedOutFence()
+        })
+    } else {
+      void restore()
+    }
     return () => {
       active = false
       pageHiding()

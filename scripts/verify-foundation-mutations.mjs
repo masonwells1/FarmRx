@@ -6,7 +6,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
 const files = [
-  'src/App.tsx', 'src/sw.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json',
+  'src/App.tsx', 'src/sw.ts', 'src/auth/passwordRecovery.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json',
   'scripts/verify-foundation.ps1',
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
   'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/queuedOperationGuard.ts',
@@ -58,7 +58,10 @@ try {
   reset()
   mutate('src/data/workspaceCache.ts', (source) => source.replace('`${scope.projectRef}:${scope.userId}:${scope.farmId}:${scope.module}`', '`${scope.projectRef}:shared-user:${scope.farmId}:${scope.module}`'))
   detected('private cache user-scope removal', 'cache:user-farm-module-key')
-  console.log('Foundation mutation drill: PASS (11/11 controlled mutations turned the gate red)')
+  reset()
+  mutate('src/auth/passwordRecovery.ts', (source) => source.replace("isolated.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' })", "isolated.auth.verifyOtp({ token_hash: tokenHash, type: 'email' })"))
+  detected('recovery token type change', 'auth:isolated-recovery-token-verification')
+  console.log('Foundation mutation drill: PASS (12/12 controlled mutations turned the gate red)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

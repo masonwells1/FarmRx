@@ -80,6 +80,13 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, cache, 'financialCacheMaxAgeMs = 24 * 60 * 60 * 1_000', 'cache:financial-expiry')
   const serviceWorker = read(root, 'src/sw.ts')
   requireText(errors, serviceWorker, "registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html'), { denylist: [/^\\/update-password(?:[/?]|$)/] }))", 'service-worker:recovery-network-shell')
+  requireText(errors, serviceWorker, "url.search === '?recovery_entry=1'", 'service-worker:legacy-recovery-entry')
+  requireText(errors, serviceWorker, 'setTimeout(() => { void (async () => {', 'service-worker:post-activation-recovery-handoff')
+  requireText(errors, serviceWorker, 'await client.navigate(client.url)', 'service-worker:legacy-recovery-network-reload')
+  const passwordRecovery = read(root, 'src/auth/passwordRecovery.ts')
+  requireText(errors, passwordRecovery, "location.search !== `?${passwordRecoveryEntryParameter}=1`", 'auth:exact-recovery-entry')
+  requireText(errors, passwordRecovery, "history.replaceState(history.state, '', passwordRecoveryRoute)", 'auth:recovery-token-history-removal')
+  requireText(errors, passwordRecovery, "isolated.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' })", 'auth:isolated-recovery-token-verification')
   if (/supabase\.co|api\/v1|rest\/v1/.test(serviceWorker)) errors.push('service-worker:private-api-runtime-cache')
 
   const widget = read(root, 'src/components/MarketQuote.tsx')

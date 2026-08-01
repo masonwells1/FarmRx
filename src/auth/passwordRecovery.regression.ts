@@ -11,10 +11,12 @@ import {
   passwordRecoveryRedirectTo,
   passwordResetPublicResponse,
   requestPasswordResetNonEnumerating,
+  takePasswordRecoveryTokenHash,
   passwordStrength,
   passwordValidationMessage,
   updatePasswordFromRecovery,
   updatePasswordWithIsolatedRecoverySession,
+  verifyPasswordRecoveryTokenHash,
 } from './passwordRecovery'
 import { createSubmitLock } from '../lib/submitLock'
 
@@ -45,6 +47,15 @@ assert(!acceptsRecoveryEvent('SIGNED_IN', recoverySession, '/update-password'), 
 assert(!acceptsRecoveryEvent('PASSWORD_RECOVERY', recoverySession, '/fields'), 'A recovery event outside the public update route was accepted.')
 assert(!acceptsRecoveryEvent('PASSWORD_RECOVERY', null, '/update-password'), 'A missing or expired recovery session was accepted.')
 
+const tokenHash = 'a'.repeat(64)
+const tokenWindow = new Window({ url: `https://farm-rx.vercel.app/update-password?recovery_entry=1#token_hash=${tokenHash}&type=recovery` })
+assert(takePasswordRecoveryTokenHash(tokenWindow.location as unknown as Location, tokenWindow.history as unknown as History) === tokenHash, 'The direct recovery token hash was not accepted from the exact fragment contract.')
+assert(tokenWindow.location.href === 'https://farm-rx.vercel.app/update-password', 'The recovery token hash was not removed from browser history before verification.')
+tokenWindow.history.replaceState({}, '', `/update-password?recovery_entry=1#token_hash=${tokenHash}&type=email`)
+assert(takePasswordRecoveryTokenHash(tokenWindow.location as unknown as Location, tokenWindow.history as unknown as History) === null, 'A non-recovery token hash was accepted.')
+assert(tokenWindow.location.href === 'https://farm-rx.vercel.app/update-password', 'A rejected recovery fragment remained in browser history.')
+await tokenWindow.happyDOM.close()
+
 assert(passwordValidationMessage('short', 'short') === `Use at least ${minimumPasswordLength} characters.`, 'Short passwords were accepted.')
 assert(passwordValidationMessage('a secure passphrase', 'different passphrase') === 'The passwords do not match.', 'Password mismatch was accepted.')
 assert(passwordValidationMessage('a secure passphrase', 'a secure passphrase') === null, 'A valid password was rejected.')
@@ -71,6 +82,14 @@ const capturedIsolatedOptions = isolatedOptions as { auth?: { persistSession?: b
 assert(capturedIsolatedOptions?.auth?.persistSession === false && capturedIsolatedOptions.auth.autoRefreshToken === false && capturedIsolatedOptions.auth.detectSessionInUrl === false, 'Recovery mutation client was not isolated from persistent/shared Auth state.')
 const capturedSetSession = isolatedSetSession as { access_token: string; refresh_token: string } | null
 assert(capturedSetSession?.access_token === recoverySession.access_token && capturedSetSession?.refresh_token === recoverySession.refresh_token && isolatedUpdates === 1, 'Isolated recovery mutation was not bound to the captured recovery credentials.')
+
+let verifiedTokenHash = ''
+const verifiedRecovery = await verifyPasswordRecoveryTokenHash(tokenHash, ((_url: string, _key: string, options: typeof isolatedOptions) => {
+  isolatedOptions = options
+  return { auth: { async verifyOtp(input: { token_hash: string; type: string }) { verifiedTokenHash = input.token_hash; return { data: { session: recoverySession, user: recoverySession.user }, error: input.type === 'recovery' ? null : new Error('wrong type') } } } }
+}) as never)
+assert(verifiedRecovery === recoverySession && verifiedTokenHash === tokenHash, 'The isolated token-hash verification did not return the exact recovery session.')
+assert((isolatedOptions as { auth?: { persistSession?: boolean; autoRefreshToken?: boolean; detectSessionInUrl?: boolean } } | null)?.auth?.persistSession === false, 'Token-hash verification could persist a reusable recovery session.')
 
 const lock = createSubmitLock()
 assert(lock.acquire() && !lock.acquire(), 'Password update double-submit was not blocked.')
@@ -169,7 +188,20 @@ try {
     assert(authWindow.localStorage.getItem(authSessionKey) === null, 'The production Auth adapter persisted a reusable raw recovery credential.')
     await act(async () => { listener?.('PASSWORD_RECOVERY', recoverySession); await Promise.resolve() })
   }
+  authWindow.history.replaceState({}, '', `/update-password?recovery_entry=1#token_hash=${tokenHash}&type=recovery`)
+  dependencies.takeRecoveryTokenHash = () => takePasswordRecoveryTokenHash(authWindow.location as unknown as Location, authWindow.history as unknown as History)
+  dependencies.verifyRecoveryTokenHash = async (candidate) => {
+    assert(candidate === tokenHash, 'The provider changed the recovery token hash before verification.')
+    return recoverySession
+  }
   let root = await renderProvider()
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  assert(currentAuth().passwordRecoveryPhase === 'ready' && authWindow.location.href === 'http://recovery.test/update-password', 'The provider did not bootstrap an exact direct recovery token into its memory-only capability.')
+  await act(async () => { root.unmount() })
+  authWindow.localStorage.clear()
+  dependencies.takeRecoveryTokenHash = () => null
+  dependencies.verifyRecoveryTokenHash = undefined
+  root = await renderProvider()
   await beginRecovery()
   assert(currentAuth().passwordRecoveryPhase === 'ready', 'The provider did not accept its valid PASSWORD_RECOVERY event.')
   await act(async () => { root.unmount() })
