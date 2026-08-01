@@ -5,7 +5,7 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import { coordinatedDeviceTransaction } from '../data/queueTransaction'
 import { clearFarmAccess, isDefiniteTransportFailure, restoreOfflineFarmUserId } from './farmContext'
 import { consumeAuthSessionRemovalTicket, type AuthSessionRemovalTicket } from './authSessionStorage'
-import { isPasswordRecoveryEvent, passwordEmailDeliveryEnabled, passwordRecoveryRoute, persistPasswordRecoveryCleanupRequest, requestPasswordResetNonEnumerating, updatePasswordWithIsolatedRecoverySession } from './passwordRecovery'
+import { clearPasswordRecoveryCleanupAuthority, isPasswordRecoveryEvent, passwordEmailDeliveryEnabled, passwordRecoveryRoute, persistedPasswordRecoveryCleanupAuthority, persistPasswordRecoveryCleanupRequest, requestPasswordResetNonEnumerating, updatePasswordWithIsolatedRecoverySession } from './passwordRecovery'
 
 export type AuthPhase = 'restoring' | 'signed_out' | 'signed_in'
 export type PasswordRecoveryPhase = 'idle' | 'checking' | 'ready' | 'invalid' | 'complete' | 'complete_with_warning'
@@ -16,6 +16,7 @@ interface AuthContextValue {
   user: User | null
   signIn(email: string, password: string): Promise<void>
   signOut(): Promise<void>
+  completePasswordRecoveryCleanup(authority: string): Promise<boolean>
   passwordRecoveryPhase: PasswordRecoveryPhase
   requestPasswordReset(email: string): Promise<string>
   updatePassword(password: string): Promise<void>
@@ -383,6 +384,7 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
   const recoverySession = useRef<Session | null>(null)
   const recoveryConflictDuringSignIn = useRef(false)
   const pendingSignOutCleanupUserIds = useRef(new Set<string>())
+  const appliedRecoveryCompletionAuthority = useRef<string | null>(null)
   const recoveryCompleted = useRef(false)
   const recoveryOwnerId = useRef<string | null>(null)
   if (recoveryOwnerId.current === null) recoveryOwnerId.current = d.createId()
@@ -833,8 +835,54 @@ export function AuthProvider({ children, dependencies }: { children: ReactNode; 
     async requestPasswordReset(email) {
       if (!passwordEmailDeliveryEnabled) throw new Error('Farm Rx password email delivery is not enabled yet.')
       const origin = typeof window === 'undefined' ? '' : window.location.origin
-      persistPasswordRecoveryCleanupRequest(d.storage, email, session, d.createId(), d.now())
+      persistPasswordRecoveryCleanupRequest(d.storage, email, session, session?.user.id ?? offlineUser?.id, d.createId(), d.now())
       return requestPasswordResetNonEnumerating(email, origin, d.auth.resetPasswordForEmail.bind(d.auth))
+    },
+    async completePasswordRecoveryCleanup(authority) {
+      let cleanupUserId = session?.user.id ?? offlineUser?.id ?? null
+      if (appliedRecoveryCompletionAuthority.current !== authority) {
+        let authorizedUserId: string | null = null
+        await d.coordinateAuthState(async (verify) => {
+          verify()
+          if (!cleanupUserId || persistedPasswordRecoveryCleanupAuthority(d.storage, cleanupUserId, d.now()) !== authority) return
+          const authCleanupAuthority = capturePersistedAuthCleanupAuthority(d.storage)
+          if (!authCleanupAuthority || !persistedAuthCleanupAuthorityMatches(d.storage, authCleanupAuthority)) return
+          verify()
+          if (persistedPasswordRecoveryCleanupAuthority(d.storage, cleanupUserId, d.now()) !== authority
+            || !persistedAuthCleanupAuthorityMatches(d.storage, authCleanupAuthority)) return
+          clearPersistedAuthSession(d.storage, false)
+          verify()
+          if (d.storage.getItem(authIntentKey) !== authCleanupAuthority.intentBytes) throw new Error('Farm Rx preserved a newer sign-in during password recovery cleanup.')
+          persistSignedOutIntent(d.storage, d.now(), d.createId())
+          verify()
+          authorizedUserId = cleanupUserId
+        })
+        if (!authorizedUserId) return false
+        cleanupUserId = authorizedUserId
+        authActionVersion.current += 1
+        signInInFlight.current = false
+        blockAuthEventsUntilManualSignIn.current = true
+        acceptedSession.current = null
+        trustedAuthSnapshot.current = null
+        d.intentionalSignOut.set(true)
+        setSession(null)
+        setOfflineUser(null)
+        setPhase('signed_out')
+        pendingSignOutCleanupUserIds.current.add(cleanupUserId)
+        appliedRecoveryCompletionAuthority.current = authority
+      }
+
+      let cleanupError: unknown = null
+      for (const pendingUserId of [...pendingSignOutCleanupUserIds.current]) {
+        try {
+          await d.clearFarmAccess(pendingUserId)
+          pendingSignOutCleanupUserIds.current.delete(pendingUserId)
+        } catch (error) { cleanupError ??= error }
+      }
+      if (cleanupError) throw cleanupError
+      clearPasswordRecoveryCleanupAuthority(d.storage, authority)
+      appliedRecoveryCompletionAuthority.current = null
+      return true
     },
     async updatePassword(password) {
       const currentRecoverySession = recoverySession.current

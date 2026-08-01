@@ -6,6 +6,8 @@ import type { Session } from '@supabase/supabase-js'
 import type { AuthProviderDependencies } from './AuthProvider'
 import { createAuthSessionStorage } from './authSessionStorage'
 import {
+  passwordRecoveryCleanupAuthority,
+  persistPasswordRecoveryCleanupRequest,
   isPasswordRecoveryEvent,
   isPasswordRecoveryHostname,
   minimumPasswordLength,
@@ -27,7 +29,7 @@ function assert(value: unknown, message: string): asserts value {
 const recoveryPayload = btoa(JSON.stringify({ sub: 'recovery-user', session_id: 'recovery-session-lineage' })).replaceAll('=', '')
 const recoverySession = { access_token: `header.${recoveryPayload}.signature`, refresh_token: 'recovery-refresh-token', user: { id: 'recovery-user' } } as unknown as Session
 const otherPayload = btoa(JSON.stringify({ sub: 'other-user', session_id: 'other-session-lineage' })).replaceAll('=', '')
-const otherSession = { access_token: `header.${otherPayload}.signature`, refresh_token: 'other-refresh-token', user: { id: 'other-user' } } as unknown as Session
+const otherSession = { access_token: `header.${otherPayload}.signature`, refresh_token: 'other-refresh-token', user: { id: 'other-user', email: 'other@example.test' } } as unknown as Session
 function acceptsRecoveryEvent(event: string, session: Session | null, pathname: string): boolean { return isPasswordRecoveryEvent(event, session, pathname) }
 
 // Known, unknown/provider-error, and thrown/network-error cases must leave
@@ -112,7 +114,7 @@ const previousReact = Object.getOwnPropertyDescriptor(globalThis, 'React')
 Object.defineProperty(globalThis, 'React', { configurable: true, writable: true, value: React })
 try {
   const { createRoot } = await import('react-dom/client')
-  type ProbeAuth = { phase: string; user: { id: string } | null; passwordRecoveryPhase: string; signIn(email: string, password: string): Promise<void>; signOut(): Promise<void>; updatePassword(password: string): Promise<void>; cancelPasswordRecovery(): Promise<void> }
+  type ProbeAuth = { phase: string; user: { id: string } | null; passwordRecoveryPhase: string; signIn(email: string, password: string): Promise<void>; signOut(): Promise<void>; completePasswordRecoveryCleanup(authority: string): Promise<boolean>; updatePassword(password: string): Promise<void>; cancelPasswordRecovery(): Promise<void> }
   const current = { value: null as ProbeAuth | null }
   let authEvent: ((event: string, session: typeof recoverySession | null) => void) | null = null
   let updateCalls = 0
@@ -286,6 +288,90 @@ try {
   assert(retryCleanupUsers.length === 2 && retryCleanupUsers.every((id) => id === otherSession.user.id), 'A sign-out cleanup retry lost the original user identity.')
   await act(async () => { retryRoot.unmount() })
   retryContainer.remove()
+  authWindow.localStorage.clear()
+  authWindow.history.replaceState({}, '', '/update-password')
+
+  // A transport failure may restore only offlineUser while the exact accepted
+  // session remains persisted. Completion must authorize against that exact
+  // persisted lineage and clear both Auth and farm access under one provider
+  // transaction, rather than treating session=null as an unsigned URL.
+  authWindow.history.replaceState({}, '', '/login')
+  authWindow.localStorage.setItem(authSessionKey, JSON.stringify(otherSession))
+  authWindow.localStorage.setItem(authIntentKey, JSON.stringify({ version: 1, nonce: 'offline-cleanup-session', phase: 'accepted', userId: otherSession.user.id, sessionLineage: 'other-session-lineage', startedAtMs: Date.now() }))
+  persistPasswordRecoveryCleanupRequest(authWindow.localStorage, otherSession.user.email!, null, otherSession.user.id, 'offline-cleanup-request', Date.now())
+  const offlineCleanupUsers: string[] = []
+  const offlineCurrent = { value: null as ProbeAuth | null }
+  function OfflineProbe() { offlineCurrent.value = useAuth() as ProbeAuth; return createElement('div', null, `${offlineCurrent.value.phase}:${offlineCurrent.value.user?.id ?? 'none'}`) }
+  const offlineContainer = authWindow.document.createElement('div')
+  authWindow.document.body.append(offlineContainer)
+  const offlineRoot = createRoot(offlineContainer as unknown as HTMLElement)
+  const offlineDependencies = {
+    ...dependencies,
+    pathname: () => '/login',
+    auth: {
+      ...client,
+      getSession: async () => ({ data: { session: null }, error: new TypeError('controlled offline transport failure') }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => undefined } } }),
+    },
+    restoreOfflineFarmUserId: () => otherSession.user.id,
+    clearFarmAccess: async (cleanupUserId: string) => { offlineCleanupUsers.push(cleanupUserId) },
+  } as unknown as AuthProviderDependencies
+  await act(async () => {
+    offlineRoot.render(createElement(AuthProvider, { dependencies: offlineDependencies, children: createElement(OfflineProbe) }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  assert(offlineCurrent.value?.phase === 'signed_in' && offlineCurrent.value.user?.id === otherSession.user.id, 'The completion fixture did not restore its offline-only identity.')
+  const offlineAuthority = passwordRecoveryCleanupAuthority(authWindow.localStorage, null, offlineCurrent.value.user.id, Date.now())
+  assert(offlineAuthority !== null, 'An exact persisted offline lineage was not accepted as completion cleanup authority.')
+  let offlineCleanupApplied = false
+  await act(async () => { offlineCleanupApplied = await offlineCurrent.value!.completePasswordRecoveryCleanup(offlineAuthority); await Promise.resolve() })
+  assert(offlineCleanupApplied && String(offlineCurrent.value?.phase) === 'signed_out' && offlineCleanupUsers.length === 1 && offlineCleanupUsers[0] === otherSession.user.id, 'Offline-only completion did not clear the exact restored identity and farm access.')
+  await act(async () => { offlineRoot.unmount() })
+  offlineContainer.remove()
+  authWindow.localStorage.clear()
+  authWindow.history.replaceState({}, '', '/update-password')
+
+  // The UI may read a valid authority just before another tab publishes a
+  // newer accepted session. Transactional completion must re-read persisted
+  // lineage and preserve that newer tuple instead of clearing it.
+  authWindow.history.replaceState({}, '', '/login')
+  authWindow.localStorage.setItem(authSessionKey, JSON.stringify(otherSession))
+  authWindow.localStorage.setItem(authIntentKey, JSON.stringify({ version: 1, nonce: 'pre-race-session', phase: 'accepted', userId: otherSession.user.id, sessionLineage: 'other-session-lineage', startedAtMs: Date.now() }))
+  persistPasswordRecoveryCleanupRequest(authWindow.localStorage, otherSession.user.email!, otherSession, otherSession.user.id, 'pre-race-cleanup-request', Date.now())
+  const raceCurrent = { value: null as ProbeAuth | null }
+  function RaceProbe() { raceCurrent.value = useAuth() as ProbeAuth; return createElement('div', null, raceCurrent.value.phase) }
+  const raceContainer = authWindow.document.createElement('div')
+  authWindow.document.body.append(raceContainer)
+  const raceRoot = createRoot(raceContainer as unknown as HTMLElement)
+  const raceDependencies = {
+    ...dependencies,
+    pathname: () => '/login',
+    auth: {
+      ...client,
+      getSession: async () => ({ data: { session: otherSession }, error: null }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => undefined } } }),
+    },
+  } as unknown as AuthProviderDependencies
+  await act(async () => {
+    raceRoot.render(createElement(AuthProvider, { dependencies: raceDependencies, children: createElement(RaceProbe) }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  const preRaceAuthority = passwordRecoveryCleanupAuthority(authWindow.localStorage, otherSession, otherSession.user.id, Date.now())
+  assert(preRaceAuthority !== null, 'The post-authority race fixture did not capture its older cleanup authority.')
+  const newerPayload = btoa(JSON.stringify({ sub: otherSession.user.id, session_id: 'newer-post-authority-lineage' })).replaceAll('=', '')
+  const newerSameUserSession = { ...otherSession, access_token: `header.${newerPayload}.signature`, refresh_token: 'newer-post-authority-refresh' }
+  const newerSessionBytes = JSON.stringify(newerSameUserSession)
+  const newerIntentBytes = JSON.stringify({ version: 1, nonce: 'newer-post-authority-intent', phase: 'accepted', userId: otherSession.user.id, sessionLineage: 'newer-post-authority-lineage', startedAtMs: Date.now() })
+  authWindow.localStorage.setItem(authSessionKey, newerSessionBytes)
+  authWindow.localStorage.setItem(authIntentKey, newerIntentBytes)
+  let postRaceCleanupApplied = true
+  await act(async () => { postRaceCleanupApplied = await raceCurrent.value!.completePasswordRecoveryCleanup(preRaceAuthority); await Promise.resolve() })
+  assert(!postRaceCleanupApplied
+    && authWindow.localStorage.getItem(authSessionKey) === newerSessionBytes
+    && authWindow.localStorage.getItem(authIntentKey) === newerIntentBytes,
+  'Completion cleanup cleared or rewrote a newer session published after the UI authority check.')
+  await act(async () => { raceRoot.unmount() })
+  raceContainer.remove()
   authWindow.localStorage.clear()
   authWindow.history.replaceState({}, '', '/update-password')
 

@@ -11,6 +11,7 @@ export const passwordEmailDeliveryEnabled = import.meta.env?.VITE_PASSWORD_EMAIL
 export const passwordRecoveryCleanupRequestKey = `farm-rx-password-recovery-cleanup:v1:${supabaseConfig.projectRef}`
 
 const maximumPasswordRecoveryCleanupRequestAgeMs = 60 * 60 * 1000
+const persistedAuthSessionKey = `farm-rx-auth:${supabaseConfig.projectRef}`
 type PasswordRecoveryCleanupRequest = { version: 1; requestId: string; email: string; sessionLineage: string | null; requestedAtMs: number }
 
 function normalizedRecoveryEmail(email: string) {
@@ -28,17 +29,35 @@ function recoverySessionLineage(session: Session | null): string | null {
   } catch { return null }
 }
 
-export function persistPasswordRecoveryCleanupRequest(storage: Storage, email: string, session: Session | null, requestId: string, nowMs: number) {
-  const request = { version: 1, requestId, email: normalizedRecoveryEmail(email), sessionLineage: recoverySessionLineage(session), requestedAtMs: nowMs } satisfies PasswordRecoveryCleanupRequest
+function persistedRecoverySession(storage: Storage): Session | null {
+  try {
+    const value = JSON.parse(storage.getItem(persistedAuthSessionKey) ?? 'null') as Partial<Session> | null
+    return value
+      && typeof value.access_token === 'string'
+      && value.user && typeof value.user.id === 'string' && typeof value.user.email === 'string'
+      ? value as Session
+      : null
+  } catch { return null }
+}
+
+function recoveryCleanupSession(storage: Storage, currentSession: Session | null, currentUserId: string | null | undefined) {
+  const candidate = currentSession ?? persistedRecoverySession(storage)
+  return candidate && candidate.user.id === currentUserId ? candidate : null
+}
+
+export function persistPasswordRecoveryCleanupRequest(storage: Storage, email: string, session: Session | null, currentUserId: string | null | undefined, requestId: string, nowMs: number) {
+  const cleanupSession = recoveryCleanupSession(storage, session, currentUserId)
+  const request = { version: 1, requestId, email: normalizedRecoveryEmail(email), sessionLineage: recoverySessionLineage(cleanupSession), requestedAtMs: nowMs } satisfies PasswordRecoveryCleanupRequest
   const serialized = JSON.stringify(request)
   storage.setItem(passwordRecoveryCleanupRequestKey, serialized)
   if (storage.getItem(passwordRecoveryCleanupRequestKey) !== serialized) throw new Error('Farm Rx could not protect this password reset on this device.')
 }
 
-export function passwordRecoveryCleanupAuthority(storage: Storage, currentSession: Session | null, nowMs: number): string | null {
+export function passwordRecoveryCleanupAuthority(storage: Storage, currentSession: Session | null, currentUserId: string | null | undefined, nowMs: number): string | null {
   try {
     const serialized = storage.getItem(passwordRecoveryCleanupRequestKey)
     const request = JSON.parse(serialized ?? 'null') as Partial<PasswordRecoveryCleanupRequest> | null
+    const cleanupSession = recoveryCleanupSession(storage, currentSession, currentUserId)
     const valid = request?.version === 1
       && typeof request.requestId === 'string' && request.requestId.length > 0
       && typeof request.email === 'string' && request.email.length > 0
@@ -47,12 +66,16 @@ export function passwordRecoveryCleanupAuthority(storage: Storage, currentSessio
       && request.requestedAtMs <= nowMs
       && nowMs - request.requestedAtMs <= maximumPasswordRecoveryCleanupRequestAgeMs
       && request.sessionLineage !== null
-      && request.sessionLineage === recoverySessionLineage(currentSession)
-      && request.email === normalizedRecoveryEmail(currentSession?.user.email ?? '')
+      && request.sessionLineage === recoverySessionLineage(cleanupSession)
+      && request.email === normalizedRecoveryEmail(cleanupSession?.user.email ?? '')
     if (valid) return serialized
     if (storage.getItem(passwordRecoveryCleanupRequestKey) === serialized) storage.removeItem(passwordRecoveryCleanupRequestKey)
   } catch { /* unreadable storage is never cleanup authority */ }
   return null
+}
+
+export function persistedPasswordRecoveryCleanupAuthority(storage: Storage, currentUserId: string | null | undefined, nowMs: number): string | null {
+  return passwordRecoveryCleanupAuthority(storage, null, currentUserId, nowMs)
 }
 
 export function clearPasswordRecoveryCleanupAuthority(storage: Storage, authority: string) {
