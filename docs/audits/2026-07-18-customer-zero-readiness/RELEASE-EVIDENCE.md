@@ -176,3 +176,33 @@ replace.
 
 The default-off email guards make this code publication safe while SMTP remains absent. Enabling
 email delivery is a separate production action with its own proof; this release did not enable it.
+
+## 2026-08-01 recovery-origin hardening update
+
+The July evidence above remains historical for its exact release. A later approved operator tranche
+configured the SMTP provider and guarded Vercel email flag and received disposable recovery
+messages. The real Chrome journey then exposed a stale service-worker interception defect; that
+pre-repair delivery is evidence that mail arrived, not final customer-zero recovery proof.
+
+The bounded local repair was accepted at exact commit
+`e012e718aec1f5492894891a3df92544c1c4951f`. It moves both reset and first-password links to
+`https://recovery.croprxsolutions.app/update-password`, suppresses service-worker registration on
+that origin, confines the hostname to the recovery route, preserves the normal Supabase
+`PASSWORD_RECOVERY` event, and returns farmers to canonical `https://farm-rx.vercel.app`. Invalid
+link retry and cancellation preserve a pre-existing canonical session; confirmed completion waits
+for canonical restoration, clears that older session, lands at sign-in, and prevents stale session
+bytes from reopening `/fields`.
+
+Exact local proof included the full foundation gate, 17/17 controlled mutation rejections,
+disposable database/RLS lanes, 59 Playwright passes with 9 intentional configuration/project skips,
+6/6 default and 7/7 enabled-email focused Chromium journeys, the green season contract, and a
+fresh-context read-only Sol **ACCEPT** with no merge blocker. This is source/runtime proof only.
+
+At closeout, remote and production `main` remain
+`45dc52f425ee844a0ddc473d514cce748e61c559`; deployment
+`dpl_Fe9UHdAiwoF8ucczm8kgHnZYczrJ` is `READY` and the canonical URL returns HTTP `200`. The accepted
+recovery commit is unpublished, `recovery.croprxsolutions.app` is NXDOMAIN/unbound, and the exact
+Supabase redirect is not configured. Final release proof therefore still requires separately
+authorized publication/automatic deployment, same-project recovery-domain and DNS binding, exact
+Auth allowlisting, a no-bypass disposable real-email Chrome journey, and both physical-phone
+journeys. No customer account or communication receives credit from this update.
