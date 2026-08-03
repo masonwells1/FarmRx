@@ -43,6 +43,8 @@ After deletion, a read-only aggregate query against `auth.users` returned:
 
 Fresh-context read-only Sol additionally found zero references to the disposable UID across the identified public user/creator columns. The three retained Auth emails were `farmrep@croprxsolutions.com`, `farmtest@croprxsolutions.com`, and `farmworker@croprxsolutions.com`.
 
+Supabase did not retain a `user_created` event or a complete creation-window audit result for this tranche. The operator directly observed creating only this disposable identity, but that creation-count boundary is **OPERATOR-OBSERVED** and is not promoted to **PROVEN**. Durable evidence proves the exact UID's later recovery chain, deletion, final three-user Auth state, and absence from the identified public references only.
+
 ## Operator-observed external-Chrome facts
 
 The following were directly observed in external Chrome during the same event chain but do not have a committed screenshot, trace, HAR, or mailbox export. They are recorded as **OPERATOR-OBSERVED**, not as independent **PROVEN** evidence:

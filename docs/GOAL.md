@@ -80,6 +80,10 @@ These are the only status definitions for this initiative. Other files may repor
 
 **COMPLETE** means RELEASE CANDIDATE READY plus every required Mason-approved commit, publish, pull-request, merge, deploy, live migration, live-data, secret/auth/permission, and customer-account action has actually been performed and recorded, and every required physical-device and live verification has actually been performed and recorded. Planned, simulated, automated, or deferred work does not count as performed.
 
+### OPERATOR-OBSERVED
+
+**OPERATOR-OBSERVED** means the action or UI state was directly observed during a controlled run but lacks a committed screenshot, trace, HAR, mailbox export, complete audit window, or equivalent durable artifact. It may preserve truthful provenance, but it cannot establish **PROVEN** or **COMPLETE** by itself.
+
 ## Unresolved customer-zero gates carried forward
 
 The prior engineering release did not close these operational gates, and the 2027 timing does not waive them:
