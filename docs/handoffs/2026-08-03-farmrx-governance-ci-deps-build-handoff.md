@@ -25,7 +25,7 @@ Stabilize dated governance evidence, remove the GitHub Actions Node 20 runtime w
 ## REJECTED IMMUTABLE INTERMEDIATES
 
 - Dependency commit `292412c645ba3fd8a85aa33c3d3cafb60756926d` allowed Playwright `1.62.1`, which repeatably failed the established phone offline-PWA journey.
-- Dependency commit `b5263287136ee2270281b4c4c753bb177be57761f` restored a caret range but still resolved Playwright `1.62.1`; it was not accepted.
+- Dependency commit `b5263287136ee2270281b4c4c753bb177be57761` restored a caret range but still resolved Playwright `1.62.1`; it was not accepted.
 - Dependency commit `066df1576e0a95a8a5c1ae5b37a75f2378580f88` restored proven Playwright `1.61.1` and passed the full gate, but fresh Sol blocked its stale tracked `deno.lock` workspace metadata. Exact child `361f982c8d2eba2be81bc599592a4b4d1edc322e` repaired that discrepancy and is controlling.
 
 ## REMAINING
