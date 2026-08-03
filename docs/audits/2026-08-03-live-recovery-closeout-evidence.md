@@ -1,8 +1,8 @@
 # Farm Rx live recovery closeout evidence index
 
-**Observed:** 2026-08-01 through 2026-08-03 (`America/Chicago`)  
-**Repository base:** `4b4dae787afbd013a79d4edc05d8aebfbb0d5257`  
-**Accepted recovery source:** `9ecc6cba7bbaa9bea063054fe3b996cd22ea9555`  
+**Observed:** 2026-08-01 through 2026-08-03 (`America/Chicago`)
+**Repository base:** `4b4dae787afbd013a79d4edc05d8aebfbb0d5257`
+**Accepted recovery source:** `9ecc6cba7bbaa9bea063054fe3b996cd22ea9555`
 **Governed source-closeout tip:** `5f2733e167edd4c420427e4ade14b761d6e9b7a7`
 
 This redacted index separates durable server/repository evidence from operator-observed browser facts. It contains no password, session token, recovery token, API key, cookie, or signed-link query value. Browser facts marked **OPERATOR-OBSERVED** are not promoted to the scorecard's **PROVEN** status by themselves.
