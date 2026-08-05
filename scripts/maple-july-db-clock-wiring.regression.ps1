@@ -76,9 +76,14 @@ Assert-True ($LASTEXITCODE -eq 0 -and ($timeoutRegression -join "`n") -ceq 'MAPL
 # launches into a port a foreign process already holds.
 Assert-True ($browserHelper.Contains('Assert-MapleSeasonBrowserPortFree') -and $browserHelper.Contains('was already in use by')) 'Continuous browser helper does not preflight its governed port before launching.'
 Assert-True (-not $browserHelper.Contains("Get-NetTCPConnection -LocalAddress")) 'Browser helper port checks do not fail closed for wildcard or IPv6 listeners.'
-Assert-True ($browserHelper.Contains('leaked Farm Rx season server')) 'Browser helper preflight does not distinguish a leaked Farm Rx server from a foreign one.'
+Assert-True ($browserHelper.Contains('Farm Rx dev or season server')) 'Browser helper preflight does not distinguish a Farm Rx-owned listener from a foreign one.'
 $preflightRegression = @(& (Join-Path $root 'scripts/maple-season-browser-port-preflight.regression.ps1'))
 # Carry the child's own marker line through: it catches its exception and exits 1 rather than
-# throwing, so without this the operator only learns that "something" failed.
-Assert-True ($LASTEXITCODE -eq 0 -and ($preflightRegression -join "`n") -ceq 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS') "Browser governed-port preflight regression did not pass: $($preflightRegression -join ' | ')"
+# throwing, so without this the operator only learns that "something" failed. Redact the user
+# profile directory first - the child's diagnostics name temporary paths under it, and this text is
+# written into season evidence logs.
+$preflightDetail = ($preflightRegression -join ' | ')
+$userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+if (-not [string]::IsNullOrEmpty($userProfile)) { $preflightDetail = $preflightDetail.Replace($userProfile, '<user-profile>') }
+Assert-True ($LASTEXITCODE -eq 0 -and ($preflightRegression -join "`n") -ceq 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS') "Browser governed-port preflight regression did not pass: $preflightDetail"
 Write-Output 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS'

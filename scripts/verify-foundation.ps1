@@ -40,6 +40,12 @@ try {
   Invoke-FoundationLane { & npm audit --audit-level=high } 'Dependency audit failed.'
   Invoke-FoundationLane { & node scripts/foundation-static-guards.mjs } 'Foundation static guard failed.'
   Invoke-FoundationLane { & node scripts/verify-foundation-mutations.mjs } 'Foundation mutation drill failed.'
+  # The season contract gate was reachable only when an operator typed `npm run verify:season` by
+  # hand - no workflow and no hook ran it - so the structural guards it holds, including the
+  # governed-port preflight checks, could regress without anything failing. Both are pure node with
+  # no platform dependencies, so they run on the ubuntu foundation job as well as here.
+  Invoke-FoundationLane { & node scripts/verify-season-contract.mjs } 'Season contract gate failed.'
+  Invoke-FoundationLane { & node scripts/verify-season-contract.regression.mjs } 'Season contract mutation drill failed.'
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1') } 'Disposable 0033 proof failed.'
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0034-disposable.ps1') } 'Disposable 0034 proof failed.'
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0035-disposable.ps1') } 'Disposable 0035 proof failed.'

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
@@ -36,7 +36,12 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh.exe')", 'orchestrator:windows-core-probe-shell')
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh')", 'orchestrator:unix-core-probe-shell')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & $probeShell -NoProfile -Command 'exit 23' } $expected", 'orchestrator:resolved-probe-shell')
-  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 19) errors.push('orchestrator:all-lanes-checked')
+  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 21) errors.push('orchestrator:all-lanes-checked')
+  // Pin both season lanes by name. The count above only proves nobody added a lane without
+  // updating this guard; it does not prove these two specific lanes survived, and they are the only
+  // thing making the season contract gate reachable from an automated gate rather than by hand.
+  requireText(errors, foundationOrchestrator, 'Invoke-FoundationLane { & node scripts/verify-season-contract.mjs }', 'orchestrator:checked-season-contract')
+  requireText(errors, foundationOrchestrator, 'Invoke-FoundationLane { & node scripts/verify-season-contract.regression.mjs }', 'orchestrator:checked-season-contract-regression')
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
 
@@ -136,6 +141,24 @@ export function foundationStaticGuard(root = process.cwd()) {
   const inline = frameDocument.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? ''
   const frameHash = createHash('sha256').update(inline).digest('base64')
   if (!frameCsp?.includes(`'sha256-${frameHash}'`)) errors.push('csp:frame-inline-hash')
+
+  // tests/season/maple-2027-start.sql derives the season owner password from psql variable
+  // :'season_owner_password' rather than carrying a literal one. Only Invoke-MapleSeasonSqlFile
+  // prepends the matching \set, so piping the fixture straight into psql hands the placeholder to
+  // Postgres verbatim and the fixture dies on `syntax error at or near ":"`. That is exactly how
+  // scripts/verify-program-assignment-identities-disposable.ps1 broke when the fixture was
+  // parameterized and stayed broken: nothing in the repository runs that script, so no gate
+  // noticed. Discover consumers by scanning rather than from a fixed list, so a newly added
+  // runner cannot reintroduce the raw pipe.
+  const seasonStartFixture = read(root, 'tests/season/maple-2027-start.sql')
+  requireText(errors, seasonStartFixture, ":'season_owner_password'", 'season:start-fixture-parameterized-password')
+  const fixtureConsumers = readdirSync(resolve(root, 'scripts')).filter((entry) => entry.endsWith('.ps1') && read(root, `scripts/${entry}`).includes('maple-2027-start.sql'))
+  if (fixtureConsumers.length === 0) errors.push('season:start-fixture-has-no-consumer')
+  for (const consumer of fixtureConsumers) {
+    const source = read(root, `scripts/${consumer}`)
+    requireText(errors, source, 'Invoke-MapleSeasonSqlFile', `season:fixture-helper-${consumer}`)
+    if (/\|\s*docker exec/.test(source)) errors.push(`season:fixture-raw-psql-pipe-${consumer}`)
+  }
 
   const scheduler = read(root, 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql')
   requireText(errors, scheduler, "current_setting('request.jwt.claim.role',true),'') <> 'service_role'", 'scheduler:service-role-check')

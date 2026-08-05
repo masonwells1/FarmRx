@@ -19,6 +19,12 @@ const HARNESS_FILES = [
 
 const EXPECTED_PACKAGE_COMMAND = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-season.ps1";
 
+// The closing summary used to carry hand-written mutation counts, so adding or splitting a drill
+// left the number stale and the summary overstated or understated the coverage. Record each
+// rejection where it is actually confirmed and report the measurement.
+const rejectedContractMutations = [];
+const rejectedIsolationMutations = [];
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -39,6 +45,7 @@ function expectContractFailure(name, candidate, workflowMarkdown, expectedPatter
     expectedPattern.test(failure.message),
     `Season contract mutation ${name} failed with an unexpected error: ${failure.message}`,
   );
+  rejectedContractMutations.push(name);
   console.log(`Season contract mutation ${name}: EXPECTED FAIL (${failure.message})`);
 }
 
@@ -64,6 +71,7 @@ async function expectIsolationFailure(name, root, expectedPattern) {
     expectedPattern.test(failure.message),
     `Season isolation mutation ${name} failed with an unexpected error: ${failure.message}`,
   );
+  rejectedIsolationMutations.push(name);
   console.log(`Season isolation mutation ${name}: EXPECTED FAIL (${failure.message})`);
 }
 
@@ -84,7 +92,11 @@ async function runReplacementIsolationMutation(name, relativePath, expectedText,
   const root = await createTemporaryHarness();
   try {
     const target = join(root, relativePath);
-    const content = await readFile(target, "utf8");
+    // Normalize line endings before matching. This machine has core.autocrlf=true globally, so a
+    // fresh clone checks these files out with CRLF; a multi-line expectedText would then never be
+    // found and the mutation would report "could not find its target text" instead of proving the
+    // isolation property it exists to prove.
+    const content = (await readFile(target, "utf8")).replace(/\r\n/g, "\n");
     assert(content.includes(expectedText), `Season isolation mutation ${name} could not find its target text.`);
     await writeFile(target, content.replace(expectedText, replacementText), "utf8");
     await expectIsolationFailure(name, root, expectedPattern);
@@ -96,7 +108,15 @@ async function runReplacementIsolationMutation(name, relativePath, expectedText,
 
 const { manifest, workflowMarkdown } = await loadSeasonContractInputs();
 const goodResult = validateSeasonContract(manifest, workflowMarkdown);
-await validateHarnessIsolation();
+const isolationCoverage = await validateHarnessIsolation();
+// HARNESS_FILES is duplicated here so the temporary harness can be built without importing an
+// internal constant. Nothing used to notice when the two lists diverged, and a file present only in
+// the contract module would then be validated against a copy this regression never wrote - so
+// compare them instead of trusting that they stayed in step.
+assert(
+  isolationCoverage.checkedFiles.slice().sort().join(",") === HARNESS_FILES.slice().sort().join(","),
+  "Season regression harness file list has drifted from the files the contract module checks.",
+);
 console.log(`Season contract good fixture: PASS (${goodResult.fixtureCount} fixtures)`);
 
 {
@@ -300,13 +320,25 @@ await runReplacementIsolationMutation(
   /^scripts\/maple-season-browser\.ps1 starts its browser process before the governed-port preflight\.$/,
 );
 
+// Two functions query the governed port, and String.replace rewrites only the first match. Naming
+// one drill "governed-port check" mutated whichever occurrence came first in the file - the cleanup
+// query - so the preflight's own query was never actually exercised. Anchor each drill on its
+// function's last parameter, which is the only text that distinguishes the two call sites.
 await runReplacementIsolationMutation(
-  "governed-port check narrowed to loopback",
+  "governed-port preflight check narrowed to loopback",
   "scripts/maple-season-browser.ps1",
-  "Get-NetTCPConnection -LocalPort $Port -State Listen",
-  "Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen",
+  "[Parameter(Mandatory)][string]$Root\n  )\n  $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen",
+  "[Parameter(Mandatory)][string]$Root\n  )\n  $listeners = @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen",
   /^scripts\/maple-season-browser\.ps1 port checks do not fail closed for wildcard or IPv6 listeners\.$/,
 );
 
-console.log("Season contract regressions: PASS (9 rejected contract mutations; 17 rejected isolation mutations)");
+await runReplacementIsolationMutation(
+  "governed-port cleanup check narrowed to loopback",
+  "scripts/maple-season-browser.ps1",
+  "[Parameter(Mandatory)][string]$Scenario\n  )\n  $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen",
+  "[Parameter(Mandatory)][string]$Scenario\n  )\n  $listeners = @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen",
+  /^scripts\/maple-season-browser\.ps1 port checks do not fail closed for wildcard or IPv6 listeners\.$/,
+);
+
+console.log(`Season contract regressions: PASS (${rejectedContractMutations.length} rejected contract mutations; ${rejectedIsolationMutations.length} rejected isolation mutations)`);
 console.log("Season regression proof boundary: contract/isolation only; disposable-backend and browser workflow proof not yet run");
