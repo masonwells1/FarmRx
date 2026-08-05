@@ -75,6 +75,10 @@ Assert-True ($LASTEXITCODE -eq 0 -and ($timeoutRegression -join "`n") -ceq 'MAPL
 # shared helper on its default governed port, so the helper itself must refuse before it
 # launches into a port a foreign process already holds.
 Assert-True ($browserHelper.Contains('Assert-MapleSeasonBrowserPortFree') -and $browserHelper.Contains('was already in use by')) 'Continuous browser helper does not preflight its governed port before launching.'
+Assert-True (-not $browserHelper.Contains("Get-NetTCPConnection -LocalAddress")) 'Browser helper port checks do not fail closed for wildcard or IPv6 listeners.'
+Assert-True ($browserHelper.Contains('leaked Farm Rx season server')) 'Browser helper preflight does not distinguish a leaked Farm Rx server from a foreign one.'
 $preflightRegression = @(& (Join-Path $root 'scripts/maple-season-browser-port-preflight.regression.ps1'))
-Assert-True ($LASTEXITCODE -eq 0 -and ($preflightRegression -join "`n") -ceq 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS') 'Browser governed-port preflight regression did not pass.'
+# Carry the child's own marker line through: it catches its exception and exits 1 rather than
+# throwing, so without this the operator only learns that "something" failed.
+Assert-True ($LASTEXITCODE -eq 0 -and ($preflightRegression -join "`n") -ceq 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS') "Browser governed-port preflight regression did not pass: $($preflightRegression -join ' | ')"
 Write-Output 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS'

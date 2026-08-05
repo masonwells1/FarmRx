@@ -9,6 +9,7 @@ export const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, "..");
 
 const MANIFEST_PATH = "tests/season/season-2027.manifest.json";
 const WORKFLOWS_PATH = "docs/season-readiness/WORKFLOWS-AND-SCENARIOS.md";
+const BROWSER_HELPER_PATH = "scripts/maple-season-browser.ps1";
 const EXPECTED_SCHEMA = "farm-rx-season-contract";
 const EXPECTED_VERSION = 1;
 const EXPECTED_YEAR = 2027;
@@ -135,6 +136,7 @@ const HARNESS_FILES = [
   "scripts/verify-season.ps1",
   "scripts/verify-season-contract.mjs",
   "scripts/verify-season-contract.regression.mjs",
+  BROWSER_HELPER_PATH,
   MANIFEST_PATH,
 ];
 
@@ -738,6 +740,25 @@ export async function validateHarnessIsolation(root = REPOSITORY_ROOT) {
   assert(
     powershellHash === EXPECTED_POWERSHELL_SHA256,
     "scripts/verify-season.ps1 does not match the pinned SHA-256.",
+  );
+
+  // The governed-port preflight is the only thing standing between an occupied season port and a
+  // run that burns Playwright's webServer timeout and then mis-blames itself for the listener.
+  // Its execution regression is Windows-only (Get-NetTCPConnection), so these three structural
+  // checks are what keep the guard reachable from a gate on every platform.
+  const browserHelperContent = await readFile(resolve(root, BROWSER_HELPER_PATH), "utf8");
+  assert(
+    browserHelperContent.includes("Assert-MapleSeasonBrowserPortFree -Port $port"),
+    `${BROWSER_HELPER_PATH} does not preflight its governed port before launching a scenario.`,
+  );
+  assert(
+    browserHelperContent.indexOf("Assert-MapleSeasonBrowserPortFree -Port $port") <
+      browserHelperContent.indexOf("$process.Start()"),
+    `${BROWSER_HELPER_PATH} starts its browser process before the governed-port preflight.`,
+  );
+  assert(
+    !browserHelperContent.includes("Get-NetTCPConnection -LocalAddress"),
+    `${BROWSER_HELPER_PATH} port checks do not fail closed for wildcard or IPv6 listeners.`,
   );
 
   for (const file of ["scripts/verify-season-contract.mjs", "scripts/verify-season-contract.regression.mjs"]) {

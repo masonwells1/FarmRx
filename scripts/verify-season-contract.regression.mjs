@@ -13,6 +13,7 @@ const HARNESS_FILES = [
   "scripts/verify-season.ps1",
   "scripts/verify-season-contract.mjs",
   "scripts/verify-season-contract.regression.mjs",
+  "scripts/maple-season-browser.ps1",
   "tests/season/season-2027.manifest.json",
 ];
 
@@ -283,5 +284,29 @@ await runAppendIsolationMutation(
   /^scripts\/verify-season\.ps1 does not match the pinned SHA-256\.$/,
 );
 
-console.log("Season contract regressions: PASS (9 rejected contract mutations; 14 rejected isolation mutations)");
+await runReplacementIsolationMutation(
+  "removed governed-port preflight",
+  "scripts/maple-season-browser.ps1",
+  "Assert-MapleSeasonBrowserPortFree -Port $port",
+  "# preflight removed",
+  /^scripts\/maple-season-browser\.ps1 does not preflight its governed port before launching a scenario\.$/,
+);
+
+await runReplacementIsolationMutation(
+  "governed-port preflight after launch",
+  "scripts/maple-season-browser.ps1",
+  "  Assert-MapleSeasonBrowserPortFree -Port $port -Scenario $Scenario -PortVariable $portContract[0] -Root $ownedMarker\n  if (-not $process.Start())",
+  "  if (-not $process.Start())\n  Assert-MapleSeasonBrowserPortFree -Port $port -Scenario $Scenario -PortVariable $portContract[0] -Root $ownedMarker",
+  /^scripts\/maple-season-browser\.ps1 starts its browser process before the governed-port preflight\.$/,
+);
+
+await runReplacementIsolationMutation(
+  "governed-port check narrowed to loopback",
+  "scripts/maple-season-browser.ps1",
+  "Get-NetTCPConnection -LocalPort $Port -State Listen",
+  "Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen",
+  /^scripts\/maple-season-browser\.ps1 port checks do not fail closed for wildcard or IPv6 listeners\.$/,
+);
+
+console.log("Season contract regressions: PASS (9 rejected contract mutations; 17 rejected isolation mutations)");
 console.log("Season regression proof boundary: contract/isolation only; disposable-backend and browser workflow proof not yet run");

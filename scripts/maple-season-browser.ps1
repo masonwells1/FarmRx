@@ -1,3 +1,18 @@
+function Test-MapleSeasonBrowserPortOwned {
+  param(
+    $ListenerProcess,
+    [Parameter(Mandatory)][string]$Root
+  )
+  # CommandLine is null for a process this session cannot inspect (another user, or elevated).
+  # Guard it explicitly: under Set-StrictMode -Version Latest a null .IndexOf() throws a method
+  # error instead of returning the "not ours" answer the callers depend on.
+  if ($null -eq $ListenerProcess) { return $false }
+  $commandLine = $ListenerProcess.CommandLine
+  if ([string]::IsNullOrEmpty($commandLine)) { return $false }
+  return $commandLine.IndexOf($Root, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+    $commandLine -match '(?i)(vite|npm|node)'
+}
+
 function Clear-MapleSeasonBrowserPort {
   param(
     [Parameter(Mandatory)][int]$Port,
@@ -7,9 +22,7 @@ function Clear-MapleSeasonBrowserPort {
   $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
   foreach ($listener in $listeners) {
     $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue
-    $owned = $null -ne $listenerProcess -and
-      $listenerProcess.CommandLine.IndexOf($Root, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-      $listenerProcess.CommandLine -match '(?i)(vite|npm|node)'
+    $owned = Test-MapleSeasonBrowserPortOwned -ListenerProcess $listenerProcess -Root $Root
     if (-not $owned) {
       throw "$Scenario found an unrecognized listener on governed port $Port; refusing to terminate it."
     }
@@ -35,18 +48,32 @@ function Assert-MapleSeasonBrowserPortFree {
   param(
     [Parameter(Mandatory)][int]$Port,
     [Parameter(Mandatory)][string]$Scenario,
-    [Parameter(Mandatory)][string]$PortVariable
+    [Parameter(Mandatory)][string]$PortVariable,
+    [Parameter(Mandatory)][string]$Root
   )
   $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
   if ($listeners.Count -eq 0) { return }
-  $holders = foreach ($listener in $listeners) {
+  $holders = [Collections.Generic.List[string]]::new()
+  $leaked = $false
+  foreach ($listener in $listeners) {
     $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue
+    if (Test-MapleSeasonBrowserPortOwned -ListenerProcess $listenerProcess -Root $Root) { $leaked = $true }
     # Image name and PID only. A foreign command line can carry tokens or private paths and
     # this message is written into season evidence logs.
     $name = if ($null -eq $listenerProcess) { 'unknown' } else { $listenerProcess.Name }
-    '{0} (PID {1})' -f $name, $listener.OwningProcess
+    $holders.Add("$name (PID $($listener.OwningProcess))")
   }
-  throw ("$Scenario cannot start: governed port $Port was already in use by {0} before this scenario ran. Free that port or set $PortVariable to an unused port." -f (($holders | Sort-Object -Unique) -join ', '))
+  # No -f here: $Scenario is caller-supplied and already interpolated, so a brace in it would
+  # turn this refusal into a FormatException instead of the diagnosis.
+  $holderList = ($holders | Sort-Object -Unique) -join ', '
+  # Distinguish a leaked Farm Rx server from a genuinely foreign one. Vite has no strictPort, so
+  # a leaked season server can drift onto the next month's governed port; telling the operator to
+  # hunt a foreign squatter that does not exist is the same mis-diagnosis this preflight exists
+  # to remove. Refuse either way - never terminate a listener this scenario did not create.
+  if ($leaked) {
+    throw "$Scenario cannot start: governed port $Port was already held by a leaked Farm Rx season server ($holderList) before this scenario ran. An earlier proof did not release it; stop that server and investigate the proof that left it behind."
+  }
+  throw "$Scenario cannot start: governed port $Port was already in use by $holderList before this scenario ran, and no listener there belongs to Farm Rx. Free that port or set $PortVariable to an unused port."
 }
 
 function Invoke-MapleSeasonBrowserProof {
@@ -72,11 +99,6 @@ function Invoke-MapleSeasonBrowserProof {
   }
   $configuredPort = [Environment]::GetEnvironmentVariable($portContract[0], [EnvironmentVariableTarget]::Process)
   $port = if ([string]::IsNullOrWhiteSpace($configuredPort)) { [int]$portContract[1] } else { [int]$configuredPort }
-  # Fail before launching. Playwright runs these configs with reuseExistingServer:false, so an
-  # occupied governed port cannot be shared: without this the run burns its full bounded
-  # timeout and then reports the post-run cleanup refusal, which reads as if this scenario
-  # leaked the listener when in fact a foreign process held the port beforehand.
-  Assert-MapleSeasonBrowserPortFree -Port $port -Scenario $Scenario -PortVariable $portContract[0]
   $node = (Get-Command node.exe -ErrorAction Stop).Source
   $runner = if ([string]::IsNullOrWhiteSpace($RunnerFile)) { Join-Path $Root 'node_modules/@playwright/test/cli.js' } else { $RunnerFile }
   $runner = [IO.Path]::GetFullPath($runner)
@@ -95,6 +117,13 @@ function Invoke-MapleSeasonBrowserProof {
   $startInfo.CreateNoWindow = $true
   $process = New-Object System.Diagnostics.Process
   $process.StartInfo = $startInfo
+  # Fail before launching, and only after the deterministic contract checks above, so a real
+  # defect (missing runner, invalid grep tag) is never masked by an environment collision.
+  # Playwright runs these configs with reuseExistingServer:false, so an occupied governed port
+  # cannot be shared: without this the scenario launches anyway, waits out Playwright's 120s
+  # webServer timeout, and then dies inside the post-run cleanup refusal - which reads as if
+  # this scenario leaked the listener when something else held the port beforehand.
+  Assert-MapleSeasonBrowserPortFree -Port $port -Scenario $Scenario -PortVariable $portContract[0] -Root $ownedMarker
   if (-not $process.Start()) { throw "$Scenario browser process did not start." }
   $completed = $process.WaitForExit($TimeoutMilliseconds)
   if (-not $completed) {
