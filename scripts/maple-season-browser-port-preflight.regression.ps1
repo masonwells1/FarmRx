@@ -150,21 +150,43 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   # gates the Stop-Process in Clear-MapleSeasonBrowserPort, so a true answer here would terminate
   # somebody else's server.
   $ownedRoot = 'C:\FarmRx'
+  # ImageName is part of each case because the predicate tests the process image, not the command
+  # line, for the node/npm/npx condition - an argument that merely mentions node_modules must not be
+  # able to satisfy it.
   $ownershipCases = @(
-    @{ Name = 'sibling directory sharing the root prefix'; CommandLine = 'node.exe "C:\FarmRx2\node_modules\vite\bin\vite.js"'; Owned = $false }
-    @{ Name = 'listener inside the owned root'; CommandLine = 'node.exe "C:\FarmRx\node_modules\vite\bin\vite.js"'; Owned = $true }
-    @{ Name = 'owned root spelled with forward slashes'; CommandLine = 'node.exe "C:/FarmRx/node_modules/vite/bin/vite.js"'; Owned = $true }
-    @{ Name = 'owned root at the end of the command line'; CommandLine = 'node.exe C:\FarmRx'; Owned = $true }
-    @{ Name = 'owned root but not a node or vite process'; CommandLine = 'ruby.exe C:\FarmRx\serve.rb'; Owned = $false }
+    @{ Name = 'sibling directory sharing the root prefix'; ImageName = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx2\node_modules\vite\bin\vite.js"'; Owned = $false }
+    # The space-suffixed sibling is the case the first version of this predicate got wrong: a space
+    # was accepted as a path boundary, so root C:\FarmRx claimed a server in C:\FarmRx Backup and
+    # would have terminated it. Directory names may contain spaces, so a space ends nothing.
+    @{ Name = 'sibling directory whose name adds a space'; ImageName = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx Backup\node_modules\vite\bin\vite.js"'; Owned = $false }
+    @{ Name = 'sibling directory whose name adds a quoted suffix'; ImageName = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx old\node_modules\vite\bin\vite.js"'; Owned = $false }
+    @{ Name = 'listener inside the owned root'; ImageName = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx\node_modules\vite\bin\vite.js"'; Owned = $true }
+    @{ Name = 'owned root spelled with forward slashes'; ImageName = 'node.exe'; CommandLine = 'node.exe "C:/FarmRx/node_modules/vite/bin/vite.js"'; Owned = $true }
+    @{ Name = 'owned root at the end of the command line'; ImageName = 'node.exe'; CommandLine = 'node.exe C:\FarmRx'; Owned = $true }
+    @{ Name = 'owned root inside closing quotes'; ImageName = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx"'; Owned = $true }
+    # A prefix-sharing sibling appearing BEFORE the real owned path used to mask it: the search
+    # stopped at the first occurrence, found a bad boundary, and declared our own server foreign,
+    # which failed the month at cleanup with a wrong diagnosis.
+    @{ Name = 'prefix-sharing sibling ahead of the owned path'; ImageName = 'node.exe'; CommandLine = 'node.exe --require C:\FarmRx2\hook.js "C:\FarmRx\node_modules\vite\bin\vite.js"'; Owned = $true }
+    @{ Name = 'owned root but not a node process'; ImageName = 'ruby.exe'; CommandLine = 'ruby.exe C:\FarmRx\serve.rb'; Owned = $false }
+    # A non-node process whose arguments mention node_modules must not qualify. The predecessor
+    # matched '(vite|npm|node)' anywhere in the command line, so this returned true.
+    @{ Name = 'non-node process whose arguments mention node_modules'; ImageName = 'ruby.exe'; CommandLine = 'ruby.exe C:\FarmRx\node_modules\tool\serve.rb'; Owned = $false }
   )
   foreach ($ownershipCase in $ownershipCases) {
-    $probe = [pscustomobject]@{ Name = 'probe.exe'; CommandLine = $ownershipCase.CommandLine }
+    $probe = [pscustomobject]@{ Name = $ownershipCase.ImageName; CommandLine = $ownershipCase.CommandLine }
     $actual = Test-MapleSeasonBrowserPortOwned -ListenerProcess $probe -Root $ownedRoot
     Assert-True ($actual -eq $ownershipCase.Owned) "Ownership test answered $actual for the $($ownershipCase.Name) case; expected $($ownershipCase.Owned)."
   }
   # Fail closed when this session cannot inspect the holder at all.
   Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $null -Root $ownedRoot)) 'Ownership test did not fail closed for an uninspectable process.'
-  Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess ([pscustomobject]@{ Name = 'probe.exe'; CommandLine = $null }) -Root $ownedRoot)) 'Ownership test did not fail closed for a null command line.'
+  Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess ([pscustomobject]@{ Name = 'node.exe'; CommandLine = $null }) -Root $ownedRoot)) 'Ownership test did not fail closed for a null command line.'
+  # A missing or degenerate root must not claim every listener. TrimEnd empties a root of '\', and
+  # IndexOf('') succeeds at every position, so this is the difference between "not ours" and "kill
+  # anything on this port".
+  $anyListener = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx\node_modules\vite\bin\vite.js"' }
+  Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $anyListener)) 'Ownership test did not fail closed for a missing root.'
+  Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $anyListener -Root '\')) 'Ownership test did not fail closed for a degenerate root.'
 
   Write-Output 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS'
   exit 0

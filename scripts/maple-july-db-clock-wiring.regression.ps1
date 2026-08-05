@@ -9,6 +9,19 @@ function Assert-True([bool]$Value, [string]$Message) {
   if (-not $Value) { throw $Message }
 }
 
+function Get-MapleRedactedChildDetail([string[]]$Lines) {
+  # Child regressions catch their own exceptions and report through a marker plus a native exit
+  # code, so their output is the only failure detail this caller has - carry it through rather than
+  # replacing it with a fixed string. Redact the profile directory AND the temp directory before
+  # doing so: their diagnostics name paths built from [IO.Path]::GetTempPath(), which follows %TEMP%
+  # and is not always inside the profile, and this text is written into season evidence logs.
+  $detail = ($Lines -join ' | ')
+  foreach ($machinePath in @([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile), [IO.Path]::GetTempPath())) {
+    if (-not [string]::IsNullOrEmpty($machinePath)) { $detail = $detail.Replace($machinePath.TrimEnd('\'), '<redacted-path>') }
+  }
+  return $detail
+}
+
 & $module {
   function Assert-ModuleTrue([bool]$Value, [string]$Message) {
     if (-not $Value) { throw $Message }
@@ -70,7 +83,7 @@ foreach ($month in @('january','february','march','april','may','june')) {
 Assert-True ($july.Contains('FARMRX_SEASON_JANUARY_PORT') -and $july.Contains("'4274'") -and $july.Contains('Assert-MapleJulySeasonPortsAvailable')) 'July does not reserve and restore its isolated nested-chain ports.'
 Assert-True ($july.Contains('Get-NetTCPConnection -LocalPort $port -State Listen') -and -not $july.Contains("Get-NetTCPConnection -LocalAddress '127.0.0.1'")) 'July port preflight does not fail closed for wildcard or IPv6 listeners.'
 $timeoutRegression = @(& (Join-Path $root 'scripts/maple-season-browser-timeout.regression.ps1'))
-Assert-True ($LASTEXITCODE -eq 0 -and ($timeoutRegression -join "`n") -ceq 'MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_PASS') 'Browser forced-timeout cleanup regression did not pass.'
+Assert-True ($LASTEXITCODE -eq 0 -and ($timeoutRegression -join "`n") -ceq 'MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_PASS') "Browser forced-timeout cleanup regression did not pass: $(Get-MapleRedactedChildDetail $timeoutRegression)"
 # July already reserves its own isolated nested-chain ports. Every other month reaches the
 # shared helper on its default governed port, so the helper itself must refuse before it
 # launches into a port a foreign process already holds.
@@ -78,12 +91,5 @@ Assert-True ($browserHelper.Contains('Assert-MapleSeasonBrowserPortFree') -and $
 Assert-True (-not $browserHelper.Contains("Get-NetTCPConnection -LocalAddress")) 'Browser helper port checks do not fail closed for wildcard or IPv6 listeners.'
 Assert-True ($browserHelper.Contains('Farm Rx dev or season server')) 'Browser helper preflight does not distinguish a Farm Rx-owned listener from a foreign one.'
 $preflightRegression = @(& (Join-Path $root 'scripts/maple-season-browser-port-preflight.regression.ps1'))
-# Carry the child's own marker line through: it catches its exception and exits 1 rather than
-# throwing, so without this the operator only learns that "something" failed. Redact the user
-# profile directory first - the child's diagnostics name temporary paths under it, and this text is
-# written into season evidence logs.
-$preflightDetail = ($preflightRegression -join ' | ')
-$userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
-if (-not [string]::IsNullOrEmpty($userProfile)) { $preflightDetail = $preflightDetail.Replace($userProfile, '<user-profile>') }
-Assert-True ($LASTEXITCODE -eq 0 -and ($preflightRegression -join "`n") -ceq 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS') "Browser governed-port preflight regression did not pass: $preflightDetail"
+Assert-True ($LASTEXITCODE -eq 0 -and ($preflightRegression -join "`n") -ceq 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS') "Browser governed-port preflight regression did not pass: $(Get-MapleRedactedChildDetail $preflightRegression)"
 Write-Output 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS'

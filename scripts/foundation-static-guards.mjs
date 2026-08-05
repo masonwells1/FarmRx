@@ -148,8 +148,11 @@ export function foundationStaticGuard(root = process.cwd()) {
   // Postgres verbatim and the fixture dies on `syntax error at or near ":"`. That is exactly how
   // scripts/verify-program-assignment-identities-disposable.ps1 broke when the fixture was
   // parameterized and stayed broken: nothing in the repository runs that script, so no gate
-  // noticed. Discover consumers by scanning rather than from a fixed list, so a newly added
-  // runner cannot reintroduce the raw pipe.
+  // noticed. Consumers are discovered by scanning rather than from a fixed list so that adding a
+  // runner does not also require remembering to register it here. This is a tripwire for the one
+  // mistake that actually happened, not a proof: it sees only top-level scripts/*.ps1 that name the
+  // fixture literally, and only the `| docker exec` spelling of the pipe. A consumer written as a
+  // .psm1, placed elsewhere, or building the filename by concatenation is not covered.
   const seasonStartFixture = read(root, 'tests/season/maple-2027-start.sql')
   requireText(errors, seasonStartFixture, ":'season_owner_password'", 'season:start-fixture-parameterized-password')
   const fixtureConsumers = readdirSync(resolve(root, 'scripts')).filter((entry) => entry.endsWith('.ps1') && read(root, `scripts/${entry}`).includes('maple-2027-start.sql'))
@@ -157,6 +160,11 @@ export function foundationStaticGuard(root = process.cwd()) {
   for (const consumer of fixtureConsumers) {
     const source = read(root, `scripts/${consumer}`)
     requireText(errors, source, 'Invoke-MapleSeasonSqlFile', `season:fixture-helper-${consumer}`)
+    // The file that DEFINES the helper is exempt from the pipe prohibition: piping the payload into
+    // psql is its job, and it is the one place that does it correctly. Without this exemption the
+    // gate turns red the moment someone adds a comment naming the fixture to the helper, pointing
+    // the blame at the correct implementation.
+    if (/function\s+Invoke-MapleSeasonSqlFile/.test(source)) continue
     if (/\|\s*docker exec/.test(source)) errors.push(`season:fixture-raw-psql-pipe-${consumer}`)
   }
 

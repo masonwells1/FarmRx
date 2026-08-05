@@ -16,7 +16,11 @@ const EXPECTED_YEAR = 2027;
 const EXPECTED_TIMEZONE = "America/Chicago";
 const EXPECTED_FIXTURE_COUNT = 101;
 const EXPECTED_PACKAGE_COMMAND = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-season.ps1";
-const EXPECTED_POWERSHELL_SHA256 = "419a68327bb080e63ea58ec48c06926c24ea9ebbb69a8022dea5e8723322a359";
+// Re-pinned when the Windows execution lane was added to scripts/verify-season.ps1. The pin exists
+// to catch an unreviewed edit to the season orchestrator, so updating it in the same commit that
+// deliberately changes that file is the intended workflow, not a bypass - the mutation drill still
+// proves an unauthorized edit turns this gate red.
+const EXPECTED_POWERSHELL_SHA256 = "cf93aa35f6bae6528f785d83ede718672b27e71c901e7f95ef81868f836aa200";
 
 const EXPECTED_SCENARIOS = new Map([
   [
@@ -736,6 +740,15 @@ export async function validateHarnessIsolation(root = REPOSITORY_ROOT) {
   );
 
   const powershellContent = await readFile(resolve(root, "scripts/verify-season.ps1"), "utf8");
+  // Name the execution lane, and do it BEFORE the hash. A hash alone cannot object to the lane being
+  // deleted, because whoever deletes it re-pins the hash in the same edit - which is exactly how this
+  // chain became orphaned in the first place. Checking it first also means the mutation drill for this
+  // property reports this property: any edit that removes the lane also changes the hash, so with the
+  // hash checked first the specific diagnosis would always be masked by the generic one.
+  assert(
+    powershellContent.includes("maple-july-db-clock-wiring.regression.ps1"),
+    "scripts/verify-season.ps1 no longer runs the Windows season execution regressions.",
+  );
   const powershellHash = createHash("sha256").update(powershellContent.replace(/\r\n/g, "\n")).digest("hex");
   assert(
     powershellHash === EXPECTED_POWERSHELL_SHA256,
@@ -744,8 +757,9 @@ export async function validateHarnessIsolation(root = REPOSITORY_ROOT) {
 
   // The governed-port preflight is the only thing standing between an occupied season port and a
   // run that burns Playwright's webServer timeout and then mis-blames itself for the listener.
-  // Its execution regression is Windows-only (Get-NetTCPConnection), so these three structural
-  // checks are what keep the guard reachable from a gate on every platform.
+  // Its execution regression is Windows-only (Get-NetTCPConnection), and the season gate now runs
+  // that regression on Windows. These three structural checks are what remain on Linux, where CI
+  // runs: they prove the call is present and ordered before launch, but they never execute it.
   const browserHelperContent = await readFile(resolve(root, BROWSER_HELPER_PATH), "utf8");
   assert(
     browserHelperContent.includes("Assert-MapleSeasonBrowserPortFree -Port $port"),

@@ -32,13 +32,17 @@ try {
   try {
     & $supabase --profile supabase db reset --local --no-seed --yes
     if ($LASTEXITCODE -ne 0) { throw 'Disposable local Supabase reset failed.' }
-    # Invoke-MapleSeasonSqlFile deliberately withholds psql output because the payload carries the
-    # generated credential, so name the failing file here; without that the generic helper message
-    # cannot say whether the fixture or the assertions broke.
+    # The fixture's own failure can only be named, not quoted: Invoke-MapleSeasonSqlFile throws the
+    # captured psql output, and the fixture payload carries the generated season owner password, so
+    # relaying it here could copy that credential into an evidence log.
     try { $null = Invoke-MapleSeasonSqlFile -Path $fixturePath -ExpectedContainer $expectedContainer }
     catch { throw 'Maple starting fixture failed to apply.' }
+    # The assertion file is different: it contains no password, crypt call, or reference to
+    # :'season_owner_password', so forwarding the database's own error carries no credential. A bare
+    # label here would leave the operator with strictly less diagnosis than the raw psql pipe this
+    # script used to have, which would make the repair a regression in everything but correctness.
     try { $null = Invoke-MapleSeasonSqlFile -Path $proofPath -ExpectedContainer $expectedContainer }
-    catch { throw 'Programs identity assertions failed.' }
+    catch { throw "Programs identity assertions failed: $($_.Exception.Message)" }
   } finally {
     Exit-MapleSeasonCredential
   }

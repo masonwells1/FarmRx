@@ -53,6 +53,8 @@ The required Maple run resets once before January and preserves the same disposa
 | November | **PROVEN** | SR-035/SR-036 and unified exact commit `8a9565a` reran step-exact independent bin, inbound, contract, outbound, and delivery actions plus raw phone state at `2027-11-10 17:25:00+00:00`. | No Maple month blocker; Grain semantics remain explicit and non-coupled. |
 | December | **PROVEN** | SR-035/SR-036 and unified exact commit `8a9565a` reran full-year reconciliation, exact 11-receipt and 32,000/30,800-bushel SQL, twelve read-only module/concurrency lanes, zero startup writes, and phone no-overflow at `2027-12-15 15:30:00+00:00`. | No Maple month blocker; this is browser emulation, not physical-device proof. |
 
+February's status was re-examined during the SR-060 sweep, because the broken `verify-program-assignment-identities-disposable.ps1` also asserted Program assignment identities and had been unrunnable since exact `53e8d2d...`. February's **PROVEN** status does not and never did depend on that script: February is proven by `verify-maple-february-disposable.ps1` inside the continuous chain, and the broken script had no caller anywhere in the repository, so it contributed no evidence to withdraw. The whole 2027 Maple year was subsequently re-driven end to end at the repaired commit and printed every chain marker through terminal `MAPLE_2027_AUGUST_DECEMBER_DISPOSABLE_PASS`; see SR-060.
+
 ## Governed scenario gauntlets
 
 | Scenario | Status | Current blocker / missing evidence |

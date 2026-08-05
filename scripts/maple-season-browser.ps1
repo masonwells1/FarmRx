@@ -1,8 +1,12 @@
 function Test-MapleSeasonBrowserPortOwned {
   param(
     $ListenerProcess,
-    [Parameter(Mandatory)][string]$Root
+    $Root
   )
+  # Both parameters are declared bare on purpose. Mandatory would make the guards below dead code
+  # and would turn a caller that forgets -Root into an interactive prompt, which hangs a proof run
+  # instead of failing it. Bare plus an explicit guard means a missing argument fails closed to
+  # "not ours", and the only consequence of that is refusing to terminate something.
   # CommandLine is null for a process this session cannot inspect (another user, or elevated).
   # Guard it explicitly: calling .IndexOf() on $null raises a method-not-found error in every
   # PowerShell mode, so without this guard the callers get an exception instead of the "not ours"
@@ -11,20 +15,39 @@ function Test-MapleSeasonBrowserPortOwned {
   $commandLine = $ListenerProcess.CommandLine
   if ([string]::IsNullOrEmpty($commandLine)) { return $false }
   if ([string]::IsNullOrEmpty($Root)) { return $false }
-  # Compare on one separator form, then require a path boundary after the match. A bare substring
-  # test lets root C:\FarmRx claim a listener running out of C:\FarmRx2, and this predicate gates
-  # the Stop-Process in Clear-MapleSeasonBrowserPort, so an over-broad match would terminate a
-  # process this proof does not own.
+  # Compare on one separator form, then require the root to end at a directory boundary. A bare
+  # substring test lets root C:\FarmRx claim a listener running out of C:\FarmRx2, and this
+  # predicate gates the Stop-Process in Clear-MapleSeasonBrowserPort, so an over-broad match would
+  # terminate a process this proof does not own.
   $normalizedCommandLine = $commandLine.Replace('/', '\')
   $normalizedRoot = $Root.Replace('/', '\').TrimEnd('\')
-  $matchIndex = $normalizedCommandLine.IndexOf($normalizedRoot, [StringComparison]::OrdinalIgnoreCase)
-  if ($matchIndex -lt 0) { return $false }
-  $boundaryIndex = $matchIndex + $normalizedRoot.Length
-  if ($boundaryIndex -lt $normalizedCommandLine.Length) {
-    $boundary = [string]$normalizedCommandLine[$boundaryIndex]
-    if ($boundary -notmatch '[\\"'' ]') { return $false }
+  # TrimEnd can empty the root (Root of '\' or '/'), and IndexOf('') succeeds at every position,
+  # so without this the predicate would claim every listener.
+  if ([string]::IsNullOrEmpty($normalizedRoot)) { return $false }
+  # A space is deliberately NOT a boundary. Directory names may contain spaces, so treating one as
+  # a terminator lets root C:\FarmRx claim "C:\FarmRx Backup\node_modules\vite\bin\vite.js" - a
+  # different tree - and this predicate authorizes killing it. Only a separator, a closing quote,
+  # or the end of the string actually ends the directory name.
+  $rooted = $false
+  $searchIndex = 0
+  while ($searchIndex -ge 0 -and $searchIndex -le ($normalizedCommandLine.Length - $normalizedRoot.Length)) {
+    $matchIndex = $normalizedCommandLine.IndexOf($normalizedRoot, $searchIndex, [StringComparison]::OrdinalIgnoreCase)
+    if ($matchIndex -lt 0) { break }
+    $boundaryIndex = $matchIndex + $normalizedRoot.Length
+    if ($boundaryIndex -ge $normalizedCommandLine.Length) { $rooted = $true; break }
+    if ([string]$normalizedCommandLine[$boundaryIndex] -match '[\\"'']') { $rooted = $true; break }
+    # Keep scanning. Stopping at the first occurrence let an unrelated leading argument such as
+    # --require C:\FarmRx2\hook.js mask the real owned path later in the same command line, which
+    # declared our own server foreign and failed the month at cleanup with a wrong diagnosis.
+    $searchIndex = $matchIndex + 1
   }
-  return $commandLine -match '(?i)(vite|npm|node)'
+  if (-not $rooted) { return $false }
+  # Test the image name, not the command line. The old '(vite|npm|node)' match scanned the whole
+  # command line, so any process whose arguments merely mentioned node_modules qualified; an
+  # argument cannot satisfy this. This still cannot tell our season server apart from another Node
+  # process started by hand inside this tree - Assert-MapleSeasonBrowserPortFree is what guards
+  # that case, before launch - so it is a narrowing, not a proof of ownership.
+  return ([string]$ListenerProcess.Name) -match '(?i)^(node|npm|npx)(\.exe)?$'
 }
 
 function Clear-MapleSeasonBrowserPort {
@@ -67,19 +90,27 @@ function Assert-MapleSeasonBrowserPortFree {
   )
   $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
   if ($listeners.Count -eq 0) { return }
-  $holders = [Collections.Generic.List[string]]::new()
-  $ownedCount = 0
+  $ownedHolders = [Collections.Generic.List[string]]::new()
+  $foreignHolders = [Collections.Generic.List[string]]::new()
   foreach ($listener in $listeners) {
     $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue
-    if (Test-MapleSeasonBrowserPortOwned -ListenerProcess $listenerProcess -Root $Root) { $ownedCount++ }
     # Image name and PID only. A foreign command line can carry tokens or private paths and
     # this message is written into season evidence logs.
     $name = if ($null -eq $listenerProcess) { 'unknown' } else { $listenerProcess.Name }
-    $holders.Add("$name (PID $($listener.OwningProcess))")
+    $holder = "$name (PID $($listener.OwningProcess))"
+    # Bucket by ownership rather than counting. A combined list plus "some of these are foreign"
+    # gave the operator no way to tell which PID to go look at, which is the mis-diagnosis this
+    # preflight exists to remove.
+    if (Test-MapleSeasonBrowserPortOwned -ListenerProcess $listenerProcess -Root $Root) { $ownedHolders.Add($holder) }
+    else { $foreignHolders.Add($holder) }
   }
   # No -f here: $Scenario is caller-supplied and already interpolated, so a brace in it would
   # turn this refusal into a FormatException instead of the diagnosis.
-  $holderList = ($holders | Sort-Object -Unique) -join ', '
+  # Select-Object -Unique, not Sort-Object -Unique: the latter reordered holders alphabetically, so
+  # the message no longer matched the order of the listener enumeration the operator is comparing
+  # it against.
+  $ownedList = ($ownedHolders | Select-Object -Unique) -join ', '
+  $foreignList = ($foreignHolders | Select-Object -Unique) -join ', '
   # Distinguish a Farm Rx server from a genuinely foreign one. Vite has no strictPort, so a season
   # server can drift onto the next month's governed port; telling the operator to hunt a foreign
   # squatter that does not exist is the same mis-diagnosis this preflight exists to remove. But the
@@ -89,11 +120,11 @@ function Assert-MapleSeasonBrowserPortFree {
   # forward even when the holder is theirs and they do not want to stop it. Refuse either way -
   # never terminate a listener this scenario did not create.
   $redirect = "Free that port or set $PortVariable to an unused port."
-  if ($ownedCount -gt 0) {
-    $mixed = if ($ownedCount -lt $listeners.Count) { ' Other listeners on that port do not belong to Farm Rx.' } else { '' }
-    throw "$Scenario cannot start: governed port $Port was already held by a Farm Rx dev or season server ($holderList) before this scenario ran.$mixed An earlier proof that never released the port is the usual cause, but a development server started by hand in this tree looks the same; stop that server or investigate the proof that left it behind. $redirect"
+  if ($ownedHolders.Count -gt 0) {
+    $mixed = if ($foreignHolders.Count -gt 0) { " Listeners on that port that do not belong to Farm Rx: $foreignList." } else { '' }
+    throw "$Scenario cannot start: governed port $Port was already held by a Farm Rx dev or season server ($ownedList) before this scenario ran.$mixed An earlier proof that never released the port is the usual cause, but a development server started by hand in this tree looks the same; stop that server or investigate the proof that left it behind. $redirect"
   }
-  throw "$Scenario cannot start: governed port $Port was already in use by $holderList before this scenario ran, and no listener there belongs to Farm Rx. $redirect"
+  throw "$Scenario cannot start: governed port $Port was already in use by $foreignList before this scenario ran, and no listener there belongs to Farm Rx. $redirect"
 }
 
 function Invoke-MapleSeasonBrowserProof {
