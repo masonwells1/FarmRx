@@ -71,4 +71,10 @@ Assert-True ($july.Contains('FARMRX_SEASON_JANUARY_PORT') -and $july.Contains("'
 Assert-True ($july.Contains('Get-NetTCPConnection -LocalPort $port -State Listen') -and -not $july.Contains("Get-NetTCPConnection -LocalAddress '127.0.0.1'")) 'July port preflight does not fail closed for wildcard or IPv6 listeners.'
 $timeoutRegression = @(& (Join-Path $root 'scripts/maple-season-browser-timeout.regression.ps1'))
 Assert-True ($LASTEXITCODE -eq 0 -and ($timeoutRegression -join "`n") -ceq 'MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_PASS') 'Browser forced-timeout cleanup regression did not pass.'
+# July already reserves its own isolated nested-chain ports. Every other month reaches the
+# shared helper on its default governed port, so the helper itself must refuse before it
+# launches into a port a foreign process already holds.
+Assert-True ($browserHelper.Contains('Assert-MapleSeasonBrowserPortFree') -and $browserHelper.Contains('was already in use by')) 'Continuous browser helper does not preflight its governed port before launching.'
+$preflightRegression = @(& (Join-Path $root 'scripts/maple-season-browser-port-preflight.regression.ps1'))
+Assert-True ($LASTEXITCODE -eq 0 -and ($preflightRegression -join "`n") -ceq 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS') 'Browser governed-port preflight regression did not pass.'
 Write-Output 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS'

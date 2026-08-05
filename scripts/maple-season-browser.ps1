@@ -11,7 +11,7 @@ function Clear-MapleSeasonBrowserPort {
       $listenerProcess.CommandLine.IndexOf($Root, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
       $listenerProcess.CommandLine -match '(?i)(vite|npm|node)'
     if (-not $owned) {
-      throw "$Scenario left an unrecognized listener on governed port $Port; refusing to terminate it."
+      throw "$Scenario found an unrecognized listener on governed port $Port; refusing to terminate it."
     }
     $ownedProcess = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
     if ($null -ne $ownedProcess) {
@@ -29,6 +29,24 @@ function Clear-MapleSeasonBrowserPort {
     Start-Sleep -Milliseconds 100
   } while ([DateTime]::UtcNow -lt $deadline)
   throw "$Scenario browser server cleanup did not release governed port $Port."
+}
+
+function Assert-MapleSeasonBrowserPortFree {
+  param(
+    [Parameter(Mandatory)][int]$Port,
+    [Parameter(Mandatory)][string]$Scenario,
+    [Parameter(Mandatory)][string]$PortVariable
+  )
+  $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+  if ($listeners.Count -eq 0) { return }
+  $holders = foreach ($listener in $listeners) {
+    $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue
+    # Image name and PID only. A foreign command line can carry tokens or private paths and
+    # this message is written into season evidence logs.
+    $name = if ($null -eq $listenerProcess) { 'unknown' } else { $listenerProcess.Name }
+    '{0} (PID {1})' -f $name, $listener.OwningProcess
+  }
+  throw ("$Scenario cannot start: governed port $Port was already in use by {0} before this scenario ran. Free that port or set $PortVariable to an unused port." -f (($holders | Sort-Object -Unique) -join ', '))
 }
 
 function Invoke-MapleSeasonBrowserProof {
@@ -54,6 +72,11 @@ function Invoke-MapleSeasonBrowserProof {
   }
   $configuredPort = [Environment]::GetEnvironmentVariable($portContract[0], [EnvironmentVariableTarget]::Process)
   $port = if ([string]::IsNullOrWhiteSpace($configuredPort)) { [int]$portContract[1] } else { [int]$configuredPort }
+  # Fail before launching. Playwright runs these configs with reuseExistingServer:false, so an
+  # occupied governed port cannot be shared: without this the run burns its full bounded
+  # timeout and then reports the post-run cleanup refusal, which reads as if this scenario
+  # leaked the listener when in fact a foreign process held the port beforehand.
+  Assert-MapleSeasonBrowserPortFree -Port $port -Scenario $Scenario -PortVariable $portContract[0]
   $node = (Get-Command node.exe -ErrorAction Stop).Source
   $runner = if ([string]::IsNullOrWhiteSpace($RunnerFile)) { Join-Path $Root 'node_modules/@playwright/test/cli.js' } else { $RunnerFile }
   $runner = [IO.Path]::GetFullPath($runner)
