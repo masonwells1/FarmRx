@@ -36,6 +36,27 @@ jobs:
         run: node scripts/verify-foundation-mutations.mjs
       - name: Windows execution lane runtime drill
         run: node scripts/foundation-windows-lane-runtime-drill.mjs
+      # The kill-authorizing predicate's BEHAVIOUR, run here because the two guards above cannot see it.
+      # Measured on the author's workstation: inserting `return $true` at the top of
+      # Test-MapleSeasonBrowserPortOwned - which authorizes killing every listener on the governed port,
+      # including a foreign one - left both `foundation-static-guards.mjs` and
+      # `verify-foundation-mutations.mjs` printing PASS with all of their mutations detected, because every
+      # pinned string was still present and only the behaviour was gone. Pinning text is a restatement of
+      # "the code still works" and fails the same way the predicate did. This step calls the predicate.
+      # It runs on ubuntu because its expectations were measured from CommandLineToArgvW on Windows and
+      # then hard-coded, and because containment refusals do not need a Windows path resolver to prove:
+      # gutted, the predicate fails 25 of this suite's cases here. The must-be-TRUE half is skipped off
+      # Windows, where a Windows-shaped root cannot resolve inside itself, and is covered by the
+      # Windows-only socket regression the orchestrator chains.
+      - name: Season browser ownership regression
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ownership = @(./scripts/maple-season-browser-ownership.regression.ps1)
+          $ownership | ForEach-Object { Write-Output $_ }
+          if ($ownership -notcontains 'MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS') {
+            throw 'Season browser ownership regression did not print its completion marker.'
+          }
       - name: Run foundation gate
         shell: pwsh
         # The marker assertion stays, downgraded in what it claims. It catches a truncated or crashed run

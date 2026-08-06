@@ -243,6 +243,32 @@ try {
   # mutated copies of this file's own functions. It is the only lane over the Windows lane that also
   # executes on the ubuntu CI runner, because it never starts the Windows-only regression chain.
   Invoke-FoundationLane { & node scripts/foundation-windows-lane-runtime-drill.mjs } 'Foundation Windows lane runtime drill failed.'
+  # Same argument one layer down, for the one function whose false answer kills a process: the static
+  # guard and the mutation drill both read the kill-authorizing predicate as TEXT. Measured, inserting
+  # `return $true` at the top of Test-MapleSeasonBrowserPortOwned left both of them green with every
+  # mutation detected, because no pinned string had moved. This lane calls the predicate instead of
+  # reading it, and it proves its own teeth each run by gutting the predicate in memory and requiring
+  # every refusal case to catch the gutted copy. Portable, so it also runs on the ubuntu CI job as its
+  # own workflow step; the containment TRUE cases need a Windows path resolver and are chained by the
+  # Windows-only regression below. Out of process deliberately: that self-test Invoke-Expressions a
+  # GUTTED copy of the predicate, and those definitions must not leak into this orchestrator's session.
+  $ownership = Join-Path $PSScriptRoot 'maple-season-browser-ownership.regression.ps1'
+  # -ExecutionPolicy is a Windows-only switch. $IsWindows does not exist in Windows PowerShell 5.1, so a
+  # null reading of it means Desktop, which is Windows. Passing the switch on the ubuntu runner would
+  # fail the whole invocation, and omitting it on Windows can fail the whole invocation too.
+  $ownershipOnWindows = ($null -eq $IsWindows) -or $IsWindows
+  $script:ownershipOutput = @()
+  Invoke-FoundationLane {
+    if ($ownershipOnWindows) { $script:ownershipOutput = @(& (Get-FoundationProbeShell) -NoProfile -ExecutionPolicy Bypass -File $ownership) }
+    else { $script:ownershipOutput = @(& (Get-FoundationProbeShell) -NoProfile -File $ownership) }
+  } 'Season browser ownership regression failed.'
+  # Relay the child's output, then require its marker. The exit code alone accepts a regression edited to
+  # return before running anything, which exits 0 having proved nothing. The child prints no paths beyond
+  # the synthetic command lines in its own tables, so there is nothing here to redact.
+  foreach ($line in $script:ownershipOutput) { Write-Output $line }
+  if ($script:ownershipOutput -notcontains 'MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS') {
+    throw 'Season browser ownership regression did not print its completion marker.'
+  }
   # The season contract gate was reachable only when an operator typed `npm run verify:season` by
   # hand - no workflow and no hook ran it - so the structural guards it holds, including the
   # governed-port preflight checks, could regress without anything failing. Both are pure node with

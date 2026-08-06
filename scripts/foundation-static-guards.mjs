@@ -40,16 +40,16 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh.exe')", 'orchestrator:windows-core-probe-shell')
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh')", 'orchestrator:unix-core-probe-shell')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & $probeShell -NoProfile -Command 'exit 23' } $expected", 'orchestrator:resolved-probe-shell')
-  // What this count actually counts: statements beginning with `Invoke-FoundationLane`. That is 23 -
-  // one intermediate-failure probe, twenty-one in the orchestration body, and one nested inside
+  // What this count actually counts: statements beginning with `Invoke-FoundationLane`. That is 24 -
+  // one intermediate-failure probe, twenty-two in the orchestration body, and one nested inside
   // Invoke-FoundationWindowsExecutionLane. It does NOT count the Windows lane's own call site, because
   // this pattern requires whitespace immediately after `Invoke-FoundationLane` and
   // `Invoke-FoundationWindowsExecutionLane` continues with a letter. So the earlier rise from 21 to 22
-  // came from the nested call, not from a new top-level lane, and 22 to 23 is the runtime drill lane
-  // added below; the Windows lane itself is pinned separately.
+  // came from the nested call, not from a new top-level lane, 22 to 23 is the runtime drill lane, and
+  // 23 to 24 is the season browser ownership regression lane; the Windows lane is pinned separately.
   // The label says invoke-lane-statements rather than all-lanes-checked for that reason - the old
   // label implied this one number covered every lane in the file, which it does not.
-  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 23) errors.push('orchestrator:invoke-lane-statements')
+  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 24) errors.push('orchestrator:invoke-lane-statements')
   // Pin both season lanes by name. The count above only proves nobody added a lane without
   // updating this guard; it does not prove these two specific lanes survived, and they are the only
   // thing making the season contract gate reachable from an automated gate rather than by hand.
@@ -163,12 +163,14 @@ export function foundationStaticGuard(root = process.cwd()) {
   // followed by a boundary. Measured True before this rule was ASCII-only. The rule is defined ONCE and
   // used by both of the tokenizer's loops: written twice, the two copies drifted, and a parse that stopped
   // at a character the separator skip would not consume spun forever instead of answering. The stall
-  // guard is the second half of that repair - it converts any residual no-progress pass into a short
-  // parse, which is fail-closed, rather than a hung proof month.
+  // guard is the second half of that repair - and it THROWS rather than returning what it has. Breaking out
+  // with a truncated argument list was measured to be a false-TRUE of its own: on the sibling line the
+  // drifted parse yields `node.exe`, `C:\FarmRx`, ``, and the bare exact root IS a containment match, so
+  // the truncation authorized killing the sibling's listener. Refusing to answer is the only safe answer.
   requireText(errors, seasonBrowser, "return ($Character -eq ' ' -or $Character -eq \"`t\")", 'season-browser:tokenizer-splits-on-ascii-space-and-tab-only')
   requireText(errors, seasonBrowser, 'if ((-not $inQuotes) -and (Test-MapleSeasonCommandLineSeparator -Character $character)) { break }', 'season-browser:tokenizer-breaks-argument-at-shared-separator')
   requireText(errors, seasonBrowser, 'while ($index -lt $length -and (Test-MapleSeasonCommandLineSeparator -Character $CommandLine[$index])) { $index++ }', 'season-browser:tokenizer-skips-shared-separator')
-  requireText(errors, seasonBrowser, 'if ($index -eq $argumentStart) { break }', 'season-browser:tokenizer-cannot-stall')
+  requireText(errors, seasonBrowser, 'throw "Split-MapleSeasonCommandLineArgument made no progress at index $index', 'season-browser:tokenizer-refuses-stalled-parse')
   // 2n backslashes then a quote: n backslashes, quote is a delimiter. 2n+1: n backslashes and a LITERAL
   // quote. Without this rule `--label "C:\FarmRx\safe\" --port 4177"` counted the escaped quote as a
   // closing delimiter and the predicate answered True for a listener running out of C:\Other. Measured.
@@ -181,33 +183,104 @@ export function foundationStaticGuard(root = process.cwd()) {
   // set: chaining .TrimEnd(' ',tab) then .TrimEnd('.') is order-dependent and left '.. .' with a length of
   // three, so the component walk accepted it and the predicate claimed the parent directory. Measured.
   requireText(errors, seasonBrowser, "return $Component.TrimEnd(' ', \"`t\", '.').Length -ne 0", 'season-browser:ownership-refuses-traversal')
-  requireText(errors, seasonBrowser, 'if (-not (Test-MapleSeasonPathComponentIsRealName -Component $component)) { $escapesTree = $true; break }', 'season-browser:ownership-walks-tail-components')
+  requireText(errors, seasonBrowser, 'if (-not (Test-MapleSeasonPathComponentIsRealName -Component $component)) { return $false }', 'season-browser:ownership-walks-tail-components')
   requireText(errors, seasonBrowser, 'if (-not (Test-MapleSeasonPathComponentIsRealName -Component $segment)) { return $false }', 'season-browser:ownership-walks-root-components')
+  // Windows has TWO argument grammars and they disagree on exactly one construct. CommandLineToArgvW - what
+  // the tokenizer above reproduces - splits `"C:\Other"" C:\FarmRx\safe"` into `C:\Other"` and
+  // `C:\FarmRx\safe`, so half a label reads as a path in our tree; node.exe is parsed by the Microsoft C
+  // runtime, where the same label stays one argument naming nothing of ours. Both readings are defensible,
+  // and guessing wrong authorizes a kill, so a doubled quote is refused rather than parsed. Measured.
+  requireText(errors, seasonBrowser, "if ($commandLine.Contains('\"\"')) { return $false }", 'season-browser:ownership-refuses-ambiguous-grammar')
+  // Containment is decided by the PLATFORM's path resolver, not by a hand-written walk over the text. The
+  // walk this replaced refused `\\?\C:\FarmRx\x.js`, `C:\FarmRx\.\x.js` and `C:\FarmRx\sub\..\x.js`, all of
+  // which ARE inside the tree - each would have declared our own listener foreign - and it ACCEPTED
+  // `C:\FarmRx\NUL` and `C:\FarmRx\file:stream`, which name a device and a stream. All five measured.
+  requireText(errors, seasonBrowser, 'try { $resolved = [System.IO.Path]::GetFullPath($candidate) } catch { return $false }', 'season-browser:ownership-resolves-with-the-platform')
+  requireText(errors, seasonBrowser, "if ($candidate.StartsWith('\\\\?\\', [StringComparison]::Ordinal)) { $candidate = $candidate.Substring(4) }", 'season-browser:ownership-strips-extended-length-prefix')
   // An argument carrying a character Win32 forbids in a path is not a path at all. This is what refuses
   // the escaped-quote defeat, whose argument `C:\FarmRx\safe" --port 4177` starts with our root at a real
   // separator yet cannot name a file.
-  requireText(errors, seasonBrowser, "$forbiddenInPath = [char[]]@('\"', '<', '>', '|', '*', '?')", 'season-browser:ownership-refuses-non-path-characters')
-  requireText(errors, seasonBrowser, 'if ($tail.IndexOfAny($forbiddenInPath) -ge 0) { continue }', 'season-browser:ownership-applies-non-path-characters')
+  requireText(errors, seasonBrowser, "if ($candidate.IndexOfAny([char[]]@('\"', '<', '>', '|', '*', '?')) -ge 0) { return $false }", 'season-browser:ownership-refuses-non-path-characters')
+  requireText(errors, seasonBrowser, 'if ([char]::IsControl($character)) { return $false }', 'season-browser:ownership-refuses-control-characters')
+  // A colon past the drive letter names an alternate data stream, and a reserved device name is a device
+  // rather than a file. Both are checked explicitly instead of being left to the resolver, so the answer
+  // cannot change under a shell built on a different .NET.
+  requireText(errors, seasonBrowser, "if ($candidate.IndexOf(':', 2) -ge 0) { return $false }", 'season-browser:ownership-refuses-alternate-data-stream')
+  requireText(errors, seasonBrowser, "if ($bareName -match '(?i)^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$') { return $false }", 'season-browser:ownership-refuses-reserved-device-name')
+  // Resolve only ABSOLUTE spellings. GetFullPath resolves a relative or drive-relative path against
+  // process state - the current directory, or the current directory of a drive - and no part of a kill
+  // authorization may depend on where the shell happens to be standing.
+  requireText(errors, seasonBrowser, "if (-not (($candidate -match '^[A-Za-z]:\\\\') -or ($candidate -match '^\\\\\\\\[^\\\\?.]'))) { return $false }", 'season-browser:ownership-refuses-shell-relative-path')
   // The root must end at a real separator inside the argument, or be the whole argument. Without this,
   // root C:\FarmRx claimed a listener running out of C:\FarmRx2.
-  requireText(errors, seasonBrowser, "if ($tail.Length -gt 0 -and $tail[0] -ne '\\') { continue }", 'season-browser:ownership-requires-separator-boundary')
+  requireText(errors, seasonBrowser, "if ($tail.Length -gt 0 -and $tail[0] -ne '\\') { return $false }", 'season-browser:ownership-requires-separator-boundary')
   // The tokenizer's rules are checked against the real parser, not against my reading of the docs.
   const seasonBrowserRegression = read(root, 'scripts/maple-season-browser-port-preflight.regression.ps1')
   requireText(errors, seasonBrowserRegression, 'CommandLineToArgvW', 'season-browser-regression:tokenizer-compared-to-win32')
   requireText(errors, seasonBrowserRegression, 'disagreed with CommandLineToArgvW', 'season-browser-regression:tokenizer-disagreement-is-fatal')
   // A tokenizer that HANGS is worse than one that answers wrongly, because every caller is built to
   // survive a false and none survives a hang. The drill re-introduces the separator drift on a copy of
-  // the function and requires the parse to finish anyway, which is only true while the stall guard is
-  // present: measured on this workstation, drift with the guard returns a short 3-argument parse, and
-  // drift with the guard deleted never returns at all.
+  // the function and requires the drifted parse to REFUSE - not merely to finish. Finishing was the
+  // earlier, weaker requirement, and it would now pass on the truncated argument list that was itself a
+  // false-TRUE. Three things have to hold or the drill proves nothing: it must be bounded in time, the
+  // job must actually reach Completed, and the value it returns must be the refusal.
   requireText(errors, seasonBrowserRegression, 'Wait-Job $stallJob -Timeout 30', 'season-browser-regression:stall-drill-is-bounded')
   requireText(errors, seasonBrowserRegression, '[char]::IsWhiteSpace($character)', 'season-browser-regression:stall-drill-reintroduces-drift')
   requireText(errors, seasonBrowserRegression, 'made the command-line parse stall', 'season-browser-regression:stall-is-fatal')
   requireText(errors, seasonBrowserRegression, 'its needle is stale and the drill would prove nothing', 'season-browser-regression:stall-drill-refuses-stale-needle')
+  // Wait-Job returns a job OBJECT, and a job object is truthy even when its State is Failed or Stopped.
+  // Measured: a job whose body was `throw 'copy failed'` came back truthy with State = Failed. Casting the
+  // return to [bool] therefore tested nothing, and this drill could have gone green on a job that never
+  // ran the tokenizer at all - which is exactly the class of vacuous pass the drill exists to prevent.
+  requireText(errors, seasonBrowserRegression, "Assert-True ($stallJob.State -eq 'Completed')", 'season-browser-regression:stall-drill-requires-a-completed-job')
+  requireText(errors, seasonBrowserRegression, "$stallOutcome -like 'THREW: Split-MapleSeasonCommandLineArgument made no progress*'", 'season-browser-regression:stall-drill-requires-the-refusal')
+  // The empty command line is the ONE place this tokenizer deliberately disagrees with Windows, and the
+  // divergence is asserted in both directions rather than omitted from the table. Windows answers an empty
+  // command line with the path of the process asking - a fact about the caller, useless as evidence about
+  // a listener - so zero arguments is the fail-closed answer.
+  requireText(errors, seasonBrowserRegression, "Assert-True ($emptyFromWindows.Count -eq 1)", 'season-browser-regression:empty-divergence-is-asserted')
+  requireText(errors, seasonBrowser, '# ONE deliberate divergence from CommandLineToArgvW', 'season-browser:empty-divergence-is-declared')
   // The force kill must go through the object that was validated, and the validated identity must still
   // hold. A process id is not durable: the validated process can exit and Windows can reissue its number.
   requireText(errors, seasonBrowser, '$ownedProcess.Kill()', 'season-browser:cleanup-kills-validated-object')
   requireText(errors, seasonBrowser, 'no longer identifies the listener it validated', 'season-browser:cleanup-rechecks-process-identity')
+
+  // ---------------------------------------------------------------------------------------------------
+  // Every pin above this line, and every mutation drilled against them, reads the kill-authorizing
+  // predicate as TEXT. Measured on the author's workstation: inserting `return $true` at the top of
+  // Test-MapleSeasonBrowserPortOwned - which authorizes killing every listener on the governed port,
+  // a foreign one included - left this guard printing PASS and the mutation drill printing PASS with all
+  // 85 mutations detected. Not one pinned substring had moved; only the behaviour was gone. Pinning text
+  // is a restatement of "the code still works" and it fails the same way the predicate itself kept
+  // failing. So the pins below hold something different in kind: they require that a suite which CALLS
+  // the predicate exists, that two separate callers run it, and that it proves its own teeth each run.
+  const ownershipRegression = read(root, 'scripts/maple-season-browser-ownership.regression.ps1')
+  // The suite must gut the predicate in memory and require its own refusal table to reject the gutted
+  // copy - an EXACT-count match, so the whole table is proven reachable rather than one case of it. Delete
+  // this and the file becomes decoration that cannot distinguish a working predicate from `return $true`.
+  requireText(errors, ownershipRegression, "Replace($firstGuard, \"  return `$true`n$firstGuard\")", 'ownership-regression:guts-the-predicate')
+  requireText(errors, ownershipRegression, 'Assert-True ($guttedClaims.Count -eq $portableRefusals.Count)', 'ownership-regression:refusals-reject-the-gutted-predicate')
+  requireText(errors, ownershipRegression, "function Split-MapleSeasonCommandLineArgumentGutted { param([string]$CommandLine) return @($CommandLine) }", 'ownership-regression:guts-the-tokenizer')
+  requireText(errors, ownershipRegression, "Measure-TokenizerDisagreement -FunctionName 'Split-MapleSeasonCommandLineArgumentGutted'", 'ownership-regression:table-rejects-the-gutted-tokenizer')
+  // Both gutting needles fail closed. A stale needle would otherwise leave the anti-vacuity check
+  // silently testing an unmodified copy, which is the vacuous pass it exists to prevent.
+  requireText(errors, ownershipRegression, 'the anti-vacuity check below would prove nothing', 'ownership-regression:gutting-anchor-fails-closed')
+  requireText(errors, ownershipRegression, 'the gutting needle is stale and the anti-vacuity check would prove nothing', 'ownership-regression:gutting-needle-fails-closed')
+  // It must call the predicate, not read it, and the refusals must be the portable half so the ubuntu job
+  // executes them. Gutted, the predicate fails 24 of these cases on Linux - measured.
+  requireText(errors, ownershipRegression, "foreach ($claimed in @(Measure-RefusalFailures -FunctionName 'Test-MapleSeasonBrowserPortOwned')) {", 'ownership-regression:calls-the-real-predicate')
+  requireText(errors, ownershipRegression, 'if (& $FunctionName -ListenerProcess $case.Listener -Root $case.Root) { $wrong += $case.Label }', 'ownership-regression:refusals-are-executed')
+  // Its own slice must be unambiguous, and must actually contain the three functions under test.
+  requireText(errors, ownershipRegression, 'declares Clear-MapleSeasonBrowserPort more than once', 'ownership-regression:slice-refuses-ambiguity')
+  requireText(errors, ownershipRegression, 'function Test-MapleSeasonBrowserPortOwned', 'ownership-regression:slice-requires-the-predicate')
+  // TWO independent callers, for the same reason the three node gates are listed separately in the
+  // workflow: the orchestrator can be edited to return before its lane while still printing the final
+  // marker, and a workflow step it does not invoke cannot be suppressed that way.
+  requireText(errors, foundationWorkflow, './scripts/maple-season-browser-ownership.regression.ps1', 'workflow:ownership-regression-run-independently')
+  requireText(errors, foundationWorkflow, "throw 'Season browser ownership regression did not print its completion marker.'", 'workflow:ownership-regression-marker-asserted')
+  requireText(errors, foundationOrchestrator, "$script:ownershipOutput = @(& (Get-FoundationProbeShell) -NoProfile -ExecutionPolicy Bypass -File $ownership)", 'orchestrator:ownership-regression-lane')
+  requireText(errors, foundationOrchestrator, "if ($script:ownershipOutput -notcontains 'MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS') {", 'orchestrator:ownership-regression-marker-asserted')
+
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
 

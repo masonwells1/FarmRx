@@ -17,6 +17,9 @@ const files = [
   // rules in Split-MapleSeasonCommandLineArgument are only trustworthy while something compares them to
   // CommandLineToArgvW, so deleting that comparison has to fail the guard.
   'scripts/maple-season-browser-port-preflight.regression.ps1',
+  // The behavioural suite over the same predicate. It is the only gate that can tell a working predicate
+  // from one edited to `return $true`, so the guard reads it and the drills below mutate it.
+  'scripts/maple-season-browser-ownership.regression.ps1',
   // The season start fixture and every script that applies it. The static guard discovers the
   // consumers by scanning scripts/, so all of them have to exist here or the baseline is not the
   // same shape as the repository.
@@ -207,6 +210,32 @@ try {
   mutate('.github/workflows/foundation.yml', (source) => source.replace('run: node scripts/foundation-windows-lane-runtime-drill.mjs', 'run: echo skipped'))
   detected('CI stops running the lane runtime drill itself', 'workflow:runtime-drill-run-independently')
   reset()
+  // The behavioural suite over the kill-authorizing predicate, and the reason it exists: every mutation
+  // in this file drills a SUBSTRING PIN, and inserting `return $true` at the top of the predicate was
+  // measured to leave this drill green with all of its mutations detected, because no pinned substring had
+  // moved. The four drills below therefore protect a suite that CALLS the predicate - its two callers, and
+  // the self-test that makes it non-vacuous.
+  mutate('.github/workflows/foundation.yml', (source) => source.replace('./scripts/maple-season-browser-ownership.regression.ps1', 'echo skipped'))
+  detected('CI stops running the ownership regression itself', 'workflow:ownership-regression-run-independently')
+  reset()
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("\n    if ($ownershipOnWindows) { $script:ownershipOutput = @(& (Get-FoundationProbeShell) -NoProfile -ExecutionPolicy Bypass -File $ownership) }\n", "\n    if ($ownershipOnWindows) { $script:ownershipOutput = @('MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS') }\n"))
+  detected('orchestrator forges the ownership regression marker instead of running it', 'orchestrator:ownership-regression-lane')
+  reset()
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("if ($script:ownershipOutput -notcontains 'MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS') {", 'if ($false) {'))
+  detected('orchestrator stops requiring the ownership regression marker', 'orchestrator:ownership-regression-marker-asserted')
+  reset()
+  // The anti-vacuity self-test, degraded the way it would actually be degraded: "at least one case caught
+  // it" instead of "every case did". That passes while most of the table is unreachable, which is the
+  // vacuous pass the exact count exists to refuse.
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('Assert-True ($guttedClaims.Count -eq $portableRefusals.Count)', 'Assert-True ($guttedClaims.Count -gt 0)'))
+  detected('ownership regression stops requiring its whole refusal table to catch a gutted predicate', 'ownership-regression:refusals-reject-the-gutted-predicate')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('Replace($firstGuard, "  return `$true`n$firstGuard")', 'Replace($firstGuard, $firstGuard)'))
+  detected('ownership regression stops actually gutting the predicate it claims to gut', 'ownership-regression:guts-the-predicate')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('if (& $FunctionName -ListenerProcess $case.Listener -Root $case.Root) { $wrong += $case.Label }', 'if ($false) { $wrong += $case.Label }'))
+  detected('ownership regression stops calling the predicate at all', 'ownership-regression:refusals-are-executed')
+  reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Write-Output 'Farm Rx foundation gate: PASS'", "Write-Output 'done'"))
   detected('foundation completion marker renamed', 'orchestrator:completion-marker')
   reset()
@@ -232,8 +261,14 @@ try {
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace('while ($index -lt $length -and (Test-MapleSeasonCommandLineSeparator -Character $CommandLine[$index])) { $index++ }', "while ($index -lt $length -and $CommandLine[$index] -eq ' ') { $index++ }"))
   detected('tokenizer stops using the shared separator rule to skip between arguments', 'season-browser:tokenizer-skips-shared-separator')
   reset()
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('if ($index -eq $argumentStart) { break }', 'if ($false) { break }'))
-  detected('tokenizer loses the guard that stops it stalling on one index', 'season-browser:tokenizer-cannot-stall')
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('throw "Split-MapleSeasonCommandLineArgument made no progress at index $index', 'Write-Verbose "no progress at index $index'))
+  detected('tokenizer loses the guard that stops it stalling on one index', 'season-browser:tokenizer-refuses-stalled-parse')
+  reset()
+  // Degrading the refusal back to `break` is the specific regression that matters, because breaking LOOKS
+  // fail-closed and is not: the truncated list contains the bare exact root, which is itself a containment
+  // match, so it authorized killing the sibling's listener. Measured.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('throw "Split-MapleSeasonCommandLineArgument made no progress at index $index', 'break; "no progress at index $index'))
+  detected('tokenizer degrades a stalled parse to a truncated argument list instead of refusing', 'season-browser:tokenizer-refuses-stalled-parse')
   reset()
   // The 2n / 2n+1 backslash rule. Without it a backslash-escaped quote reads as a delimiter, which is how
   // `--label "C:\FarmRx\safe\" --port 4177"` put our root inside an argument that belonged to C:\Other.
@@ -254,21 +289,45 @@ try {
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace("return $Component.TrimEnd(' ', \"`t\", '.').Length -ne 0", "return $Component.TrimEnd(' ', \"`t\").TrimEnd('.').Length -ne 0"))
   detected('component check goes back to chained order-dependent trims', 'season-browser:ownership-refuses-traversal')
   reset()
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('if (-not (Test-MapleSeasonPathComponentIsRealName -Component $component)) { $escapesTree = $true; break }', 'if ($false) { $escapesTree = $true }'))
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('if (-not (Test-MapleSeasonPathComponentIsRealName -Component $component)) { return $false }', 'if ($false) { return $false }'))
   detected('ownership predicate stops walking the components below the root', 'season-browser:ownership-walks-tail-components')
   reset()
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace('if (-not (Test-MapleSeasonPathComponentIsRealName -Component $segment)) { return $false }', 'if ($false) { return $false }'))
   detected('ownership predicate stops validating the components of the root itself', 'season-browser:ownership-walks-root-components')
   reset()
+  // Windows' two argument grammars disagree on exactly one construct, and picking the wrong one authorizes
+  // a kill: shell32 splits `--label "C:\Other"" C:\FarmRx\safe"` so that half the label reads as a path in
+  // our tree, while node's own C-runtime parse keeps it one argument naming nothing of ours. Measured.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($commandLine.Contains('\"\"')) { return $false }", 'if ($false) { return $false }'))
+  detected('ownership predicate answers a command line whose meaning depends on which Windows grammar parsed it', 'season-browser:ownership-refuses-ambiguous-grammar')
+  reset()
+  // Containment is the platform resolver's answer, not a hand-written walk's. Going back to a raw prefix
+  // test on the unresolved text is the mutation that matters: it re-accepts `C:\FarmRx\.\x.js` correctly but
+  // also re-accepts every spelling the resolver would have moved OUT of the tree.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('try { $resolved = [System.IO.Path]::GetFullPath($candidate) } catch { return $false }', '$resolved = $candidate'))
+  detected('ownership predicate stops resolving the argument with the platform path resolver', 'season-browser:ownership-resolves-with-the-platform')
+  reset()
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($candidate.StartsWith('\\\\?\\', [StringComparison]::Ordinal)) { $candidate = $candidate.Substring(4) }", 'if ($false) { $candidate = $candidate.Substring(4) }'))
+  detected('ownership predicate stops recognizing an extended-length spelling of the owned tree', 'season-browser:ownership-strips-extended-length-prefix')
+  reset()
   // An argument carrying a character Win32 forbids in a path is not a path. This is what refuses the
   // escaped-quote defeat, whose argument starts with our root at a real separator yet cannot name a file.
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("$forbiddenInPath = [char[]]@('\"', '<', '>', '|', '*', '?')", '$forbiddenInPath = [char[]]@()'))
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($candidate.IndexOfAny([char[]]@('\"', '<', '>', '|', '*', '?')) -ge 0) { return $false }", 'if ($false) { return $false }'))
   detected('ownership predicate stops refusing characters Win32 forbids in a path', 'season-browser:ownership-refuses-non-path-characters')
   reset()
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('if ($tail.IndexOfAny($forbiddenInPath) -ge 0) { continue }', 'if ($false) { continue }'))
-  detected('ownership predicate stops applying the forbidden-character refusal', 'season-browser:ownership-applies-non-path-characters')
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('if ([char]::IsControl($character)) { return $false }', 'if ($false) { return $false }'))
+  detected('ownership predicate stops refusing control characters in an argument', 'season-browser:ownership-refuses-control-characters')
   reset()
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($tail.Length -gt 0 -and $tail[0] -ne '\\') { continue }", 'if ($false) { continue }'))
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($candidate.IndexOf(':', 2) -ge 0) { return $false }", 'if ($false) { return $false }'))
+  detected('ownership predicate stops refusing an alternate data stream below the root', 'season-browser:ownership-refuses-alternate-data-stream')
+  reset()
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($bareName -match '(?i)^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$') { return $false }", 'if ($false) { return $false }'))
+  detected('ownership predicate stops refusing a reserved device name below the root', 'season-browser:ownership-refuses-reserved-device-name')
+  reset()
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if (-not (($candidate -match '^[A-Za-z]:\\\\') -or ($candidate -match '^\\\\\\\\[^\\\\?.]'))) { return $false }", 'if ($false) { return $false }'))
+  detected('ownership predicate resolves a shell-relative path, making a kill depend on the current directory', 'season-browser:ownership-refuses-shell-relative-path')
+  reset()
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($tail.Length -gt 0 -and $tail[0] -ne '\\') { return $false }", 'if ($false) { return $false }'))
   detected('ownership predicate stops requiring a separator after the root', 'season-browser:ownership-requires-separator-boundary')
   reset()
   // The tokenizer's rules are only trustworthy while something compares them to the real parser. Three
@@ -281,9 +340,11 @@ try {
   mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('disagreed with CommandLineToArgvW', 'agreed with CommandLineToArgvW'))
   detected('predicate regression stops naming a tokenizer disagreement as a failure', 'season-browser-regression:tokenizer-disagreement-is-fatal')
   reset()
-  // The stall drill has four moving parts and every one of them can be quietly disarmed: the timeout that
-  // bounds the wait, the drift that provokes the stall, the assertion that names it, and the needle check
-  // that refuses to pass on a copy it failed to mutate. Losing any one turns the drill into decoration.
+  // The stall drill has six moving parts and every one of them can be quietly disarmed: the timeout that
+  // bounds the wait, the drift that provokes the stall, the assertion that names it, the needle check that
+  // refuses to pass on a copy it failed to mutate, the state check that a truthy Wait-Job return does not
+  // give, and the outcome check that distinguishes refusing from merely finishing. Losing any one turns the
+  // drill into decoration.
   mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('Wait-Job $stallJob -Timeout 30', 'Wait-Job $stallJob'))
   detected('stall drill waits forever instead of bounding the parse', 'season-browser-regression:stall-drill-is-bounded')
   reset()
@@ -295,6 +356,24 @@ try {
   reset()
   mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('its needle is stale and the drill would prove nothing', 'continuing anyway'))
   detected('stall drill stops refusing a stale mutation needle', 'season-browser-regression:stall-drill-refuses-stale-needle')
+  reset()
+  // Wait-Job returns a truthy job object even for a Failed or Stopped job - measured on a job whose body was
+  // `throw 'copy failed'`. Reverting to the [bool] cast is the exact weakness Sol found: the drill would go
+  // green on a job that never ran the tokenizer at all.
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace("Assert-True ($stallJob.State -eq 'Completed')", 'Assert-True ([bool]$stallWaited)'))
+  detected('stall drill accepts a failed job as proof the parse returned', 'season-browser-regression:stall-drill-requires-a-completed-job')
+  reset()
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace("$stallOutcome -like 'THREW: Split-MapleSeasonCommandLineArgument made no progress*'", '$null -ne $stallOutcome'))
+  detected('stall drill accepts any completion instead of requiring the parse to refuse', 'season-browser-regression:stall-drill-requires-the-refusal')
+  reset()
+  // The empty command line is the one deliberate divergence from Windows, and it is asserted rather than
+  // omitted. Windows answers an empty line with the path of the process ASKING, which is a fact about the
+  // caller and worthless as evidence about a listener.
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('Assert-True ($emptyFromWindows.Count -eq 1)', 'Assert-True ($true)'))
+  detected('predicate regression stops asserting the deliberate empty-command-line divergence', 'season-browser-regression:empty-divergence-is-asserted')
+  reset()
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('# ONE deliberate divergence from CommandLineToArgvW', '# a divergence'))
+  detected('tokenizer stops declaring its one deliberate divergence from Windows', 'season-browser:empty-divergence-is-declared')
   reset()
   // The cleanup kill itself. Killing by number rather than through the validated object reopens the
   // window in which that number can come to mean a different process, and this is a force kill.

@@ -30,6 +30,12 @@ function Split-MapleSeasonCommandLineArgument {
   # table entry the regression fails, so the rules below are checked against the real parser rather
   # than against my reading of the documentation.
   $arguments = New-Object System.Collections.Generic.List[string]
+  # ONE deliberate divergence from CommandLineToArgvW, stated here because the equivalence table cannot
+  # assert it: given an empty string the real API returns the path of the CURRENT executable, measured as
+  # one argument naming powershell.exe itself. That is documented behaviour and it is worthless as
+  # ownership evidence - it would answer a question about a listener with a fact about the process asking.
+  # Zero arguments is the fail-closed answer, and the equivalence table records the empty case as
+  # excluded on purpose rather than omitting it silently. Every non-empty command line is compared.
   if ([string]::IsNullOrEmpty($CommandLine)) { return $arguments.ToArray() }
   $index = 0
   $length = $CommandLine.Length
@@ -69,7 +75,15 @@ function Split-MapleSeasonCommandLineArgument {
           # was data, and the argument kept going.
           [void]$builder.Append('\', [int][Math]::Floor($backslashes / 2))
           if (($backslashes % 2) -eq 1) { [void]$builder.Append('"'); $index++ }
-          else { $inQuotes = -not $inQuotes; $index++ }
+          # An EVEN run leaves the quote for the quote branch below rather than toggling it here. Handling
+          # it here duplicated the decision and got it wrong, because a delimiter quote can also be the
+          # first half of a doubled quote and only one of the two places knew that. Measured against the
+          # real API on `node.exe C:\Other\server.js --label "C:\FarmRx\safe\\"" --port 4177`: Windows
+          # returns `C:\FarmRx\safe\"` as its own argument, which the forbidden-character test then
+          # refuses, while toggling here produced `C:\FarmRx\safe\ --port 4177` - one argument that starts
+          # with our root at a real separator and carries no forbidden character, so the predicate
+          # answered True and would have authorized terminating a process whose script was C:\Other.
+          # There is now exactly one place in this function that decides what a quote means.
         } else {
           [void]$builder.Append('\', $backslashes)
         }
@@ -98,10 +112,19 @@ function Split-MapleSeasonCommandLineArgument {
     # once this cannot fail, but the consequence of it failing is the worst behaviour this function has:
     # not a wrong answer, which the callers are built to survive, but no answer at all. Measured - a parse
     # that stopped at a character the separator skip would not consume spun on the same index until the
-    # governed-port regression was killed at four minutes, having printed nothing. Stopping here instead
-    # returns a short argument list, which can only cost an owned listener its match; the predicate then
-    # answers false and cleanup reports a wrong diagnosis rather than hanging a proof month.
-    if ($index -eq $argumentStart) { break }
+    # governed-port regression was killed at four minutes, having printed nothing.
+    # THROW rather than return the short list. An earlier version of this guard broke out of the loop and
+    # returned what it had, on the stated reasoning that a truncated parse could only cost an owned
+    # listener its match. That reasoning was wrong in the dangerous direction, and it was measured wrong:
+    # with the separator test drifted and the command line `node.exe C:\FarmRx<U+00A0>Backup\server.js`,
+    # the truncated list was `node.exe`, `C:\FarmRx`, `` - and the bare exact root IS a containment match,
+    # so the predicate answered True for a listener living in the sibling tree and would have authorized
+    # killing it. A parse that cannot advance is a defect in this function, and the only answer that
+    # refuses to kill anything is to fail loudly: cleanup then reports a named internal failure instead of
+    # either hanging or guessing.
+    if ($index -eq $argumentStart) {
+      throw "Split-MapleSeasonCommandLineArgument made no progress at index $index; refusing to answer ownership from a partial parse."
+    }
   }
   return $arguments.ToArray()
 }
@@ -114,6 +137,65 @@ function Test-MapleSeasonPathComponentIsRealName {
   # order-dependent and left '.. .' with a length of three, so the component walk accepted it and the
   # predicate claimed the parent directory. Measured True before this was one trim.
   return $Component.TrimEnd(' ', "`t", '.').Length -ne 0
+}
+
+function Test-MapleSeasonArgumentIsInsideTree {
+  param(
+    [string]$Argument,
+    [string]$NormalizedRoot
+  )
+  # One argument, one question: does this text name a file inside the given tree? The lesson the tokenizer
+  # taught applies here too - decide it with the platform's own path rules rather than a hand-written walk.
+  # The walk this replaces refused several spellings that ARE inside the tree, each of which would have
+  # declared our own listener foreign and failed a proof month with a wrong diagnosis: `\\?\C:\FarmRx\x.js`,
+  # `C:\FarmRx\.\x.js` and `C:\FarmRx\sub\..\x.js`. It also ACCEPTED `C:\FarmRx\NUL`, which is a reserved
+  # device rather than a file in the tree, and `C:\FarmRx\file:stream`, which names an alternate data
+  # stream. Both were measured.
+  $candidate = $Argument.Replace('/', '\')
+  # An extended-length prefix is a spelling of the same path, not a different one, so strip it and judge
+  # what is underneath. Leaving it on is what refused the first spelling above.
+  if ($candidate.StartsWith('\\?\', [StringComparison]::Ordinal)) { $candidate = $candidate.Substring(4) }
+  # Characters Win32 forbids in a path. An argument carrying one is not a path at all, and the
+  # escaped-quote defeat relied on exactly that: the argument Windows built was
+  # `C:\FarmRx\safe" --port 4177`, which starts with our root at a real separator yet is not a filename,
+  # while the actual server was a different argument entirely.
+  if ($candidate.IndexOfAny([char[]]@('"', '<', '>', '|', '*', '?')) -ge 0) { return $false }
+  foreach ($character in $candidate.ToCharArray()) {
+    if ([char]::IsControl($character)) { return $false }
+  }
+  # A colon anywhere past the drive letter names an alternate data stream. This is checked explicitly
+  # rather than left to the resolver: [IO.Path]::GetFullPath throws on it under Windows PowerShell 5.1,
+  # measured, but this predicate must not answer differently under a shell built on a newer .NET, and a
+  # permissive resolver would hand back the stream spelling unchanged for the prefix test to accept.
+  if ($candidate.IndexOf(':', 2) -ge 0) { return $false }
+  # Require an absolute drive- or share-rooted spelling BEFORE resolving. GetFullPath resolves a relative
+  # or drive-relative path against process state - the current directory, or the current directory OF a
+  # drive - and no part of a kill authorization may depend on where the shell happens to be standing.
+  # `C:FarmRx\server.js` is therefore refused rather than resolved, which is fail-closed.
+  if (-not (($candidate -match '^[A-Za-z]:\\') -or ($candidate -match '^\\\\[^\\?.]'))) { return $false }
+  try { $resolved = [System.IO.Path]::GetFullPath($candidate) } catch { return $false }
+  $resolved = $resolved.Replace('/', '\')
+  if (-not $resolved.StartsWith($NormalizedRoot, [StringComparison]::OrdinalIgnoreCase)) { return $false }
+  $tail = $resolved.Substring($NormalizedRoot.Length)
+  # The root must end at a directory boundary within this argument, or be the whole argument. Without
+  # this, root C:\FarmRx claimed a listener running out of C:\FarmRx2.
+  if ($tail.Length -gt 0 -and $tail[0] -ne '\') { return $false }
+  foreach ($component in $tail.Split('\')) {
+    # A truly empty component is a doubled separator, which Windows collapses and which cannot escape.
+    if ($component.Length -eq 0) { continue }
+    # GetFullPath resolves '.' and '..' but does NOT apply Win32's rule that trailing dots and spaces are
+    # stripped from each component, measured: `C:\FarmRx\.. \Other\x.js` comes back unchanged, and Windows
+    # would open it as `C:\Other\x.js`. So the component test still earns its place after the resolver.
+    if (-not (Test-MapleSeasonPathComponentIsRealName -Component $component)) { return $false }
+    # Reserved device names resolve to a device, not to a file in this tree. Under Windows PowerShell 5.1
+    # GetFullPath already turns `C:\FarmRx\NUL` into `\\.\NUL`, which fails the prefix test above; this
+    # check is what keeps the answer the same on a shell whose resolver leaves it alone.
+    $bareName = $component.TrimEnd(' ', "`t", '.')
+    $dot = $bareName.IndexOf('.')
+    if ($dot -ge 0) { $bareName = $bareName.Substring(0, $dot) }
+    if ($bareName -match '(?i)^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$') { return $false }
+  }
+  return $true
 }
 
 function Test-MapleSeasonBrowserPortOwned {
@@ -141,11 +223,20 @@ function Test-MapleSeasonBrowserPortOwned {
   # killing it.
   if ([string]::IsNullOrWhiteSpace($commandLine)) { return $false }
   if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
-  # Compare on one separator form, then require the root to end at a directory boundary. A bare
-  # substring test lets root C:\FarmRx claim a listener running out of C:\FarmRx2, and this
-  # predicate gates the Stop-Process in Clear-MapleSeasonBrowserPort, so an over-broad match would
-  # terminate a process this proof does not own.
-  $normalizedCommandLine = $commandLine.Replace('/', '\')
+  # Windows has TWO argument grammars, and this predicate cannot know which one built the process it is
+  # judging. CommandLineToArgvW is what this file reproduces and what the equivalence table checks; node
+  # itself enters at wmain and gets the Microsoft C runtime's parse, and the two disagree about exactly one
+  # construct - a doubled quote. Measured with the real API on
+  # `node.exe C:\Other\server.js --label "C:\Other"" C:\FarmRx\safe"`: shell32 splits the label into
+  # `C:\Other"` and `C:\FarmRx\safe`, so the second half reads as a path in our tree, while under the
+  # documented C runtime rule the label stays one argument that names nothing of ours. Both readings are
+  # defensible and only one can be right, so a command line carrying a doubled quote is refused outright
+  # rather than guessed at. Refusing costs a cleanup diagnosis; guessing costs a foreign process.
+  if ($commandLine.Contains('""')) { return $false }
+  # Put the root into one separator form. The command line is deliberately NOT normalized here: it is
+  # handed to the tokenizer as Windows gave it, and each resulting ARGUMENT is normalized on its own in
+  # Test-MapleSeasonArgumentIsInsideTree. Normalizing the whole line up front was left over from the raw
+  # substring scan and nothing reads it now, so it is gone rather than kept as a decoy.
   $normalizedRoot = $Root.Replace('/', '\').TrimEnd('\')
   # TrimEnd can empty the root (Root of '\' or '/'), and IndexOf('') succeeds at every position,
   # so without this the predicate would claim every listener.
@@ -183,38 +274,9 @@ function Test-MapleSeasonBrowserPortOwned {
   # reviews. Comparing arguments removes the whole class: a sibling such as C:\FarmRx<NBSP>Backup is
   # simply a different argument, not our root followed by something the boundary test has to classify.
   $rooted = $false
-  # Characters Win32 forbids in a path. An argument carrying one of these is not a path at all, and the
-  # escaped-quote defeat relied on exactly that: the argument Windows built was
-  # `C:\FarmRx\safe" --port 4177`, which starts with our root at a real separator yet is not a filename,
-  # while the actual server was a different argument entirely.
-  $forbiddenInPath = [char[]]@('"', '<', '>', '|', '*', '?')
   foreach ($argument in (Split-MapleSeasonCommandLineArgument -CommandLine $commandLine)) {
     if ([string]::IsNullOrEmpty($argument)) { continue }
-    $normalizedArgument = $argument.Replace('/', '\')
-    if (-not $normalizedArgument.StartsWith($normalizedRoot, [StringComparison]::OrdinalIgnoreCase)) { continue }
-    $tail = $normalizedArgument.Substring($normalizedRoot.Length)
-    # The root must end at a directory boundary within this argument, or be the whole argument. Without
-    # this, root C:\FarmRx claimed a listener running out of C:\FarmRx2.
-    if ($tail.Length -gt 0 -and $tail[0] -ne '\') { continue }
-    if ($tail.IndexOfAny($forbiddenInPath) -ge 0) { continue }
-    $carriesControlCharacter = $false
-    foreach ($character in $tail.ToCharArray()) {
-      if ([char]::IsControl($character)) { $carriesControlCharacter = $true; break }
-    }
-    if ($carriesControlCharacter) { continue }
-    # A containment-valid argument still has to stay inside the tree it names. Measured with root
-    # C:\FarmRx against `node.exe "C:\FarmRx\..\Other\scripts\factory-board.mjs" --port 4177`: the root
-    # was found at a real separator and this predicate answered True, which would have authorized
-    # terminating a process running wholly outside the repository. Farm Rx builds these paths through
-    # [IO.Path]::GetFullPath, which leaves no '..' behind, so no legitimate listener loses its match, and
-    # refusing costs a cleanup diagnosis rather than a wrong termination.
-    $escapesTree = $false
-    foreach ($component in $tail.Split('\')) {
-      # A truly empty component is a doubled separator, which Windows collapses and which cannot escape.
-      if ($component.Length -eq 0) { continue }
-      if (-not (Test-MapleSeasonPathComponentIsRealName -Component $component)) { $escapesTree = $true; break }
-    }
-    if ($escapesTree) { continue }
+    if (-not (Test-MapleSeasonArgumentIsInsideTree -Argument $argument -NormalizedRoot $normalizedRoot)) { continue }
     # Keep no early exit on a REFUSED argument: an unrelated leading argument such as
     # --require C:\FarmRx2\hook.js must not mask the real owned path later in the same command line,
     # which declared our own server foreign and failed the month with a wrong diagnosis.

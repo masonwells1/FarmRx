@@ -309,8 +309,10 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
     # the same name - and the name Windows then builds is the sibling 'C:\FarmRx Backup'. Measured True
     # before the quote-parity test, which is the whole reason the predicate now counts quotes.
     @{ Label = 'sibling reached by opening a quoted fragment'; CommandLine = 'node.exe C:\FarmRx" Backup"\scripts\factory-board.mjs' }
-    # The same sibling by the doubled-quote spelling: the quote that appears to close the argument is
-    # followed by another quote rather than by whitespace, so a further fragment is appended.
+    # The same sibling by the doubled-quote spelling. This is now refused earlier and for a stronger
+    # reason than its own tokenization: ANY command line carrying a doubled quote is refused, because
+    # Windows has two argument grammars and this predicate cannot know which one built the process it is
+    # judging. See the doubled-quote cases below.
     @{ Label = 'sibling reached by a doubled-quote concatenation'; CommandLine = 'node.exe "C:\FarmRx"" Backup"\x.js' }
     # A quoted space belongs to the directory name, but it must not hide a traversal that follows it.
     @{ Label = 'traversal out of a space-bearing segment'; CommandLine = 'node.exe "C:\FarmRx\my app\..\..\Other\x.js"' }
@@ -370,15 +372,67 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   $spaceRootQuoted = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\Mason FarmRx\node_modules\vite\bin\vite.js"' }
   Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $spaceRootQuoted -Root 'C:\Mason FarmRx') 'Ownership test refused a quoted owned root whose own name contains a space.'
 
+  # Windows has TWO argument grammars and they disagree about exactly one construct. CommandLineToArgvW,
+  # which the table below checks this tokenizer against, is what shell32 and PowerShell use; node.exe
+  # enters at wmain and is parsed by the Microsoft C runtime, where a doubled quote inside a quoted
+  # argument yields one literal quote and does NOT leave quoted mode. Measured with the real API on the
+  # first line below: shell32 produces the two arguments `C:\Other"` and `C:\FarmRx\safe`, so the second
+  # half of a label reads as a path inside our tree, whereas under the C runtime rule the label stays one
+  # argument that names nothing of ours. The predicate cannot know which grammar built the process it is
+  # judging, and picking the wrong one authorizes a kill, so it refuses any command line carrying '""'.
+  foreach ($doubledQuote in @(
+    'node.exe C:\Other\server.js --label "C:\Other"" C:\FarmRx\safe"'
+    'node.exe "C:\FarmRx"" Backup"\x.js'
+    'node.exe C:\Other\server.js --label "a""C:\FarmRx\x.js"'
+  )) {
+    $ambiguousListener = [pscustomobject]@{ Name = 'node.exe'; CommandLine = $doubledQuote }
+    Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $ambiguousListener -Root 'C:\FarmRx')) "Ownership test answered a command line whose meaning depends on which Windows argument grammar parsed it: '$doubledQuote'."
+  }
+  # The over-strictness mirror. A SINGLE quote pair is unambiguous - both grammars agree - so refusing
+  # every quoted command line would pass the three cases above and refuse the real listener, whose path
+  # contains '.claude\worktrees' and is quoted precisely because paths like it can contain spaces.
+  $singleQuotedOwned = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx\.claude\worktrees\b\node_modules\vite\bin\vite.js" --port 4177' }
+  Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $singleQuotedOwned -Root 'C:\FarmRx\.claude\worktrees\b') 'Ownership test refused an ordinary singly-quoted owned path; the doubled-quote refusal must not reject every quoted command line.'
+
+  # Containment is decided by the platform's own path resolver, not by a hand-written walk over the text.
+  # These are the spellings that decision changed, in both directions, and each was measured.
+  #
+  # ACCEPTED before and wrong: an argument that starts with our root at a real separator and yet cannot
+  # name a file inside the tree. `NUL` is a reserved device - GetFullPath turns it into `\\.\NUL`, which
+  # leaves the tree entirely - and a colon past the drive letter names an alternate data stream.
+  foreach ($case in @(
+    @{ Label = 'reserved device name below the root'; CommandLine = 'node.exe C:\Other\server.js --label C:\FarmRx\NUL' }
+    @{ Label = 'reserved device name with an extension'; CommandLine = 'node.exe C:\Other\server.js --label C:\FarmRx\COM1.txt' }
+    @{ Label = 'alternate data stream below the root'; CommandLine = 'node.exe C:\Other\server.js --label C:\FarmRx\file:stream' }
+    @{ Label = 'drive-relative path that depends on shell state'; CommandLine = 'node.exe C:FarmRx\server.js' }
+  )) {
+    $unresolvableListener = [pscustomobject]@{ Name = 'node.exe'; CommandLine = $case.CommandLine }
+    Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $unresolvableListener -Root 'C:\FarmRx')) "Ownership test did not fail closed for a $($case.Label)."
+  }
+  # REFUSED before and wrong, which is the direction that fails a proof month with a false diagnosis:
+  # every one of these genuinely IS the owned tree, spelled a way the hand-written walk did not accept.
+  foreach ($case in @(
+    @{ Label = 'extended-length prefix'; CommandLine = 'node.exe "\\?\C:\FarmRx\node_modules\vite\bin\vite.js"' }
+    @{ Label = 'a no-op current-directory segment'; CommandLine = 'node.exe C:\FarmRx\.\server.mjs' }
+    @{ Label = 'a traversal that stays inside the tree'; CommandLine = 'node.exe C:\FarmRx\sub\..\server.mjs' }
+    @{ Label = 'a doubled separator'; CommandLine = 'node.exe C:\FarmRx\\server.mjs' }
+  )) {
+    $spelledListener = [pscustomobject]@{ Name = 'node.exe'; CommandLine = $case.CommandLine }
+    Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $spelledListener -Root 'C:\FarmRx') "Ownership test refused an owned path spelled with $($case.Label), which would declare our own listener foreign."
+  }
+
   # The tokenizer must not be able to STALL. Its two loops - the skip between arguments and the scan within
   # one - have to agree on what separates arguments, because a scan that stops at a character the skip will
   # not consume makes no progress and the parse never returns. That is worse than a wrong answer: the
   # callers are built to survive a false, but nothing survives a hang. Measured on this workstation - with
   # the two tests written separately and one of them widened to [char]::IsWhiteSpace, this regression ran
   # for four minutes and printed nothing before it was killed. The separator rule is now defined once, and
-  # the stall guard below turns any residual no-progress pass into a short argument list, which can only
-  # cost an owned listener its match. This drills the guard by re-introducing the drift on a COPY of the
-  # function and requiring the parse to finish anyway.
+  # the stall guard below refuses to answer at all if an iteration consumed nothing. It THROWS rather than
+  # breaking out with what it has: the earlier version broke, and breaking was measured to be a false-TRUE
+  # of its own. On the sibling line below the drifted parse produces `node.exe`, `C:\FarmRx`, `` - and the
+  # bare exact root is itself a containment match, so the truncated list authorized killing the sibling's
+  # listener. Truncating a parse this predicate then answers from is not fail-closed; refusing is. This
+  # drills the guard by re-introducing the drift on a COPY of the function and requiring that refusal.
   $tokenizerSource = Get-Content -Raw (Join-Path $PSScriptRoot 'maple-season-browser.ps1')
   $tokenizerSource = $tokenizerSource.Substring(0, $tokenizerSource.IndexOf('function Test-MapleSeasonPathComponentIsRealName'))
   $driftNeedle = 'if ((-not $inQuotes) -and (Test-MapleSeasonCommandLineSeparator -Character $character)) { break }'
@@ -387,11 +441,21 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   $stallJob = Start-Job -ScriptBlock {
     param([string]$FunctionSource, [string]$Line)
     Invoke-Expression $FunctionSource
-    @(Split-MapleSeasonCommandLineArgument -CommandLine $Line).Count
+    try { @(Split-MapleSeasonCommandLineArgument -CommandLine $Line).Count }
+    catch { "THREW: $($_.Exception.Message)" }
   } -ArgumentList $driftedSource, ("node.exe C:\FarmRx{0}Backup\server.js" -f ([char]0x00A0))
   try {
-    $stallCompleted = [bool](Wait-Job $stallJob -Timeout 30)
-    Assert-True $stallCompleted 'A drifted separator test made the command-line parse stall: it never returned, which hangs a proof month instead of failing it.'
+    # Wait-Job returns a job OBJECT, and a job object is truthy even when its State is Failed or Stopped.
+    # Measured: a job whose body was `throw 'copy failed'` returned a truthy PSRemotingJob with
+    # State = Failed. Casting that return to [bool] is therefore not a test of anything, and this drill
+    # would have gone green on a job that never ran the tokenizer at all. Require the state explicitly.
+    $stallWaited = Wait-Job $stallJob -Timeout 30
+    Assert-True ($null -ne $stallWaited) 'A drifted separator test made the command-line parse stall: it never returned, which hangs a proof month instead of failing it.'
+    Assert-True ($stallJob.State -eq 'Completed') "The stall drill's job ended in state '$($stallJob.State)' rather than Completed, so it proved nothing about the stall guard."
+    # ...and the value has to be the refusal, not merely SOME value. A drill that accepts any completion
+    # would pass on the truncated argument list that was the previous, unsafe behaviour.
+    $stallOutcome = [string](@(Receive-Job $stallJob) | Select-Object -Last 1)
+    Assert-True ($stallOutcome -like 'THREW: Split-MapleSeasonCommandLineArgument made no progress*') "A drifted separator test returned '$stallOutcome' instead of refusing to answer; a partial parse that still yields arguments can authorize killing a foreign process."
   } finally {
     Remove-Job $stallJob -Force -ErrorAction SilentlyContinue
   }
@@ -455,6 +519,16 @@ public static class MapleSeasonArgv {
       'node.exe "a""b"'
       'node.exe "a""b c"'
       'node.exe ab"c"d"e"f'
+      # An EVEN backslash run followed immediately by TWO quotes. This is where the two rules meet, and the
+      # first version of this tokenizer decided the first quote inside the backslash branch, which had no
+      # way to know a delimiter quote can also be the first half of a doubled quote. Measured: Windows
+      # builds `C:\FarmRx\safe\"`, which the forbidden-character test then refuses, while the buggy version
+      # built `C:\FarmRx\safe\ --port 4177` and the predicate answered TRUE on a command line whose actual
+      # script was C:\Other\server.js. There is now exactly one place that decides what a quote means.
+      'node.exe C:\Other\server.js --label "C:\FarmRx\safe\\"" --port 4177'
+      'node.exe C:\Other\server.js --label "C:\Other"" C:\FarmRx\safe"'
+      'node.exe a\\""b c'
+      'node.exe "a\\""b" c'
       # Malformed and degenerate spellings. A predicate that throws here answers neither TRUE nor FALSE,
       # which is the one answer its callers cannot use.
       'node.exe ""'
@@ -486,6 +560,15 @@ public static class MapleSeasonArgv {
       $rendered = "expected [$(($expected | ForEach-Object { "<$_>" }) -join ' ')] but produced [$(($actual | ForEach-Object { "<$_>" }) -join ' ')]"
       Assert-True $agrees "Split-MapleSeasonCommandLineArgument disagreed with CommandLineToArgvW on '$commandLine': $rendered."
     }
+    # The EMPTY command line is the one case where equivalence is not wanted, and it is asserted here
+    # rather than quietly left out of the table above. Measured: CommandLineToArgvW('') returns ONE
+    # argument, the path of the process that asked - powershell.exe on this workstation - which is a fact
+    # about the caller and not about the listener being judged. Zero arguments is the fail-closed answer.
+    # Both halves are pinned so a future edit cannot make this an accidental divergence in either
+    # direction: Windows must still return that one self-naming argument, and we must still return none.
+    $emptyFromWindows = @([MapleSeasonArgv]::Parse(''))
+    Assert-True ($emptyFromWindows.Count -eq 1) "CommandLineToArgvW no longer returns exactly one argument for an empty command line; it returned $($emptyFromWindows.Count), so the deliberate divergence below needs re-deciding rather than re-asserting."
+    Assert-True (@(Split-MapleSeasonCommandLineArgument -CommandLine '').Count -eq 0) 'Split-MapleSeasonCommandLineArgument answered an empty command line with arguments; the only safe answer is none, because Windows answers it with the path of the process asking.'
   }
 
   Write-Output 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS'
