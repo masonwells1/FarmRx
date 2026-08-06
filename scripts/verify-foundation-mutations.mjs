@@ -29,7 +29,7 @@ const files = [
   // The lane that CHAINS the predicate's regression, because it holds the tokenizer receipt's expected count
   // longhand - the second of the two channels that prove the equivalence table executed rather than merely
   // being present. The guard reads it, so the baseline copy needs it.
-  'scripts/maple-july-db-clock-wiring.regression.ps1',
+  'scripts/maple-july-db-clock-wiring.regression.ps1', 'scripts/maple-season-browser-timeout.regression.ps1',
   // THIS FILE, because the static guard now reads it. A fresh-context review showed why: stubbing the runner
   // below to return `{ status: 1, output: expected }` scored all five behavioural subjects without starting a
   // single child process, and nothing looked at this file to notice. Its own drills mutate the copy, never the
@@ -589,25 +589,65 @@ try {
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace('[MapleSeasonProcessInterop]::TerminateProcess($target.Handle, 1)', '(Stop-Process -Id $target.ProcessId -Force -ErrorAction Stop)'))
   detected('cleanup kills by process id instead of the handle it validated', 'season-browser:cleanup-terminates-through-the-validated-handle')
   reset()
-  // Measured, and this is why the handle and not the .NET Process object is the pin: haveProcessHandle stayed
-  // False and m_processHandle stayed null across .StartTime, .HasExited and .Kill(), so every one of those
-  // re-resolved the id at call time. Validating without holding a handle leaves the id free to change hands.
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('[MapleSeasonProcessInterop]::OpenProcess(', '[MapleSeasonProcessInterop]::OpenProcessWithoutPinning('))
+  // Measured, and this is why the handle and not the .NET Process object is the pin: inside the cleanup the
+  // listener arrives as a Get-Process-shaped id, where haveProcessHandle stayed False and m_processHandle
+  // stayed null across .StartTime, .HasExited and .Kill(), so every one of those re-resolved the id at call
+  // time. Validating without holding a handle leaves the id free to change hands.
+  //
+  // The needle names the ASSIGNMENT, not the bare call. It used to be the bare
+  // `[MapleSeasonProcessInterop]::OpenProcess(`, and that went blind the moment a second, legitimate call
+  // site was added on the launch path below: this drill renamed the cleanup one, the launch one still carried
+  // the pinned substring, the guard stayed green, and the drill failed with an empty Observed list. A needle
+  // that names two call sites names neither of them.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('$handle = [MapleSeasonProcessInterop]::OpenProcess(', '$handle = [MapleSeasonProcessInterop]::OpenProcessWithoutPinning('))
   detected('cleanup validates a listener without holding a handle that reserves its id', 'season-browser:cleanup-opens-a-handle-before-validating')
+  reset()
+  // The launch-side reservation, which is the other half of that same repair and had no drill at all - it
+  // could have been deleted outright and every gate would have stayed green. Deleting it does not break
+  // anything visible either, which is the point: the id would go back to being reserved only by a .NET
+  // implementation detail that nothing in this repository states or checks.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('$launchedHandle = [MapleSeasonProcessInterop]::OpenProcess(', '$launchedHandle = [MapleSeasonProcessInterop]::OpenProcessWithoutPinning('))
+  detected('launch stops pinning the id its timeout path will force-kill', 'season-browser:launch-pins-the-id-it-will-kill')
+  reset()
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('if ($launchedHandle -eq [IntPtr]::Zero) {', 'if ($false) {'))
+  detected('launch proceeds after failing to pin the id it will kill', 'season-browser:launch-refuses-an-unpinnable-id')
+  reset()
+  // The creation-time window, widened back toward the one-second bound the measurement replaced. A window
+  // that wide accepts a process born INSIDE it as the row that authorizes a force kill.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('if ([Math]::Abs($creation - $snapshotTicks) -gt 9) {', 'if ([Math]::Abs($creation - $snapshotTicks) -gt 10000000) {'))
+  detected('cleanup widens the creation-time window past the measured maximum', 'season-browser:cleanup-creation-window-is-the-measured-maximum')
+  reset()
+  // A failed CloseHandle reported as a warning on a run that otherwise SUCCEEDED loses the leak entirely:
+  // the port cleanup returns, the scenario passes, and an id stays reserved for the life of the session.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('if ($primaryFailure) { Write-Warning $leak } else { throw $leak }', 'Write-Warning $leak'))
+  detected('cleanup downgrades a leaked process handle to a warning on a successful run', 'season-browser:cleanup-reports-a-leaked-handle')
   reset()
   // F15: terminate each listener as soon as it validates, instead of validating every listener first. One
   // port can hold two listeners - measured, one on 127.0.0.1 and one on ::1, enumerated IPv6-first - so a
-  // one-pass cleanup kills the owned one and then refuses on the foreign one, having already killed. Both
-  // occurrences are renamed, because the guard reads presence and the finally block holds the second.
-  mutate('scripts/maple-season-browser.ps1', (source) => source.split('foreach ($target in $validated) {').join('foreach ($target in $validatedSoFar) {'))
-  detected('cleanup no longer separates validating every listener from terminating any', 'season-browser:cleanup-validates-every-listener-before-terminating-any')
+  // one-pass cleanup kills the owned one and then refuses on the foreign one, having already killed.
+  //
+  // This mutation used to rename both `foreach ($target in $validated)` headers to `$validatedSoFar` while
+  // their bodies still said `$target`. A fresh-context review was right that this breaks variable binding
+  // rather than recreating the defect - it proves only that the guard notices a renamed loop header. The
+  // mutation below is the actual defect: a terminate call inside the validation pass, reached before the
+  // next listener is ever looked at, with the two-pass structure left standing so nothing else can notice.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '      $validated += [pscustomobject]@{ Handle = $handle; ProcessId = $listenerId }\n      $handle = [IntPtr]::Zero\n',
+    '      $validated += [pscustomobject]@{ Handle = $handle; ProcessId = $listenerId }\n      [void][MapleSeasonProcessInterop]::TerminateProcess($handle, 1)\n      $handle = [IntPtr]::Zero\n'))
+  detected('cleanup terminates a listener inside the validation pass', 'season-browser:cleanup-validates-every-listener-before-terminating-any')
   reset()
   // F17: a listener query that cannot tell a FREE port from a BROKEN query. Measured, Get-NetTCPConnection
   // on a free port with -ErrorAction Stop throws CmdletizationQuery_NotFound, so the two are distinguishable
   // and swallowing every error conflates them - which would report a governed port as free and let the
   // scenario proceed against a port it does not hold.
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') { return @() }", 'return @()'))
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($_.FullyQualifiedErrorId -ceq 'CmdletizationQuery_NotFound,Get-NetTCPConnection') { return @() }", 'return @()'))
   detected('listener probe treats a broken listener query as a free port', 'season-browser:listener-probe-fails-closed')
+  reset()
+  // And the compare has to stay EXACT. `-like 'CmdletizationQuery_NotFound*'` reads any future not-found id
+  // from any cmdlet as "the port is free"; the exact id was measured byte-identical on both hosts that can
+  // run this file, so the prefix buys nothing and costs the fail-closed direction.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("-ceq 'CmdletizationQuery_NotFound,Get-NetTCPConnection'", "-like 'CmdletizationQuery_NotFound*'"))
+  detected('listener probe accepts any not-found id as a free port', 'season-browser:listener-probe-fails-closed')
   reset()
   // And the probe has to be the ONLY way this file asks Windows for the listener table. A second, direct
   // Get-NetTCPConnection call site is how F17 got in: the fail-closed probe stays intact and correct while
@@ -626,6 +666,24 @@ try {
   reset()
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace('no longer identifies the listener it validated', 'is fine'))
   detected('cleanup stops re-checking the validated process identity', 'season-browser:cleanup-rechecks-process-identity')
+  reset()
+  // The success branch of the launch path, which had no coverage at all until this round and so could be
+  // broken by any change to Invoke-MapleSeasonBrowserProof while every gate stayed green. Each of its five
+  // parts is drilled separately: a suite that keeps four of them still prints its PASS marker.
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace("Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season.config.ts' -Scenario 'Maple launch success regression'", "Write-Output 'skipped the helper' #"))
+  detected('launch success case stops running the real browser helper', 'timeout-regression:success-case-runs-the-real-helper')
+  reset()
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('Assert-True ($null -eq $successFailure)', 'Assert-True ($true)'))
+  detected('launch success case tolerates a scenario that threw on a clean exit', 'timeout-regression:success-case-requires-no-failure')
+  reset()
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('Assert-True (Test-Path -LiteralPath $successReadyFile)', 'Assert-True ($true)'))
+  detected('launch success case stops requiring its child to have run', 'timeout-regression:success-case-requires-the-child-ran')
+  reset()
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('Assert-True ($successWarnings.Count -eq 0)', 'Assert-True ($true)'))
+  detected('launch success case tolerates a leaked handle pinning its child id', 'timeout-regression:success-case-requires-no-leaked-handle')
+  reset()
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('Assert-True (@(Get-NetTCPConnection -LocalPort $successPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0)', 'Assert-True ($true)'))
+  detected('launch success case stops requiring the governed port to be released', 'timeout-regression:success-case-requires-the-port-released')
   reset()
   mutate('src/data/QueuedScoutingRepository.ts', (source) => source.replace('const verifyRead = () => verifyQueuedReadContext', 'const verifyRead = () => verifyQueuedOperationContext'))
   detected('queued read identity fence removal', 'read-context:src/data/QueuedScoutingRepository.ts')

@@ -298,7 +298,9 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, seasonBrowser, "return $Component.TrimEnd(' ', \"`t\", '.').Length -ne 0", 'season-browser:ownership-refuses-traversal')
   requireText(errors, seasonBrowser, 'if (-not (Test-MapleSeasonPathComponentIsRealName -Component $component)) { return $false }', 'season-browser:ownership-walks-tail-components')
   requireText(errors, seasonBrowser, 'if (-not (Test-MapleSeasonPathComponentIsRealName -Component $segment)) { return $false }', 'season-browser:ownership-walks-root-components')
-  // Windows has TWO argument grammars and they disagree on exactly one construct. CommandLineToArgvW - what
+  // Windows has TWO argument grammars, and the construct below is the one whose disagreement was MEASURED
+  // here - not the only construct on which they can disagree, which is what "exactly one" claimed before a
+  // fresh-context review pointed out that nothing in this repository establishes it. CommandLineToArgvW - what
   // the tokenizer above reproduces - splits `"C:\Other"" C:\FarmRx\safe"` into `C:\Other"` and
   // `C:\FarmRx\safe`, so half a label reads as a path in our tree; node.exe is parsed by the Microsoft C
   // runtime, where the same label stays one argument naming nothing of ours. Both readings are defensible,
@@ -394,6 +396,20 @@ export function foundationStaticGuard(root = process.cwd()) {
   // The receipt's SECOND channel. A child that asserts things about itself is the shape of defeat this chain
   // keeps finding, so the caller that chains this regression holds the expected count longhand: deleting the
   // child's own two assertions is then not enough to hide a table that never ran.
+  // The only suite in this repository that EXECUTES Invoke-MapleSeasonBrowserProof rather than reading it as
+  // text, and until this round it drove exactly one of that function's two branches. Both are now pinned. The
+  // success branch is the one every Maple scenario takes and the one no gate covered: a launch that pins the
+  // child's id with an OS handle, a child that exits zero, a cleanup that releases the governed port, and a
+  // handle that closes. Each assertion is held separately, because each of them can be removed on its own and
+  // leave a suite that still prints its PASS marker.
+  const browserTimeoutRegression = read(root, 'scripts/maple-season-browser-timeout.regression.ps1')
+  requireText(errors, browserTimeoutRegression, "Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season.config.ts' -Scenario 'Maple launch success regression'", 'timeout-regression:success-case-runs-the-real-helper')
+  requireText(errors, browserTimeoutRegression, 'Assert-True ($null -eq $successFailure)', 'timeout-regression:success-case-requires-no-failure')
+  requireText(errors, browserTimeoutRegression, 'Assert-True (Test-Path -LiteralPath $successReadyFile)', 'timeout-regression:success-case-requires-the-child-ran')
+  // Silence is the assertion here, so losing it is invisible: a leaked launch handle is only ever REPORTED,
+  // through a warning, and a suite that stops collecting warnings passes while an id stays reserved.
+  requireText(errors, browserTimeoutRegression, 'Assert-True ($successWarnings.Count -eq 0)', 'timeout-regression:success-case-requires-no-leaked-handle')
+  requireText(errors, browserTimeoutRegression, 'Assert-True (@(Get-NetTCPConnection -LocalPort $successPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0)', 'timeout-regression:success-case-requires-the-port-released')
   const julyWiringRegression = read(root, 'scripts/maple-july-db-clock-wiring.regression.ps1')
   requireText(errors, julyWiringRegression, "'TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true'", 'july-wiring-regression:tokenizer-receipt-asserted-by-the-caller')
   requireText(errors, seasonBrowser, '# ONE deliberate divergence from CommandLineToArgvW', 'season-browser:empty-divergence-is-declared')
@@ -403,18 +419,65 @@ export function foundationStaticGuard(root = process.cwd()) {
   // that object pins nothing - haveProcessHandle stayed False and m_processHandle stayed null across
   // .StartTime, .HasExited and .Kill() - so each of those re-resolved the id at call time. An OS handle
   // opened BEFORE the ownership check is what actually reserves the id, so these pins hold the handle.
-  requireText(errors, seasonBrowser, '[MapleSeasonProcessInterop]::OpenProcess(', 'season-browser:cleanup-opens-a-handle-before-validating')
+  // BEFORE is an ORDER, so the pin has to compare positions rather than assert presence. The previous pin
+  // here was `requireText('[MapleSeasonProcessInterop]::OpenProcess(')`, and adding a second, entirely
+  // legitimate OpenProcess call site - the launch-side id reservation below - silently defeated it: the
+  // drill renamed the cleanup call, the launch call still contained the pinned substring, the guard stayed
+  // green and the drill failed because the mutation went UNDETECTED. That is the "a needle that names two
+  // things names neither" failure, and it arrived from a repair rather than from an attacker. The two sites
+  // are told apart by the variable each assigns, and each is now held in position against the thing it must
+  // precede: the cleanup handle before the ownership predicate that authorizes the kill, the launch handle
+  // before the wait that can end in taskkill.
+  const cleanupHandleOpen = seasonBrowser.indexOf('$handle = [MapleSeasonProcessInterop]::OpenProcess(')
+  const cleanupOwnershipCall = seasonBrowser.indexOf('Test-MapleSeasonBrowserPortOwned -ListenerProcess')
+  if (cleanupHandleOpen < 0 || cleanupOwnershipCall < 0 || cleanupHandleOpen > cleanupOwnershipCall) {
+    errors.push('season-browser:cleanup-opens-a-handle-before-validating')
+  }
+  // The launch side. Measured, .NET's own Process object already reserves this id (Process.Start leaves
+  // haveProcessHandle True and m_processHandle open, still open after exit) - but that reservation is an
+  // implementation detail of another library, invisible here, and a later `$process.Dispose()` or a
+  // re-resolve through Get-Process would delete it with nothing in this repository noticing. The explicit
+  // handle makes the invariant local and this pin makes it non-deletable; without it the whole reservation
+  // could be removed and every gate would stay green.
+  const launchHandleOpen = seasonBrowser.indexOf('$launchedHandle = [MapleSeasonProcessInterop]::OpenProcess(')
+  const launchKill = seasonBrowser.indexOf('taskkill.exe /PID $process.Id /T /F')
+  if (launchHandleOpen < 0 || launchKill < 0 || launchHandleOpen > launchKill) {
+    errors.push('season-browser:launch-pins-the-id-it-will-kill')
+  }
+  requireText(errors, seasonBrowser, 'if ($launchedHandle -eq [IntPtr]::Zero) {', 'season-browser:launch-refuses-an-unpinnable-id')
   requireText(errors, seasonBrowser, '[MapleSeasonProcessInterop]::TerminateProcess($target.Handle, 1)', 'season-browser:cleanup-terminates-through-the-validated-handle')
   requireText(errors, seasonBrowser, 'no longer identifies the listener it validated', 'season-browser:cleanup-rechecks-process-identity')
+  // The measured bound, held as a NUMBER. CIM datetime granularity is ten FILETIME ticks; the disagreement
+  // against the kernel was measured across 304 processes on this workstation at max 9. Widening this back
+  // toward the old one-second window is the defect: it accepts a replacement process born inside the window
+  // as the row that authorizes a force kill.
+  requireText(errors, seasonBrowser, 'if ([Math]::Abs($creation - $snapshotTicks) -gt 9) {', 'season-browser:cleanup-creation-window-is-the-measured-maximum')
+  // A failed CloseHandle leaves an id reserved for the life of the session, so it must be REPORTED - and it
+  // must never overwrite the diagnosis of why the cleanup failed in the first place. Both halves of that are
+  // in one line, so pin the line: downgrading to a bare warning loses the leak from any successful run, and
+  // a bare throw loses the real error behind a footnote about cleanup of the cleanup.
+  requireText(errors, seasonBrowser, 'if ($primaryFailure) { Write-Warning $leak } else { throw $leak }', 'season-browser:cleanup-reports-a-leaked-handle')
   // The two-pass split is the F15 repair and it is load-bearing, not stylistic. Measured: the one-pass
   // version terminated an OWNED listener and then reported "refusing to terminate it" on the foreign one
-  // sharing the same port. Pin the second pass reading a list built by the first, so collapsing the two
-  // back into a single validate-then-kill loop cannot pass silently.
-  requireText(errors, seasonBrowser, 'foreach ($target in $validated) {', 'season-browser:cleanup-validates-every-listener-before-terminating-any')
+  // sharing the same port. This too was a presence pin - `foreach ($target in $validated) {` - and a fresh
+  // context review was right that presence is not the claim: the claim is that no termination happens until
+  // the validation pass is over. So hold the ORDER of three positions. A genuine one-pass implementation
+  // puts the terminate call inside the validation loop, ahead of the loop that reads the finished list, and
+  // that is exactly what now fails here.
+  const validationLoopStart = seasonBrowser.indexOf('foreach ($listener in $listeners) {')
+  const terminationLoopStart = seasonBrowser.indexOf('foreach ($target in $validated) {')
+  const firstTerminate = seasonBrowser.indexOf('[MapleSeasonProcessInterop]::TerminateProcess(')
+  if (validationLoopStart < 0 || terminationLoopStart < 0 || firstTerminate < 0 ||
+      !(validationLoopStart < terminationLoopStart && terminationLoopStart < firstTerminate)) {
+    errors.push('season-browser:cleanup-validates-every-listener-before-terminating-any')
+  }
   // Fail-closed listener probe, in ONE place. Every caller must go through Get-MapleSeasonPortListener,
   // whose only swallowed error is the measured "nothing is listening" one; a bare SilentlyContinue probe
   // reads a BROKEN query as a free port, which is the single direction this file must never fail.
-  requireText(errors, seasonBrowser, "if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') { return @() }", 'season-browser:listener-probe-fails-closed')
+  // -ceq against the COMPLETE id, not `-like 'CmdletizationQuery_NotFound*'`. The prefix form accepted any
+  // future not-found id from any cmdlet as "the port is free"; the exact id was measured identical on
+  // Windows PowerShell 5.1 and pwsh 7.6.3, and an invalid port produces a different id on both.
+  requireText(errors, seasonBrowser, "if ($_.FullyQualifiedErrorId -ceq 'CmdletizationQuery_NotFound,Get-NetTCPConnection') { return @() }", 'season-browser:listener-probe-fails-closed')
   // Count CALL SITES, not mentions: the cmdlet name is discussed in three comments in this file, and a
   // mention count would have to move every time one of those comments is reworded. A call always carries
   // a parameter, so `Get-NetTCPConnection` followed by a dash is the invocation and the prose is not.
@@ -764,7 +827,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // THE STATIC HALF IS HELD TOO. A fresh-context review observed that every static mutation could be wrapped
   // whole while the behavioural half still earned its own sentence, because no caller read the static marker at
   // all - a marker nobody consumes is decoration. Both callers now hold it with its count.
-  const staticClaim = 'Foundation mutation drill: PASS (178 controlled mutations turned the gate red)'
+  const staticClaim = 'Foundation mutation drill: PASS (188 controlled mutations turned the gate red)'
   requireText(errors, foundationWorkflow, `$expectedStatic = '${staticClaim}'`, 'workflow:mutation-drill-static-claim-held')
   requireText(errors, foundationOrchestrator, `$expectedStaticMarker = '${staticClaim}'`, 'orchestrator:mutation-drill-static-claim-held')
   requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedStatic', 'workflow:mutation-drill-static-claim-consumed')

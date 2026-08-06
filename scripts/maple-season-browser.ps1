@@ -31,8 +31,13 @@ function Split-MapleSeasonCommandLineArguments {
   # than against my reading of the documentation.
   $arguments = New-Object System.Collections.Generic.List[string]
   # ONE deliberate divergence from CommandLineToArgvW, stated here because the equivalence table cannot
-  # assert it: given an empty string the real API returns the path of the CURRENT executable, measured as
-  # one argument naming powershell.exe itself. That is documented behaviour and it is worthless as
+  # assert it: given an empty string the real API returns the path of the CURRENT executable, tokenized on
+  # spaces - so the ARGUMENT COUNT is host-dependent, and the earlier "one argument naming powershell.exe"
+  # here was only true of the host it was written on. Measured: Windows PowerShell 5.1 asks from
+  # `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` and gets 1 argument; pwsh 7 asks from
+  # `C:\Program Files\PowerShell\7\pwsh.exe` and gets 2, split at the space in "Program Files". The
+  # regression therefore asserts the rejoined CONTENT against the asking process's own module path rather
+  # than a count. Either way the answer is built from the caller, and it is worthless as
   # ownership evidence - it would answer a question about a listener with a fact about the process asking.
   # Zero arguments is the fail-closed answer, and the equivalence table records the empty case as
   # excluded on purpose rather than omitting it silently. Every non-empty command line is compared.
@@ -313,6 +318,10 @@ function Clear-MapleSeasonBrowserPort {
   # before terminating any of them.
   $handle = [IntPtr]::Zero
   $validated = @()
+  # Whether a real failure is already on its way out. The handle-close check in the finally must REPORT a
+  # leaked pin, never replace the diagnosis of why the cleanup failed in the first place.
+  $primaryFailure = $false
+  $closeFailures = [Collections.Generic.List[string]]::new()
   try {
     foreach ($listener in $listeners) {
       $listenerId = [int]$listener.OwningProcess
@@ -352,14 +361,25 @@ function Clear-MapleSeasonBrowserPort {
       if ($null -eq $listenerProcess -or $null -eq $listenerProcess.CreationDate) {
         throw "$Scenario could not read the command line of the listener holding governed port $Port (pid $listenerId); refusing to terminate it."
       }
-      # Confirm the snapshot the predicate is about to judge describes the process this handle holds.
-      # Ten FILETIME ticks - one microsecond - is the documented granularity of a CIM datetime, and it was
-      # MEASURED against the kernel across 304 processes on this workstation: max disagreement 9 ticks,
+      # SAY WHAT THIS IS. It is a STALE-SNAPSHOT check, not proof of identity: it confirms the WMI row the
+      # predicate is about to judge was taken of the same process this handle holds, so a row left over from
+      # a previous occupant of the id cannot be what authorizes the kill. Identity itself comes from the
+      # handle, which reserves the id; a fresh-context review was right that this comparison alone cannot
+      # prove identity, and that a provider row carrying the current creation timestamp with stale
+      # Name/CommandLine fields would still pass. What closes THAT is handle-bound launch provenance, which
+      # this file does not yet have (F1, open).
+      #
+      # Ten FILETIME ticks - one microsecond - is the documented granularity of a CIM datetime, and the
+      # disagreement was MEASURED against the kernel across 304 processes on this workstation: max 9 ticks,
       # median 4, and only 34 of 304 exactly equal. So exact equality would refuse almost every real
-      # cleanup, and the previous one-SECOND window was a hundred million times looser than the
-      # measurement needs - wide enough to accept a replacement born inside it.
+      # cleanup, and the previous one-SECOND window was a hundred million times looser than the measurement
+      # needs - wide enough to accept a replacement born inside it. The bound is the MEASURED maximum, 9,
+      # not the round number above it: `-gt 10` accepted a ten-tick disagreement that nothing here ever
+      # observed, and a bound should be the largest value the measurement actually produced. Tightening
+      # fails in the safe direction - a wider disagreement now refuses the cleanup by name instead of
+      # authorizing a kill on a row it cannot vouch for.
       $snapshotTicks = $listenerProcess.CreationDate.ToUniversalTime().ToFileTimeUtc()
-      if ([Math]::Abs($creation - $snapshotTicks) -gt 10) {
+      if ([Math]::Abs($creation - $snapshotTicks) -gt 9) {
         throw "$Scenario found the process id holding governed port $Port no longer identifies the listener it validated; refusing to terminate it."
       }
       if (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $listenerProcess -Root $Root)) {
@@ -385,9 +405,30 @@ function Clear-MapleSeasonBrowserPort {
         throw "$Scenario browser server did not terminate within ten seconds."
       }
     }
+  } catch {
+    # Bare `throw` inside catch rethrows the ErrorRecord unchanged; this exists only to record that the
+    # body failed, so the close check below downgrades itself to a warning instead of overwriting the real
+    # error on its way out of the finally.
+    $primaryFailure = $true
+    throw
   } finally {
-    foreach ($target in $validated) { [void][MapleSeasonProcessInterop]::CloseHandle($target.Handle) }
-    if ($handle -ne [IntPtr]::Zero) { [void][MapleSeasonProcessInterop]::CloseHandle($handle) }
+    # A FAILED CLOSE IS NOT NOTHING, and while both of these were cast to void it was invisible. The kernel
+    # keeps a process object - and therefore keeps reserving its id - until the last handle to it closes, so
+    # a handle this function opened and failed to close leaves that id pinned for the life of the session,
+    # and a later run reading that id is reading a reservation nobody owns any more. Collect, then decide:
+    # never mask a primary failure with a footnote about cleanup of the cleanup.
+    foreach ($target in $validated) {
+      if (-not [MapleSeasonProcessInterop]::CloseHandle($target.Handle)) {
+        $closeFailures.Add("pid $($target.ProcessId) (Windows error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))")
+      }
+    }
+    if ($handle -ne [IntPtr]::Zero -and -not [MapleSeasonProcessInterop]::CloseHandle($handle)) {
+      $closeFailures.Add("the listener still being validated (Windows error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))")
+    }
+    if ($closeFailures.Count -gt 0) {
+      $leak = "$Scenario could not close $($closeFailures.Count) process handle(s) it opened for governed port $Port ($($closeFailures -join '; ')), so those process ids stay reserved for the life of this session."
+      if ($primaryFailure) { Write-Warning $leak } else { throw $leak }
+    }
   }
 
   $deadline = [DateTime]::UtcNow.AddSeconds(10)
@@ -438,10 +479,20 @@ function Get-MapleSeasonPortListener {
   # so "nothing is listening" IS distinguishable from a broken query. Only that one error means empty.
   # This is the ONLY call to Get-NetTCPConnection in this file, pinned as such by
   # scripts/foundation-static-guards.mjs, so no caller can reintroduce a fail-open probe of its own.
+  #
+  # -ceq AGAINST THE WHOLE ID, not a prefix. The previous `-like 'CmdletizationQuery_NotFound*'` accepted
+  # any future not-found id from any cmdlet, and a fresh-context review was right that "the id starts the
+  # way the measured one starts" is not the same claim as "this is the measured one". Exact is the
+  # fail-closed direction only if the id is genuinely identical everywhere this runs, so that was measured
+  # rather than assumed, on both hosts that can run this file: Windows PowerShell 5.1.26100.8875 and
+  # pwsh 7.6.3 each answered a free port with the byte-identical 48-character id below, and each answered
+  # an INVALID port with 'ParameterArgumentTransformationError,Get-NetTCPConnection', which the prefix form
+  # also rejected. Anything else - permission denied, a dead CIM service, a timeout - now throws with a
+  # name instead of being read as an empty port.
   try {
     return @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop)
   } catch {
-    if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') { return @() }
+    if ($_.FullyQualifiedErrorId -ceq 'CmdletizationQuery_NotFound,Get-NetTCPConnection') { return @() }
     throw "$Scenario could not read the listener table for governed port $Port, so it cannot tell an occupied port from a free one: $($_.Exception.Message)"
   }
 }
@@ -544,22 +595,58 @@ function Invoke-MapleSeasonBrowserProof {
   # this scenario leaked the listener when something else held the port beforehand.
   Assert-MapleSeasonBrowserPortFree -Port $port -Scenario $Scenario -PortVariable $portContract[0] -Root $ownedMarker
   if (-not $process.Start()) { throw "$Scenario browser process did not start." }
-  $completed = $process.WaitForExit($TimeoutMilliseconds)
-  if (-not $completed) {
-    & taskkill.exe /PID $process.Id /T /F 2>&1 | Out-Null
-    $killExitCode = $LASTEXITCODE
-    $terminated = $process.WaitForExit(10000)
-    Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
-    if ($killExitCode -ne 0 -or -not $terminated -or -not $process.HasExited) {
-      throw "$Scenario browser timeout cleanup did not terminate its owned process tree."
+  # PIN THE ID THIS FUNCTION WILL KILL BY, with a handle of this file's own, opened before anything else can
+  # happen and held until after the kill. `taskkill /PID` names a NUMBER, and a number means one particular
+  # process only for as long as the kernel is still reserving it.
+  #
+  # The id is in fact already reserved here - by an implementation detail. MEASURED on this workstation, and
+  # deliberately contrasted with the object shape Clear-MapleSeasonBrowserPort has to work with:
+  #   Process.Start()          -> haveProcessHandle True,  m_processHandle open, still open AFTER exit
+  #   Start-Process -PassThru  -> haveProcessHandle True,  m_processHandle open, still open AFTER exit
+  #   Get-Process -Id          -> haveProcessHandle False, m_processHandle null
+  # So a fresh-context review's reading that this path force-kills "without retaining a native handle" was
+  # wrong about the mechanism: .NET holds one from Start(), which is precisely why the cleanup path needed
+  # its own and this path appeared not to. But that reservation was PRIVATE to .NET and invisible in this
+  # file - moving a `$process.Dispose()` above the kill, or re-resolving the id through Get-Process, would
+  # delete the guarantee silently and nothing here would notice. The handle below makes the invariant local,
+  # stated, and pinnable instead of inherited.
+  #
+  # No PROCESS_TERMINATE: taskkill /T is still what kills the TREE, and this handle exists to reserve the
+  # id, not to do the killing. Least privilege, so the pin cannot quietly become a second kill path.
+  Initialize-MapleSeasonProcessInterop
+  $launchedHandle = [MapleSeasonProcessInterop]::OpenProcess(
+    [MapleSeasonProcessInterop]::PROCESS_QUERY_LIMITED_INFORMATION -bor [MapleSeasonProcessInterop]::SYNCHRONIZE,
+    $false,
+    [uint32]$process.Id)
+  if ($launchedHandle -eq [IntPtr]::Zero) {
+    throw "$Scenario could not pin the browser process it just started (pid $($process.Id), Windows error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())), so a later force-terminate could not be proved to address the same process."
+  }
+  try {
+    $completed = $process.WaitForExit($TimeoutMilliseconds)
+    if (-not $completed) {
+      # Safe to kill BY ID: $launchedHandle has reserved this id since immediately after Start(), so the
+      # number cannot have come to mean a different process, and /T can only reach processes genuinely
+      # descended from it - nothing else can have been created holding the parent id it walks from.
+      & taskkill.exe /PID $process.Id /T /F 2>&1 | Out-Null
+      $killExitCode = $LASTEXITCODE
+      $terminated = $process.WaitForExit(10000)
+      Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
+      if ($killExitCode -ne 0 -or -not $terminated -or -not $process.HasExited) {
+        throw "$Scenario browser timeout cleanup did not terminate its owned process tree."
+      }
+      throw "$Scenario browser scenario exceeded its bounded process limit after verified cleanup."
     }
-    throw "$Scenario browser scenario exceeded its bounded process limit after verified cleanup."
-  }
-  if (-not $process.HasExited -or $null -eq $process.ExitCode) {
-    throw "$Scenario browser process ended without a readable native exit code."
-  }
-  $exitCode = [int]$process.ExitCode
+    if (-not $process.HasExited -or $null -eq $process.ExitCode) {
+      throw "$Scenario browser process ended without a readable native exit code."
+    }
+    $exitCode = [int]$process.ExitCode
 
-  Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
-  if ($exitCode -ne 0) { throw "$Scenario browser scenario failed with exit code $exitCode." }
+    Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
+    if ($exitCode -ne 0) { throw "$Scenario browser scenario failed with exit code $exitCode." }
+  } finally {
+    # Reported, not swallowed, and never allowed to replace the scenario's own verdict on its way out.
+    if (-not [MapleSeasonProcessInterop]::CloseHandle($launchedHandle)) {
+      Write-Warning "$Scenario could not close the handle pinning browser pid $($process.Id) (Windows error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())); that id stays reserved for the life of this session."
+    }
+  }
 }
