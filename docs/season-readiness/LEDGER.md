@@ -1242,3 +1242,80 @@ SR-077 is left as written — this ledger is append-only — so the corrections 
 - Carried, unchanged: task #27 (a real PowerShell code view for the guard, so pins stop being satisfiable by inert data), and the open findings on `7887fd3`, `bd2d995` and `71742a8`.
 
 **Authority, stated plainly:** local commit only, on `claude/gauntlet-testing-sweep-013d65`. Nothing was pushed, merged, or deployed. A green gate is not approval for an outward action. Still open decisions for Mason: the Job Object rewrite together with F1/F2's ownership semantics; a Windows CI job (no runner executes the Windows-only refusals that protect this workstation from a false TRUE, nor the orphan case); and wiring the orphaned PowerShell regressions into a gate.
+
+## SR-079 — Sol tranche E1 on `00668e1`: reading a port and being allowed to kill what is on it are separated, and four claims in SR-078 are corrected
+
+**2026-08-06 · branch `claude/gauntlet-testing-sweep-013d65` · local commit only**
+
+A fresh-context Sol review of `00668e1` returned ten findings. Six were code defects in the two PowerShell files, three were defects in the instrumentation that was supposed to prove them, and one was a false claim in the ledger. All ten are addressed here. Three further defects Sol did not name were found while repairing them and are recorded below rather than folded into Sol's count.
+
+### The correction that matters most: SR-078's central claim was wrong, and so was what I told Mason
+
+SR-078 says the new salvage is **"strictly narrower in kill exposure"** than the code before it. That is false, and I repeated it to Mason in plain English as "it doesn't widen what can be killed; it narrows it." Sol's F1 is right and the hazard is specific to this workstation:
+
+- `-OwnedCommandMarker` **defaults to the repository root** (`scripts/maple-season-browser.ps1:613`).
+- `Test-MapleSeasonBrowserPortOwned` states outright that it cannot distinguish another `node`/`npm`/`npx` process started inside that same tree.
+- SR-078's salvage read the port **unconditionally** and released whatever it found — including on the ordinary success path, where the cleanup inside the `try` had *already observed that port free*.
+
+So a developer's own repository-rooted `node` process that bound the governed port in the window between that verified release and the salvage would have been classified as owned and **force-killed**. The flag-based code SR-078 replaced would have left it alone. In that direction the change was strictly *worse*, not narrower.
+
+**The repair separates two permissions that had been treated as one.** Reading the port stays unconditional — that is what catches the late-binding descendant a flag misses. *Killing* what is found now requires that this scenario can still plausibly own it:
+
+- `$verifiedPortRelease = $false` is declared immediately before the `try`.
+- It is set `$true` only on the line after a `Clear-MapleSeasonBrowserPort` that **returned** — once on the timeout path, once on the success path.
+- That function returns only from inside a loop that has observed **zero listeners**, which is what makes the flag a statement about the port rather than about a call completing. (Pinned: `season-browser:port-cleanup-returns-only-on-an-observed-free-port`.)
+- At salvage time: a listener found *after* a verified release is, by construction, not this scenario's — it is footnoted and **left alone**. A listener found with no verified release is released as before.
+
+The footnote is not a soft outcome. The launch regression asserts zero warnings, so a leak surfaces as a failed proof instead of as a silent force kill aimed at a process this file cannot prove it owns.
+
+### Four defects Sol did not name
+
+1. **Three fail-open listener reads were load-bearing assertions, not safety nets.** Sol flagged two reads in the orphan safety net. Six reads in the regression used `Get-NetTCPConnection … -ErrorAction SilentlyContinue` directly, and three of those sat inside `Assert-True` — so a listener table that could not be queried answered "nothing is listening" and the case reported **success while the port was held**. That is worse than the two Sol named. All six now go through the fail-closed probe, and the shape is closed with a **forbid over the whole file** (`timeout-regression:reads-listeners-without-the-fail-closed-probe`) rather than three presence pins, because the defect can reappear at any new read.
+2. **The timeout case's port assertion had no guard pin at all** while the success and orphan cases each had one. Pinned and drilled.
+3. **A presence pin on `$orphanPort = 4290` is insufficient.** A *second* assignment inside the `try` leaves the pinned literal intact while the case and the cleanup watch different ports. A write count sits alongside it now, and a drill inserts exactly that second assignment.
+4. **One drill reddened the guard on broken PowerShell syntax, not on the weakening it names** — the same class as Sol's F8, found by measuring instead of by reading. The separator-drift drill in the port preflight substituted `($character -eq ' ')` into a span that sits *inside a single-quoted PowerShell string*, so the bare quotes closed the string and left a file PowerShell cannot parse. The pin still fired, on the wrong fact: a defect that cannot parse cannot ship, so the drill proved nothing about a maintainer narrowing the drift. The quotes are doubled now and the mutated file parses. **How it was found is the reusable part** — instead of hand-transcribing mutations into a second list that drifts, a throwaway copy of the drill saved every PowerShell file it wrote and PowerShell's own parser was run over the whole set (see the tally below).
+
+### The instrumentation defects (Sol F8, F9) — the tally could be fabricated and three drills proved nothing
+
+**F9.** The summary sentence says "*N* controlled mutations turned the gate red", and nothing checked the word *mutation*. `detected()` only re-runs the guard and looks for a label, so **two `detected()` calls after one `mutate()` both pass** and the total counts a mutation that never existed. The count is now *spent*: `mutate` records the write it made, `detected` refuses by name when nothing is pending and clears the record. Three pins hold it, including a count of exactly one increment — because a *second* increment placed above the stale-needle refusal would count mutations that never applied while the pinned pair below stayed untouched.
+
+**F8.** Three drills did not recreate the defects they named, and Sol was right about all three:
+
+- The release-flag drill inserted `if ($portReleased) { … }` against a `$portReleased` that was never declared. Without strict mode that is `$null`; the branch never ran and the drill only tripped a text forbid. It now declares the flag from the fact the file already establishes and overrides the port state **after** the read — the whole defect in one line, and it executes.
+- The PID-pin drill replaced the handle acquisition with `$strandedHandle = $null`, which the next line turns into `continue` — it skipped the kill instead of recreating one aimed at a number. It now changes exactly one thing: the force kill goes to a bare id in a **second lookup** rather than through the pinned handle. The `.Handle` deletion drill attacks the same pin from the other end.
+- The swallowed-kill drill left the `HasExited` verification below it, so an access-denied kill still printed `_STRANDED_ALIVE` and the survivor was never hidden. The report and the verification now go with the kill.
+
+All three mutated files were handed to PowerShell's own parser, and then so was every other PowerShell mutation in the file — see the parse tally below.
+
+### Three further claims in SR-078 that were wrong or unsupported
+
+SR-078 stands as written — this ledger is append-only.
+
+1. **"Strictly narrower in kill exposure"** — false, as above.
+2. **The `Get-Process` PID-reservation assertion.** SR-078 says "a held handle keeps the id reserved". Measured on this workstation: after `Get-Process -Id`, `haveProcessHandle` is **False** and stays False after reading `.HasExited`. Reading **`.Handle`** is what opens one, measured True immediately afterwards. The safety net now touches `.Handle` explicitly and the pin covers that line; SR-078's claim was true of the *repair it intended* and false of the *code it described*.
+3. **"Every one has a drill … recreating the defect from the direction of the defect"** — false, per F8 above; three did not. And **"26 new and re-anchored drills"** overstates it: Sol counted 24, and 24 is the number I can substantiate.
+
+### Ran and watched, not "tests pass"
+
+- `node --check` on both `.mjs` files → OK. (The IDE's TypeScript service continues to emit phantom `[1128]` diagnostics for `.mjs` at line numbers past end-of-file, and a false `[6133]` on a constant read three times; `node --check` is the authority.)
+- `[Parser]::ParseFile` on the touched PowerShell files → regression 1271 tokens / **0 errors**, helper 4186 tokens / **0 errors**, port preflight 4115 tokens / **0 errors**.
+- **Every PowerShell mutation this drill can produce was handed to PowerShell's own parser: 192 mutated files, `191 parse clean`.** The single remaining file is an *intermediate* snapshot of the one drill that applies two mutations in sequence — the first opens `if ($false) {` and the second closes it — and its completed state was diffed and confirmed valid. Before the repair above the tally was 190; that measurement is what found the defect.
+- `node scripts/foundation-static-guards.mjs` → `Foundation static guards: PASS`.
+- `node scripts/verify-foundation-mutations.mjs` → `PASS (262 controlled mutations turned the gate red)` and `PASS (5 broken subjects …, 0 not measurable on this platform)`. **21 new drills, `241 → 262`**, arrived at from the drill's own tally and then propagated to the three places that consume the sentence.
+- `npx tsc -b --force` → clean, exit 0.
+- **`powershell scripts/verify-foundation.ps1` → `Farm Rx foundation gate: PASS`, exit 0** — the lane that *consumes* the `262` sentence, plus `62 passed / 14 skipped` in the foundation shell suite. A drill count that only the drill itself agrees with is not proven; this is the run that proves the three consumers agree.
+- `powershell scripts/maple-season-browser-timeout.regression.ps1` → `MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_PASS`, exit 0, and **zero `_STRANDED*` marker lines** across two full runs.
+- **The new kill-authorization gate was then proven behaviourally, in both directions, on a throwaway copy.** Only the `try` *body* of `Invoke-MapleSeasonBrowserProof` was stubbed — the salvage in the `finally` is the real code, byte for byte — and a real foreign `node` listener was started on a governed port *after* the preflight had accepted it, so the salvage meets a listener it did not launch:
+  - `$verifiedPortRelease` left `$false` → port went from **1 listener to 0**. The release still happens.
+  - `$verifiedPortRelease` set `$true` → the squatter **survived** (pid 46032 still holding the port) and the footnote surfaced: *"found a listener on governed port 4291 after it had already verified that port free, so the listener is not one this scenario launched and it refused to terminate it."*
+  - This is exactly the process SR-078's code would have force-killed: a `node` process whose command line sits under the owned marker. Both directions are load-bearing at runtime, not only in the pins.
+- Ports 4288/4289/4290/4291 confirmed at **zero** listeners afterwards, no stray probe processes, and Mason's unrelated `factory-board.mjs` process (pid 22580) confirmed still alive.
+
+### What this tranche does NOT fix
+
+- **`countPowerShellWrites` counts matching lines, not assignments** — two assignments on one line still read as one, at its remaining call sites. This tranche adds two more call sites that inherit the weakness; both are pinned to exact counts, so the weakness is bounded rather than closed.
+- **The 192-file parse sweep is a probe, not a gate.** It ran once, by hand, on a throwaway copy of the drill; nothing stops the next syntax-invalid mutation from being added. Making it permanent belongs with task #27, which needs the same parser for a different reason.
+- **Task #27 — a real PowerShell code view for the guard.** The comment-stripped view drops only whole-line comments, so a here-string body still reads as code and a trailing comment still hides text. Designed and measured, not started.
+- Carried, unchanged: **F12** (the launch sits outside cleanup protection until after three assignments) and **F13** (three catch bodies still interpolate `$process.Id`), plus the open findings on `7887fd3`, `bd2d995` and `71742a8`.
+
+**Authority, stated plainly:** local commit only, on `claude/gauntlet-testing-sweep-013d65`. Nothing was pushed, merged, or deployed. A green gate is not approval for an outward action. Still open decisions for Mason: the Job Object rewrite together with the ownership semantics above; a Windows CI job (no runner executes the Windows-only refusals nor the orphan case); and wiring the orphaned PowerShell regressions into a gate.

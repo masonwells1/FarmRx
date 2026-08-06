@@ -427,13 +427,22 @@ export function foundationStaticGuard(root = process.cwd()) {
   // handle that closes. Each assertion is held separately, because each of them can be removed on its own and
   // leave a suite that still prints its PASS marker.
   const browserTimeoutRegression = read(root, 'scripts/maple-season-browser-timeout.regression.ps1')
+  // The FORBIDS below need a view with comment lines dropped, and finding that out cost a red gate: this file's
+  // comments quote the very defects they defend against - `.Contains($tempRoot)`, the fail-open reads - so a forbid
+  // run over the raw source reports the documentation as the defect. It is the same reason countPowerShellWrites
+  // strips them. Presence pins keep using the raw source, because requireStatementOnce strips them itself.
+  const browserTimeoutRegressionCode = powerShellStatements(browserTimeoutRegression)
   requireStatementOnce(errors, browserTimeoutRegression, "Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season.config.ts' -Scenario 'Maple launch success regression'", 'timeout-regression:success-case-runs-the-real-helper')
   requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True ($null -eq $successFailure)', 'timeout-regression:success-case-requires-no-failure')
   requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True (Test-Path -LiteralPath $successReadyFile)', 'timeout-regression:success-case-requires-the-child-ran')
   // Silence is the assertion here, so losing it is invisible: a leaked launch handle is only ever REPORTED,
   // through a warning, and a suite that stops collecting warnings passes while an id stays reserved.
   requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True ($successWarnings.Count -eq 0)', 'timeout-regression:success-case-requires-no-leaked-handle')
-  requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True (@(Get-NetTCPConnection -LocalPort $successPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0)', 'timeout-regression:success-case-requires-the-port-released')
+  requireStatementOnce(errors, browserTimeoutRegression, "Assert-True (@(Get-MapleSeasonPortListener -Port $successPort -Scenario 'Maple launch success regression').Count -eq 0)", 'timeout-regression:success-case-requires-the-port-released')
+  // The TIMEOUT case's port assertion, which no pin held at all until now - the success and orphan cases each had
+  // one and the dramatic branch in between did not, so deleting it left a case that runs the timeout cleanup and
+  // never asks whether the port came back.
+  requireStatementOnce(errors, browserTimeoutRegression, "Assert-True (@(Get-MapleSeasonPortListener -Port $port -Scenario 'Maple timeout regression').Count -eq 0)", 'timeout-regression:timeout-case-requires-the-port-released')
   // THE ORPHAN CASE, and it is the only executed proof in this repository that the governed port gets released
   // when the process this function launched is already gone. Every other case has the parent alive at the moment
   // the salvage runs, which is why the leak survived: the release was gated on the parent, and the listener was
@@ -446,7 +455,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireStatementOnce(errors, browserTimeoutRegression, "Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season.config.ts' -Scenario 'Maple orphan drill'", 'timeout-regression:orphan-case-runs-the-injected-helper')
   requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True (Test-Path -LiteralPath $orphanReadyFile)', 'timeout-regression:orphan-case-requires-the-detached-listener')
   requireStatementOnce(errors, browserTimeoutRegression, "Assert-True ($orphanFailure -ceq 'Maple orphan drill launch drill failed on purpose after the parent exited.')", 'timeout-regression:orphan-case-requires-its-injected-failure')
-  requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True (@(Get-NetTCPConnection -LocalPort $orphanPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0)', 'timeout-regression:orphan-case-requires-the-port-released')
+  requireStatementOnce(errors, browserTimeoutRegression, "Assert-True (@(Get-MapleSeasonPortListener -Port $orphanPort -Scenario 'Maple orphan drill').Count -eq 0)", 'timeout-regression:orphan-case-requires-the-port-released')
   requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True ($orphanWarnings.Count -eq 0)', 'timeout-regression:orphan-case-requires-a-complete-salvage')
   // A drill whose needle has gone stale patches nothing and then reports on unmodified source, which is the one
   // failure mode that makes an injection worse than no injection at all.
@@ -471,15 +480,69 @@ export function foundationStaticGuard(root = process.cwd()) {
   // lookups of one number, so the owner could exit between them and Windows could reissue that number to
   // something this suite never created. It also swallowed the outcome - SilentlyContinue, no wait, no re-read -
   // so it could announce a kill it had not performed and then delete the temporary directory that was the only
-  // evidence tying the survivor to this suite. A fresh-context review found both. Get-Process hands back an
-  // object holding an OS handle; a held handle keeps the id reserved, so the ownership re-read and the kill both
-  // speak about that one process. MEASURED: on the pre-repair helper this branch fired and killed a stranded
-  // node process.
-  requireStatementOnce(errors, browserTimeoutRegression, 'try { $strandedHandle = Get-Process -Id $strandedId -ErrorAction Stop } catch { $strandedHandle = $null }', 'timeout-regression:orphan-cleanup-pins-the-id-it-kills')
+  // evidence tying the survivor to this suite. A fresh-context review found both.
+  //
+  // The first repair pinned `Get-Process -Id` alone and the comment here claimed the returned object holds an OS
+  // handle that keeps the id reserved. A later fresh-context review said that is false, and it is: this repository
+  // had already MEASURED the opposite about the helper this suite tests, and it was measured again -
+  // haveProcessHandle is False after Get-Process -Id and still False after reading .HasExited, so .Kill()
+  // re-resolves the id at call time and the reservation never existed. Reading .Handle is what opens one, measured
+  // True immediately afterwards. So the pin is the whole block: the lookup, the handle touch, and a catch that
+  // leaves $strandedHandle null - because a process this suite cannot pin is one it must refuse to kill, not one
+  // it kills by a bare number.
+  // MEASURED: on the pre-repair helper this branch fired and killed a stranded node process.
+  requireStatementOnce(errors, browserTimeoutRegression, [
+    '    try {',
+    '      $strandedHandle = Get-Process -Id $strandedId -ErrorAction Stop',
+    '      $null = $strandedHandle.Handle',
+    '    } catch { $strandedHandle = $null }',
+    '    if ($null -eq $strandedHandle) { continue }',
+  ].join('\n'), 'timeout-regression:orphan-cleanup-pins-the-id-it-kills')
   requireStatementOnce(errors, browserTimeoutRegression, 'try { $strandedHandle.Kill(); [void]$strandedHandle.WaitForExit(10000) }', 'timeout-regression:orphan-case-cleans-up-after-itself')
   requireStatementOnce(errors, browserTimeoutRegression, 'if (-not $strandedHandle.HasExited) {', 'timeout-regression:orphan-cleanup-verifies-its-kill')
   requireStatementOnce(errors, browserTimeoutRegression, 'MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_PORT_STILL_HELD', 'timeout-regression:orphan-cleanup-reports-a-still-held-port')
   if (/Stop-Process[^\n]*-ErrorAction SilentlyContinue/.test(browserTimeoutRegression)) errors.push('timeout-regression:orphan-cleanup-swallows-its-kill-outcome')
+  // A PATH BOUNDARY, NOT A SUBSTRING, on the one test that AUTHORIZES a force kill in this file.
+  // .Contains($tempRoot) also matched any sibling directory whose name merely begins with this one's, so an
+  // unrelated process could be classified as this suite's own. A fresh-context review found it. Both halves are
+  // pinned - the separator that makes the marker a boundary, and the comparison that uses it - because either one
+  // alone is satisfiable while the other is reverted, and the forbid below is what closes the revert.
+  requireStatementOnce(errors, browserTimeoutRegression, '$ownedPrefix = $tempRoot + [IO.Path]::DirectorySeparatorChar', 'timeout-regression:orphan-cleanup-builds-a-path-boundary-marker')
+  requireStatementOnce(errors, browserTimeoutRegression, 'if (-not ([string]$strandedProcess.CommandLine).Contains($ownedPrefix)) { continue }', 'timeout-regression:orphan-cleanup-matches-on-the-boundary')
+  if (/\.Contains\(\$tempRoot\)/.test(browserTimeoutRegressionCode)) errors.push('timeout-regression:orphan-cleanup-matches-a-bare-substring')
+  // NO FAIL-OPEN LISTENER READ ANYWHERE IN THIS FILE. Every read here used -ErrorAction SilentlyContinue, so a
+  // listener table that could not be queried answered "nothing is listening" - and three of those reads are the
+  // ASSERTIONS that prove the repairs, which means a broken query reported the cases clean while a dev server held
+  // the port. A fresh-context review named the two in the cleanup; the three assertions are worse and it did not.
+  // A forbid rather than a set of presence pins, because the defect is a SHAPE that can reappear at any new read.
+  if (/Get-NetTCPConnection/.test(browserTimeoutRegressionCode)) errors.push('timeout-regression:reads-listeners-without-the-fail-closed-probe')
+  // ONE PORT DECLARATION, read by the case and by the cleanup. The orphan port was assigned inside the try and the
+  // cleanup hard-coded 4290 beside it, so changing the case's port alone would have left the cleanup watching a
+  // port nothing ran on while every pin above stayed green. A fresh-context review found it.
+  requireStatementOnce(errors, browserTimeoutRegression, '$orphanPort = 4290', 'timeout-regression:orphan-port-is-declared-once')
+  // AND WRITTEN ONCE. The pin above holds the literal, which a SECOND declaration assigning a different value
+  // leaves perfectly intact - `$orphanPort = 4291` inside the try would run the case on one port while the cleanup
+  // watched the other, which is the divergence this pin exists to stop rather than the spelling of one line.
+  const orphanPortWrites = countPowerShellWrites(browserTimeoutRegression.split(/\r?\n/), 'orphanPort')
+  if (orphanPortWrites !== 1) errors.push(`timeout-regression:orphan-port-is-written-once:${orphanPortWrites}`)
+  if (/(?:LocalPort|-Port)\s+4290/.test(browserTimeoutRegressionCode)) errors.push('timeout-regression:orphan-cleanup-hard-codes-its-port')
+  // THE CLEANUP MARKERS HAVE TO BE ABLE TO FAIL THE RUN. Everything above is output only, and the success path
+  // prints PASS and `exit 0` inside the try, BEFORE the finally runs - so a run that stranded a live dev server
+  // could announce PASS, exit 0, and leave the evidence in the same output for a caller that reads only the exit
+  // code. A fresh-context review found it. MEASURED: a script exiting 0 in its try and 3 in its finally exits 3,
+  // so the override below is real. The flag's declaration, the exit, and the presence of at least one write are
+  // each held: a flag that is declared and consulted but never SET is the same silence with more code.
+  requireStatementOnce(errors, browserTimeoutRegression, '$strandedReported = $false', 'timeout-regression:orphan-cleanup-declares-its-report-flag')
+  requireStatementOnce(errors, browserTimeoutRegression, [
+    '  if ($strandedReported) {',
+  ].join('\n'), 'timeout-regression:orphan-cleanup-consults-its-report-flag')
+  requireStatementOnce(errors, browserTimeoutRegression, "    exit 1\n  }\n}", 'timeout-regression:orphan-cleanup-overrides-a-passing-exit-code')
+  // FOUR: the declaration plus one write for each way the cleanup can find the workstation unclean - an unreadable
+  // listener table, a stranded process it named, and a port still held. Deleting any one of them silences that path
+  // while the exit override above stays perfectly intact, so the count is the pin. It takes LINES, not the source
+  // string: passed a string this returns undefined, `undefined < 4` is false, and the pin would pass on everything.
+  const strandedReportWrites = countPowerShellWrites(browserTimeoutRegression.split(/\r?\n/), 'strandedReported')
+  if (strandedReportWrites !== 4) errors.push(`timeout-regression:orphan-cleanup-sets-its-report-flag-on-every-path:${strandedReportWrites}`)
   const julyWiringRegression = read(root, 'scripts/maple-july-db-clock-wiring.regression.ps1')
   requireText(errors, julyWiringRegression, "'TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true'", 'july-wiring-regression:tokenizer-receipt-asserted-by-the-caller')
   // requireText, deliberately, and the ONE pin here that must stay a presence check: its needle IS a comment,
@@ -613,7 +676,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // not release". Those are two different causes with two different fixes, and the more serious of them was the
   // one being lost. A fresh-context review found it. BOTH judgments are inside the needle: the split above is
   // only worth having if neither half can be moved back below the housekeeping it was lifted above.
-  requireMatch(errors, seasonBrowserCode, /if \(-not \$terminated -or -not \$readKilledTimes -or \$killedExited -eq 0\) \{\n *throw "\$Scenario browser timeout cleanup could not prove it terminated the root of its owned process tree\."\n *\}\n *if \(\$killExitCode -ne 0\) \{\n *throw "[^"]*tree walk reported exit code \$killExitCode[^"]*"\n *\}\n *Clear-MapleSeasonBrowserPort -Port \$port -Root \$ownedMarker -Scenario \$Scenario\n *throw "\$Scenario browser scenario exceeded its bounded process limit after verified cleanup\."\n/, 'season-browser:launch-judges-the-kill-before-housekeeping')
+  requireMatch(errors, seasonBrowserCode, /if \(-not \$terminated -or -not \$readKilledTimes -or \$killedExited -eq 0\) \{\n *throw "\$Scenario browser timeout cleanup could not prove it terminated the root of its owned process tree\."\n *\}\n *if \(\$killExitCode -ne 0\) \{\n *throw "[^"]*tree walk reported exit code \$killExitCode[^"]*"\n *\}\n *Clear-MapleSeasonBrowserPort -Port \$port -Root \$ownedMarker -Scenario \$Scenario\n *\$verifiedPortRelease = \$true\n *throw "\$Scenario browser scenario exceeded its bounded process limit after verified cleanup\."\n/, 'season-browser:launch-judges-the-kill-before-housekeeping')
   // THE PORT RELEASE IS CONDITIONED ON THE PORT, NOT ON THE PARENT, and of everything in this tranche it is the
   // one finding that describes a live process left running on a real workstation rather than a wording problem.
   // The salvage's release used to sit inside `if (-not $process.HasExited)`, which asks whether the node PARENT
@@ -635,8 +698,51 @@ export function foundationStaticGuard(root = process.cwd()) {
   // optimisation long before it came back as a deliberate change.
   requireStatementOnce(errors, seasonBrowser, 'try { $portStillHeld = @(Get-MapleSeasonPortListener -Port $port -Scenario $Scenario).Count -gt 0 }', 'season-browser:launch-reads-the-port-before-releasing-it')
   requireStatementOnce(errors, seasonBrowser, '$portStillHeld = $true', 'season-browser:launch-assumes-the-port-held-when-it-cannot-tell')
-  requireStatementOnce(errors, seasonBrowser, 'if ($portStillHeld) {', 'season-browser:launch-releases-the-port-on-its-own-condition')
   if (/portReleased/.test(seasonBrowserCode)) errors.push('season-browser:launch-still-remembers-a-release-flag')
+  // READING THE PORT AND BEING ALLOWED TO KILL WHAT IS ON IT ARE TWO DIFFERENT PERMISSIONS, and the repair above
+  // conflated them: it released whenever anything was listening, including on the ordinary success path where the
+  // cleanup inside the try had ALREADY observed this port free. A fresh-context review was right that this is a NEW
+  // kill hazard rather than a narrower one, and on this workstation it is not theoretical - the owned-command marker
+  // DEFAULTS to the repository root, and the ownership predicate accepts any node/npm/npx process whose command line
+  // references that root, which it says of itself. A developer's own repository-rooted node process binding this
+  // port in that window would have been classified as owned and force-killed, where the flag-based code before it
+  // left that process alone. So the read stays unconditional - that is what catches the late-binding descendant the
+  // flag missed - and only the KILL is gated on this scenario still plausibly owning what it finds.
+  //
+  // Held as one contiguous shape, because the defect is which branch a listener falls into and a set of presences
+  // cannot say that. The refusal branch must come FIRST: with the two branches swapped, `elseif` makes the refusal
+  // unreachable and every presence pin here stays green.
+  requireStatementOnce(errors, seasonBrowser, [
+    '    if ($portStillHeld -and $verifiedPortRelease) {',
+    '      $footnotes.Add("found a listener on governed port $port after it had already verified that port free, so the listener is not one this scenario launched and it refused to terminate it")',
+    '    }',
+    '    elseif ($portStillHeld) {',
+  ].join('\n'), 'season-browser:launch-refuses-to-kill-what-it-cannot-own')
+  // The fact itself. It is FALSE by default and set only immediately after a cleanup that returned - and that
+  // function returns only after its own loop observes zero listeners, which is what makes the flag a statement about
+  // the port rather than about a call having completed. Both writes are pinned as the shape that produces them: a
+  // write moved BEFORE its cleanup call, or added anywhere a release was not actually observed, turns the refusal
+  // above into a blanket refusal that never releases anything and leaks in silence.
+  requireStatementOnce(errors, seasonBrowser, '$verifiedPortRelease = $false', 'season-browser:launch-starts-with-no-verified-release')
+  requireStatementOnce(errors, seasonBrowser, [
+    '      Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario',
+    '      $verifiedPortRelease = $true',
+    '      throw "$Scenario browser scenario exceeded its bounded process limit after verified cleanup."',
+  ].join('\n'), 'season-browser:timeout-cleanup-records-its-verified-release')
+  requireStatementOnce(errors, seasonBrowser, [
+    '    Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario',
+    '    $verifiedPortRelease = $true',
+  ].join('\n'), 'season-browser:success-cleanup-records-its-verified-release')
+  const verifiedReleaseWrites = countPowerShellWrites(seasonBrowser.split(/\r?\n/), 'verifiedPortRelease')
+  if (verifiedReleaseWrites !== 3) errors.push(`season-browser:launch-writes-its-verified-release-only-where-a-cleanup-returned:${verifiedReleaseWrites}`)
+  // And the fact it records has to stay true of Clear-MapleSeasonBrowserPort. The flag means "this port was
+  // OBSERVED free", which is only warranted because that function returns exclusively from inside a loop that saw
+  // zero listeners. Pinned here, next to the reasoning that depends on it, so a future edit that lets it return on
+  // some other condition reddens the guard beside the flag rather than only near the function.
+  requireStatementOnce(errors, seasonBrowser, [
+    '    $remaining = @(Get-MapleSeasonPortListener -Port $Port -Scenario $Scenario)',
+    '    if ($remaining.Count -eq 0) { return }',
+  ].join('\n'), 'season-browser:port-cleanup-returns-only-on-an-observed-free-port')
   // EVERY STEP OF THE SALVAGE IS WRAPPED, including the steps that only READ. Four statements sat outside any
   // try - both HasExited reads, the handle close and Dispose - so housekeeping nobody expected to throw could
   // still raise a terminating error out of the finally and REPLACE the diagnosis it exists to annotate, which is
@@ -677,7 +783,10 @@ export function foundationStaticGuard(root = process.cwd()) {
     '    $portStillHeld = $true',
     '    try { $portStillHeld = @(Get-MapleSeasonPortListener -Port $port -Scenario $Scenario).Count -gt 0 }',
     '    catch { $footnotes.Add("could not tell whether governed port $port is still held, so it attempted the release anyway: $($_.Exception.Message)") }',
-    '    if ($portStillHeld) {',
+    '    if ($portStillHeld -and $verifiedPortRelease) {',
+    '      $footnotes.Add("found a listener on governed port $port after it had already verified that port free, so the listener is not one this scenario launched and it refused to terminate it")',
+    '    }',
+    '    elseif ($portStillHeld) {',
     '      try { Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario }',
     '      catch { $footnotes.Add("could not release governed port $port after salvaging an unmanaged launch: $($_.Exception.Message)") }',
     '    }',
@@ -1094,7 +1203,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // THE STATIC HALF IS HELD TOO. A fresh-context review observed that every static mutation could be wrapped
   // whole while the behavioural half still earned its own sentence, because no caller read the static marker at
   // all - a marker nobody consumes is decoration. Both callers now hold it with its count.
-  const staticClaim = 'Foundation mutation drill: PASS (241 controlled mutations turned the gate red)'
+  const staticClaim = 'Foundation mutation drill: PASS (262 controlled mutations turned the gate red)'
   requireText(errors, foundationWorkflow, `$expectedStatic = '${staticClaim}'`, 'workflow:mutation-drill-static-claim-held')
   requireText(errors, foundationOrchestrator, `$expectedStaticMarker = '${staticClaim}'`, 'orchestrator:mutation-drill-static-claim-held')
   requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedStatic', 'workflow:mutation-drill-static-claim-consumed')
@@ -1134,6 +1243,22 @@ export function foundationStaticGuard(root = process.cwd()) {
   // before the behavioural half ran, so the behavioural half could be wrapped whole and the log still read PASS.
   requireText(errors, mutationDrill, 'console.log(`Foundation mutation drill: PASS (${detectedMutations.length} controlled mutations turned the gate red)`)', 'mutation-drill:static-claim-counted-not-asserted')
   requireText(errors, mutationDrill, 'console.log(`Foundation behavioural mutation drill: PASS (${behaviouralMutations.length} broken subjects were reported by the suite that runs against them, ${behaviourGaps.length} not measurable on this platform)`)', 'mutation-drill:behavioural-claim-counted-not-asserted')
+  // COUNTING THE CALLS IS NOT COUNTING THE MUTATIONS. The pin above proves the total is computed rather than
+  // written down, and a fresh-context review showed that is a weaker claim than the sentence makes: `detected`
+  // only re-runs the guard and looks for a label, so two `detected` calls after ONE `mutate` both pass and the
+  // total counts a mutation that was never applied. So the count is spent: `mutate` records the write it made,
+  // `detected` refuses when nothing is pending and clears the record. All three parts are load-bearing and each
+  // fails differently, so the shape is pinned CONTIGUOUSLY - a refusal placed after the clear refuses nothing,
+  // and a clear that never runs lets one mutation be counted by every detection that follows it.
+  // Line-anchored because this file's drills patch their own source, so their replacement literals contain the
+  // text of the statements they patch; a plain presence pin over this file is satisfiable by a string argument.
+  requireMatch(errors, mutationDrill, /^ *if \(pendingMutations === 0\) throw new Error\(`\$\{label\} claims a controlled mutation.*\n *const failures = foundationStaticGuard\(temporary\)\n *if \(!failures\.includes\(expected\)\) throw new Error.*\n *pendingMutations = 0\n *detectedMutations\.push\(label\)$/m, 'mutation-drill:detection-spends-an-applied-mutation')
+  requireMatch(errors, mutationDrill, /^ *writeFileSync\(target, after\)\n *pendingMutations \+= 1$/m, 'mutation-drill:mutate-counts-only-a-write-it-made')
+  // AND EXACTLY ONE OF THEM. The contiguous pin above stays green if a SECOND increment is added higher up in
+  // `mutate` - above the stale-needle refusal, where it would count a mutation that never applied while the
+  // pinned pair below it is untouched. Same defect the orphan port's write count exists to refuse.
+  const pendingIncrements = (mutationDrill.match(/^ *pendingMutations \+= 1$/gm) ?? []).length
+  if (pendingIncrements !== 1) errors.push(`mutation-drill:mutate-counts-a-write-exactly-once:${pendingIncrements}`)
 
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')

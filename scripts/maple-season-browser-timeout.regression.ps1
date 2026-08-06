@@ -9,6 +9,16 @@ function Assert-True([bool]$Value, [string]$Message) {
 
 $port = 4288
 $successPort = 4289
+# DECLARED HERE, WITH THE OTHER PORTS, because the cleanup in the finally has to name the same port the orphan
+# case used. It was assigned inside the try and the safety net hard-coded 4290 alongside it, so changing the
+# case's port alone would have left the safety net watching a port nothing ran on while every pin stayed green.
+# A fresh-context review found that. One declaration, read by both.
+$orphanPort = 4290
+# Whether the safety net had to report anything. The suite prints PASS and exits 0 from inside the try, and the
+# markers below are output only, so a run that stranded a process could announce success with the marker sitting
+# in the same output. MEASURED on this workstation: `exit` inside a finally overrides an exit code already on its
+# way out (a probe exiting 0 in the try and 3 in the finally exits 3), which is what makes the override below real.
+$strandedReported = $false
 $priorPath = $env:PATH
 $priorPort = $env:FARMRX_SEASON_JANUARY_PORT
 $priorReadyFile = $env:FARMRX_MAPLE_TIMEOUT_READY_FILE
@@ -21,10 +31,10 @@ $successRunner = Join-Path $tempRoot 'fake-playwright-success.js'
 $successReadyFile = Join-Path $tempRoot 'success-ready.txt'
 
 try {
-  if (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -ne 0) {
+  if (@(Get-MapleSeasonPortListener -Port $port -Scenario 'Maple timeout regression preflight').Count -ne 0) {
     throw "Timeout regression requires unused loopback port $port."
   }
-  if (@(Get-NetTCPConnection -LocalPort $successPort -State Listen -ErrorAction SilentlyContinue).Count -ne 0) {
+  if (@(Get-MapleSeasonPortListener -Port $successPort -Scenario 'Maple launch success regression preflight').Count -ne 0) {
     throw "Timeout regression requires unused loopback port $successPort."
   }
   New-Item -ItemType Directory -Path $tempRoot -ErrorAction Stop | Out-Null
@@ -60,7 +70,7 @@ server.listen(Number(process.env.FARMRX_SEASON_JANUARY_PORT), '127.0.0.1', () =>
   # A leaked launch handle keeps the kernel reserving that process id for the life of the session, and the
   # only way it is ever reported is a warning. Silence here is the assertion.
   Assert-True ($successWarnings.Count -eq 0) "Browser launch regression leaked the handle pinning its child: $($successWarnings -join '; ')"
-  Assert-True (@(Get-NetTCPConnection -LocalPort $successPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0) 'Browser launch regression left its governed port listening after a clean exit.'
+  Assert-True (@(Get-MapleSeasonPortListener -Port $successPort -Scenario 'Maple launch success regression').Count -eq 0) 'Browser launch regression left its governed port listening after a clean exit.'
 
   # CASE TWO: the bounded timeout, its force kill, and the verified cleanup that must follow.
   $runner = @"
@@ -86,7 +96,7 @@ setInterval(() => {}, 1000)
   Assert-True $timedOut 'Browser timeout regression did not reach the verified-timeout result.'
   Assert-True (Test-Path -LiteralPath $readyFile) 'Browser timeout regression never created its child listener.'
   Assert-True ($started.Elapsed.TotalSeconds -lt 20) 'Browser timeout cleanup exceeded its bounded regression window.'
-  Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 0) 'Browser timeout cleanup left its governed port listening.'
+  Assert-True (@(Get-MapleSeasonPortListener -Port $port -Scenario 'Maple timeout regression').Count -eq 0) 'Browser timeout cleanup left its governed port listening.'
 
   # CASE THREE: THE ORPHAN. This is the one case where the governed port outlives the process this function
   # launched, and a fresh-context review found that the salvage in the launch finally could not reach it. The
@@ -101,8 +111,7 @@ setInterval(() => {}, 1000)
   # regression uses to gut its predicate. The injection replaces the wait with a wait-then-throw, which makes
   # the ordering deterministic rather than a race: the throw cannot happen until the parent has exited, and the
   # parent does not exit until its detached grandchild has the governed port bound and has said so in a file.
-  $orphanPort = 4290
-  if (@(Get-NetTCPConnection -LocalPort $orphanPort -State Listen -ErrorAction SilentlyContinue).Count -ne 0) {
+  if (@(Get-MapleSeasonPortListener -Port $orphanPort -Scenario 'Maple orphan drill preflight').Count -ne 0) {
     throw "Timeout regression requires unused loopback port $orphanPort."
   }
   $orphanRunner = Join-Path $tempRoot 'fake-playwright-orphan.js'
@@ -173,7 +182,7 @@ settle()
   Assert-True ($orphanFailure -ceq 'Maple orphan drill launch drill failed on purpose after the parent exited.') "Browser orphan drill did not reach its injected launch failure: $orphanFailure"
   # THE ASSERTION THIS CASE EXISTS FOR. The parent is gone and the launch path failed; the governed port must
   # still have been released, because the thing holding it was never the parent.
-  Assert-True (@(Get-NetTCPConnection -LocalPort $orphanPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0) 'Browser orphan drill left a detached dev server holding its governed port after a launch failure that landed with the parent already exited.'
+  Assert-True (@(Get-MapleSeasonPortListener -Port $orphanPort -Scenario 'Maple orphan drill').Count -eq 0) 'Browser orphan drill left a detached dev server holding its governed port after a launch failure that landed with the parent already exited.'
   # Silence again: a salvage that could not release the port reports it only as a footnote, so a warning here
   # means the release was attempted and failed, which is a different defect from never attempting it.
   Assert-True ($orphanWarnings.Count -eq 0) "Browser orphan drill could not complete its salvage: $($orphanWarnings -join '; ')"
@@ -197,20 +206,48 @@ settle()
   # the repair under test is absent. Terminate only a listener whose command line names a path inside this
   # suite's own temporary directory: this is a last resort in a test, not a second ownership predicate, so it
   # refuses anything it cannot positively tie to a file it created itself.
-  foreach ($stranded in @(Get-NetTCPConnection -LocalPort 4290 -State Listen -ErrorAction SilentlyContinue)) {
+  # FAIL CLOSED EVEN HERE. Every listener read in this file used -ErrorAction SilentlyContinue, so a listener
+  # table that could not be queried answered "nothing is listening" - and three of those reads were the
+  # ASSERTIONS that prove the repairs, which means a broken query could have reported the orphan case clean while
+  # a dev server held the port. Get-MapleSeasonPortListener is the fail-closed probe the helper already carries
+  # and returns empty only for the one measured not-found error. In this finally its throw must not escape and
+  # replace the run's verdict, so it is caught and reported as its own marker.
+  $strandedListeners = @()
+  try { $strandedListeners = @(Get-MapleSeasonPortListener -Port $orphanPort -Scenario 'Maple orphan drill cleanup') }
+  catch {
+    $strandedReported = $true
+    Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_UNREADABLE ${orphanPort}: $($_.Exception.Message)"
+  }
+  foreach ($stranded in $strandedListeners) {
     $strandedId = [int]$stranded.OwningProcess
     # A PROCESS ID IS NOT DURABLE, and this branch force kills by one. The CIM read that AUTHORIZED the kill and
     # the Stop-Process that performed it were two separate lookups of the same number, so the owner could exit
     # between them and Windows could reissue that number to a process this suite never created - the exact hazard
-    # the helper under test was hardened against, reintroduced inside the test that guards it. A fresh-context
-    # review found it. Get-Process returns an object holding an OS handle, and a held handle keeps the id
-    # reserved, so the ownership re-read and the kill both speak about that one process and nothing else.
+    # the helper under test was hardened against, reintroduced inside the test that guards it.
+    #
+    # The first repair said "Get-Process returns an object holding an OS handle" and a fresh-context review was
+    # right that it does not - this repository had already MEASURED the opposite in the helper under test, and it
+    # was measured again here: haveProcessHandle is False after Get-Process -Id and still False after reading
+    # .HasExited, so .Kill() re-resolves the id at call time and the reservation the comment claimed never
+    # existed. Reading .Handle is what opens one, measured True immediately afterwards, and the kernel reserves
+    # the id until that handle closes. A handle that cannot be opened means this refuses to kill at all rather
+    # than killing by a bare number.
     $strandedHandle = $null
-    try { $strandedHandle = Get-Process -Id $strandedId -ErrorAction Stop } catch { $strandedHandle = $null }
+    try {
+      $strandedHandle = Get-Process -Id $strandedId -ErrorAction Stop
+      $null = $strandedHandle.Handle
+    } catch { $strandedHandle = $null }
     if ($null -eq $strandedHandle) { continue }
     $strandedProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $strandedId" -ErrorAction SilentlyContinue
     if ($null -eq $strandedProcess) { continue }
-    if (-not ([string]$strandedProcess.CommandLine).Contains($tempRoot)) { continue }
+    # A PATH BOUNDARY, NOT A SUBSTRING. .Contains($tempRoot) also accepted any sibling directory whose name
+    # merely BEGINS with this one's - `farmrx-maple-browser-timeout-<guid>-foreign\runner.js` contains
+    # `farmrx-maple-browser-timeout-<guid>` - so an unrelated process could be classified as this suite's own and
+    # force-killed. A fresh-context review found it. The marker is the directory plus its separator, which no
+    # sibling name can satisfy.
+    $ownedPrefix = $tempRoot + [IO.Path]::DirectorySeparatorChar
+    if (-not ([string]$strandedProcess.CommandLine).Contains($ownedPrefix)) { continue }
+    $strandedReported = $true
     Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED pid $strandedId"
     # THE KILL IS VERIFIED, not merely attempted. -ErrorAction SilentlyContinue with no wait and no re-read let
     # this announce a kill it had not performed, then delete the temporary directory that was the only thing
@@ -219,16 +256,30 @@ settle()
     catch { Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_KILL_FAILED pid ${strandedId}: $($_.Exception.Message)" }
     if (-not $strandedHandle.HasExited) { Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_ALIVE pid $strandedId" }
   }
-  # The port, read last and independently of the loop above. A survivor this suite refused to claim still leaves
-  # the port held, and the next run needs to be told that by this run rather than discovering it as a preflight
-  # refusal it cannot explain.
-  if (@(Get-NetTCPConnection -LocalPort 4290 -State Listen -ErrorAction SilentlyContinue).Count -ne 0) {
-    Write-Output 'MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_PORT_STILL_HELD 4290'
+  # The port, read last and independently of the loop above, and named by the SAME variable the case used. A
+  # survivor this suite refused to claim still leaves the port held, and the next run needs to be told that by
+  # this run rather than discovering it as a preflight refusal it cannot explain.
+  $strandedPortStillHeld = $true
+  try { $strandedPortStillHeld = @(Get-MapleSeasonPortListener -Port $orphanPort -Scenario 'Maple orphan drill cleanup').Count -ne 0 }
+  catch { $strandedPortStillHeld = $true }
+  if ($strandedPortStillHeld) {
+    $strandedReported = $true
+    Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_PORT_STILL_HELD $orphanPort"
   }
   if (Test-Path -LiteralPath $tempRoot) {
     $resolvedTemp = [IO.Path]::GetFullPath($tempRoot)
     $resolvedBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
     if (-not $resolvedTemp.StartsWith($resolvedBase, [StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing timeout-regression cleanup outside the temporary directory.' }
     Remove-Item -LiteralPath $resolvedTemp -Recurse -Force
+  }
+  # THE MARKERS HAVE TO BE ABLE TO FAIL THE RUN. Every line above is output only, and the success path prints PASS
+  # and `exit 0` inside the try, BEFORE this finally runs - so a run that stranded a live dev server on the
+  # workstation could announce PASS, exit 0, and leave the evidence sitting in the same output for a caller that
+  # only reads the exit code. A fresh-context review found that. MEASURED on this workstation: a script printing
+  # PASS and `exit 0` in its try and `exit 3` in its finally exits 3, so an exit here does override the code
+  # already on its way out. Last statement in the block, after the temporary directory is gone.
+  if ($strandedReported) {
+    Write-Output 'MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_FAIL the orphan drill safety net had to report a stranded process or a port it could not clear, so this run did not leave the workstation clean.'
+    exit 1
   }
 }

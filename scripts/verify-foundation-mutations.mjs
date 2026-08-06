@@ -47,7 +47,14 @@ const files = [
   'src/data/QueuedInventoryRepository.ts', 'src/data/QueuedNotificationsRepository.ts', 'src/data/QueuedProfitabilityRepository.ts',
   'src/data/QueuedProgramsRepository.ts', 'src/data/QueuedScoutingRepository.ts',
 ]
-const reset = () => { for (const path of files) { const target = join(temporary, path); mkdirSync(dirname(target), { recursive: true }); cpSync(join(root, path), target) } }
+// How many mutations have actually been written to the copy and not yet been spent by a detection. The
+// summary line calls its total "controlled mutations", and nothing checked the word MUTATION: `detected`
+// only re-runs the guard and looks for a label, so two `detected` calls after ONE `mutate` both pass and
+// the total counts a mutation that was never applied. A fresh-context review found the total fabricable.
+// So `mutate` counts what it wrote and `detected` spends it - a detection with nothing pending is refused
+// by name. That is what makes the number in the summary a count of applied mutations, not of calls.
+let pendingMutations = 0
+const reset = () => { pendingMutations = 0; for (const path of files) { const target = join(temporary, path); mkdirSync(dirname(target), { recursive: true }); cpSync(join(root, path), target) } }
 // A mutation is only a test if it actually applies. String.replace with a needle that no longer occurs
 // returns the original silently, so the drill then runs the static guard against UNMODIFIED source, the
 // guard is green because nothing was broken, and the failure surfaces as an empty "Observed:" list that
@@ -59,13 +66,16 @@ const mutate = (path, replace) => {
   const after = replace(before)
   if (after === before) throw new Error(`Mutation no longer applies to ${path}; its needle is stale: ${replace.toString()}`)
   writeFileSync(target, after)
+  pendingMutations += 1
 }
 // Count the drills instead of restating the total in the summary line. The hand-written count went
 // stale the moment a drill was added, which made the summary claim coverage it had not measured.
 const detectedMutations = []
 const detected = (label, expected) => {
+  if (pendingMutations === 0) throw new Error(`${label} claims a controlled mutation, but none was applied since the last reset or detection, so the drill total would count a mutation that never happened.`)
   const failures = foundationStaticGuard(temporary)
   if (!failures.includes(expected)) throw new Error(`${label} mutation was not detected. Observed: ${failures.join(', ')}`)
+  pendingMutations = 0
   detectedMutations.push(label)
   console.log(`Mutation detected: ${label}`)
 }
@@ -554,7 +564,11 @@ try {
   mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('Wait-Job $stallJob -Timeout 30', 'Wait-Job $stallJob'))
   detected('stall drill waits forever instead of bounding the parse', 'season-browser-regression:stall-drill-is-bounded')
   reset()
-  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('[char]::IsWhiteSpace($character)', "($character -eq ' ')"))
+  // The quotes are DOUBLED because the text being replaced sits inside a single-quoted PowerShell string. Written
+  // with bare quotes this mutation left a file PowerShell cannot parse, so the pin reddened on broken syntax
+  // rather than on the weakening it names - the defect could never have shipped, because any parse would reject
+  // it first. Escaped, the mutated file parses and says exactly what a maintainer narrowing the drift would say.
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('[char]::IsWhiteSpace($character)', "($character -eq '' '')"))
   detected('stall drill stops re-introducing the separator drift it exists to catch', 'season-browser-regression:stall-drill-reintroduces-drift')
   reset()
   mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('made the command-line parse stall', 'took a while'))
@@ -737,12 +751,13 @@ try {
   // cannot tell a real trailing `#` from a `#` inside a quoted string without a parser. So the property it
   // depends on is pinned instead. A trailing comment here is not itself dangerous - what is dangerous is that
   // it makes every statement pin in these two files satisfiable by prose again.
-  // The anchor is the last declaration before the `try`, whichever that is. It has now moved twice - to
-  // `$portReleased` when that flag was introduced and back to `$primaryFailure` when the flag was removed - and
-  // both times the drill went red as a STALE NEEDLE rather than quietly passing, which is the whole reason
-  // `mutate` refuses a no-op. The two-line anchor is not decoration: `$primaryFailure = $false` occurs twice in
-  // this helper, so the needle has to name which one.
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('  $primaryFailure = $false\n  try {', '  $primaryFailure = $false # a trailing comment the strip cannot see\n  try {'))
+  // The anchor is the last declaration before the `try`, whichever that is. It has now moved three times - to
+  // `$portReleased` when that flag was introduced, back to `$primaryFailure` when the flag was removed, and on to
+  // `$verifiedPortRelease` when the kill authorization was split out - and every time the drill went red as a
+  // STALE NEEDLE rather than quietly passing, which is the whole reason `mutate` refuses a no-op. The two-line
+  // anchor is not decoration: it is what keeps the needle naming the declaration that actually sits against the
+  // `try`, so the next thing declared there breaks this loudly too.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('  $verifiedPortRelease = $false\n  try {', '  $verifiedPortRelease = $false # a trailing comment the strip cannot see\n  try {'))
   detected('a trailing comment reopens the comment-satisfaction hole in the browser helper', 'season-browser:no-inline-comments')
   reset()
   mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('$port = 4288', '$port = 4288 # a trailing comment the strip cannot see'))
@@ -823,7 +838,7 @@ try {
   mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('Assert-True ($successWarnings.Count -eq 0)', 'Assert-True ($true)'))
   detected('launch success case tolerates a leaked handle pinning its child id', 'timeout-regression:success-case-requires-no-leaked-handle')
   reset()
-  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('Assert-True (@(Get-NetTCPConnection -LocalPort $successPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0)', 'Assert-True ($true)'))
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace("Assert-True (@(Get-MapleSeasonPortListener -Port $successPort -Scenario 'Maple launch success regression').Count -eq 0)", 'Assert-True ($true)'))
   detected('launch success case stops requiring the governed port to be released', 'timeout-regression:success-case-requires-the-port-released')
   reset()
   // THE LAUNCH FINALLY, TRANCHE C. Three real code defects lived in it, and each repair gets drilled from the
@@ -842,8 +857,8 @@ try {
   // left a live dev server on a governed port: the parent is a node runner that spawns the listener, so it can be
   // gone while the port is still held. MEASURED behaviourally as well - with this condition in place the orphan
   // case in the timeout regression goes red and its own safety net has to kill a stranded node process.
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('if ($portStillHeld) {', 'if (-not $process.HasExited) {'))
-  detected('the salvage gates the port release on the parent being alive again', 'season-browser:launch-releases-the-port-on-its-own-condition')
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('elseif ($portStillHeld) {', 'elseif (-not $process.HasExited) {'))
+  detected('the salvage gates the port release on the parent being alive again', 'season-browser:launch-port-block-is-whole')
   reset()
   // THE SECOND REPAIR OF THE SAME LEAK, restored: a flag that remembers a cleanup call returning, standing in for
   // the port. The write-count pin that used to guard it is gone with the flag, and it deserved to be - it counted
@@ -859,10 +874,16 @@ try {
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace('    $portStillHeld = $true\n', '    $portStillHeld = $false\n'))
   detected('an unanswerable port read is taken as a clean port', 'season-browser:launch-assumes-the-port-held-when-it-cannot-tell')
   reset()
+  // The flag, reintroduced so that it EXECUTES. This drill used to insert `if ($portReleased) { ... }` above the
+  // read, against a `$portReleased` that was never declared: without strict mode that is `$null`, the branch never
+  // ran, and the drill only tripped the identifier forbid. A fresh-context review found the no-op. So the flag is
+  // now declared from the fact the file already establishes, and it overrides the port state AFTER the read - which
+  // is the whole defect in one line: a stranded listener that the salvage genuinely observed is discarded because
+  // something earlier remembered a cleanup call returning, and the leak is neither released nor reported.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
-    '    $portStillHeld = $true\n',
-    '    $portStillHeld = $true\n    if ($portReleased) { $portStillHeld = $false }\n'))
-  detected('a release flag comes back and short-circuits the port read', 'season-browser:launch-still-remembers-a-release-flag')
+    '    if ($portStillHeld -and $verifiedPortRelease) {',
+    '    $portReleased = $verifiedPortRelease\n    if ($portReleased) { $portStillHeld = $false }\n    if ($portStillHeld -and $verifiedPortRelease) {'))
+  detected('a release flag comes back and overrides the port the salvage read', 'season-browser:launch-still-remembers-a-release-flag')
   reset()
   // The four statements that sat outside any try. Each is unwrapped back to exactly the code it replaced, so
   // each drill recreates the real masking rather than deleting something: housekeeping that throws out of a
@@ -943,7 +964,7 @@ try {
   mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace("Assert-True ($orphanFailure -ceq 'Maple orphan drill launch drill failed on purpose after the parent exited.')", 'Assert-True ($true)'))
   detected('the orphan case accepts any failure instead of the one it injected', 'timeout-regression:orphan-case-requires-its-injected-failure')
   reset()
-  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('Assert-True (@(Get-NetTCPConnection -LocalPort $orphanPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0)', 'Assert-True ($true)'))
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace("Assert-True (@(Get-MapleSeasonPortListener -Port $orphanPort -Scenario 'Maple orphan drill').Count -eq 0)", 'Assert-True ($true)'))
   detected('the orphan case stops requiring the orphaned port to be released', 'timeout-regression:orphan-case-requires-the-port-released')
   reset()
   mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('Assert-True ($orphanWarnings.Count -eq 0)', 'Assert-True ($true)'))
@@ -992,13 +1013,24 @@ try {
   // performed. And it never re-read the port, so it deleted the temporary directory that was the only evidence
   // tying a survivor to this suite and exited as though the workstation were clean. A fresh-context review found
   // all three.
+  // THE PID REUSE HAZARD ITSELF, and only it. This drill used to replace the whole handle acquisition with
+  // `$strandedHandle = $null`, which the very next line turns into `continue` - so it skipped the kill instead of
+  // recreating a kill aimed at a number. A fresh-context review found that. What it does now leaves the ownership
+  // test, the failure report and the verification exactly where they are and changes ONE thing: the force kill goes
+  // to a bare id in a second lookup rather than through the handle whose identity was pinned. That is the window -
+  // the owner can exit between the ownership test and the kill, and Windows can reissue the number to a process
+  // this suite never created. The .Handle deletion further down attacks the same pin from the other end.
   mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace(
-    'try { $strandedHandle = Get-Process -Id $strandedId -ErrorAction Stop } catch { $strandedHandle = $null }',
-    '$strandedHandle = $null'))
-  detected('the orphan cleanup stops pinning the id it force kills', 'timeout-regression:orphan-cleanup-pins-the-id-it-kills')
+    '    try { $strandedHandle.Kill(); [void]$strandedHandle.WaitForExit(10000) }\n',
+    '    try { Stop-Process -Id $strandedId -Force -ErrorAction Stop }\n'))
+  detected('the orphan cleanup force kills a bare id in a second lookup', 'timeout-regression:orphan-case-cleans-up-after-itself')
   reset()
+  // SWALLOWED, ALL THE WAY. Replacing only the kill pair left the HasExited verification below it, so an
+  // access-denied kill still printed _STRANDED_ALIVE and the survivor was never actually hidden - a fresh-context
+  // review found the drill weaker than its name. The report and the verification go with the kill, which is the
+  // defect the pin names: a kill announced as done, on a process still running, with nothing said about either.
   mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace(
-    '    try { $strandedHandle.Kill(); [void]$strandedHandle.WaitForExit(10000) }\n    catch { Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_KILL_FAILED pid ${strandedId}: $($_.Exception.Message)" }\n',
+    '    try { $strandedHandle.Kill(); [void]$strandedHandle.WaitForExit(10000) }\n    catch { Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_KILL_FAILED pid ${strandedId}: $($_.Exception.Message)" }\n    if (-not $strandedHandle.HasExited) { Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_ALIVE pid $strandedId" }\n',
     '    Stop-Process -Id $strandedId -Force -ErrorAction SilentlyContinue\n'))
   detected('the orphan cleanup goes back to swallowing its kill outcome', 'timeout-regression:orphan-cleanup-swallows-its-kill-outcome')
   reset()
@@ -1006,9 +1038,139 @@ try {
   detected('the orphan cleanup stops verifying the kill it announced', 'timeout-regression:orphan-cleanup-verifies-its-kill')
   reset()
   mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace(
-    "Write-Output 'MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_PORT_STILL_HELD 4290'",
+    'Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_PORT_STILL_HELD $orphanPort"',
     "Write-Verbose 'the port looked fine'"))
   detected('the orphan cleanup stops reporting a port it left held', 'timeout-regression:orphan-cleanup-reports-a-still-held-port')
+  reset()
+  // TRANCHE E1. Reading a port and being ALLOWED TO KILL what is on it are two different permissions, and the
+  // previous tranche's repair conflated them: it read the port unconditionally at salvage time and released
+  // whatever it found, including on the ordinary success path where the cleanup inside the try had already observed
+  // that port free. A fresh-context review was right that this is a NEW kill hazard and not a narrower one - the
+  // owned-command marker defaults to the repository root, and the ownership predicate accepts any node/npm/npx
+  // process whose command line references that root - so a developer's own repository-rooted node process binding
+  // the port in that window would have been force-killed where the code before it left that process alone.
+  //
+  // What replaced it keeps the read unconditional and gates only the KILL. These drills break that six ways.
+  //
+  // One: the kill unconditional again, which is the hazard exactly.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '    if ($portStillHeld -and $verifiedPortRelease) {\n      $footnotes.Add("found a listener on governed port $port after it had already verified that port free, so the listener is not one this scenario launched and it refused to terminate it")\n    }\n    elseif ($portStillHeld) {\n',
+    '    if ($portStillHeld) {\n'))
+  detected('the salvage force kills any listener it finds on the governed port', 'season-browser:launch-refuses-to-kill-what-it-cannot-own')
+  reset()
+  // Two: the refusal made unreachable by ORDER rather than removed. With the branches swapped every statement the
+  // pin above names is still present, in the same file, spelled the same way - and `elseif` never runs.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '    if ($portStillHeld -and $verifiedPortRelease) {\n      $footnotes.Add("found a listener on governed port $port after it had already verified that port free, so the listener is not one this scenario launched and it refused to terminate it")\n    }\n    elseif ($portStillHeld) {\n      try { Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario }\n      catch { $footnotes.Add("could not release governed port $port after salvaging an unmanaged launch: $($_.Exception.Message)") }\n    }\n',
+    '    if ($portStillHeld) {\n      try { Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario }\n      catch { $footnotes.Add("could not release governed port $port after salvaging an unmanaged launch: $($_.Exception.Message)") }\n    }\n    elseif ($portStillHeld -and $verifiedPortRelease) {\n      $footnotes.Add("found a listener on governed port $port after it had already verified that port free, so the listener is not one this scenario launched and it refused to terminate it")\n    }\n'))
+  detected('the refusal branch is ordered where it can never run', 'season-browser:launch-port-block-is-whole')
+  reset()
+  // Three: the flag true from the start, which is the opposite failure and just as real - the salvage then refuses
+  // every release it was added to perform and the leak it exists to catch becomes a footnote nobody acts on.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('$verifiedPortRelease = $false', '$verifiedPortRelease = $true'))
+  detected('the salvage starts out believing the port was already verified free', 'season-browser:launch-starts-with-no-verified-release')
+  reset()
+  // Four: the write moved ABOVE the cleanup it reports on, so the flag claims an observed release before anything
+  // observed anything. This is the previous tranche's defect one level down: a flag that records an intention.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '    Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario\n    $verifiedPortRelease = $true\n',
+    '    $verifiedPortRelease = $true\n    Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario\n'))
+  detected('the success cleanup records its release before performing it', 'season-browser:success-cleanup-records-its-verified-release')
+  reset()
+  // Five: the timeout path stops recording its release, so a salvage after a VERIFIED timeout cleanup is back to
+  // killing whatever holds the port by then.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '      Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario\n      $verifiedPortRelease = $true\n',
+    '      Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario\n'))
+  detected('the timeout cleanup stops recording the release it verified', 'season-browser:timeout-cleanup-records-its-verified-release')
+  reset()
+  // Six: a write added where no cleanup returned. Every pinned shape survives this - the declaration, both
+  // cleanup blocks, the refusal branch - and the flag now means nothing, so the count is the only thing that sees it.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '  $verifiedPortRelease = $false\n  try {\n',
+    '  $verifiedPortRelease = $false\n  $verifiedPortRelease = $true\n  try {\n'))
+  detected('a verified-release write appears where no cleanup ran', 'season-browser:launch-writes-its-verified-release-only-where-a-cleanup-returned:4')
+  reset()
+  // AND THE FACT THE FLAG DEPENDS ON. "This port was observed free" is only warranted because the cleanup returns
+  // exclusively from inside a loop that saw zero listeners. Let it return on anything else and the flag above is a
+  // sentence about a call completing again, which is where this whole chain started.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '    if ($remaining.Count -eq 0) { return }',
+    '    if ($true) { return }'))
+  detected('the port cleanup returns without observing the port free', 'season-browser:port-cleanup-returns-only-on-an-observed-free-port')
+  reset()
+  // THE REGRESSION'S OWN SAFETY NET, which is the only code in this repository that force kills by a process id it
+  // did not launch. A fresh-context review found three defects in it and the repair of a fourth was itself wrong.
+  //
+  // The ownership test was `.Contains($tempRoot)`, a bare substring: a sibling directory whose name merely BEGINS
+  // with this suite's - `...-<guid>-foreign\\runner.js` - satisfied it, so an unrelated process could be classified
+  // as this suite's own and killed. Restored here exactly.
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace(
+    'if (-not ([string]$strandedProcess.CommandLine).Contains($ownedPrefix)) { continue }',
+    'if (-not ([string]$strandedProcess.CommandLine).Contains($tempRoot)) { continue }'))
+  detected('the orphan cleanup authorizes a kill on a bare substring again', 'timeout-regression:orphan-cleanup-matches-a-bare-substring')
+  reset()
+  // The same hazard reached the other way: the separator dropped from the marker while the comparison keeps using
+  // it, which the forbid above cannot see because the forbidden spelling never appears.
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace(
+    '$ownedPrefix = $tempRoot + [IO.Path]::DirectorySeparatorChar',
+    '$ownedPrefix = $tempRoot'))
+  detected('the ownership marker stops being a path boundary', 'timeout-regression:orphan-cleanup-builds-a-path-boundary-marker')
+  reset()
+  // A FAIL-OPEN LISTENER READ RESTORED, on the assertion that proves the orphan repair. Every read in this file was
+  // `-ErrorAction SilentlyContinue`, so a listener table that could not be queried answered "nothing is listening" -
+  // and this is one of the three reads that are ASSERTIONS, which a fresh-context review did not name and which are
+  // worse than the two it did: a broken query reports the case clean while a dev server holds the port.
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace(
+    "Assert-True (@(Get-MapleSeasonPortListener -Port $orphanPort -Scenario 'Maple orphan drill').Count -eq 0)",
+    'Assert-True (@(Get-NetTCPConnection -LocalPort $orphanPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0)'))
+  detected('an assertion goes back to reading listeners fail-open', 'timeout-regression:reads-listeners-without-the-fail-closed-probe')
+  reset()
+  // The timeout case's port assertion, which had no pin at all before this tranche.
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace(
+    "Assert-True (@(Get-MapleSeasonPortListener -Port $port -Scenario 'Maple timeout regression').Count -eq 0)",
+    'Assert-True ($true)'))
+  detected('the timeout case stops requiring its governed port to be released', 'timeout-regression:timeout-case-requires-the-port-released')
+  reset()
+  // The cleanup naming a port the case does not use. It was written this way - the case assigned 4290 inside the
+  // try and the cleanup hard-coded 4290 beside it - so changing the case's port alone would have left the cleanup
+  // watching a port nothing ran on while every pin stayed green.
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace(
+    "try { $strandedListeners = @(Get-MapleSeasonPortListener -Port $orphanPort -Scenario 'Maple orphan drill cleanup') }",
+    "try { $strandedListeners = @(Get-MapleSeasonPortListener -Port 4290 -Scenario 'Maple orphan drill cleanup') }"))
+  detected('the orphan cleanup hard-codes the port it watches', 'timeout-regression:orphan-cleanup-hard-codes-its-port')
+  reset()
+  // And a SECOND declaration, which is how the two would diverge without either literal looking wrong.
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace(
+    "  if (@(Get-MapleSeasonPortListener -Port $orphanPort -Scenario 'Maple orphan drill preflight').Count -ne 0) {",
+    "  $orphanPort = 4291\n  if (@(Get-MapleSeasonPortListener -Port $orphanPort -Scenario 'Maple orphan drill preflight').Count -ne 0) {"))
+  detected('the orphan case reassigns its port behind the cleanup', 'timeout-regression:orphan-port-is-written-once:2')
+  reset()
+  // THE MARKERS' TEETH. Everything the safety net prints is output only, and the success path prints PASS and
+  // `exit 0` inside the try, BEFORE the finally runs - so a run that stranded a live dev server could announce
+  // PASS, exit 0, and leave the evidence in the same output for a caller reading only the exit code. A
+  // fresh-context review found that. MEASURED on this workstation: a script exiting 0 in its try and 3 in its
+  // finally exits 3, so the override is real. Broken four ways: the flag undeclared, the flag unset on a path, the
+  // override removed entirely, and the override reduced to a message with no exit.
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('$strandedReported = $false\n', ''))
+  detected('the report flag is never declared, so the override never fires', 'timeout-regression:orphan-cleanup-declares-its-report-flag')
+  reset()
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('    $strandedReported = $true\n', ''))
+  detected('a path that finds the workstation unclean stops recording it', 'timeout-regression:orphan-cleanup-sets-its-report-flag-on-every-path:3')
+  reset()
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace(
+    "  if ($strandedReported) {\n    Write-Output 'MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_FAIL the orphan drill safety net had to report a stranded process or a port it could not clear, so this run did not leave the workstation clean.'\n    exit 1\n  }\n",
+    ''))
+  detected('the safety net stops consulting what it reported', 'timeout-regression:orphan-cleanup-consults-its-report-flag')
+  reset()
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('    exit 1\n  }\n}', '  }\n}'))
+  detected('the safety net reports a stranded process and still exits zero', 'timeout-regression:orphan-cleanup-overrides-a-passing-exit-code')
+  reset()
+  // And the handle touch, which is the whole reason the kill below speaks about one process. Get-Process alone pins
+  // NOTHING - measured here and already recorded in the helper this suite tests - so removing the touch returns
+  // the net to force killing by a bare number that Windows may have reissued.
+  mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('      $null = $strandedHandle.Handle\n', ''))
+  detected('the orphan cleanup kills by an id it never pinned', 'timeout-regression:orphan-cleanup-pins-the-id-it-kills')
   reset()
   mutate('src/data/QueuedScoutingRepository.ts', (source) => source.replace('const verifyRead = () => verifyQueuedReadContext', 'const verifyRead = () => verifyQueuedOperationContext'))
   detected('queued read identity fence removal', 'read-context:src/data/QueuedScoutingRepository.ts')
@@ -1203,6 +1365,22 @@ try {
   reset()
   mutate(drillFile, (source) => source.replace(/^( *)console\.log\(`Foundation behavioural mutation drill: PASS \(\$\{behaviouralMutations\.length\}/m, '$1console.log(`Foundation behavioural mutation drill: PASS (5'))
   detected('the behavioural half states a fabricated total instead of counting its subjects', 'mutation-drill:behavioural-claim-counted-not-asserted')
+  reset()
+  // THE TOTAL, FABRICABLE WITHOUT TOUCHING THE SENTENCE. The two drills above prove the number is computed;
+  // these three prove the number counts APPLIED MUTATIONS. Drop the refusal and a `detected` with nothing
+  // pending scores anyway, so two detections after one `mutate` both count. Drop the clear and one applied
+  // mutation is spendable by every detection that follows it. Both leave the summary sentence untouched.
+  mutate(drillFile, (source) => source.replace(/^ *if \(pendingMutations === 0\) throw new Error\(`\$\{label\} claims a controlled mutation.*\n/m, ''))
+  detected('a detection scores with no mutation applied behind it', 'mutation-drill:detection-spends-an-applied-mutation')
+  reset()
+  mutate(drillFile, (source) => source.replace(/^( *)pendingMutations = 0\n( *)detectedMutations\.push\(label\)$/m, '$2detectedMutations.push(label)'))
+  detected('one applied mutation is spendable by every detection after it', 'mutation-drill:detection-spends-an-applied-mutation')
+  reset()
+  // And the increment, DUPLICATED above the stale-needle refusal rather than moved: the contiguous pin over
+  // `writeFileSync` and its increment stays satisfied, and every mutation whose needle no longer matches is
+  // counted before `mutate` refuses it. Presence of the pinned pair says nothing about a second occurrence.
+  mutate(drillFile, (source) => source.replace(/^( *)if \(after === before\) throw new Error\(`Mutation no longer applies/m, '$1pendingMutations += 1\n$1if (after === before) throw new Error(`Mutation no longer applies'))
+  detected('a mutation that never applied is counted before it is refused', 'mutation-drill:mutate-counts-a-write-exactly-once:2')
 
   // ---------------------------------------------------------------------------------------------------
   // THE BEHAVIOURAL HALF. Every drill above asks the STATIC guard whether it noticed, and every one of

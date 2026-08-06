@@ -639,6 +639,13 @@ function Invoke-MapleSeasonBrowserProof {
   # review found that; nothing below the try can protect a process launched above it, so nothing is above it.
   $launchedHandle = [IntPtr]::Zero
   $primaryFailure = $false
+  # WHETHER A CLEANUP OF THIS PORT ALREADY OBSERVED IT FREE. This is not the $portReleased flag that was removed
+  # from here, and the difference is the whole point: that flag decided whether to LOOK at the port, and skipping
+  # the look is what let a late-binding descendant hold it. This decides only whether a listener found at salvage
+  # time may be KILLED. Clear-MapleSeasonBrowserPort returns only after its own loop observes zero listeners, so a
+  # normal return means this port was observed free - and a listener appearing after that is, by construction, one
+  # this scenario never launched.
+  $verifiedPortRelease = $false
   try {
     # PIN THE ID THIS FUNCTION WILL KILL BY, with a handle of this file's own, held until after the kill.
     # `taskkill /PID` names a NUMBER, and a number means one particular process only for as long as the
@@ -740,6 +747,7 @@ function Invoke-MapleSeasonBrowserProof {
         throw "$Scenario browser timeout cleanup proved the root of its owned process tree died, but the tree walk reported exit code $killExitCode, so a descendant of it may still be running."
       }
       Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
+      $verifiedPortRelease = $true
       throw "$Scenario browser scenario exceeded its bounded process limit after verified cleanup."
     }
     if (-not $process.HasExited -or $null -eq $process.ExitCode) {
@@ -748,6 +756,7 @@ function Invoke-MapleSeasonBrowserProof {
     $exitCode = [int]$process.ExitCode
 
     Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
+    $verifiedPortRelease = $true
     if ($exitCode -ne 0) { throw "$Scenario browser scenario failed with exit code $exitCode." }
   } catch {
     # Bare `throw` rethrows the ErrorRecord unchanged; this records only that the scenario already has a
@@ -796,12 +805,31 @@ function Invoke-MapleSeasonBrowserProof {
     # listener observed at salvage time.
     #
     # The read fails OPEN toward releasing, for the same reason the liveness read above does: an unanswerable
-    # query must not be read as "the port is clean". Clear-MapleSeasonBrowserPort re-reads and re-validates
-    # ownership itself, so attempting it on a port that turns out to be free costs nothing.
+    # query must not be read as "the port is clean".
+    #
+    # READING THE PORT AND BEING ALLOWED TO KILL WHAT IS ON IT ARE TWO DIFFERENT PERMISSIONS, and the first
+    # version of this repair conflated them. It read the port unconditionally and released whenever anything was
+    # listening - including on the ordinary success path, where the cleanup at the end of the try had ALREADY
+    # observed this port free. A fresh-context review was right that this is a NEW kill hazard rather than a
+    # narrower one, and the hazard is not theoretical on this workstation: -OwnedCommandMarker defaults to the
+    # repository root, and Test-MapleSeasonBrowserPortOwned accepts any node/npm/npx process whose command line
+    # references that root - it says so itself. So a developer's own repository-rooted node process that bound
+    # this port in the window between the verified release and this line would have been classified as owned and
+    # force-killed, where the flag-based code before it would have left that process alone. That is strictly
+    # worse than what it replaced, and the review's finding is recorded rather than paraphrased.
+    #
+    # So the port is still always READ - that is what catches the late-binding descendant the flag missed - and
+    # the kill is authorized only where this scenario can still plausibly own what it finds. After a verified
+    # release, a new listener is by construction not ours: it is reported and left alone. That footnote is not a
+    # soft outcome; the launch regression asserts zero warnings, so a leak surfaces as a failure instead of as a
+    # silent force kill aimed at a process this file cannot prove it owns.
     $portStillHeld = $true
     try { $portStillHeld = @(Get-MapleSeasonPortListener -Port $port -Scenario $Scenario).Count -gt 0 }
     catch { $footnotes.Add("could not tell whether governed port $port is still held, so it attempted the release anyway: $($_.Exception.Message)") }
-    if ($portStillHeld) {
+    if ($portStillHeld -and $verifiedPortRelease) {
+      $footnotes.Add("found a listener on governed port $port after it had already verified that port free, so the listener is not one this scenario launched and it refused to terminate it")
+    }
+    elseif ($portStillHeld) {
       try { Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario }
       catch { $footnotes.Add("could not release governed port $port after salvaging an unmanaged launch: $($_.Exception.Message)") }
     }
