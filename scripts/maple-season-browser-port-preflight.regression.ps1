@@ -159,7 +159,11 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
     # was accepted as a path boundary, so root C:\FarmRx claimed a server in C:\FarmRx Backup and
     # would have terminated it. Directory names may contain spaces, so a space ends nothing.
     @{ Name = 'sibling directory whose name adds a space'; ImageName = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx Backup\node_modules\vite\bin\vite.js"'; Owned = $false }
-    @{ Name = 'sibling directory whose name adds a quoted suffix'; ImageName = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx old\node_modules\vite\bin\vite.js"'; Owned = $false }
+    # The apostrophe sibling is the same defect as the space, and it survived the first repair: the
+    # boundary set still listed an apostrophe, which is legal in a Windows directory name, so root
+    # C:\FarmRx claimed a server in C:\FarmRx's Backup and would have terminated it. A double quote is
+    # the only quote character Windows forbids in a path, so it is the only one that can end a name.
+    @{ Name = 'sibling directory whose name adds an apostrophe'; ImageName = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx''s Backup\node_modules\vite\bin\vite.js"'; Owned = $false }
     @{ Name = 'listener inside the owned root'; ImageName = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx\node_modules\vite\bin\vite.js"'; Owned = $true }
     @{ Name = 'owned root spelled with forward slashes'; ImageName = 'node.exe'; CommandLine = 'node.exe "C:/FarmRx/node_modules/vite/bin/vite.js"'; Owned = $true }
     @{ Name = 'owned root at the end of the command line'; ImageName = 'node.exe'; CommandLine = 'node.exe C:\FarmRx'; Owned = $true }
@@ -187,6 +191,30 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   $anyListener = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx\node_modules\vite\bin\vite.js"' }
   Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $anyListener)) 'Ownership test did not fail closed for a missing root.'
   Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $anyListener -Root '\')) 'Ownership test did not fail closed for a degenerate root.'
+  # A root that does not name a directory under a drive or share is too broad to identify one tree,
+  # and rejecting only the empty root was not enough to catch that. Each of these answered true
+  # against an unrelated listener before the root-shape check existed, and true here authorizes
+  # Stop-Process: 'C:\' trims to 'C:', which every absolute path on that drive continues with a
+  # separator - a legal boundary - so it claimed every node process on the machine; '.' matched the
+  # dot in `node .`; a lone space matched the space in nearly any command line.
+  $unrelatedListener = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\Other\app.js"' }
+  foreach ($overBroadRoot in @('C:\', 'C:', 'C:/', '.', ' ', 'FarmRx', '\\server\share')) {
+    Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $unrelatedListener -Root $overBroadRoot)) "Ownership test did not fail closed for the over-broad root '$overBroadRoot'."
+  }
+  # A non-string root must fail closed rather than throw. Dropping the [string] cast from the
+  # parameter sent an integer straight into .Replace() and raised a method-not-found error, which is
+  # the one answer the callers cannot use - they depend on this function returning false.
+  Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $unrelatedListener -Root 4174)) 'Ownership test did not fail closed for a non-string root.'
+  # The mirror of the apostrophe case: removing the apostrophe from the boundary set must not stop a
+  # genuinely owned tree from being recognized when the owned path itself contains one. Without this,
+  # a repair that simply refused every apostrophe would pass the case above and still fail the month.
+  $apostropheOwned = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\Mason''s FarmRx\node_modules\vite\bin\vite.js"' }
+  Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $apostropheOwned -Root 'C:\Mason''s FarmRx') 'Ownership test refused an owned root whose own name contains an apostrophe.'
+  # A UNC root names a real tree and must still be recognized, and its sibling must not be.
+  $uncOwned = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "\\server\share\FarmRx\node_modules\vite\bin\vite.js"' }
+  Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $uncOwned -Root '\\server\share\FarmRx') 'Ownership test refused an owned UNC root.'
+  $uncSibling = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "\\server\share\FarmRx2\node_modules\vite\bin\vite.js"' }
+  Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $uncSibling -Root '\\server\share\FarmRx')) 'Ownership test claimed a UNC sibling that shares the root prefix.'
 
   Write-Output 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS'
   exit 0

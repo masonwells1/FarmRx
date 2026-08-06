@@ -117,18 +117,14 @@ assert(
   isolationCoverage.checkedFiles.slice().sort().join(",") === HARNESS_FILES.slice().sort().join(","),
   "Season regression harness file list has drifted from the files the contract module checks.",
 );
-// The comparison above only proves two hand-maintained lists agree: the contract module builds
-// checkedFiles from its own HARNESS_FILES constant, while its individual checks name their paths
-// directly, so a list entry that no check reads would still pass. Require each advertised file to
-// appear in the module's source as well, which catches the case the list comparison cannot - a file
-// declared as covered that the gate never actually opens.
-const contractSource = await readFile(join(REPOSITORY_ROOT, "scripts/verify-season-contract.mjs"), "utf8");
-for (const file of isolationCoverage.checkedFiles) {
-  assert(
-    contractSource.includes(file),
-    `Season contract module advertises ${file} as harness-isolated but never names it.`,
-  );
-}
+// A source-presence loop used to follow, asserting that the contract module "names" each advertised
+// file. It was removed because it could not fail. checkedFiles is built from HARNESS_FILES - the
+// assertion directly above proves the two are the same list - and every HARNESS_FILES entry is a
+// string literal written in the contract module's own source, so `source.includes(entry)` was true by
+// construction for every entry, forever. A check that cannot go red is worse than no check: it
+// reports coverage nobody has. Proving that each advertised file is actually opened by some check
+// would require correlating each entry with its readFile call site, which the list comparison above
+// does not attempt and which no text scan can do honestly.
 console.log(`Season contract good fixture: PASS (${goodResult.fixtureCount} fixtures)`);
 
 {
@@ -314,17 +310,6 @@ await runAppendIsolationMutation(
   "scripts/verify-season.ps1",
   "Invoke-WebRequest https://example.invalid",
   /^scripts\/verify-season\.ps1 does not match the pinned SHA-256\.$/,
-);
-
-// The appended mutation above proves the hash still catches an arbitrary edit. This one proves the
-// separate, more specific property: deleting the Windows execution lane is reported as deleting the
-// lane, not merely as a hash mismatch, so the operator is told what coverage they lost.
-await runReplacementIsolationMutation(
-  "removed Windows season execution lane",
-  "scripts/verify-season.ps1",
-  "maple-july-db-clock-wiring.regression.ps1",
-  "# lane removed",
-  /^scripts\/verify-season\.ps1 no longer runs the Windows season execution regressions\.$/,
 );
 
 await runReplacementIsolationMutation(

@@ -36,12 +36,22 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh.exe')", 'orchestrator:windows-core-probe-shell')
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh')", 'orchestrator:unix-core-probe-shell')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & $probeShell -NoProfile -Command 'exit 23' } $expected", 'orchestrator:resolved-probe-shell')
-  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 21) errors.push('orchestrator:all-lanes-checked')
+  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 22) errors.push('orchestrator:all-lanes-checked')
   // Pin both season lanes by name. The count above only proves nobody added a lane without
   // updating this guard; it does not prove these two specific lanes survived, and they are the only
   // thing making the season contract gate reachable from an automated gate rather than by hand.
   requireText(errors, foundationOrchestrator, 'Invoke-FoundationLane { & node scripts/verify-season-contract.mjs }', 'orchestrator:checked-season-contract')
   requireText(errors, foundationOrchestrator, 'Invoke-FoundationLane { & node scripts/verify-season-contract.regression.mjs }', 'orchestrator:checked-season-contract-regression')
+  // Pin the Windows execution lane: the definition and the call, the chain it runs, and the marker it
+  // demands. Requiring exactly two occurrences of the name is what catches the call being deleted while
+  // the function stays behind, which a presence check cannot see. Be clear about what this is worth:
+  // these are text assertions, so they prove the lane is still wired, not that it ran. On this Linux CI
+  // job the lane itself reports a skip, and the ownership predicate goes unexecuted; the execution
+  // credit exists only on a Windows run.
+  if ((foundationOrchestrator.match(/Invoke-FoundationWindowsExecutionLane/g) ?? []).length !== 2) errors.push('orchestrator:windows-execution-lane-called')
+  requireText(errors, foundationOrchestrator, "Join-Path $PSScriptRoot 'maple-july-db-clock-wiring.regression.ps1'", 'orchestrator:windows-execution-lane-chain')
+  requireText(errors, foundationOrchestrator, 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS', 'orchestrator:windows-execution-lane-marker')
+  requireText(errors, foundationOrchestrator, 'SKIPPED (Windows-only cmdlets; no credit claimed)', 'orchestrator:windows-execution-lane-honest-skip')
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
 
@@ -160,11 +170,13 @@ export function foundationStaticGuard(root = process.cwd()) {
   for (const consumer of fixtureConsumers) {
     const source = read(root, `scripts/${consumer}`)
     requireText(errors, source, 'Invoke-MapleSeasonSqlFile', `season:fixture-helper-${consumer}`)
-    // The file that DEFINES the helper is exempt from the pipe prohibition: piping the payload into
-    // psql is its job, and it is the one place that does it correctly. Without this exemption the
-    // gate turns red the moment someone adds a comment naming the fixture to the helper, pointing
-    // the blame at the correct implementation.
-    if (/function\s+Invoke-MapleSeasonSqlFile/.test(source)) continue
+    // An exemption for the file that DEFINES the helper used to sit here, on the theory that piping
+    // the payload into psql is that file's job. It was removed: the definer
+    // (scripts/maple-season-credential.ps1) does not name the fixture, so it never enters this loop and
+    // the exemption could not fire - while any consumer that did enter the loop could exempt itself
+    // from the prohibition merely by containing the words `function Invoke-MapleSeasonSqlFile`
+    // anywhere, including inside a comment. A bypass that no drill covered, guarding against a
+    // situation that does not exist, is a worse trade than a red gate nobody has triggered.
     if (/\|\s*docker exec/.test(source)) errors.push(`season:fixture-raw-psql-pipe-${consumer}`)
   }
 

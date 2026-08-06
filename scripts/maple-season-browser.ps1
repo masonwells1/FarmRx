@@ -1,20 +1,28 @@
 function Test-MapleSeasonBrowserPortOwned {
   param(
     $ListenerProcess,
-    $Root
+    [string]$Root
   )
-  # Both parameters are declared bare on purpose. Mandatory would make the guards below dead code
-  # and would turn a caller that forgets -Root into an interactive prompt, which hangs a proof run
-  # instead of failing it. Bare plus an explicit guard means a missing argument fails closed to
-  # "not ours", and the only consequence of that is refusing to terminate something.
+  # Neither parameter is Mandatory: that would make the guards below dead code and would turn a
+  # caller that forgets -Root into an interactive prompt, which hangs a proof run instead of failing
+  # it. A missing argument has to fail closed to "not ours", and the only consequence of that is
+  # refusing to terminate something.
+  # $Root keeps its [string] cast, though, and the cast is load-bearing in the other direction. With
+  # the cast dropped, a caller that passed a non-string - a port number, a path object - reached
+  # .Replace() below and got "does not contain a method named 'Replace'" instead of the fail-closed
+  # answer this function promises. The cast coerces such an argument to text, which then fails the
+  # root-shape check a few lines down and returns false.
   # CommandLine is null for a process this session cannot inspect (another user, or elevated).
   # Guard it explicitly: calling .IndexOf() on $null raises a method-not-found error in every
   # PowerShell mode, so without this guard the callers get an exception instead of the "not ours"
   # answer they depend on.
   if ($null -eq $ListenerProcess) { return $false }
   $commandLine = $ListenerProcess.CommandLine
-  if ([string]::IsNullOrEmpty($commandLine)) { return $false }
-  if ([string]::IsNullOrEmpty($Root)) { return $false }
+  # IsNullOrWhiteSpace, not IsNullOrEmpty. A root of a single space survived the empty check, and a
+  # space occurs in nearly every command line, so root ' ' matched a foreign listener and authorized
+  # killing it.
+  if ([string]::IsNullOrWhiteSpace($commandLine)) { return $false }
+  if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
   # Compare on one separator form, then require the root to end at a directory boundary. A bare
   # substring test lets root C:\FarmRx claim a listener running out of C:\FarmRx2, and this
   # predicate gates the Stop-Process in Clear-MapleSeasonBrowserPort, so an over-broad match would
@@ -23,19 +31,31 @@ function Test-MapleSeasonBrowserPortOwned {
   $normalizedRoot = $Root.Replace('/', '\').TrimEnd('\')
   # TrimEnd can empty the root (Root of '\' or '/'), and IndexOf('') succeeds at every position,
   # so without this the predicate would claim every listener.
-  if ([string]::IsNullOrEmpty($normalizedRoot)) { return $false }
-  # A space is deliberately NOT a boundary. Directory names may contain spaces, so treating one as
-  # a terminator lets root C:\FarmRx claim "C:\FarmRx Backup\node_modules\vite\bin\vite.js" - a
-  # different tree - and this predicate authorizes killing it. Only a separator, a closing quote,
-  # or the end of the string actually ends the directory name.
+  if ([string]::IsNullOrWhiteSpace($normalizedRoot)) { return $false }
+  # The root must name a directory BELOW a drive or share root, and the emptiness check above is not
+  # enough to enforce that. TrimEnd reduces 'C:\' to 'C:', which is non-empty and which every
+  # absolute path on that drive continues with a separator - a legal boundary - so root 'C:\' claimed
+  # every node process on the machine and authorized killing all of them. A relative root has the
+  # same shape of problem: root '.' matched the '.' in `node .`, and in most command lines besides.
+  # Requiring a named directory under the root rejects 'C:\', 'C:', '.', '\\server\share', and any
+  # bare relative name, all of which are too broad to identify one tree.
+  $rootNamesDirectoryUnderDrive = $normalizedRoot -match '^[A-Za-z]:\\[^\\]'
+  $rootNamesDirectoryUnderShare = $normalizedRoot -match '^\\\\[^\\]+\\[^\\]+\\[^\\]'
+  if (-not ($rootNamesDirectoryUnderDrive -or $rootNamesDirectoryUnderShare)) { return $false }
+  # Neither a space nor an apostrophe is a boundary. Both are legal in a Windows directory name, so
+  # treating either as a terminator lets root C:\FarmRx claim a different tree and this predicate
+  # authorizes killing what it finds there: a space accepted "C:\FarmRx Backup\node_modules\vite\..."
+  # and an apostrophe accepted "C:\FarmRx's Backup\node_modules\vite\...". A double quote is a
+  # boundary because Windows forbids it in a path, so its only possible role is closing the argument.
+  # Only a separator, a closing double quote, or the end of the string actually ends a directory name.
   $rooted = $false
   $searchIndex = 0
-  while ($searchIndex -ge 0 -and $searchIndex -le ($normalizedCommandLine.Length - $normalizedRoot.Length)) {
+  while ($searchIndex -le ($normalizedCommandLine.Length - $normalizedRoot.Length)) {
     $matchIndex = $normalizedCommandLine.IndexOf($normalizedRoot, $searchIndex, [StringComparison]::OrdinalIgnoreCase)
     if ($matchIndex -lt 0) { break }
     $boundaryIndex = $matchIndex + $normalizedRoot.Length
     if ($boundaryIndex -ge $normalizedCommandLine.Length) { $rooted = $true; break }
-    if ([string]$normalizedCommandLine[$boundaryIndex] -match '[\\"'']') { $rooted = $true; break }
+    if ([string]$normalizedCommandLine[$boundaryIndex] -match '[\\"]') { $rooted = $true; break }
     # Keep scanning. Stopping at the first occurrence let an unrelated leading argument such as
     # --require C:\FarmRx2\hook.js mask the real owned path later in the same command line, which
     # declared our own server foreign and failed the month at cleanup with a wrong diagnosis.

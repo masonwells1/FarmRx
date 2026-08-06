@@ -57,6 +57,26 @@ try {
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1') }", "& (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1')"))
   detected('intermediate foundation exit check removal', 'orchestrator:all-lanes-checked')
   reset()
+  // The Windows execution lane is the only thing in the repository that runs the port-ownership
+  // predicate gating Stop-Process. Four ways to lose that coverage, each of which must be reported as
+  // itself rather than as a generic count mismatch. The call is matched with its two-space indent so
+  // this drill hits the call site and not the function definition.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('  Invoke-FoundationWindowsExecutionLane', '  # lane call removed'))
+  detected('Windows execution lane call removal', 'orchestrator:windows-execution-lane-called')
+  reset()
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('maple-july-db-clock-wiring.regression.ps1', 'unrelated.regression.ps1'))
+  detected('Windows execution lane points at another chain', 'orchestrator:windows-execution-lane-chain')
+  reset()
+  // Dropping the marker requirement leaves an exit-code check, which a child that dies early or does
+  // nothing at all can satisfy.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS', 'ANY_OUTPUT_AT_ALL'))
+  detected('Windows execution lane completion marker removal', 'orchestrator:windows-execution-lane-marker')
+  reset()
+  // Turning the honest skip into a pass is the failure mode that matters most on CI, where the skip is
+  // the branch actually taken: it would report earned coverage on a platform that ran nothing.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('SKIPPED (Windows-only cmdlets; no credit claimed)', 'PASS'))
+  detected('Windows execution lane skip reported as a pass', 'orchestrator:windows-execution-lane-honest-skip')
+  reset()
   mutate('src/data/QueuedScoutingRepository.ts', (source) => source.replace('const verifyRead = () => verifyQueuedReadContext', 'const verifyRead = () => verifyQueuedOperationContext'))
   detected('queued read identity fence removal', 'read-context:src/data/QueuedScoutingRepository.ts')
   reset()
