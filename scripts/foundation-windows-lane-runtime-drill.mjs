@@ -33,7 +33,11 @@ const MARKER = 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS'
 // anchor ever disappears this file throws rather than silently drilling an empty string.
 const ANCHOR = 'Push-Location $root'
 
-const source = readFileSync(ORCHESTRATOR, 'utf8')
+// Normalize to LF before anything looks for a needle. The mutation needles below end in '\n', and this
+// repository carries no .gitattributes rule forcing LF, so a CRLF checkout would leave every needle
+// unmatched. That surfaces as "the mutation no longer applies" rather than as a silent pass, but it
+// fails the gate on the operator's line endings instead of on a defect. PowerShell reads LF happily.
+const source = readFileSync(ORCHESTRATOR, 'utf8').replace(/\r\n/g, '\n')
 const anchorIndex = source.indexOf(ANCHOR)
 if (anchorIndex < 0) throw new Error(`${ORCHESTRATOR} no longer contains the ${JSON.stringify(ANCHOR)} anchor these drills slice at.`)
 const definitions = source.slice(0, anchorIndex)
@@ -108,6 +112,21 @@ if (onWindows) {
   })
 }
 
+// The accounting function must be pure bookkeeping over its two script variables, and this is what makes
+// the drill able to speak for a real run at all. Every forgery in this file's history worked by SENSING
+// its surroundings and behaving differently: Sol's original read the accounting probe's loop variable out
+// of the caller's scope, and the next one distinguishes this drill from the orchestrator by testing
+// whether a sibling script exists beside $PSScriptRoot - false in a temp directory, true in scripts/ -
+// so it could forge success only on real runs while every layer here stayed green. Rather than trying to
+// make a temp copy indistinguishable from the repository, which cannot be done, refuse the vocabulary
+// that senses the difference. This is a narrowing of what an editor can write, not a proof of execution.
+const PURITY = ['$PSScriptRoot', '$PSCommandPath', '$MyInvocation', 'Get-Variable', 'Get-PSCallStack', 'Test-Path', 'Get-Item', 'Get-ChildItem']
+const accountingStart = definitions.indexOf(ACCOUNTING)
+if (accountingStart < 0) throw new Error(`${ORCHESTRATOR} no longer defines the accounting function these drills exercise.`)
+const accountingEnd = definitions.indexOf('\nfunction ', accountingStart + 1)
+const accountingBody = definitions.slice(accountingStart, accountingEnd < 0 ? definitions.length : accountingEnd)
+const impurities = PURITY.filter((token) => accountingBody.includes(token))
+
 const harness = (testCase) => [
   '',
   "$ErrorActionPreference = 'Stop'",
@@ -119,11 +138,20 @@ const harness = (testCase) => [
   '$realFailure = $null',
   'try { Assert-FoundationWindowsExecutionLaneAccountedFor | Out-Null } catch { $realFailure = $_.Exception.Message }',
   'if ($null -eq $realFailure) { Write-Output \'DRILL-REAL silent\' } else { Write-Output "DRILL-REAL threw :: $realFailure" }',
+  // Last line, deliberately. Without it a case that ended early - a stray `exit 0` reached through a
+  // seed or a mutation - printed no DRILL-REAL line at all, and the two verdicts that tolerate silence
+  // ('either' and an expected-null) read a MISSING line as a satisfied expectation. The case then passed
+  // having executed nothing, while the count printed at the end still claimed it.
+  'Write-Output \'DRILL-COMPLETE\'',
   '',
 ].join('\n')
 
 const workDir = mkdtempSync(join(tmpdir(), 'farmrx-lane-drill-'))
 const failures = []
+let completed = 0
+if (impurities.length > 0) {
+  failures.push(`the accounting function senses its surroundings (${impurities.join(', ')}); these drills cannot speak for a real run while it can tell them apart from one`)
+}
 try {
   for (const testCase of CASES) {
     const mutated = testCase.mutate(definitions)
@@ -143,10 +171,23 @@ try {
       failures.push(`${testCase.label}: the drill harness did not complete`)
       continue
     }
-    const probeLine = output.split(/\r?\n/).find((line) => line.startsWith('DRILL-PROBE')) ?? ''
-    const realLine = output.split(/\r?\n/).find((line) => line.startsWith('DRILL-REAL')) ?? ''
+    const lines = output.split(/\r?\n/)
+    const probeLine = lines.find((line) => line.startsWith('DRILL-PROBE')) ?? ''
+    const realLine = lines.find((line) => line.startsWith('DRILL-REAL')) ?? ''
     const probePassed = probeLine === 'DRILL-PROBE passed'
     const realThrew = realLine.startsWith('DRILL-REAL threw')
+
+    // Absence is not evidence. Require the harness to have reached the end and to have reported both
+    // verdicts before any expectation below is allowed to be satisfied by silence.
+    if (!lines.includes('DRILL-COMPLETE')) {
+      failures.push(`${testCase.label}: the drill harness did not run to completion`)
+      continue
+    }
+    if (probeLine === '' || realLine === '') {
+      failures.push(`${testCase.label}: the drill harness did not report both the probe and the accounting`)
+      continue
+    }
+    completed += 1
 
     if (testCase.expectProbe === 'passes' && !probePassed) failures.push(`${testCase.label}: the accounting probe did not pass`)
     if (testCase.expectProbe === 'fails' && probePassed) failures.push(`${testCase.label}: the accounting probe passed and should not have`)
@@ -175,4 +216,12 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`Windows lane runtime drill failed: ${failure}`)
   process.exit(1)
 }
-console.log(`Foundation Windows lane runtime drill: PASS (${CASES.length} executed cases)`)
+// Report cases that actually ran to completion, not the length of the array. The two figures used to be
+// the same number written from the array, which would have claimed coverage for a case that exited early.
+// The count is platform-dependent by design: the Windows-only platform-gate case cannot run on the
+// ubuntu-latest CI runner, so CI validates one case fewer and says so rather than printing a fixed total.
+if (completed !== CASES.length) {
+  console.error(`Windows lane runtime drill failed: only ${completed} of ${CASES.length} cases completed`)
+  process.exit(1)
+}
+console.log(`Foundation Windows lane runtime drill: PASS (${completed} of ${CASES.length} cases executed and validated on ${process.platform})`)

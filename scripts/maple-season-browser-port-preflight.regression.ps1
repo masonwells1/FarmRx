@@ -144,6 +144,54 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
     $listenerProcess = $null
   }
 
+  # Clear-MapleSeasonBrowserPort itself, executed. Everything above proves the preflight REFUSES; this
+  # is the other function, the one that actually terminates a listener, and until now no regression ran
+  # it at all - the force kill it performs was covered by reading its source. Both directions are
+  # exercised against a real listening process: the owned direction must terminate it and release the
+  # port, and the foreign direction must throw and leave it untouched.
+  foreach ($clearCase in @(
+    @{ Name = 'owned listener'; Root = $tempRoot; MustTerminate = $true }
+    # A root that names a real tree this listener does not live in. The refusal is the safety-critical
+    # direction: this function's kill is unconditional once the predicate says yes.
+    @{ Name = 'foreign listener'; Root = (Join-Path ([IO.Path]::GetTempPath()) ("farmrx-not-this-tree-{0}" -f $suffix)); MustTerminate = $false }
+  )) {
+    $listenerScript = Join-Path $tempRoot 'listener.js'
+    $readyFile = Join-Path $tempRoot 'listener-ready.txt'
+    Set-Content -LiteralPath $listenerScript -Value $listenerSource -Encoding Ascii -NoNewline
+    Remove-Item -LiteralPath $readyFile -ErrorAction SilentlyContinue
+    $env:FARMRX_PREFLIGHT_READY_FILE = $readyFile
+    $env:FARMRX_PREFLIGHT_BIND_ADDRESS = '127.0.0.1'
+    $listenerProcess = Start-Process -FilePath $node -ArgumentList @("`"$listenerScript`"") -PassThru -WindowStyle Hidden
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while (-not (Test-Path -LiteralPath $readyFile) -and -not $listenerProcess.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    Assert-True (Test-Path -LiteralPath $readyFile) "Cleanup regression listener for the $($clearCase.Name) case did not begin listening on port $port within twenty seconds."
+
+    $clearFailure = $null
+    try {
+      Clear-MapleSeasonBrowserPort -Port $port -Root $clearCase.Root -Scenario $scenario
+    } catch {
+      $clearFailure = $_.Exception.Message
+    }
+
+    if ($clearCase.MustTerminate) {
+      Assert-True ($null -eq $clearFailure) "Cleanup refused to terminate an owned listener on port $port. Got: $clearFailure"
+      Assert-True $listenerProcess.HasExited "Cleanup reported success without terminating the owned listener on port $port."
+      Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 0) "Cleanup left governed port $port listening after terminating its owned listener."
+    } else {
+      Assert-True ($clearFailure -ceq "$scenario found an unrecognized listener on governed port $port; refusing to terminate it.") "Cleanup did not refuse a foreign listener on port $port with the exact message. Got: $clearFailure"
+      # The decisive assertion. A refusal that still killed the process would be the exact failure this
+      # predicate exists to prevent, and an exception message alone would not reveal it.
+      Assert-True (-not $listenerProcess.HasExited) "Cleanup terminated a foreign listener on port $port while reporting that it refused to."
+      Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 1) "Cleanup disturbed a foreign listener on port $port."
+      Stop-Process -Id $listenerProcess.Id -Force -ErrorAction SilentlyContinue
+      $listenerProcess.WaitForExit(10000) | Out-Null
+    }
+    $released = [DateTime]::UtcNow.AddSeconds(10)
+    while (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -ne 0 -and [DateTime]::UtcNow -lt $released) { Start-Sleep -Milliseconds 100 }
+    Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 0) "Cleanup regression could not release port $port after the $($clearCase.Name) case."
+    $listenerProcess = $null
+  }
+
   # Ownership boundary, asserted directly. The listener cases above can only put a process clearly
   # inside the owned root or clearly outside it, so they cannot reach the case that matters most:
   # a sibling directory that merely shares the root's name prefix. Test-MapleSeasonBrowserPortOwned
@@ -246,6 +294,26 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
     @{ Label = 'traversal deeper in the same token'; CommandLine = 'node.exe C:\FarmRx\app\..\..\Other\app.js' }
     @{ Label = 'traversal at the end of the command line'; CommandLine = 'node.exe C:\FarmRx\..' }
     @{ Label = 'traversal ending at a closing quote'; CommandLine = 'node.exe "C:\FarmRx\.."' }
+    # The five cases above all place '..' as a whole token that ends at a quote or at the end of the
+    # string. The traversal walk originally scanned to the next double quote only, which means an
+    # UNQUOTED traversal followed by another argument left the tail '\.. --port 4177'. That is not the
+    # exact segment '..', so the refusal missed it and the predicate claimed the parent directory.
+    # Measured True before this repair. An unquoted argument ends at whitespace.
+    @{ Label = 'unquoted traversal followed by another argument'; CommandLine = 'node.exe C:\FarmRx\.. --port 4177' }
+    # Win32 strips trailing dots and spaces from each path component, so '.. ' reaches the parent exactly
+    # as '..' does and '... ' is not a directory name at all. Both measured True before this repair.
+    @{ Label = 'traversal spelled with a trailing space'; CommandLine = 'node.exe "C:\FarmRx\.. \Other\x.js"' }
+    @{ Label = 'component built only of dots and a space'; CommandLine = 'node.exe "C:\FarmRx\... \Other\x.js"' }
+    # A double quote is not automatically a closing quote. With an even number of quotes ahead of it the
+    # match sits OUTSIDE any quoted argument, so a quote at the boundary OPENS a fragment that continues
+    # the same name - and the name Windows then builds is the sibling 'C:\FarmRx Backup'. Measured True
+    # before the quote-parity test, which is the whole reason the predicate now counts quotes.
+    @{ Label = 'sibling reached by opening a quoted fragment'; CommandLine = 'node.exe C:\FarmRx" Backup"\scripts\factory-board.mjs' }
+    # The same sibling by the doubled-quote spelling: the quote that appears to close the argument is
+    # followed by another quote rather than by whitespace, so a further fragment is appended.
+    @{ Label = 'sibling reached by a doubled-quote concatenation'; CommandLine = 'node.exe "C:\FarmRx"" Backup"\x.js' }
+    # A quoted space belongs to the directory name, but it must not hide a traversal that follows it.
+    @{ Label = 'traversal out of a space-bearing segment'; CommandLine = 'node.exe "C:\FarmRx\my app\..\..\Other\x.js"' }
   )) {
     $traversingListener = [pscustomobject]@{ Name = 'node.exe'; CommandLine = $case.CommandLine }
     Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $traversingListener -Root 'C:\FarmRx')) "Ownership test did not fail closed for a $($case.Label)."
@@ -279,8 +347,28 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   # proofs actually run in.
   $dotsOwned = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx\...odd\server.mjs"' }
   Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $dotsOwned -Root 'C:\FarmRx') 'Ownership test refused an owned path whose segment merely begins with dots.'
-  $spaceSegmentOwned = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe C:\FarmRx\my app\server.mjs' }
+  # QUOTED, deliberately. The unquoted spelling of this assertion proved nothing: an unquoted argument
+  # ends at whitespace, so the predicate only ever saw 'C:\FarmRx\my' and answered TRUE without the
+  # space-bearing segment mattering. A listener genuinely running from a path with a space in it quotes
+  # that path, which is the case this now pins.
+  $spaceSegmentOwned = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx\my app\server.mjs"' }
   Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $spaceSegmentOwned -Root 'C:\FarmRx') 'Ownership test refused an owned path containing a space-bearing directory segment.'
+  # The exact root as a bare final-or-followed argument is a legitimately owned spelling, and the first
+  # version of the quote-parity repair refused it: whitespace ends an unquoted argument, so the root
+  # ending right at that whitespace ends at the token's end and is a match. Measured FALSE before this
+  # assertion existed, which is fail-closed but still a wrong cleanup diagnosis.
+  $bareRootThenFlag = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node C:\FarmRx --port 4177' }
+  Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $bareRootThenFlag -Root 'C:\FarmRx') 'Ownership test refused the exact owned root followed by another argument.'
+  # A space-bearing root cannot appear in an UNQUOTED argument at all, because Windows splits there. This
+  # corrects SR-064, which reported root 'C:\Mason FarmRx' against `node C:\Mason FarmRx` answering TRUE
+  # and offered it as a match: what that command line really passes is 'C:\Mason' and then 'FarmRx', so
+  # our root is absent and TRUE was wrong rather than merely conservative.
+  $spaceRootUnquoted = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node C:\Mason FarmRx' }
+  Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $spaceRootUnquoted -Root 'C:\Mason FarmRx')) 'Ownership test claimed a space-bearing root spanning two unquoted arguments.'
+  # ...and the quoted spelling of the same root must still be recognized, so the rule above cannot be
+  # satisfied by refusing every space-bearing root.
+  $spaceRootQuoted = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\Mason FarmRx\node_modules\vite\bin\vite.js"' }
+  Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $spaceRootQuoted -Root 'C:\Mason FarmRx') 'Ownership test refused a quoted owned root whose own name contains a space.'
 
   Write-Output 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS'
   exit 0

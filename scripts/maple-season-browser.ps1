@@ -57,42 +57,93 @@ function Test-MapleSeasonBrowserPortOwned {
   $rootTail = if ($rootNamesDirectoryUnderDrive) { $normalizedRoot.Substring(3) } else { ($normalizedRoot -replace '^\\\\[^\\]+\\[^\\]+\\', '') }
   foreach ($segment in $rootTail.Split('\')) {
     if ([string]::IsNullOrWhiteSpace($segment)) { return $false }
-    if ($segment -eq '.' -or $segment -eq '..') { return $false }
+    if ($segment.TrimEnd(' ', "`t").TrimEnd('.').Length -eq 0) { return $false }
   }
   # Neither a space nor an apostrophe is a boundary. Both are legal in a Windows directory name, so
   # treating either as a terminator lets root C:\FarmRx claim a different tree and this predicate
   # authorizes killing what it finds there: a space accepted "C:\FarmRx Backup\node_modules\vite\..."
-  # and an apostrophe accepted "C:\FarmRx's Backup\node_modules\vite\...". A double quote is a
-  # boundary because Windows forbids it in a path, so its only possible role is closing the argument.
-  # Only a separator, a closing double quote, or the end of the string actually ends a directory name.
+  # and an apostrophe accepted "C:\FarmRx's Backup\node_modules\vite\...". A double quote is not simply
+  # a boundary either: whether it closes the argument or opens another fragment of the same name depends
+  # on how many quotes precede it, which the parity test below establishes.
   $rooted = $false
   $searchIndex = 0
   while ($searchIndex -le ($normalizedCommandLine.Length - $normalizedRoot.Length)) {
     $matchIndex = $normalizedCommandLine.IndexOf($normalizedRoot, $searchIndex, [StringComparison]::OrdinalIgnoreCase)
     if ($matchIndex -lt 0) { break }
-    $boundaryIndex = $matchIndex + $normalizedRoot.Length
-    $endsAtEndOfCommandLine = $boundaryIndex -ge $normalizedCommandLine.Length
-    $endsAtDirectoryBoundary = (-not $endsAtEndOfCommandLine) -and ([string]$normalizedCommandLine[$boundaryIndex] -match '[\\"]')
-    if ($endsAtEndOfCommandLine -or $endsAtDirectoryBoundary) {
-      # A boundary-valid occurrence still has to stay inside the tree it names, and matching the root
-      # text does not establish that. Measured with root C:\FarmRx against
-      # `node.exe "C:\FarmRx\..\Other\scripts\factory-board.mjs" --port 4177`: the root was found at a
-      # real separator, this predicate answered True, and it would have authorized Stop-Process -Force
-      # against a process running wholly outside the repository - the parent directory reached by
-      # another spelling. Walk the rest of that path token, up to the closing double quote or the end
-      # of the command line, and refuse if any segment is a parent traversal. Farm Rx builds these
-      # paths through [IO.Path]::GetFullPath, which leaves no '..' behind, so no legitimate listener
-      # loses its match; and refusing is the fail-closed answer, which costs a cleanup diagnosis
-      # rather than a wrong termination.
-      $tokenTail = $normalizedCommandLine.Substring($boundaryIndex)
-      $closingQuoteIndex = $tokenTail.IndexOf('"')
-      if ($closingQuoteIndex -ge 0) { $tokenTail = $tokenTail.Substring(0, $closingQuoteIndex) }
-      if ($tokenTail.Split('\') -notcontains '..') { $rooted = $true; break }
-    }
-    # Keep scanning. Stopping at the first occurrence let an unrelated leading argument such as
-    # --require C:\FarmRx2\hook.js mask the real owned path later in the same command line, which
-    # declared our own server foreign and failed the month at cleanup with a wrong diagnosis.
+    # Keep scanning past this occurrence whatever it turns out to be. Stopping at the first occurrence
+    # let an unrelated leading argument such as --require C:\FarmRx2\hook.js mask the real owned path
+    # later in the same command line, which declared our own server foreign and failed the month at
+    # cleanup with a wrong diagnosis. Advancing here rather than at the bottom of the loop means every
+    # `continue` below is safe.
     $searchIndex = $matchIndex + 1
+    $boundaryIndex = $matchIndex + $normalizedRoot.Length
+    # Count the double quotes ahead of this occurrence. Quote parity is what a character after the root
+    # MEANS: inside a quoted argument a space belongs to the directory name and a double quote closes
+    # the argument, while outside one a space ends the argument and a double quote OPENS a fragment that
+    # continues the same name. Measured with root C:\FarmRx: without this test
+    # `node.exe C:\FarmRx" Backup"\scripts\factory-board.mjs` answered True, because the bare quote was
+    # read as a closing quote - yet the argument Windows actually builds is C:\FarmRx Backup\..., a
+    # sibling directory, and this predicate is the sole gate on Stop-Process -Force.
+    $quotesBefore = 0
+    for ($scan = 0; $scan -lt $matchIndex; $scan++) {
+      if ($normalizedCommandLine[$scan] -eq '"') { $quotesBefore++ }
+    }
+    $insideQuotes = ($quotesBefore % 2) -eq 1
+    # An unquoted occurrence has to be ONE argument. Windows splits an unquoted argument at whitespace,
+    # so when the root's own name contains a space the matched text spans two arguments and the root is
+    # not really present. Measured: root 'C:\Mason FarmRx' against `node C:\Mason FarmRx` answered True,
+    # yet what that command line actually passes is 'C:\Mason' and then 'FarmRx'. A listener genuinely
+    # running from a space-bearing root quotes it, which is the branch above.
+    if ((-not $insideQuotes) -and ($normalizedRoot -match '\s')) { continue }
+    # Find where this argument ends, so the traversal walk below sees one path token instead of the rest
+    # of the command line. Measured: scanning only to the next double quote left the tail
+    # '\.. --port 4177' for `node.exe C:\FarmRx\.. --port 4177`, which is not the exact segment '..', so
+    # the traversal refusal missed it and the predicate claimed the PARENT directory.
+    $tokenEnd = $normalizedCommandLine.Length
+    $argumentContinues = $false
+    for ($scan = $boundaryIndex; $scan -lt $normalizedCommandLine.Length; $scan++) {
+      $character = $normalizedCommandLine[$scan]
+      if ($character -eq '"') {
+        $tokenEnd = $scan
+        # An unquoted token cannot be ended by a quote - that quote opens a fragment appended to this
+        # same name. A quoted token's closing quote must be followed by whitespace or nothing; anything
+        # else (including the '""' spelling) concatenates a further fragment. Either way the argument
+        # being built is longer than the text matched here, so this occurrence proves nothing.
+        $argumentContinues = (-not $insideQuotes) -or -not (($scan -eq ($normalizedCommandLine.Length - 1)) -or [char]::IsWhiteSpace($normalizedCommandLine[$scan + 1]))
+        break
+      }
+      if ((-not $insideQuotes) -and [char]::IsWhiteSpace($character)) { $tokenEnd = $scan; break }
+    }
+    if ($argumentContinues) { continue }
+    # The root must end where a directory name can end: at a separator inside the token, or exactly at
+    # the token's end. Whitespace is a boundary only for an unquoted token, which is why the token end
+    # is computed above rather than tested character by character - inside quotes a space is part of the
+    # name, outside quotes it ends the argument.
+    $endsAtTokenEnd = $boundaryIndex -ge $tokenEnd
+    $endsAtSeparator = (-not $endsAtTokenEnd) -and ($normalizedCommandLine[$boundaryIndex] -eq '\')
+    if (-not ($endsAtTokenEnd -or $endsAtSeparator)) { continue }
+    # A boundary-valid occurrence still has to stay inside the tree it names, and matching the root
+    # text does not establish that. Measured with root C:\FarmRx against
+    # `node.exe "C:\FarmRx\..\Other\scripts\factory-board.mjs" --port 4177`: the root was found at a
+    # real separator, this predicate answered True, and it would have authorized Stop-Process -Force
+    # against a process running wholly outside the repository - the parent directory reached by another
+    # spelling. Walk the remaining segments of this one token and refuse a parent traversal. Farm Rx
+    # builds these paths through [IO.Path]::GetFullPath, which leaves no '..' behind, so no legitimate
+    # listener loses its match; and refusing is the fail-closed answer, which costs a cleanup diagnosis
+    # rather than a wrong termination.
+    $escapesTree = $false
+    foreach ($segment in $normalizedCommandLine.Substring($boundaryIndex, $tokenEnd - $boundaryIndex).Split('\')) {
+      # A truly empty segment is a doubled separator, which Windows collapses and which cannot escape.
+      if ($segment.Length -eq 0) { continue }
+      # Win32 strips trailing dots and spaces from a path component, so '.. ' reaches the parent exactly
+      # as '..' does, and a component built only of dots and spaces is never a real directory name.
+      # Measured: '"C:\FarmRx\.. \Other\x.js"' and '"C:\FarmRx\... \Other\x.js"' both answered True
+      # before this normalization.
+      if ($segment.TrimEnd(' ', "`t").TrimEnd('.').Length -eq 0) { $escapesTree = $true; break }
+    }
+    if ($escapesTree) { continue }
+    $rooted = $true
+    break
   }
   if (-not $rooted) { return $false }
   # Test the image name, not the command line. The old '(vite|npm|node)' match scanned the whole
@@ -111,17 +162,33 @@ function Clear-MapleSeasonBrowserPort {
   )
   $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
   foreach ($listener in $listeners) {
-    $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue
+    # Take the process object BEFORE validating ownership. A process id is not a durable identity: the
+    # validated process can exit and Windows can hand its number to something unrelated, and what
+    # follows is a force kill. Holding the object first, then killing through it rather than by number,
+    # removes the window in which the id could come to mean a different process.
+    $ownedProcess = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+    if ($null -eq $ownedProcess) { continue }
+    $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($ownedProcess.Id)" -ErrorAction SilentlyContinue
     $owned = Test-MapleSeasonBrowserPortOwned -ListenerProcess $listenerProcess -Root $Root
     if (-not $owned) {
       throw "$Scenario found an unrecognized listener on governed port $Port; refusing to terminate it."
     }
-    $ownedProcess = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
-    if ($null -ne $ownedProcess) {
-      Stop-Process -Id $listener.OwningProcess -Force -ErrorAction Stop
-      if (-not $ownedProcess.WaitForExit(10000)) {
-        throw "$Scenario browser server did not terminate within ten seconds."
-      }
+    # Confirm the object about to be killed is the one that was validated. The ownership test ran against
+    # a WMI snapshot; comparing that snapshot's creation time to the live object's start time is what
+    # detects an id that changed hands between the two reads. Refusing is the fail-closed answer: it
+    # costs a cleanup diagnosis, where guessing costs an unrelated process.
+    $validatedStart = $null
+    if ($null -ne $listenerProcess) { $validatedStart = $listenerProcess.CreationDate }
+    if ($null -eq $validatedStart) {
+      throw "$Scenario could not read the start time of the listener on governed port $Port; refusing to terminate it."
+    }
+    if ([Math]::Abs((New-TimeSpan -Start $validatedStart -End $ownedProcess.StartTime).TotalSeconds) -gt 1) {
+      throw "$Scenario found the process id on governed port $Port no longer identifies the listener it validated; refusing to terminate it."
+    }
+    if ($ownedProcess.HasExited) { continue }
+    $ownedProcess.Kill()
+    if (-not $ownedProcess.WaitForExit(10000)) {
+      throw "$Scenario browser server did not terminate within ten seconds."
     }
   }
 

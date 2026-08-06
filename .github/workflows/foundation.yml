@@ -21,14 +21,26 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      # These three gates are invoked by the WORKFLOW, not by the orchestrator, and that is the entire
+      # point of listing them separately. A single earlier attempt to solve this asserted the
+      # orchestrator's final marker from here, on the reasoning that a script which returns early cannot
+      # keep the last line it prints. That reasoning was wrong: an edit reading
+      # `Write-Output ('Farm Rx foundation gate: ' + 'PASS'); return` at the top prints the marker
+      # without running anything, and a substring assertion over a log the script itself writes cannot
+      # tell the two apart. No log-string check can, because the liar writes the log. Running the guards
+      # as their own steps is the difference that holds: a forged orchestrator cannot suppress a step it
+      # does not invoke.
+      - name: Foundation static guards
+        run: node scripts/foundation-static-guards.mjs
+      - name: Foundation mutation drill
+        run: node scripts/verify-foundation-mutations.mjs
+      - name: Windows execution lane runtime drill
+        run: node scripts/foundation-windows-lane-runtime-drill.mjs
       - name: Run foundation gate
         shell: pwsh
-        # Require the orchestrator's own final marker, not just a clean exit. Every guard inside
-        # scripts/verify-foundation.ps1 reads that file as text, so an edit that inserts a top-level
-        # `return` above the lanes leaves all of them present, runs nothing, and exits 0 - and the one
-        # thing such an edit cannot keep is the last line the script prints. Asserting the marker from
-        # here puts that check in a second file, outside the script that would be lying.
-        # Tee-Object passes the output through, so the gate still streams to the job log.
+        # The marker assertion stays, downgraded in what it claims. It catches a truncated or crashed run
+        # that still exits 0; it does not catch a deliberate forgery, and the steps above are what cover
+        # that. Tee-Object passes the output through, so the gate still streams to the job log.
         run: |
           $ErrorActionPreference = 'Stop'
           ./scripts/verify-foundation.ps1 | Tee-Object -FilePath foundation-gate.log

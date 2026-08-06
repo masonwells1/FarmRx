@@ -134,6 +134,12 @@ export function foundationStaticGuard(root = process.cwd()) {
   const foundationWorkflow = read(root, '.github/workflows/foundation.yml')
   requireText(errors, foundationWorkflow, "Select-String -LiteralPath foundation-gate.log -SimpleMatch -CaseSensitive -Pattern 'Farm Rx foundation gate: PASS' -Quiet", 'workflow:foundation-completion-marker-asserted')
   requireText(errors, foundationWorkflow, "throw 'Foundation gate did not print its completion marker.'", 'workflow:foundation-completion-marker-fatal')
+  // The three gates the workflow must run ITSELF. Invoked from the orchestrator alone, all three are
+  // suppressible by an orchestrator that returns before reaching them while still printing the final
+  // marker - which a log-substring assertion cannot distinguish from a real run.
+  requireText(errors, foundationWorkflow, 'run: node scripts/foundation-static-guards.mjs', 'workflow:static-guards-run-independently')
+  requireText(errors, foundationWorkflow, 'run: node scripts/verify-foundation-mutations.mjs', 'workflow:mutation-drill-run-independently')
+  requireText(errors, foundationWorkflow, 'run: node scripts/foundation-windows-lane-runtime-drill.mjs', 'workflow:runtime-drill-run-independently')
   requireText(errors, foundationOrchestrator, "Write-Output 'Farm Rx foundation gate: PASS'", 'orchestrator:completion-marker')
 
   // The kill-authorizing predicate. This is the sole gate on the Stop-Process -Force in
@@ -143,7 +149,22 @@ export function foundationStaticGuard(root = process.cwd()) {
   // True. The traversal refusal is pinned here and executed by
   // scripts/maple-season-browser-port-preflight.regression.ps1.
   const seasonBrowser = read(root, 'scripts/maple-season-browser.ps1')
-  requireText(errors, seasonBrowser, "if ($tokenTail.Split('\\') -notcontains '..') { $rooted = $true; break }", 'season-browser:ownership-refuses-traversal')
+  requireText(errors, seasonBrowser, "if ($segment.TrimEnd(' ', \"`t\").TrimEnd('.').Length -eq 0) { $escapesTree = $true; break }", 'season-browser:ownership-refuses-traversal')
+  // What a character after the root MEANS depends on how many quotes precede it. Without the parity
+  // count, `node.exe C:\FarmRx" Backup"\scripts\factory-board.mjs` read the bare quote as a closing quote
+  // and answered True for root C:\FarmRx - while the argument Windows builds names the sibling
+  // C:\FarmRx Backup. Measured True before this line existed.
+  requireText(errors, seasonBrowser, '$insideQuotes = ($quotesBefore % 2) -eq 1', 'season-browser:ownership-counts-quote-parity')
+  requireText(errors, seasonBrowser, '$argumentContinues = (-not $insideQuotes) -or -not (($scan -eq ($normalizedCommandLine.Length - 1)) -or [char]::IsWhiteSpace($normalizedCommandLine[$scan + 1]))', 'season-browser:ownership-rejects-continued-argument')
+  // An unquoted argument ends at whitespace. Without this the traversal walk saw the rest of the command
+  // line, so `node.exe C:\FarmRx\.. --port 4177` left the tail '\.. --port 4177', which is not the exact
+  // segment '..', and the predicate claimed the parent directory. Measured True before this line existed.
+  requireText(errors, seasonBrowser, "if ((-not $insideQuotes) -and [char]::IsWhiteSpace($character)) { $tokenEnd = $scan; break }", 'season-browser:ownership-ends-unquoted-token-at-whitespace')
+  requireText(errors, seasonBrowser, "if ((-not $insideQuotes) -and ($normalizedRoot -match '\\s')) { continue }", 'season-browser:ownership-rejects-unquoted-space-root')
+  // The force kill must go through the object that was validated, and the validated identity must still
+  // hold. A process id is not durable: the validated process can exit and Windows can reissue its number.
+  requireText(errors, seasonBrowser, '$ownedProcess.Kill()', 'season-browser:cleanup-kills-validated-object')
+  requireText(errors, seasonBrowser, 'no longer identifies the listener it validated', 'season-browser:cleanup-rechecks-process-identity')
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
 

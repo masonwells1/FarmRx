@@ -51,6 +51,24 @@ const detected = (label, expected) => {
 try {
   reset()
   if (foundationStaticGuard(temporary).length) throw new Error('Static guard baseline was not green before mutation drills.')
+  // Drill the no-op guard itself. Every one of the mutations below is only a test while its needle still
+  // matches, so the guard above is load-bearing for this entire file - and deleting it would leave all of
+  // them green while some of them tested untouched source. Nothing else in this repository would notice,
+  // so the guard gets its own executed self-test: supply a deliberately stale needle and require the
+  // named refusal. Run against the baseline copy, and it must leave that copy byte-identical.
+  const baselineBefore = readFileSync(join(temporary, 'src/App.tsx'), 'utf8')
+  let staleNeedleRefusal = null
+  try {
+    mutate('src/App.tsx', (source) => source.replace('a needle that this file will never contain', 'x'))
+  } catch (error) {
+    staleNeedleRefusal = error.message
+  }
+  if (staleNeedleRefusal === null) throw new Error('The mutation helper accepted a needle that does not match; every drill in this file would then be able to test unmodified source.')
+  if (!staleNeedleRefusal.startsWith('Mutation no longer applies to src/App.tsx; its needle is stale:')) throw new Error(`The mutation helper refused a stale needle without naming it: ${staleNeedleRefusal}`)
+  if (readFileSync(join(temporary, 'src/App.tsx'), 'utf8') !== baselineBefore) throw new Error('The mutation helper wrote to the baseline copy while refusing a stale needle.')
+  // Not counted as a controlled mutation: it drills this file's own helper rather than a repository guard,
+  // and folding it into that total would inflate a number the summary line reports as coverage.
+  console.log('Mutation helper self-test: a stale needle is refused and named')
   mutate('src/App.tsx', (source) => source.replace('path="/grain/*"', 'path="/grain-broken/*"'))
   detected('ordered route manifest change', 'routes:exact-ordered-manifest')
   reset()
@@ -174,14 +192,47 @@ try {
   mutate('.github/workflows/foundation.yml', (source) => source.replace("throw 'Foundation gate did not print its completion marker.'", "Write-Output 'marker missing'"))
   detected('CI marker assertion downgraded to a message', 'workflow:foundation-completion-marker-fatal')
   reset()
+  // Each of the three independent steps, removed one at a time. Losing any of them puts that gate back
+  // behind the orchestrator, where an orchestrator that lies about running it is enough to skip it.
+  mutate('.github/workflows/foundation.yml', (source) => source.replace('run: node scripts/foundation-static-guards.mjs', 'run: echo skipped'))
+  detected('CI stops running the static guards itself', 'workflow:static-guards-run-independently')
+  reset()
+  mutate('.github/workflows/foundation.yml', (source) => source.replace('run: node scripts/verify-foundation-mutations.mjs', 'run: echo skipped'))
+  detected('CI stops running the mutation drill itself', 'workflow:mutation-drill-run-independently')
+  reset()
+  mutate('.github/workflows/foundation.yml', (source) => source.replace('run: node scripts/foundation-windows-lane-runtime-drill.mjs', 'run: echo skipped'))
+  detected('CI stops running the lane runtime drill itself', 'workflow:runtime-drill-run-independently')
+  reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Write-Output 'Farm Rx foundation gate: PASS'", "Write-Output 'done'"))
   detected('foundation completion marker renamed', 'orchestrator:completion-marker')
   reset()
   // The kill-authorizing predicate's traversal refusal. Without it, root C:\FarmRx claims a listener
   // running at C:\FarmRx\..\Other - outside the repository - and the sole gate on Stop-Process -Force
   // authorizes terminating it.
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($tokenTail.Split('\\') -notcontains '..') { $rooted = $true; break }", '$rooted = $true; break'))
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($segment.TrimEnd(' ', \"`t\").TrimEnd('.').Length -eq 0) { $escapesTree = $true; break }", 'if ($false) { $escapesTree = $true }'))
   detected('ownership predicate stops refusing a traversing command line', 'season-browser:ownership-refuses-traversal')
+  reset()
+  // Quote parity. Read as a plain boundary, a double quote outside any quoted argument OPENS a fragment
+  // that continues the directory name, and the name it builds is a sibling of our root.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('$insideQuotes = ($quotesBefore % 2) -eq 1', '$insideQuotes = $true'))
+  detected('ownership predicate stops counting quote parity', 'season-browser:ownership-counts-quote-parity')
+  reset()
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('$argumentContinues = (-not $insideQuotes) -or -not (($scan -eq ($normalizedCommandLine.Length - 1)) -or [char]::IsWhiteSpace($normalizedCommandLine[$scan + 1]))', '$argumentContinues = $false'))
+  detected('ownership predicate accepts an argument that continues past the quote', 'season-browser:ownership-rejects-continued-argument')
+  reset()
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ((-not $insideQuotes) -and [char]::IsWhiteSpace($character)) { $tokenEnd = $scan; break }", 'if ($false) { $tokenEnd = $scan }'))
+  detected('ownership predicate stops ending an unquoted token at whitespace', 'season-browser:ownership-ends-unquoted-token-at-whitespace')
+  reset()
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ((-not $insideQuotes) -and ($normalizedRoot -match '\\s')) { continue }", 'if ($false) { continue }'))
+  detected('ownership predicate accepts a space-bearing root spanning two unquoted arguments', 'season-browser:ownership-rejects-unquoted-space-root')
+  reset()
+  // The cleanup kill itself. Killing by number rather than through the validated object reopens the
+  // window in which that number can come to mean a different process, and this is a force kill.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('$ownedProcess.Kill()', 'Stop-Process -Id $listener.OwningProcess -Force -ErrorAction Stop'))
+  detected('cleanup kills by process id instead of the validated object', 'season-browser:cleanup-kills-validated-object')
+  reset()
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('no longer identifies the listener it validated', 'is fine'))
+  detected('cleanup stops re-checking the validated process identity', 'season-browser:cleanup-rechecks-process-identity')
   reset()
   mutate('src/data/QueuedScoutingRepository.ts', (source) => source.replace('const verifyRead = () => verifyQueuedReadContext', 'const verifyRead = () => verifyQueuedOperationContext'))
   detected('queued read identity fence removal', 'read-context:src/data/QueuedScoutingRepository.ts')
