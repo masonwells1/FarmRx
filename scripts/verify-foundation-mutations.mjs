@@ -30,6 +30,11 @@ const files = [
   // longhand - the second of the two channels that prove the equivalence table executed rather than merely
   // being present. The guard reads it, so the baseline copy needs it.
   'scripts/maple-july-db-clock-wiring.regression.ps1',
+  // THIS FILE, because the static guard now reads it. A fresh-context review showed why: stubbing the runner
+  // below to return `{ status: 1, output: expected }` scored all five behavioural subjects without starting a
+  // single child process, and nothing looked at this file to notice. Its own drills mutate the copy, never the
+  // original, so the pins over it are exercised the same way every other pin here is.
+  'scripts/verify-foundation-mutations.mjs',
   // The season start fixture and every script that applies it. The static guard discovers the
   // consumers by scanning scripts/, so all of them have to exist here or the baseline is not the
   // same shape as the repository.
@@ -357,8 +362,28 @@ try {
     // The accepted answer must be SELECTED by filtering this caller's own candidate spellings. A selection
     // replaced by a constant records a value the comparison did not produce, which is the whole defect the
     // recording exists to catch.
-    mutate(path, (source) => source.replace(/^( *)(\$\w*[Aa]ccepted) = @\(\$\w*[Ff]orIndex \| Where-Object \{ \$\w+ -ccontains \$_ \}\)/m, "$1$2 = @('placeholder')"))
+    mutate(path, (source) => source.replace(/if \(\$\w*[Cc]andidates -ccontains \$\w*[Aa]nswer\)/, 'if ($true)'))
     detected(`${id} stops selecting the accepted answer from its own candidate spellings`, `${id}:ownership-answer-selected-from-candidates`)
+    reset()
+    // AND THE SELECTION MUST NOT GO THROUGH A CMDLET. A fresh-context review defeated the `Where-Object` version
+    // of this selection with eight lines placed earlier in the same file: `function Where-Object { process { $_ } }`
+    // returns every object un-filtered, so a child printing `owned=FALSE` against a caller expecting TRUE is
+    // accepted, `$accepted.Count` is 1, and the reconciliation compares the forged answer with itself. Both the
+    // keyword form and the prohibition on redefining the cmdlet are drilled, because either alone restores it.
+    mutate(path, (source) => source.replace(/^( *)foreach \((\$\w*[Aa]nswer) in (\$\w*[Ff]orIndex)\) \{/m, '$1$2s = @($3 | Where-Object { $_ }); foreach ($2 in $2s) {'))
+    detected(`${id} routes the answer selection back through a shadowable cmdlet`, `${id}:ownership-answer-iterated-with-a-keyword`)
+    reset()
+    mutate(path, (source) => source.replace(/^( *)foreach \((\$\w*[Aa]nswer) in /m, '$1function Where-Object { process { $_ } }\n$1foreach ($2 in '))
+    detected(`${id} redefines Where-Object so any pipeline filter in it stops filtering`, `${id}:cmdlet-not-shadowed-by-function:Where-Object`)
+    reset()
+    // The caller's expectations are ReadOnly BINDINGS, not plain assignments. PowerShell refuses the second write
+    // at run time, which no regex over PowerShell can promise: names are case-insensitive and `${script:x}` puts
+    // the scope inside the braces, and a fresh-context review confirmed both spellings landed silently.
+    mutate(path, (source) => source.replace(/^( *)Set-Variable -Name (\w+) -Option ReadOnly -Value ("OWNERSHIP_MANIFEST)/m, '$1$$$2 = $3'))
+    detected(`${id} makes its ownership-manifest expectation rebindable by the party being judged`, `${id}:ownership-assertion-canary-required-readonly`)
+    reset()
+    mutate(path, (source) => source.replace(/^( *)Set-Variable -Name (\w+) -Option ReadOnly -Value \(\[Guid\]::NewGuid\(\)\.ToString\('N'\)\)/m, "$1$$$2 = [Guid]::NewGuid().ToString('N')"))
+    detected(`${id} makes its per-run challenge nonce rebindable after it is generated`, `${id}:ownership-challenge-nonce-assigned-live-readonly`)
     reset()
     // And the recorded value must be the accepted answer rather than whatever the child printed. Recording the
     // raw output makes the reconciliation below compare the output against itself, which always agrees.
@@ -629,6 +654,89 @@ try {
   reset()
   mutate('tests/season/maple-2027-start.sql', (source) => source.replaceAll(":'season_owner_password'", "'a-literal-password'"))
   detected('season start fixture carries a literal password', 'season:start-fixture-parameterized-password')
+  reset()
+
+  // ---------------------------------------------------------------------------------------------------
+  // THIS FILE'S OWN CLAIMS, and the two receipts that carry a measured quantity. Every case below exists
+  // because a fresh-context review defeated the previous shape of it.
+  //
+  // The static half of this drill printed its PASS marker at line ~820 and NOBODY READ IT. So the whole
+  // static half - every case above - could be wrapped in `if (false)`, the marker would still print, and
+  // both callers would still be satisfied. Both callers now hold the sentence and refuse a run without it.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('$mutationDrill -cnotcontains $expectedStaticMarker', '$false'))
+  detected('orchestrator stops requiring the mutation drill to report its static half', 'orchestrator:mutation-drill-static-claim-consumed')
+  reset()
+  mutate('.github/workflows/foundation.yml', (source) => source.replace('$drill -cnotcontains $expectedStatic', '$false'))
+  detected('CI stops requiring the mutation drill to report its static half', 'workflow:mutation-drill-static-claim-consumed')
+  reset()
+  // And the behavioural claim is PLATFORM-SPECIFIC, which is how a real CI break got in with no adversarial
+  // edit at all: the ubuntu job's drill step required the 4-broken/1-gap sentence while the same job's
+  // orchestrator required the 5-broken/0-gap one unconditionally. That lane was red on merge. Selecting by
+  // platform is pinned, and so is REFUSING the other platform's sentence - a run that prints both is not
+  // measuring anything, because at most one of them can be true of the machine it ran on.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('$expectedBehaviouralMarker = if ($onWindowsForDrill) { $windowsBehaviouralMarker } else { $portableBehaviouralMarker }', '$expectedBehaviouralMarker = $windowsBehaviouralMarker'))
+  detected('orchestrator demands the Windows behavioural claim on every platform', 'orchestrator:mutation-drill-claim-selected-by-platform')
+  reset()
+  for (const [path, id, drill, rejected] of [['.github/workflows/foundation.yml', 'workflow', '$drill', '$rejectedBehaviour'], ['scripts/verify-foundation.ps1', 'orchestrator', '$mutationDrill', '$rejectedBehaviouralMarker']]) {
+    mutate(path, (source) => source.replace(`${drill} -ccontains ${rejected}`, '$false'))
+    detected(`${id} stops refusing the other platform's behavioural claim`, `${id}:mutation-drill-other-platform-claim-refused`)
+    reset()
+  }
+  // The tokenizer receipt carries a QUANTITY WINDOWS PRODUCED. The count-only version was defeated by
+  // `$agrees = $true` after the $null clear plus wrapping both parses: comparisons=33, distinct=33, and not
+  // one call to CommandLineToArgvW. Summing the argument counts the real parse returned cannot be reached
+  // that way, so removing the sum, the publication, or the check each restores the hole.
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('      $tokenizerTokens += $expected.Count\n', ''))
+  detected('tokenizer receipt stops carrying the argument count Windows returned', 'season-browser-regression:tokenizer-receipt-recorded-after-the-comparison')
+  reset()
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('Assert-True ($tokenizerTokens -eq $tokenizerExpectedTokens)', 'Assert-True ($tokenizerTokens -ge 0)'))
+  detected('tokenizer receipt stops checking the argument total against the measured expectation', 'season-browser-regression:tokenizer-tokens-consumed')
+  reset()
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('      $agrees = $expected.Count -eq $actual.Count\n', '      $agrees = $expected.Count -eq $actual.Count\n      $agrees = $true\n'))
+  detected('tokenizer agreement flag is forced true after the comparison', 'season-browser-regression:tokenizer-agreement-written-three-times:4')
+  reset()
+  // The two runtime-immutable bindings. `Set-Variable -Option ReadOnly` is the HARD half of these: PowerShell
+  // itself refuses the second write, which is worth more than any regex over PowerShell, because names are
+  // case-insensitive and `${script:x}` puts the scope inside the braces - a fresh-context review confirmed
+  // `${script:nonBreakingSpace} = [char]0x20` and `$script:tallied = @('padding') * $expectedCases` both
+  // landed silently against the plain-assignment versions.
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('Set-Variable -Name nonBreakingSpace -Option ReadOnly -Value ([char]0x00A0)', '$nonBreakingSpace = [char]0x00A0'))
+  detected('non-breaking space becomes rebindable to an ordinary space', 'season-browser-regression:non-breaking-space-defined-readonly-by-code-point')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('Set-Variable -Name tallied -Scope Script -Option ReadOnly -Value ([Collections.Generic.List[string]]::new())', '$script:tallied = @()'))
+  detected('reached-case tally becomes a rebindable array that padding can inflate', 'ownership-regression:tally-bound-readonly')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('  $script:tallied.Add($Message)', '  $script:tallied.Add($Message)\n  $script:tallied = @()'))
+  detected('reached-case tally is rebound a second time inside the wrapper', 'ownership-regression:tally-bound-once:tallied:2')
+  reset()
+  // AND THIS FILE, mutated in the copy exactly as the review wrote it. The behavioural half below counts how
+  // many times it called its own helper, so a runner that answers without starting a child makes every one of
+  // those calls succeed. Five pins stand over that: the child process, the returned result, the hang refusal,
+  // and the two scoring criteria. Each mutation here is the review's own stub or a weakening of one criterion.
+  // EVERY NEEDLE HERE IS ANCHORED TO THE START OF A LINE, and that is not cosmetic. The first version used
+  // plain substrings, and each one matched ITSELF: the needle is written out in this file, above the code it
+  // aims at, so `String.replace` mutated the mutation case and left the runner untouched. The guard was green,
+  // the drill reported "not detected", and the diagnosis looked like a blind guard rather than a self-hit
+  // needle. Measured here before this comment was written. Anchoring works because the copy inside a needle
+  // is preceded by a quote, never by line-start-plus-spaces.
+  const drillFile = 'scripts/verify-foundation-mutations.mjs'
+  mutate(drillFile, (source) => source.replace(/^( *)const result = spawnSync\(onWindows \? 'powershell' : 'pwsh'/m, '$1const result = { status: 1, stdout: expected, stderr: "" }; const unused = (() => spawnSync)(onWindows ? "powershell" : "pwsh"'))
+  detected("the drill's subject runner answers without starting a child process", 'mutation-drill:subject-runner-starts-a-real-child')
+  reset()
+  mutate(drillFile, (source) => source.replace(/^( *)if \(status !== 1\) \{$/m, '$1if (false) {'))
+  detected('the drill scores any non-zero exit as a detection again', 'mutation-drill:detection-requires-exit-one')
+  reset()
+  mutate(drillFile, (source) => source.replace(/^( *)if \(output\.includes\('MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS'\)\) \{$/m, '$1if (false) {'))
+  detected('the drill accepts a suite that printed PASS and then exited 1', 'mutation-drill:detection-refuses-a-pass-marker')
+  reset()
+  mutate(drillFile, (source) => source.replace(/^( *)if \(behaviourBaseline\.output\.includes\(expected\)\) \{$/m, '$1if (false) {'))
+  detected("the drill stops requiring its expected sentence to be absent from the green baseline", 'mutation-drill:detection-sentence-must-be-new')
+  reset()
+  mutate(drillFile, (source) => source.replace(/^( *)for \(const field of expectedManifestFields\) \{$/m, '$1for (const field of []) {'))
+  detected('the drill records a blind spot without checking the run had the shape it claims', 'mutation-drill:gap-requires-the-expected-manifest')
+  reset()
+  mutate(drillFile, (source) => source.replace(/^( *)if \(behaviourBaseline\.status !== 0 \|\|/m, '$1if (false &&'))
+  detected('the drill stops requiring its behavioural baseline to be green', 'mutation-drill:behavioural-baseline-must-be-green')
 
   // ---------------------------------------------------------------------------------------------------
   // THE BEHAVIOURAL HALF. Every drill above asks the STATIC guard whether it noticed, and every one of
@@ -683,10 +791,31 @@ try {
   // fresh-context review correctly called "nonzero exit plus a substring": any unrelated failure, and any
   // future mutation that broke something else entirely, would have scored. Each case now states the sentence
   // the suite must produce about the specific thing that was broken.
+  //
+  // FOUR conditions, because a later fresh-context review showed that "non-zero exit plus a substring" is still
+  // too generous. `status === 0 ||` accepted ANY non-zero result: a suite that could not start, a syntax error
+  // introduced by the mutation, a crash in an unrelated file - each scores as a detection, and keeps scoring
+  // after the mutation stops being applied. So:
+  //   1. exit is EXACTLY 1, the code this suite uses to say FAIL. Not 2, not 255, not null.
+  //   2. the sentence naming THIS defect is present.
+  //   3. the PASS marker is absent. A suite that reported PASS and then exited 1 for an unrelated reason has
+  //      not reported the mutation, whatever else is in its output.
+  //   4. the sentence is NEW relative to the green baseline captured above. If the suite says it on unmutated
+  //      source too, the sentence is not evidence about the mutation - it is boilerplate, and the case is
+  //      measuring nothing.
   const detectedByBehaviour = (label, expected) => {
+    if (behaviourBaseline.output.includes(expected)) {
+      throw new Error(`${label}: the sentence this case waits for is already present when the suite runs on UNMUTATED source, so finding it after the mutation proves nothing about the mutation. expected=${expected}`)
+    }
     const { status, output } = runOwnershipSuite()
-    if (status === 0 || !output.includes(expected)) {
-      throw new Error(`${label}: the ownership suite did not report the expected defect on a deliberately broken subject, so its assertions do not bite. exit=${status} expected=${expected}\n${output.trim()}`)
+    if (status !== 1) {
+      throw new Error(`${label}: the ownership suite exited ${status} on a deliberately broken subject. Only exit 1 is this suite's way of reporting a defect; any other code means it fell over instead of reporting, and a crash is not a detection.\n${output.trim()}`)
+    }
+    if (!output.includes(expected)) {
+      throw new Error(`${label}: the ownership suite went red but never said what was wrong, so its assertions do not bite on this defect. expected=${expected}\n${output.trim()}`)
+    }
+    if (output.includes('MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS')) {
+      throw new Error(`${label}: the ownership suite printed its PASS marker AND exited 1, so the red exit is not attributable to this mutation.\n${output.trim()}`)
     }
     behaviouralMutations.push(label)
     console.log(`Behavioural mutation detected: ${label}`)
@@ -700,11 +829,25 @@ try {
   // never arrives. Reproduced by forcing the suite's $onWindows to false with that predicate in place - exit 0,
   // PASS marker, windowsCases=0. So the expectation is now platform-conditional, and where the answer is "not
   // measured here" this prints a named gap that a Windows lane would have to close.
+  //
+  // Exit 0 ALONE is not enough here either, for the mirror-image reason. A suite that exits 0 because it stopped
+  // early - a `return` near the top, a body that no longer runs - also exits 0, and would be recorded as "this
+  // platform cannot see the defect" when the truth is "this run measured nothing". So the gap is only recorded
+  // when the suite ran all the way to the end and said so: the PASS marker, plus a manifest whose own fields
+  // agree that this is the off-Windows shape the gap is claimed about.
   const behaviourGaps = []
-  const unseenByBehaviour = (label, why) => {
+  const unseenByBehaviour = (label, why, expectedManifestFields) => {
     const { status, output } = runOwnershipSuite()
     if (status !== 0) {
       throw new Error(`${label}: this platform was expected NOT to see the defect, and the suite went red anyway. The gap this records has been closed or moved, so this case needs re-deciding rather than re-asserting. exit=${status}\n${output.trim()}`)
+    }
+    if (!output.includes('MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS')) {
+      throw new Error(`${label}: the ownership suite exited 0 without printing its PASS marker, so it stopped somewhere short of the end. That is not a measured blind spot, it is an unmeasured run.\n${output.trim()}`)
+    }
+    for (const field of expectedManifestFields) {
+      if (!output.includes(field)) {
+        throw new Error(`${label}: the ownership suite's manifest does not carry ${field}, so this run is not the off-Windows shape this gap is claimed about and the gap is not what was measured.\n${output.trim()}`)
+      }
     }
     behaviourGaps.push(label)
     console.log(`BEHAVIOUR_GAP ${label}: ${why}`)
@@ -732,7 +875,7 @@ try {
   if (onWindows) {
     detectedByBehaviour('kill-authorizing predicate refuses everything', 'The ownership predicate refused ')
   } else {
-    unseenByBehaviour('kill-authorizing predicate refuses everything', 'the must-be-TRUE table is Windows-only, so off Windows the suite stays green on a predicate that declares every listener foreign - it would fail a proof month with a wrong diagnosis and nothing here would notice')
+    unseenByBehaviour('kill-authorizing predicate refuses everything', 'the must-be-TRUE table is Windows-only, so off Windows the suite stays green on a predicate that declares every listener foreign - it would fail a proof month with a wrong diagnosis and nothing here would notice', ['windows=false', 'windowsCases=0', 'cases=5'])
   }
   reset()
   mutate(predicateFile, (source) => source.replace('  param([string]$CommandLine)\n', '  param([string]$CommandLine)\n  return @($CommandLine)\n'))

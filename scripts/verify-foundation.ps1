@@ -243,13 +243,36 @@ try {
   # `Foundation mutation drill: PASS` because that line printed BEFORE the section it summarizes. Both markers
   # now print last and this lane requires the behavioural one longhand, with the count it expects on Windows -
   # five broken subjects and no unmeasurable ones - so a skipped half arrives as a missing line.
+  # BOTH SENTENCES ARE HELD, and the platform picks which one is required. The previous version held the
+  # Windows sentence unconditionally, and a fresh-context review pointed out that this broke CI without any
+  # adversarial edit at all: the ubuntu workflow runs its own drill step expecting the four-broken sentence
+  # and then runs THIS script in the same job, which demanded the five-broken one, so the job could not
+  # be green on either platform's truth. Selecting the expectation is not the same as accepting whatever
+  # arrives - both exact sentences are still written out here, and a drill that reports the wrong one for
+  # the platform it is running on is refused.
+  # The STATIC half is held too, for the same reason the behavioural half is. Every one of its mutations can be
+  # wrapped whole while the behavioural half still earns its own sentence, and nothing was reading the
+  # static marker's count. A marker nobody consumes is decoration.
   $global:LASTEXITCODE = 0
   $mutationDrill = @(& node scripts/verify-foundation-mutations.mjs)
   $mutationDrill | ForEach-Object { Write-Output $_ }
   if ($LASTEXITCODE -ne 0) { throw 'Foundation mutation drill failed.' }
-  $expectedBehaviouralMarker = 'Foundation behavioural mutation drill: PASS (5 broken subjects were reported by the suite that runs against them, 0 not measurable on this platform)'
+  $expectedStaticMarker = 'Foundation mutation drill: PASS (172 controlled mutations turned the gate red)'
+  if ($mutationDrill -cnotcontains $expectedStaticMarker) {
+    throw "Foundation mutation drill did not report its static half to this lane.`n  expected: $expectedStaticMarker"
+  }
+  $windowsBehaviouralMarker = 'Foundation behavioural mutation drill: PASS (5 broken subjects were reported by the suite that runs against them, 0 not measurable on this platform)'
+  $portableBehaviouralMarker = 'Foundation behavioural mutation drill: PASS (4 broken subjects were reported by the suite that runs against them, 1 not measurable on this platform)'
+  $onWindowsForDrill = ($PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows)
+  $expectedBehaviouralMarker = if ($onWindowsForDrill) { $windowsBehaviouralMarker } else { $portableBehaviouralMarker }
   if ($mutationDrill -cnotcontains $expectedBehaviouralMarker) {
     throw "Foundation mutation drill did not report its behavioural half to this lane.`n  expected: $expectedBehaviouralMarker"
+  }
+  # And the OTHER platform's sentence must be absent, so a drill that prints both to satisfy every caller
+  # at once is refused. One of these two is the truth about this run; both cannot be.
+  $rejectedBehaviouralMarker = if ($onWindowsForDrill) { $portableBehaviouralMarker } else { $windowsBehaviouralMarker }
+  if ($mutationDrill -ccontains $rejectedBehaviouralMarker) {
+    throw "Foundation mutation drill reported BOTH platforms' behavioural claims, so at least one of them is not a measurement.`n  unexpected: $rejectedBehaviouralMarker"
   }
   # Behavioral, not textual, and out of process. The two lanes above assert that lines exist and that
   # deleting one turns a named guard red; this one runs the Windows lane's accounting for real against
@@ -302,7 +325,12 @@ try {
   # tokenizer. The determinism trade-off is deliberate and narrow - the season proof's fixed clock, fixed UUIDs
   # and synthetic fixtures are untouched, because the nonce exists only inside this challenge and reaches no
   # product code, no database and no artifact. A failing run reports the nonce it used in the throw below.
-  $ownershipNonce = [Guid]::NewGuid().ToString('N')
+  # ReadOnly, because a fresh-context review confirmed that `${script:ownershipNonce} = 'fixed'` written after
+  # this line overwrites the value while the guard's single-assignment count still reads one - that count is a
+  # JavaScript regex over PowerShell, whose variable names are case-insensitive and spellable several ways.
+  # PowerShell refuses the second write at runtime, and a fixed nonce would let the whole challenge be
+  # hard-coded, which is the exact defeat the nonce exists to catch.
+  Set-Variable -Name ownershipNonce -Option ReadOnly -Value ([Guid]::NewGuid().ToString('N'))
   $ownershipChallenge = @(
     @{ Line = 'node.exe C:\FarmRx\node_modules\vite\bin\vite.js --port 4177'; Argv = '<node.exe>|<C:\FarmRx\node_modules\vite\bin\vite.js>|<--port>|<4177>'; Owned = $true; ResolverDependent = $true }
     @{ Line = '"C:\Program Files\nodejs\node.exe" scripts/factory-board.mjs --port 4177'; Argv = '<C:\Program Files\nodejs\node.exe>|<scripts/factory-board.mjs>|<--port>|<4177>'; Owned = $false; ResolverDependent = $false }
@@ -353,7 +381,11 @@ try {
   # the field that closes what `canary=caught` could not see: the child's own two-channel cross-check compared
   # failure counts, so wrapping an assertion that normally PASSES left both channels at zero, agreeing, and the
   # child printed PASS. Measured against the real file. Five cases are portable; each Windows-only row adds one.
-  $expectedOwnershipManifest = "OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=$($ownershipOnWindows.ToString().ToLowerInvariant()) windowsCases=$(if ($ownershipOnWindows) { 24 } else { 0 }) cases=$(if ($ownershipOnWindows) { 29 } else { 5 }) challenges=$($ownershipChallenge.Count) canary=caught"
+  # ReadOnly, because a fresh-context review pointed out that `$expectedOwnershipManifest = $ownershipManifest[0]`
+  # inserted after this line makes the lane compare the child's manifest with itself while every pinned string
+  # stays exactly where it is. An expectation the judged party can overwrite is not an expectation. PowerShell
+  # refuses a second write at RUNTIME, so this is a barrier and not another sentence for a guard to look for.
+  Set-Variable -Name expectedOwnershipManifest -Option ReadOnly -Value "OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=$($ownershipOnWindows.ToString().ToLowerInvariant()) windowsCases=$(if ($ownershipOnWindows) { 24 } else { 0 }) cases=$(if ($ownershipOnWindows) { 29 } else { 5 }) challenges=$($ownershipChallenge.Count) canary=caught"
   if ($ownershipManifest[0] -cne $expectedOwnershipManifest) { throw "Season browser ownership regression reported a different shape than this lane requires.`n  expected: $expectedOwnershipManifest`n  reported: $($ownershipManifest[0])" }
   # Every OWNERSHIP_CHALLENGE line the child printed, counted as an INSTANCE rather than searched for. The
   # first version of this check filtered the lane's own CANDIDATE strings by whether the output contained
@@ -381,7 +413,16 @@ try {
     $ownershipVerdicts = if ($ownershipRow.ResolverDependent -and (-not $ownershipOnWindows)) { @('TRUE', 'FALSE') } elseif ($ownershipRow.Owned) { @('TRUE') } else { @('FALSE') }
     $ownershipCandidates = @($ownershipVerdicts | ForEach-Object { "OWNERSHIP_CHALLENGE $ownershipIndex owned=$_ argv=$($ownershipRow.Argv)" })
     $ownershipForIndex = @($ownershipAnswered | Where-Object { $_.StartsWith("OWNERSHIP_CHALLENGE $ownershipIndex ", [StringComparison]::Ordinal) })
-    $ownershipAccepted = @($ownershipForIndex | Where-Object { $ownershipCandidates -ccontains $_ })
+    # A `foreach` KEYWORD and a `-ccontains` OPERATOR, deliberately not a pipeline. A fresh-context review
+    # demonstrated that a locally defined `Where-Object` function which returns every object without invoking
+    # its filter makes this line accept a printed FALSE against a candidate TRUE, with the pinned source text
+    # completely unchanged. Keywords and operators cannot be shadowed by a function definition; cmdlets can.
+    # The static guard separately forbids any governed file from defining or aliasing these cmdlet names,
+    # which is sound in a way an affirmation is not: a shadow cannot act without its definition being findable.
+    $ownershipAccepted = [Collections.Generic.List[string]]::new()
+    foreach ($ownershipAnswer in $ownershipForIndex) {
+      if ($ownershipCandidates -ccontains $ownershipAnswer) { $ownershipAccepted.Add($ownershipAnswer) }
+    }
     if ($ownershipForIndex.Count -ne 1 -or $ownershipAccepted.Count -ne 1) {
       throw "Season browser ownership regression did not answer challenge $ownershipIndex as this lane requires.`n  accepted: $($ownershipCandidates -join ' OR ')`n  printed: $($ownershipForIndex -join ' AND ')`n  command line: $($ownershipRow.Line)"
     }

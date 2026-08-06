@@ -116,12 +116,19 @@ $script:assertionCanaryCaught = 'caught'
 # Reproduced against the real file before this rewrite. So the tally counts cases REACHED and is published in
 # the manifest, where each caller holds the expected number independently; a skipped passing assertion now
 # shows up as a case count that is one short, in a place this file's own arithmetic cannot cover for.
-$script:tallied = @()
-$script:talliedFailures = @()
+#
+# APPEND-ONLY, and the variables cannot be rebound. A fresh-context review pointed out that a count is still a
+# count: `$script:tallied = @('padding') * $expectedCases` written just before the check at the bottom of this
+# file reports the expected total with every comparison skipped, and no pinned string moves. These are now
+# ReadOnly bindings to List objects - `.Add()` still works because the OBJECT is mutable, while PowerShell
+# refuses at runtime to point the NAME at a different array. Padding the tally therefore has to defeat the
+# language rather than a regex.
+Set-Variable -Name tallied -Scope Script -Option ReadOnly -Value ([Collections.Generic.List[string]]::new())
+Set-Variable -Name talliedFailures -Scope Script -Option ReadOnly -Value ([Collections.Generic.List[string]]::new())
 function Assert-MapleSeasonCase {
   param([bool]$Condition, [string]$Message)
-  $script:tallied += $Message
-  if (-not $Condition) { $script:talliedFailures += $Message }
+  $script:tallied.Add($Message)
+  if (-not $Condition) { $script:talliedFailures.Add($Message) }
   Assert-True $Condition $Message
 }
 

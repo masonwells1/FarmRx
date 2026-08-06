@@ -482,6 +482,7 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   # comparison, because the default hashtable/HashSet comparer is case-insensitive and two rows that differ
   # only in case are two rows.
   $tokenizerComparisons = 0
+  $tokenizerTokens = 0
   $tokenizerLinesCompared = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
   if (-not $onWindows) {
     Write-Output 'Tokenizer equivalence table skipped: CommandLineToArgvW is a Windows API.'
@@ -508,7 +509,12 @@ public static class MapleSeasonArgv {
 }
 '@ | Out-Null
     }
-    $nonBreakingSpace = [char]0x00A0
+    # ReadOnly, because pinning this line's TEXT says nothing about the character the variable carries, and a
+    # fresh-context review confirmed that `${script:nonBreakingSpace} = [char]0x20` written after it silently
+    # turned the one row that distinguishes Windows' separators from [char]::IsWhiteSpace into a row about an
+    # ordinary space. PowerShell refuses a second write at RUNTIME, which no guard regex can be relied on to
+    # do: variable names here are case-insensitive and spellable several ways.
+    Set-Variable -Name nonBreakingSpace -Option ReadOnly -Value ([char]0x00A0)
     foreach ($commandLine in @(
       # Ordinary spellings, including the tab separator and the quoted program path that argv[0]'s own
       # rule exists for.
@@ -588,8 +594,15 @@ public static class MapleSeasonArgv {
       # every string the static guard pins was still present, and this file printed PASS with not one command
       # line handed to CommandLineToArgvW. Reproduced before this move. Wrapping the comparison now leaves
       # $agrees at $null, so nothing is recorded and the receipt falls short of the full table.
+      # And the receipt carries a QUANTITY THE PARSE PRODUCED, not only the fact that $agrees was truthy. A
+      # fresh-context review defeated the gating-on-$agrees version by writing `$agrees = $true` immediately
+      # after the $null clear and then wrapping the two parses and the comparison: $agrees is truthy without a
+      # single call to CommandLineToArgvW, and every count above still reaches its expected total. Windows'
+      # own token count for each row cannot be produced without calling Windows, and an unset $expected counts
+      # zero, so a wrapped parse arrives at the reconciliation below as a shortfall no extra assignment fixes.
       if ($agrees) {
         $tokenizerComparisons++
+        $tokenizerTokens += $expected.Count
         [void]$tokenizerLinesCompared.Add($commandLine)
       }
     }
@@ -607,8 +620,13 @@ public static class MapleSeasonArgv {
   # The receipt is consumed HERE, outside the branch above, and it is published as well as asserted so a
   # caller can hold the expectation independently instead of trusting this file's own PASS marker.
   $tokenizerExpectedComparisons = if ($onWindows) { 33 } else { 0 }
-  Write-Output "TOKENIZER_RECEIPT comparisons=$tokenizerComparisons distinct=$($tokenizerLinesCompared.Count) windows=$($onWindows.ToString().ToLowerInvariant())"
+  # `tokens` is the only field here that Windows itself had to produce. The other two can be reached by an
+  # extra `$agrees = $true`; this one cannot, because it sums the argument counts CommandLineToArgvW returned.
+  # 90 across the 33 rows, measured from this workstation's CommandLineToArgvW rather than reasoned about.
+  $tokenizerExpectedTokens = if ($onWindows) { 90 } else { 0 }
+  Write-Output "TOKENIZER_RECEIPT comparisons=$tokenizerComparisons distinct=$($tokenizerLinesCompared.Count) tokens=$tokenizerTokens windows=$($onWindows.ToString().ToLowerInvariant())"
   Assert-True ($tokenizerComparisons -eq $tokenizerExpectedComparisons) "The tokenizer equivalence table handed $tokenizerComparisons command lines to CommandLineToArgvW instead of $tokenizerExpectedComparisons, so the rows this file's static guard pins did not all execute."
+  Assert-True ($tokenizerTokens -eq $tokenizerExpectedTokens) "The tokenizer equivalence table accumulated $tokenizerTokens argument tokens from CommandLineToArgvW instead of $tokenizerExpectedTokens, so at least one row's parse did not run even though the row was counted as agreeing."
   Assert-True ($tokenizerLinesCompared.Count -eq $tokenizerExpectedComparisons) "The tokenizer equivalence table compared $($tokenizerLinesCompared.Count) DISTINCT command lines instead of $tokenizerExpectedComparisons, so at least one row duplicates another and whatever case the duplicate displaced was never checked."
   Write-Output 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS'
   exit 0

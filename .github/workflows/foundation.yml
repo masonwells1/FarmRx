@@ -45,9 +45,21 @@ jobs:
           $drill = @(node scripts/verify-foundation-mutations.mjs)
           $drill | ForEach-Object { Write-Output $_ }
           if ($LASTEXITCODE -ne 0) { throw 'Foundation mutation drill failed.' }
+          # The STATIC half is held here too. A fresh-context review observed that all of its mutations could be
+          # wrapped whole while the behavioural half still earned its own sentence, because no caller was
+          # reading the static marker at all. A marker nobody consumes is decoration.
+          $expectedStatic = 'Foundation mutation drill: PASS (172 controlled mutations turned the gate red)'
+          if ($drill -cnotcontains $expectedStatic) {
+            throw "Foundation mutation drill did not report its static half to this job.`n  expected: $expectedStatic"
+          }
           $expectedBehaviour = 'Foundation behavioural mutation drill: PASS (4 broken subjects were reported by the suite that runs against them, 1 not measurable on this platform)'
           if ($drill -cnotcontains $expectedBehaviour) {
             throw "Foundation mutation drill did not report its behavioural half to this job.`n  expected: $expectedBehaviour"
+          }
+          # A drill that prints BOTH platforms' claims is satisfying its callers rather than measuring them.
+          $rejectedBehaviour = 'Foundation behavioural mutation drill: PASS (5 broken subjects were reported by the suite that runs against them, 0 not measurable on this platform)'
+          if ($drill -ccontains $rejectedBehaviour) {
+            throw "Foundation mutation drill reported BOTH platforms' behavioural claims, so at least one of them is not a measurement.`n  unexpected: $rejectedBehaviour"
           }
       - name: Windows execution lane runtime drill
         run: node scripts/foundation-windows-lane-runtime-drill.mjs
@@ -86,7 +98,12 @@ jobs:
           # space, quote or backslash, which is why the expected argv is plain concatenation and this step never
           # re-implements the tokenizer. It reaches no product code, database or artifact, so the season proof's
           # determinism is untouched.
-          $nonce = [Guid]::NewGuid().ToString('N')
+          # ReadOnly, because a fresh-context review confirmed that `${script:nonce} = 'fixed'` written after
+          # this line overwrites the value while the guard's single-assignment count still reads one - the
+          # count is a JavaScript regex over PowerShell, whose variable names are case-insensitive and
+          # spellable several ways. PowerShell itself refuses the second write at runtime; a fixed nonce would
+          # let the whole challenge be hard-coded, which is the exact defeat the nonce exists to catch.
+          Set-Variable -Name nonce -Option ReadOnly -Value ([Guid]::NewGuid().ToString('N'))
           $rows = @(
             @{ Line = 'node.exe C:\FarmRx\node_modules\vite\bin\vite.js --port 4177'; Argv = '<node.exe>|<C:\FarmRx\node_modules\vite\bin\vite.js>|<--port>|<4177>'; Owned = $true; ResolverDependent = $true }
             @{ Line = '"C:\Program Files\nodejs\node.exe" scripts/factory-board.mjs --port 4177'; Argv = '<C:\Program Files\nodejs\node.exe>|<scripts/factory-board.mjs>|<--port>|<4177>'; Owned = $false; ResolverDependent = $false }
@@ -123,7 +140,12 @@ jobs:
           # failure counts, so wrapping an assertion that normally PASSES left both channels at zero, agreeing,
           # and the child printed PASS. Measured. Five cases are portable; each Windows-only row adds one, and
           # this job is ubuntu, so five is the number here.
-          $expected = "OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=$($onWindows.ToString().ToLowerInvariant()) windowsCases=$(if ($onWindows) { 24 } else { 0 }) cases=$(if ($onWindows) { 29 } else { 5 }) challenges=$($rows.Count) canary=caught"
+          # ReadOnly, because a fresh-context review pointed out that `$expected = $manifest[0]` inserted after
+          # this line makes the caller compare the child's manifest with itself while every pinned string stays
+          # exactly where it is. An expectation that can be overwritten by the thing it judges is not an
+          # expectation. PowerShell refuses a second write to a ReadOnly variable at RUNTIME, so this is a real
+          # barrier rather than another sentence for a guard to look for.
+          Set-Variable -Name expected -Option ReadOnly -Value "OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=$($onWindows.ToString().ToLowerInvariant()) windowsCases=$(if ($onWindows) { 24 } else { 0 }) cases=$(if ($onWindows) { 29 } else { 5 }) challenges=$($rows.Count) canary=caught"
           if ($manifest[0] -cne $expected) { throw "Season browser ownership regression reported a different shape than this step requires.`n  expected: $expected`n  reported: $($manifest[0])" }
           # Counted as INSTANCES, not searched for. Filtering this step's own candidate strings by whether the
           # output contains them measures nothing about how many lines the child printed, so a child answering
@@ -144,7 +166,15 @@ jobs:
             $verdicts = if ($rows[$i].ResolverDependent -and (-not $onWindows)) { @('TRUE', 'FALSE') } elseif ($rows[$i].Owned) { @('TRUE') } else { @('FALSE') }
             $candidates = @($verdicts | ForEach-Object { "OWNERSHIP_CHALLENGE $i owned=$_ argv=$($rows[$i].Argv)" })
             $forIndex = @($answered | Where-Object { $_.StartsWith("OWNERSHIP_CHALLENGE $i ", [StringComparison]::Ordinal) })
-            $accepted = @($forIndex | Where-Object { $candidates -ccontains $_ })
+            # A `foreach` KEYWORD and a `-ccontains` OPERATOR, deliberately not a pipeline. A fresh-context
+            # review demonstrated that defining a local `Where-Object` function which returns every object
+            # without invoking its filter makes this line accept a printed FALSE against a candidate TRUE,
+            # with the pinned source text completely unchanged. Keywords and operators cannot be shadowed by
+            # a function definition; cmdlets can. The static guard separately forbids any file here from
+            # defining or aliasing these cmdlet names - a PROHIBITION is sound where an affirmation is not,
+            # because a shadow cannot take effect without its definition being present to find.
+            $accepted = [Collections.Generic.List[string]]::new()
+            foreach ($answer in $forIndex) { if ($candidates -ccontains $answer) { $accepted.Add($answer) } }
             if ($forIndex.Count -ne 1 -or $accepted.Count -ne 1) {
               throw "Season browser ownership regression did not answer challenge $i as this step requires.`n  accepted: $($candidates -join ' OR ')`n  printed: $($forIndex -join ' AND ')`n  command line: $($rows[$i].Line)"
             }

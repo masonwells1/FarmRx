@@ -9,6 +9,39 @@ const requireText = (errors, source, text, label) => { if (!source.includes(text
 // a commented-out statement. Use requireMatch where the pin has to be a live statement rather than
 // merely present text.
 const requireMatch = (errors, source, pattern, label) => { if (!pattern.test(source)) errors.push(label) }
+// Every way PowerShell can WRITE a named variable, counted over lines. A fresh-context review defeated two
+// hand-rolled versions of this with spellings they did not allow for, so the rules are written out once here:
+// names are CASE-INSENSITIVE (`$NoNcE` is `$nonce`), a scope qualifier may sit inside or outside the braces
+// (`${script:nonce}` and `$script:nonce` are both writes), any compound assignment operator is a write, and
+// `Set-Variable` is a write that never mentions a `$` at all. This is a second channel only: the values it
+// protects are ReadOnly bindings, so PowerShell itself refuses the second write at run time. A regex over
+// another language is the wrong place for the load-bearing barrier.
+const countPowerShellWrites = (lines, name) => {
+  const assignment = new RegExp(`\\$(?:\\{(?:script:|global:|local:|private:|using:)?${name}\\}|(?:script:|global:|local:|private:|using:)?${name}(?![\\w:]))\\s*(?:=|\\+=|-=|\\*=|/=|%=)`, 'i')
+  const setVariable = new RegExp(`Set-Variable\\b[^\\n]*(?:'|"|\\b)${name}(?:'|"|\\b)`, 'i')
+  // Comment-only lines are dropped first. This can only ever REMOVE false positives, never hide a real write:
+  // a line PowerShell treats as a comment cannot assign anything, and a write that shares a line with code is
+  // still counted because only lines that START with # are dropped. The comments in these files quote the very
+  // defeats they defend against - `${script:nonce} = 'fixed'`, `$agrees = $true` - so without this the counter
+  // reports its own documentation as extra writes.
+  return lines.filter((line) => !/^\s*#/.test(line)).filter((line) => assignment.test(line) || setVariable.test(line)).length
+}
+// A PROHIBITION, which is the one shape of static check that is sound on its own: unlike an affirmation, the
+// thing being forbidden cannot take effect without its definition being present for this to find. A
+// fresh-context review demonstrated that `function Where-Object { $input }` defined beside a load-bearing
+// pipeline makes that pipeline return every object without ever invoking its filter - so a candidate list
+// accepts an answer it should refuse, with the pinned source line completely unchanged. Keywords and
+// operators cannot be shadowed, which is why the comparisons themselves were rewritten as `foreach` plus
+// `-ccontains`; the remaining pipelines are covered here.
+const shadowableCmdlets = ['Where-Object', 'ForEach-Object', 'Sort-Object', 'Select-String', 'Compare-Object', 'Measure-Object', 'Select-Object', 'Set-Variable', 'Get-Variable']
+const forbidCmdletShadowing = (errors, source, label) => {
+  for (const cmdlet of shadowableCmdlets) {
+    const escaped = cmdlet.replace('-', '\\-')
+    if (new RegExp(`(?:^|[^\\w-])function\\s+${escaped}\\b`, 'i').test(source)) errors.push(`${label}:cmdlet-not-shadowed-by-function:${cmdlet}`)
+    if (new RegExp(`(?:Set|New)-Alias\\b[^\\n]*(?:\\b|['"])${escaped}(?:\\b|['"])`, 'i').test(source)) errors.push(`${label}:cmdlet-not-shadowed-by-alias:${cmdlet}`)
+    if (new RegExp(`\\$(?:function|alias):${escaped}\\b`, 'i').test(source)) errors.push(`${label}:cmdlet-not-shadowed-by-provider-write:${cmdlet}`)
+  }
+}
 
 export function foundationStaticGuard(root = process.cwd()) {
   const errors = []
@@ -139,6 +172,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // does catch is a truncated or crashed run that still exits 0. The forgery class is closed instead by
   // the three independent workflow steps pinned below, which the orchestrator does not invoke.
   const foundationWorkflow = read(root, '.github/workflows/foundation.yml')
+  const mutationDrill = read(root, 'scripts/verify-foundation-mutations.mjs')
   requireText(errors, foundationWorkflow, "Select-String -LiteralPath foundation-gate.log -SimpleMatch -CaseSensitive -Pattern 'Farm Rx foundation gate: PASS' -Quiet", 'workflow:foundation-completion-marker-asserted')
   requireText(errors, foundationWorkflow, "throw 'Foundation gate did not print its completion marker.'", 'workflow:foundation-completion-marker-fatal')
   // The three gates the workflow must run ITSELF. Invoked from the orchestrator alone, all three are
@@ -168,8 +202,15 @@ export function foundationStaticGuard(root = process.cwd()) {
   // `"\x69f"` are both the key `if` to any parser while being nothing like the letters `if` as text. Measured:
   // `"if": false` at job level disabled the whole job with this guard green. Single-quoted and plain
   // scalars carry no escapes in YAML and are compared as written.
-  const decodeDoubleQuoted = (text) => text.replace(/\\(u\{([0-9A-Fa-f]+)\}|u([0-9A-Fa-f]{4})|x([0-9A-Fa-f]{2})|[\s\S])/g, (_whole, body, braced, u4, x2) => {
+  // YAML's escape set includes an EIGHT-digit `\U########` as well as `\u####` and `\x##`. The first version of
+  // this decoder handled two of the three, and a fresh-context review wrote `"\U00000069f": false` - `\U00000069`
+  // is the letter `i`, so the key is `if` to any parser, the whole job is disabled, and the decoder returned the
+  // literal text `U00000069f`. All three widths are decoded here, longest first so `\U` is never read as the
+  // one-character escape `U`. The durable answer is a real YAML parser; there is none in node_modules, and a
+  // hand-written decoder is exactly the kind of thing that gets one spelling right and misses the next.
+  const decodeDoubleQuoted = (text) => text.replace(/\\(u\{([0-9A-Fa-f]+)\}|U([0-9A-Fa-f]{8})|u([0-9A-Fa-f]{4})|x([0-9A-Fa-f]{2})|[\s\S])/g, (_whole, body, braced, u8, u4, x2) => {
     if (braced) return String.fromCodePoint(Number.parseInt(braced, 16))
+    if (u8) return String.fromCodePoint(Number.parseInt(u8, 16))
     if (u4) return String.fromCharCode(Number.parseInt(u4, 16))
     if (x2) return String.fromCharCode(Number.parseInt(x2, 16))
     const simple = { 0: '\0', a: '\x07', b: '\b', t: '\t', n: '\n', v: '\v', f: '\f', r: '\r', e: '\x1b', ' ': ' ', '"': '"', '/': '/', '\\': '\\', N: '\x85', _: '\xa0', L: ' ', P: ' ' }
@@ -326,11 +367,11 @@ export function foundationStaticGuard(root = process.cwd()) {
   // stale agreement cannot carry over. Both the clearing and the gate are pinned; without the clearing, the
   // gate would pass on row two onwards from row one's answer.
   requireText(errors, seasonBrowserRegression, '$agrees = $null', 'season-browser-regression:tokenizer-agreement-cleared-per-row')
-  requireMatch(errors, seasonBrowserRegression, /Assert-True \$agrees "Split-MapleSeasonCommandLineArguments disagreed[^\n]*\n(?: *#[^\n]*\n)* *if \(\$agrees\) \{\n *\$tokenizerComparisons\+\+\n *\[void\]\$tokenizerLinesCompared\.Add\(\$commandLine\)\n/, 'season-browser-regression:tokenizer-receipt-recorded-after-the-comparison')
+  requireMatch(errors, seasonBrowserRegression, /Assert-True \$agrees "Split-MapleSeasonCommandLineArguments disagreed[^\n]*\n(?: *#[^\n]*\n)* *if \(\$agrees\) \{\n *\$tokenizerComparisons\+\+\n *\$tokenizerTokens \+= \$expected\.Count\n *\[void\]\$tokenizerLinesCompared\.Add\(\$commandLine\)\n/, 'season-browser-regression:tokenizer-receipt-recorded-after-the-comparison')
   requireText(errors, seasonBrowserRegression, '$tokenizerComparisons++', 'season-browser-regression:tokenizer-comparisons-counted')
   requireText(errors, seasonBrowserRegression, '[void]$tokenizerLinesCompared.Add($commandLine)', 'season-browser-regression:tokenizer-lines-recorded')
   requireText(errors, seasonBrowserRegression, '[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)', 'season-browser-regression:tokenizer-receipt-is-case-sensitive')
-  requireText(errors, seasonBrowserRegression, 'TOKENIZER_RECEIPT comparisons=$tokenizerComparisons distinct=$($tokenizerLinesCompared.Count) windows=', 'season-browser-regression:tokenizer-receipt-published')
+  requireText(errors, seasonBrowserRegression, 'TOKENIZER_RECEIPT comparisons=$tokenizerComparisons distinct=$($tokenizerLinesCompared.Count) tokens=$tokenizerTokens windows=', 'season-browser-regression:tokenizer-receipt-published')
   requireText(errors, seasonBrowserRegression, 'Assert-True ($tokenizerComparisons -eq $tokenizerExpectedComparisons)', 'season-browser-regression:tokenizer-receipt-total-consumed')
   requireText(errors, seasonBrowserRegression, 'Assert-True ($tokenizerLinesCompared.Count -eq $tokenizerExpectedComparisons)', 'season-browser-regression:tokenizer-receipt-distinct-consumed')
   requireText(errors, seasonBrowserRegression, 'if ($onWindows) { 33 } else { 0 }', 'season-browser-regression:tokenizer-receipt-expects-the-full-table')
@@ -338,7 +379,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // keeps finding, so the caller that chains this regression holds the expected count longhand: deleting the
   // child's own two assertions is then not enough to hide a table that never ran.
   const julyWiringRegression = read(root, 'scripts/maple-july-db-clock-wiring.regression.ps1')
-  requireText(errors, julyWiringRegression, "'TOKENIZER_RECEIPT comparisons=33 distinct=33 windows=true'", 'july-wiring-regression:tokenizer-receipt-asserted-by-the-caller')
+  requireText(errors, julyWiringRegression, "'TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true'", 'july-wiring-regression:tokenizer-receipt-asserted-by-the-caller')
   requireText(errors, seasonBrowser, '# ONE deliberate divergence from CommandLineToArgvW', 'season-browser:empty-divergence-is-declared')
   // The force kill must go through the object that was validated, and the validated identity must still
   // hold. A process id is not durable: the validated process can exit and Windows can reissue its number.
@@ -374,7 +415,18 @@ export function foundationStaticGuard(root = process.cwd()) {
   // fresh-context review wrapped an assertion that normally PASSES in `if ($false) { ... }`, both counts stayed
   // at zero, they agreed, and the suite printed PASS. Reproduced. The unconditional append and the failure-only
   // list are pinned separately, because collapsing either back into the other restores that defeat.
-  requireMatch(errors, ownershipRegression, /function Assert-MapleSeasonCase \{\n *param\(\[bool\]\$Condition, \[string\]\$Message\)\n *\$script:tallied \+= \$Message\n *if \(-not \$Condition\) \{ \$script:talliedFailures \+= \$Message \}\n *Assert-True \$Condition \$Message\n\}/, 'ownership-regression:every-case-is-tallied')
+  requireMatch(errors, ownershipRegression, /function Assert-MapleSeasonCase \{\n *param\(\[bool\]\$Condition, \[string\]\$Message\)\n *\$script:tallied\.Add\(\$Message\)\n *if \(-not \$Condition\) \{ \$script:talliedFailures\.Add\(\$Message\) \}\n *Assert-True \$Condition \$Message\n\}/, 'ownership-regression:every-case-is-tallied')
+  // The two tallies are ReadOnly append-only lists, not arrays. A fresh-context review defeated the array form
+  // with `$script:tallied = @('padding') * $expectedCases` placed just before the count check: the count agreed
+  // without a single case having run. PowerShell itself refuses to rebind a ReadOnly name at run time, so that
+  // padding line now throws where the old form silently succeeded, and Add() cannot shrink a list.
+  requireMatch(errors, ownershipRegression, /^Set-Variable -Name tallied -Scope Script -Option ReadOnly -Value \(\[Collections\.Generic\.List\[string\]\]::new\(\)\)$/m, 'ownership-regression:tally-bound-readonly')
+  requireMatch(errors, ownershipRegression, /^Set-Variable -Name talliedFailures -Scope Script -Option ReadOnly -Value \(\[Collections\.Generic\.List\[string\]\]::new\(\)\)$/m, 'ownership-regression:failure-tally-bound-readonly')
+  for (const tally of ['tallied', 'talliedFailures']) {
+    const writes = countPowerShellWrites(ownershipRegression.split(/\r?\n/), tally)
+    if (writes !== 1) errors.push(`ownership-regression:tally-bound-once:${tally}:${writes}`)
+  }
+  forbidCmdletShadowing(errors, ownershipRegression, 'ownership-regression')
   requireText(errors, ownershipRegression, 'if ($script:talliedFailures.Count -ne $script:failures.Count) {', 'ownership-regression:failure-channels-cross-checked')
   requireText(errors, ownershipRegression, '$expectedCases = 5 + $windowsCasesRun', 'ownership-regression:expected-case-count-is-derived')
   requireText(errors, ownershipRegression, 'if ($script:tallied.Count -lt $expectedCases) {', 'ownership-regression:case-count-consumed')
@@ -468,9 +520,28 @@ export function foundationStaticGuard(root = process.cwd()) {
   // Rewriting the definition to an ASCII space keeps the row pin above green and silently turns the one case
   // that distinguishes Windows' separators (space and tab only) from [char]::IsWhiteSpace into a case about an
   // ordinary space. Both the definition and its single assignment are required, for the same reason the nonce is.
-  requireMatch(errors, preflightRegression, /^ *\$nonBreakingSpace = \[char\]0x00A0$/m, 'season-browser-regression:non-breaking-space-defined-by-code-point')
-  const nbspWrites = preflightLines.filter((line) => /\$(?:\{nonBreakingSpace\}|(?:script:|global:|local:|private:)?nonBreakingSpace(?![\w:]))\s*(?:=|\+=|-=|\*=|\/=|%=)/.test(line) || /Set-Variable\b[^\n]*nonBreakingSpace/i.test(line))
-  if (nbspWrites.length !== 1) errors.push(`season-browser-regression:non-breaking-space-assigned-once:${nbspWrites.length}`)
+  // The definition is now a ReadOnly binding, so a second write fails in POWERSHELL rather than only here. That
+  // matters because a fresh-context review defeated the previous count with two ordinary spellings this regex had
+  // no way to see: PowerShell variable names are case-insensitive (`$NoNbReAkInGsPaCe = …` is the same variable)
+  // and `${script:nonBreakingSpace} = …` puts the scope INSIDE the braces, which the old alternation did not
+  // allow for. Both are fixed below, and the runtime barrier is the channel that does not depend on my getting
+  // the regex exhaustive.
+  requireMatch(errors, preflightRegression, /^ *Set-Variable -Name nonBreakingSpace -Option ReadOnly -Value \(\[char\]0x00A0\)$/m, 'season-browser-regression:non-breaking-space-defined-readonly-by-code-point')
+  if (countPowerShellWrites(preflightLines, 'nonBreakingSpace') !== 1) errors.push(`season-browser-regression:non-breaking-space-assigned-once:${countPowerShellWrites(preflightLines, 'nonBreakingSpace')}`)
+  // THE RECEIPT CARRIES A QUANTITY WINDOWS PRODUCED. A fresh-context review defeated the gate-on-$agrees version
+  // by writing `$agrees = $true` straight after the $null clear and then wrapping both parses and the comparison:
+  // $agrees is truthy with no call to CommandLineToArgvW, and the comparison and distinct-line counts both still
+  // reach 33. Summing the argument counts Windows RETURNED cannot be reached that way - an unset $expected counts
+  // zero - so the shortfall survives any number of extra assignments to the agreement flag.
+  requireMatch(errors, preflightRegression, /^ *\$tokenizerTokens \+= \$expected\.Count$/m, 'season-browser-regression:tokenizer-tokens-accumulated-from-windows')
+  requireText(errors, preflightRegression, 'tokens=$tokenizerTokens windows=', 'season-browser-regression:tokenizer-tokens-published')
+  requireText(errors, preflightRegression, '$tokenizerExpectedTokens = if ($onWindows) { 90 } else { 0 }', 'season-browser-regression:tokenizer-tokens-expected-held')
+  requireText(errors, preflightRegression, 'Assert-True ($tokenizerTokens -eq $tokenizerExpectedTokens)', 'season-browser-regression:tokenizer-tokens-consumed')
+  // $agrees is written exactly three times: cleared to $null, set from the length comparison, and cleared to
+  // $false inside the element loop. A fourth write is the defeat above, so a fourth write is red.
+  const agreesWrites = countPowerShellWrites(preflightLines, 'agrees')
+  if (agreesWrites !== 3) errors.push(`season-browser-regression:tokenizer-agreement-written-three-times:${agreesWrites}`)
+  forbidCmdletShadowing(errors, preflightRegression, 'season-browser-regression')
   // The reverse direction, named row by named row. Any live row that is NOT one of the 29 paired rows must be
   // one of these four, and each of these four must still be there - so neither table can gain or lose a row
   // without a failure that says which row and which side.
@@ -560,13 +631,28 @@ export function foundationStaticGuard(root = process.cwd()) {
     // The accepted answer is SELECTED by filtering this caller's own candidates, and the selection's own result
     // is what gets recorded. The earlier form tested membership and then recorded nothing, so the recording step
     // could not tell an executed comparison from a skipped one.
-    requireText(errors, caller, `${accepted} = @(${forIndex} | Where-Object { ${candidates} -ccontains $_ })`, `${id}:ownership-answer-selected-from-candidates`)
+    // A `foreach` KEYWORD and a `-ccontains` OPERATOR rather than a pipeline, and not for style. A fresh-context
+    // review defined a local `Where-Object` function that returns every object without invoking its filter, and
+    // the pipeline form then accepted a printed FALSE against a candidate TRUE with this pin still green.
+    // Keywords and operators cannot be shadowed by a function definition. Anchored as a live statement.
+    requireMatch(errors, caller, new RegExp(`^ *foreach \\(\\$\\w+ in ${forIndex.replace('$', '\\$')}\\) \\{`, 'm'), `${id}:ownership-answer-iterated-with-a-keyword`)
+    requireText(errors, caller, `if (${candidates} -ccontains $`, `${id}:ownership-answer-selected-from-candidates`)
+    requireText(errors, caller, `${accepted}.Add($`, `${id}:ownership-accepted-answer-collected`)
     requireText(errors, caller, `if (${forIndex}.Count -ne 1 -or ${accepted}.Count -ne 1) {`, `${id}:ownership-answer-must-be-a-candidate`)
+    // No governed caller may shadow the cmdlets its remaining pipelines depend on.
+    forbidCmdletShadowing(errors, caller, id)
     // The suite's assertion-helper self-test, reported through the manifest. A caller that stops requiring
     // `canary=caught` cannot tell a run with ~100 live assertions from a run with all of them disabled.
     // Anchored to the live expected-manifest statement: the surrounding comment also says `canary=caught`, and
     // a substring pin satisfied by prose is exactly the mistake this whole tranche keeps repairing.
-    requireMatch(errors, caller, /^ *\$\w+ = "OWNERSHIP_MANIFEST [^\n"]*canary=caught"$/m, `${id}:ownership-assertion-canary-required`)
+    // ReadOnly, because a fresh-context review pointed out that assigning the child's own manifest line back over
+    // this variable makes the caller compare the child's answer with itself while every pin here stays green.
+    // PowerShell refuses the second write at run time; that is the barrier, and this is the pin that keeps it.
+    // TWO pins, not one, because they fail for different reasons and a single label cannot say which happened:
+    // the binding can lose its ReadOnly option while still demanding the canary, and it can keep ReadOnly while
+    // dropping the canary from the expected manifest.
+    requireMatch(errors, caller, /^ *Set-Variable -Name \w+ -Option ReadOnly -Value "OWNERSHIP_MANIFEST [^\n"]*"$/m, `${id}:ownership-assertion-canary-required-readonly`)
+    requireMatch(errors, caller, /^ *Set-Variable -Name \w+ -Option ReadOnly -Value "OWNERSHIP_MANIFEST [^\n"]*canary=caught"$/m, `${id}:ownership-assertion-canary-required`)
     // The live unrelated Node process that holds the governed port on the author's workstation. If the
     // predicate ever answers TRUE for this line, the cleanup path force-kills it. Both callers must keep
     // asking about exactly this string.
@@ -586,14 +672,14 @@ export function foundationStaticGuard(root = process.cwd()) {
     // `Set-Variable nonce 'fixed'` all reassign it and all left that count at one. So every WRITE form is
     // counted, and any extra write - even one this file cannot interpret - makes the guard red rather than
     // quiet, because a nonce that is not fresh is the same as no challenge at all.
-    const nonceAssignment = /^ *(\$\w+) = \[Guid\]::NewGuid\(\)\.ToString\('N'\)$/m.exec(caller)
-    if (!nonceAssignment) errors.push(`${id}:ownership-challenge-nonce-assigned-live`)
-    else {
-      const nonceName = nonceAssignment[1].slice(1)
-      const assignment = new RegExp(`\\$(?:\\{${nonceName}\\}|(?:script:|global:|local:|private:|using:)?${nonceName}(?![\\w:]))\\s*(?:=|\\+=|-=|\\*=|/=|%=)`)
-      const setVariable = new RegExp(`Set-Variable\\b[^\\n]*(?:'|"|\\b)${nonceName}(?:'|"|\\b)`, 'i')
-      const reassignments = caller.split(/\r?\n/).filter((line) => assignment.test(line) || setVariable.test(line))
-      if (reassignments.length !== 1) errors.push(`${id}:ownership-challenge-nonce-assigned-once:${reassignments.length}`)
+    // AND THE NONCE IS A ReadOnly BINDING, which is the channel that does not depend on this regex being
+    // exhaustive - a later review defeated the count with two spellings it had no way to see: PowerShell names
+    // are case-insensitive, and `${script:nonce}` puts the scope inside the braces. Both are handled now, but
+    // PowerShell refusing the second write at RUN TIME is the barrier; the count is the second channel.
+    const nonceAssignment = /^ *Set-Variable -Name (\w+) -Option ReadOnly -Value \(\[Guid\]::NewGuid\(\)\.ToString\('N'\)\)$/m.exec(caller)
+    if (!nonceAssignment) errors.push(`${id}:ownership-challenge-nonce-assigned-live-readonly`)
+    else if (countPowerShellWrites(caller.split(/\r?\n/), nonceAssignment[1]) !== 1) {
+      errors.push(`${id}:ownership-challenge-nonce-assigned-once:${countPowerShellWrites(caller.split(/\r?\n/), nonceAssignment[1])}`)
     }
     // The per-index verification must be RECORDED and RECONCILED. A fresh-context review wrapped the
     // answer-total check and the per-index loop in `if ($false) { ... }` in both callers: every pin in this
@@ -619,12 +705,68 @@ export function foundationStaticGuard(root = process.cwd()) {
   // requires - broken subjects reported, plus subjects this platform cannot see - and the counts differ by
   // platform, which is why the two callers hold different sentences. A caller whose count no longer matches goes
   // red, so neither half can be removed, disabled, or quietly shrunk from inside the drill.
-  requireText(errors, foundationWorkflow, "$expectedBehaviour = 'Foundation behavioural mutation drill: PASS (4 broken subjects were reported by the suite that runs against them, 1 not measurable on this platform)'", 'workflow:mutation-drill-behavioural-claim-held')
-  requireText(errors, foundationOrchestrator, "$expectedBehaviouralMarker = 'Foundation behavioural mutation drill: PASS (5 broken subjects were reported by the suite that runs against them, 0 not measurable on this platform)'", 'orchestrator:mutation-drill-behavioural-claim-held')
+  const windowsBehaviouralClaim = 'Foundation behavioural mutation drill: PASS (5 broken subjects were reported by the suite that runs against them, 0 not measurable on this platform)'
+  const portableBehaviouralClaim = 'Foundation behavioural mutation drill: PASS (4 broken subjects were reported by the suite that runs against them, 1 not measurable on this platform)'
+  requireText(errors, foundationWorkflow, `$expectedBehaviour = '${portableBehaviouralClaim}'`, 'workflow:mutation-drill-behavioural-claim-held')
+  // THE ORCHESTRATOR HOLDS BOTH SENTENCES AND SELECTS BY PLATFORM. It used to hold the Windows sentence
+  // unconditionally, and a fresh-context review pointed out that this was not a residual but a broken CI lane
+  // needing no adversarial edit at all: the ubuntu workflow requires the four-broken sentence from its own drill
+  // step and then runs this script IN THE SAME JOB, which demanded the five-broken one - so the job could not be
+  // green on either platform's truth. Selecting is not accepting: both exact sentences are still written out.
+  requireText(errors, foundationOrchestrator, `$windowsBehaviouralMarker = '${windowsBehaviouralClaim}'`, 'orchestrator:mutation-drill-windows-claim-held')
+  requireText(errors, foundationOrchestrator, `$portableBehaviouralMarker = '${portableBehaviouralClaim}'`, 'orchestrator:mutation-drill-portable-claim-held')
+  requireMatch(errors, foundationOrchestrator, /^ *\$expectedBehaviouralMarker = if \(\$onWindowsForDrill\) \{ \$windowsBehaviouralMarker \} else \{ \$portableBehaviouralMarker \}$/m, 'orchestrator:mutation-drill-claim-selected-by-platform')
   // And the claim must be CONSUMED, not merely stored. Both callers capture the drill's output and refuse when
   // the sentence is absent, which is the only reason holding it is worth anything.
   requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedBehaviour', 'workflow:mutation-drill-behavioural-claim-consumed')
   requireText(errors, foundationOrchestrator, '$mutationDrill -cnotcontains $expectedBehaviouralMarker', 'orchestrator:mutation-drill-behavioural-claim-consumed')
+  // The OTHER platform's sentence must be REFUSED. A drill that prints both is satisfying its callers rather
+  // than measuring anything, and exactly one of the two can be true of a given run.
+  requireText(errors, foundationWorkflow, '$drill -ccontains $rejectedBehaviour', 'workflow:mutation-drill-other-platform-claim-refused')
+  requireText(errors, foundationOrchestrator, '$mutationDrill -ccontains $rejectedBehaviouralMarker', 'orchestrator:mutation-drill-other-platform-claim-refused')
+  // THE STATIC HALF IS HELD TOO. A fresh-context review observed that every static mutation could be wrapped
+  // whole while the behavioural half still earned its own sentence, because no caller read the static marker at
+  // all - a marker nobody consumes is decoration. Both callers now hold it with its count.
+  const staticClaim = 'Foundation mutation drill: PASS (172 controlled mutations turned the gate red)'
+  requireText(errors, foundationWorkflow, `$expectedStatic = '${staticClaim}'`, 'workflow:mutation-drill-static-claim-held')
+  requireText(errors, foundationOrchestrator, `$expectedStaticMarker = '${staticClaim}'`, 'orchestrator:mutation-drill-static-claim-held')
+  requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedStatic', 'workflow:mutation-drill-static-claim-consumed')
+  requireText(errors, foundationOrchestrator, '$mutationDrill -cnotcontains $expectedStaticMarker', 'orchestrator:mutation-drill-static-claim-consumed')
+
+  // ---------------------------------------------------------------------------------------------------------
+  // THE DRILL ITSELF, which until now this file did not read at all. A fresh-context review pointed at the
+  // consequence: stubbing the drill's own subject runner - `const runOwnershipSuite = () => ({ status: 1,
+  // output: expected })` - makes all five behavioural subjects "detected" without a child process ever
+  // starting, and nothing anywhere noticed, because the counts in the sentence are computed from how many
+  // times the drill called its own helper.
+  //
+  // SAY WHAT THIS DOES AND DOES NOT DO. It pins the runner to a real child process and the scoring helpers to
+  // their strict criteria, so the stub cannot be written without moving text that is pinned here. It does NOT
+  // make a self-reporting file honest about itself - that is not reachable by a check living in the same
+  // repository the file lives in, and an eighth counter inside the drill would not reach it either. What
+  // closes it is review of the exact commit plus a protected branch that runs this on a machine the author
+  // does not control; what this closes is the accident and the quiet edit.
+  requireText(errors, mutationDrill, "const result = spawnSync(onWindows ? 'powershell' : 'pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(temporary, ownershipSuite)]", 'mutation-drill:subject-runner-starts-a-real-child')
+  requireMatch(errors, mutationDrill, /^ *return \{ status: result\.status, output: `\$\{result\.stdout \?\? ''\}\$\{result\.stderr \?\? ''\}` \}$/m, 'mutation-drill:subject-runner-returns-the-child-result')
+  requireMatch(errors, mutationDrill, /^ *if \(result\.error\?\.code === 'ETIMEDOUT' \|\| result\.signal\) \{$/m, 'mutation-drill:subject-runner-refuses-a-hang')
+  // The baseline is what makes "the suite went red" mean anything: a suite red for an unrelated reason would
+  // satisfy every case below it while measuring nothing.
+  requireMatch(errors, mutationDrill, /^ *if \(behaviourBaseline\.status !== 0 \|\| !behaviourBaseline\.output\.includes\('MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS'\)\) \{$/m, 'mutation-drill:behavioural-baseline-must-be-green')
+  // A detection is exit EXACTLY 1, the named sentence, no PASS marker, and a sentence the green baseline did
+  // NOT already print. "Non-zero exit plus a substring" scored crashes and boilerplate as detections.
+  requireMatch(errors, mutationDrill, /^ *if \(status !== 1\) \{$/m, 'mutation-drill:detection-requires-exit-one')
+  requireMatch(errors, mutationDrill, /^ *if \(!output\.includes\(expected\)\) \{$/m, 'mutation-drill:detection-requires-the-named-sentence')
+  requireMatch(errors, mutationDrill, /^ *if \(output\.includes\('MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS'\)\) \{$/m, 'mutation-drill:detection-refuses-a-pass-marker')
+  requireMatch(errors, mutationDrill, /^ *if \(behaviourBaseline\.output\.includes\(expected\)\) \{$/m, 'mutation-drill:detection-sentence-must-be-new')
+  // And a recorded blind spot is exit 0 PLUS the PASS marker PLUS the manifest fields that make it the shape
+  // the gap is claimed about. Exit 0 alone is also what a suite that stopped early produces.
+  requireMatch(errors, mutationDrill, /^ *if \(!output\.includes\('MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS'\)\) \{$/m, 'mutation-drill:gap-requires-a-complete-run')
+  requireMatch(errors, mutationDrill, /^ *for \(const field of expectedManifestFields\) \{$/m, 'mutation-drill:gap-requires-the-expected-manifest')
+  requireText(errors, mutationDrill, "['windows=false', 'windowsCases=0', 'cases=5']", 'mutation-drill:gap-manifest-fields-held')
+  // Both sentences are printed LAST and from the counters, never as literals. The static marker used to print
+  // before the behavioural half ran, so the behavioural half could be wrapped whole and the log still read PASS.
+  requireText(errors, mutationDrill, 'console.log(`Foundation mutation drill: PASS (${detectedMutations.length} controlled mutations turned the gate red)`)', 'mutation-drill:static-claim-counted-not-asserted')
+  requireText(errors, mutationDrill, 'console.log(`Foundation behavioural mutation drill: PASS (${behaviouralMutations.length} broken subjects were reported by the suite that runs against them, ${behaviourGaps.length} not measurable on this platform)`)', 'mutation-drill:behavioural-claim-counted-not-asserted')
 
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')

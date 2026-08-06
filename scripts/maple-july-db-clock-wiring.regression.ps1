@@ -97,7 +97,7 @@ $preflightRegression = @(& (Join-Path $root 'scripts/maple-season-browser-port-p
 # Windows-only - off Windows the child prints a skip line instead, which this exact match already refused - and
 # a receipt reading windows=false, or a lower count, would mean the equivalence table did not run.
 $preflightExpected = @(
-  'TOKENIZER_RECEIPT comparisons=33 distinct=33 windows=true'
+  'TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true'
   'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS'
 ) -join "`n"
 Assert-True ($LASTEXITCODE -eq 0 -and ($preflightRegression -join "`n") -ceq $preflightExpected) "Browser governed-port preflight regression did not pass: $(Get-MapleRedactedChildDetail $preflightRegression)"
