@@ -508,10 +508,16 @@ public static class MapleSeasonProcessInterop {
   // other's job. KILL_ON_JOB_CLOSE is the backstop that no PowerShell code can provide: if this session
   // dies - killed, crashed, closed - the kernel reaps every member as the last job handle closes. That is
   // what makes the launch window between creating the process and the first line of the try harmless.
-  public static IntPtr CreateKillOnCloseJob(out int error) {
+  //
+  // The stage is reported the same way StartInJob reports its own, and for the same reason: "the job could not
+  // be created" and "the job was created but could not be given the limit that makes it a backstop, and then
+  // could not even be closed again" are different facts about the workstation, and a refusal that says only
+  // "could not create the job object" tells whoever reads the evidence log the wrong one.
+  public static IntPtr CreateKillOnCloseJob(out int error, out string stage) {
     error = 0;
+    stage = "";
     IntPtr job = CreateJobObjectW(IntPtr.Zero, null);
-    if (job == IntPtr.Zero) { error = Marshal.GetLastWin32Error(); return IntPtr.Zero; }
+    if (job == IntPtr.Zero) { error = Marshal.GetLastWin32Error(); stage = "create"; return IntPtr.Zero; }
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
@@ -520,7 +526,16 @@ public static class MapleSeasonProcessInterop {
       Marshal.StructureToPtr(limits, buffer, false);
       if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, buffer, (uint)size)) {
         error = Marshal.GetLastWin32Error();
-        CloseHandle(job);
+        stage = "limit";
+        // THIS CLOSE IS CHECKED TOO. The job never received its KILL_ON_JOB_CLOSE limit, so it will never reap
+        // anything and leaking it strands no process - but it is a kernel object this process opened and is one
+        // statement away from losing the only reference to. A close that fails leaks it for the life of the
+        // session, and the caller is about to refuse the launch anyway, so saying so costs one sentence in a
+        // message a human is already going to read.
+        if (!CloseHandle(job)) {
+          stage = "limit, and the unusable job object could not be closed (Windows error "
+            + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";
+        }
         return IntPtr.Zero;
       }
     } finally { Marshal.FreeHGlobal(buffer); }
@@ -534,9 +549,14 @@ public static class MapleSeasonProcessInterop {
   // process this file most needs to own. Creating the child suspended closes that window in the kernel
   // rather than betting on how long node takes to reach its first spawn.
   //
-  // Every failure path terminates the child it created. A suspended process that is never resumed and never
-  // killed is a permanent stranded process on the workstation, and returning false while leaving one behind
-  // would make a launch failure worse than a launch.
+  // Every failure path terminates the child it created, and the one path whose kill KILL_ON_JOB_CLOSE cannot
+  // backstop checks that kill by hand. A suspended process that is never resumed and never killed is a
+  // permanent stranded process on the workstation, and returning false while leaving one behind would make a
+  // launch failure worse than a launch. The assign-failure path is the only one where that can still happen:
+  // that child is NOT a job member, so nothing done to the job handle will ever reach it, so TerminateProcess
+  // is the only thing that can end it - and if TerminateProcess itself fails, this function reports the
+  // stranded pid out through stage and processId instead of dropping the last name anyone had for it. An
+  // earlier version of this comment claimed the termination always succeeded; it never checked.
   public static bool StartInJob(IntPtr job, string executable, string commandLine, string workingDirectory,
       out IntPtr processHandle, out uint processId, out int error, out string stage) {
     processHandle = IntPtr.Zero;
@@ -557,7 +577,17 @@ public static class MapleSeasonProcessInterop {
     if (!AssignProcessToJobObject(job, created.hProcess)) {
       error = Marshal.GetLastWin32Error();
       stage = "assign";
-      TerminateProcess(created.hProcess, 1);
+      // THE RETURN VALUE IS CHECKED, because this is the one child KILL_ON_JOB_CLOSE cannot save. The
+      // assignment failed, so this process is not a member of the job, and nothing that happens to the job
+      // handle will ever touch it. It was created suspended, so it will never run and never exit on its own.
+      // A few lines below, both handles close and this script loses the ability to name it at all. So if the
+      // kill fails, the pid leaves through stage and processId and the refusal upstream tells a human which
+      // process to end, rather than reporting a cleanup that did not happen.
+      if (!TerminateProcess(created.hProcess, 1)) {
+        stage = "assign, and the suspended child could not be terminated (Windows error "
+          + Marshal.GetLastWin32Error().ToString() + ")";
+        processId = created.dwProcessId;
+      }
       CloseHandle(created.hThread);
       CloseHandle(created.hProcess);
       return false;
@@ -769,9 +799,10 @@ function Invoke-MapleSeasonBrowserProof {
   # spent trying to recover that proof afterwards from command-line text. Created LAST before the try, so no
   # statement can throw between owning this handle and the finally that closes it.
   $jobError = 0
-  $job = [MapleSeasonProcessInterop]::CreateKillOnCloseJob([ref]$jobError)
+  $jobStage = ''
+  $job = [MapleSeasonProcessInterop]::CreateKillOnCloseJob([ref]$jobError, [ref]$jobStage)
   if ($job -eq [IntPtr]::Zero) {
-    throw "$Scenario could not create the job object that would own its browser process tree (Windows error $jobError), so it refused to launch a process tree it could not prove it owned."
+    throw "$Scenario could not create the job object that would own its browser process tree (failed at the $jobStage stage, Windows error $jobError), so it refused to launch a process tree it could not prove it owned."
   }
   # THE TRY NOW OPENS *BEFORE* THE LAUNCH, and that is a reversal of the previous arrangement worth stating.
   # It used to open on the line AFTER Start(), because nothing below it could protect a process launched above
@@ -785,7 +816,17 @@ function Invoke-MapleSeasonBrowserProof {
     $launchError = 0
     $launchStage = ''
     if (-not [MapleSeasonProcessInterop]::StartInJob($job, $node, $commandLine, $Root, [ref]$launchedHandle, [ref]$launchedId, [ref]$launchError, [ref]$launchStage)) {
-      throw "$Scenario browser process did not start (failed at the $launchStage stage, Windows error $launchError)."
+      # A NONZERO ID ON A FAILED LAUNCH MEANS EXACTLY ONE THING, which is why this reads it as a discriminator
+      # rather than needing a second flag. StartInJob leaves processId at 0 on every failure it cleaned up
+      # after: create-failure never had a child, assign-failure sets it only when the kill of that child also
+      # failed, resume-failure is reaped by the job. So an id here is a suspended process that is not a job
+      # member, cannot be reaped by closing the job handle, will never run, and will never exit - and this is
+      # the last statement that can name it. The pid goes in the refusal because a human has to end it.
+      $strandedClause = ''
+      if ($launchedId -ne 0) {
+        $strandedClause = " Process id $launchedId was created suspended, could not be added to the job, and could not be terminated, so it is still running on this workstation and has to be ended by hand."
+      }
+      throw "$Scenario browser process did not start (failed at the $launchStage stage, Windows error $launchError).$strandedClause"
     }
     # WAIT ON THE HANDLE, not on a .NET Process object. There is no Process object in this path any more, and
     # that is a simplification rather than a loss: every previous version had to prove that .NET's private,

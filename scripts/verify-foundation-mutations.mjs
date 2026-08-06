@@ -638,16 +638,33 @@ try {
   // A failed creation that records the error and carries on. The caller then receives a zero handle from a
   // function whose contract is "a job or nothing", and every kill made through it reaches no process at all.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
-    '    if (job == IntPtr.Zero) { error = Marshal.GetLastWin32Error(); return IntPtr.Zero; }',
-    '    if (job == IntPtr.Zero) { error = Marshal.GetLastWin32Error(); }'))
+    '    if (job == IntPtr.Zero) { error = Marshal.GetLastWin32Error(); stage = "create"; return IntPtr.Zero; }',
+    '    if (job == IntPtr.Zero) { error = Marshal.GetLastWin32Error(); stage = "create"; }'))
   detected('a job that could not be created is returned anyway', 'season-browser:job-creation-failure-returns-nothing')
+  reset()
+  // And the stage that names WHICH of the two job failures happened. Delete it and both refusals read "failed at
+  // the  stage" - an empty word in an evidence log, and the two failures are different facts: one means the
+  // kernel would not make a job, the other means it made one that cannot be trusted to reap anything.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '        stage = "limit";\n',
+    ''))
+  detected('the job limit failure stops naming its stage', 'season-browser:job-limit-failure-reports-its-stage')
   reset()
   // The opposite half: a job whose limit could not be set, handed back instead of closed. It governs membership
   // correctly and reaps nothing, so the failure shows up only as a stranded browser tree after a killed session.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
-    '        CloseHandle(job);\n        return IntPtr.Zero;\n',
+    '        if (!CloseHandle(job)) {\n          stage = "limit, and the unusable job object could not be closed (Windows error "\n            + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";\n        }\n        return IntPtr.Zero;\n',
     '        return job;\n'))
   detected('a job without its limit is handed back rather than closed', 'season-browser:job-without-its-limit-is-closed-not-returned')
+  reset()
+  // AND THE REGRESSION THAT MOTIVATED THE CHECK: the close is made but its result is thrown away, which is the
+  // exact shape a fresh-context review found here. The handle is gone either way, the refusal reads the same, and
+  // a leaked kernel object goes unmentioned for the life of the session. This one is invisible to any pin that
+  // asks only whether CloseHandle is called.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '        if (!CloseHandle(job)) {\n          stage = "limit, and the unusable job object could not be closed (Windows error "\n            + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";\n        }\n',
+    '        CloseHandle(job);\n'))
+  detected('the job close result is discarded again', 'season-browser:job-without-its-limit-is-closed-not-returned')
   reset()
 
   // ---- SUSPENDED, ASSIGNED, AND ONLY THEN RESUMED -----------------------------------------------------
@@ -667,10 +684,41 @@ try {
   // block is DELETED first and reinserted after the resume, because String.replace patches only the first match
   // and a copy-then-delete would find its own copy.
   mutate('scripts/maple-season-browser.ps1', (source) => {
-    const assignBlock = '    if (!AssignProcessToJobObject(job, created.hProcess)) {\n      error = Marshal.GetLastWin32Error();\n      stage = "assign";\n      TerminateProcess(created.hProcess, 1);\n      CloseHandle(created.hThread);\n      CloseHandle(created.hProcess);\n      return false;\n    }\n'
+    // The whole block, COMMENTS INCLUDED, because this needle runs against raw source and the block's own
+    // explanation lives inside its braces. Spelled as a literal rather than sliced with indexOf on purpose: a
+    // literal that goes stale makes this a no-op and mutate() throws, whereas an indexOf that returns -1 would
+    // slice from the end of the file and hand the guard broken syntax to redden on instead of the named defect.
+    const assignBlock = [
+      '    if (!AssignProcessToJobObject(job, created.hProcess)) {',
+      '      error = Marshal.GetLastWin32Error();',
+      '      stage = "assign";',
+      '      // THE RETURN VALUE IS CHECKED, because this is the one child KILL_ON_JOB_CLOSE cannot save. The',
+      '      // assignment failed, so this process is not a member of the job, and nothing that happens to the job',
+      '      // handle will ever touch it. It was created suspended, so it will never run and never exit on its own.',
+      '      // A few lines below, both handles close and this script loses the ability to name it at all. So if the',
+      '      // kill fails, the pid leaves through stage and processId and the refusal upstream tells a human which',
+      '      // process to end, rather than reporting a cleanup that did not happen.',
+      '      if (!TerminateProcess(created.hProcess, 1)) {',
+      '        stage = "assign, and the suspended child could not be terminated (Windows error "',
+      '          + Marshal.GetLastWin32Error().ToString() + ")";',
+      '        processId = created.dwProcessId;',
+      '      }',
+      '      CloseHandle(created.hThread);',
+      '      CloseHandle(created.hProcess);',
+      '      return false;',
+      '    }',
+      '',
+    ].join('\n')
+    const reinsertAnchor = '    CloseHandle(created.hThread);\n    processHandle = created.hProcess;'
+    // Both anchors checked before either is used, for the reason spelled out on the try-after-launch drill
+    // below: with two replaces, a stale needle rides along on a live one and mutate() sees a changed file.
+    if (!source.includes(assignBlock) || !source.includes(reinsertAnchor)) {
+      throw new Error('the assign-after-resume drill lost an anchor and would have half-applied; needles are stale: ' +
+        JSON.stringify({ assignBlockFound: source.includes(assignBlock), reinsertAnchorFound: source.includes(reinsertAnchor) }))
+    }
     return source
       .replace(assignBlock, '')
-      .replace('    CloseHandle(created.hThread);\n    processHandle = created.hProcess;', assignBlock + '    CloseHandle(created.hThread);\n    processHandle = created.hProcess;')
+      .replace(reinsertAnchor, assignBlock + reinsertAnchor)
   })
   detected('the child is assigned to the job only after it is already running', 'season-browser:child-is-assigned-to-the-job-before-it-runs')
   reset()
@@ -679,9 +727,33 @@ try {
   // call and a suspended process that will never be resumed and never be killed stays on the workstation for
   // the life of the login session. Nothing reports it, because the function correctly returns false.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
-    '      stage = "assign";\n      TerminateProcess(created.hProcess, 1);\n',
-    '      stage = "assign";\n'))
+    [
+      '      if (!TerminateProcess(created.hProcess, 1)) {',
+      '        stage = "assign, and the suspended child could not be terminated (Windows error "',
+      '          + Marshal.GetLastWin32Error().ToString() + ")";',
+      '        processId = created.dwProcessId;',
+      '      }',
+      '',
+    ].join('\n'),
+    ''))
   detected('a child that could not be assigned is abandoned suspended', 'season-browser:launch-terminates-a-child-it-could-not-assign')
+  reset()
+  // AND THE SHAPE A FRESH-CONTEXT REVIEW ACTUALLY FOUND, which the deletion above cannot reach: the kill is still
+  // made, so every "is TerminateProcess called here" question answers yes, and its bool is thrown away. When the
+  // kill fails - the child is protected, the handle carries no PROCESS_TERMINATE right, the pid is already
+  // reaped and reissued - the function returns false having reported nothing, the two handles close, and the last
+  // name anyone had for a permanently suspended process is gone. The comment above the mutated line still says
+  // the return value is checked, which is the second half of the defect: a false comment reads as proof.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    [
+      '      if (!TerminateProcess(created.hProcess, 1)) {',
+      '        stage = "assign, and the suspended child could not be terminated (Windows error "',
+      '          + Marshal.GetLastWin32Error().ToString() + ")";',
+      '        processId = created.dwProcessId;',
+      '      }',
+    ].join('\n'),
+    '      TerminateProcess(created.hProcess, 1);'))
+  detected('the failed-assignment kill goes back to discarding its result', 'season-browser:launch-terminates-a-child-it-could-not-assign')
   reset()
   // And the mirror: a child that could not be RESUMED is already a member, so terminating the JOB is what kills
   // it. Delete that and the stranded suspended process is a job member with nothing left holding the job.
@@ -883,20 +955,55 @@ try {
   // THE TRY RESTORED TO WHERE IT USED TO BE - after the launch, which is the arrangement this design reversed.
   // It was correct for a cleanup that depended on later statements succeeding; with a KILL_ON_JOB_CLOSE job it
   // is now the unsafe placement, because a throw from the launch itself reaches no finally and the job handle
-  // is closed by process exit rather than by code that could report what happened. Moving a statement out of a
-  // try necessarily reindents it, so this reddens the StartInJob presence pin as well; the order pin is the
-  // label aimed at, and the reindentation is a property of the defect rather than a weakness of the drill.
-  mutate('scripts/maple-season-browser.ps1', (source) => source
-    .replace('  try {\n    $launchError = 0\n    $launchStage = \'\'\n', '  $launchError = 0\n  $launchStage = \'\'\n')
-    .replace(
-      '    if (-not [MapleSeasonProcessInterop]::StartInJob($job, $node, $commandLine, $Root, [ref]$launchedHandle, [ref]$launchedId, [ref]$launchError, [ref]$launchStage)) {\n      throw "$Scenario browser process did not start (failed at the $launchStage stage, Windows error $launchError)."\n    }\n',
-      '  if (-not [MapleSeasonProcessInterop]::StartInJob($job, $node, $commandLine, $Root, [ref]$launchedHandle, [ref]$launchedId, [ref]$launchError, [ref]$launchStage)) {\n    throw "$Scenario browser process did not start (failed at the $launchStage stage, Windows error $launchError)."\n  }\n  try {\n'))
+  // is closed by process exit rather than by code that could report what happened.
+  //
+  // MOVES THE `try {` RATHER THAN THE LAUNCH BLOCK, and that is a deliberate rewrite of an earlier version of
+  // this drill. The earlier one carried the whole failed-launch block as a literal needle, and when that block
+  // grew a stranded-pid clause the needle went stale - silently, because the FIRST replace still applied, so
+  // mutate() saw a changed file and never threw. A drill that only half-applies is worse than no drill: it
+  // reports a pass. Two one-line anchors cannot rot that way, and the closing brace plus the comment that
+  // follows it is a unique anchor no matter how long the block inside grows.
+  mutate('scripts/maple-season-browser.ps1', (source) => {
+    const openAnchor = '  try {\n    $launchError = 0\n    $launchStage = \'\'\n'
+    const closeAnchor = '    }\n    # WAIT ON THE HANDLE, not on a .NET Process object.'
+    // BOTH ANCHORS ARE CHECKED BEFORE EITHER IS USED, which is the general repair for the failure described
+    // above: mutate() can only see whether the file changed, so in any multi-anchor mutation a stale anchor
+    // hides behind a live one. Checking here converts that silence into the loud stale-needle failure the
+    // single-anchor drills get for free.
+    if (!source.includes(openAnchor) || !source.includes(closeAnchor)) {
+      throw new Error('the try-after-launch drill lost an anchor and would have half-applied; needles are stale: ' +
+        JSON.stringify({ openAnchorFound: source.includes(openAnchor), closeAnchorFound: source.includes(closeAnchor) }))
+    }
+    return source
+      .replace(openAnchor, '  $launchError = 0\n  $launchStage = \'\'\n')
+      .replace(closeAnchor, '    }\n    try {\n    # WAIT ON THE HANDLE, not on a .NET Process object.')
+  })
   detected('the try opens after the launch again', 'season-browser:launch-opens-its-try-before-it-starts-anything')
   reset()
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
     '    if (-not [MapleSeasonProcessInterop]::StartInJob($job, $node, $commandLine, $Root, [ref]$launchedHandle, [ref]$launchedId, [ref]$launchError, [ref]$launchStage)) {',
     '    if ($false) {'))
   detected('a child that did not start stops failing the launch', 'season-browser:launch-fails-when-its-child-does-not-start')
+  reset()
+  // THE INTEROP'S REPORT IS WORTHLESS IF THE POWERSHELL DROPS IT, so the clause that carries the stranded pid
+  // into the refusal is drilled twice. First the interpolation: the clause is still built, the condition still
+  // evaluates, and the sentence a human reads no longer contains the pid - which is the whole point of building
+  // it. A run that stranded a suspended process reports "did not start (failed at the assign stage)" and nobody
+  // learns there is a process to end.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '      throw "$Scenario browser process did not start (failed at the $launchStage stage, Windows error $launchError).$strandedClause"',
+    '      throw "$Scenario browser process did not start (failed at the $launchStage stage, Windows error $launchError)."'))
+  detected('the refusal stops naming the child it could not terminate', 'season-browser:launch-names-a-child-it-could-not-terminate')
+  reset()
+  // Then the condition, which is the same hole reached from the other side: the clause is interpolated into the
+  // sentence and never populated, so every failed launch reports the same message it did before the pid was
+  // available. `$false` rather than deletion, because deleting the `if` would also delete the assignment and the
+  // string would interpolate an unbound variable - and with no Set-StrictMode in this file that is an empty
+  // string, which is precisely the failure being drilled, from a third direction.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '      if ($launchedId -ne 0) {',
+    '      if ($false) {'))
+  detected('the stranded-pid clause is never populated', 'season-browser:launch-names-a-child-it-could-not-terminate')
   reset()
   // A SECOND CLEANUP CALL SITE, which is how three review rounds of conditional cleanup returned each time. This
   // one is placed on the timeout path and looks entirely reasonable there - release the port before reporting the

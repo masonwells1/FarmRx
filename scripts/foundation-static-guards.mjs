@@ -689,8 +689,24 @@ export function foundationStaticGuard(root = process.cwd()) {
   // NEITHER FAILURE MAY DEGRADE INTO AN UNGOVERNED JOB: a job that could not be created returns nothing, and a
   // job whose limit could not be set is CLOSED rather than handed back, because a job without the limit is a
   // job whose members outlive this session.
-  pinBrowserOnce('    if (job == IntPtr.Zero) { error = Marshal.GetLastWin32Error(); return IntPtr.Zero; }', 'season-browser:job-creation-failure-returns-nothing')
-  pinBrowserOnce('        CloseHandle(job);\n        return IntPtr.Zero;', 'season-browser:job-without-its-limit-is-closed-not-returned')
+  pinBrowserOnce('    if (job == IntPtr.Zero) { error = Marshal.GetLastWin32Error(); stage = "create"; return IntPtr.Zero; }', 'season-browser:job-creation-failure-returns-nothing')
+  // AND THAT CLOSE IS CHECKED, so "the job was closed" is a fact rather than an intention. A fresh-context review
+  // found the bare call here: the only handle to a just-created kernel object, discarded one statement before the
+  // last reference to it went out of scope, with nothing able to say it had failed. Nothing is stranded when it
+  // fails - this job never got its limit, so it would never have reaped anything - but the leak lasts the whole
+  // session and the caller is already assembling a refusal a human will read. The pin is on the `if (!...)` form
+  // and includes the sentence, because a check whose failure is not reported is the same silence in a longer
+  // spelling.
+  pinBrowserOnce([
+    '        stage = "limit";',
+  ].join('\n'), 'season-browser:job-limit-failure-reports-its-stage')
+  pinBrowserOnce([
+    '        if (!CloseHandle(job)) {',
+    '          stage = "limit, and the unusable job object could not be closed (Windows error "',
+    '            + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";',
+    '        }',
+    '        return IntPtr.Zero;',
+  ].join('\n'), 'season-browser:job-without-its-limit-is-closed-not-returned')
 
   // ---- suspended, assigned, and only then resumed -----------------------------------------------------
   // THE ORDER IS THE ENTIRE GUARANTEE, so this compares three positions instead of asserting three presences.
@@ -711,8 +727,18 @@ export function foundationStaticGuard(root = process.cwd()) {
   // child that could not be RESUMED is already a member, so terminating the job is what kills it. The two
   // CloseHandle pairs are identical text, so each needle runs to the statement that follows it - a needle that
   // names both blocks names neither.
+  //
+  // AND THE ASSIGN PATH'S KILL IS PINNED AS A CHECKED CALL, not as a call. A fresh-context review found the
+  // earlier version invoking TerminateProcess and discarding its bool, under a comment promising every failure
+  // path terminated its child - the one claim in this file that KILL_ON_JOB_CLOSE cannot make true, because a
+  // child that failed to be assigned is not a member and closing the job handle never touches it. So the pin is
+  // on the `if (!...)` form: restoring the bare call reddens the gate.
   pinBrowserOnce([
-    '      TerminateProcess(created.hProcess, 1);',
+    '      if (!TerminateProcess(created.hProcess, 1)) {',
+    '        stage = "assign, and the suspended child could not be terminated (Windows error "',
+    '          + Marshal.GetLastWin32Error().ToString() + ")";',
+    '        processId = created.dwProcessId;',
+    '      }',
     '      CloseHandle(created.hThread);',
     '      CloseHandle(created.hProcess);',
     '      return false;',
@@ -724,8 +750,14 @@ export function foundationStaticGuard(root = process.cwd()) {
     '      return false;',
   ].join('\n'), 'season-browser:launch-kills-the-job-of-a-child-it-could-not-resume')
   // THE INTEROP SURFACE IS NARROWED TO WHAT IS ACTUALLY CALLED, and that is a HARD boundary rather than a rule
-  // in a comment: TerminateProcess is PRIVATE, so no PowerShell statement anywhere in this repository can
-  // invoke a kill that is not TerminateJobObject, even by accident, even in a future edit. GetProcessTimes and
+  // in a comment: TerminateProcess is PRIVATE, so no PowerShell statement can reach THIS FILE'S kill primitive -
+  // only its C# can, on the one path that needs it. Stated narrowly on purpose. An earlier version of this
+  // comment said no PowerShell statement anywhere in the repository could invoke a kill that was not
+  // TerminateJobObject, and that is simply false: Stop-Process and .Kill() exist, this repository's regression
+  // scripts use them on processes they created themselves, and a private DllImport cannot revoke a cmdlet.
+  // What the private modifier buys is exactly one thing - the season browser helper cannot kill by pid - and
+  // overstating it in a comment is how a false sentence gets copied into a ledger entry, which is what
+  // happened. GetProcessTimes and
   // PROCESS_TERMINATE went with it - their only caller was the creation-time reconciliation that existed to
   // prove a re-resolved process id still described the process the launch started, and CreateProcessW hands
   // back the HANDLE, so there is nothing to re-resolve. A right taken and never spent is what a fresh-context
@@ -812,9 +844,9 @@ export function foundationStaticGuard(root = process.cwd()) {
   // refusal to launch rather than an ungoverned start. Contiguous, because the creation call and the check on
   // its result are one statement in two lines.
   pinBrowserOnce([
-    '  $job = [MapleSeasonProcessInterop]::CreateKillOnCloseJob([ref]$jobError)',
+    '  $job = [MapleSeasonProcessInterop]::CreateKillOnCloseJob([ref]$jobError, [ref]$jobStage)',
     '  if ($job -eq [IntPtr]::Zero) {',
-    '    throw "$Scenario could not create the job object that would own its browser process tree (Windows error $jobError), so it refused to launch a process tree it could not prove it owned."',
+    '    throw "$Scenario could not create the job object that would own its browser process tree (failed at the $jobStage stage, Windows error $jobError), so it refused to launch a process tree it could not prove it owned."',
     '  }',
   ].join('\n'), 'season-browser:launch-refuses-to-start-a-tree-it-cannot-own')
   // ORDER: create the job, open the try, then start the child. The try opening BEFORE the launch is a reversal
@@ -829,6 +861,19 @@ export function foundationStaticGuard(root = process.cwd()) {
     errors.push('season-browser:launch-opens-its-try-before-it-starts-anything')
   }
   pinBrowserOnce('    if (-not [MapleSeasonProcessInterop]::StartInJob($job, $node, $commandLine, $Root, [ref]$launchedHandle, [ref]$launchedId, [ref]$launchError, [ref]$launchStage)) {', 'season-browser:launch-fails-when-its-child-does-not-start')
+  // AND THE REFUSAL NAMES THE STRANDED PROCESS, because the interop's report is worthless if the PowerShell that
+  // receives it drops it. StartInJob leaves processId at 0 on every failure it cleaned up after, so a nonzero id
+  // at this throw means precisely one state: a suspended child that is not a job member, that closing the job
+  // handle will never reap, that will never run and never exit, and whose pid this is the last statement able to
+  // name. Contiguous with the throw, so a repair that keeps the clause but stops interpolating it is not
+  // satisfied by this pin.
+  pinBrowserOnce([
+    '      $strandedClause = \'\'',
+    '      if ($launchedId -ne 0) {',
+    '        $strandedClause = " Process id $launchedId was created suspended, could not be added to the job, and could not be terminated, so it is still running on this workstation and has to be ended by hand."',
+    '      }',
+    '      throw "$Scenario browser process did not start (failed at the $launchStage stage, Windows error $launchError).$strandedClause"',
+  ].join('\n'), 'season-browser:launch-names-a-child-it-could-not-terminate')
   // EXACTLY ONE CLEANUP CALL SITE, and it is the unconditional one in the finally. Every previous version of
   // this function had two or three, each guarded by a different condition - the parent's liveness, then a
   // $portReleased flag, then a $verifiedPortRelease flag - and every one of those conditions was an attempt to
@@ -1242,7 +1287,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // THE STATIC HALF IS HELD TOO. A fresh-context review observed that every static mutation could be wrapped
   // whole while the behavioural half still earned its own sentence, because no caller read the static marker at
   // all - a marker nobody consumes is decoration. Both callers now hold it with its count.
-  const staticClaim = 'Foundation mutation drill: PASS (280 controlled mutations turned the gate red)'
+  const staticClaim = 'Foundation mutation drill: PASS (285 controlled mutations turned the gate red)'
   requireText(errors, foundationWorkflow, `$expectedStatic = '${staticClaim}'`, 'workflow:mutation-drill-static-claim-held')
   requireText(errors, foundationOrchestrator, `$expectedStaticMarker = '${staticClaim}'`, 'orchestrator:mutation-drill-static-claim-held')
   requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedStatic', 'workflow:mutation-drill-static-claim-consumed')

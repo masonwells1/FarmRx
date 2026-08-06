@@ -221,6 +221,16 @@ Set-Content -LiteralPath '$cimMessageFile' -Value `$message -Encoding Ascii -NoN
   # exactly the port a scenario must not launch onto.
   Assert-True (-not (Test-Path -LiteralPath $startedSentinel)) 'Port preflight started the browser runner despite being unable to identify the holder of the governed port.'
   Assert-True (-not $listenerProcess.HasExited) 'Port preflight terminated a listener it could not even identify instead of refusing.'
+  # AND STILL LISTENING, which is the assertion that actually matters and which `-not $listenerProcess.HasExited`
+  # does not make. A fresh-context review was right about this. A live process proves only that nothing killed a
+  # process; the claim under test is that the preflight left the PORT alone, and those two facts come apart - a
+  # listener can close its socket and keep running, so a refusal that drained the port first and refused second
+  # would satisfy the liveness check while doing the one thing this case exists to forbid. Asked by OWNING PID
+  # rather than "is anything listening", so a stranger that arrived on the port cannot stand in for the listener
+  # that was supposed to survive.
+  $cimSurvivors = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+    Where-Object { $_.OwningProcess -eq $listenerProcess.Id })
+  Assert-True ($cimSurvivors.Count -gt 0) "Port preflight refused, but governed port $port is no longer held by the unidentifiable listener (pid $($listenerProcess.Id)) that was supposed to survive the refusal, so it did more than refuse."
 
   Stop-Process -Id $listenerProcess.Id -Force -ErrorAction SilentlyContinue
   $listenerProcess.WaitForExit(10000) | Out-Null
@@ -266,8 +276,9 @@ setInterval(() => {}, 1000)
 
   function New-ProbeJob {
     $createError = 0
-    $created = [MapleSeasonProcessInterop]::CreateKillOnCloseJob([ref]$createError)
-    Assert-True ($created -ne [IntPtr]::Zero) "Cleanup regression could not create a job object to own its listener (Windows error $createError)."
+    $createStage = ''
+    $created = [MapleSeasonProcessInterop]::CreateKillOnCloseJob([ref]$createError, [ref]$createStage)
+    Assert-True ($created -ne [IntPtr]::Zero) "Cleanup regression could not create a job object to own its listener (failed at the $createStage stage, Windows error $createError)."
     $clearJobs.Add($created)
     return $created
   }
@@ -950,39 +961,138 @@ public static class MapleSeasonArgv {
   Write-Output "MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_FAIL $($_.Exception.Message)"
   exit 1
 } finally {
-  if ($null -eq $priorPort) { Remove-Item Env:FARMRX_SEASON_JANUARY_PORT -ErrorAction SilentlyContinue } else { $env:FARMRX_SEASON_JANUARY_PORT = $priorPort }
-  if ($null -eq $priorReadyFile) { Remove-Item Env:FARMRX_PREFLIGHT_READY_FILE -ErrorAction SilentlyContinue } else { $env:FARMRX_PREFLIGHT_READY_FILE = $priorReadyFile }
-  if ($null -eq $priorStartedFile) { Remove-Item Env:FARMRX_PREFLIGHT_STARTED_FILE -ErrorAction SilentlyContinue } else { $env:FARMRX_PREFLIGHT_STARTED_FILE = $priorStartedFile }
-  if ($null -eq $priorBindAddress) { Remove-Item Env:FARMRX_PREFLIGHT_BIND_ADDRESS -ErrorAction SilentlyContinue } else { $env:FARMRX_PREFLIGHT_BIND_ADDRESS = $priorBindAddress }
+  # EVERY TEARDOWN FAILURE IS OBSERVABLE AND CHANGES THE VERDICT, which a fresh-context review found this block
+  # doing for none of them. The previous version was a wall of `-ErrorAction SilentlyContinue`: a Stop-Process
+  # that failed, a handle that would not close, a job that stayed open, a temp tree that could not be deleted -
+  # every one of those left the workstation dirty and the run still printed
+  # MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS and exited 0. For a file whose entire subject is
+  # processes left holding a governed port, a silent cleanup is the one failure mode it must not have.
+  #
+  # The shape is the one the timeout regression already proves on this workstation, and it depends on two
+  # MEASURED facts about PowerShell rather than on assumptions about it. First: an explicit `exit` inside a
+  # finally overrides the pending `exit 0` from the try, so the report below can fail a run whose assertions all
+  # passed. Second: a THROW inside a finally ends the run at exit 1 having skipped every statement after it -
+  # so an unguarded failure here would not merely be unreported, it would suppress the report of everything
+  # below it. That is why every statement in this block is inside its own try, including the ones that look
+  # incapable of failing, and why the directory-refusal below records a problem instead of throwing.
+  $teardownProblems = [Collections.Generic.List[string]]::new()
+  foreach ($restore in @(
+    @{ Name = 'FARMRX_SEASON_JANUARY_PORT'; Value = $priorPort },
+    @{ Name = 'FARMRX_PREFLIGHT_READY_FILE'; Value = $priorReadyFile },
+    @{ Name = 'FARMRX_PREFLIGHT_STARTED_FILE'; Value = $priorStartedFile },
+    @{ Name = 'FARMRX_PREFLIGHT_BIND_ADDRESS'; Value = $priorBindAddress }
+  )) {
+    # A LOOP, so one failed restore cannot skip the other three. Written as four sequential statements before,
+    # which meant a throw on the first left three of this session's environment variables pointing at a deleted
+    # temporary directory for whatever ran next in the same shell.
+    try {
+      if ($null -eq $restore.Value) { Remove-Item -LiteralPath "Env:$($restore.Name)" -ErrorAction SilentlyContinue }
+      else { Set-Item -LiteralPath "Env:$($restore.Name)" -Value $restore.Value }
+    } catch {
+      $teardownProblems.Add("could not restore environment variable $($restore.Name): $($_.Exception.Message)")
+    }
+  }
   # Only ever stop the listeners this regression started itself.
-  if ($null -ne $listenerProcess -and -not $listenerProcess.HasExited) {
-    Stop-Process -Id $listenerProcess.Id -Force -ErrorAction SilentlyContinue
-    $listenerProcess.WaitForExit(10000) | Out-Null
+  try {
+    if ($null -ne $listenerProcess -and -not $listenerProcess.HasExited) {
+      Stop-Process -Id $listenerProcess.Id -Force -ErrorAction Stop
+      if (-not $listenerProcess.WaitForExit(10000)) {
+        $teardownProblems.Add("listener pid $($listenerProcess.Id) did not exit within ten seconds of being stopped, so it may still hold port $port")
+      }
+    }
+  } catch {
+    # A RACED EXIT IS NOT A TEARDOWN FAILURE, and telling them apart matters because this block can now fail an
+    # otherwise passing run. The listener is a node process that may exit on its own between the HasExited check
+    # above and the Stop-Process below, and -ErrorAction Stop turns that into a terminating error. Asking
+    # .HasExited in the catch settles it: MEASURED on this workstation, reading .HasExited on an already-exited
+    # process does not throw, so this is a safe question to ask here.
+    if ($null -eq $listenerProcess -or -not $listenerProcess.HasExited) {
+      $teardownProblems.Add("could not stop the listener this regression started: $($_.Exception.Message)")
+    }
   }
   # The mixed-listener case asserts that its NON-MEMBER listener is still running, so on both the success
   # and the failure path there is a live process here to stop; leaving it behind would occupy the port for
   # whatever ran next. Emptied on the success path, so this only fires when an assertion threw.
   foreach ($orphan in $mixedProcesses) {
-    if ($null -eq $orphan -or $orphan.HasExited) { continue }
-    Stop-Process -Id $orphan.Id -Force -ErrorAction SilentlyContinue
-    $orphan.WaitForExit(10000) | Out-Null
+    try {
+      if ($null -eq $orphan -or $orphan.HasExited) { continue }
+      Stop-Process -Id $orphan.Id -Force -ErrorAction Stop
+      if (-not $orphan.WaitForExit(10000)) {
+        $teardownProblems.Add("non-member listener pid $($orphan.Id) did not exit within ten seconds of being stopped, so it may still hold port $port")
+      }
+    } catch {
+      # Same raced-exit discrimination as the listener above, for the same reason.
+      if ($null -eq $orphan -or -not $orphan.HasExited) {
+        $teardownProblems.Add("could not stop a non-member listener this regression started: $($_.Exception.Message)")
+      }
+    }
   }
   # Handles first, then jobs. A process handle is only a handle - closing it terminates nothing - whereas
   # closing a job handle created with KILL_ON_JOB_CLOSE makes the kernel reap every member that is still
   # alive. So the job close is simultaneously the handle-leak fix and the one teardown that cannot be
   # skipped: it needs no listener table, no process id, and no cooperation from the processes themselves,
   # which is why it also protects a run that failed an assertion halfway through a case.
+  #
+  # `[void]` USED TO DISCARD THE ANSWER. CloseHandle returns a bool, and on the job handles that bool is the
+  # difference between "the kernel reaped every member of this job" and "a listener this regression created is
+  # still on the port and nothing will ever collect it". Reported now, per handle, by name.
   foreach ($openHandle in $clearHandles) {
-    if ($openHandle -ne [IntPtr]::Zero) { [void][MapleSeasonProcessInterop]::CloseHandle($openHandle) }
+    try {
+      if ($openHandle -ne [IntPtr]::Zero -and -not [MapleSeasonProcessInterop]::CloseHandle($openHandle)) {
+        $teardownProblems.Add("could not close a process handle this regression opened (Windows error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())), so that process id stays reserved for the life of this session")
+      }
+    } catch {
+      $teardownProblems.Add("could not close a process handle this regression opened: $($_.Exception.Message)")
+    }
   }
   foreach ($openJob in $clearJobs) {
-    if ($openJob -ne [IntPtr]::Zero) { [void][MapleSeasonProcessInterop]::CloseHandle($openJob) }
+    try {
+      if ($openJob -ne [IntPtr]::Zero -and -not [MapleSeasonProcessInterop]::CloseHandle($openJob)) {
+        $teardownProblems.Add("could not close a job object this regression created (Windows error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())), so the kernel did not reap its surviving members and they may still hold port $port")
+      }
+    } catch {
+      $teardownProblems.Add("could not close a job object this regression created: $($_.Exception.Message)")
+    }
   }
-  foreach ($doomed in @($tempRoot, $squatterRoot)) {
-    if (-not (Test-Path -LiteralPath $doomed)) { continue }
-    $resolvedTemp = [IO.Path]::GetFullPath($doomed)
-    $resolvedBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
-    if (-not $resolvedTemp.StartsWith($resolvedBase, [StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing port-preflight cleanup outside the temporary directory.' }
-    Remove-Item -LiteralPath $resolvedTemp -Recurse -Force -ErrorAction SilentlyContinue
+  # THE TEMPORARY TREES ARE KEPT WHEN ANYTHING ELSE WENT WRONG, deliberately. If a listener or a job survived
+  # this teardown, the scripts and sentinel files that describe what was running are the only evidence of what
+  # is still on the workstation, and deleting them to keep the temp directory tidy destroys exactly the record
+  # a human needs. On a clean teardown they go, as before.
+  if ($teardownProblems.Count -gt 0) {
+    $teardownProblems.Add("kept $tempRoot and $squatterRoot for inspection because this teardown reported a problem")
+  } else {
+    foreach ($doomed in @($tempRoot, $squatterRoot)) {
+      try {
+        if (-not (Test-Path -LiteralPath $doomed)) { continue }
+        $resolvedTemp = [IO.Path]::GetFullPath($doomed)
+        $resolvedBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+        # RECORDED, NOT THROWN. A throw here is a throw inside a finally: it ends the run at exit 1 and skips
+        # the report below, so the one path that most needs to say what it refused to delete would say nothing.
+        if (-not $resolvedTemp.StartsWith($resolvedBase, [StringComparison]::OrdinalIgnoreCase)) {
+          $teardownProblems.Add("refused to delete $resolvedTemp because it is not under $resolvedBase, so it was left in place")
+          continue
+        }
+        # BOUNDED RETRY, because the processes that were holding files under this tree were stopped seconds ago
+        # and Windows releases their file handles asynchronously. Without the retry, -ErrorAction Stop would
+        # turn an ordinary handle-release delay into a reported teardown failure - a flaky red, which is its own
+        # kind of dishonesty. Ten attempts over two seconds, and then it really is a failure worth reporting.
+        $deleteError = $null
+        for ($attempt = 1; $attempt -le 10; $attempt++) {
+          try { Remove-Item -LiteralPath $resolvedTemp -Recurse -Force -ErrorAction Stop; $deleteError = $null; break }
+          catch { $deleteError = $_; Start-Sleep -Milliseconds 200 }
+        }
+        if ($null -ne $deleteError -and (Test-Path -LiteralPath $resolvedTemp)) {
+          $teardownProblems.Add("could not delete the temporary directory $resolvedTemp after ten attempts over two seconds: $($deleteError.Exception.Message)")
+        }
+      } catch {
+        $teardownProblems.Add("could not delete the temporary directory $doomed`: $($_.Exception.Message)")
+      }
+    }
+  }
+  # THE MARKER AND THE EXIT CODE, which this block previously had neither of. The harness reads the marker line
+  # and the exit code, so a teardown problem has to produce both or it produces nothing.
+  if ($teardownProblems.Count -gt 0) {
+    Write-Output "MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_FAIL teardown left this workstation dirty: $($teardownProblems -join '; ')."
+    exit 1
   }
 }

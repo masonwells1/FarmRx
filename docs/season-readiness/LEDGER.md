@@ -1435,3 +1435,86 @@ Run at the exact tree that became this commit, with no probe or sabotage script 
 
 Nothing was pushed, merged, or deployed. Production remains untouched at `https://farm-rx.vercel.app`.
 
+
+## SR-081 — Sol tranche G on `47298b2`: the two kill paths the job object cannot backstop are checked, a teardown that swallowed everything now reports, and two SR-080 claims are withdrawn
+
+**2026-08-06 · branch `claude/gauntlet-testing-sweep-013d65` · local commit only**
+
+A fresh-context Sol review of `47298b2` (the commit SR-080 describes) returned **nine confirmed findings**. Four are code defects and are repaired here with executed proof; two are false sentences in SR-080 and are withdrawn below; three are instrumentation limits deferred with a stated reason. This is commit **2 of the 2–4** Mason approved when he chose *"fix ownership properly, then stop hardening."*
+
+The four code findings share one shape, and it is the shape SR-080's own argument invited: **the job object retired the hazards it covers so completely that the two paths it cannot cover stopped being looked at.** `KILL_ON_JOB_CLOSE` reaps every *member* of the job with no code running. A child that failed to *become* a member is not covered by it, and neither is a job handle that was never returned to anyone. Both were being cleaned up by an unchecked call.
+
+### C-01 — the one kill `KILL_ON_JOB_CLOSE` cannot backstop was not checked, under a comment saying it was
+
+`StartInJob` creates the child `CREATE_SUSPENDED`, then assigns it to the job. If `AssignProcessToJobObject` fails, that child is **not a job member** — nothing done to the job handle will ever reach it — so `TerminateProcess` is the only thing that can end it. Its return value was discarded, and a few lines later both handles closed, at which point the script has lost the ability to name the process at all. A suspended child would sit on the workstation forever with nobody holding its pid.
+
+The asymmetry is worth stating because it is what made this a real hole rather than a tidiness point: the **resume**-failure path discards its `TerminateProcess` result too, and that is fine — that child *is* a member, so the handle closing reaps it. The **assign**-failure path is the only one where the backstop does not apply.
+
+The kill is now checked. When it fails, the pid leaves the function through `stage` and `processId`, and the refusal upstream says so in plain words — *"Process id N was created suspended, could not be added to the job, and could not be terminated, so it is still running on this workstation and has to be ended by hand."* A launch failure that reports a nonzero pid now means exactly one thing, and the message says which. The comment that claimed every failure path terminated its child was rewritten to describe what the code actually checks, and it records that an earlier version of itself made the stronger claim without checking.
+
+### C-02 — a job object that could not be configured leaked its handle
+
+`CreateKillOnCloseJob` created the job, and if `SetInformationJobObject` failed it called `CloseHandle(job)` unchecked and returned `IntPtr.Zero`. A failed close there leaks a kernel handle for the life of the session, and — worse for a reader — the caller could not tell *which* of the two steps had failed, because the function reported only a Windows error code.
+
+The signature is now `CreateKillOnCloseJob(out int error, out string stage)`, the close is checked, and a failed close appends to `stage` rather than being silent. The refusal names the stage: *"could not create the job object that would own its browser process tree (failed at the `limit` stage, Windows error N)."* Propagated to all four call sites, including the probe job builder inside the preflight regression.
+
+### C-03 — an assertion proved a process was alive where the claim was that a port was still held
+
+The F12 case SR-080 added asserts that a listener the preflight could not identify is left running. It proved that by checking `-not $listenerProcess.HasExited` — which proves the *process* survived, not that it still **holds the governed port**. A refusal that killed the listener's socket while leaving the process alive would have passed.
+
+It now also reads the port and requires that the surviving listener is still the one holding it, matched by owning pid — `Get-NetTCPConnection -LocalPort $port -State Listen` filtered on `OwningProcess` — with the failure sentence *"...is no longer held by the unidentifiable listener (pid N) that was supposed to survive the refusal, so it did more than refuse."* This is the same defect layer as SR-078's — **a flag recording that a call returned is not the fact the call was supposed to produce** — arriving one layer up, in an assertion.
+
+### C-04 — the regression's teardown could leave the workstation dirty and still print PASS
+
+The preflight regression's terminal `finally` restored four environment variables in sequence, killed its listener, closed its handles, and deleted its temp trees. Every one of those was either `-ErrorAction SilentlyContinue`, `[void]`, or unguarded — so the first failure either skipped the three restores after it or was swallowed entirely, and **no mechanism existed to report any of it**. A run that killed nothing, restored nothing, and deleted nothing would still have printed the PASS marker and exited 0.
+
+Rewritten around a `$teardownProblems` list:
+
+- the four environment restores are a `foreach` over hashtables, so one failure cannot skip the rest;
+- `Stop-Process -ErrorAction Stop`, with a raced exit discriminated in the `catch` (a node listener can exit between `HasExited` and `Stop-Process`, and that is not a problem — reading `.HasExited` on a corpse was previously measured not to throw, which is what makes this discrimination safe);
+- `if (-not $listenerProcess.WaitForExit(10000))` records a listener that would not die. **Measured before relying on it:** `WaitForExit(int)` returns `Boolean` (`WAITFOREXIT_TYPE=Boolean`), so `-not` reads a real answer rather than a silent always-true on a void return;
+- **checked** `CloseHandle` on every process and job handle, replacing `[void]`;
+- temp trees are **kept** when any problem was recorded, because that is exactly when the evidence matters, and `Remove-Item` gets a bounded 10 × 200 ms retry first because Windows releases file handles asynchronously after the holders are killed;
+- the outside-temp safety refusal **records instead of throwing**, so it cannot jump over the report;
+- and finally, `MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_FAIL teardown left this workstation dirty: ...` plus `exit 1`.
+
+**The report mechanism was proven able to fail, not just to pass.** Three probes: CASE A — a problem added inside the `finally` after the `try` had already run `exit 0` → `EXIT=1 FAIL_MARKER=True`, so the report overrides a pending success; CASE B — the identical shape with nothing added → `EXIT=0 FAIL_MARKER=False`, so the report is genuinely conditional and case A is not merely proving that `exit` works inside a `finally`; CASE C — the `WaitForExit` return type above. Then the marker was verified to be **load-bearing**: `maple-july-db-clock-wiring.regression.ps1:118` requires both `$LASTEXITCODE -eq 0` and an exact `-ceq` match on the regression's full output, so an extra FAIL line and a nonzero exit each independently redden the caller.
+
+**Negative assertion, recorded so it is not mistaken for coverage.** The FAIL path was proven in isolated probes and by inspection of the consumer, **not** by sabotaging the real preflight regression file into a dirty teardown. That file resolves its siblings through `$PSScriptRoot`, so the usual technique — copy it elsewhere, break one line, run the copy — does not work, and breaking it in place while it is the only Windows-only proof of the refusal table was judged the worse risk. What is proven: the mechanism reports when there is something to report, stays silent when there is not, and is consumed. What is not proven: that a real teardown failure inside that specific file reaches it.
+
+### A defect the harness caught in my own drill: a multi-anchor mutation that half-applies reports a PASS
+
+Layer 23 for the list, and the most transferable thing in this tranche. `mutate()` refuses a **no-op** — it throws when its needle is stale. A drill that calls `.replace` **twice** defeats that: if one needle goes stale and the other still applies, `mutate()` sees a changed file, throws nothing, and the drill reports a pass while having applied half a defect. This was not hypothetical — the try-after-launch drill's second needle went stale the moment C-01 grew the stranded-pid block, and the first still matched.
+
+Both multi-anchor drills now do an explicit `includes()` pre-check on **every** anchor before mutating, and throw naming the drill and the stale needle. The try-after-launch drill was additionally rewritten from one whole-block needle to two one-line anchors so a change inside the block cannot stale it at all. The rule is written into the drill file where the next author will meet it.
+
+### Instrumentation
+
+Six guard pins reconciled or added: the create-failure and limit-failure stages, the checked job close as a whole block, the checked `TerminateProcess` block through its `return false`, the five-line stranded-pid clause, and the updated `[ref]$jobStage` call site. Five new drills, each recreating the repaired defect from the direction of the defect: the limit failure stops naming its stage; the job close result is discarded again; the failed-assignment kill goes back to discarding its result; the refusal stops naming the child it could not terminate; the stranded-pid clause is never populated.
+
+Drill total **280 → 285**, taken from the drill's own tally rather than computed, then propagated with a per-file occurrence check that would have aborted on anything but exactly one match.
+
+### What this commit deliberately does not close
+
+- **C-05** — a here-string **body** satisfies `requireStatementOnce`, because the comment-stripped view is still text. This belongs to the open task that gives the guard a real PowerShell code view (`ParseFile`, token census): stripping here-strings blind would break pins that legitimately match generated child-script text, and that needs a measurement pass first.
+- **C-06** — `countPowerShellWrites` counts matching **lines**, not writes, and its grammar omits `++`, `--`, `Set-Item Variable:`, `New-Variable -Force`. Same task, same reason.
+- **C-07** — the printed total is `detectedMutations.length`, so two `mutate()` calls behind one `detected()` raise the total by one. Real, and the number is therefore a **lower bound on applied mutations**, not a count of them. Not taken here; noted so the sentence is read correctly in the meantime.
+- **C-09's code half** — the three comments that still describe the predicate as authorizing a kill (`.github/workflows/foundation.yml:66`, `maple-season-browser-ownership.regression.ps1:16`, `maple-season-browser-port-preflight.regression.ps1:745`) stay with the rename commit, because `verify-foundation-mutations.mjs:1532` regex-needles the label line and splitting that across two commits is how a self-drill goes stale unnoticed. The **record** is made true here instead, immediately below.
+- **F13–F19**, the timeout regression's own safety net, is commit 3 of Mason's estimate; one bounded tranche per commit.
+
+### Corrections to SR-080
+
+1. **SR-080 said `TerminateProcess` being `private` means "no PowerShell statement anywhere in this repository can spell a kill other than `TerminateJobObject`." That is false, and it is withdrawn.** Making one C# declaration private stops PowerShell from calling *that declaration*. It cannot stop `Stop-Process`, `.Kill()`, `taskkill`, or a second interop declaration — and the same commit contains several `Stop-Process` calls in the port-preflight regression and a `.Kill()` in the timeout regression. The true claim is narrower and still worth having: **the season browser helper's own launch and cleanup path can no longer spell a kill other than `TerminateJobObject`**, and the regressions that kill by pid are killing processes they themselves created moments earlier in a temp directory. The overstated comment in `foundation-static-guards.mjs` that this ledger sentence was copied from has been corrected at source in this commit, and it now records that overstating a boundary in a comment is how a false sentence reaches a ledger entry.
+2. **SR-080 said "every comment that described the predicate as gating a kill has been corrected in this commit." That is false, and it is withdrawn.** Three such comments remained, listed above. A reader of `47298b2` was told both that the predicate is diagnosis-only and that a `true` return authorizes killing listeners — the exact confusion SR-080 claimed to have removed. They are still there as of this commit; they are deferred, not corrected, and the deferral is now recorded where the claim used to be.
+
+### Evidence, all local, nothing pushed
+
+Run at the exact tree that became this commit, with no probe or sabotage script running alongside.
+
+- `powershell scripts/verify-foundation.ps1` → **`Farm Rx foundation gate: PASS`**, exit 0, `62 passed (46.4s)`, 14 skipped. Inside it: `Foundation static guards: PASS`; **`Foundation mutation drill: PASS (285 controlled mutations turned the gate red)`**; `Foundation behavioural mutation drill: PASS (5 broken subjects were reported by the suite that runs against them, 0 not measurable on this platform)`; `Foundation orchestrator intermediate-failure probe: PASS`; `Foundation Windows execution lane accounting probe: PASS (4 rejected, 1 accepted)`; `MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS`; `Season fixture contract: PASS (101 fixtures; 6 scenarios; 6 isolation-scanned files)`; `Season contract regressions: PASS (9 rejected contract mutations; 18 rejected isolation mutations)`; `PROBE disposable migration suite: PASS`. The full log is kept at `scratchpad/gate-tranche-g.log`, because an earlier run of this same gate had its evidence lines discarded by a `tail`, which is not evidence.
+- The two **Windows-only** suites the foundation gate does not run, executed directly and singly: `MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS` (exit 0) with `TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true` **and no teardown-problem line**, which is the guarded teardown reporting zero problems on a clean run; and `MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_PASS` (exit 0).
+- Teardown report probes: `CASE_A_PROBLEM_REPORTED EXIT=1 FAIL_MARKER=True`, `CASE_B_CLEAN_TEARDOWN EXIT=0 FAIL_MARKER=False`, `CASE_C WAITFOREXIT_TYPE=Boolean`.
+- `npx tsc -b --force` → exit 0. `node --check` on both changed `.mjs` files → parse-clean. `[Parser]::ParseFile` across every `.ps1` under `scripts/` → `bad=0`.
+- The three claim sites were re-read after propagation and all hold the identical sentence at **285**.
+
+Nothing was pushed, merged, or deployed. Production remains untouched at `https://farm-rx.vercel.app`.

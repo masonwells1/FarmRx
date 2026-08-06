@@ -48,7 +48,7 @@ jobs:
           # The STATIC half is held here too. A fresh-context review observed that all of its mutations could be
           # wrapped whole while the behavioural half still earned its own sentence, because no caller was
           # reading the static marker at all. A marker nobody consumes is decoration.
-          $expectedStatic = 'Foundation mutation drill: PASS (280 controlled mutations turned the gate red)'
+          $expectedStatic = 'Foundation mutation drill: PASS (285 controlled mutations turned the gate red)'
           if ($drill -cnotcontains $expectedStatic) {
             throw "Foundation mutation drill did not report its static half to this job.`n  expected: $expectedStatic"
           }
