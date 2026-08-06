@@ -1,3 +1,121 @@
+function Test-MapleSeasonCommandLineSeparator {
+  param([char]$Character)
+  # The ONE definition of what separates two arguments, deliberately not written twice. Windows splits on
+  # ASCII space and tab only; [char]::IsWhiteSpace also accepts a non-breaking space and a dozen other
+  # characters that are legal in a Windows file name, which is how the sibling C:\FarmRx<NBSP>Backup came
+  # to look like our root followed by a boundary. Measured True before this rule was ASCII-only.
+  # Splitting this test across the two loops in Split-MapleSeasonCommandLineArgument is what made that bug
+  # worse than a wrong answer: with the inner loop stopping at a character the outer loop would not
+  # consume, the parse made no progress and never returned. Measured - a widened inner test hung the
+  # governed-port regression for four minutes with no output instead of failing it. One definition used by
+  # both loops cannot drift apart like that.
+  return ($Character -eq ' ' -or $Character -eq "`t")
+}
+
+function Split-MapleSeasonCommandLineArgument {
+  param([string]$CommandLine)
+  # Windows' own argument rules, implemented once, instead of scanning the raw command line for the
+  # root text. Three consecutive reviews found a different false-TRUE in that scan, and each was the
+  # same mistake: deciding what a character MEANS without tokenizing. Measured defeats of the scan,
+  # each of which authorized terminating a foreign process -
+  #   node.exe C:\FarmRx\.. --port 4177                       (an unquoted argument ends at whitespace)
+  #   node.exe C:\FarmRx" Backup"\scripts\factory-board.mjs   (a quote can OPEN a fragment)
+  #   node.exe C:\Other\server.js --label "C:\FarmRx\safe\" --port 4177"
+  #                                                           (\" is a LITERAL quote, not a delimiter)
+  #   node.exe C:\FarmRx<U+00A0>Backup\server.js              (NBSP is not a Windows separator)
+  # The last two cannot be fixed by another boundary test, because they are tokenizer bugs. Windows
+  # splits arguments on ASCII space and tab only, and a backslash run before a quote follows the 2n/2n+1
+  # rule. This function is verified against CommandLineToArgvW itself in
+  # scripts/maple-season-browser-port-preflight.regression.ps1: if Windows and this disagree on any
+  # table entry the regression fails, so the rules below are checked against the real parser rather
+  # than against my reading of the documentation.
+  $arguments = New-Object System.Collections.Generic.List[string]
+  if ([string]::IsNullOrEmpty($CommandLine)) { return $arguments.ToArray() }
+  $index = 0
+  $length = $CommandLine.Length
+  # argv[0] is parsed by its own rule: a backslash is never an escape there, and a leading quote runs
+  # to the next quote. Parsing it with the general rule would mis-split a quoted program path. Note that
+  # leading whitespace is NOT skipped: Windows begins argv[0] at the first character, so a command line
+  # starting with a space yields an EMPTY argv[0] and then parses the rest normally. Skipping the
+  # whitespace instead made this disagree with CommandLineToArgvW on '   node.exe   one', which would
+  # have parsed the program path under the general rule and changed where its backslashes went.
+  if ($index -lt $length) {
+    $builder = New-Object System.Text.StringBuilder
+    if ($CommandLine[$index] -eq '"') {
+      $index++
+      while ($index -lt $length -and $CommandLine[$index] -ne '"') { [void]$builder.Append($CommandLine[$index]); $index++ }
+      if ($index -lt $length) { $index++ }
+    } else {
+      while ($index -lt $length -and -not (Test-MapleSeasonCommandLineSeparator -Character $CommandLine[$index])) { [void]$builder.Append($CommandLine[$index]); $index++ }
+    }
+    $arguments.Add($builder.ToString())
+  }
+  while ($index -lt $length) {
+    while ($index -lt $length -and (Test-MapleSeasonCommandLineSeparator -Character $CommandLine[$index])) { $index++ }
+    if ($index -ge $length) { break }
+    $argumentStart = $index
+    $builder = New-Object System.Text.StringBuilder
+    $inQuotes = $false
+    while ($index -lt $length) {
+      $character = $CommandLine[$index]
+      if ((-not $inQuotes) -and (Test-MapleSeasonCommandLineSeparator -Character $character)) { break }
+      if ($character -eq '\') {
+        $backslashes = 0
+        while ($index -lt $length -and $CommandLine[$index] -eq '\') { $backslashes++; $index++ }
+        if ($index -lt $length -and $CommandLine[$index] -eq '"') {
+          # 2n backslashes then a quote: n backslashes and the quote is a delimiter. 2n+1 backslashes
+          # then a quote: n backslashes and a LITERAL quote. This rule is why the escaped-quote command
+          # line above defeated a raw quote count - the quote that looked like it closed the argument
+          # was data, and the argument kept going.
+          [void]$builder.Append('\', [int][Math]::Floor($backslashes / 2))
+          if (($backslashes % 2) -eq 1) { [void]$builder.Append('"'); $index++ }
+          else { $inQuotes = -not $inQuotes; $index++ }
+        } else {
+          [void]$builder.Append('\', $backslashes)
+        }
+        continue
+      }
+      if ($character -eq '"') {
+        # CommandLineToArgvW's doubled-quote quirk, and it is NOT the C runtime's: inside a quoted
+        # argument, '""' yields one literal quote and LEAVES quoted mode. Measured with the real API on
+        # `node.exe "C:\FarmRx"" Backup"\x.js`, which yields 'C:\FarmRx"' and 'Backup\x.js' - two
+        # arguments, not the single concatenated sibling path an earlier ledger entry claimed.
+        if ($inQuotes -and ($index + 1) -lt $length -and $CommandLine[$index + 1] -eq '"') {
+          [void]$builder.Append('"')
+          $inQuotes = $false
+          $index += 2
+          continue
+        }
+        $inQuotes = -not $inQuotes
+        $index++
+        continue
+      }
+      [void]$builder.Append($character)
+      $index++
+    }
+    $arguments.Add($builder.ToString())
+    # Every pass of the outer loop must consume at least one character. With the separator test written
+    # once this cannot fail, but the consequence of it failing is the worst behaviour this function has:
+    # not a wrong answer, which the callers are built to survive, but no answer at all. Measured - a parse
+    # that stopped at a character the separator skip would not consume spun on the same index until the
+    # governed-port regression was killed at four minutes, having printed nothing. Stopping here instead
+    # returns a short argument list, which can only cost an owned listener its match; the predicate then
+    # answers false and cleanup reports a wrong diagnosis rather than hanging a proof month.
+    if ($index -eq $argumentStart) { break }
+  }
+  return $arguments.ToArray()
+}
+
+function Test-MapleSeasonPathComponentIsRealName {
+  param([string]$Component)
+  # Win32 strips trailing dots and spaces from every path component, so '..', '.. ', '... ', '.. .' and
+  # ' ' all reduce to a navigation segment or to nothing, and none of them is a directory name. The
+  # trim must take dots, spaces and tabs as ONE set: chaining .TrimEnd(' ',tab) then .TrimEnd('.') is
+  # order-dependent and left '.. .' with a length of three, so the component walk accepted it and the
+  # predicate claimed the parent directory. Measured True before this was one trim.
+  return $Component.TrimEnd(' ', "`t", '.').Length -ne 0
+}
+
 function Test-MapleSeasonBrowserPortOwned {
   param(
     $ListenerProcess,
@@ -57,91 +175,49 @@ function Test-MapleSeasonBrowserPortOwned {
   $rootTail = if ($rootNamesDirectoryUnderDrive) { $normalizedRoot.Substring(3) } else { ($normalizedRoot -replace '^\\\\[^\\]+\\[^\\]+\\', '') }
   foreach ($segment in $rootTail.Split('\')) {
     if ([string]::IsNullOrWhiteSpace($segment)) { return $false }
-    if ($segment.TrimEnd(' ', "`t").TrimEnd('.').Length -eq 0) { return $false }
+    if (-not (Test-MapleSeasonPathComponentIsRealName -Component $segment)) { return $false }
   }
-  # Neither a space nor an apostrophe is a boundary. Both are legal in a Windows directory name, so
-  # treating either as a terminator lets root C:\FarmRx claim a different tree and this predicate
-  # authorizes killing what it finds there: a space accepted "C:\FarmRx Backup\node_modules\vite\..."
-  # and an apostrophe accepted "C:\FarmRx's Backup\node_modules\vite\...". A double quote is not simply
-  # a boundary either: whether it closes the argument or opens another fragment of the same name depends
-  # on how many quotes precede it, which the parity test below establishes.
+  # Ask Windows how this command line splits, then test whole ARGUMENTS for containment. The previous
+  # version searched the raw text for the root and then tried to prove the match sat at a real boundary;
+  # that is the tokenizer's job, and doing it by hand produced a new false-TRUE in each of the last three
+  # reviews. Comparing arguments removes the whole class: a sibling such as C:\FarmRx<NBSP>Backup is
+  # simply a different argument, not our root followed by something the boundary test has to classify.
   $rooted = $false
-  $searchIndex = 0
-  while ($searchIndex -le ($normalizedCommandLine.Length - $normalizedRoot.Length)) {
-    $matchIndex = $normalizedCommandLine.IndexOf($normalizedRoot, $searchIndex, [StringComparison]::OrdinalIgnoreCase)
-    if ($matchIndex -lt 0) { break }
-    # Keep scanning past this occurrence whatever it turns out to be. Stopping at the first occurrence
-    # let an unrelated leading argument such as --require C:\FarmRx2\hook.js mask the real owned path
-    # later in the same command line, which declared our own server foreign and failed the month at
-    # cleanup with a wrong diagnosis. Advancing here rather than at the bottom of the loop means every
-    # `continue` below is safe.
-    $searchIndex = $matchIndex + 1
-    $boundaryIndex = $matchIndex + $normalizedRoot.Length
-    # Count the double quotes ahead of this occurrence. Quote parity is what a character after the root
-    # MEANS: inside a quoted argument a space belongs to the directory name and a double quote closes
-    # the argument, while outside one a space ends the argument and a double quote OPENS a fragment that
-    # continues the same name. Measured with root C:\FarmRx: without this test
-    # `node.exe C:\FarmRx" Backup"\scripts\factory-board.mjs` answered True, because the bare quote was
-    # read as a closing quote - yet the argument Windows actually builds is C:\FarmRx Backup\..., a
-    # sibling directory, and this predicate is the sole gate on Stop-Process -Force.
-    $quotesBefore = 0
-    for ($scan = 0; $scan -lt $matchIndex; $scan++) {
-      if ($normalizedCommandLine[$scan] -eq '"') { $quotesBefore++ }
+  # Characters Win32 forbids in a path. An argument carrying one of these is not a path at all, and the
+  # escaped-quote defeat relied on exactly that: the argument Windows built was
+  # `C:\FarmRx\safe" --port 4177`, which starts with our root at a real separator yet is not a filename,
+  # while the actual server was a different argument entirely.
+  $forbiddenInPath = [char[]]@('"', '<', '>', '|', '*', '?')
+  foreach ($argument in (Split-MapleSeasonCommandLineArgument -CommandLine $commandLine)) {
+    if ([string]::IsNullOrEmpty($argument)) { continue }
+    $normalizedArgument = $argument.Replace('/', '\')
+    if (-not $normalizedArgument.StartsWith($normalizedRoot, [StringComparison]::OrdinalIgnoreCase)) { continue }
+    $tail = $normalizedArgument.Substring($normalizedRoot.Length)
+    # The root must end at a directory boundary within this argument, or be the whole argument. Without
+    # this, root C:\FarmRx claimed a listener running out of C:\FarmRx2.
+    if ($tail.Length -gt 0 -and $tail[0] -ne '\') { continue }
+    if ($tail.IndexOfAny($forbiddenInPath) -ge 0) { continue }
+    $carriesControlCharacter = $false
+    foreach ($character in $tail.ToCharArray()) {
+      if ([char]::IsControl($character)) { $carriesControlCharacter = $true; break }
     }
-    $insideQuotes = ($quotesBefore % 2) -eq 1
-    # An unquoted occurrence has to be ONE argument. Windows splits an unquoted argument at whitespace,
-    # so when the root's own name contains a space the matched text spans two arguments and the root is
-    # not really present. Measured: root 'C:\Mason FarmRx' against `node C:\Mason FarmRx` answered True,
-    # yet what that command line actually passes is 'C:\Mason' and then 'FarmRx'. A listener genuinely
-    # running from a space-bearing root quotes it, which is the branch above.
-    if ((-not $insideQuotes) -and ($normalizedRoot -match '\s')) { continue }
-    # Find where this argument ends, so the traversal walk below sees one path token instead of the rest
-    # of the command line. Measured: scanning only to the next double quote left the tail
-    # '\.. --port 4177' for `node.exe C:\FarmRx\.. --port 4177`, which is not the exact segment '..', so
-    # the traversal refusal missed it and the predicate claimed the PARENT directory.
-    $tokenEnd = $normalizedCommandLine.Length
-    $argumentContinues = $false
-    for ($scan = $boundaryIndex; $scan -lt $normalizedCommandLine.Length; $scan++) {
-      $character = $normalizedCommandLine[$scan]
-      if ($character -eq '"') {
-        $tokenEnd = $scan
-        # An unquoted token cannot be ended by a quote - that quote opens a fragment appended to this
-        # same name. A quoted token's closing quote must be followed by whitespace or nothing; anything
-        # else (including the '""' spelling) concatenates a further fragment. Either way the argument
-        # being built is longer than the text matched here, so this occurrence proves nothing.
-        $argumentContinues = (-not $insideQuotes) -or -not (($scan -eq ($normalizedCommandLine.Length - 1)) -or [char]::IsWhiteSpace($normalizedCommandLine[$scan + 1]))
-        break
-      }
-      if ((-not $insideQuotes) -and [char]::IsWhiteSpace($character)) { $tokenEnd = $scan; break }
-    }
-    if ($argumentContinues) { continue }
-    # The root must end where a directory name can end: at a separator inside the token, or exactly at
-    # the token's end. Whitespace is a boundary only for an unquoted token, which is why the token end
-    # is computed above rather than tested character by character - inside quotes a space is part of the
-    # name, outside quotes it ends the argument.
-    $endsAtTokenEnd = $boundaryIndex -ge $tokenEnd
-    $endsAtSeparator = (-not $endsAtTokenEnd) -and ($normalizedCommandLine[$boundaryIndex] -eq '\')
-    if (-not ($endsAtTokenEnd -or $endsAtSeparator)) { continue }
-    # A boundary-valid occurrence still has to stay inside the tree it names, and matching the root
-    # text does not establish that. Measured with root C:\FarmRx against
-    # `node.exe "C:\FarmRx\..\Other\scripts\factory-board.mjs" --port 4177`: the root was found at a
-    # real separator, this predicate answered True, and it would have authorized Stop-Process -Force
-    # against a process running wholly outside the repository - the parent directory reached by another
-    # spelling. Walk the remaining segments of this one token and refuse a parent traversal. Farm Rx
-    # builds these paths through [IO.Path]::GetFullPath, which leaves no '..' behind, so no legitimate
-    # listener loses its match; and refusing is the fail-closed answer, which costs a cleanup diagnosis
-    # rather than a wrong termination.
+    if ($carriesControlCharacter) { continue }
+    # A containment-valid argument still has to stay inside the tree it names. Measured with root
+    # C:\FarmRx against `node.exe "C:\FarmRx\..\Other\scripts\factory-board.mjs" --port 4177`: the root
+    # was found at a real separator and this predicate answered True, which would have authorized
+    # terminating a process running wholly outside the repository. Farm Rx builds these paths through
+    # [IO.Path]::GetFullPath, which leaves no '..' behind, so no legitimate listener loses its match, and
+    # refusing costs a cleanup diagnosis rather than a wrong termination.
     $escapesTree = $false
-    foreach ($segment in $normalizedCommandLine.Substring($boundaryIndex, $tokenEnd - $boundaryIndex).Split('\')) {
-      # A truly empty segment is a doubled separator, which Windows collapses and which cannot escape.
-      if ($segment.Length -eq 0) { continue }
-      # Win32 strips trailing dots and spaces from a path component, so '.. ' reaches the parent exactly
-      # as '..' does, and a component built only of dots and spaces is never a real directory name.
-      # Measured: '"C:\FarmRx\.. \Other\x.js"' and '"C:\FarmRx\... \Other\x.js"' both answered True
-      # before this normalization.
-      if ($segment.TrimEnd(' ', "`t").TrimEnd('.').Length -eq 0) { $escapesTree = $true; break }
+    foreach ($component in $tail.Split('\')) {
+      # A truly empty component is a doubled separator, which Windows collapses and which cannot escape.
+      if ($component.Length -eq 0) { continue }
+      if (-not (Test-MapleSeasonPathComponentIsRealName -Component $component)) { $escapesTree = $true; break }
     }
     if ($escapesTree) { continue }
+    # Keep no early exit on a REFUSED argument: an unrelated leading argument such as
+    # --require C:\FarmRx2\hook.js must not mask the real owned path later in the same command line,
+    # which declared our own server foreign and failed the month with a wrong diagnosis.
     $rooted = $true
     break
   }

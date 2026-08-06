@@ -370,6 +370,124 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   $spaceRootQuoted = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\Mason FarmRx\node_modules\vite\bin\vite.js"' }
   Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $spaceRootQuoted -Root 'C:\Mason FarmRx') 'Ownership test refused a quoted owned root whose own name contains a space.'
 
+  # The tokenizer must not be able to STALL. Its two loops - the skip between arguments and the scan within
+  # one - have to agree on what separates arguments, because a scan that stops at a character the skip will
+  # not consume makes no progress and the parse never returns. That is worse than a wrong answer: the
+  # callers are built to survive a false, but nothing survives a hang. Measured on this workstation - with
+  # the two tests written separately and one of them widened to [char]::IsWhiteSpace, this regression ran
+  # for four minutes and printed nothing before it was killed. The separator rule is now defined once, and
+  # the stall guard below turns any residual no-progress pass into a short argument list, which can only
+  # cost an owned listener its match. This drills the guard by re-introducing the drift on a COPY of the
+  # function and requiring the parse to finish anyway.
+  $tokenizerSource = Get-Content -Raw (Join-Path $PSScriptRoot 'maple-season-browser.ps1')
+  $tokenizerSource = $tokenizerSource.Substring(0, $tokenizerSource.IndexOf('function Test-MapleSeasonPathComponentIsRealName'))
+  $driftNeedle = 'if ((-not $inQuotes) -and (Test-MapleSeasonCommandLineSeparator -Character $character)) { break }'
+  Assert-True ($tokenizerSource.Contains($driftNeedle)) 'The stall drill could not find the shared separator test to drift; its needle is stale and the drill would prove nothing.'
+  $driftedSource = $tokenizerSource.Replace($driftNeedle, 'if ((-not $inQuotes) -and [char]::IsWhiteSpace($character)) { break }')
+  $stallJob = Start-Job -ScriptBlock {
+    param([string]$FunctionSource, [string]$Line)
+    Invoke-Expression $FunctionSource
+    @(Split-MapleSeasonCommandLineArgument -CommandLine $Line).Count
+  } -ArgumentList $driftedSource, ("node.exe C:\FarmRx{0}Backup\server.js" -f ([char]0x00A0))
+  try {
+    $stallCompleted = [bool](Wait-Job $stallJob -Timeout 30)
+    Assert-True $stallCompleted 'A drifted separator test made the command-line parse stall: it never returned, which hangs a proof month instead of failing it.'
+  } finally {
+    Remove-Job $stallJob -Force -ErrorAction SilentlyContinue
+  }
+
+  # The ownership predicate now decides containment by comparing whole ARGUMENTS, so every case above
+  # rests on Split-MapleSeasonCommandLineArgument splitting a command line the way Windows does. Three
+  # consecutive reviews each found a different false-TRUE in the hand-written scan that preceded it, and
+  # all three were the same mistake: deciding what a character means without tokenizing. Checking the
+  # rules against my reading of the documentation is what produced those three rounds, so check them
+  # against the real parser instead - CommandLineToArgvW, the function Windows itself uses to build argv
+  # for a process. If the two disagree on any entry below, this regression fails.
+  $onWindows = ($null -eq $IsWindows) -or $IsWindows
+  if (-not $onWindows) {
+    Write-Output 'Tokenizer equivalence table skipped: CommandLineToArgvW is a Windows API.'
+  } else {
+    if (-not ('MapleSeasonArgv' -as [type])) {
+      Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class MapleSeasonArgv {
+  [DllImport("shell32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern IntPtr CommandLineToArgvW([MarshalAs(UnmanagedType.LPWStr)] string lpCmdLine, out int pNumArgs);
+  [DllImport("kernel32.dll")]
+  static extern IntPtr LocalFree(IntPtr hMem);
+  public static string[] Parse(string commandLine) {
+    int count;
+    IntPtr block = CommandLineToArgvW(commandLine, out count);
+    if (block == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+    try {
+      string[] parsed = new string[count];
+      for (int i = 0; i < count; i++) { parsed[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(block, i * IntPtr.Size)); }
+      return parsed;
+    } finally { LocalFree(block); }
+  }
+}
+'@ | Out-Null
+    }
+    $nonBreakingSpace = [char]0x00A0
+    foreach ($commandLine in @(
+      # Ordinary spellings, including the tab separator and the quoted program path that argv[0]'s own
+      # rule exists for.
+      'node.exe C:\FarmRx\x.js'
+      'node.exe   C:\FarmRx\x.js   --port   4177'
+      "node.exe`tC:\FarmRx\x.js`t--port`t4177"
+      '"C:\Program Files\nodejs\node.exe" scripts\factory-board.mjs --port 4177'
+      'node.exe "C:\Mason FarmRx\x.js"'
+      # The three command lines that defeated the hand-written scan, each measured TRUE before the
+      # rewrite: a backslash-escaped quote that is data rather than a delimiter, a quote that OPENS a
+      # continuing fragment, and a non-breaking space that is a legal file-name character rather than a
+      # separator.
+      'node.exe C:\Other\server.js --label "C:\FarmRx\safe\" --port 4177"'
+      'node.exe C:\FarmRx" Backup"\scripts\factory-board.mjs'
+      ("node.exe C:\FarmRx{0}Backup\server.js" -f $nonBreakingSpace)
+      # The 2n / 2n+1 backslash rule at every parity, and the doubled-quote quirk that belongs to
+      # CommandLineToArgvW and NOT to the C runtime: inside a quoted argument '""' yields one literal
+      # quote and leaves quoted mode.
+      'node.exe a\\"b c'
+      'node.exe a\\\"b c'
+      'node.exe a\\\\"b c" d'
+      'node.exe "C:\FarmRx"" Backup"\x.js'
+      'node.exe "a""b"'
+      'node.exe "a""b c"'
+      'node.exe ab"c"d"e"f'
+      # Malformed and degenerate spellings. A predicate that throws here answers neither TRUE nor FALSE,
+      # which is the one answer its callers cannot use.
+      'node.exe ""'
+      'node.exe """"'
+      'node.exe """"""'
+      'node.exe \\'
+      'node.exe "'
+      '"node.exe'
+      'node.exe one"'
+      'node.exe "C:\FarmRx\..\Other\x.js'
+      # Leading whitespace: Windows begins argv[0] at the first character, so this yields an EMPTY argv[0]
+      # and then parses the rest normally. Skipping the whitespace instead parsed the program path under
+      # the general rule, which is where its backslashes would have gone somewhere else.
+      '   node.exe   one'
+      # Spellings the containment walk depends on downstream.
+      'node.exe C:/FarmRx/x.js'
+      'node.exe "C:\FarmRx\my app\x.js" --port 4177'
+      'node.exe "C:\FarmRx\.. .\Other\x.js"'
+      "node.exe `"C:\FarmRx\`t\Other\x.js`""
+    )) {
+      $expected = @([MapleSeasonArgv]::Parse($commandLine))
+      $actual = @(Split-MapleSeasonCommandLineArgument -CommandLine $commandLine)
+      $agrees = $expected.Count -eq $actual.Count
+      if ($agrees) {
+        for ($position = 0; $position -lt $expected.Count; $position++) {
+          if ($expected[$position] -cne $actual[$position]) { $agrees = $false; break }
+        }
+      }
+      $rendered = "expected [$(($expected | ForEach-Object { "<$_>" }) -join ' ')] but produced [$(($actual | ForEach-Object { "<$_>" }) -join ' ')]"
+      Assert-True $agrees "Split-MapleSeasonCommandLineArgument disagreed with CommandLineToArgvW on '$commandLine': $rendered."
+    }
+  }
+
   Write-Output 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS'
   exit 0
 } catch {

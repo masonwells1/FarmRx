@@ -129,8 +129,12 @@ export function foundationStaticGuard(root = process.cwd()) {
 
   // The completion marker, asserted from outside the script that prints it. Every guard above reads
   // scripts/verify-foundation.ps1 as text, so a top-level `return` inserted above its lanes keeps all of
-  // them present, runs nothing, and exits 0. The last line the orchestrator prints is the one thing that
-  // edit cannot keep, and the workflow is a second file it would also have to rewrite.
+  // them present, runs nothing, and exits 0 - and this assertion does NOT catch that. The earlier claim
+  // here, that the final line is the one thing such an edit cannot keep, is withdrawn: measured, an edit
+  // reading `Write-Output ('Farm Rx foundation gate: ' + 'PASS'); return` prints the marker having run
+  // nothing, and no assertion over a log the script itself writes can tell the two apart. What this pair
+  // does catch is a truncated or crashed run that still exits 0. The forgery class is closed instead by
+  // the three independent workflow steps pinned below, which the orchestrator does not invoke.
   const foundationWorkflow = read(root, '.github/workflows/foundation.yml')
   requireText(errors, foundationWorkflow, "Select-String -LiteralPath foundation-gate.log -SimpleMatch -CaseSensitive -Pattern 'Farm Rx foundation gate: PASS' -Quiet", 'workflow:foundation-completion-marker-asserted')
   requireText(errors, foundationWorkflow, "throw 'Foundation gate did not print its completion marker.'", 'workflow:foundation-completion-marker-fatal')
@@ -149,18 +153,57 @@ export function foundationStaticGuard(root = process.cwd()) {
   // True. The traversal refusal is pinned here and executed by
   // scripts/maple-season-browser-port-preflight.regression.ps1.
   const seasonBrowser = read(root, 'scripts/maple-season-browser.ps1')
-  requireText(errors, seasonBrowser, "if ($segment.TrimEnd(' ', \"`t\").TrimEnd('.').Length -eq 0) { $escapesTree = $true; break }", 'season-browser:ownership-refuses-traversal')
-  // What a character after the root MEANS depends on how many quotes precede it. Without the parity
-  // count, `node.exe C:\FarmRx" Backup"\scripts\factory-board.mjs` read the bare quote as a closing quote
-  // and answered True for root C:\FarmRx - while the argument Windows builds names the sibling
-  // C:\FarmRx Backup. Measured True before this line existed.
-  requireText(errors, seasonBrowser, '$insideQuotes = ($quotesBefore % 2) -eq 1', 'season-browser:ownership-counts-quote-parity')
-  requireText(errors, seasonBrowser, '$argumentContinues = (-not $insideQuotes) -or -not (($scan -eq ($normalizedCommandLine.Length - 1)) -or [char]::IsWhiteSpace($normalizedCommandLine[$scan + 1]))', 'season-browser:ownership-rejects-continued-argument')
-  // An unquoted argument ends at whitespace. Without this the traversal walk saw the rest of the command
-  // line, so `node.exe C:\FarmRx\.. --port 4177` left the tail '\.. --port 4177', which is not the exact
-  // segment '..', and the predicate claimed the parent directory. Measured True before this line existed.
-  requireText(errors, seasonBrowser, "if ((-not $insideQuotes) -and [char]::IsWhiteSpace($character)) { $tokenEnd = $scan; break }", 'season-browser:ownership-ends-unquoted-token-at-whitespace')
-  requireText(errors, seasonBrowser, "if ((-not $insideQuotes) -and ($normalizedRoot -match '\\s')) { continue }", 'season-browser:ownership-rejects-unquoted-space-root')
+  // The predicate now compares whole ARGUMENTS, parsed by Windows' own rules, instead of searching the raw
+  // command line for the root text and then classifying the boundary by hand. That hand classification
+  // produced a different false-TRUE in each of three consecutive reviews, so the pins below hold the
+  // tokenizer's load-bearing rules rather than any one boundary test.
+  requireText(errors, seasonBrowser, 'foreach ($argument in (Split-MapleSeasonCommandLineArgument -CommandLine $commandLine)) {', 'season-browser:ownership-compares-whole-arguments')
+  // Windows splits on ASCII space and tab ONLY. [char]::IsWhiteSpace also accepts NBSP, which is legal in
+  // a file name, so treating it as a separator made the sibling C:\FarmRx<NBSP>Backup look like our root
+  // followed by a boundary. Measured True before this rule was ASCII-only. The rule is defined ONCE and
+  // used by both of the tokenizer's loops: written twice, the two copies drifted, and a parse that stopped
+  // at a character the separator skip would not consume spun forever instead of answering. The stall
+  // guard is the second half of that repair - it converts any residual no-progress pass into a short
+  // parse, which is fail-closed, rather than a hung proof month.
+  requireText(errors, seasonBrowser, "return ($Character -eq ' ' -or $Character -eq \"`t\")", 'season-browser:tokenizer-splits-on-ascii-space-and-tab-only')
+  requireText(errors, seasonBrowser, 'if ((-not $inQuotes) -and (Test-MapleSeasonCommandLineSeparator -Character $character)) { break }', 'season-browser:tokenizer-breaks-argument-at-shared-separator')
+  requireText(errors, seasonBrowser, 'while ($index -lt $length -and (Test-MapleSeasonCommandLineSeparator -Character $CommandLine[$index])) { $index++ }', 'season-browser:tokenizer-skips-shared-separator')
+  requireText(errors, seasonBrowser, 'if ($index -eq $argumentStart) { break }', 'season-browser:tokenizer-cannot-stall')
+  // 2n backslashes then a quote: n backslashes, quote is a delimiter. 2n+1: n backslashes and a LITERAL
+  // quote. Without this rule `--label "C:\FarmRx\safe\" --port 4177"` counted the escaped quote as a
+  // closing delimiter and the predicate answered True for a listener running out of C:\Other. Measured.
+  requireText(errors, seasonBrowser, "[void]$builder.Append('\\', [int][Math]::Floor($backslashes / 2))", 'season-browser:tokenizer-halves-escaped-backslash-run')
+  requireText(errors, seasonBrowser, "if (($backslashes % 2) -eq 1) { [void]$builder.Append('\"'); $index++ }", 'season-browser:tokenizer-treats-odd-run-quote-as-literal')
+  // CommandLineToArgvW's doubled-quote quirk, which the C runtime does NOT share: inside a quoted
+  // argument '""' yields one literal quote and LEAVES quoted mode. Measured against the real API.
+  requireText(errors, seasonBrowser, "if ($inQuotes -and ($index + 1) -lt $length -and $CommandLine[$index + 1] -eq '\"') {", 'season-browser:tokenizer-handles-doubled-quote')
+  // Win32 strips trailing dots and spaces per component. The trim must take dots, spaces and tabs as ONE
+  // set: chaining .TrimEnd(' ',tab) then .TrimEnd('.') is order-dependent and left '.. .' with a length of
+  // three, so the component walk accepted it and the predicate claimed the parent directory. Measured.
+  requireText(errors, seasonBrowser, "return $Component.TrimEnd(' ', \"`t\", '.').Length -ne 0", 'season-browser:ownership-refuses-traversal')
+  requireText(errors, seasonBrowser, 'if (-not (Test-MapleSeasonPathComponentIsRealName -Component $component)) { $escapesTree = $true; break }', 'season-browser:ownership-walks-tail-components')
+  requireText(errors, seasonBrowser, 'if (-not (Test-MapleSeasonPathComponentIsRealName -Component $segment)) { return $false }', 'season-browser:ownership-walks-root-components')
+  // An argument carrying a character Win32 forbids in a path is not a path at all. This is what refuses
+  // the escaped-quote defeat, whose argument `C:\FarmRx\safe" --port 4177` starts with our root at a real
+  // separator yet cannot name a file.
+  requireText(errors, seasonBrowser, "$forbiddenInPath = [char[]]@('\"', '<', '>', '|', '*', '?')", 'season-browser:ownership-refuses-non-path-characters')
+  requireText(errors, seasonBrowser, 'if ($tail.IndexOfAny($forbiddenInPath) -ge 0) { continue }', 'season-browser:ownership-applies-non-path-characters')
+  // The root must end at a real separator inside the argument, or be the whole argument. Without this,
+  // root C:\FarmRx claimed a listener running out of C:\FarmRx2.
+  requireText(errors, seasonBrowser, "if ($tail.Length -gt 0 -and $tail[0] -ne '\\') { continue }", 'season-browser:ownership-requires-separator-boundary')
+  // The tokenizer's rules are checked against the real parser, not against my reading of the docs.
+  const seasonBrowserRegression = read(root, 'scripts/maple-season-browser-port-preflight.regression.ps1')
+  requireText(errors, seasonBrowserRegression, 'CommandLineToArgvW', 'season-browser-regression:tokenizer-compared-to-win32')
+  requireText(errors, seasonBrowserRegression, 'disagreed with CommandLineToArgvW', 'season-browser-regression:tokenizer-disagreement-is-fatal')
+  // A tokenizer that HANGS is worse than one that answers wrongly, because every caller is built to
+  // survive a false and none survives a hang. The drill re-introduces the separator drift on a copy of
+  // the function and requires the parse to finish anyway, which is only true while the stall guard is
+  // present: measured on this workstation, drift with the guard returns a short 3-argument parse, and
+  // drift with the guard deleted never returns at all.
+  requireText(errors, seasonBrowserRegression, 'Wait-Job $stallJob -Timeout 30', 'season-browser-regression:stall-drill-is-bounded')
+  requireText(errors, seasonBrowserRegression, '[char]::IsWhiteSpace($character)', 'season-browser-regression:stall-drill-reintroduces-drift')
+  requireText(errors, seasonBrowserRegression, 'made the command-line parse stall', 'season-browser-regression:stall-is-fatal')
+  requireText(errors, seasonBrowserRegression, 'its needle is stale and the drill would prove nothing', 'season-browser-regression:stall-drill-refuses-stale-needle')
   // The force kill must go through the object that was validated, and the validated identity must still
   // hold. A process id is not durable: the validated process can exit and Windows can reissue its number.
   requireText(errors, seasonBrowser, '$ownedProcess.Kill()', 'season-browser:cleanup-kills-validated-object')
