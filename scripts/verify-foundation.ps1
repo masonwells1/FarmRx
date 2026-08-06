@@ -40,10 +40,13 @@ function Invoke-FoundationWindowsExecutionLane {
   $script:windowsExecutionLaneOutcome = $null
   $script:windowsExecutionOutput = @()
   # Every guard the repository holds over the governed-port preflight reads it as text. Nothing
-  # executed the ownership predicate that gates the force kill in Clear-MapleSeasonBrowserPort: the
-  # regression chain that does exercise it sat in scripts/ with no caller at all, so a defect in it
-  # would have surfaced only when a season month either refused to clean up its own server or
-  # terminated a process the proof does not own.
+  # executed the ownership predicate at all: the regression chain that does exercise it sat in scripts/
+  # with no caller, so a defect in it would have surfaced only when a season month either refused to
+  # clean up its own server or - at the time this lane was written, when that predicate still gated a
+  # force kill - terminated a process the proof does not own. It no longer gates a kill; cleanup
+  # terminates the scenario's own job and the predicate only shapes a preflight refusal's diagnosis.
+  # This lane still belongs here, because a wrong diagnosis blames the wrong process and that is how
+  # the last several rounds of this defect got mis-attributed in the first place.
   #
   # This lane belongs here and not in scripts/verify-season.ps1. That file is itself reachable only
   # when an operator types `npm run verify:season` by hand - .github/workflows/foundation.yml runs this
@@ -257,7 +260,7 @@ try {
   $mutationDrill = @(& node scripts/verify-foundation-mutations.mjs)
   $mutationDrill | ForEach-Object { Write-Output $_ }
   if ($LASTEXITCODE -ne 0) { throw 'Foundation mutation drill failed.' }
-  $expectedStaticMarker = 'Foundation mutation drill: PASS (262 controlled mutations turned the gate red)'
+  $expectedStaticMarker = 'Foundation mutation drill: PASS (280 controlled mutations turned the gate red)'
   if ($mutationDrill -cnotcontains $expectedStaticMarker) {
     throw "Foundation mutation drill did not report its static half to this lane.`n  expected: $expectedStaticMarker"
   }
@@ -279,8 +282,9 @@ try {
   # mutated copies of this file's own functions. It is the only lane over the Windows lane that also
   # executes on the ubuntu CI runner, because it never starts the Windows-only regression chain.
   Invoke-FoundationLane { & node scripts/foundation-windows-lane-runtime-drill.mjs } 'Foundation Windows lane runtime drill failed.'
-  # Same argument one layer down, for the one function whose false answer kills a process: the static
-  # guard and the mutation drill both read the kill-authorizing predicate as TEXT. Measured, inserting
+  # Same argument one layer down, for the function whose false answer used to kill a process and now
+  # mis-names one in a refusal: the static guard and the mutation drill both read that predicate as
+  # TEXT. Measured, inserting
   # `return $true` at the top of Test-MapleSeasonBrowserPortOwned left both of them green with every
   # mutation detected, because no pinned string had moved. This lane calls the predicate instead of
   # reading it, and it proves its own teeth each run by gutting the predicate in memory and requiring

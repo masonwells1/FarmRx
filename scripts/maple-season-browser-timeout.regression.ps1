@@ -87,9 +87,24 @@ setInterval(() => {}, 1000)
   $started = [Diagnostics.Stopwatch]::StartNew()
   $timedOut = $false
   try {
-    Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season.config.ts' -Scenario 'Maple timeout regression' -TimeoutMilliseconds 3000 -RunnerFile $fakeRunner -OwnedCommandMarker $tempRoot
+    # THE TIMEOUT PATH CAPTURES WARNINGS TOO, and it is the path that most needs to. Cleanup here runs in the
+    # finally while a terminating error is already in flight, and the helper deliberately DOWNGRADES a cleanup
+    # problem to a warning on that path rather than overwriting the timeout verdict - which is correct, and is
+    # also exactly how a cleanup failure could ride along underneath a green timeout case unnoticed. The other
+    # two cases in this file already asserted zero warnings; this one did not, so it was the one blind spot.
+    # Measured before writing this, because a common parameter that silently goes unbound on a terminating error
+    # would make the assertion below vacuous: a command that emits one warning from its finally and then throws
+    # populates the variable with that warning (Count 1) and is still caught, while a command that throws with no
+    # warning leaves Count 0 - never null. The assertion therefore distinguishes the two, which is the only
+    # property that makes it worth writing.
+    Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season.config.ts' -Scenario 'Maple timeout regression' -TimeoutMilliseconds 3000 -RunnerFile $fakeRunner -OwnedCommandMarker $tempRoot -WarningVariable timeoutWarnings
   } catch {
-    $timedOut = $_.Exception.Message -ceq 'Maple timeout regression browser scenario exceeded its bounded process limit after verified cleanup.'
+    # THE MESSAGE NAMES THE BOUND, NOT THE CLEANUP, and that is a repair rather than a loss. It used to end "after
+    # verified cleanup", which was the timeout branch asserting in prose that it had already released the port -
+    # a claim it could only make because it did the cleanup itself and then read a flag saying so. The cleanup now
+    # happens in the finally, AFTER this throw, so the branch cannot honestly say anything about it. What proves
+    # the port came back is the assertion below that reads the port, which is behaviour rather than wording.
+    $timedOut = $_.Exception.Message -ceq 'Maple timeout regression browser scenario exceeded its bounded process limit of 3000 milliseconds.'
   }
   $started.Stop()
 
@@ -97,9 +112,22 @@ setInterval(() => {}, 1000)
   Assert-True (Test-Path -LiteralPath $readyFile) 'Browser timeout regression never created its child listener.'
   Assert-True ($started.Elapsed.TotalSeconds -lt 20) 'Browser timeout cleanup exceeded its bounded regression window.'
   Assert-True (@(Get-MapleSeasonPortListener -Port $port -Scenario 'Maple timeout regression').Count -eq 0) 'Browser timeout cleanup left its governed port listening.'
+  Assert-True ($timeoutWarnings.Count -eq 0) "Browser timeout cleanup footnoted a problem while the timeout verdict stood: $($timeoutWarnings -join '; ')"
 
-  # CASE THREE: THE ORPHAN. This is the one case where the governed port outlives the process this function
-  # launched, and a fresh-context review found that the salvage in the launch finally could not reach it. The
+  # CASE THREE: THE ORPHAN, and it is now the strongest single piece of evidence in this file. The detached
+  # grandchild here is a process this suite never names, spawned by a child that then exits, holding the
+  # governed port with nothing left pointing at it. It gets reaped anyway, because CreateProcessW put the
+  # child in a Windows job object before it ran a single instruction and every descendant of a job member is
+  # a member too. That is the whole reason the ownership question is answerable now: the kernel recorded the
+  # answer at launch, so cleanup does not have to reconstruct it from a command line afterwards.
+  #
+  # THE HISTORY BELOW IS KEPT because it is why the case exists, and it describes code that is gone. The
+  # salvage that could not reach this listener, the parent-liveness gate, the port-release flag - none of
+  # that survives; there is one unconditional TerminateJobObject in the finally. What the case still proves
+  # is the property, not the implementation: a launch-side failure landing after the parent has exited must
+  # leave the governed port free. A rewrite that reintroduces any guess about ownership fails right here.
+  #
+  # A fresh-context review found that the salvage in the launch finally could not reach it. The
   # port release lived inside `if (-not $process.HasExited)`, which asks whether the PARENT is alive - a
   # different question from whether the port is held, because the parent is a node runner that SPAWNS the dev
   # server that does the listening. So a launch-side failure landing after the parent exited found HasExited
@@ -145,7 +173,7 @@ settle()
   Set-Content -LiteralPath $orphanListener -Value $orphanListenerSource -Encoding Ascii -NoNewline
   Set-Content -LiteralPath $orphanRunner -Value $orphanRunnerSource -Encoding Ascii -NoNewline
   $orphanSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'maple-season-browser.ps1') -Raw
-  $orphanNeedle = '    $completed = $process.WaitForExit($TimeoutMilliseconds)'
+  $orphanNeedle = '    $waitResult = [MapleSeasonProcessInterop]::WaitForSingleObject($launchedHandle, [uint32]$TimeoutMilliseconds)'
   # EXACTLY ONE OCCURRENCE, not at least one. Contains() was the whole check, and .Replace() patches EVERY match,
   # so a second occurrence anywhere in the helper would have injected this throw into a path this case never
   # reasons about while the case still printed PASS. A fresh-context review found it. The count is the refusal:
@@ -155,13 +183,20 @@ settle()
   if ($orphanNeedleCount -ne 1) {
     throw "Browser orphan drill needs exactly one occurrence of the wait it injects its failure at and found $orphanNeedleCount; its needle is stale and the drill would prove nothing."
   }
-  # THE WAIT'S BOOLEAN IS READ, not discarded. [void] threw it away, so the injected message could announce
+  # THE WAIT'S RESULT IS READ, not discarded. [void] threw it away, so the injected message could announce
   # "after the parent exited" having waited out thirty seconds with the parent still running - and the premise
   # this entire case rests on was carried by a sentence that could not fail. A fresh-context review found it. A
   # wait that does not complete now throws a DIFFERENT message, which the injected-failure assertion below
   # rejects by name, so the case fails instead of passing on an unproven premise.
+  #
+  # IT WAITS ON THE HANDLE, because there is no .NET Process object in the helper any more. WAIT_OBJECT_0 is the
+  # only result that means "the process exited"; a timeout returns WAIT_TIMEOUT and a broken wait returns
+  # WAIT_FAILED, and both of those must reach the refusal rather than the on-purpose failure. Comparing against
+  # WAIT_OBJECT_0 with -ne is what makes every non-exit outcome refuse, rather than only the one this drill
+  # happens to have thought of.
   $orphanInjection = @(
-    '    if (-not $process.WaitForExit(30000)) { throw "$Scenario launch drill could not confirm its parent exited, so it proves nothing." }',
+    '    $orphanWait = [MapleSeasonProcessInterop]::WaitForSingleObject($launchedHandle, [uint32]30000)',
+    '    if ($orphanWait -ne [MapleSeasonProcessInterop]::WAIT_OBJECT_0) { throw "$Scenario launch drill could not confirm its parent exited, so it proves nothing." }',
     '    throw "$Scenario launch drill failed on purpose after the parent exited."'
   ) -join "`n"
   Set-Content -LiteralPath $orphanScript -Value $orphanSource.Replace($orphanNeedle, $orphanInjection) -Encoding UTF8

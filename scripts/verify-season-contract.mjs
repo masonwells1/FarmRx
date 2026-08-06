@@ -753,9 +753,23 @@ export async function validateHarnessIsolation(root = REPOSITORY_ROOT) {
     browserHelperContent.includes("Assert-MapleSeasonBrowserPortFree -Port $port"),
     `${BROWSER_HELPER_PATH} does not preflight its governed port before launching a scenario.`,
   );
+  // THE LAUNCH NEEDLE IS REQUIRED TO EXIST BEFORE ITS POSITION IS COMPARED, and this is a repair of a real
+  // defect rather than defensive decoration. The needle used to be `$process.Start()`, and the helper stopped
+  // starting processes that way - it calls CreateProcessW through StartInJob now. indexOf returned -1, the
+  // comparison `preflightIndex < -1` evaluated false, and this check reported that the helper "starts its
+  // browser process before the governed-port preflight" when the ordering was in fact correct. That is the
+  // loud direction of the failure and it is how the staleness was found. The quiet direction is what makes
+  // the presence check mandatory: with the operands the other way round, or with the preflight needle going
+  // stale instead, -1 makes the comparison TRUE and a broken ordering rule reports PASS. An ordering test
+  // that cannot tell "correctly ordered" from "not present" is not an ordering test.
+  const preflightIndex = browserHelperContent.indexOf("Assert-MapleSeasonBrowserPortFree -Port $port");
+  const launchIndex = browserHelperContent.indexOf("[MapleSeasonProcessInterop]::StartInJob(");
   assert(
-    browserHelperContent.indexOf("Assert-MapleSeasonBrowserPortFree -Port $port") <
-      browserHelperContent.indexOf("$process.Start()"),
+    launchIndex >= 0,
+    `${BROWSER_HELPER_PATH} no longer contains the launch call this ordering rule is written against, so the rule cannot be evaluated.`,
+  );
+  assert(
+    preflightIndex >= 0 && preflightIndex < launchIndex,
     `${BROWSER_HELPER_PATH} starts its browser process before the governed-port preflight.`,
   );
   assert(

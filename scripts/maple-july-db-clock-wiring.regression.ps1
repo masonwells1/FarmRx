@@ -74,16 +74,23 @@ foreach ($config in @('playwright.season.config.ts','playwright.season-february.
   Assert-True ($source.Contains('seasonLoopback') -and $source.Contains('127.0.0.1')) "Season config does not retain dynamic loopback-only port handling: $config"
 }
 $browserHelper = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'scripts/maple-season-browser.ps1')
-Assert-True ($browserHelper.Contains('Get-Command node.exe') -and $browserHelper.Contains("node_modules/@playwright/test/cli.js") -and $browserHelper.Contains('$startInfo.FileName = $node') -and $browserHelper.Contains('$startInfo.CreateNoWindow = $true') -and $browserHelper.Contains('System.Diagnostics.ProcessStartInfo') -and $browserHelper.Contains('$process.WaitForExit($TimeoutMilliseconds)') -and $browserHelper.Contains('$process.ExitCode')) 'Continuous browser helper does not use the repository Playwright CLI in a bounded direct Node process with an exact exit code.'
-# The kill needle here was '$ownedProcess.Kill()' and it went stale when the cleanup was rewritten to hold an
-# OS handle across the ownership check. That is the safe direction for a stale needle to fail in - this
-# assertion went red and named itself, rather than passing over a cleanup it no longer describes - and it is
-# why this caller is worth keeping alongside the static guard: it runs inside the foundation gate's Windows
-# lane, so it fails a gate run rather than only a hand-run check. Measured: haveProcessHandle stayed False and
-# m_processHandle stayed null across .StartTime, .HasExited and .Kill(), so a .NET Process object pinned
-# nothing and every one of those calls re-resolved the process id. The handle is what reserves the id, so the
-# handle is what is pinned - opened before the ownership check, terminated through, never re-looked-up.
-Assert-True ($browserHelper.Contains('Get-NetTCPConnection -LocalPort $Port -State Listen') -and $browserHelper.Contains('[MapleSeasonProcessInterop]::OpenProcess(') -and $browserHelper.Contains('[MapleSeasonProcessInterop]::TerminateProcess($target.Handle, 1)') -and $browserHelper.Contains('no longer identifies the listener it validated') -and $browserHelper.Contains('$killExitCode = $LASTEXITCODE') -and $browserHelper.Contains('browser server cleanup did not release governed port')) 'Continuous browser helper does not terminate and verify its proof-owned browser server through the handle it validated.'
+# The launch needles here named a .NET ProcessStartInfo - FileName, CreateNoWindow, WaitForExit, ExitCode - and
+# every one of them went stale when the launch was rewritten onto CreateProcessW inside a Windows Job Object.
+# That is the safe direction for a stale needle to fail in: this assertion went red and named itself rather
+# than passing over a launch it no longer describes. The replacements name the four things that now carry the
+# guarantee - the job is created before the process, the child is created SUSPENDED so it cannot spawn the dev
+# server outside the job, the wait is on the HANDLE CreateProcessW returned rather than on a re-resolved id,
+# and the exit code is read from that same handle.
+Assert-True ($browserHelper.Contains('Get-Command node.exe') -and $browserHelper.Contains("node_modules/@playwright/test/cli.js") -and $browserHelper.Contains('[MapleSeasonProcessInterop]::CreateKillOnCloseJob([ref]$jobError)') -and $browserHelper.Contains('CREATE_SUSPENDED | CREATE_NO_WINDOW') -and $browserHelper.Contains('[MapleSeasonProcessInterop]::StartInJob($job, $node, $commandLine, $Root,') -and $browserHelper.Contains('[MapleSeasonProcessInterop]::WaitForSingleObject($launchedHandle, [uint32]$TimeoutMilliseconds)') -and $browserHelper.Contains('[MapleSeasonProcessInterop]::GetExitCodeProcess($launchedHandle, [ref]$exitCode)')) 'Continuous browser helper does not use the repository Playwright CLI in a bounded, job-owned, suspended-then-assigned Node process with an exact native exit code.'
+# The kill needle here was '$ownedProcess.Kill()', then a TerminateProcess through a validated handle, and both
+# went stale as the ownership question moved. It is why this caller is worth keeping alongside the static guard:
+# it runs inside the foundation gate's Windows lane, so it fails a gate run rather than only a hand-run check.
+# The question it now pins is a different one. Every earlier version asked "does this command line look like
+# ours?" and answered from text; measured, that predicate returned True for a genuinely foreign node process
+# started by hand inside this repository. Job membership is kernel state bound to a HANDLE rather than to a
+# reusable number, so the cleanup kills a JOB - naming no process id at all - and then classifies whatever
+# survives by asking the kernel, not by reading a string.
+Assert-True ($browserHelper.Contains('Get-NetTCPConnection -LocalPort $Port -State Listen') -and $browserHelper.Contains('[MapleSeasonProcessInterop]::OpenProcess(') -and $browserHelper.Contains('[MapleSeasonProcessInterop]::TerminateJobObject($Job, 1)') -and $browserHelper.Contains('[MapleSeasonProcessInterop]::IsProcessInJob($handle, $Job, [ref]$inJob)') -and $browserHelper.Contains('is not in that job and still holds governed port') -and $browserHelper.Contains('browser server cleanup did not release governed port')) 'Continuous browser helper does not terminate its own job and classify surviving listeners by kernel job membership.'
 foreach ($month in @('january','february','march','april','may','june')) {
   $runner = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root "scripts/verify-maple-$month-disposable.ps1")
   Assert-True ($runner.Contains('maple-season-browser.ps1') -and $runner.Contains('Invoke-MapleSeasonBrowserProof')) "Maple $month runner bypasses the deterministic browser process helper."

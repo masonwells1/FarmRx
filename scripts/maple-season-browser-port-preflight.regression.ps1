@@ -48,6 +48,12 @@ $listenerProcess = $null
 # The mixed-listener case below holds TWO processes at once, so one variable cannot carry them to the
 # cleanup in the finally.
 $mixedProcesses = [Collections.Generic.List[object]]::new()
+# Declared out here, ahead of the try, because the finally has to be able to release them on the failure
+# path too. Closing a job handle is itself a kill - these jobs are created with KILL_ON_JOB_CLOSE - so this
+# list is both the handle-leak cleanup and the last-resort teardown for any listener a failed assertion
+# left running inside a job.
+$clearJobs = [Collections.Generic.List[IntPtr]]::new()
+$clearHandles = [Collections.Generic.List[IntPtr]]::new()
 
 try {
   Assert-True ($port -ne 0) 'Port preflight regression could not find a free loopback port in 4289-4319.'
@@ -147,99 +153,294 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
     $listenerProcess = $null
   }
 
-  # Clear-MapleSeasonBrowserPort itself, executed. Everything above proves the preflight REFUSES; this
-  # is the other function, the one that actually terminates a listener, and until now no regression ran
-  # it at all - the force kill it performs was covered by reading its source. Both directions are
-  # exercised against a real listening process: the owned direction must terminate it and release the
-  # port, and the foreign direction must throw and leave it untouched.
-  foreach ($clearCase in @(
-    @{ Name = 'owned listener'; Root = $tempRoot; MustTerminate = $true }
-    # A root that names a real tree this listener does not live in. The refusal is the safety-critical
-    # direction: this function's kill is unconditional once the predicate says yes.
-    @{ Name = 'foreign listener'; Root = (Join-Path ([IO.Path]::GetTempPath()) ("farmrx-not-this-tree-{0}" -f $suffix)); MustTerminate = $false }
-  )) {
-    $listenerScript = Join-Path $tempRoot 'listener.js'
-    $readyFile = Join-Path $tempRoot 'listener-ready.txt'
-    Set-Content -LiteralPath $listenerScript -Value $listenerSource -Encoding Ascii -NoNewline
-    Remove-Item -LiteralPath $readyFile -ErrorAction SilentlyContinue
-    $env:FARMRX_PREFLIGHT_READY_FILE = $readyFile
-    $env:FARMRX_PREFLIGHT_BIND_ADDRESS = '127.0.0.1'
-    $listenerProcess = Start-Process -FilePath $node -ArgumentList @("`"$listenerScript`"") -PassThru -WindowStyle Hidden
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
-    while (-not (Test-Path -LiteralPath $readyFile) -and -not $listenerProcess.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
-    Assert-True (Test-Path -LiteralPath $readyFile) "Cleanup regression listener for the $($clearCase.Name) case did not begin listening on port $port within twenty seconds."
+  # THE UNREADABLE HOLDER, executed rather than reasoned about. Every case above has a holder this preflight can
+  # read. This is the one where it cannot, and until now that state was recorded as a STRANGER: the process
+  # lookup ran with -ErrorAction SilentlyContinue, $null went to the ownership predicate, the predicate answered
+  # "not ours", and the refusal told the operator as a flat fact that no listener on that port belonged to Farm
+  # Rx. The likeliest real cause is the opposite of that sentence - a leaked Farm Rx server the operator now has
+  # no reason to go looking for.
+  #
+  # An access-denied CIM read cannot be produced on demand from an unprivileged shell, so the failure is
+  # INJECTED into a COPY of the helper - the technique the orphan case uses - and only the single statement that
+  # reads the process is replaced. The bucketing, the sentence and the refusal under test are the real ones.
+  # The listener sits in $squatterRoot, OUTSIDE the owned marker, deliberately: if the injection ever stopped
+  # taking effect the holder would be readable and foreign, and this case would fail with the foreign message
+  # rather than pass on a mutation that no longer applies.
+  $cimHelper = Join-Path $tempRoot 'injected-cim-failure-helper.ps1'
+  $cimRunner = Join-Path $tempRoot 'injected-cim-failure-case.ps1'
+  $cimMessageFile = Join-Path $tempRoot 'injected-cim-failure-message.txt'
+  $cimNeedle = '      $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction Stop'
+  $cimSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'maple-season-browser.ps1') -Raw
+  # EXACTLY ONE occurrence, because .Replace patches every match: a second copy of that statement would be
+  # silently neutered too, and the case would still pass while covering less than it claims.
+  Assert-True (($cimSource.Split([string[]]@($cimNeedle), [StringSplitOptions]::None).Count - 1) -eq 1) 'Port preflight regression could not find exactly one process-lookup statement to inject a failure into; its needle is stale and the drill would prove nothing.'
+  [IO.File]::WriteAllText($cimHelper, $cimSource.Replace($cimNeedle, "      throw 'the process table could not be read (injected)'"), [Text.UTF8Encoding]::new($false))
+  # Every value below is baked into the generated child rather than passed as an argument, because $scenario
+  # contains spaces and native-argument quoting is not identical across the two hosts this suite runs on - a
+  # split argument would arrive as a different scenario name and fail this case for the wrong reason. Single
+  # quotes are the delimiter, so a quote inside any of these values would end the literal early and generate
+  # something other than the intended probe; asserted rather than assumed.
+  foreach ($baked in @($cimHelper, $cimMessageFile, $scenario, $tempRoot)) {
+    Assert-True (-not $baked.Contains("'")) "Port preflight regression cannot bake the value '$baked' into its injected-failure probe because it contains a single quote."
+  }
+  $cimRunnerSource = @"
+`$ErrorActionPreference = 'Stop'
+. '$cimHelper'
+`$message = 'NO_REFUSAL_AT_ALL'
+try {
+  Assert-MapleSeasonBrowserPortFree -Port $port -Scenario '$scenario' -PortVariable 'FARMRX_SEASON_JANUARY_PORT' -Root '$tempRoot'
+} catch {
+  `$message = `$_.Exception.Message
+}
+Set-Content -LiteralPath '$cimMessageFile' -Value `$message -Encoding Ascii -NoNewline
+"@
+  Set-Content -LiteralPath $cimRunner -Value $cimRunnerSource -Encoding Ascii -NoNewline
 
-    $clearFailure = $null
-    try {
-      Clear-MapleSeasonBrowserPort -Port $port -Root $clearCase.Root -Scenario $scenario
-    } catch {
-      $clearFailure = $_.Exception.Message
-    }
+  $cimListenerScript = Join-Path $squatterRoot 'cim-failure-listener.js'
+  $cimReadyFile = Join-Path $squatterRoot 'cim-failure-ready.txt'
+  Set-Content -LiteralPath $cimListenerScript -Value $listenerSource -Encoding Ascii -NoNewline
+  Remove-Item -LiteralPath $cimReadyFile -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $cimMessageFile -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $startedSentinel -ErrorAction SilentlyContinue
+  $env:FARMRX_PREFLIGHT_READY_FILE = $cimReadyFile
+  $env:FARMRX_PREFLIGHT_BIND_ADDRESS = '127.0.0.1'
+  $listenerProcess = Start-Process -FilePath $node -ArgumentList @("`"$cimListenerScript`"") -PassThru -WindowStyle Hidden
+  $cimDeadline = [DateTime]::UtcNow.AddSeconds(20)
+  while (-not (Test-Path -LiteralPath $cimReadyFile) -and -not $listenerProcess.HasExited -and [DateTime]::UtcNow -lt $cimDeadline) { Start-Sleep -Milliseconds 100 }
+  Assert-True (Test-Path -LiteralPath $cimReadyFile) "Port preflight regression's unreadable-holder listener did not begin listening on port $port within twenty seconds."
 
-    if ($clearCase.MustTerminate) {
-      Assert-True ($null -eq $clearFailure) "Cleanup refused to terminate an owned listener on port $port. Got: $clearFailure"
-      Assert-True $listenerProcess.HasExited "Cleanup reported success without terminating the owned listener on port $port."
-      Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 0) "Cleanup left governed port $port listening after terminating its owned listener."
-    } else {
-      Assert-True ($clearFailure -ceq "$scenario found an unrecognized listener on governed port $port; refusing to terminate it.") "Cleanup did not refuse a foreign listener on port $port with the exact message. Got: $clearFailure"
-      # The decisive assertion. A refusal that still killed the process would be the exact failure this
-      # predicate exists to prevent, and an exception message alone would not reveal it.
-      Assert-True (-not $listenerProcess.HasExited) "Cleanup terminated a foreign listener on port $port while reporting that it refused to."
-      Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 1) "Cleanup disturbed a foreign listener on port $port."
-      Stop-Process -Id $listenerProcess.Id -Force -ErrorAction SilentlyContinue
-      $listenerProcess.WaitForExit(10000) | Out-Null
-    }
-    $released = [DateTime]::UtcNow.AddSeconds(10)
-    while (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -ne 0 -and [DateTime]::UtcNow -lt $released) { Start-Sleep -Milliseconds 100 }
-    Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 0) "Cleanup regression could not release port $port after the $($clearCase.Name) case."
-    $listenerProcess = $null
+  # The SAME engine this file is running under, so this case cannot pass on one host while going untested on
+  # the other - which is what a hardcoded 'pwsh' would have done under Windows PowerShell 5.1.
+  $cimProbeShell = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+  & $cimProbeShell -NoProfile -ExecutionPolicy Bypass -File $cimRunner | Out-Null
+  Assert-True (Test-Path -LiteralPath $cimMessageFile) 'Port preflight regression could not read back a refusal from its injected-CIM-failure child shell, so the probe did not run.'
+  $cimMessage = Get-Content -LiteralPath $cimMessageFile -Raw
+  $cimExpected = "$scenario cannot start: governed port $port was already in use before this scenario ran, and this preflight could not identify a single listener on it, so it will not guess whether the holder is Farm Rx or not: PID $($listenerProcess.Id) (could not be identified: the process table could not be read (injected)). Check those PIDs from an elevated shell. Free that port or set FARMRX_SEASON_JANUARY_PORT to an unused port."
+  Assert-True ($cimMessage -ceq $cimExpected) "Port preflight did not refuse an unreadable holder honestly. Got: $cimMessage"
+  # It still has to be a REFUSAL, not just an honest sentence: a port whose holder cannot be identified is
+  # exactly the port a scenario must not launch onto.
+  Assert-True (-not (Test-Path -LiteralPath $startedSentinel)) 'Port preflight started the browser runner despite being unable to identify the holder of the governed port.'
+  Assert-True (-not $listenerProcess.HasExited) 'Port preflight terminated a listener it could not even identify instead of refusing.'
+
+  Stop-Process -Id $listenerProcess.Id -Force -ErrorAction SilentlyContinue
+  $listenerProcess.WaitForExit(10000) | Out-Null
+  $cimReleased = [DateTime]::UtcNow.AddSeconds(10)
+  while (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -ne 0 -and [DateTime]::UtcNow -lt $cimReleased) { Start-Sleep -Milliseconds 100 }
+  Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 0) "Port preflight regression could not release port $port after the unreadable-holder case."
+  $listenerProcess = $null
+
+  # Clear-MapleSeasonBrowserPort itself, executed. Everything above proves the preflight REFUSES; this is
+  # the other function, the one that actually terminates a listener, and its authority changed completely.
+  # It no longer asks whether a listener's command line sits under the owned root. That question was
+  # MEASURED wrong in both directions on this workstation - a developer's own repository-rooted node process
+  # answered "ours" and would have been force-killed, and a genuine descendant that bound the port late
+  # answered "not ours" and was left holding it - so authority moved to the only record that cannot be
+  # imitated by text: the kernel's own list of which processes this scenario launched, a Job Object.
+  #
+  # These cases exercise that record against real listening processes, in the four directions that decide
+  # whether the change is actually safe:
+  #   1. a listener created INSIDE the job is terminated and the port is released
+  #   2. a DETACHED GRANDCHILD of the launch is terminated too. This is the direction the retired predicate
+  #      got wrong, and the reason the rewrite happened at all: in a real season run the process holding the
+  #      governed port is a dev server the launch never named.
+  #   3. a listener created OUTSIDE the job survives, is named, and the call throws. Its DIRECTORY is
+  #      irrelevant now - it would be foreign even sitting inside the owned root, which is precisely the
+  #      distinction the old design could not express.
+  #   4. a caller that supplies no job is refused before anything is terminated.
+  Initialize-MapleSeasonProcessInterop
+
+  $spawnerSource = @'
+const fs = require("fs")
+const { spawn } = require("child_process")
+// Binds NOTHING itself. It spawns a detached, unreferenced grandchild that binds the governed port and
+// writes the ready file, so the process holding the port is not the process the launch created. Detached
+// and unref'd on purpose: that is the process the retired command-line predicate left alive.
+const child = spawn(process.execPath, [process.env.FARMRX_PREFLIGHT_CHILD_SCRIPT], {
+  detached: true,
+  stdio: "ignore",
+})
+child.unref()
+fs.writeFileSync(process.env.FARMRX_PREFLIGHT_SPAWNED_FILE, String(child.pid))
+setInterval(() => {}, 1000)
+'@
+
+  function New-ProbeJob {
+    $createError = 0
+    $created = [MapleSeasonProcessInterop]::CreateKillOnCloseJob([ref]$createError)
+    Assert-True ($created -ne [IntPtr]::Zero) "Cleanup regression could not create a job object to own its listener (Windows error $createError)."
+    $clearJobs.Add($created)
+    return $created
   }
 
-  # ONE port, TWO listeners - one owned, one foreign. This is the case the two cases above cannot reach,
-  # because each of them puts a single listener on the port and the previous cleanup validated and killed
-  # one listener at a time. MEASURED against the previous version: it terminated the OWNED listener and
-  # then threw "refusing to terminate it" about the foreign one, so its refusal had already stopped a
-  # process. The repair validates every listener before terminating any, and this case is what proves it.
-  #
-  # A port really can hold two listeners: one bound to 127.0.0.1 and one to ::1 are separate sockets, and
-  # Get-NetTCPConnection returns both rows. The owned one binds ::1 because that is the row Windows was
-  # measured to enumerate FIRST, and enumeration order is not creation order. The order is checked at run
-  # time below rather than assumed: if the owned row is not first, the previous version would have refused
-  # on the foreign row before reaching its defect, so the case would pass on broken code. It says so
-  # instead of passing quietly.
-  # A local starter rather than a pipeline: `Where-Object` to pick the two processes back out of a list
-  # would put a shadowable cmdlet on the path of a safety-critical assertion, which is the shape this suite
-  # spent two reviews removing. Two named variables need no selection step at all.
-  function Start-MixedListener {
-    param([Parameter(Mandatory)][string]$Script, [Parameter(Mandatory)][string]$Ready, [Parameter(Mandatory)][string]$Bind, [Parameter(Mandatory)][string]$Label)
-    Set-Content -LiteralPath $Script -Value $listenerSource -Encoding Ascii -NoNewline
+  function Test-ProbeExited {
+    param([Parameter(Mandatory)][IntPtr]$Handle)
+    # "Has this process ended", asked of the HANDLE rather than of a process id, so it cannot be answered
+    # about some later process that inherited the id. `.HasExited` is not available for these: they were
+    # created by CreateProcessW rather than Start-Process, which is the whole point - only a launch that can
+    # be assigned to a job before its first instruction runs can be governed by one.
+    return ([MapleSeasonProcessInterop]::WaitForSingleObject($Handle, [uint32]0) -eq [MapleSeasonProcessInterop]::WAIT_OBJECT_0)
+  }
+
+  function Start-JobListener {
+    param(
+      [Parameter(Mandatory)][IntPtr]$Job,
+      [Parameter(Mandatory)][string]$Script,
+      [Parameter(Mandatory)][string]$Ready,
+      [Parameter(Mandatory)][string]$Bind,
+      [Parameter(Mandatory)][string]$Label
+    )
     Remove-Item -LiteralPath $Ready -ErrorAction SilentlyContinue
     $env:FARMRX_PREFLIGHT_READY_FILE = $Ready
     $env:FARMRX_PREFLIGHT_BIND_ADDRESS = $Bind
-    $started = Start-Process -FilePath $node -ArgumentList @("`"$Script`"") -PassThru -WindowStyle Hidden
-    $mixedProcesses.Add($started)
+    $handle = [IntPtr]::Zero
+    $launchedId = [uint32]0
+    $launchError = 0
+    $launchStage = ''
+    # No environment block is passed, so the launched process inherits this one - which is how the listener
+    # learns its ready file and bind address, and how a GRANDCHILD inherits them in turn. If that
+    # inheritance ever broke, the ready-file assertion below is what would say so.
+    $started = [MapleSeasonProcessInterop]::StartInJob(
+      $Job, $node, ('"{0}" "{1}"' -f $node, $Script), $tempRoot,
+      [ref]$handle, [ref]$launchedId, [ref]$launchError, [ref]$launchStage)
+    Assert-True $started "Cleanup regression could not start its $Label listener inside a job object (failed at the $launchStage stage, Windows error $launchError)."
+    $clearHandles.Add($handle)
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
-    while (-not (Test-Path -LiteralPath $Ready) -and -not $started.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
-    Assert-True (Test-Path -LiteralPath $Ready) "Mixed-listener cleanup case could not start its $Label listener on port $port within twenty seconds."
-    return $started
+    while (-not (Test-Path -LiteralPath $Ready) -and -not (Test-ProbeExited -Handle $handle) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    Assert-True (Test-Path -LiteralPath $Ready) "Cleanup regression's $Label listener did not begin listening on port $port within twenty seconds."
+    return [pscustomobject]@{ Handle = $handle; Id = [int]$launchedId }
   }
-  $mixedOwned = Start-MixedListener -Script (Join-Path $tempRoot 'mixed-owned-listener.js') -Ready (Join-Path $tempRoot 'mixed-owned-ready.txt') -Bind '::1' -Label 'owned'
-  $mixedForeign = Start-MixedListener -Script (Join-Path $squatterRoot 'mixed-foreign-listener.js') -Ready (Join-Path $squatterRoot 'mixed-foreign-ready.txt') -Bind '127.0.0.1' -Label 'foreign'
+
+  # 1. A listener the launch created itself.
+  $ownedJob = New-ProbeJob
+  $ownedScript = Join-Path $tempRoot 'clear-owned-listener.js'
+  Set-Content -LiteralPath $ownedScript -Value $listenerSource -Encoding Ascii -NoNewline
+  $ownedListener = Start-JobListener -Job $ownedJob -Script $ownedScript -Ready (Join-Path $tempRoot 'clear-owned-ready.txt') -Bind '127.0.0.1' -Label 'owned'
+  $ownedFailure = $null
+  try {
+    Clear-MapleSeasonBrowserPort -Port $port -Job $ownedJob -Scenario $scenario
+  } catch {
+    $ownedFailure = $_.Exception.Message
+  }
+  Assert-True ($null -eq $ownedFailure) "Cleanup refused to terminate the listener it launched itself on port $port. Got: $ownedFailure"
+  Assert-True (Test-ProbeExited -Handle $ownedListener.Handle) "Cleanup returned without terminating the listener it launched on port $port."
+  Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 0) "Cleanup left governed port $port listening after terminating the listener it launched."
+
+  # 2. A DETACHED GRANDCHILD of the launch, which is the case that motivated the whole rewrite.
+  $grandchildJob = New-ProbeJob
+  $grandchildScript = Join-Path $tempRoot 'clear-grandchild-listener.js'
+  $spawnerScript = Join-Path $tempRoot 'clear-grandchild-spawner.js'
+  $spawnedFile = Join-Path $tempRoot 'clear-grandchild-spawned.txt'
+  Set-Content -LiteralPath $grandchildScript -Value $listenerSource -Encoding Ascii -NoNewline
+  Set-Content -LiteralPath $spawnerScript -Value $spawnerSource -Encoding Ascii -NoNewline
+  Remove-Item -LiteralPath $spawnedFile -ErrorAction SilentlyContinue
+  $env:FARMRX_PREFLIGHT_CHILD_SCRIPT = $grandchildScript
+  $env:FARMRX_PREFLIGHT_SPAWNED_FILE = $spawnedFile
+  $spawnerListener = Start-JobListener -Job $grandchildJob -Script $spawnerScript -Ready (Join-Path $tempRoot 'clear-grandchild-ready.txt') -Bind '127.0.0.1' -Label 'detached grandchild'
+  $grandchildRows = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+  Assert-True ($grandchildRows.Count -eq 1) "Detached-grandchild cleanup case needs exactly one listener on port $port; the listener table returned $($grandchildRows.Count) rows."
+  # Checked at run time rather than assumed. If the port were held by the launched process itself this case
+  # would be case 1 again wearing a different name, and it would pass without ever proving anything about a
+  # descendant - so it says so instead of passing quietly.
+  Assert-True ([int]$grandchildRows[0].OwningProcess -ne $spawnerListener.Id) "Detached-grandchild cleanup case requires governed port $port to be held by a process the launch did not create, or it proves nothing about descendants. The port is held by pid $($grandchildRows[0].OwningProcess) and the launched process is pid $($spawnerListener.Id)."
+  $grandchildFailure = $null
+  try {
+    Clear-MapleSeasonBrowserPort -Port $port -Job $grandchildJob -Scenario $scenario
+  } catch {
+    $grandchildFailure = $_.Exception.Message
+  }
+  Assert-True ($null -eq $grandchildFailure) "Cleanup refused to terminate a detached grandchild of its own launch on port $port - the exact process the retired command-line predicate left alive. Got: $grandchildFailure"
+  Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 0) "Cleanup left governed port $port held by a detached grandchild of its own launch."
+
+  # 3 and 4, against one listener started deliberately OUTSIDE any job.
+  $foreignJob = New-ProbeJob
+  $foreignScript = Join-Path $squatterRoot 'clear-foreign-listener.js'
+  $foreignReady = Join-Path $squatterRoot 'clear-foreign-ready.txt'
+  Set-Content -LiteralPath $foreignScript -Value $listenerSource -Encoding Ascii -NoNewline
+  Remove-Item -LiteralPath $foreignReady -ErrorAction SilentlyContinue
+  $env:FARMRX_PREFLIGHT_READY_FILE = $foreignReady
+  $env:FARMRX_PREFLIGHT_BIND_ADDRESS = '127.0.0.1'
+  # Start-Process, not StartInJob: being outside the job is the entire definition of foreign now.
+  $listenerProcess = Start-Process -FilePath $node -ArgumentList @("`"$foreignScript`"") -PassThru -WindowStyle Hidden
+  $deadline = [DateTime]::UtcNow.AddSeconds(20)
+  while (-not (Test-Path -LiteralPath $foreignReady) -and -not $listenerProcess.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+  Assert-True (Test-Path -LiteralPath $foreignReady) "Cleanup regression's foreign listener did not begin listening on port $port within twenty seconds."
+
+  # 4 first, while a live listener is on the port: a caller with no job must be refused, and the refusal
+  # must happen before anything is terminated. An IntPtr::Zero job would otherwise reach TerminateJobObject.
+  $noJobFailure = $null
+  try {
+    Clear-MapleSeasonBrowserPort -Port $port -Job ([IntPtr]::Zero) -Scenario $scenario
+  } catch {
+    $noJobFailure = $_.Exception.Message
+  }
+  Assert-True ($noJobFailure -ceq "$scenario was asked to release governed port $port without the job that owns its browser tree; refusing to terminate anything.") "Cleanup did not refuse a caller that supplied no job with the exact message. Got: $noJobFailure"
+  Assert-True (-not $listenerProcess.HasExited) "Cleanup terminated a listener even though it was given no job to authorize terminating anything."
+
+  # 3. The safety-critical direction.
+  $foreignFailure = $null
+  try {
+    Clear-MapleSeasonBrowserPort -Port $port -Job $foreignJob -Scenario $scenario
+  } catch {
+    $foreignFailure = $_.Exception.Message
+  }
+  Assert-True ($foreignFailure -ceq "$scenario terminated its own browser tree, but pid $($listenerProcess.Id) is not in that job and still holds governed port $port, so it is not a process this scenario launched and it refused to terminate it.") "Cleanup did not refuse a listener outside its job with the exact message, naming the process. Got: $foreignFailure"
+  # The decisive assertion. A refusal that still killed the process is the exact failure the rewrite exists
+  # to prevent, and an exception message alone would not reveal it.
+  Assert-True (-not $listenerProcess.HasExited) "Cleanup terminated a listener outside its job while reporting that it refused to."
+  Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 1) "Cleanup disturbed a listener outside its job on port $port."
+  Stop-Process -Id $listenerProcess.Id -Force -ErrorAction SilentlyContinue
+  $listenerProcess.WaitForExit(10000) | Out-Null
+  $released = [DateTime]::UtcNow.AddSeconds(10)
+  while (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -ne 0 -and [DateTime]::UtcNow -lt $released) { Start-Sleep -Milliseconds 100 }
+  Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 0) "Cleanup regression could not release port $port after the foreign-listener case."
+  $listenerProcess = $null
+
+  # ONE port, TWO listeners - one a job member, one not. This is the case none of the four above can reach,
+  # because each of them puts the port entirely inside or entirely outside the job, and it asks the question
+  # that decides whether a wholesale TerminateJobObject is safe at all: when the kill names no process id
+  # and reaches every member at once, can it spill onto a process sharing the same port?
+  #
+  # It cannot, and that is what this asserts. The member IS terminated - it is ours, and needing to keep it
+  # alive was an artifact of the old design, which killed one listener at a time and therefore had to
+  # validate them all before starting. Job membership is decided before any process runs, so there is
+  # nothing left to validate at kill time. The non-member survives untouched and is named in the throw.
+  #
+  # A port really can hold two listeners: one bound to 127.0.0.1 and one to ::1 are separate sockets, and
+  # Get-NetTCPConnection returns both rows. Enumeration ORDER used to matter here and deliberately no longer
+  # does - the kill is atomic over the job rather than a walk down the listener table - so this case no
+  # longer pins which row Windows returns first.
+  $mixedJob = New-ProbeJob
+  $mixedOwnedScript = Join-Path $tempRoot 'mixed-owned-listener.js'
+  Set-Content -LiteralPath $mixedOwnedScript -Value $listenerSource -Encoding Ascii -NoNewline
+  $mixedOwned = Start-JobListener -Job $mixedJob -Script $mixedOwnedScript -Ready (Join-Path $tempRoot 'mixed-owned-ready.txt') -Bind '::1' -Label 'mixed-case job member'
+  $mixedForeignScript = Join-Path $squatterRoot 'mixed-foreign-listener.js'
+  $mixedForeignReady = Join-Path $squatterRoot 'mixed-foreign-ready.txt'
+  Set-Content -LiteralPath $mixedForeignScript -Value $listenerSource -Encoding Ascii -NoNewline
+  Remove-Item -LiteralPath $mixedForeignReady -ErrorAction SilentlyContinue
+  $env:FARMRX_PREFLIGHT_READY_FILE = $mixedForeignReady
+  $env:FARMRX_PREFLIGHT_BIND_ADDRESS = '127.0.0.1'
+  $mixedForeign = Start-Process -FilePath $node -ArgumentList @("`"$mixedForeignScript`"") -PassThru -WindowStyle Hidden
+  $mixedProcesses.Add($mixedForeign)
+  $deadline = [DateTime]::UtcNow.AddSeconds(20)
+  while (-not (Test-Path -LiteralPath $mixedForeignReady) -and -not $mixedForeign.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+  Assert-True (Test-Path -LiteralPath $mixedForeignReady) "Mixed-listener cleanup case could not start its non-member listener on port $port within twenty seconds."
   $mixedRows = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
-  Assert-True ($mixedRows.Count -eq 2) "Mixed-listener cleanup case needs one port held by two listeners; the listener table returned $($mixedRows.Count) rows, so it cannot tell a two-pass cleanup from a one-pass one."
-  Assert-True ([int]$mixedRows[0].OwningProcess -eq $mixedOwned.Id) "Mixed-listener cleanup case requires the OWNED listener to be enumerated first, or a one-pass cleanup would refuse before reaching its defect and this case would pass on broken code. Windows returned pid $($mixedRows[0].OwningProcess) first and the owned listener is pid $($mixedOwned.Id); swap which address family each listener binds and re-run."
+  Assert-True ($mixedRows.Count -eq 2) "Mixed-listener cleanup case needs one port held by two listeners; the listener table returned $($mixedRows.Count) rows, so it cannot tell a job-scoped kill from an indiscriminate one."
 
   $mixedFailure = $null
   try {
-    Clear-MapleSeasonBrowserPort -Port $port -Root $tempRoot -Scenario $scenario
+    Clear-MapleSeasonBrowserPort -Port $port -Job $mixedJob -Scenario $scenario
   } catch {
     $mixedFailure = $_.Exception.Message
   }
-  Assert-True ($mixedFailure -ceq "$scenario found an unrecognized listener on governed port $port; refusing to terminate it.") "Mixed-listener cleanup did not refuse a port shared with a foreign listener using the exact message. Got: $mixedFailure"
-  # The two decisive assertions. Either one failing is the F15 defect: a refusal that terminated something.
-  Assert-True (-not $mixedOwned.HasExited) "Mixed-listener cleanup terminated its OWN listener on port $port and then reported that it refused to terminate anything; a refusal must validate every listener before terminating any."
-  Assert-True (-not $mixedForeign.HasExited) "Mixed-listener cleanup terminated a FOREIGN listener on port $port while reporting that it refused to."
-  Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 2) "Mixed-listener cleanup disturbed one of the two listeners on port $port."
+  Assert-True ($mixedFailure -ceq "$scenario terminated its own browser tree, but pid $($mixedForeign.Id) is not in that job and still holds governed port $port, so it is not a process this scenario launched and it refused to terminate it.") "Mixed-listener cleanup did not report a port shared with a non-member using the exact message, naming the process. Got: $mixedFailure"
+  # The decisive assertion: the kill reached exactly the job and stopped there. A failure here means
+  # TerminateJobObject took a process off this port that this scenario never launched.
+  Assert-True (-not $mixedForeign.HasExited) "Mixed-listener cleanup terminated a NON-MEMBER listener on port $port while reporting that it refused to."
+  Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 1) "Mixed-listener cleanup left $(@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count) listeners on port $port; exactly the non-member should remain."
+  # And the other half of the same fact: the member really was terminated, so this case is not passing
+  # merely because the kill did nothing at all.
+  Assert-True (Test-ProbeExited -Handle $mixedOwned.Handle) "Mixed-listener cleanup left its own job member running on port $port, so the throw about the non-member may simply be a kill that never happened."
 
   foreach ($mixed in $mixedProcesses) {
     if (-not $mixed.HasExited) { Stop-Process -Id $mixed.Id -Force -ErrorAction SilentlyContinue }
@@ -269,9 +470,16 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
 
   # Ownership boundary, asserted directly. The listener cases above can only put a process clearly
   # inside the owned root or clearly outside it, so they cannot reach the case that matters most:
-  # a sibling directory that merely shares the root's name prefix. Test-MapleSeasonBrowserPortOwned
-  # gates the force kill in Clear-MapleSeasonBrowserPort - `TerminateProcess` through an OS handle opened
-  # before this check runs - so a true answer here would terminate somebody else's server.
+  # a sibling directory that merely shares the root's name prefix.
+  #
+  # WHAT A TRUE ANSWER NOW COSTS, stated honestly, because this comment used to claim more. This predicate
+  # NO LONGER GATES ANY KILL. Kill authority is Job Object membership, and its one surviving caller is the
+  # preflight, which refuses to launch either way and terminates nothing. A wrong answer here therefore
+  # mislabels a refusal message - it says "a Farm Rx dev or season server" where it should say "a foreign
+  # listener", or the reverse - and it sends an operator looking in the wrong place. That is worth these
+  # cases and no more. They are kept, in full, for two reasons: the message an operator reads is still the
+  # only thing that tells them what to stop, and every case below records a defect this predicate actually
+  # had, which is evidence about how text-matching fails and should not be discarded with the kill.
   $ownedRoot = 'C:\FarmRx'
   # ImageName is part of each case because the predicate tests the process image, not the command
   # line, for the node/npm/npx condition - an argument that merely mentions node_modules must not be
@@ -315,7 +523,8 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $anyListener)) 'Ownership test did not fail closed for a missing root.'
   Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $anyListener -Root '\')) 'Ownership test did not fail closed for a degenerate root.'
   # A root that does not name a directory under a drive or share is too broad to identify one tree, and
-  # rejecting only the empty root was not enough to catch that. True here authorizes the force kill.
+  # rejecting only the empty root was not enough to catch that. True here no longer authorizes anything -
+  # see the note above - but a root this broad would call every node process on the machine Farm Rx's own.
   #
   # Be exact about which of these are regressions, because an earlier version of this comment claimed
   # all of them were and that was wrong. Measured against the predicate at 599818e using the very
@@ -750,13 +959,24 @@ public static class MapleSeasonArgv {
     Stop-Process -Id $listenerProcess.Id -Force -ErrorAction SilentlyContinue
     $listenerProcess.WaitForExit(10000) | Out-Null
   }
-  # The mixed-listener case holds two at once, and it is the one case that can fail with BOTH still
-  # running - that is the property it asserts - so leaving them behind would occupy the port for whatever
-  # ran next. Emptied on the success path, so this only fires when an assertion threw.
+  # The mixed-listener case asserts that its NON-MEMBER listener is still running, so on both the success
+  # and the failure path there is a live process here to stop; leaving it behind would occupy the port for
+  # whatever ran next. Emptied on the success path, so this only fires when an assertion threw.
   foreach ($orphan in $mixedProcesses) {
     if ($null -eq $orphan -or $orphan.HasExited) { continue }
     Stop-Process -Id $orphan.Id -Force -ErrorAction SilentlyContinue
     $orphan.WaitForExit(10000) | Out-Null
+  }
+  # Handles first, then jobs. A process handle is only a handle - closing it terminates nothing - whereas
+  # closing a job handle created with KILL_ON_JOB_CLOSE makes the kernel reap every member that is still
+  # alive. So the job close is simultaneously the handle-leak fix and the one teardown that cannot be
+  # skipped: it needs no listener table, no process id, and no cooperation from the processes themselves,
+  # which is why it also protects a run that failed an assertion halfway through a case.
+  foreach ($openHandle in $clearHandles) {
+    if ($openHandle -ne [IntPtr]::Zero) { [void][MapleSeasonProcessInterop]::CloseHandle($openHandle) }
+  }
+  foreach ($openJob in $clearJobs) {
+    if ($openJob -ne [IntPtr]::Zero) { [void][MapleSeasonProcessInterop]::CloseHandle($openJob) }
   }
   foreach ($doomed in @($tempRoot, $squatterRoot)) {
     if (-not (Test-Path -LiteralPath $doomed)) { continue }

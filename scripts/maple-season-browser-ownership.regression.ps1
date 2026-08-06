@@ -1,4 +1,14 @@
-# A BEHAVIOURAL regression for the kill-authorizing ownership predicate, runnable on any platform.
+# A BEHAVIOURAL regression for the ownership predicate, runnable on any platform.
+#
+# WHAT THAT PREDICATE DOES NOW, because this file was written when it did something more dangerous and its
+# prose below still reads that way in places. It used to gate a force kill: a TRUE answer authorized
+# terminating the listener on the governed port. It does not any more. Cleanup terminates this scenario's
+# own Windows job object, which cannot reach a process outside the job, and the predicate is called from
+# one place - the preflight refusal - which kills nothing. The cost of a wrong answer here is therefore a
+# wrong DIAGNOSIS rather than a dead foreign process, and every "authorized a kill" sentence below should
+# be read as history: it is what the measurement meant when it was taken. The refusal table is kept at
+# full strength anyway, because a preflight that blames the wrong process is exactly how the ownership
+# defect stayed mis-attributed for several rounds.
 #
 # Why this file exists, stated plainly because it is the whole justification for it. Every guard protecting
 # `Test-MapleSeasonBrowserPortOwned` up to now was a `requireText` pin - a substring the source must contain -

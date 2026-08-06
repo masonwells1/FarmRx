@@ -1319,3 +1319,119 @@ SR-078 stands as written — this ledger is append-only.
 - Carried, unchanged: **F12** (the launch sits outside cleanup protection until after three assignments) and **F13** (three catch bodies still interpolate `$process.Id`), plus the open findings on `7887fd3`, `bd2d995` and `71742a8`.
 
 **Authority, stated plainly:** local commit only, on `claude/gauntlet-testing-sweep-013d65`. Nothing was pushed, merged, or deployed. A green gate is not approval for an outward action. Still open decisions for Mason: the Job Object rewrite together with the ownership semantics above; a Windows CI job (no runner executes the Windows-only refusals nor the orphan case); and wiring the orphaned PowerShell regressions into a gate.
+
+## SR-080 — Sol tranche F on `11804ff`: the ownership question is moved out of text and into the Windows kernel
+
+**2026-08-06 · branch `claude/gauntlet-testing-sweep-013d65` · local commit only**
+
+A fresh-context Sol review of `11804ff` returned **41 findings**. Six of them — F1, F2, F4, F7, F41 and the PID-reuse basis of F19 — are one finding stated six ways, and it ends this line of work: **a boolean derived from a command line cannot represent process ownership.** Eight rounds of hardening a text proxy produced eight rounds of Sol breaking it in a direction the previous round had not considered, and each repair was correct about the case it named. This entry stops answering the question better and changes where the answer comes from.
+
+Mason's standing direction for this tranche, given in his own words, was to *"fix ownership properly, then stop hardening"* — do the structural fix once, repair the independent defects, then declare this harness done. This commit is the structural fix.
+
+### What was actually wrong, in one paragraph
+
+`Clear-MapleSeasonBrowserPort` had to decide whether the process holding the governed port belonged to the scenario that was cleaning up. It decided by reading that process's **command line** and asking whether the path inside it sat under the repository root. That question is answerable for a well-behaved Playwright child and unanswerable in general: a developer's own `node` process started in the same tree looks identical, and the scenario's real dev server — the process that actually binds the port — is a *grandchild* the launch never named. Every flag layered on top (`$portReleased`, then `$verifiedPortRelease`) was an attempt to compensate with history: *a release already happened, so what is here now must be a stranger.* Sol broke that in both directions on the same commit, and it was right both times, because "a release already happened" cannot distinguish a descendant that bound the port a moment later from a stranger that bound it a moment later.
+
+### The fix: the kernel records ownership at launch, so cleanup does not have to reconstruct it
+
+The launch no longer starts a process with `System.Diagnostics.Process`. It calls `CreateProcessW` directly, and around it:
+
+1. `CreateJobObjectW` makes a **Windows job object** — a kernel container whose defining property is that *every descendant of a member is automatically a member*.
+2. `SetInformationJobObject` sets `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` on it.
+3. `CreateProcessW` starts the child **`CREATE_SUSPENDED`**. This is not a tidiness detail. Assigning a running child to a job leaves a window in which the dev server — the process that actually holds the port — could be spawned *outside* the job, which is precisely the case the old code could not see.
+4. `AssignProcessToJobObject`, then `ResumeThread`. The child runs its first instruction already inside the job.
+
+Ownership is now `IsProcessInJob(handle, job)` — a kernel fact, not a reading of text. The kill is `TerminateJobObject(job, 1)`, which **names no process id at all**: it kills the members of this job and cannot reach anything else. Two whole hazard classes are retired by that signature rather than defended against — PID reuse, because no pid is passed; and foreign-process exposure, because a non-member is unreachable by construction.
+
+`KILL_ON_JOB_CLOSE` is the backstop, and it holds without any code running. The script holds the only handle to the job; the children are members but hold no handle. When that handle closes the kernel reaps every surviving member — and handles close on process exit *whatever* ends the host, so the guarantee survives a `finally` that never runs.
+
+### Least privilege, enforced rather than described
+
+`TerminateProcess` is now declared `private` in the interop class, so **no PowerShell statement anywhere in this repository can spell a kill other than `TerminateJobObject`.** `GetProcessTimes`, `PROCESS_TERMINATE`, `SYNCHRONIZE` and `WAIT_TIMEOUT` are deleted outright: the old design opened a handle in order to kill by id and then wait on the corpse, and every one of those rights was a right taken and never spent once the job did the killing. The surviving access right is `QUERY_LIMITED_INFORMATION` — a read.
+
+### What the predicate is now, stated plainly because its name still overstates it
+
+`Test-MapleSeasonBrowserPortOwned` is **diagnosis-only**. It is called from exactly one place, the preflight refusal in `Assert-MapleSeasonBrowserPortFree`, which kills nothing. A wrong answer now costs a **wrong sentence in a refusal message** — a stranger's listener described as a leftover Farm Rx one, or the reverse — rather than a dead process. Its full refusal table, tokenizer and behavioural regression are kept at that lower stake anyway, because a preflight that blames the wrong process is exactly how this defect stayed mis-attributed for several rounds.
+
+The name still says `Owned` and still claims more than it can know. **Renaming it is deliberately deferred to its own commit**, along with the `kill-authorizing predicate` drill labels, because a label rename has to patch the self-drill that quotes the label and that does not belong in the same change as the structural fix. Every comment that described the predicate as gating a kill has been corrected in this commit; the names have not.
+
+### Proven behaviourally, in three directions, on real processes
+
+Not static pins. Real `node` processes, real ports, on this workstation.
+
+- **Direction A — a descendant nothing named gets reaped.** A `detached: true`, `unref()`ed grandchild holding the governed port: `IS_A_JOB_MEMBER=True`, and cleanup returned with the port released. This is the case the old code was structurally unable to see.
+- **Direction B — a stranger is not touched.** A genuinely foreign, repository-rooted `node` listener: the retired predicate answered `OLD_PREDICATE_CALLED_IT_OWNED=True` on it — the false TRUE, reproduced on demand — and the new cleanup **refused**, printed the stranger message naming the process, and left it running (`FOREIGN_STILL_ALIVE=True`).
+- **Direction C — the backstop needs no code.** Both handles closed with **no kill call and no cleanup call at all**: both ports went to zero listeners. `KILL_ON_JOB_CLOSE` is real.
+
+**Sabotage-proven assertions.** The three decisive assertions were each broken one at a time against the real files — the kill skipped, the missing-job refusal removed, every survivor classified as a member — and each printed `REDDENED_THE_RIGHT_ASSERTION=True` and `RESTORED_BYTE_IDENTICAL=True`, with the file byte-identical to its snapshot at the end of the run. All three now also have static drills, so a future edit that removes them reddens the gate rather than relying on this one run.
+
+### The orphan case is now the strongest evidence in the repository
+
+`scripts/maple-season-browser-timeout.regression.ps1` case three creates a detached grandchild on a governed port and then fails the launch path *after its parent has already exited* — the one state where the port outlives everything the scenario can name. It passes. Its needle and its injected failure were re-aimed at the handle-based wait (`WaitForSingleObject`, compared `-ne WAIT_OBJECT_0` so a timeout **and** a broken wait both reach the refusal rather than the on-purpose failure).
+
+Case two's expected message changed from `... after verified cleanup.` to `... exceeded its bounded process limit of 3000 milliseconds.` **This is a repair, not a loosening.** The old wording was the timeout branch asserting in prose that it had already released the port, a claim it could only make because it did the cleanup itself and read a flag saying so. Cleanup now happens in the `finally`, *after* that throw, so the branch cannot honestly say anything about it. What proves the port came back is the assertion that reads the port — behaviour instead of wording.
+
+### Instrumentation
+
+- **Fifty-two browser drills, re-aimed or new**, replacing the stale set. Each recreates a realistic defect *from the direction of the defect*: the job created without its limit, the limit applied to the wrong handle, the child assigned after it runs, the kill spelled four different forbidden ways, a survivor classified as a member, the handles closed out of order, the cleanup made conditional, a `//` comment satisfying a pin, a trailing `#` comment satisfying a pin.
+- **Twenty-two drills were deleted rather than repaired**, and the file says why in prose where they used to sit. Sixteen protected a `finally` that force-killed by process id and reconciled creation times; six protected the `$verifiedPortRelease` flag. All of that code is gone. Keeping the drills pointed at deleted text would have meant twenty-two stale needles, which `mutate` refuses by name — but a reader deserves to know the properties were not abandoned, only re-covered from the kernel's side.
+- **Several realistic defects necessarily trip two pins** (republishing `TerminateProcess`; comparing a wait result to a raw hex literal; moving the `try` out from under the launch). Rather than contort the mutation into something no developer would write, each such drill's prose names the second pin and states which label it is aimed at.
+- **No mutation is allowed to make a file unparseable.** `if ($false)` is used instead of deleting blocks, and the block-comment drill wraps a whole `try`/`catch` pair — a guard reddening on broken syntax proves nothing about the defect it names.
+- The drill total moved from **262 to 280**, propagated to all three places that hold and consume the claim sentence.
+
+### The `//` hole, closed
+
+The comment-stripped view the guard uses knew only `#`. The launch path is embedded C#, where a `//` line is a comment — so a `//` line satisfied a pin exactly as a `#` line used to. `seasonBrowserExecutable` now strips both, and a trailing-`//` forbid was added. Measured on the real helper: 18 whole-line `//` comments, zero trailing ones.
+
+This is a **down-payment on the real fix, not the fix.** The guard still reads PowerShell as text. Giving it a genuine code view (`ParseFile`, token counts, a `StringConstantType` census) remains open and is the honest limit of everything above.
+
+### A defect this rewrite introduced, found by running the gate rather than by reading it
+
+The season fixture contract holds an ordering rule: the governed-port preflight must appear before the launch. It expressed "the launch" as `indexOf("$process.Start()")`. This rewrite deleted `$process.Start()`, so that returned **-1**, `preflightIndex < -1` evaluated false, and the contract reported **`scripts/maple-season-browser.ps1 starts its browser process before the governed-port preflight.`** against a file whose ordering was correct. Nothing static caught it; it surfaced only because the full orchestrator was run.
+
+Worth stating precisely, because the loud direction is the lucky one. With the operands the other way round — or with the *preflight* needle going stale instead — `-1` makes the comparison **true** and a broken ordering rule reports PASS. An ordering test that cannot distinguish "correctly ordered" from "not present" is not an ordering test. The rule now aims at `[MapleSeasonProcessInterop]::StartInJob(` and **refuses to be evaluated** when its own needle is missing, with a message that says so. Both directions are drilled: a real launch call inserted above the preflight (which leaves the presence rule green, so only the ordering rule can notice), and the interop method renamed out from under the rule — the staleness that actually happened. Isolation mutations rejected went 17 → 18.
+
+### F12 — a failed read is not evidence of a stranger
+
+`Assert-MapleSeasonBrowserPortFree` read each listener's process with `Get-CimInstance ... -ErrorAction SilentlyContinue` and, when that returned nothing, filed the holder into the **foreign** bucket under the name `unknown`. So a process table that could not be read — a permissions failure, a race, a transient WMI fault — produced the definite sentence *"no listener there belongs to Farm Rx"* about a listener nobody had managed to look at. `Clear-MapleSeasonBrowserPort` already had an unreadable bucket and already refused honestly; the preflight was the half of the pair that had never been brought up to that standard.
+
+There is now a third bucket. The read is `-ErrorAction Stop` inside `try`/`catch`, which separates two different unknowns that used to look identical: *the query failed* (`could not be identified: <reason>`) and *the process exited before we could name it* (`exited before it could be identified`). Three refusals follow from it — one when nothing at all could be identified, which guesses nothing; one when some listeners are readable, which narrows its claim to *"none of the listeners this preflight could identify belong to Farm Rx"*; and the leftover-Farm-Rx one, which now also carries the unreadable list. Every refusal that mentions an unidentified PID says the same thing in plain words: check it from an elevated shell before concluding anything. The foreign sentence was verified to reproduce byte-for-byte what the existing regression asserts, so the honesty was added without loosening what was already pinned. Refusals still carry **image name and PID only** — never a foreign process's command line — because they land in season evidence logs.
+
+The proof is an **executed** case, not a pin. The regression copies the helper, fault-injects a throw into the exact process-lookup statement (refusing to run if that needle is not found exactly once, so a stale needle fails loudly instead of proving nothing), stands up a real listener on the governed port, and asserts three things: the refusal is the honest sentence **character-for-character**, nothing launched, and **the listener it could not identify is still alive**. Sabotaged by restoring the original defect in behaviour: `SABOTAGE_FAILED_THE_SUITE=true`, `REDDENED_THE_RIGHT_ASSERTION=true`, `RESTORED_BYTE_IDENTICAL=true`. The failure line was the old defect verbatim — `... already in use by unknown (PID 46172) ... and no listener there belongs to Farm Rx.`
+
+### F6, and the defect underneath F6
+
+The timeout case never captured the warnings it was supposed to assert on. The timeout path is the one place the helper deliberately **downgrades a cleanup failure to a warning**, precisely so a cleanup problem cannot overwrite the timeout verdict — which is exactly the path where a failed cleanup can ride along underneath a green case. Before assuming a zero-warning assertion would work there, it was measured: `-WarningVariable` **is** populated when the command goes on to throw (warning then throw → `Count 1`, still caught). So the assertion listens to something real.
+
+Adding it surfaced a worse defect in the two sibling assertions that already existed. Both were pinned by the static guard; the `-WarningVariable` flags **feeding** them were not. There is no `Set-StrictMode` in that file, so an unbound variable's `.Count` reads `0` — deleting the flag leaves the assertion present, pinned, and **vacuously true forever**. A new defect layer for the list: *a pin on an assertion is not a pin on the thing that gives the assertion its data.* All three flags are now pinned tied to their own invocation's runner arguments, with drills that delete each flag and watch the gate redden.
+
+### The harness caught one of my own repairs
+
+Worth recording because the mechanism is subtle and will recur. The new F12 assertion reused a house phrase — *"its needle is stale and the drill would prove nothing"* — giving the file a second occurrence of it. An existing drill patched that phrase with `String.replace`, which patches the **first** occurrence: it mutated my new sentence while its label pointed at the stall drill's. The drill failed with an empty observation, which is what a mutation that lands in the wrong place looks like. Another layer: *a `.replace` needle shared by two legitimate sentences patches whichever comes first in the file, so a drill can mutate one sentence while its label names another.* Fixed by anchoring both the pin and the needle to the stall drill's full unique sentence — not by weakening either message.
+
+### What Sol found that this commit does *not* close
+
+Stated plainly so the next round does not have to rediscover it. Dissolved by the rewrite: F1, F2, F3, F4, F7, F41, F8, F5, F9–F11, and the PID-reuse basis of F19. Repaired above with executed proof: **F6** and **F12**. **Still open:**
+
+- **F13–F19** — the timeout regression's own safety net scans only `$orphanPort`, and abandons the orphan on handle failure, CIM failure, or a thrown kill; it also deletes temp evidence on failure. **Two parts of this finding were measured here and are narrower than stated, recorded now so the next round does not repair something that is not broken.** A throw inside that `finally` exits **1**, so there is no silent false PASS; what it actually costs is the marker block below it, which never runs — so the run fails without ever naming the leaked pid or port, and a `Remove-Item` failure on a directory a live survivor still holds is the realistic trigger. And reading `.HasExited` on an already-exited process does **not** throw, nor does `Kill()` on a corpse (`KILL_ON_CORPSE_OK`), so the unguarded-`HasExited` limb of the finding does not reproduce on this workstation.
+- **F20–F33** — instrumentation. `countPowerShellWrites` counts matching **lines**, not assignment occurrences, and its write grammar omits `++`, `--`, `Set-Item Variable:`, and `New-Variable -Force`. F26–F28 are closed for the C# region only.
+- **F34–F40** — ledger and claim corrections; F39 is that **no CI runner executes the Windows-only refusals or the orphan case at all.** A Windows CI job is Mason's call and is not taken here.
+
+### Corrections to earlier entries and to what Mason was told
+
+1. **SR-079 said the E1 salvage separated reading a port from being allowed to kill what is on it.** The separation was real but **incomplete**: it gated only the salvage path, and two other call sites still called cleanup unconditionally. The hazard class SR-079 described as closed was not closed. It is closed now, by there being exactly one cleanup call site and no kill-by-id anywhere.
+2. **I told Mason of `00668e1` that it "doesn't widen what can be killed; it narrows it."** That was wrong, as SR-079 already recorded for the ledger but not in those words for him. On this workstation it widened exposure in one direction: a repository-rooted `node` process of his own that bound the governed port in the window after a verified release would have been force-killed. Nothing in this commit can kill it — it is not a member of the job.
+
+### Evidence, all local, nothing pushed
+
+Run at the exact tree that became this commit, with no probe or sabotage script running alongside. That last clause is itself a correction: an earlier gate run this round overlapped a sabotage probe that had temporarily rewritten `maple-season-browser.ps1`, and although it returned exit 0 the result was discarded as meaningless rather than reported, because the gate had read a sabotaged file.
+
+- `pwsh scripts/verify-foundation.ps1` → **`Farm Rx foundation gate: PASS`**, exit 0, `62 passed (48.4s)`. Inside it: `Foundation static guards: PASS`; **`Foundation mutation drill: PASS (280 controlled mutations turned the gate red)`**; `Foundation behavioural mutation drill: PASS (5 broken subjects were reported by the suite that runs against them, 0 not measurable on this platform)`; `Foundation orchestrator intermediate-failure probe: PASS`; `Foundation Windows execution lane accounting probe: PASS (4 rejected, 1 accepted)`; `MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS`; `Season fixture contract: PASS (101 fixtures; 6 scenarios; 6 isolation-scanned files)`; `Season contract regressions: PASS (9 rejected contract mutations; 18 rejected isolation mutations)`; `PROBE disposable migration suite: PASS`.
+- The two **Windows-only** suites the foundation gate does not run, executed directly and singly, because nothing else in the repository exercises them: `MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS` (exit 0) with `TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true`, and `MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_PASS` (exit 0). This is the same gap Sol raises as F39, seen from the inside: these two green lines exist only because they were run by hand.
+- `npx tsc -b --force` → exit 0. `node --check` on all four changed `.mjs` files → parse-clean.
+- The three claim sites were re-read after propagation and all hold the identical sentence at **280**.
+- Behavioural ownership proof, on real processes and real ports: Direction A `IS_A_JOB_MEMBER=True` with the port released; Direction B `OLD_PREDICATE_CALLED_IT_OWNED=True` on a stranger while the new cleanup refused and `FOREIGN_STILL_ALIVE=True`; Direction C both ports to zero listeners with no kill call and no cleanup call.
+- Sabotage proofs, each restoring a real defect and then restoring the file from a snapshot of the current tree — never `git checkout`, which destroyed four fixes earlier in this work: the three ownership assertions, and F12's (`SABOTAGE_FAILED_THE_SUITE=true`, `REDDENED_THE_RIGHT_ASSERTION=true`, `RESTORED_BYTE_IDENTICAL=true`).
+
+Nothing was pushed, merged, or deployed. Production remains untouched at `https://farm-rx.vercel.app`.
+

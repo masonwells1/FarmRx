@@ -320,12 +320,30 @@ await runReplacementIsolationMutation(
   /^scripts\/maple-season-browser\.ps1 does not preflight its governed port before launching a scenario\.$/,
 );
 
+// A LAUNCH AHEAD OF THE PREFLIGHT. The mutation inserts a real StartInJob call above the preflight and leaves
+// the preflight where it is, so the presence rule stays green and the ORDERING rule is the only thing that can
+// notice - which is the point of drilling it separately. The needle used to name `$process.Start()`, and the
+// helper stopped starting processes that way; indexOf returned -1, `preflightIndex < -1` was false, and the
+// contract reported a launch-before-preflight defect against a correctly ordered file. That is why the rule now
+// requires its launch needle to be PRESENT before it compares positions, and why the drill below exists.
 await runReplacementIsolationMutation(
   "governed-port preflight after launch",
   "scripts/maple-season-browser.ps1",
-  "  Assert-MapleSeasonBrowserPortFree -Port $port -Scenario $Scenario -PortVariable $portContract[0] -Root $ownedMarker\n  if (-not $process.Start())",
-  "  if (-not $process.Start())\n  Assert-MapleSeasonBrowserPortFree -Port $port -Scenario $Scenario -PortVariable $portContract[0] -Root $ownedMarker",
+  "  Assert-MapleSeasonBrowserPortFree -Port $port -Scenario $Scenario -PortVariable $portContract[0] -Root $ownedMarker",
+  "  if (-not [MapleSeasonProcessInterop]::StartInJob($job, $node, $commandLine, $Root, [ref]$launchedHandle, [ref]$launchedId, [ref]$launchError, [ref]$launchStage)) { throw \"early launch\" }\n  Assert-MapleSeasonBrowserPortFree -Port $port -Scenario $Scenario -PortVariable $portContract[0] -Root $ownedMarker",
   /^scripts\/maple-season-browser\.ps1 starts its browser process before the governed-port preflight\.$/,
+);
+
+// THE STALE-NEEDLE REFUSAL ITSELF, drilled from the direction the staleness actually arrived: the interop
+// method gets renamed and this rule is not updated with it. Without the presence assertion this mutation makes
+// launchIndex -1, and the ordering comparison then reports whichever verdict the operand order happens to
+// produce - here a false failure, and with the operands reversed a false PASS on an unevaluated rule.
+await runReplacementIsolationMutation(
+  "ordering rule cannot find the launch it is written against",
+  "scripts/maple-season-browser.ps1",
+  "[MapleSeasonProcessInterop]::StartInJob($job",
+  "[MapleSeasonProcessInterop]::LaunchInJob($job",
+  /^scripts\/maple-season-browser\.ps1 no longer contains the launch call this ordering rule is written against, so the rule cannot be evaluated\.$/,
 );
 
 // This was TWO drills, one per querying function, anchored on each function's last parameter because
