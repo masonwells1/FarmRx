@@ -1,7 +1,13 @@
+import { spawnSync } from 'node:child_process'
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { foundationStaticGuard } from './foundation-static-guards.mjs'
+
+// Windows Desktop PowerShell is `powershell`; everywhere else the cross-platform build is `pwsh`. Same
+// resolution scripts/foundation-windows-lane-runtime-drill.mjs already uses, so both node-side drills
+// reach the same shell.
+const onWindows = process.platform === 'win32'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
@@ -20,6 +26,10 @@ const files = [
   // The behavioural suite over the same predicate. It is the only gate that can tell a working predicate
   // from one edited to `return $true`, so the guard reads it and the drills below mutate it.
   'scripts/maple-season-browser-ownership.regression.ps1',
+  // The lane that CHAINS the predicate's regression, because it holds the tokenizer receipt's expected count
+  // longhand - the second of the two channels that prove the equivalence table executed rather than merely
+  // being present. The guard reads it, so the baseline copy needs it.
+  'scripts/maple-july-db-clock-wiring.regression.ps1',
   // The season start fixture and every script that applies it. The static guard discovers the
   // consumers by scanning scripts/, so all of them have to exist here or the baseline is not the
   // same shape as the repository.
@@ -239,13 +249,13 @@ try {
   reset()
   // The anti-vacuity self-test, degraded the way it would actually be degraded: "at least one case caught
   // it" instead of "every case did". That passes while most of the table is unreachable.
-  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('Assert-True ($uncaught.Count -eq 0)', 'Assert-True ($uncaught.Count -lt 99)'))
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('Assert-MapleSeasonCase ($uncaught.Count -eq 0)', 'Assert-MapleSeasonCase ($uncaught.Count -lt 99)'))
   detected('ownership regression stops requiring its whole refusal table to catch a gutted predicate', 'ownership-regression:refusals-reject-the-gutted-predicate')
   reset()
   // The distinct-input assertion, and the re-typing that made it necessary. `[string]$CommandLine` coerces
   // $null to '', which silently turned two refusal rows into one case wearing two labels - measured. Both the
   // assertion and the de-typed parameter are drilled, because either one alone lets that back in.
-  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('Assert-True ($duplicateInputs.Count -eq 0)', 'Assert-True ($true)'))
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('Assert-MapleSeasonCase ($duplicateInputs.Count -eq 0)', 'Assert-MapleSeasonCase ($true)'))
   detected('ownership regression stops requiring its refusal rows to be distinct inputs', 'ownership-regression:refusal-inputs-are-distinct')
   reset()
   mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace("param($CommandLine, $Name = 'node.exe')", "param([string]$CommandLine, [string]$Name = 'node.exe')"))
@@ -599,6 +609,84 @@ try {
   mutate('tests/season/maple-2027-start.sql', (source) => source.replaceAll(":'season_owner_password'", "'a-literal-password'"))
   detected('season start fixture carries a literal password', 'season:start-fixture-parameterized-password')
   console.log(`Foundation mutation drill: PASS (${detectedMutations.length} controlled mutations turned the gate red)`)
+
+  // ---------------------------------------------------------------------------------------------------
+  // THE BEHAVIOURAL HALF. Every drill above asks the STATIC guard whether it noticed, and every one of
+  // them is a text mutation caught by a text pin. A fresh-context review measured what that cannot see:
+  // `Assert-True` in the ownership suite was rewritten to record ONLY its own canary message and to drop
+  // the general path entirely, and the whole gate stayed green - static guards PASS, all controlled
+  // mutations above detected, `OWNERSHIP_MANIFEST ... canary=caught` with every table at full size, all
+  // six challenge answers correct from a fresh nonce - with roughly a hundred real assertions inert.
+  // Reproduced against the real files before this section was written.
+  //
+  // No text guard can close that, because the sabotaged text IS present, and no self-test inside the
+  // suite can either: whatever the suite hands its own helper, the helper can be written to recognise.
+  // The only check that survives is end to end - break the SUBJECT, then require the suite to say so.
+  // A suite whose assertions do not bite cannot report a broken predicate, however its internals are
+  // arranged, so this measures execution rather than presence.
+  const ownershipSuite = 'scripts/maple-season-browser-ownership.regression.ps1'
+  const predicateFile = 'scripts/maple-season-browser.ps1'
+  const runOwnershipSuite = () => {
+    // Not execFileSync: a suite that reports FAIL exits 1, and execFileSync throws on that, so the
+    // expected outcome would arrive as an exception and the unexpected one as a value.
+    const result = spawnSync(onWindows ? 'powershell' : 'pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(temporary, ownershipSuite)], { encoding: 'utf8' })
+    return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` }
+  }
+  // The baseline first, and it is load-bearing. "The suite went red" proves nothing unless the same suite
+  // is green on unmutated source from this same copy: a suite that is red for an unrelated reason - a
+  // missing file in the temp tree, a shell that cannot run it - would satisfy every drill below while
+  // measuring nothing at all.
+  reset()
+  const behaviourBaseline = runOwnershipSuite()
+  if (behaviourBaseline.status !== 0 || !behaviourBaseline.output.includes('MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS')) {
+    throw new Error(`The ownership suite was not green on unmutated source in the baseline copy, so nothing below measures a mutation. exit=${behaviourBaseline.status}\n${behaviourBaseline.output.trim()}`)
+  }
+  const behaviouralMutations = []
+  // A NAMED refusal, not merely a red exit. Measured while writing this: replacing the predicate's first guard
+  // outright made the suite die with an exception, because that exact line is the needle the suite uses to gut
+  // its own predicate - red, but for the wrong reason and saying nothing about the mutation. A drill that
+  // accepted any non-zero exit would score that as a detection and would keep scoring it after the mutation
+  // stopped being applied at all. So each case states the sentence the suite must produce.
+  const detectedByBehaviour = (label, expected) => {
+    const { status, output } = runOwnershipSuite()
+    if (status === 0 || !output.includes(expected)) {
+      throw new Error(`${label}: the ownership suite did not report the expected defect on a deliberately broken subject, so its assertions do not bite. exit=${status} expected=${expected}\n${output.trim()}`)
+    }
+    behaviouralMutations.push(label)
+    console.log(`Behavioural mutation detected: ${label}`)
+  }
+  const reportsFailure = 'MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_FAIL'
+  // The kill-authorizing predicate, in both directions. A false TRUE force-kills a foreign process on the
+  // workstation; a false FALSE fails a proof month with a wrong diagnosis. Both are inserted lines rather
+  // than edited ones, so no pinned substring moves and the static guard above stays green on them - which
+  // is precisely why this section exists.
+  // Inserted AFTER the null guard, not over it. Replacing that line was measured to make the suite die
+  // with an exception instead of a verdict: the suite locates that exact guard to gut the predicate for
+  // its own anti-vacuity check, so deleting it makes the suite refuse to report at all. A crash is not a
+  // defect report, and a drill that accepted one would stop distinguishing "the suite noticed" from "the
+  // suite fell over", so the needle leaves the line in place and the mutation goes underneath it.
+  const authorizeEverything = (source) => source.replace('  if ($null -eq $ListenerProcess) { return $false }', '  if ($null -eq $ListenerProcess) { return $false }\n  return $true')
+  reset()
+  mutate(predicateFile, authorizeEverything)
+  detectedByBehaviour('kill-authorizing predicate authorizes everything', reportsFailure)
+  reset()
+  mutate(predicateFile, (source) => source.replace('  if ($null -eq $ListenerProcess) { return $false }', '  if ($null -eq $ListenerProcess) { return $false }\n  return $false'))
+  detectedByBehaviour('kill-authorizing predicate refuses everything', reportsFailure)
+  reset()
+  mutate(predicateFile, (source) => source.replace('  param([string]$CommandLine)\n', '  param([string]$CommandLine)\n  return @($CommandLine)\n'))
+  detectedByBehaviour('tokenizer collapses every command line into one argument', reportsFailure)
+  // THE CASE THIS SECTION WAS WRITTEN FOR, planted verbatim as the review wrote it. The helper still
+  // records the canary, so `canary=caught` is still honest and the suite's own self-test still passes;
+  // every other assertion is discarded. Paired with an authorize-everything predicate, the suite has a
+  // real defect in front of it and no working way to report it.
+  reset()
+  mutate(ownershipSuite, (source) => source.replace(
+    '  if (-not $Condition) { $script:failures += $Message }\n',
+    '  if ($Message -ceq $script:assertionCanary) { $script:failures += $Message; return }\n'))
+  mutate(predicateFile, authorizeEverything)
+  detectedByBehaviour('assertion helper honours only its own canary while the predicate authorizes everything', "reporting channels disagree")
+  reset()
+  console.log(`Foundation behavioural mutation drill: PASS (${behaviouralMutations.length} broken subjects were reported by the suite that runs against them)`)
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

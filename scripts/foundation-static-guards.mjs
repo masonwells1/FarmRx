@@ -151,6 +151,19 @@ export function foundationStaticGuard(root = process.cwd()) {
   // begins at `      - name:` and its body is every following line indented further, up to the next step.
   const governedSteps = ['Foundation static guards', 'Foundation mutation drill', 'Windows execution lane runtime drill', 'Season browser ownership regression', 'Run foundation gate']
   const workflowLines = foundationWorkflow.split(/\r?\n/)
+  // KEYS ARE NORMALIZED BEFORE THEY ARE JUDGED. Both loops below used to match the bare spelling `if:`, and a
+  // fresh-context review wrote `'if': false` at job level instead - the same key to any YAML parser, the whole
+  // job disabled, and this guard green. Reproduced against the real workflow before this rewrite. YAML accepts
+  // single quotes, double quotes and space before the colon, so the key is PARSED at the required indent and
+  // then compared, rather than a list of spellings being guessed at. Exact indent matters: job keys sit at four
+  // spaces and step keys at eight, and none of the quoting forms can begin with a space, so a deeper-indented
+  // line inside a run: block cannot be mistaken for a key at either level.
+  const gatingKeyAt = (line, indent) => {
+    const match = new RegExp(`^ {${indent}}(?:'([^']*)'|"([^"]*)"|([^\\s:'"#][^:]*?))\\s*:`).exec(line)
+    if (!match) return null
+    const key = (match[1] ?? match[2] ?? match[3] ?? '').trim()
+    return key === 'if' || key === 'continue-on-error' ? key : null
+  }
   const stepStarts = workflowLines.map((line, index) => ({ line, index })).filter((entry) => /^ {6}- name: /.test(entry.line))
   for (const name of governedSteps) {
     const start = stepStarts.find((entry) => entry.line === `      - name: ${name}`)
@@ -162,7 +175,7 @@ export function foundationStaticGuard(root = process.cwd()) {
     // for a step condition.
     for (const bodyLine of body) {
       if (/^ {6}\S/.test(bodyLine)) break
-      if (/^ {8}(if|continue-on-error):/.test(bodyLine)) errors.push(`workflow:governed-step-unconditional:${name}`)
+      if (gatingKeyAt(bodyLine, 8)) errors.push(`workflow:governed-step-unconditional:${name}`)
     }
   }
   // The job itself is the same hole one level up: `if: false` on the job disables all five steps at once.
@@ -177,7 +190,7 @@ export function foundationStaticGuard(root = process.cwd()) {
     if (!/^ {2}foundation:\s*$/.test(workflowLines[index])) continue
     for (const jobLine of workflowLines.slice(index + 1)) {
       if (/^ {0,2}\S/.test(jobLine)) break
-      if (/^ {4}(if|continue-on-error):/.test(jobLine)) errors.push('workflow:foundation-job-unconditional')
+      if (gatingKeyAt(jobLine, 4)) errors.push('workflow:foundation-job-unconditional')
     }
   }
   requireMatch(errors, foundationWorkflow, /^ {2}foundation:\n {4}runs-on: /m, 'workflow:foundation-job-declared')
@@ -277,6 +290,25 @@ export function foundationStaticGuard(root = process.cwd()) {
   // command line with the path of the process asking - a fact about the caller, useless as evidence about
   // a listener - so zero arguments is the fail-closed answer.
   requireText(errors, seasonBrowserRegression, "Assert-True ($emptyFromWindows.Count -eq 1)", 'season-browser-regression:empty-divergence-is-asserted')
+  // The RUNTIME RECEIPT for that table. Everything this file pins about the 33 rows below - their spelling,
+  // their pairing against the portable table in both directions, their total - is a statement that the rows
+  // EXIST. A fresh-context review wrapped the `foreach` in `if ($false) { ... }` and every one of those checks
+  // stayed green while zero command lines reached CommandLineToArgvW. Reproduced. So the count of comparisons
+  // actually executed is published and asserted, and the counter is declared before the Windows branch and
+  // consumed after it closes, so wrapping the branch's body cannot take the check with it. Both the total and
+  // the DISTINCT total are required, because a duplicated row keeps the total while silently displacing a case.
+  requireText(errors, seasonBrowserRegression, '$tokenizerComparisons++', 'season-browser-regression:tokenizer-comparisons-counted')
+  requireText(errors, seasonBrowserRegression, '[void]$tokenizerLinesCompared.Add($commandLine)', 'season-browser-regression:tokenizer-lines-recorded')
+  requireText(errors, seasonBrowserRegression, '[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)', 'season-browser-regression:tokenizer-receipt-is-case-sensitive')
+  requireText(errors, seasonBrowserRegression, 'TOKENIZER_RECEIPT comparisons=$tokenizerComparisons distinct=$($tokenizerLinesCompared.Count) windows=', 'season-browser-regression:tokenizer-receipt-published')
+  requireText(errors, seasonBrowserRegression, 'Assert-True ($tokenizerComparisons -eq $tokenizerExpectedComparisons)', 'season-browser-regression:tokenizer-receipt-total-consumed')
+  requireText(errors, seasonBrowserRegression, 'Assert-True ($tokenizerLinesCompared.Count -eq $tokenizerExpectedComparisons)', 'season-browser-regression:tokenizer-receipt-distinct-consumed')
+  requireText(errors, seasonBrowserRegression, 'if ($onWindows) { 33 } else { 0 }', 'season-browser-regression:tokenizer-receipt-expects-the-full-table')
+  // The receipt's SECOND channel. A child that asserts things about itself is the shape of defeat this chain
+  // keeps finding, so the caller that chains this regression holds the expected count longhand: deleting the
+  // child's own two assertions is then not enough to hide a table that never ran.
+  const julyWiringRegression = read(root, 'scripts/maple-july-db-clock-wiring.regression.ps1')
+  requireText(errors, julyWiringRegression, "'TOKENIZER_RECEIPT comparisons=33 distinct=33 windows=true'", 'july-wiring-regression:tokenizer-receipt-asserted-by-the-caller')
   requireText(errors, seasonBrowser, '# ONE deliberate divergence from CommandLineToArgvW', 'season-browser:empty-divergence-is-declared')
   // The force kill must go through the object that was validated, and the validated identity must still
   // hold. A process id is not durable: the validated process can exit and Windows can reissue its number.
@@ -301,8 +333,12 @@ export function foundationStaticGuard(root = process.cwd()) {
   // weaker than it read: N executions of one row satisfy a count of N. It was also measurably wrong, because
   // `[string]$CommandLine` coerced a $null command line to '' and two rows became the same input. Both the
   // set comparison and the distinct-input assertion are pinned, because either alone can be defeated.
-  requireText(errors, ownershipRegression, 'Assert-True ($uncaught.Count -eq 0)', 'ownership-regression:refusals-reject-the-gutted-predicate')
-  requireText(errors, ownershipRegression, 'Assert-True ($duplicateInputs.Count -eq 0)', 'ownership-regression:refusal-inputs-are-distinct')
+  // Assert-MapleSeasonCase, not Assert-True: every real case in that file now goes through a wrapper that
+  // tallies independently and then calls the helper, because the helper itself was measured sabotageable in a
+  // way no text pin can see. Pinning the wrapper is what keeps those two channels from collapsing back into
+  // one - a case routed straight to Assert-True is untallied, and the cross-check below stops covering it.
+  requireText(errors, ownershipRegression, 'Assert-MapleSeasonCase ($uncaught.Count -eq 0)', 'ownership-regression:refusals-reject-the-gutted-predicate')
+  requireText(errors, ownershipRegression, 'Assert-MapleSeasonCase ($duplicateInputs.Count -eq 0)', 'ownership-regression:refusal-inputs-are-distinct')
   requireText(errors, ownershipRegression, 'param($CommandLine, $Name = \'node.exe\')', 'ownership-regression:listener-preserves-a-null-command-line')
   requireText(errors, ownershipRegression, "function Split-MapleSeasonCommandLineArgumentsGutted { param([string]$CommandLine) return @($CommandLine) }", 'ownership-regression:guts-the-tokenizer')
   requireText(errors, ownershipRegression, "Measure-TokenizerDisagreement -FunctionName 'Split-MapleSeasonCommandLineArgumentsGutted'", 'ownership-regression:table-rejects-the-gutted-tokenizer')
@@ -337,6 +373,13 @@ export function foundationStaticGuard(root = process.cwd()) {
   if (tokenizerRowStarts !== 29) errors.push('ownership-regression:tokenizer-row-count')
   const portableTokenizerLines = [...ownershipRegression.matchAll(/^ {4}@\{ Line = '((?:[^']|'')*)'; Expected =/gm)].map((match) => match[1].replace(/''/g, "'"))
   if (portableTokenizerLines.length !== 26) errors.push('ownership-regression:tokenizer-literal-count')
+  // DISTINCT, not just counted. Every count in this block is an array `.length`, and every pairing below runs
+  // through a `Set` - which collapses duplicates. A fresh-context review used exactly that gap: duplicate one
+  // row and delete a different one, MIRRORED on both sides so each table's total still matched, and the whole
+  // pairing stayed green with a case silently gone. A one-sided duplicate was already caught
+  // (`live-row-unaccounted`); the mirrored form was not. Requiring the Set size to equal the total is what
+  // closes it, because a duplicate is the one thing that makes those two numbers differ.
+  if (new Set(portableTokenizerLines).size !== 26) errors.push('ownership-regression:tokenizer-literal-distinct-count')
   const preflightRegression = read(root, 'scripts/maple-season-browser-port-preflight.regression.ps1')
   // The live side is PARSED into its actual rows, not searched as text, and the pairing is then asserted in
   // BOTH directions. The previous version searched the whole live file for each portable literal, and a
@@ -355,6 +398,10 @@ export function foundationStaticGuard(root = process.cwd()) {
   // that nothing on the portable side asserts, which is how the tables drifted apart the first time.
   if (liveTokenizerRows.length !== 33) errors.push('ownership-regression:live-tokenizer-row-count')
   const liveTokenizerRowSet = new Set(liveTokenizerRows)
+  // The live half of the same distinctness requirement, and the reason this one matters twice over: the runtime
+  // receipt in the preflight file asserts 33 comparisons AND 33 distinct command lines, so a duplicated live row
+  // now fails at run time as well as here. Two independent channels, deliberately.
+  if (liveTokenizerRowSet.size !== 33) errors.push('ownership-regression:live-tokenizer-distinct-row-count')
   for (const line of portableTokenizerLines) {
     if (!liveTokenizerRowSet.has(`'${line.replace(/'/g, "''")}'`)) errors.push(`ownership-regression:tokenizer-literal-rederived:${line}`)
   }
@@ -461,6 +508,24 @@ export function foundationStaticGuard(root = process.cwd()) {
     // the answers without running the predicate at all; a nonce forces the child to tokenize and judge text it
     // has never seen. Anchored to live statements so a commented-out row cannot satisfy them.
     requireText(errors, caller, "[Guid]::NewGuid().ToString('N')", `${id}:ownership-challenge-nonce-generated`)
+    // AND ASSIGNED EXACTLY ONCE. A fresh-context review added `$nonce = 'fixed'` on the line directly after the
+    // NewGuid() call, in both callers: the pin above still matched, both nonce-row pins still matched, and the
+    // challenge stopped being fresh - which is the whole point of it, because a fixed row is answerable by a
+    // stub that hard-codes verdicts without running the predicate. Reproduced in both callers before this check.
+    // The property is that nothing reassigns the variable, so assignments are COUNTED rather than more
+    // spellings being pinned.
+    const nonceAssignment = /^ *(\$\w+) = \[Guid\]::NewGuid\(\)\.ToString\('N'\)$/m.exec(caller)
+    if (!nonceAssignment) errors.push(`${id}:ownership-challenge-nonce-assigned-live`)
+    else {
+      const reassignments = caller.split(/\r?\n/).filter((line) => new RegExp(`^ *\\${nonceAssignment[1]} = `).test(line))
+      if (reassignments.length !== 1) errors.push(`${id}:ownership-challenge-nonce-assigned-once`)
+    }
+    // The per-index verification must be counted and the count consumed. A fresh-context review wrapped the
+    // answer-total check and the per-index loop in `if ($false) { ... }` in both callers: every pin in this
+    // block still matched, because every pinned line was still in the file, and nothing measured that any of it
+    // RAN. Reproduced in both callers. A counter incremented inside the loop and compared after it turns a
+    // skipped block into a red lane, because a block that did not execute leaves the count at zero.
+    requireText(errors, caller, 'challenge answers this lane did not verify one by one', `${id}:ownership-answers-verified-count-consumed`)
     requireMatch(errors, caller, /^ *@\{ Line = "node\.exe C:\\FarmRx\\node_modules\\vite\\bin\\vite\.js --nonce \$\w+"; .*Owned = \$true;/m, `${id}:ownership-challenge-nonce-row-owned`)
     requireMatch(errors, caller, /^ *@\{ Line = "node\.exe C:\\Other\\server\.js --nonce \$\w+"; .*Owned = \$false;/m, `${id}:ownership-challenge-nonce-row-unowned`)
   }

@@ -87,6 +87,34 @@ if ($script:failures.Count -ne 0) {
 # requiring it is a mutation drill away from red.
 $script:assertionCanaryCaught = 'caught'
 
+# AND THE CANARY ABOVE IS NOT ENOUGH, which is measured rather than supposed. A fresh-context review left the
+# canary working and defeated everything else with it:
+#
+#   function Assert-True {
+#     param([bool]$Condition, [string]$Message)
+#     if ($Message -ceq $script:assertionCanary) { $script:failures += $Message; return }
+#   }
+#
+# The self-test above passes, `canary=caught` is honest, every table still reports full size, all six caller
+# challenges are still answered correctly from a fresh nonce - and every real assertion in this file is
+# discarded. Planted verbatim in the real files and measured: static guards PASS, all 139 controlled mutations
+# still detected, the lane green, on a predicate edited to authorize killing every listener on the governed
+# port. A self-test cannot close this, because whatever this file hands its own helper, the helper can be
+# written to recognise.
+#
+# So there are TWO channels and they are cross-checked. Assert-True keeps the failure list; the wrapper below
+# keeps an independent tally and merely CALLS Assert-True rather than being it. Sabotaging the helper leaves
+# the tally full and the list empty, and the `throw` before the manifest - which does not go through the
+# helper - refuses to report a result on that contradiction. Sabotaging BOTH is a larger edit, and
+# scripts/verify-foundation-mutations.mjs now runs this file against a deliberately broken predicate and
+# requires it to go red, which is the only check of this class that measures execution instead of text.
+$script:tallied = @()
+function Assert-MapleSeasonCase {
+  param([bool]$Condition, [string]$Message)
+  if (-not $Condition) { $script:tallied += $Message }
+  Assert-True $Condition $Message
+}
+
 $sourcePath = Join-Path $PSScriptRoot 'maple-season-browser.ps1'
 $source = Get-Content -Raw $sourcePath
 # Take only the pure functions. Everything from Clear-MapleSeasonBrowserPort onwards touches real processes
@@ -186,12 +214,12 @@ function Measure-TokenizerDisagreement {
 }
 
 $tokenizerDisagreements = @(Measure-TokenizerDisagreement -FunctionName 'Split-MapleSeasonCommandLineArguments')
-foreach ($disagreement in $tokenizerDisagreements) { Assert-True $false "Split-MapleSeasonCommandLineArguments disagreed with the measured Windows parse on $disagreement." }
+foreach ($disagreement in $tokenizerDisagreements) { Assert-MapleSeasonCase $false "Split-MapleSeasonCommandLineArguments disagreed with the measured Windows parse on $disagreement." }
 
 # The empty command line is the tokenizer's ONE deliberate divergence from Windows. The real API answers it
 # with the path of the process ASKING - measured as one argument naming powershell.exe itself - which is a
 # fact about the caller and worthless as evidence about a listener. Zero is the fail-closed answer.
-Assert-True (@(Split-MapleSeasonCommandLineArguments -CommandLine '').Count -eq 0) 'Split-MapleSeasonCommandLineArguments answered an empty command line with arguments instead of none.'
+Assert-MapleSeasonCase (@(Split-MapleSeasonCommandLineArguments -CommandLine '').Count -eq 0) 'Split-MapleSeasonCommandLineArguments answered an empty command line with arguments instead of none.'
 
 # ---------------------------------------------------------------------------------------------------------
 # The predicate's refusals that hold on EVERY platform. This is the portable core, and it is what catches a
@@ -288,7 +316,7 @@ function Measure-RefusalFailures {
 }
 
 foreach ($claimed in @(Measure-RefusalFailures -FunctionName 'Test-MapleSeasonBrowserPortOwned')) {
-  Assert-True $false "The ownership predicate authorized a kill for $claimed."
+  Assert-MapleSeasonCase $false "The ownership predicate authorized a kill for $claimed."
 }
 
 # ---------------------------------------------------------------------------------------------------------
@@ -314,12 +342,12 @@ $guttedClaims = @(Measure-RefusalFailures -FunctionName 'Test-MapleSeasonBrowser
 # against which labels exist cannot be satisfied that way.
 $expectedRefusalLabels = @($portableRefusals | ForEach-Object { $_.Label })
 $uncaught = @($expectedRefusalLabels | Where-Object { $guttedClaims -notcontains $_ })
-Assert-True ($uncaught.Count -eq 0) "The refusal table did not reject a gutted predicate. Rows that failed to catch `return `$true`: $($uncaught -join '; '). A table that cannot detect an unconditional authorization is not evidence."
+Assert-MapleSeasonCase ($uncaught.Count -eq 0) "The refusal table did not reject a gutted predicate. Rows that failed to catch `return `$true`: $($uncaught -join '; '). A table that cannot detect an unconditional authorization is not evidence."
 # A label set is only an identity if the labels are unique, and the rows are only distinct evidence if their
 # INPUTS differ. Both are asserted rather than assumed: the second of these is what catches the null-coercion
 # defect that made two rows the same case, and it will catch the next copy-paste row that forgets to change
 # its command line.
-Assert-True (@($expectedRefusalLabels | Select-Object -Unique).Count -eq $portableRefusals.Count) 'Two refusal rows share a label, so the set comparison above cannot tell them apart.'
+Assert-MapleSeasonCase (@($expectedRefusalLabels | Select-Object -Unique).Count -eq $portableRefusals.Count) 'Two refusal rows share a label, so the set comparison above cannot tell them apart.'
 $refusalInputKeys = @($portableRefusals | ForEach-Object {
   $listener = $_.Listener
   $name = if ($null -eq $listener) { '<no listener>' } elseif ($null -eq $listener.Name) { '<null name>' } else { $listener.Name }
@@ -328,10 +356,10 @@ $refusalInputKeys = @($portableRefusals | ForEach-Object {
   "$name`u{241F}$line`u{241F}$root"
 })
 $duplicateInputs = @($refusalInputKeys | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
-Assert-True ($duplicateInputs.Count -eq 0) "Two refusal rows are the same runtime input wearing different labels, so the table has fewer distinct cases than rows: $($duplicateInputs.Count) duplicated input(s)."
+Assert-MapleSeasonCase ($duplicateInputs.Count -eq 0) "Two refusal rows are the same runtime input wearing different labels, so the table has fewer distinct cases than rows: $($duplicateInputs.Count) duplicated input(s)."
 # The same proof for the tokenizer table.
 function Split-MapleSeasonCommandLineArgumentsGutted { param([string]$CommandLine) return @($CommandLine) }
-Assert-True ((@(Measure-TokenizerDisagreement -FunctionName 'Split-MapleSeasonCommandLineArgumentsGutted')).Count -gt 0) 'The tokenizer table did not reject a gutted tokenizer that returns the whole command line as one argument.'
+Assert-MapleSeasonCase ((@(Measure-TokenizerDisagreement -FunctionName 'Split-MapleSeasonCommandLineArgumentsGutted')).Count -gt 0) 'The tokenizer table did not reject a gutted tokenizer that returns the whole command line as one argument.'
 
 # ---------------------------------------------------------------------------------------------------------
 # What this file CANNOT prove off Windows, stated rather than quietly skipped, and stated more carefully than
@@ -396,13 +424,28 @@ if (-not $onWindows) {
   Write-Output 'Ownership TRUE cases skipped: this platform is not Windows, and the off-Windows verdict for a Windows-shaped root is not measured. Run the Windows lane for those cases.'
 } else {
   foreach ($case in $ownedCases) {
-    Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess (New-Listener -CommandLine $case.CommandLine) -Root $case.Root) "The ownership predicate refused $($case.Label), which would declare our own listener foreign and fail a proof month with a wrong diagnosis."
+    Assert-MapleSeasonCase (Test-MapleSeasonBrowserPortOwned -ListenerProcess (New-Listener -CommandLine $case.CommandLine) -Root $case.Root) "The ownership predicate refused $($case.Label), which would declare our own listener foreign and fail a proof month with a wrong diagnosis."
     $windowsCasesRun++
   }
   foreach ($case in $resolverRefusals) {
-    Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess (New-Listener -CommandLine $case.CommandLine) -Root 'C:\FarmRx')) "The ownership predicate authorized a kill for $($case.Label)."
+    Assert-MapleSeasonCase (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess (New-Listener -CommandLine $case.CommandLine) -Root 'C:\FarmRx')) "The ownership predicate authorized a kill for $($case.Label)."
     $windowsCasesRun++
   }
+}
+
+# ---------------------------------------------------------------------------------------------------------
+# THE TWO CHANNELS MUST AGREE, and this is the last thing that happens before anything is reported.
+#
+# Every real case above went through Assert-MapleSeasonCase, which tallies independently and then calls
+# Assert-True. Equal counts is the only honest outcome: the tally is appended by plain array arithmetic outside
+# the helper, so a helper rewritten to discard real failures leaves the tally populated and the failure list
+# empty. `throw`, not Assert-True, because Assert-True is the thing being cross-checked - and it happens before
+# the manifest and before the challenge answers, so a run in this state reports nothing rather than reporting
+# PASS. Measured against the real files: without this, the sabotage quoted at the top of this file printed
+# `canary=caught`, every table at full size, six correct challenge answers and PASS, against a predicate edited
+# to authorize killing every listener on the governed port.
+if ($script:tallied.Count -ne $script:failures.Count) {
+  throw "This file's two reporting channels disagree: $($script:tallied.Count) case(s) were tallied and $($script:failures.Count) reached the failure list, so one of them is not working and no result from this run can be trusted. Tallied: $($script:tallied -join '; ')"
 }
 
 # ---------------------------------------------------------------------------------------------------------

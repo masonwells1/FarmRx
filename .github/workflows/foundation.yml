@@ -113,6 +113,12 @@ jobs:
           if ($answered.Count -ne $rows.Count) {
             throw "Season browser ownership regression printed $($answered.Count) challenge answers for $($rows.Count) challenges.`n  " + ($answered -join "`n  ")
           }
+          # COUNTED, and the count is consumed after the loop. A fresh-context review wrapped the total check
+          # above and this loop in `if ($false) { ... }`: every string the static guard pins here was still
+          # present, this step stayed green, and not one answer was verified. Reproduced before this counter. A
+          # skipped block leaves the count at zero - or the variable unset, which compares unequal just the
+          # same - so the throw below fires either way.
+          $verifiedAnswers = 0
           for ($i = 0; $i -lt $rows.Count; $i++) {
             $verdicts = if ($rows[$i].ResolverDependent -and (-not $onWindows)) { @('TRUE', 'FALSE') } elseif ($rows[$i].Owned) { @('TRUE') } else { @('FALSE') }
             $candidates = @($verdicts | ForEach-Object { "OWNERSHIP_CHALLENGE $i owned=$_ argv=$($rows[$i].Argv)" })
@@ -120,6 +126,10 @@ jobs:
             if ($forIndex.Count -ne 1 -or $candidates -cnotcontains $forIndex[0]) {
               throw "Season browser ownership regression did not answer challenge $i as this step requires.`n  accepted: $($candidates -join ' OR ')`n  printed: $($forIndex -join ' AND ')`n  command line: $($rows[$i].Line)"
             }
+            $verifiedAnswers++
+          }
+          if ($verifiedAnswers -ne $rows.Count) {
+            throw "Season browser ownership regression: $($rows.Count) challenge answers this lane did not verify one by one - only $verifiedAnswers were checked, so the per-index comparison above did not run."
           }
       - name: Run foundation gate
         shell: pwsh

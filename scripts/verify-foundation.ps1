@@ -347,6 +347,11 @@ try {
   if ($ownershipAnswered.Count -ne $ownershipChallenge.Count) {
     throw "Season browser ownership regression printed $($ownershipAnswered.Count) challenge answers for $($ownershipChallenge.Count) challenges.`n  " + ($ownershipAnswered -join "`n  ")
   }
+  # COUNTED, and the count is consumed after the loop. A fresh-context review wrapped the total check above and
+  # this loop in `if ($false) { ... }`: every string this file's guard pins was still present, the lane stayed
+  # green, and not one answer was verified. Reproduced before this counter. A skipped block leaves the count at
+  # zero - or the variable unset, which compares unequal just the same - so the throw below fires either way.
+  $ownershipVerifiedAnswers = 0
   for ($ownershipIndex = 0; $ownershipIndex -lt $ownershipChallenge.Count; $ownershipIndex++) {
     $ownershipRow = $ownershipChallenge[$ownershipIndex]
     # Exactly one line for THIS index, and that line must be one of the accepted spellings. Where the verdict
@@ -360,6 +365,10 @@ try {
     if ($ownershipForIndex.Count -ne 1 -or $ownershipCandidates -cnotcontains $ownershipForIndex[0]) {
       throw "Season browser ownership regression did not answer challenge $ownershipIndex as this lane requires.`n  accepted: $($ownershipCandidates -join ' OR ')`n  printed: $($ownershipForIndex -join ' AND ')`n  command line: $($ownershipRow.Line)"
     }
+    $ownershipVerifiedAnswers++
+  }
+  if ($ownershipVerifiedAnswers -ne $ownershipChallenge.Count) {
+    throw "Season browser ownership regression: $($ownershipChallenge.Count) challenge answers this lane did not verify one by one - only $ownershipVerifiedAnswers were checked, so the per-index comparison above did not run."
   }
   # The season contract gate was reachable only when an operator typed `npm run verify:season` by
   # hand - no workflow and no hook ran it - so the structural guards it holds, including the

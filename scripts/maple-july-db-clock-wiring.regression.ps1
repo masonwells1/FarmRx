@@ -91,5 +91,14 @@ Assert-True ($browserHelper.Contains('Assert-MapleSeasonBrowserPortFree') -and $
 Assert-True (-not $browserHelper.Contains("Get-NetTCPConnection -LocalAddress")) 'Browser helper port checks do not fail closed for wildcard or IPv6 listeners.'
 Assert-True ($browserHelper.Contains('Farm Rx dev or season server')) 'Browser helper preflight does not distinguish a Farm Rx-owned listener from a foreign one.'
 $preflightRegression = @(& (Join-Path $root 'scripts/maple-season-browser-port-preflight.regression.ps1'))
-Assert-True ($LASTEXITCODE -eq 0 -and ($preflightRegression -join "`n") -ceq 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS') "Browser governed-port preflight regression did not pass: $(Get-MapleRedactedChildDetail $preflightRegression)"
+# The tokenizer receipt is held HERE, longhand, as well as inside the child. The child asserts its own table
+# ran, and a child that asserts things about itself is the exact shape of defeat this chain keeps finding, so
+# this caller states the number it requires independently. `windows=true` is not incidental: this lane is
+# Windows-only - off Windows the child prints a skip line instead, which this exact match already refused - and
+# a receipt reading windows=false, or a lower count, would mean the equivalence table did not run.
+$preflightExpected = @(
+  'TOKENIZER_RECEIPT comparisons=33 distinct=33 windows=true'
+  'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS'
+) -join "`n"
+Assert-True ($LASTEXITCODE -eq 0 -and ($preflightRegression -join "`n") -ceq $preflightExpected) "Browser governed-port preflight regression did not pass: $(Get-MapleRedactedChildDetail $preflightRegression)"
 Write-Output 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS'

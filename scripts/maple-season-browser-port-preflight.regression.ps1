@@ -471,6 +471,18 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   # against the real parser instead - CommandLineToArgvW, the function Windows itself uses to build argv
   # for a process. If the two disagree on any entry below, this regression fails.
   $onWindows = ($null -eq $IsWindows) -or $IsWindows
+  # A RUNTIME RECEIPT for the table below, declared here and consumed after the branch closes - deliberately
+  # outside the block it measures. The static guard pins all 33 rows of that table and pairs every one of them
+  # against the portable ownership table, and a fresh-context review defeated the whole of that by wrapping the
+  # `foreach` in `if ($false) { ... }`: every row was still present in the file, still spelled exactly as
+  # pinned, still paired in both directions, and not one command line was ever handed to CommandLineToArgvW.
+  # Reproduced before this counter. A static guard proves statements EXIST; only a count proves they EXECUTED.
+  # DISTINCT lines are counted separately because the total alone is satisfied by duplicating one row and
+  # dropping another - the row count stays 33 and the case the dropped row covered is simply gone. Ordinal
+  # comparison, because the default hashtable/HashSet comparer is case-insensitive and two rows that differ
+  # only in case are two rows.
+  $tokenizerComparisons = 0
+  $tokenizerLinesCompared = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
   if (-not $onWindows) {
     Write-Output 'Tokenizer equivalence table skipped: CommandLineToArgvW is a Windows API.'
   } else {
@@ -558,6 +570,8 @@ public static class MapleSeasonArgv {
       'node.exe "C:\FarmRx\.. .\Other\x.js"'
       "node.exe `"C:\FarmRx\`t\Other\x.js`""
     )) {
+      $tokenizerComparisons++
+      [void]$tokenizerLinesCompared.Add($commandLine)
       $expected = @([MapleSeasonArgv]::Parse($commandLine))
       $actual = @(Split-MapleSeasonCommandLineArguments -CommandLine $commandLine)
       $agrees = $expected.Count -eq $actual.Count
@@ -580,6 +594,12 @@ public static class MapleSeasonArgv {
     Assert-True (@(Split-MapleSeasonCommandLineArguments -CommandLine '').Count -eq 0) 'Split-MapleSeasonCommandLineArguments answered an empty command line with arguments; the only safe answer is none, because Windows answers it with the path of the process asking.'
   }
 
+  # The receipt is consumed HERE, outside the branch above, and it is published as well as asserted so a
+  # caller can hold the expectation independently instead of trusting this file's own PASS marker.
+  $tokenizerExpectedComparisons = if ($onWindows) { 33 } else { 0 }
+  Write-Output "TOKENIZER_RECEIPT comparisons=$tokenizerComparisons distinct=$($tokenizerLinesCompared.Count) windows=$($onWindows.ToString().ToLowerInvariant())"
+  Assert-True ($tokenizerComparisons -eq $tokenizerExpectedComparisons) "The tokenizer equivalence table handed $tokenizerComparisons command lines to CommandLineToArgvW instead of $tokenizerExpectedComparisons, so the rows this file's static guard pins did not all execute."
+  Assert-True ($tokenizerLinesCompared.Count -eq $tokenizerExpectedComparisons) "The tokenizer equivalence table compared $($tokenizerLinesCompared.Count) DISTINCT command lines instead of $tokenizerExpectedComparisons, so at least one row duplicates another and whatever case the duplicate displaced was never checked."
   Write-Output 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS'
   exit 0
 } catch {
