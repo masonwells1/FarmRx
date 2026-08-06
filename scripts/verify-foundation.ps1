@@ -237,7 +237,20 @@ try {
   Invoke-FoundationLane { & npm run build } 'Production build failed.'
   Invoke-FoundationLane { & npm audit --audit-level=high } 'Dependency audit failed.'
   Invoke-FoundationLane { & node scripts/foundation-static-guards.mjs } 'Foundation static guard failed.'
-  Invoke-FoundationLane { & node scripts/verify-foundation-mutations.mjs } 'Foundation mutation drill failed.'
+  # THIS LANE HOLDS THE DRILL'S OWN CLAIM, because a zero exit does not say how much of the drill ran. A
+  # fresh-context review noted that the drill's whole behavioural half can be wrapped in `if (false) { ... }`:
+  # node still exits 0, every string the static guard pins is still present, and the log still carried
+  # `Foundation mutation drill: PASS` because that line printed BEFORE the section it summarizes. Both markers
+  # now print last and this lane requires the behavioural one longhand, with the count it expects on Windows -
+  # five broken subjects and no unmeasurable ones - so a skipped half arrives as a missing line.
+  $global:LASTEXITCODE = 0
+  $mutationDrill = @(& node scripts/verify-foundation-mutations.mjs)
+  $mutationDrill | ForEach-Object { Write-Output $_ }
+  if ($LASTEXITCODE -ne 0) { throw 'Foundation mutation drill failed.' }
+  $expectedBehaviouralMarker = 'Foundation behavioural mutation drill: PASS (5 broken subjects were reported by the suite that runs against them, 0 not measurable on this platform)'
+  if ($mutationDrill -cnotcontains $expectedBehaviouralMarker) {
+    throw "Foundation mutation drill did not report its behavioural half to this lane.`n  expected: $expectedBehaviouralMarker"
+  }
   # Behavioral, not textual, and out of process. The two lanes above assert that lines exist and that
   # deleting one turns a named guard red; this one runs the Windows lane's accounting for real against
   # mutated copies of this file's own functions. It is the only lane over the Windows lane that also
@@ -336,7 +349,11 @@ try {
   # noticed. Without it, this lane cannot distinguish a run with a hundred live assertions from a run with all
   # of them silently disabled - which was measured by no-op'ing the helper and watching everything else here
   # stay green.
-  $expectedOwnershipManifest = "OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=$($ownershipOnWindows.ToString().ToLowerInvariant()) windowsCases=$(if ($ownershipOnWindows) { 24 } else { 0 }) challenges=$($ownershipChallenge.Count) canary=caught"
+  # `cases` is the count of assertion cases the child REACHED, and this lane holds the expected number. It is
+  # the field that closes what `canary=caught` could not see: the child's own two-channel cross-check compared
+  # failure counts, so wrapping an assertion that normally PASSES left both channels at zero, agreeing, and the
+  # child printed PASS. Measured against the real file. Five cases are portable; each Windows-only row adds one.
+  $expectedOwnershipManifest = "OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=$($ownershipOnWindows.ToString().ToLowerInvariant()) windowsCases=$(if ($ownershipOnWindows) { 24 } else { 0 }) cases=$(if ($ownershipOnWindows) { 29 } else { 5 }) challenges=$($ownershipChallenge.Count) canary=caught"
   if ($ownershipManifest[0] -cne $expectedOwnershipManifest) { throw "Season browser ownership regression reported a different shape than this lane requires.`n  expected: $expectedOwnershipManifest`n  reported: $($ownershipManifest[0])" }
   # Every OWNERSHIP_CHALLENGE line the child printed, counted as an INSTANCE rather than searched for. The
   # first version of this check filtered the lane's own CANDIDATE strings by whether the output contained
@@ -347,11 +364,13 @@ try {
   if ($ownershipAnswered.Count -ne $ownershipChallenge.Count) {
     throw "Season browser ownership regression printed $($ownershipAnswered.Count) challenge answers for $($ownershipChallenge.Count) challenges.`n  " + ($ownershipAnswered -join "`n  ")
   }
-  # COUNTED, and the count is consumed after the loop. A fresh-context review wrapped the total check above and
-  # this loop in `if ($false) { ... }`: every string this file's guard pins was still present, the lane stayed
-  # green, and not one answer was verified. Reproduced before this counter. A skipped block leaves the count at
-  # zero - or the variable unset, which compares unequal just the same - so the throw below fires either way.
-  $ownershipVerifiedAnswers = 0
+  # RECONCILED, and what is recorded is the ANSWER the comparison accepted rather than a tick. The first version
+  # of this was `$ownershipVerifiedAnswers++` on its own line after the comparison, and a fresh-context review
+  # pointed out the obvious: wrap only the comparison and the increment still runs six times, so the count reads
+  # six with nothing compared. What lands in the list below is a value that exists only because the comparison
+  # ran, so a wrapped comparison leaves the list empty or full of nulls and neither reconciles against the
+  # answers the child actually printed.
+  $ownershipVerifiedAnswers = [Collections.Generic.List[string]]::new()
   for ($ownershipIndex = 0; $ownershipIndex -lt $ownershipChallenge.Count; $ownershipIndex++) {
     $ownershipRow = $ownershipChallenge[$ownershipIndex]
     # Exactly one line for THIS index, and that line must be one of the accepted spellings. Where the verdict
@@ -362,13 +381,14 @@ try {
     $ownershipVerdicts = if ($ownershipRow.ResolverDependent -and (-not $ownershipOnWindows)) { @('TRUE', 'FALSE') } elseif ($ownershipRow.Owned) { @('TRUE') } else { @('FALSE') }
     $ownershipCandidates = @($ownershipVerdicts | ForEach-Object { "OWNERSHIP_CHALLENGE $ownershipIndex owned=$_ argv=$($ownershipRow.Argv)" })
     $ownershipForIndex = @($ownershipAnswered | Where-Object { $_.StartsWith("OWNERSHIP_CHALLENGE $ownershipIndex ", [StringComparison]::Ordinal) })
-    if ($ownershipForIndex.Count -ne 1 -or $ownershipCandidates -cnotcontains $ownershipForIndex[0]) {
+    $ownershipAccepted = @($ownershipForIndex | Where-Object { $ownershipCandidates -ccontains $_ })
+    if ($ownershipForIndex.Count -ne 1 -or $ownershipAccepted.Count -ne 1) {
       throw "Season browser ownership regression did not answer challenge $ownershipIndex as this lane requires.`n  accepted: $($ownershipCandidates -join ' OR ')`n  printed: $($ownershipForIndex -join ' AND ')`n  command line: $($ownershipRow.Line)"
     }
-    $ownershipVerifiedAnswers++
+    $ownershipVerifiedAnswers.Add($ownershipAccepted[0])
   }
-  if ($ownershipVerifiedAnswers -ne $ownershipChallenge.Count) {
-    throw "Season browser ownership regression: $($ownershipChallenge.Count) challenge answers this lane did not verify one by one - only $ownershipVerifiedAnswers were checked, so the per-index comparison above did not run."
+  if ((($ownershipVerifiedAnswers | Sort-Object) -join "`n") -cne (($ownershipAnswered | Sort-Object) -join "`n")) {
+    throw "Season browser ownership regression: the $($ownershipChallenge.Count) challenge answers this lane accepted one by one do not reconcile with the $($ownershipAnswered.Count) it printed, so the per-index comparison above did not run.`n  accepted:`n  $(($ownershipVerifiedAnswers -join "`n  "))`n  printed:`n  $(($ownershipAnswered -join "`n  "))"
   }
   # The season contract gate was reachable only when an operator typed `npm run verify:season` by
   # hand - no workflow and no hook ran it - so the structural guards it holds, including the

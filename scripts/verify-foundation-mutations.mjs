@@ -214,7 +214,7 @@ try {
   mutate('.github/workflows/foundation.yml', (source) => source.replace('run: node scripts/foundation-static-guards.mjs', 'run: echo skipped'))
   detected('CI stops running the static guards itself', 'workflow:static-guards-run-independently')
   reset()
-  mutate('.github/workflows/foundation.yml', (source) => source.replace('run: node scripts/verify-foundation-mutations.mjs', 'run: echo skipped'))
+  mutate('.github/workflows/foundation.yml', (source) => source.replace('$drill = @(node scripts/verify-foundation-mutations.mjs)', '$drill = @()'))
   detected('CI stops running the mutation drill itself', 'workflow:mutation-drill-run-independently')
   reset()
   mutate('.github/workflows/foundation.yml', (source) => source.replace('run: node scripts/foundation-windows-lane-runtime-drill.mjs', 'run: echo skipped'))
@@ -272,7 +272,7 @@ try {
   // publish what it ran, must answer with the real tokenizer and the real predicate rather than a constant,
   // and each caller must keep requiring both - including the one challenge line that names a live unrelated
   // process on the governed port, which the cleanup path would force-kill if the predicate ever said TRUE.
-  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('OWNERSHIP_MANIFEST tokenizer={0} refusals={1} gutted={2} windows={3} windowsCases={4} challenges={5}', 'OWNERSHIP_MANIFEST ran'))
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('OWNERSHIP_MANIFEST tokenizer={0} refusals={1} gutted={2} windows={3} windowsCases={4} cases={5} challenges={6}', 'OWNERSHIP_MANIFEST ran'))
   detected('ownership regression stops publishing how much of itself ran', 'ownership-regression:publishes-a-manifest')
   reset()
   mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('OWNERSHIP_CHALLENGE {0} owned={1} argv={2}', 'OWNERSHIP_CHALLENGE {0} answered'))
@@ -351,8 +351,29 @@ try {
     mutate(path, (source) => source.replace(/ challenge answers for \$\(/, ' challenge answers, which is fine $('))
     detected(`${id} stops requiring one challenge answer per challenge sent`, `${id}:ownership-answer-total-asserted`)
     reset()
-    mutate(path, (source) => source.replace(/^( *)if \((\$\w*[Ff]orIndex)\.Count -ne 1 -or (\$\w+) -cnotcontains \2\[0\]\) \{/m, '$1if ($3.Count -eq 0) {'))
+    mutate(path, (source) => source.replace(/^( *)if \((\$\w*[Ff]orIndex)\.Count -ne 1 -or (\$\w*[Aa]ccepted)\.Count -ne 1\) \{/m, '$1if ($2.Count -eq 0) {'))
     detected(`${id} stops requiring exactly one answer per challenge index and stops checking it is accepted`, `${id}:ownership-answer-must-be-a-candidate`)
+    reset()
+    // The accepted answer must be SELECTED by filtering this caller's own candidate spellings. A selection
+    // replaced by a constant records a value the comparison did not produce, which is the whole defect the
+    // recording exists to catch.
+    mutate(path, (source) => source.replace(/^( *)(\$\w*[Aa]ccepted) = @\(\$\w*[Ff]orIndex \| Where-Object \{ \$\w+ -ccontains \$_ \}\)/m, "$1$2 = @('placeholder')"))
+    detected(`${id} stops selecting the accepted answer from its own candidate spellings`, `${id}:ownership-answer-selected-from-candidates`)
+    reset()
+    // And the recorded value must be the accepted answer rather than whatever the child printed. Recording the
+    // raw output makes the reconciliation below compare the output against itself, which always agrees.
+    mutate(path, (source) => source.replace(/^( *)(\$\w*[Vv]erifiedAnswers)\.Add\(\$\w*[Aa]ccepted\[0\]\)/m, (_whole, indent, list) => `${indent}${list}.Add('recorded without comparing')`))
+    detected(`${id} records the printed answer instead of the one its comparison accepted`, `${id}:ownership-accepted-answer-recorded`)
+    reset()
+    // The reconciliation is what turns the recording into a measurement of execution. Without it the list is
+    // built and never read, so a per-index loop that never ran leaves it empty with nothing noticing.
+    mutate(path, (source) => source.replace(/^( *)if \(\(\(\$\w*[Vv]erifiedAnswers \| Sort-Object\) -join "`n"\) -cne/m, '$1if ($false -and'))
+    detected(`${id} stops reconciling the answers it accepted against the answers the child printed`, `${id}:ownership-answers-reconciled`)
+    reset()
+    // The manifest's reached-case count, held by this caller. `canary=caught` proves the helper notices a false
+    // condition; only the count can tell a full run from one with a passing assertion quietly skipped.
+    mutate(path, (source) => source.replace(' cases=$(', ' cases=any$('))
+    detected(`${id} stops requiring the number of assertion cases the ownership regression reached`, `${id}:ownership-case-count-asserted`)
     reset()
   }
   // THE ASSERTION HELPER ITSELF. A fresh-context review changed its condition to `if ($false)` and the suite
@@ -372,7 +393,7 @@ try {
   mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace("$script:assertionCanaryCaught = 'caught'", "$script:assertionCanaryCaught = 'skipped'"))
   detected('ownership regression stops publishing the assertion-helper verdict its callers require', 'ownership-regression:assertion-canary-published')
   reset()
-  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('challenges={5} canary={6}', 'challenges={5}'))
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('challenges={6} canary={7}', 'challenges={6}'))
   detected('ownership regression drops the assertion-helper field from its manifest', 'ownership-regression:publishes-a-manifest')
   reset()
   // THE PAIRING, in both directions. The portable tables in the ownership suite are only meaningful if the
@@ -608,7 +629,6 @@ try {
   reset()
   mutate('tests/season/maple-2027-start.sql', (source) => source.replaceAll(":'season_owner_password'", "'a-literal-password'"))
   detected('season start fixture carries a literal password', 'season:start-fixture-parameterized-password')
-  console.log(`Foundation mutation drill: PASS (${detectedMutations.length} controlled mutations turned the gate red)`)
 
   // ---------------------------------------------------------------------------------------------------
   // THE BEHAVIOURAL HALF. Every drill above asks the STATIC guard whether it noticed, and every one of
@@ -629,7 +649,17 @@ try {
   const runOwnershipSuite = () => {
     // Not execFileSync: a suite that reports FAIL exits 1, and execFileSync throws on that, so the
     // expected outcome would arrive as an exception and the unexpected one as a value.
-    const result = spawnSync(onWindows ? 'powershell' : 'pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(temporary, ownershipSuite)], { encoding: 'utf8' })
+    //
+    // TIMED OUT, because every subject below is deliberately broken and a broken subject can loop instead of
+    // answering. Without this the drill would hang until the job's own 45-minute limit killed it, which reads
+    // as an infrastructure failure rather than as this drill's verdict. A timeout kills the child and returns
+    // status null with signal SIGTERM, so it is distinguished from a real non-zero exit rather than being
+    // scored as one - `null` is not zero, and a drill that accepted any non-zero result would call a hang a
+    // detection.
+    const result = spawnSync(onWindows ? 'powershell' : 'pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(temporary, ownershipSuite)], { encoding: 'utf8', timeout: 300000 })
+    if (result.error?.code === 'ETIMEDOUT' || result.signal) {
+      throw new Error(`The ownership suite did not finish within five minutes (signal ${result.signal ?? 'none'}), so this drill measured a hang rather than a verdict.`)
+    }
     return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` }
   }
   // The baseline first, and it is load-bearing. "The suite went red" proves nothing unless the same suite
@@ -647,6 +677,12 @@ try {
   // its own predicate - red, but for the wrong reason and saying nothing about the mutation. A drill that
   // accepted any non-zero exit would score that as a detection and would keep scoring it after the mutation
   // stopped being applied at all. So each case states the sentence the suite must produce.
+  //
+  // BY NAME means the sentence that names THIS defect, not the suite's generic FAIL marker. The first version
+  // of this accepted `MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_FAIL` for three of the four cases, which a
+  // fresh-context review correctly called "nonzero exit plus a substring": any unrelated failure, and any
+  // future mutation that broke something else entirely, would have scored. Each case now states the sentence
+  // the suite must produce about the specific thing that was broken.
   const detectedByBehaviour = (label, expected) => {
     const { status, output } = runOwnershipSuite()
     if (status === 0 || !output.includes(expected)) {
@@ -655,7 +691,24 @@ try {
     behaviouralMutations.push(label)
     console.log(`Behavioural mutation detected: ${label}`)
   }
-  const reportsFailure = 'MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_FAIL'
+  // The other half of honesty about this drill: where the suite CANNOT see a broken subject, measure that and
+  // say so, rather than skipping the case silently or asserting a detection the platform cannot produce.
+  //
+  // A fresh-context review found the drill as first written could not pass on ubuntu-latest at all, which is
+  // the only place CI runs it: the suite skips every must-be-TRUE case off Windows, so a predicate that
+  // REFUSES EVERYTHING leaves all portable refusals passing, the suite exits 0, and the required detection
+  // never arrives. Reproduced by forcing the suite's $onWindows to false with that predicate in place - exit 0,
+  // PASS marker, windowsCases=0. So the expectation is now platform-conditional, and where the answer is "not
+  // measured here" this prints a named gap that a Windows lane would have to close.
+  const behaviourGaps = []
+  const unseenByBehaviour = (label, why) => {
+    const { status, output } = runOwnershipSuite()
+    if (status !== 0) {
+      throw new Error(`${label}: this platform was expected NOT to see the defect, and the suite went red anyway. The gap this records has been closed or moved, so this case needs re-deciding rather than re-asserting. exit=${status}\n${output.trim()}`)
+    }
+    behaviourGaps.push(label)
+    console.log(`BEHAVIOUR_GAP ${label}: ${why}`)
+  }
   // The kill-authorizing predicate, in both directions. A false TRUE force-kills a foreign process on the
   // workstation; a false FALSE fails a proof month with a wrong diagnosis. Both are inserted lines rather
   // than edited ones, so no pinned substring moves and the static guard above stays green on them - which
@@ -668,13 +721,22 @@ try {
   const authorizeEverything = (source) => source.replace('  if ($null -eq $ListenerProcess) { return $false }', '  if ($null -eq $ListenerProcess) { return $false }\n  return $true')
   reset()
   mutate(predicateFile, authorizeEverything)
-  detectedByBehaviour('kill-authorizing predicate authorizes everything', reportsFailure)
+  // The dangerous direction, and the one the portable refusals cover everywhere: a predicate that says TRUE
+  // about a listener in another tree is what force-kills a stranger's process on the workstation.
+  detectedByBehaviour('kill-authorizing predicate authorizes everything', 'The ownership predicate authorized a kill for ')
   reset()
   mutate(predicateFile, (source) => source.replace('  if ($null -eq $ListenerProcess) { return $false }', '  if ($null -eq $ListenerProcess) { return $false }\n  return $false'))
-  detectedByBehaviour('kill-authorizing predicate refuses everything', reportsFailure)
+  // The other direction is proved only by the must-be-TRUE table, and that table is Windows-only, so this is
+  // the case that splits by platform. On ubuntu it is an honest, measured blind spot; a Windows CI job is what
+  // would close it, and until one exists the gap is printed rather than implied.
+  if (onWindows) {
+    detectedByBehaviour('kill-authorizing predicate refuses everything', 'The ownership predicate refused ')
+  } else {
+    unseenByBehaviour('kill-authorizing predicate refuses everything', 'the must-be-TRUE table is Windows-only, so off Windows the suite stays green on a predicate that declares every listener foreign - it would fail a proof month with a wrong diagnosis and nothing here would notice')
+  }
   reset()
   mutate(predicateFile, (source) => source.replace('  param([string]$CommandLine)\n', '  param([string]$CommandLine)\n  return @($CommandLine)\n'))
-  detectedByBehaviour('tokenizer collapses every command line into one argument', reportsFailure)
+  detectedByBehaviour('tokenizer collapses every command line into one argument', 'disagreed with the measured Windows parse on ')
   // THE CASE THIS SECTION WAS WRITTEN FOR, planted verbatim as the review wrote it. The helper still
   // records the canary, so `canary=caught` is still honest and the suite's own self-test still passes;
   // every other assertion is discarded. Paired with an authorize-everything predicate, the suite has a
@@ -684,9 +746,25 @@ try {
     '  if (-not $Condition) { $script:failures += $Message }\n',
     '  if ($Message -ceq $script:assertionCanary) { $script:failures += $Message; return }\n'))
   mutate(predicateFile, authorizeEverything)
-  detectedByBehaviour('assertion helper honours only its own canary while the predicate authorizes everything', "reporting channels disagree")
+  detectedByBehaviour('assertion helper honours only its own canary while the predicate authorizes everything', 'reporting channels disagree')
+  // The defeat that made the case tally count every case rather than only the failing ones: wrapping an
+  // assertion that normally PASSES in `if ($false) { ... }` left the old failure-only tally at zero on both
+  // channels, agreeing, and the suite printed PASS. Reproduced against the real file. The suite now publishes
+  // how many cases it REACHED, so a case short of the expected count refuses to report at all.
   reset()
-  console.log(`Foundation behavioural mutation drill: PASS (${behaviouralMutations.length} broken subjects were reported by the suite that runs against them)`)
+  mutate(ownershipSuite, (source) => source.replace(
+    "Assert-MapleSeasonCase (@($expectedRefusalLabels | Select-Object -Unique).Count -eq $portableRefusals.Count)",
+    "if ($false) { Assert-MapleSeasonCase (@($expectedRefusalLabels | Select-Object -Unique).Count -eq $portableRefusals.Count)"))
+  mutate(ownershipSuite, (source) => source.replace(
+    "'Two refusal rows share a label, so the set comparison above cannot tell them apart.'\n",
+    "'Two refusal rows share a label, so the set comparison above cannot tell them apart.' }\n"))
+  detectedByBehaviour('an assertion that normally passes is skipped without changing a single pinned string', 'assertion cases and expected at least ')
+  reset()
+  // Printed LAST, and both markers together. The static half's marker used to print before this section ran,
+  // so a fresh-context review could wrap the whole behavioural half and still read `Foundation mutation drill:
+  // PASS` in the log. Nothing in this file may claim success before everything in it has run.
+  console.log(`Foundation mutation drill: PASS (${detectedMutations.length} controlled mutations turned the gate red)`)
+  console.log(`Foundation behavioural mutation drill: PASS (${behaviouralMutations.length} broken subjects were reported by the suite that runs against them, ${behaviourGaps.length} not measurable on this platform)`)
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

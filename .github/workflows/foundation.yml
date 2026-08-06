@@ -32,8 +32,23 @@ jobs:
       # does not invoke.
       - name: Foundation static guards
         run: node scripts/foundation-static-guards.mjs
+      # This step HOLDS THE DRILL'S OWN CLAIM as well as its exit code. A zero exit does not say how much of
+      # the drill ran: its whole behavioural half can be wrapped in `if (false) { ... }` with every pinned
+      # string still present, and the summary line used to print before the section it summarizes. Both markers
+      # now print last and this step requires the behavioural one longhand. The count is FOUR here, not five,
+      # and the difference is not cosmetic: the fifth case needs the suite's Windows-only must-be-TRUE table,
+      # so on ubuntu it is a measured gap this step requires the drill to declare rather than a detection.
       - name: Foundation mutation drill
-        run: node scripts/verify-foundation-mutations.mjs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $drill = @(node scripts/verify-foundation-mutations.mjs)
+          $drill | ForEach-Object { Write-Output $_ }
+          if ($LASTEXITCODE -ne 0) { throw 'Foundation mutation drill failed.' }
+          $expectedBehaviour = 'Foundation behavioural mutation drill: PASS (4 broken subjects were reported by the suite that runs against them, 1 not measurable on this platform)'
+          if ($drill -cnotcontains $expectedBehaviour) {
+            throw "Foundation mutation drill did not report its behavioural half to this job.`n  expected: $expectedBehaviour"
+          }
       - name: Windows execution lane runtime drill
         run: node scripts/foundation-windows-lane-runtime-drill.mjs
       # The kill-authorizing predicate's BEHAVIOUR, run here because the two guards above cannot see it.
@@ -103,7 +118,12 @@ jobs:
           # noticed. Without it this step cannot tell a run with a hundred live assertions from a run with all of
           # them silently disabled, which was measured by no-op'ing the helper and watching everything else stay
           # green.
-          $expected = "OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=$($onWindows.ToString().ToLowerInvariant()) windowsCases=$(if ($onWindows) { 24 } else { 0 }) challenges=$($rows.Count) canary=caught"
+          # `cases` is the count of assertion cases the child REACHED, and this step holds the expected number.
+          # It is the field that closes what `canary=caught` could not see: the child's own cross-check compared
+          # failure counts, so wrapping an assertion that normally PASSES left both channels at zero, agreeing,
+          # and the child printed PASS. Measured. Five cases are portable; each Windows-only row adds one, and
+          # this job is ubuntu, so five is the number here.
+          $expected = "OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=$($onWindows.ToString().ToLowerInvariant()) windowsCases=$(if ($onWindows) { 24 } else { 0 }) cases=$(if ($onWindows) { 29 } else { 5 }) challenges=$($rows.Count) canary=caught"
           if ($manifest[0] -cne $expected) { throw "Season browser ownership regression reported a different shape than this step requires.`n  expected: $expected`n  reported: $($manifest[0])" }
           # Counted as INSTANCES, not searched for. Filtering this step's own candidate strings by whether the
           # output contains them measures nothing about how many lines the child printed, so a child answering
@@ -113,23 +133,25 @@ jobs:
           if ($answered.Count -ne $rows.Count) {
             throw "Season browser ownership regression printed $($answered.Count) challenge answers for $($rows.Count) challenges.`n  " + ($answered -join "`n  ")
           }
-          # COUNTED, and the count is consumed after the loop. A fresh-context review wrapped the total check
-          # above and this loop in `if ($false) { ... }`: every string the static guard pins here was still
-          # present, this step stayed green, and not one answer was verified. Reproduced before this counter. A
-          # skipped block leaves the count at zero - or the variable unset, which compares unequal just the
-          # same - so the throw below fires either way.
-          $verifiedAnswers = 0
+          # RECONCILED, and what is recorded is the ANSWER the comparison accepted rather than a tick. The first
+          # version of this was `$verifiedAnswers++` on its own line after the comparison, and a fresh-context
+          # review pointed out the obvious: wrap only the comparison and the increment still runs six times, so
+          # the count reads six with nothing compared. What lands in the list below is $accepted[0] - a value
+          # that exists only because the comparison ran - so a wrapped comparison leaves the list empty or
+          # full of nulls, and neither reconciles against the answers the child actually printed.
+          $verifiedAnswers = [Collections.Generic.List[string]]::new()
           for ($i = 0; $i -lt $rows.Count; $i++) {
             $verdicts = if ($rows[$i].ResolverDependent -and (-not $onWindows)) { @('TRUE', 'FALSE') } elseif ($rows[$i].Owned) { @('TRUE') } else { @('FALSE') }
             $candidates = @($verdicts | ForEach-Object { "OWNERSHIP_CHALLENGE $i owned=$_ argv=$($rows[$i].Argv)" })
             $forIndex = @($answered | Where-Object { $_.StartsWith("OWNERSHIP_CHALLENGE $i ", [StringComparison]::Ordinal) })
-            if ($forIndex.Count -ne 1 -or $candidates -cnotcontains $forIndex[0]) {
+            $accepted = @($forIndex | Where-Object { $candidates -ccontains $_ })
+            if ($forIndex.Count -ne 1 -or $accepted.Count -ne 1) {
               throw "Season browser ownership regression did not answer challenge $i as this step requires.`n  accepted: $($candidates -join ' OR ')`n  printed: $($forIndex -join ' AND ')`n  command line: $($rows[$i].Line)"
             }
-            $verifiedAnswers++
+            $verifiedAnswers.Add($accepted[0])
           }
-          if ($verifiedAnswers -ne $rows.Count) {
-            throw "Season browser ownership regression: $($rows.Count) challenge answers this lane did not verify one by one - only $verifiedAnswers were checked, so the per-index comparison above did not run."
+          if ((($verifiedAnswers | Sort-Object) -join "`n") -cne (($answered | Sort-Object) -join "`n")) {
+            throw "Season browser ownership regression: the $($rows.Count) challenge answers this lane accepted one by one do not reconcile with the $($answered.Count) it printed, so the per-index comparison above did not run.`n  accepted:`n  $(($verifiedAnswers -join "`n  "))`n  printed:`n  $(($answered -join "`n  "))"
           }
       - name: Run foundation gate
         shell: pwsh

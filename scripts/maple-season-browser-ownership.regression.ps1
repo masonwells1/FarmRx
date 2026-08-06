@@ -104,14 +104,24 @@ $script:assertionCanaryCaught = 'caught'
 #
 # So there are TWO channels and they are cross-checked. Assert-True keeps the failure list; the wrapper below
 # keeps an independent tally and merely CALLS Assert-True rather than being it. Sabotaging the helper leaves
-# the tally full and the list empty, and the `throw` before the manifest - which does not go through the
-# helper - refuses to report a result on that contradiction. Sabotaging BOTH is a larger edit, and
+# the failure tally full and the list empty, and the `throw` before the manifest - which does not go through
+# the helper - refuses to report a result on that contradiction. Sabotaging BOTH is a larger edit, and
 # scripts/verify-foundation-mutations.mjs now runs this file against a deliberately broken predicate and
 # requires it to go red, which is the only check of this class that measures execution instead of text.
+#
+# EVERY case is tallied, not only the failing ones. The first version of this wrapper appended to the tally
+# inside `if (-not $Condition)`, which made it a second failure list rather than a second channel: a
+# fresh-context review wrapped the label-uniqueness assertion below - an assertion that normally PASSES - in
+# `if ($false) { ... }`, and both counts stayed at zero, agreed with each other, and this file printed PASS.
+# Reproduced against the real file before this rewrite. So the tally counts cases REACHED and is published in
+# the manifest, where each caller holds the expected number independently; a skipped passing assertion now
+# shows up as a case count that is one short, in a place this file's own arithmetic cannot cover for.
 $script:tallied = @()
+$script:talliedFailures = @()
 function Assert-MapleSeasonCase {
   param([bool]$Condition, [string]$Message)
-  if (-not $Condition) { $script:tallied += $Message }
+  $script:tallied += $Message
+  if (-not $Condition) { $script:talliedFailures += $Message }
   Assert-True $Condition $Message
 }
 
@@ -444,8 +454,19 @@ if (-not $onWindows) {
 # PASS. Measured against the real files: without this, the sabotage quoted at the top of this file printed
 # `canary=caught`, every table at full size, six correct challenge answers and PASS, against a predicate edited
 # to authorize killing every listener on the governed port.
-if ($script:tallied.Count -ne $script:failures.Count) {
-  throw "This file's two reporting channels disagree: $($script:tallied.Count) case(s) were tallied and $($script:failures.Count) reached the failure list, so one of them is not working and no result from this run can be trusted. Tallied: $($script:tallied -join '; ')"
+if ($script:talliedFailures.Count -ne $script:failures.Count) {
+  throw "This file's two reporting channels disagree: $($script:talliedFailures.Count) case(s) failed by the wrapper's own count and $($script:failures.Count) reached the failure list, so one of them is not working and no result from this run can be trusted. Tallied failures: $($script:talliedFailures -join '; ')"
+}
+# HOW MANY CASES WERE REACHED, checked here and published for the callers. Five cases are portable and run
+# everywhere; the two Windows-only tables add one case per row. This number is arithmetic over the tables
+# themselves rather than a literal, so adding a row moves the expectation with it - but the callers hold the
+# LITERAL, which is what makes a shrinking suite visible to somebody other than the suite.
+# FEWER than expected is the defect this catches. More is possible on a genuinely failing run, because two
+# call sites live inside failure loops and fire once per disagreement, and that run's own failure list is the
+# right place to read about it - a `-ne` here would replace a real defect report with arithmetic about tallies.
+$expectedCases = 5 + $windowsCasesRun
+if ($script:tallied.Count -lt $expectedCases) {
+  throw "This file reached $($script:tallied.Count) assertion cases and expected at least $expectedCases, so a case that should have executed did not. Reached: $($script:tallied -join '; ')"
 }
 
 # ---------------------------------------------------------------------------------------------------------
@@ -475,7 +496,11 @@ $challengeLines = @()
 if ($Challenge.Length -gt 0) {
   $challengeLines = @([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Challenge)) -split ([char]0x1F))
 }
-Write-Output ("OWNERSHIP_MANIFEST tokenizer={0} refusals={1} gutted={2} windows={3} windowsCases={4} challenges={5} canary={6}" -f $tokenizerTable.Count, $portableRefusals.Count, $guttedClaims.Count, ($onWindows.ToString().ToLowerInvariant()), $windowsCasesRun, $challengeLines.Count, $script:assertionCanaryCaught)
+# `cases` is how many assertion cases were actually REACHED. It is the field that survives the defeat
+# `canary=caught` could not see: a wrapper that tallies only failures reports zero and zero on a skipped
+# passing assertion, and both callers hold the expected case count as a literal, so a suite that has quietly
+# stopped executing part of itself no longer looks identical to one that ran in full.
+Write-Output ("OWNERSHIP_MANIFEST tokenizer={0} refusals={1} gutted={2} windows={3} windowsCases={4} cases={5} challenges={6} canary={7}" -f $tokenizerTable.Count, $portableRefusals.Count, $guttedClaims.Count, ($onWindows.ToString().ToLowerInvariant()), $windowsCasesRun, $script:tallied.Count, $challengeLines.Count, $script:assertionCanaryCaught)
 for ($index = 0; $index -lt $challengeLines.Count; $index++) {
   $challengeLine = $challengeLines[$index]
   $challengeArgv = @(Split-MapleSeasonCommandLineArguments -CommandLine $challengeLine)

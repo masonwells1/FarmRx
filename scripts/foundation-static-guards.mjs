@@ -40,16 +40,19 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh.exe')", 'orchestrator:windows-core-probe-shell')
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh')", 'orchestrator:unix-core-probe-shell')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & $probeShell -NoProfile -Command 'exit 23' } $expected", 'orchestrator:resolved-probe-shell')
-  // What this count actually counts: statements beginning with `Invoke-FoundationLane`. That is 24 -
-  // one intermediate-failure probe, twenty-two in the orchestration body, and one nested inside
+  // What this count actually counts: statements beginning with `Invoke-FoundationLane`. That is 23 -
+  // one intermediate-failure probe, twenty-one in the orchestration body, and one nested inside
   // Invoke-FoundationWindowsExecutionLane. It does NOT count the Windows lane's own call site, because
   // this pattern requires whitespace immediately after `Invoke-FoundationLane` and
   // `Invoke-FoundationWindowsExecutionLane` continues with a letter. So the earlier rise from 21 to 22
   // came from the nested call, not from a new top-level lane, 22 to 23 is the runtime drill lane, and
-  // 23 to 24 is the season browser ownership regression lane; the Windows lane is pinned separately.
+  // 23 to 24 was the season browser ownership regression lane. It is back to 23 because the mutation
+  // drill's lane no longer goes through the helper: Invoke-FoundationLane streams its child's output and
+  // does not return it, and that lane now has to READ what the drill printed to require the drill's own
+  // behavioural claim, so it is written out longhand and pinned by that claim instead.
   // The label says invoke-lane-statements rather than all-lanes-checked for that reason - the old
   // label implied this one number covered every lane in the file, which it does not.
-  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 24) errors.push('orchestrator:invoke-lane-statements')
+  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 23) errors.push('orchestrator:invoke-lane-statements')
   // Pin both season lanes by name. The count above only proves nobody added a lane without
   // updating this guard; it does not prove these two specific lanes survived, and they are the only
   // thing making the season contract gate reachable from an automated gate rather than by hand.
@@ -142,7 +145,10 @@ export function foundationStaticGuard(root = process.cwd()) {
   // suppressible by an orchestrator that returns before reaching them while still printing the final
   // marker - which a log-substring assertion cannot distinguish from a real run.
   requireText(errors, foundationWorkflow, 'run: node scripts/foundation-static-guards.mjs', 'workflow:static-guards-run-independently')
-  requireText(errors, foundationWorkflow, 'run: node scripts/verify-foundation-mutations.mjs', 'workflow:mutation-drill-run-independently')
+  // The mutation drill's step captures the drill's output so it can require the drill's own behavioural claim,
+  // so the plain `run:` spelling this used to pin no longer exists. Pinned as the capture, and the claim itself
+  // is pinned further down for both callers.
+  requireText(errors, foundationWorkflow, '$drill = @(node scripts/verify-foundation-mutations.mjs)', 'workflow:mutation-drill-run-independently')
   requireText(errors, foundationWorkflow, 'run: node scripts/foundation-windows-lane-runtime-drill.mjs', 'workflow:runtime-drill-run-independently')
   // STRUCTURE, not text. Every pin above is a substring test, and a substring test cannot see the two
   // one-line edits that switch a step off while leaving its whole body in place: `if: false` never runs it,
@@ -158,10 +164,25 @@ export function foundationStaticGuard(root = process.cwd()) {
   // then compared, rather than a list of spellings being guessed at. Exact indent matters: job keys sit at four
   // spaces and step keys at eight, and none of the quoting forms can begin with a space, so a deeper-indented
   // line inside a run: block cannot be mistaken for a key at either level.
+  // AND DOUBLE-QUOTED KEYS ARE DECODED FIRST. A double-quoted YAML scalar carries escapes, so `"if"` and
+  // `"\x69f"` are both the key `if` to any parser while being nothing like the letters `if` as text. Measured:
+  // `"if": false` at job level disabled the whole job with this guard green. Single-quoted and plain
+  // scalars carry no escapes in YAML and are compared as written.
+  const decodeDoubleQuoted = (text) => text.replace(/\\(u\{([0-9A-Fa-f]+)\}|u([0-9A-Fa-f]{4})|x([0-9A-Fa-f]{2})|[\s\S])/g, (_whole, body, braced, u4, x2) => {
+    if (braced) return String.fromCodePoint(Number.parseInt(braced, 16))
+    if (u4) return String.fromCharCode(Number.parseInt(u4, 16))
+    if (x2) return String.fromCharCode(Number.parseInt(x2, 16))
+    const simple = { 0: '\0', a: '\x07', b: '\b', t: '\t', n: '\n', v: '\v', f: '\f', r: '\r', e: '\x1b', ' ': ' ', '"': '"', '/': '/', '\\': '\\', N: '\x85', _: '\xa0', L: ' ', P: ' ' }
+    return Object.prototype.hasOwnProperty.call(simple, body) ? simple[body] : body
+  })
   const gatingKeyAt = (line, indent) => {
-    const match = new RegExp(`^ {${indent}}(?:'([^']*)'|"([^"]*)"|([^\\s:'"#][^:]*?))\\s*:`).exec(line)
+    const match = new RegExp(`^ {${indent}}(?:'([^']*)'|"((?:[^"\\\\]|\\\\.)*)"|([^\\s:'"#][^:]*?))\\s*:`).exec(line)
     if (!match) return null
-    const key = (match[1] ?? match[2] ?? match[3] ?? '').trim()
+    let key
+    if (match[1] !== undefined) key = match[1]
+    else if (match[2] !== undefined) key = decodeDoubleQuoted(match[2])
+    else key = match[3] ?? ''
+    key = key.trim()
     return key === 'if' || key === 'continue-on-error' ? key : null
   }
   const stepStarts = workflowLines.map((line, index) => ({ line, index })).filter((entry) => /^ {6}- name: /.test(entry.line))
@@ -297,6 +318,15 @@ export function foundationStaticGuard(root = process.cwd()) {
   // actually executed is published and asserted, and the counter is declared before the Windows branch and
   // consumed after it closes, so wrapping the branch's body cannot take the check with it. Both the total and
   // the DISTINCT total are required, because a duplicated row keeps the total while silently displacing a case.
+  //
+  // AND THE COUNT MUST BE TAKEN AFTER THE COMPARISON. The first version incremented at the TOP of the loop
+  // body, which a fresh-context review defeated exactly as written: wrap only the comparison, and the receipt
+  // still read `comparisons=33 distinct=33` with nothing handed to CommandLineToArgvW. Reproduced. So the
+  // recording is gated on the comparison's own result, and the result is cleared at the top of each row so a
+  // stale agreement cannot carry over. Both the clearing and the gate are pinned; without the clearing, the
+  // gate would pass on row two onwards from row one's answer.
+  requireText(errors, seasonBrowserRegression, '$agrees = $null', 'season-browser-regression:tokenizer-agreement-cleared-per-row')
+  requireMatch(errors, seasonBrowserRegression, /Assert-True \$agrees "Split-MapleSeasonCommandLineArguments disagreed[^\n]*\n(?: *#[^\n]*\n)* *if \(\$agrees\) \{\n *\$tokenizerComparisons\+\+\n *\[void\]\$tokenizerLinesCompared\.Add\(\$commandLine\)\n/, 'season-browser-regression:tokenizer-receipt-recorded-after-the-comparison')
   requireText(errors, seasonBrowserRegression, '$tokenizerComparisons++', 'season-browser-regression:tokenizer-comparisons-counted')
   requireText(errors, seasonBrowserRegression, '[void]$tokenizerLinesCompared.Add($commandLine)', 'season-browser-regression:tokenizer-lines-recorded')
   requireText(errors, seasonBrowserRegression, '[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)', 'season-browser-regression:tokenizer-receipt-is-case-sensitive')
@@ -339,6 +369,25 @@ export function foundationStaticGuard(root = process.cwd()) {
   // one - a case routed straight to Assert-True is untallied, and the cross-check below stops covering it.
   requireText(errors, ownershipRegression, 'Assert-MapleSeasonCase ($uncaught.Count -eq 0)', 'ownership-regression:refusals-reject-the-gutted-predicate')
   requireText(errors, ownershipRegression, 'Assert-MapleSeasonCase ($duplicateInputs.Count -eq 0)', 'ownership-regression:refusal-inputs-are-distinct')
+  // THE TALLY COUNTS CASES REACHED, NOT CASES FAILED. The first version of that wrapper appended to its tally
+  // inside `if (-not $Condition)`, which made it a second failure list rather than a second channel: a
+  // fresh-context review wrapped an assertion that normally PASSES in `if ($false) { ... }`, both counts stayed
+  // at zero, they agreed, and the suite printed PASS. Reproduced. The unconditional append and the failure-only
+  // list are pinned separately, because collapsing either back into the other restores that defeat.
+  requireMatch(errors, ownershipRegression, /function Assert-MapleSeasonCase \{\n *param\(\[bool\]\$Condition, \[string\]\$Message\)\n *\$script:tallied \+= \$Message\n *if \(-not \$Condition\) \{ \$script:talliedFailures \+= \$Message \}\n *Assert-True \$Condition \$Message\n\}/, 'ownership-regression:every-case-is-tallied')
+  requireText(errors, ownershipRegression, 'if ($script:talliedFailures.Count -ne $script:failures.Count) {', 'ownership-regression:failure-channels-cross-checked')
+  requireText(errors, ownershipRegression, '$expectedCases = 5 + $windowsCasesRun', 'ownership-regression:expected-case-count-is-derived')
+  requireText(errors, ownershipRegression, 'if ($script:tallied.Count -lt $expectedCases) {', 'ownership-regression:case-count-consumed')
+  // EVERY case goes through the wrapper. A case routed straight to Assert-True is untallied, so it would be
+  // invisible to both the cross-check and the published count - which is the hole the wrapper exists to close.
+  // Counted rather than pinned one at a time: eight call sites were pinned as two, and six of them could have
+  // been deleted with this guard green. Eight = the five portable cases, one inside the gutted-predicate failure
+  // loop, and two inside the Windows-only loops that run once per row. Assert-True itself may appear exactly
+  // twice - the deliberate canary self-test, and the call inside the wrapper.
+  const ownershipCaseCalls = ownershipRegression.split(/\r?\n/).filter((line) => /^\s*Assert-MapleSeasonCase /.test(line))
+  if (ownershipCaseCalls.length !== 8) errors.push(`ownership-regression:case-call-site-count:${ownershipCaseCalls.length}`)
+  const ownershipDirectAsserts = ownershipRegression.split(/\r?\n/).filter((line) => /^\s*Assert-True /.test(line))
+  if (ownershipDirectAsserts.length !== 2) errors.push(`ownership-regression:direct-assert-call-count:${ownershipDirectAsserts.length}`)
   requireText(errors, ownershipRegression, 'param($CommandLine, $Name = \'node.exe\')', 'ownership-regression:listener-preserves-a-null-command-line')
   requireText(errors, ownershipRegression, "function Split-MapleSeasonCommandLineArgumentsGutted { param([string]$CommandLine) return @($CommandLine) }", 'ownership-regression:guts-the-tokenizer')
   requireText(errors, ownershipRegression, "Measure-TokenizerDisagreement -FunctionName 'Split-MapleSeasonCommandLineArgumentsGutted'", 'ownership-regression:table-rejects-the-gutted-tokenizer')
@@ -415,6 +464,13 @@ export function foundationStaticGuard(root = process.cwd()) {
     requireText(errors, ownershipRegression, row.portable, `ownership-regression:hand-paired-row-present:${row.label}`)
     if (!liveTokenizerRowSet.has(row.live)) errors.push(`ownership-regression:hand-paired-row-rederived:${row.label}`)
   }
+  // The live NBSP row names a VARIABLE, so pinning the row's text says nothing about the character it carries.
+  // Rewriting the definition to an ASCII space keeps the row pin above green and silently turns the one case
+  // that distinguishes Windows' separators (space and tab only) from [char]::IsWhiteSpace into a case about an
+  // ordinary space. Both the definition and its single assignment are required, for the same reason the nonce is.
+  requireMatch(errors, preflightRegression, /^ *\$nonBreakingSpace = \[char\]0x00A0$/m, 'season-browser-regression:non-breaking-space-defined-by-code-point')
+  const nbspWrites = preflightLines.filter((line) => /\$(?:\{nonBreakingSpace\}|(?:script:|global:|local:|private:)?nonBreakingSpace(?![\w:]))\s*(?:=|\+=|-=|\*=|\/=|%=)/.test(line) || /Set-Variable\b[^\n]*nonBreakingSpace/i.test(line))
+  if (nbspWrites.length !== 1) errors.push(`season-browser-regression:non-breaking-space-assigned-once:${nbspWrites.length}`)
   // The reverse direction, named row by named row. Any live row that is NOT one of the 29 paired rows must be
   // one of these four, and each of these four must still be there - so neither table can gain or lose a row
   // without a failure that says which row and which side.
@@ -435,7 +491,10 @@ export function foundationStaticGuard(root = process.cwd()) {
   for (const row of liveTokenizerRows) {
     if (!pairedLiveRows.has(row) && !enumeratedLiveOnly.has(row)) errors.push(`ownership-regression:live-row-unaccounted:${row}`)
   }
-  requireText(errors, ownershipRegression, 'OWNERSHIP_MANIFEST tokenizer={0} refusals={1} gutted={2} windows={3} windowsCases={4} challenges={5} canary={6}', 'ownership-regression:publishes-a-manifest')
+  requireText(errors, ownershipRegression, 'OWNERSHIP_MANIFEST tokenizer={0} refusals={1} gutted={2} windows={3} windowsCases={4} cases={5} challenges={6} canary={7}', 'ownership-regression:publishes-a-manifest')
+  // `cases` is the field that made the tally visible to somebody other than the suite. It must be fed by the
+  // tally itself, not by a literal or by a recount of the tables.
+  requireText(errors, ownershipRegression, '$windowsCasesRun, $script:tallied.Count, $challengeLines.Count', 'ownership-regression:manifest-publishes-the-case-count')
   // The assertion-helper self-test. A fresh-context review turned `Assert-True`'s condition into `if ($false)`
   // and this suite still printed its marker, still published a manifest with every table at full size, still
   // answered all four challenges correctly, and exited 0 - with roughly a hundred table assertions dead. The
@@ -471,11 +530,16 @@ export function foundationStaticGuard(root = process.cwd()) {
   // place is one edit away from being no challenge at all.
   // The two callers name their locals differently, so each occurrence pin carries that caller's own spelling -
   // a pin that matched either spelling would be satisfied by the wrong caller's line appearing in a comment.
-  for (const [caller, id, collect, candidates, forIndex, index] of [
-    [foundationWorkflow, 'workflow', '$answered = @($ownership', '$candidates', '$forIndex', '$i'],
-    [foundationOrchestrator, 'orchestrator', '$ownershipAnswered = @($script:ownershipOutput', '$ownershipCandidates', '$ownershipForIndex', '$ownershipIndex'],
+  for (const [caller, id, collect, candidates, forIndex, index, accepted, verified] of [
+    [foundationWorkflow, 'workflow', '$answered = @($ownership', '$candidates', '$forIndex', '$i', '$accepted', '$verifiedAnswers'],
+    [foundationOrchestrator, 'orchestrator', '$ownershipAnswered = @($script:ownershipOutput', '$ownershipCandidates', '$ownershipForIndex', '$ownershipIndex', '$ownershipAccepted', '$ownershipVerifiedAnswers'],
   ]) {
     requireText(errors, caller, 'OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=', `${id}:ownership-manifest-shape-asserted`)
+    // How many assertion cases the suite must say it REACHED. `canary=caught` proved the helper noticed one
+    // deliberately false condition; it could not tell a full run from one with an assertion quietly skipped,
+    // because the suite's own cross-check compared failure counts and a skipped passing assertion fails nothing.
+    // Measured. This caller holds the expected count, so the number lives somewhere the suite cannot edit.
+    requireText(errors, caller, 'cases=$(', `${id}:ownership-case-count-asserted`)
     requireText(errors, caller, 'manifest lines instead of exactly one; it did not run to completion.', `${id}:ownership-manifest-required-once`)
     // The count of challenges the suite says it decoded, checked against the count this caller sent. Without
     // this, a transport that eats challenges is caught only if a surviving argv happens to look wrong.
@@ -493,7 +557,11 @@ export function foundationStaticGuard(root = process.cwd()) {
     requireText(errors, caller, `${collect} | Where-Object { $_.StartsWith('OWNERSHIP_CHALLENGE ', [StringComparison]::Ordinal) })`, `${id}:ownership-answers-counted-as-instances`)
     requireText(errors, caller, 'challenge answers for $(', `${id}:ownership-answer-total-asserted`)
     requireText(errors, caller, `${forIndex} = @(${collect.split(' = ')[0]} | Where-Object { $_.StartsWith("OWNERSHIP_CHALLENGE ${index} ", [StringComparison]::Ordinal) })`, `${id}:ownership-answer-per-index-selected`)
-    requireText(errors, caller, `if (${forIndex}.Count -ne 1 -or ${candidates} -cnotcontains ${forIndex}[0]) {`, `${id}:ownership-answer-must-be-a-candidate`)
+    // The accepted answer is SELECTED by filtering this caller's own candidates, and the selection's own result
+    // is what gets recorded. The earlier form tested membership and then recorded nothing, so the recording step
+    // could not tell an executed comparison from a skipped one.
+    requireText(errors, caller, `${accepted} = @(${forIndex} | Where-Object { ${candidates} -ccontains $_ })`, `${id}:ownership-answer-selected-from-candidates`)
+    requireText(errors, caller, `if (${forIndex}.Count -ne 1 -or ${accepted}.Count -ne 1) {`, `${id}:ownership-answer-must-be-a-candidate`)
     // The suite's assertion-helper self-test, reported through the manifest. A caller that stops requiring
     // `canary=caught` cannot tell a run with ~100 live assertions from a run with all of them disabled.
     // Anchored to the live expected-manifest statement: the surrounding comment also says `canary=caught`, and
@@ -513,22 +581,50 @@ export function foundationStaticGuard(root = process.cwd()) {
     // challenge stopped being fresh - which is the whole point of it, because a fixed row is answerable by a
     // stub that hard-codes verdicts without running the predicate. Reproduced in both callers before this check.
     // The property is that nothing reassigns the variable, so assignments are COUNTED rather than more
-    // spellings being pinned.
+    // spellings being pinned. The first version of the count matched only `^ *$nonce = `, which PowerShell has
+    // at least four other spellings for: `${nonce} = 'fixed'`, `$nonce='fixed'`, `$script:nonce = 'fixed'` and
+    // `Set-Variable nonce 'fixed'` all reassign it and all left that count at one. So every WRITE form is
+    // counted, and any extra write - even one this file cannot interpret - makes the guard red rather than
+    // quiet, because a nonce that is not fresh is the same as no challenge at all.
     const nonceAssignment = /^ *(\$\w+) = \[Guid\]::NewGuid\(\)\.ToString\('N'\)$/m.exec(caller)
     if (!nonceAssignment) errors.push(`${id}:ownership-challenge-nonce-assigned-live`)
     else {
-      const reassignments = caller.split(/\r?\n/).filter((line) => new RegExp(`^ *\\${nonceAssignment[1]} = `).test(line))
-      if (reassignments.length !== 1) errors.push(`${id}:ownership-challenge-nonce-assigned-once`)
+      const nonceName = nonceAssignment[1].slice(1)
+      const assignment = new RegExp(`\\$(?:\\{${nonceName}\\}|(?:script:|global:|local:|private:|using:)?${nonceName}(?![\\w:]))\\s*(?:=|\\+=|-=|\\*=|/=|%=)`)
+      const setVariable = new RegExp(`Set-Variable\\b[^\\n]*(?:'|"|\\b)${nonceName}(?:'|"|\\b)`, 'i')
+      const reassignments = caller.split(/\r?\n/).filter((line) => assignment.test(line) || setVariable.test(line))
+      if (reassignments.length !== 1) errors.push(`${id}:ownership-challenge-nonce-assigned-once:${reassignments.length}`)
     }
-    // The per-index verification must be counted and the count consumed. A fresh-context review wrapped the
+    // The per-index verification must be RECORDED and RECONCILED. A fresh-context review wrapped the
     // answer-total check and the per-index loop in `if ($false) { ... }` in both callers: every pin in this
     // block still matched, because every pinned line was still in the file, and nothing measured that any of it
-    // RAN. Reproduced in both callers. A counter incremented inside the loop and compared after it turns a
-    // skipped block into a red lane, because a block that did not execute leaves the count at zero.
-    requireText(errors, caller, 'challenge answers this lane did not verify one by one', `${id}:ownership-answers-verified-count-consumed`)
+    // RAN. Reproduced in both callers. The first repair counted `$n++` on its own line after the comparison,
+    // which a later review defeated by wrapping only the comparison: the tick still fired once per row, so the
+    // count reached the expected total with nothing compared. What is recorded now is the accepted ANSWER - a
+    // value that exists only because the comparison produced it - and the recorded answers are reconciled
+    // against what the child printed, so a skipped comparison leaves an empty or null-filled list.
+    requireText(errors, caller, `${verified} = [Collections.Generic.List[string]]::new()`, `${id}:ownership-answers-recorded-as-values`)
+    requireText(errors, caller, `${verified}.Add(${accepted}[0])`, `${id}:ownership-accepted-answer-recorded`)
+    requireText(errors, caller, `if (((${verified} | Sort-Object) -join "\`n") -cne ((${collect.split(' = ')[0]} | Sort-Object) -join "\`n")) {`, `${id}:ownership-answers-reconciled`)
+    requireText(errors, caller, 'challenge answers this lane accepted one by one do not reconcile with the', `${id}:ownership-answers-verified-count-consumed`)
     requireMatch(errors, caller, /^ *@\{ Line = "node\.exe C:\\FarmRx\\node_modules\\vite\\bin\\vite\.js --nonce \$\w+"; .*Owned = \$true;/m, `${id}:ownership-challenge-nonce-row-owned`)
     requireMatch(errors, caller, /^ *@\{ Line = "node\.exe C:\\Other\\server\.js --nonce \$\w+"; .*Owned = \$false;/m, `${id}:ownership-challenge-nonce-row-unowned`)
   }
+
+  // The mutation drill's BEHAVIOURAL half, held by its callers. The drill has two halves: a static half that
+  // breaks a subject and requires the static guard to notice, and a behavioural half that breaks a subject and
+  // requires the SUITE THAT RUNS AGAINST IT to refuse by name. Only the second can tell a working predicate from
+  // one edited to `return $true`. Measured: wrapping the behavioural half in `if (false) { ... }` left the drill
+  // printing PASS, because the drill decided for itself what it had covered. So each caller states the count it
+  // requires - broken subjects reported, plus subjects this platform cannot see - and the counts differ by
+  // platform, which is why the two callers hold different sentences. A caller whose count no longer matches goes
+  // red, so neither half can be removed, disabled, or quietly shrunk from inside the drill.
+  requireText(errors, foundationWorkflow, "$expectedBehaviour = 'Foundation behavioural mutation drill: PASS (4 broken subjects were reported by the suite that runs against them, 1 not measurable on this platform)'", 'workflow:mutation-drill-behavioural-claim-held')
+  requireText(errors, foundationOrchestrator, "$expectedBehaviouralMarker = 'Foundation behavioural mutation drill: PASS (5 broken subjects were reported by the suite that runs against them, 0 not measurable on this platform)'", 'orchestrator:mutation-drill-behavioural-claim-held')
+  // And the claim must be CONSUMED, not merely stored. Both callers capture the drill's output and refuse when
+  // the sentence is absent, which is the only reason holding it is worth anything.
+  requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedBehaviour', 'workflow:mutation-drill-behavioural-claim-consumed')
+  requireText(errors, foundationOrchestrator, '$mutationDrill -cnotcontains $expectedBehaviouralMarker', 'orchestrator:mutation-drill-behavioural-claim-consumed')
 
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')

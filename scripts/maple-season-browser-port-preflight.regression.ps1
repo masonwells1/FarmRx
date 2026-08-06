@@ -570,8 +570,8 @@ public static class MapleSeasonArgv {
       'node.exe "C:\FarmRx\.. .\Other\x.js"'
       "node.exe `"C:\FarmRx\`t\Other\x.js`""
     )) {
-      $tokenizerComparisons++
-      [void]$tokenizerLinesCompared.Add($commandLine)
+      # Cleared FIRST so a stale agreement from the previous row cannot authorize the receipt below.
+      $agrees = $null
       $expected = @([MapleSeasonArgv]::Parse($commandLine))
       $actual = @(Split-MapleSeasonCommandLineArguments -CommandLine $commandLine)
       $agrees = $expected.Count -eq $actual.Count
@@ -582,6 +582,16 @@ public static class MapleSeasonArgv {
       }
       $rendered = "expected [$(($expected | ForEach-Object { "<$_>" }) -join ' ')] but produced [$(($actual | ForEach-Object { "<$_>" }) -join ' ')]"
       Assert-True $agrees "Split-MapleSeasonCommandLineArguments disagreed with CommandLineToArgvW on '$commandLine': $rendered."
+      # RECORDED AFTER the comparison, and gated on the comparison's own result rather than being a bare tick
+      # at the top of the loop. That is where these two lines used to sit, and a fresh-context review wrapped
+      # only the comparison in `if ($false) { ... }`: the receipt still read `comparisons=33 distinct=33`,
+      # every string the static guard pins was still present, and this file printed PASS with not one command
+      # line handed to CommandLineToArgvW. Reproduced before this move. Wrapping the comparison now leaves
+      # $agrees at $null, so nothing is recorded and the receipt falls short of the full table.
+      if ($agrees) {
+        $tokenizerComparisons++
+        [void]$tokenizerLinesCompared.Add($commandLine)
+      }
     }
     # The EMPTY command line is the one case where equivalence is not wanted, and it is asserted here
     # rather than quietly left out of the table above. Measured: CommandLineToArgvW('') returns ONE
