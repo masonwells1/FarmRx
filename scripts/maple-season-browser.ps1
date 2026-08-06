@@ -4,7 +4,7 @@ function Test-MapleSeasonCommandLineSeparator {
   # ASCII space and tab only; [char]::IsWhiteSpace also accepts a non-breaking space and a dozen other
   # characters that are legal in a Windows file name, which is how the sibling C:\FarmRx<NBSP>Backup came
   # to look like our root followed by a boundary. Measured True before this rule was ASCII-only.
-  # Splitting this test across the two loops in Split-MapleSeasonCommandLineArgument is what made that bug
+  # Splitting this test across the two loops in Split-MapleSeasonCommandLineArguments is what made that bug
   # worse than a wrong answer: with the inner loop stopping at a character the outer loop would not
   # consume, the parse made no progress and never returned. Measured - a widened inner test hung the
   # governed-port regression for four minutes with no output instead of failing it. One definition used by
@@ -12,7 +12,7 @@ function Test-MapleSeasonCommandLineSeparator {
   return ($Character -eq ' ' -or $Character -eq "`t")
 }
 
-function Split-MapleSeasonCommandLineArgument {
+function Split-MapleSeasonCommandLineArguments {
   param([string]$CommandLine)
   # Windows' own argument rules, implemented once, instead of scanning the raw command line for the
   # root text. Three consecutive reviews found a different false-TRUE in that scan, and each was the
@@ -123,7 +123,7 @@ function Split-MapleSeasonCommandLineArgument {
     # refuses to kill anything is to fail loudly: cleanup then reports a named internal failure instead of
     # either hanging or guessing.
     if ($index -eq $argumentStart) {
-      throw "Split-MapleSeasonCommandLineArgument made no progress at index $index; refusing to answer ownership from a partial parse."
+      throw "Split-MapleSeasonCommandLineArguments made no progress at index $index; refusing to answer ownership from a partial parse."
     }
   }
   return $arguments.ToArray()
@@ -274,7 +274,7 @@ function Test-MapleSeasonBrowserPortOwned {
   # reviews. Comparing arguments removes the whole class: a sibling such as C:\FarmRx<NBSP>Backup is
   # simply a different argument, not our root followed by something the boundary test has to classify.
   $rooted = $false
-  foreach ($argument in (Split-MapleSeasonCommandLineArgument -CommandLine $commandLine)) {
+  foreach ($argument in (Split-MapleSeasonCommandLineArguments -CommandLine $commandLine)) {
     if ([string]::IsNullOrEmpty($argument)) { continue }
     if (-not (Test-MapleSeasonArgumentIsInsideTree -Argument $argument -NormalizedRoot $normalizedRoot)) { continue }
     # Keep no early exit on a REFUSED argument: an unrelated leading argument such as

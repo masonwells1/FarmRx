@@ -144,10 +144,34 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationWorkflow, 'run: node scripts/foundation-static-guards.mjs', 'workflow:static-guards-run-independently')
   requireText(errors, foundationWorkflow, 'run: node scripts/verify-foundation-mutations.mjs', 'workflow:mutation-drill-run-independently')
   requireText(errors, foundationWorkflow, 'run: node scripts/foundation-windows-lane-runtime-drill.mjs', 'workflow:runtime-drill-run-independently')
+  // STRUCTURE, not text. Every pin above is a substring test, and a substring test cannot see the two
+  // one-line edits that switch a step off while leaving its whole body in place: `if: false` never runs it,
+  // and `continue-on-error: true` runs it and then ignores the result. Both would leave every pin in this
+  // file green. There is no YAML parser in node_modules, so the steps are sliced by indentation: a step
+  // begins at `      - name:` and its body is every following line indented further, up to the next step.
+  const governedSteps = ['Foundation static guards', 'Foundation mutation drill', 'Windows execution lane runtime drill', 'Season browser ownership regression', 'Run foundation gate']
+  const workflowLines = foundationWorkflow.split(/\r?\n/)
+  const stepStarts = workflowLines.map((line, index) => ({ line, index })).filter((entry) => /^ {6}- name: /.test(entry.line))
+  for (const name of governedSteps) {
+    const start = stepStarts.find((entry) => entry.line === `      - name: ${name}`)
+    if (!start) { errors.push(`workflow:governed-step-present:${name}`); continue }
+    const next = stepStarts.find((entry) => entry.index > start.index)
+    const body = workflowLines.slice(start.index + 1, next ? next.index : workflowLines.length)
+    // Stop at the end of the step even when it is the last one in the file, and only look at keys that
+    // belong to this step - eight spaces of indent - so a nested `if` inside a run: script is not confused
+    // for a step condition.
+    for (const bodyLine of body) {
+      if (/^ {6}\S/.test(bodyLine)) break
+      if (/^ {8}(if|continue-on-error):/.test(bodyLine)) errors.push(`workflow:governed-step-unconditional:${name}`)
+    }
+  }
+  // The job itself is the same hole one level up: `if: false` on the job disables all five steps at once.
+  requireMatch(errors, foundationWorkflow, /^ {2}foundation:\n {4}runs-on: /m, 'workflow:foundation-job-unconditional')
   requireText(errors, foundationOrchestrator, "Write-Output 'Farm Rx foundation gate: PASS'", 'orchestrator:completion-marker')
 
-  // The kill-authorizing predicate. This is the sole gate on the Stop-Process -Force in
-  // Clear-MapleSeasonBrowserPort, so a false TRUE terminates a process Farm Rx does not own. Matching
+  // The kill-authorizing predicate. This is the sole gate on the force kill in
+  // Clear-MapleSeasonBrowserPort - `$ownedProcess.Kill()`, on a process object taken before the check and
+  // not a re-looked-up id - so a false TRUE terminates a process Farm Rx does not own. Matching
   // the root text does not establish that the listener's path stays inside the tree that root names:
   // measured, root C:\FarmRx against `node.exe "C:\FarmRx\..\Other\scripts\factory-board.mjs"` answered
   // True. The traversal refusal is pinned here and executed by
@@ -157,7 +181,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // command line for the root text and then classifying the boundary by hand. That hand classification
   // produced a different false-TRUE in each of three consecutive reviews, so the pins below hold the
   // tokenizer's load-bearing rules rather than any one boundary test.
-  requireText(errors, seasonBrowser, 'foreach ($argument in (Split-MapleSeasonCommandLineArgument -CommandLine $commandLine)) {', 'season-browser:ownership-compares-whole-arguments')
+  requireText(errors, seasonBrowser, 'foreach ($argument in (Split-MapleSeasonCommandLineArguments -CommandLine $commandLine)) {', 'season-browser:ownership-compares-whole-arguments')
   // Windows splits on ASCII space and tab ONLY. [char]::IsWhiteSpace also accepts NBSP, which is legal in
   // a file name, so treating it as a separator made the sibling C:\FarmRx<NBSP>Backup look like our root
   // followed by a boundary. Measured True before this rule was ASCII-only. The rule is defined ONCE and
@@ -170,7 +194,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, seasonBrowser, "return ($Character -eq ' ' -or $Character -eq \"`t\")", 'season-browser:tokenizer-splits-on-ascii-space-and-tab-only')
   requireText(errors, seasonBrowser, 'if ((-not $inQuotes) -and (Test-MapleSeasonCommandLineSeparator -Character $character)) { break }', 'season-browser:tokenizer-breaks-argument-at-shared-separator')
   requireText(errors, seasonBrowser, 'while ($index -lt $length -and (Test-MapleSeasonCommandLineSeparator -Character $CommandLine[$index])) { $index++ }', 'season-browser:tokenizer-skips-shared-separator')
-  requireText(errors, seasonBrowser, 'throw "Split-MapleSeasonCommandLineArgument made no progress at index $index', 'season-browser:tokenizer-refuses-stalled-parse')
+  requireText(errors, seasonBrowser, 'throw "Split-MapleSeasonCommandLineArguments made no progress at index $index', 'season-browser:tokenizer-refuses-stalled-parse')
   // 2n backslashes then a quote: n backslashes, quote is a delimiter. 2n+1: n backslashes and a LITERAL
   // quote. Without this rule `--label "C:\FarmRx\safe\" --port 4177"` counted the escaped quote as a
   // closing delimiter and the predicate answered True for a listener running out of C:\Other. Measured.
@@ -233,7 +257,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // return to [bool] therefore tested nothing, and this drill could have gone green on a job that never
   // ran the tokenizer at all - which is exactly the class of vacuous pass the drill exists to prevent.
   requireText(errors, seasonBrowserRegression, "Assert-True ($stallJob.State -eq 'Completed')", 'season-browser-regression:stall-drill-requires-a-completed-job')
-  requireText(errors, seasonBrowserRegression, "$stallOutcome -like 'THREW: Split-MapleSeasonCommandLineArgument made no progress*'", 'season-browser-regression:stall-drill-requires-the-refusal')
+  requireText(errors, seasonBrowserRegression, "$stallOutcome -like 'THREW: Split-MapleSeasonCommandLineArguments made no progress*'", 'season-browser-regression:stall-drill-requires-the-refusal')
   // The empty command line is the ONE place this tokenizer deliberately disagrees with Windows, and the
   // divergence is asserted in both directions rather than omitted from the table. Windows answers an empty
   // command line with the path of the process asking - a fact about the caller, useless as evidence about
@@ -256,20 +280,73 @@ export function foundationStaticGuard(root = process.cwd()) {
   // the predicate exists, that two separate callers run it, and that it proves its own teeth each run.
   const ownershipRegression = read(root, 'scripts/maple-season-browser-ownership.regression.ps1')
   // The suite must gut the predicate in memory and require its own refusal table to reject the gutted
-  // copy - an EXACT-count match, so the whole table is proven reachable rather than one case of it. Delete
-  // this and the file becomes decoration that cannot distinguish a working predicate from `return $true`.
+  // copy. Delete this and the file becomes decoration that cannot distinguish a working predicate from
+  // `return $true`.
   requireText(errors, ownershipRegression, "Replace($firstGuard, \"  return `$true`n$firstGuard\")", 'ownership-regression:guts-the-predicate')
-  requireText(errors, ownershipRegression, 'Assert-True ($guttedClaims.Count -eq $portableRefusals.Count)', 'ownership-regression:refusals-reject-the-gutted-predicate')
-  requireText(errors, ownershipRegression, "function Split-MapleSeasonCommandLineArgumentGutted { param([string]$CommandLine) return @($CommandLine) }", 'ownership-regression:guts-the-tokenizer')
-  requireText(errors, ownershipRegression, "Measure-TokenizerDisagreement -FunctionName 'Split-MapleSeasonCommandLineArgumentGutted'", 'ownership-regression:table-rejects-the-gutted-tokenizer')
+  // The rejection is checked as a SET OF LABELS, not as a count. The count version was here and it was
+  // weaker than it read: N executions of one row satisfy a count of N. It was also measurably wrong, because
+  // `[string]$CommandLine` coerced a $null command line to '' and two rows became the same input. Both the
+  // set comparison and the distinct-input assertion are pinned, because either alone can be defeated.
+  requireText(errors, ownershipRegression, 'Assert-True ($uncaught.Count -eq 0)', 'ownership-regression:refusals-reject-the-gutted-predicate')
+  requireText(errors, ownershipRegression, 'Assert-True ($duplicateInputs.Count -eq 0)', 'ownership-regression:refusal-inputs-are-distinct')
+  requireText(errors, ownershipRegression, 'param($CommandLine, $Name = \'node.exe\')', 'ownership-regression:listener-preserves-a-null-command-line')
+  requireText(errors, ownershipRegression, "function Split-MapleSeasonCommandLineArgumentsGutted { param([string]$CommandLine) return @($CommandLine) }", 'ownership-regression:guts-the-tokenizer')
+  requireText(errors, ownershipRegression, "Measure-TokenizerDisagreement -FunctionName 'Split-MapleSeasonCommandLineArgumentsGutted'", 'ownership-regression:table-rejects-the-gutted-tokenizer')
   // Both gutting needles fail closed. A stale needle would otherwise leave the anti-vacuity check
   // silently testing an unmodified copy, which is the vacuous pass it exists to prevent.
   requireText(errors, ownershipRegression, 'the anti-vacuity check below would prove nothing', 'ownership-regression:gutting-anchor-fails-closed')
   requireText(errors, ownershipRegression, 'the gutting needle is stale and the anti-vacuity check would prove nothing', 'ownership-regression:gutting-needle-fails-closed')
   // It must call the predicate, not read it, and the refusals must be the portable half so the ubuntu job
-  // executes them. Gutted, the predicate fails 24 of these cases on Linux - measured.
+  // executes them. All 25 of those rows claim a gutted predicate, which is what makes the set comparison
+  // above an assertion about the whole table.
   requireText(errors, ownershipRegression, "foreach ($claimed in @(Measure-RefusalFailures -FunctionName 'Test-MapleSeasonBrowserPortOwned')) {", 'ownership-regression:calls-the-real-predicate')
   requireText(errors, ownershipRegression, 'if (& $FunctionName -ListenerProcess $case.Listener -Root $case.Root) { $wrong += $case.Label }', 'ownership-regression:refusals-are-executed')
+  // CHALLENGE/RESPONSE. The completion marker is a string, and a two-line file that prints it and exits 0
+  // was measured to satisfy both callers - the same "requires text, not behaviour" defect this whole suite
+  // exists to fix, one layer up. So the suite must publish how much of itself ran, and must answer command
+  // lines supplied by its caller using the REAL tokenizer and the REAL predicate.
+  // The portable table's expectations are HARD-CODED literals, claimed to have been measured from
+  // CommandLineToArgvW. That claim is only durable if something re-derives them from the real API, which the
+  // Windows socket regression does - and it was measured to be missing exactly one of them, so the claim was
+  // wrong by one line. This check keeps the two tables from drifting again: every plainly-quoted command line
+  // in the portable table must also appear in the file that re-derives it.
+  //
+  // The row count is stated twice on purpose, because the first version of this check stated it once and was
+  // wrong: 29 rows begin the table, but only 26 are single-quoted literals the pattern below can capture. The
+  // other THREE are built by expression, because they contain a character no single-quoted PowerShell string
+  // can carry - a tab, a non-breaking space, a tab inside quotes. A pattern that silently skipped three rows
+  // while the comment admitted only "a tab or a non-breaking space" would be exactly the defect this whole
+  // tranche exists to close, so the excluded rows are enumerated and pinned by hand below rather than waved at.
+  // Both spellings are required, because the two files build the same character differently and neither
+  // spelling proves the other is present.
+  const tokenizerRowStarts = (ownershipRegression.match(/^ {4}@\{ Line = /gm) ?? []).length
+  if (tokenizerRowStarts !== 29) errors.push('ownership-regression:tokenizer-row-count')
+  const portableTokenizerLines = [...ownershipRegression.matchAll(/^ {4}@\{ Line = '((?:[^']|'')*)'; Expected =/gm)].map((match) => match[1].replace(/''/g, "'"))
+  if (portableTokenizerLines.length !== 26) errors.push('ownership-regression:tokenizer-literal-count')
+  const preflightRegression = read(root, 'scripts/maple-season-browser-port-preflight.regression.ps1')
+  for (const line of portableTokenizerLines) {
+    if (!preflightRegression.includes(`'${line.replace(/'/g, "''")}'`)) errors.push(`ownership-regression:tokenizer-literal-rederived:${line}`)
+  }
+  // The three expression-built rows, each named, each with the spelling that must exist on BOTH sides.
+  const handPairedTokenizerRows = [
+    { label: 'tab-separated-arguments', portable: "@{ Line = 'node.exe'+[char]9+'C:\\FarmRx\\x.js'+[char]9+'--port'+[char]9+'4177'", live: 'node.exe`tC:\\FarmRx\\x.js`t--port`t4177' },
+    { label: 'non-breaking-space-in-a-path', portable: "@{ Line = ('node.exe C:\\FarmRx'+[char]0x00A0+'Backup\\server.js')", live: '("node.exe C:\\FarmRx{0}Backup\\server.js" -f $nonBreakingSpace)' },
+    { label: 'tab-inside-a-quoted-path', portable: "@{ Line = ('node.exe \"C:\\FarmRx\\'+[char]9+'\\Other\\x.js\"')", live: 'node.exe `"C:\\FarmRx\\`t\\Other\\x.js`"' },
+  ]
+  for (const row of handPairedTokenizerRows) {
+    requireText(errors, ownershipRegression, row.portable, `ownership-regression:hand-paired-row-present:${row.label}`)
+    requireText(errors, preflightRegression, row.live, `ownership-regression:hand-paired-row-rederived:${row.label}`)
+  }
+  requireText(errors, ownershipRegression, 'OWNERSHIP_MANIFEST tokenizer={0} refusals={1} gutted={2} windows={3} windowsCases={4} challenges={5}', 'ownership-regression:publishes-a-manifest')
+  requireText(errors, ownershipRegression, 'OWNERSHIP_CHALLENGE {0} owned={1} argv={2}', 'ownership-regression:answers-the-challenge')
+  // The challenge payload is Base64 on both sides. Two transport defects were MEASURED in this one parameter -
+  // `-File` binding an array to its first element only, and `-File` truncating a plain string at the first
+  // embedded double quote - and in both cases challenges vanished while the suite still printed its marker and
+  // exited 0. The encoding is therefore load-bearing and pinned on the decode side and on both encode sides,
+  // and `challenges=` in the manifest is what turns a lost challenge into a named failure.
+  requireText(errors, ownershipRegression, '$challengeLines = @([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Challenge)) -split ([char]0x1F))', 'ownership-regression:challenge-decoded-from-base64')
+  requireText(errors, ownershipRegression, '$challengeArgv = @(Split-MapleSeasonCommandLineArguments -CommandLine $challengeLine)', 'ownership-regression:challenge-uses-the-real-tokenizer')
+  requireText(errors, ownershipRegression, '$challengeOwned = [bool](Test-MapleSeasonBrowserPortOwned -ListenerProcess (New-Listener -CommandLine $challengeLine) -Root $ChallengeRoot)', 'ownership-regression:challenge-uses-the-real-predicate')
   // Its own slice must be unambiguous, and must actually contain the three functions under test.
   requireText(errors, ownershipRegression, 'declares Clear-MapleSeasonBrowserPort more than once', 'ownership-regression:slice-refuses-ambiguity')
   requireText(errors, ownershipRegression, 'function Test-MapleSeasonBrowserPortOwned', 'ownership-regression:slice-requires-the-predicate')
@@ -278,8 +355,26 @@ export function foundationStaticGuard(root = process.cwd()) {
   // marker, and a workflow step it does not invoke cannot be suppressed that way.
   requireText(errors, foundationWorkflow, './scripts/maple-season-browser-ownership.regression.ps1', 'workflow:ownership-regression-run-independently')
   requireText(errors, foundationWorkflow, "throw 'Season browser ownership regression did not print its completion marker.'", 'workflow:ownership-regression-marker-asserted')
-  requireText(errors, foundationOrchestrator, "$script:ownershipOutput = @(& (Get-FoundationProbeShell) -NoProfile -ExecutionPolicy Bypass -File $ownership)", 'orchestrator:ownership-regression-lane')
+  requireText(errors, foundationOrchestrator, "$script:ownershipOutput = @(& (Get-FoundationProbeShell) -NoProfile -ExecutionPolicy Bypass -File $ownership -Challenge $ownershipChallengeArgument -ChallengeRoot 'C:\\FarmRx')", 'orchestrator:ownership-regression-lane')
   requireText(errors, foundationOrchestrator, "if ($script:ownershipOutput -notcontains 'MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS') {", 'orchestrator:ownership-regression-marker-asserted')
+  // Each caller must hold answers of its own and require them. The marker assertions above are kept but they
+  // are no longer the whole gate: a marker is text, and these are behaviour. Both callers are pinned
+  // separately and deliberately hold the expectations longhand - a challenge whose answers live in one shared
+  // place is one edit away from being no challenge at all.
+  for (const [caller, id] of [[foundationWorkflow, 'workflow'], [foundationOrchestrator, 'orchestrator']]) {
+    requireText(errors, caller, 'OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=', `${id}:ownership-manifest-shape-asserted`)
+    requireText(errors, caller, 'manifest lines instead of exactly one; it did not run to completion.', `${id}:ownership-manifest-required-once`)
+    // The count of challenges the suite says it decoded, checked against the count this caller sent. Without
+    // this, a transport that eats challenges is caught only if a surviving argv happens to look wrong.
+    requireText(errors, caller, 'challenges=$(', `${id}:ownership-challenge-count-asserted`)
+    requireText(errors, caller, '[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(', `${id}:ownership-challenge-base64-encoded`)
+    requireText(errors, caller, 'OWNERSHIP_CHALLENGE $', `${id}:ownership-challenge-lines-required`)
+    // The live unrelated Node process that holds the governed port on the author's workstation. If the
+    // predicate ever answers TRUE for this line, the cleanup path force-kills it. Both callers must keep
+    // asking about exactly this string.
+    requireText(errors, caller, '"C:\\Program Files\\nodejs\\node.exe" scripts/factory-board.mjs --port 4177', `${id}:ownership-challenge-includes-the-live-foreign-listener`)
+    requireText(errors, caller, 'ResolverDependent', `${id}:ownership-challenge-marks-resolver-dependent-rows`)
+  }
 
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')

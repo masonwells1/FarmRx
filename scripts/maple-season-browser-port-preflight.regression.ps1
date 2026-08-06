@@ -195,8 +195,8 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   # Ownership boundary, asserted directly. The listener cases above can only put a process clearly
   # inside the owned root or clearly outside it, so they cannot reach the case that matters most:
   # a sibling directory that merely shares the root's name prefix. Test-MapleSeasonBrowserPortOwned
-  # gates the Stop-Process in Clear-MapleSeasonBrowserPort, so a true answer here would terminate
-  # somebody else's server.
+  # gates the force kill in Clear-MapleSeasonBrowserPort - `$ownedProcess.Kill()` - so a true answer here
+  # would terminate somebody else's server.
   $ownedRoot = 'C:\FarmRx'
   # ImageName is part of each case because the predicate tests the process image, not the command
   # line, for the node/npm/npx condition - an argument that merely mentions node_modules must not be
@@ -240,7 +240,7 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $anyListener)) 'Ownership test did not fail closed for a missing root.'
   Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $anyListener -Root '\')) 'Ownership test did not fail closed for a degenerate root.'
   # A root that does not name a directory under a drive or share is too broad to identify one tree, and
-  # rejecting only the empty root was not enough to catch that. True here authorizes Stop-Process.
+  # rejecting only the empty root was not enough to catch that. True here authorizes the force kill.
   #
   # Be exact about which of these are regressions, because an earlier version of this comment claimed
   # all of them were and that was wrong. Measured against the predicate at 599818e using the very
@@ -285,7 +285,7 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   # the drive; these reject the mirror image, where the root is exactly this repository and the
   # LISTENER's path walks back out of it. Measured against the predicate before this repair, root
   # C:\FarmRx against `node.exe "C:\FarmRx\..\Other\scripts\factory-board.mjs" --port 4177` answered
-  # True: the root text was found at a real separator, so the sole gate on Stop-Process -Force
+  # True: the root text was found at a real separator, so the sole gate on the force kill
   # authorized terminating a process running one directory over, outside the repository entirely.
   # Matching the root text does not establish that the path stays inside the tree the root names.
   foreach ($case in @(
@@ -441,7 +441,7 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   $stallJob = Start-Job -ScriptBlock {
     param([string]$FunctionSource, [string]$Line)
     Invoke-Expression $FunctionSource
-    try { @(Split-MapleSeasonCommandLineArgument -CommandLine $Line).Count }
+    try { @(Split-MapleSeasonCommandLineArguments -CommandLine $Line).Count }
     catch { "THREW: $($_.Exception.Message)" }
   } -ArgumentList $driftedSource, ("node.exe C:\FarmRx{0}Backup\server.js" -f ([char]0x00A0))
   try {
@@ -455,13 +455,13 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
     # ...and the value has to be the refusal, not merely SOME value. A drill that accepts any completion
     # would pass on the truncated argument list that was the previous, unsafe behaviour.
     $stallOutcome = [string](@(Receive-Job $stallJob) | Select-Object -Last 1)
-    Assert-True ($stallOutcome -like 'THREW: Split-MapleSeasonCommandLineArgument made no progress*') "A drifted separator test returned '$stallOutcome' instead of refusing to answer; a partial parse that still yields arguments can authorize killing a foreign process."
+    Assert-True ($stallOutcome -like 'THREW: Split-MapleSeasonCommandLineArguments made no progress*') "A drifted separator test returned '$stallOutcome' instead of refusing to answer; a partial parse that still yields arguments can authorize killing a foreign process."
   } finally {
     Remove-Job $stallJob -Force -ErrorAction SilentlyContinue
   }
 
   # The ownership predicate now decides containment by comparing whole ARGUMENTS, so every case above
-  # rests on Split-MapleSeasonCommandLineArgument splitting a command line the way Windows does. Three
+  # rests on Split-MapleSeasonCommandLineArguments splitting a command line the way Windows does. Three
   # consecutive reviews each found a different false-TRUE in the hand-written scan that preceded it, and
   # all three were the same mistake: deciding what a character means without tokenizing. Checking the
   # rules against my reading of the documentation is what produced those three rounds, so check them
@@ -539,6 +539,12 @@ public static class MapleSeasonArgv {
       '"node.exe'
       'node.exe one"'
       'node.exe "C:\FarmRx\..\Other\x.js'
+      # An UNQUOTED traversal followed by another argument. This was the one vector the portable ownership
+      # regression asserted as a hard-coded literal without any table ever re-deriving it from the real API -
+      # measured by diffing the two tables, one line out of twenty-nine. It matters because it is the shape
+      # the predicate must refuse: `C:\FarmRx\..` resolves to the drive root, so a listener spelled this way
+      # is not inside the tree, and the portable suite asserts exactly that refusal.
+      'node.exe C:\FarmRx\.. --port 4177'
       # Leading whitespace: Windows begins argv[0] at the first character, so this yields an EMPTY argv[0]
       # and then parses the rest normally. Skipping the whitespace instead parsed the program path under
       # the general rule, which is where its backslashes would have gone somewhere else.
@@ -550,7 +556,7 @@ public static class MapleSeasonArgv {
       "node.exe `"C:\FarmRx\`t\Other\x.js`""
     )) {
       $expected = @([MapleSeasonArgv]::Parse($commandLine))
-      $actual = @(Split-MapleSeasonCommandLineArgument -CommandLine $commandLine)
+      $actual = @(Split-MapleSeasonCommandLineArguments -CommandLine $commandLine)
       $agrees = $expected.Count -eq $actual.Count
       if ($agrees) {
         for ($position = 0; $position -lt $expected.Count; $position++) {
@@ -558,7 +564,7 @@ public static class MapleSeasonArgv {
         }
       }
       $rendered = "expected [$(($expected | ForEach-Object { "<$_>" }) -join ' ')] but produced [$(($actual | ForEach-Object { "<$_>" }) -join ' ')]"
-      Assert-True $agrees "Split-MapleSeasonCommandLineArgument disagreed with CommandLineToArgvW on '$commandLine': $rendered."
+      Assert-True $agrees "Split-MapleSeasonCommandLineArguments disagreed with CommandLineToArgvW on '$commandLine': $rendered."
     }
     # The EMPTY command line is the one case where equivalence is not wanted, and it is asserted here
     # rather than quietly left out of the table above. Measured: CommandLineToArgvW('') returns ONE
@@ -568,7 +574,7 @@ public static class MapleSeasonArgv {
     # direction: Windows must still return that one self-naming argument, and we must still return none.
     $emptyFromWindows = @([MapleSeasonArgv]::Parse(''))
     Assert-True ($emptyFromWindows.Count -eq 1) "CommandLineToArgvW no longer returns exactly one argument for an empty command line; it returned $($emptyFromWindows.Count), so the deliberate divergence below needs re-deciding rather than re-asserting."
-    Assert-True (@(Split-MapleSeasonCommandLineArgument -CommandLine '').Count -eq 0) 'Split-MapleSeasonCommandLineArgument answered an empty command line with arguments; the only safe answer is none, because Windows answers it with the path of the process asking.'
+    Assert-True (@(Split-MapleSeasonCommandLineArguments -CommandLine '').Count -eq 0) 'Split-MapleSeasonCommandLineArguments answered an empty command line with arguments; the only safe answer is none, because Windows answers it with the path of the process asking.'
   }
 
   Write-Output 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS'

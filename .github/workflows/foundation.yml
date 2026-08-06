@@ -52,10 +52,44 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $ownership = @(./scripts/maple-season-browser-ownership.regression.ps1)
+          # The marker alone was measured to be satisfiable by a two-line file that prints it and exits 0, so
+          # this step also challenges the suite with command lines whose answers are written out here. The
+          # expectations are longhand in both callers on purpose: a challenge is only a challenge if the party
+          # asking holds the answer independently. Row 1 is the live unrelated Node process that holds this
+          # port on the author's workstation and must never be judged ours - FALSE in every world, as are rows
+          # 2 and 3, each refused before the platform path resolver is consulted or by prefix arithmetic no
+          # resolver changes. Row 0 is `ResolverDependent`: TRUE on Windows, and off Windows this step requires
+          # the exact argv and requires an answer, but does not claim which verdict is right, because nobody
+          # has measured .NET's GetFullPath on Linux against this predicate. This job is ubuntu-latest, so that
+          # unclaimed case is the one that applies here, and the manifest states which world ran.
+          $rows = @(
+            @{ Line = 'node.exe C:\FarmRx\node_modules\vite\bin\vite.js --port 4177'; Argv = '<node.exe>|<C:\FarmRx\node_modules\vite\bin\vite.js>|<--port>|<4177>'; Owned = $true; ResolverDependent = $true }
+            @{ Line = '"C:\Program Files\nodejs\node.exe" scripts/factory-board.mjs --port 4177'; Argv = '<C:\Program Files\nodejs\node.exe>|<scripts/factory-board.mjs>|<--port>|<4177>'; Owned = $false; ResolverDependent = $false }
+            @{ Line = 'node.exe "C:\FarmRx"" Backup"\x.js'; Argv = '<node.exe>|<C:\FarmRx">|<Backup\x.js>'; Owned = $false; ResolverDependent = $false }
+            @{ Line = 'node.exe C:\FarmRx2\node_modules\vite\bin\vite.js'; Argv = '<node.exe>|<C:\FarmRx2\node_modules\vite\bin\vite.js>'; Owned = $false; ResolverDependent = $false }
+          )
+          $onWindows = ($null -eq $IsWindows) -or $IsWindows
+          # U+001F-joined then Base64 encoded, the same encoding the orchestrator uses. This step calls the suite
+          # in-process, so it never hit the `-File` binder defects the encoding exists to survive - it matches
+          # the orchestrator anyway, because two callers that encode differently would let a decode regression
+          # pass on one side and fail on the other.
+          $challenge = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((($rows | ForEach-Object { $_.Line }) -join ([char]0x1F))))
+          $ownership = @(./scripts/maple-season-browser-ownership.regression.ps1 -Challenge $challenge -ChallengeRoot 'C:\FarmRx')
           $ownership | ForEach-Object { Write-Output $_ }
           if ($ownership -notcontains 'MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS') {
             throw 'Season browser ownership regression did not print its completion marker.'
+          }
+          $manifest = @($ownership | Where-Object { $_ -like 'OWNERSHIP_MANIFEST *' })
+          if ($manifest.Count -ne 1) { throw "Season browser ownership regression printed $($manifest.Count) manifest lines instead of exactly one; it did not run to completion." }
+          $expected = "OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=$($onWindows.ToString().ToLowerInvariant()) windowsCases=$(if ($onWindows) { 24 } else { 0 }) challenges=$($rows.Count)"
+          if ($manifest[0] -cne $expected) { throw "Season browser ownership regression reported a different shape than this step requires.`n  expected: $expected`n  reported: $($manifest[0])" }
+          for ($i = 0; $i -lt $rows.Count; $i++) {
+            $verdicts = if ($rows[$i].ResolverDependent -and (-not $onWindows)) { @('TRUE', 'FALSE') } elseif ($rows[$i].Owned) { @('TRUE') } else { @('FALSE') }
+            $candidates = @($verdicts | ForEach-Object { "OWNERSHIP_CHALLENGE $i owned=$_ argv=$($rows[$i].Argv)" })
+            $matched = @($candidates | Where-Object { $ownership -ccontains $_ })
+            if ($matched.Count -ne 1) {
+              throw "Season browser ownership regression did not answer challenge $i as this step requires.`n  accepted: $($candidates -join ' OR ')`n  command line: $($rows[$i].Line)"
+            }
           }
       - name: Run foundation gate
         shell: pwsh

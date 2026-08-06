@@ -14,7 +14,7 @@ const files = [
   // outside it. All three have to exist in the baseline copy or the guard cannot run against it.
   'scripts/foundation-windows-lane-runtime-drill.mjs', 'scripts/maple-season-browser.ps1', '.github/workflows/foundation.yml',
   // The predicate's regression, because the guard now pins the tokenizer's equivalence table there: the
-  // rules in Split-MapleSeasonCommandLineArgument are only trustworthy while something compares them to
+  // rules in Split-MapleSeasonCommandLineArguments are only trustworthy while something compares them to
   // CommandLineToArgvW, so deleting that comparison has to fail the guard.
   'scripts/maple-season-browser-port-preflight.regression.ps1',
   // The behavioural suite over the same predicate. It is the only gate that can tell a working predicate
@@ -98,7 +98,7 @@ try {
   detected('intermediate foundation exit check removal', 'orchestrator:invoke-lane-statements')
   reset()
   // The Windows execution lane is the only thing in the repository that runs the port-ownership
-  // predicate gating Stop-Process, so every way of losing that coverage gets its own drill and must be
+  // predicate gating the force kill, so every way of losing that coverage gets its own drill and must be
   // reported as itself rather than as a generic count mismatch.
   //
   // The first drill is the one that matters most, and it is here because an adversarial review defeated
@@ -212,23 +212,44 @@ try {
   reset()
   // The behavioural suite over the kill-authorizing predicate, and the reason it exists: every mutation
   // in this file drills a SUBSTRING PIN, and inserting `return $true` at the top of the predicate was
-  // measured to leave this drill green with all of its mutations detected, because no pinned substring had
-  // moved. The four drills below therefore protect a suite that CALLS the predicate - its two callers, and
-  // the self-test that makes it non-vacuous.
+  // measured to leave this drill green with every one of its mutations detected, because no pinned substring
+  // had moved. The drills below therefore protect a suite that CALLS the predicate - its two callers, the
+  // self-test that makes it non-vacuous, and the challenge that makes its completion marker mean something.
   mutate('.github/workflows/foundation.yml', (source) => source.replace('./scripts/maple-season-browser-ownership.regression.ps1', 'echo skipped'))
   detected('CI stops running the ownership regression itself', 'workflow:ownership-regression-run-independently')
   reset()
-  mutate('scripts/verify-foundation.ps1', (source) => source.replace("\n    if ($ownershipOnWindows) { $script:ownershipOutput = @(& (Get-FoundationProbeShell) -NoProfile -ExecutionPolicy Bypass -File $ownership) }\n", "\n    if ($ownershipOnWindows) { $script:ownershipOutput = @('MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS') }\n"))
+  // Switching a governed step OFF without touching a single pinned string. Both of these leave every
+  // substring pin in foundation-static-guards.mjs satisfied, which is why that file now slices the workflow
+  // by indentation instead of only searching it. `if: false` never runs the step; `continue-on-error: true`
+  // runs it and discards the verdict; on the job, `if: false` takes all five governed steps down at once.
+  mutate('.github/workflows/foundation.yml', (source) => source.replace('      - name: Season browser ownership regression\n        shell: pwsh\n', '      - name: Season browser ownership regression\n        if: false\n        shell: pwsh\n'))
+  detected('a governed workflow step is disabled with a condition', 'workflow:governed-step-unconditional:Season browser ownership regression')
+  reset()
+  mutate('.github/workflows/foundation.yml', (source) => source.replace('      - name: Run foundation gate\n        shell: pwsh\n', '      - name: Run foundation gate\n        continue-on-error: true\n        shell: pwsh\n'))
+  detected('a governed workflow step keeps running but its failure is ignored', 'workflow:governed-step-unconditional:Run foundation gate')
+  reset()
+  mutate('.github/workflows/foundation.yml', (source) => source.replace('  foundation:\n    runs-on: ubuntu-latest', '  foundation:\n    if: false\n    runs-on: ubuntu-latest'))
+  detected('the whole foundation job is disabled with a condition', 'workflow:foundation-job-unconditional')
+  reset()
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("\n    if ($ownershipOnWindows) { $script:ownershipOutput = @(& (Get-FoundationProbeShell) -NoProfile -ExecutionPolicy Bypass -File $ownership -Challenge $ownershipChallengeArgument -ChallengeRoot 'C:\\FarmRx') }\n", "\n    if ($ownershipOnWindows) { $script:ownershipOutput = @('MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS') }\n"))
   detected('orchestrator forges the ownership regression marker instead of running it', 'orchestrator:ownership-regression-lane')
   reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("if ($script:ownershipOutput -notcontains 'MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS') {", 'if ($false) {'))
   detected('orchestrator stops requiring the ownership regression marker', 'orchestrator:ownership-regression-marker-asserted')
   reset()
   // The anti-vacuity self-test, degraded the way it would actually be degraded: "at least one case caught
-  // it" instead of "every case did". That passes while most of the table is unreachable, which is the
-  // vacuous pass the exact count exists to refuse.
-  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('Assert-True ($guttedClaims.Count -eq $portableRefusals.Count)', 'Assert-True ($guttedClaims.Count -gt 0)'))
+  // it" instead of "every case did". That passes while most of the table is unreachable.
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('Assert-True ($uncaught.Count -eq 0)', 'Assert-True ($uncaught.Count -lt 99)'))
   detected('ownership regression stops requiring its whole refusal table to catch a gutted predicate', 'ownership-regression:refusals-reject-the-gutted-predicate')
+  reset()
+  // The distinct-input assertion, and the re-typing that made it necessary. `[string]$CommandLine` coerces
+  // $null to '', which silently turned two refusal rows into one case wearing two labels - measured. Both the
+  // assertion and the de-typed parameter are drilled, because either one alone lets that back in.
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('Assert-True ($duplicateInputs.Count -eq 0)', 'Assert-True ($true)'))
+  detected('ownership regression stops requiring its refusal rows to be distinct inputs', 'ownership-regression:refusal-inputs-are-distinct')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace("param($CommandLine, $Name = 'node.exe')", "param([string]$CommandLine, [string]$Name = 'node.exe')"))
+  detected('ownership regression coerces a null command line to empty, collapsing two refusal rows into one', 'ownership-regression:listener-preserves-a-null-command-line')
   reset()
   mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('Replace($firstGuard, "  return `$true`n$firstGuard")', 'Replace($firstGuard, $firstGuard)'))
   detected('ownership regression stops actually gutting the predicate it claims to gut', 'ownership-regression:guts-the-predicate')
@@ -236,13 +257,69 @@ try {
   mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('if (& $FunctionName -ListenerProcess $case.Listener -Root $case.Root) { $wrong += $case.Label }', 'if ($false) { $wrong += $case.Label }'))
   detected('ownership regression stops calling the predicate at all', 'ownership-regression:refusals-are-executed')
   reset()
+  // CHALLENGE/RESPONSE. A two-line file printing the completion marker and exiting 0 was measured to satisfy
+  // both callers, so the marker alone proves nothing. These drills cover the whole chain: the suite must
+  // publish what it ran, must answer with the real tokenizer and the real predicate rather than a constant,
+  // and each caller must keep requiring both - including the one challenge line that names a live unrelated
+  // process on the governed port, which the cleanup path would force-kill if the predicate ever said TRUE.
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('OWNERSHIP_MANIFEST tokenizer={0} refusals={1} gutted={2} windows={3} windowsCases={4} challenges={5}', 'OWNERSHIP_MANIFEST ran'))
+  detected('ownership regression stops publishing how much of itself ran', 'ownership-regression:publishes-a-manifest')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('OWNERSHIP_CHALLENGE {0} owned={1} argv={2}', 'OWNERSHIP_CHALLENGE {0} answered'))
+  detected('ownership regression stops reporting its answers to the caller challenge', 'ownership-regression:answers-the-challenge')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('$challengeOwned = [bool](Test-MapleSeasonBrowserPortOwned -ListenerProcess (New-Listener -CommandLine $challengeLine) -Root $ChallengeRoot)', '$challengeOwned = $false'))
+  detected('ownership regression answers the challenge with a constant instead of the real predicate', 'ownership-regression:challenge-uses-the-real-predicate')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('$challengeArgv = @(Split-MapleSeasonCommandLineArguments -CommandLine $challengeLine)', '$challengeArgv = @($challengeLine)'))
+  detected('ownership regression answers the challenge without the real tokenizer', 'ownership-regression:challenge-uses-the-real-tokenizer')
+  reset()
+  // The portable tokenizer table's expectations are hard-coded; the Windows socket regression is what
+  // re-derives them from CommandLineToArgvW, and the two had already drifted by one line once. Three of the
+  // 29 rows contain a character no single-quoted PowerShell string can carry, so they are paired by hand -
+  // and a hand pairing is worth nothing unless removing either half turns the gate red. Drill all three
+  // halves that can go missing, plus silent growth of the table itself.
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('node.exe`tC:\\FarmRx\\x.js`t--port`t4177', 'node.exe C:\\FarmRx\\x.js --port 4177'))
+  detected('live tokenizer table stops re-deriving the tab-separated command line', 'ownership-regression:hand-paired-row-rederived:tab-separated-arguments')
+  reset()
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('("node.exe C:\\FarmRx{0}Backup\\server.js" -f $nonBreakingSpace)', "'node.exe C:\\FarmRx Backup\\server.js'"))
+  detected('live tokenizer table stops re-deriving the non-breaking-space path', 'ownership-regression:hand-paired-row-rederived:non-breaking-space-in-a-path')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace("@{ Line = ('node.exe \"C:\\FarmRx\\'+[char]9+'\\Other\\x.js\"')", "@{ Line = ('node.exe \"C:\\FarmRx\\ \\Other\\x.js\"')"))
+  detected('portable tokenizer table drops the tab inside a quoted path', 'ownership-regression:hand-paired-row-present:tab-inside-a-quoted-path')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace("    @{ Line = 'node.exe C:\\FarmRx\\x.js'", "    @{ Line = 'node.exe C:\\Added\\x.js'; Expected = @('node.exe', 'C:\\Added\\x.js') }\n    @{ Line = 'node.exe C:\\FarmRx\\x.js'"))
+  detected('portable tokenizer table grows a row nothing re-derives', 'ownership-regression:tokenizer-row-count')
+  reset()
+  // THE TRANSPORT. Two defects were measured in this one parameter, both silent: `-File` bound an array to its
+  // first element and dropped the rest, and then the joined plain string was truncated at the first embedded
+  // double quote - and one challenge row legitimately begins with a quote. Each time, challenges simply never
+  // arrived while the suite printed its marker and exited 0. So the Base64 encoding and the decoded-challenge
+  // COUNT are both drilled: reverting either is the exact regression that hid three challenges twice.
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('$challengeLines = @([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Challenge)) -split ([char]0x1F))', '$challengeLines = @($Challenge -split ([char]0x1F))'))
+  detected('ownership regression reads the challenge payload without decoding it', 'ownership-regression:challenge-decoded-from-base64')
+  reset()
+  for (const [path, id, collection] of [['.github/workflows/foundation.yml', 'workflow', '$rows'], ['scripts/verify-foundation.ps1', 'orchestrator', '$ownershipChallenge']]) {
+    mutate(path, (source) => source.replace('OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=', 'OWNERSHIP_MANIFEST tokenizer='))
+    detected(`${id} stops requiring the ownership regression to report its full size`, `${id}:ownership-manifest-shape-asserted`)
+    reset()
+    mutate(path, (source) => source.replace('"C:\\Program Files\\nodejs\\node.exe" scripts/factory-board.mjs --port 4177', 'node.exe C:\\Other\\server.js'))
+    detected(`${id} stops asking whether the live foreign listener on the governed port is ours`, `${id}:ownership-challenge-includes-the-live-foreign-listener`)
+    reset()
+    mutate(path, (source) => source.replace(` challenges=$(${collection}.Count)`, ''))
+    detected(`${id} stops checking how many challenges the ownership regression actually decoded`, `${id}:ownership-challenge-count-asserted`)
+    reset()
+    mutate(path, (source) => source.replace(`[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(((${collection} | ForEach-Object { $_.Line }) -join ([char]0x1F))))`, `((${collection} | ForEach-Object { $_.Line }) -join ([char]0x1F))`))
+    detected(`${id} sends the challenge payload unencoded, as the transport that ate it did`, `${id}:ownership-challenge-base64-encoded`)
+    reset()
+  }
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Write-Output 'Farm Rx foundation gate: PASS'", "Write-Output 'done'"))
   detected('foundation completion marker renamed', 'orchestrator:completion-marker')
   reset()
   // The kill-authorizing predicate. It now compares whole ARGUMENTS, parsed by Windows' own rules,
   // instead of searching the raw command line for the root text and classifying the boundary by hand.
   // Each drill below removes one rule that a measured false-TRUE depended on.
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('foreach ($argument in (Split-MapleSeasonCommandLineArgument -CommandLine $commandLine)) {', 'foreach ($argument in @($commandLine)) {'))
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('foreach ($argument in (Split-MapleSeasonCommandLineArguments -CommandLine $commandLine)) {', 'foreach ($argument in @($commandLine)) {'))
   detected('ownership predicate stops tokenizing and scans the raw command line again', 'season-browser:ownership-compares-whole-arguments')
   reset()
   // Windows splits on ASCII space and tab only. Widening that to [char]::IsWhiteSpace makes a
@@ -261,13 +338,13 @@ try {
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace('while ($index -lt $length -and (Test-MapleSeasonCommandLineSeparator -Character $CommandLine[$index])) { $index++ }', "while ($index -lt $length -and $CommandLine[$index] -eq ' ') { $index++ }"))
   detected('tokenizer stops using the shared separator rule to skip between arguments', 'season-browser:tokenizer-skips-shared-separator')
   reset()
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('throw "Split-MapleSeasonCommandLineArgument made no progress at index $index', 'Write-Verbose "no progress at index $index'))
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('throw "Split-MapleSeasonCommandLineArguments made no progress at index $index', 'Write-Verbose "no progress at index $index'))
   detected('tokenizer loses the guard that stops it stalling on one index', 'season-browser:tokenizer-refuses-stalled-parse')
   reset()
   // Degrading the refusal back to `break` is the specific regression that matters, because breaking LOOKS
   // fail-closed and is not: the truncated list contains the bare exact root, which is itself a containment
   // match, so it authorized killing the sibling's listener. Measured.
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('throw "Split-MapleSeasonCommandLineArgument made no progress at index $index', 'break; "no progress at index $index'))
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('throw "Split-MapleSeasonCommandLineArguments made no progress at index $index', 'break; "no progress at index $index'))
   detected('tokenizer degrades a stalled parse to a truncated argument list instead of refusing', 'season-browser:tokenizer-refuses-stalled-parse')
   reset()
   // The 2n / 2n+1 backslash rule. Without it a backslash-escaped quote reads as a delimiter, which is how
@@ -363,7 +440,7 @@ try {
   mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace("Assert-True ($stallJob.State -eq 'Completed')", 'Assert-True ([bool]$stallWaited)'))
   detected('stall drill accepts a failed job as proof the parse returned', 'season-browser-regression:stall-drill-requires-a-completed-job')
   reset()
-  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace("$stallOutcome -like 'THREW: Split-MapleSeasonCommandLineArgument made no progress*'", '$null -ne $stallOutcome'))
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace("$stallOutcome -like 'THREW: Split-MapleSeasonCommandLineArguments made no progress*'", '$null -ne $stallOutcome'))
   detected('stall drill accepts any completion instead of requiring the parse to refuse', 'season-browser-regression:stall-drill-requires-the-refusal')
   reset()
   // The empty command line is the one deliberate divergence from Windows, and it is asserted rather than

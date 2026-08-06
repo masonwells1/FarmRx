@@ -40,7 +40,7 @@ function Invoke-FoundationWindowsExecutionLane {
   $script:windowsExecutionLaneOutcome = $null
   $script:windowsExecutionOutput = @()
   # Every guard the repository holds over the governed-port preflight reads it as text. Nothing
-  # executed the ownership predicate that gates the Stop-Process in Clear-MapleSeasonBrowserPort: the
+  # executed the ownership predicate that gates the force kill in Clear-MapleSeasonBrowserPort: the
   # regression chain that does exercise it sat in scripts/ with no caller at all, so a defect in it
   # would have surfaced only when a season month either refused to clean up its own server or
   # terminated a process the proof does not own.
@@ -257,10 +257,49 @@ try {
   # null reading of it means Desktop, which is Windows. Passing the switch on the ubuntu runner would
   # fail the whole invocation, and omitting it on Windows can fail the whole invocation too.
   $ownershipOnWindows = ($null -eq $IsWindows) -or $IsWindows
+  # THE CHALLENGE. Requiring the child's completion marker was requiring a string again, which is the same
+  # mistake the child itself exists to fix: `Write-Output 'MAPLE_..._PASS'; exit 0` as the entire file was
+  # measured to satisfy this lane and the workflow step both. So this lane hands over command lines whose
+  # answers it holds here, and requires the child to report what the REAL tokenizer and the REAL predicate
+  # say about them. A child that has stopped executing cannot answer, and is refused.
+  #
+  # These expectations are written out longhand in BOTH callers rather than shared from one file, on purpose:
+  # the point of a challenge is that the asking party holds the answer independently. Every value below is
+  # derived from the documented Windows split, not copied from a run - rows 0, 1 and 3 are plain whitespace
+  # splitting with one quoted program path, and row 2's doubled quote is the construct measured against the
+  # real CommandLineToArgvW in the child's own tokenizer table.
+  #
+  # Which answers are claimed WHERE, stated exactly, because overclaiming here turns a CI job red for a
+  # reason that is not a defect. The argv column is a pure string split and is required on every platform.
+  # The owned column is required on every platform for three of the four rows, each of which the predicate
+  # refuses before it ever consults the platform path resolver or by prefix arithmetic that no resolver
+  # changes: row 1's script path is relative, row 2 carries a doubled quote, row 3 begins with the root's
+  # text but breaks at the directory boundary. Row 0 is the one row whose answer the resolver decides, and
+  # `ResolverDependent` marks it: on Windows it must be TRUE, and off Windows this lane requires the child to
+  # answer with the exact argv but does not claim to know which verdict is correct, because I have not
+  # measured .NET's GetFullPath on Linux and reasoning about it is how the earlier false answers were
+  # written. Row 1 is the live unrelated Node process on the governed port; it must answer FALSE in every
+  # world, and it is the one assertion here that speaks directly to the accident the predicate prevents.
+  $ownershipChallenge = @(
+    @{ Line = 'node.exe C:\FarmRx\node_modules\vite\bin\vite.js --port 4177'; Argv = '<node.exe>|<C:\FarmRx\node_modules\vite\bin\vite.js>|<--port>|<4177>'; Owned = $true; ResolverDependent = $true }
+    @{ Line = '"C:\Program Files\nodejs\node.exe" scripts/factory-board.mjs --port 4177'; Argv = '<C:\Program Files\nodejs\node.exe>|<scripts/factory-board.mjs>|<--port>|<4177>'; Owned = $false; ResolverDependent = $false }
+    @{ Line = 'node.exe "C:\FarmRx"" Backup"\x.js'; Argv = '<node.exe>|<C:\FarmRx">|<Backup\x.js>'; Owned = $false; ResolverDependent = $false }
+    @{ Line = 'node.exe C:\FarmRx2\node_modules\vite\bin\vite.js'; Argv = '<node.exe>|<C:\FarmRx2\node_modules\vite\bin\vite.js>'; Owned = $false; ResolverDependent = $false }
+  )
+  # Joined by U+001F - which cannot occur in a Windows command line - and then BASE64 encoded. Both halves are
+  # measured repairs, not caution:
+  #   1. One delimited string rather than an array, because `-File` binding was measured to keep only the FIRST
+  #      element of an array and silently drop the rest: three of four challenges never asked, exit 0.
+  #   2. Base64 on top of that, because the joined string was then measured to truncate AT THE FIRST DOUBLE
+  #      QUOTE through `-File` - challenge 1 arrived as `C:\Program` and challenges 2 and 3 never arrived - and
+  #      row 1 below legitimately begins with a quote. A delimiter no command line can contain does not help
+  #      when the QUOTING is what breaks; Base64's alphabet leaves nothing for any binder to reinterpret.
+  # The manifest assertion below pins the decoded challenge COUNT, so a payload eaten in transit fails by name.
+  $ownershipChallengeArgument = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((($ownershipChallenge | ForEach-Object { $_.Line }) -join ([char]0x1F))))
   $script:ownershipOutput = @()
   Invoke-FoundationLane {
-    if ($ownershipOnWindows) { $script:ownershipOutput = @(& (Get-FoundationProbeShell) -NoProfile -ExecutionPolicy Bypass -File $ownership) }
-    else { $script:ownershipOutput = @(& (Get-FoundationProbeShell) -NoProfile -File $ownership) }
+    if ($ownershipOnWindows) { $script:ownershipOutput = @(& (Get-FoundationProbeShell) -NoProfile -ExecutionPolicy Bypass -File $ownership -Challenge $ownershipChallengeArgument -ChallengeRoot 'C:\FarmRx') }
+    else { $script:ownershipOutput = @(& (Get-FoundationProbeShell) -NoProfile -File $ownership -Challenge $ownershipChallengeArgument -ChallengeRoot 'C:\FarmRx') }
   } 'Season browser ownership regression failed.'
   # Relay the child's output, then require its marker. The exit code alone accepts a regression edited to
   # return before running anything, which exits 0 having proved nothing. The child prints no paths beyond
@@ -268,6 +307,27 @@ try {
   foreach ($line in $script:ownershipOutput) { Write-Output $line }
   if ($script:ownershipOutput -notcontains 'MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS') {
     throw 'Season browser ownership regression did not print its completion marker.'
+  }
+  # The manifest says how much of the child ran. Sizes are pinned exactly, so a table emptied down to one
+  # surviving case cannot pass by still printing the marker; `gutted` must equal `refusals`, which is the
+  # child's own proof that its refusal table rejects an unconditionally-authorizing predicate.
+  $ownershipManifest = @($script:ownershipOutput | Where-Object { $_ -like 'OWNERSHIP_MANIFEST *' })
+  if ($ownershipManifest.Count -ne 1) { throw "Season browser ownership regression printed $($ownershipManifest.Count) manifest lines instead of exactly one; it did not run to completion." }
+  $expectedOwnershipManifest = "OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=$($ownershipOnWindows.ToString().ToLowerInvariant()) windowsCases=$(if ($ownershipOnWindows) { 24 } else { 0 }) challenges=$($ownershipChallenge.Count)"
+  if ($ownershipManifest[0] -cne $expectedOwnershipManifest) { throw "Season browser ownership regression reported a different shape than this lane requires.`n  expected: $expectedOwnershipManifest`n  reported: $($ownershipManifest[0])" }
+  for ($ownershipIndex = 0; $ownershipIndex -lt $ownershipChallenge.Count; $ownershipIndex++) {
+    $ownershipRow = $ownershipChallenge[$ownershipIndex]
+    # Exactly one of these lines must be present. Where the verdict is claimed there is one candidate, so this
+    # is an exact-string requirement; where it is not claimed there are two, so the argv is still exact and
+    # the child must still have produced an answer, which is the property that refuses a suite that stopped
+    # executing. Building candidate strings avoids a wildcard match, which would silently accept a row whose
+    # argv contained a wildcard character.
+    $ownershipVerdicts = if ($ownershipRow.ResolverDependent -and (-not $ownershipOnWindows)) { @('TRUE', 'FALSE') } elseif ($ownershipRow.Owned) { @('TRUE') } else { @('FALSE') }
+    $ownershipCandidates = @($ownershipVerdicts | ForEach-Object { "OWNERSHIP_CHALLENGE $ownershipIndex owned=$_ argv=$($ownershipRow.Argv)" })
+    $ownershipMatched = @($ownershipCandidates | Where-Object { $script:ownershipOutput -ccontains $_ })
+    if ($ownershipMatched.Count -ne 1) {
+      throw "Season browser ownership regression did not answer challenge $ownershipIndex as this lane requires.`n  accepted: $($ownershipCandidates -join ' OR ')`n  command line: $($ownershipRow.Line)"
+    }
   }
   # The season contract gate was reachable only when an operator typed `npm run verify:season` by
   # hand - no workflow and no hook ran it - so the structural guards it holds, including the
