@@ -575,16 +575,54 @@ try {
   // The empty command line is the one deliberate divergence from Windows, and it is asserted rather than
   // omitted. Windows answers an empty line with the path of the process ASKING, which is a fact about the
   // caller and worthless as evidence about a listener.
-  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('Assert-True ($emptyFromWindows.Count -eq 1)', 'Assert-True ($true)'))
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace("Assert-True (($emptyFromWindows -join ' ') -ceq $askingProcessPath)", 'Assert-True ($true)'))
   detected('predicate regression stops asserting the deliberate empty-command-line divergence', 'season-browser-regression:empty-divergence-is-asserted')
   reset()
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace('# ONE deliberate divergence from CommandLineToArgvW', '# a divergence'))
   detected('tokenizer stops declaring its one deliberate divergence from Windows', 'season-browser:empty-divergence-is-declared')
   reset()
-  // The cleanup kill itself. Killing by number rather than through the validated object reopens the
-  // window in which that number can come to mean a different process, and this is a force kill.
-  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('$ownedProcess.Kill()', 'Stop-Process -Id $listener.OwningProcess -Force -ErrorAction Stop'))
-  detected('cleanup kills by process id instead of the validated object', 'season-browser:cleanup-kills-validated-object')
+  // The cleanup kill itself. Killing by NUMBER rather than through the handle that was opened before the
+  // ownership check reopens the window in which that number can come to mean a different process, and this
+  // is a force kill on Mason's own workstation. The needle here used to be `$ownedProcess.Kill()`, and it
+  // went stale when the cleanup was rewritten to hold an OS handle - the drill named the stale needle and
+  // failed the gate rather than silently testing unmodified source, which is what that guard is for.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('[MapleSeasonProcessInterop]::TerminateProcess($target.Handle, 1)', '(Stop-Process -Id $target.ProcessId -Force -ErrorAction Stop)'))
+  detected('cleanup kills by process id instead of the handle it validated', 'season-browser:cleanup-terminates-through-the-validated-handle')
+  reset()
+  // Measured, and this is why the handle and not the .NET Process object is the pin: haveProcessHandle stayed
+  // False and m_processHandle stayed null across .StartTime, .HasExited and .Kill(), so every one of those
+  // re-resolved the id at call time. Validating without holding a handle leaves the id free to change hands.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('[MapleSeasonProcessInterop]::OpenProcess(', '[MapleSeasonProcessInterop]::OpenProcessWithoutPinning('))
+  detected('cleanup validates a listener without holding a handle that reserves its id', 'season-browser:cleanup-opens-a-handle-before-validating')
+  reset()
+  // F15: terminate each listener as soon as it validates, instead of validating every listener first. One
+  // port can hold two listeners - measured, one on 127.0.0.1 and one on ::1, enumerated IPv6-first - so a
+  // one-pass cleanup kills the owned one and then refuses on the foreign one, having already killed. Both
+  // occurrences are renamed, because the guard reads presence and the finally block holds the second.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.split('foreach ($target in $validated) {').join('foreach ($target in $validatedSoFar) {'))
+  detected('cleanup no longer separates validating every listener from terminating any', 'season-browser:cleanup-validates-every-listener-before-terminating-any')
+  reset()
+  // F17: a listener query that cannot tell a FREE port from a BROKEN query. Measured, Get-NetTCPConnection
+  // on a free port with -ErrorAction Stop throws CmdletizationQuery_NotFound, so the two are distinguishable
+  // and swallowing every error conflates them - which would report a governed port as free and let the
+  // scenario proceed against a port it does not hold.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') { return @() }", 'return @()'))
+  detected('listener probe treats a broken listener query as a free port', 'season-browser:listener-probe-fails-closed')
+  reset()
+  // And the probe has to be the ONLY way this file asks Windows for the listener table. A second, direct
+  // Get-NetTCPConnection call site is how F17 got in: the fail-closed probe stays intact and correct while
+  // the caller that matters routes around it.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace('$listeners = @(Get-MapleSeasonPortListener -Port $Port -Scenario $Scenario)', '$listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)'))
+  detected('a second direct listener query bypasses the fail-closed probe', 'season-browser:listener-probe-is-the-only-net-query (found 2 Get-NetTCPConnection call sites, expected 1 - the one inside Get-MapleSeasonPortListener)')
+  reset()
+  // The tokenizer receipt's per-row clear. Only $agrees was cleared, so a wrapped parse left $expected
+  // holding the previous row's array and the token total carried forward instead of falling short. Removing
+  // the clear of $expected is that defect exactly.
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('      $agrees = $null\n      $expected = $null\n', '      $agrees = $null\n'))
+  detected('tokenizer receipt lets a row carry the previous row\'s parse', 'season-browser-regression:tokenizer-parses-cleared-per-row')
+  reset()
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('Assert-True ($null -ne $expected -and $expected.Count -gt 0)', 'Assert-True ($true)'))
+  detected('tokenizer receipt stops requiring a parse from this iteration', 'season-browser-regression:tokenizer-receipt-recorded-after-the-comparison')
   reset()
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace('no longer identifies the listener it validated', 'is fine'))
   detected('cleanup stops re-checking the validated process identity', 'season-browser:cleanup-rechecks-process-identity')

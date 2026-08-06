@@ -328,23 +328,25 @@ await runReplacementIsolationMutation(
   /^scripts\/maple-season-browser\.ps1 starts its browser process before the governed-port preflight\.$/,
 );
 
-// Two functions query the governed port, and String.replace rewrites only the first match. Naming
-// one drill "governed-port check" mutated whichever occurrence came first in the file - the cleanup
-// query - so the preflight's own query was never actually exercised. Anchor each drill on its
-// function's last parameter, which is the only text that distinguishes the two call sites.
+// This was TWO drills, one per querying function, anchored on each function's last parameter because
+// String.replace rewrites only the first match and an unanchored drill therefore only ever exercised
+// whichever query came first in the file. Both needles are now stale, and they went stale in the safe
+// direction: this regression went red and named the missing text rather than passing over a file it no
+// longer describes. The preflight and the cleanup no longer hold a query each - they both call
+// Get-MapleSeasonPortListener, which holds the single remaining Get-NetTCPConnection in the file, and
+// scripts/foundation-static-guards.mjs counts those call sites and fails if a second one appears. So
+// there is exactly one place left where the address filter can be narrowed, and one drill covers it.
+//
+// First-match-only is not a hazard for THIS drill the way it was for the previous pair: the contract
+// rule it exercises is a whole-file prohibition on `Get-NetTCPConnection -LocalAddress`, so narrowing
+// any single occurrence anywhere in the file trips it. The old pair was not about the prohibition, it
+// was about proving each function's own query got mutated - a property the single shared probe now
+// makes true by construction.
 await runReplacementIsolationMutation(
-  "governed-port preflight check narrowed to loopback",
+  "governed-port listener probe narrowed to loopback",
   "scripts/maple-season-browser.ps1",
-  "[Parameter(Mandatory)][string]$Root\n  )\n  $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen",
-  "[Parameter(Mandatory)][string]$Root\n  )\n  $listeners = @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen",
-  /^scripts\/maple-season-browser\.ps1 port checks do not fail closed for wildcard or IPv6 listeners\.$/,
-);
-
-await runReplacementIsolationMutation(
-  "governed-port cleanup check narrowed to loopback",
-  "scripts/maple-season-browser.ps1",
-  "[Parameter(Mandatory)][string]$Scenario\n  )\n  $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen",
-  "[Parameter(Mandatory)][string]$Scenario\n  )\n  $listeners = @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen",
+  "  try {\n    return @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop)",
+  "  try {\n    return @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen -ErrorAction Stop)",
   /^scripts\/maple-season-browser\.ps1 port checks do not fail closed for wildcard or IPv6 listeners\.$/,
 );
 

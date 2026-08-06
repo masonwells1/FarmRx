@@ -300,45 +300,150 @@ function Clear-MapleSeasonBrowserPort {
     [Parameter(Mandatory)][string]$Root,
     [Parameter(Mandatory)][string]$Scenario
   )
-  $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
-  foreach ($listener in $listeners) {
-    # Take the process object BEFORE validating ownership. A process id is not a durable identity: the
-    # validated process can exit and Windows can hand its number to something unrelated, and what
-    # follows is a force kill. Holding the object first, then killing through it rather than by number,
-    # removes the window in which the id could come to mean a different process.
-    $ownedProcess = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
-    if ($null -eq $ownedProcess) { continue }
-    $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($ownedProcess.Id)" -ErrorAction SilentlyContinue
-    $owned = Test-MapleSeasonBrowserPortOwned -ListenerProcess $listenerProcess -Root $Root
-    if (-not $owned) {
-      throw "$Scenario found an unrecognized listener on governed port $Port; refusing to terminate it."
+  Initialize-MapleSeasonProcessInterop
+  $listeners = @(Get-MapleSeasonPortListener -Port $Port -Scenario $Scenario)
+  # TWO PASSES, and the split is the point. The previous version validated and killed one listener at a
+  # time, so a port held by an owned listener AND a foreign one left the owned one already dead when the
+  # foreign one threw - a refusal that had by then terminated something. MEASURED, not reasoned: with the
+  # previous version the owned listener was killed and the call still reported "refusing to terminate it";
+  # with this version both listeners were still running after the same refusal. A port can genuinely hold
+  # more than one listener - two node processes were measured holding one port together, one bound to
+  # 127.0.0.1 and one to ::1, and Get-NetTCPConnection returned both rows, in IPv6-first order, which is
+  # not creation order, so nothing about the ordering can be relied on either. Validate every listener
+  # before terminating any of them.
+  $handle = [IntPtr]::Zero
+  $validated = @()
+  try {
+    foreach ($listener in $listeners) {
+      $listenerId = [int]$listener.OwningProcess
+      # Open the handle FIRST and do everything else through it. Get-Process was MEASURED to pin nothing:
+      # haveProcessHandle stayed False and m_processHandle stayed null before, during and after
+      # .StartTime, .HasExited and after the child exited - so those and .Kill() each re-resolve the id at
+      # call time, and the old comment claiming the object "removes the window in which the id could come
+      # to mean a different process" was false. An open handle is what actually removes it: the kernel
+      # keeps the process object, and therefore reserves its id, until the last handle closes. Measured:
+      # after the process died, GetProcessTimes on the same handle still answered with a nonzero exit
+      # time.
+      $handle = [MapleSeasonProcessInterop]::OpenProcess(
+        [MapleSeasonProcessInterop]::PROCESS_QUERY_LIMITED_INFORMATION -bor [MapleSeasonProcessInterop]::PROCESS_TERMINATE -bor [MapleSeasonProcessInterop]::SYNCHRONIZE,
+        $false,
+        [uint32]$listenerId)
+      if ($handle -eq [IntPtr]::Zero) {
+        # Cannot inspect it, so cannot claim it. Refusing costs a cleanup diagnosis; the old code
+        # `continue`d past an unreadable listener and let the drain loop below fail with a message about
+        # a port that would not release, which named neither the process nor the reason.
+        throw "$Scenario could not open the listener holding governed port $Port (pid $listenerId, Windows error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())); refusing to terminate it."
+      }
+      $creation = 0L; $exited = 0L; $kernel = 0L; $user = 0L
+      if (-not [MapleSeasonProcessInterop]::GetProcessTimes($handle, [ref]$creation, [ref]$exited, [ref]$kernel, [ref]$user)) {
+        throw "$Scenario could not read the start time of the listener holding governed port $Port (pid $listenerId); refusing to terminate it."
+      }
+      if ($exited -ne 0) {
+        # Already gone. Our handle still reserves the id, so nothing else can be behind it; drop it and
+        # let the drain loop confirm the port is released.
+        [void][MapleSeasonProcessInterop]::CloseHandle($handle)
+        $handle = [IntPtr]::Zero
+        continue
+      }
+      # The ownership predicate needs the command line, which only WMI carries. Querying by id is safe
+      # HERE and nowhere else in this function: our handle already reserves that id, so this row cannot
+      # describe some other live process that inherited the number.
+      $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $listenerId" -ErrorAction SilentlyContinue
+      if ($null -eq $listenerProcess -or $null -eq $listenerProcess.CreationDate) {
+        throw "$Scenario could not read the command line of the listener holding governed port $Port (pid $listenerId); refusing to terminate it."
+      }
+      # Confirm the snapshot the predicate is about to judge describes the process this handle holds.
+      # Ten FILETIME ticks - one microsecond - is the documented granularity of a CIM datetime, and it was
+      # MEASURED against the kernel across 304 processes on this workstation: max disagreement 9 ticks,
+      # median 4, and only 34 of 304 exactly equal. So exact equality would refuse almost every real
+      # cleanup, and the previous one-SECOND window was a hundred million times looser than the
+      # measurement needs - wide enough to accept a replacement born inside it.
+      $snapshotTicks = $listenerProcess.CreationDate.ToUniversalTime().ToFileTimeUtc()
+      if ([Math]::Abs($creation - $snapshotTicks) -gt 10) {
+        throw "$Scenario found the process id holding governed port $Port no longer identifies the listener it validated; refusing to terminate it."
+      }
+      if (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $listenerProcess -Root $Root)) {
+        throw "$Scenario found an unrecognized listener on governed port $Port; refusing to terminate it."
+      }
+      $validated += [pscustomobject]@{ Handle = $handle; ProcessId = $listenerId }
+      $handle = [IntPtr]::Zero
     }
-    # Confirm the object about to be killed is the one that was validated. The ownership test ran against
-    # a WMI snapshot; comparing that snapshot's creation time to the live object's start time is what
-    # detects an id that changed hands between the two reads. Refusing is the fail-closed answer: it
-    # costs a cleanup diagnosis, where guessing costs an unrelated process.
-    $validatedStart = $null
-    if ($null -ne $listenerProcess) { $validatedStart = $listenerProcess.CreationDate }
-    if ($null -eq $validatedStart) {
-      throw "$Scenario could not read the start time of the listener on governed port $Port; refusing to terminate it."
+
+    # Pass two. Every listener above is owned, and each is terminated through the handle that validated
+    # it, so no id is resolved a second time and nothing can change hands in between.
+    foreach ($target in $validated) {
+      if (-not [MapleSeasonProcessInterop]::TerminateProcess($target.Handle, 1)) {
+        $lastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        $creation = 0L; $exited = 0L; $kernel = 0L; $user = 0L
+        $alreadyGone = [MapleSeasonProcessInterop]::GetProcessTimes($target.Handle, [ref]$creation, [ref]$exited, [ref]$kernel, [ref]$user) -and $exited -ne 0
+        if (-not $alreadyGone) {
+          throw "$Scenario could not terminate its owned listener on governed port $Port (pid $($target.ProcessId), Windows error $lastError)."
+        }
+      }
+      # WAIT_OBJECT_0 is 0; anything else (WAIT_TIMEOUT 0x102, WAIT_FAILED 0xFFFFFFFF) is a failure.
+      if ([MapleSeasonProcessInterop]::WaitForSingleObject($target.Handle, 10000) -ne 0) {
+        throw "$Scenario browser server did not terminate within ten seconds."
+      }
     }
-    if ([Math]::Abs((New-TimeSpan -Start $validatedStart -End $ownedProcess.StartTime).TotalSeconds) -gt 1) {
-      throw "$Scenario found the process id on governed port $Port no longer identifies the listener it validated; refusing to terminate it."
-    }
-    if ($ownedProcess.HasExited) { continue }
-    $ownedProcess.Kill()
-    if (-not $ownedProcess.WaitForExit(10000)) {
-      throw "$Scenario browser server did not terminate within ten seconds."
-    }
+  } finally {
+    foreach ($target in $validated) { [void][MapleSeasonProcessInterop]::CloseHandle($target.Handle) }
+    if ($handle -ne [IntPtr]::Zero) { [void][MapleSeasonProcessInterop]::CloseHandle($handle) }
   }
 
   $deadline = [DateTime]::UtcNow.AddSeconds(10)
   do {
-    $remaining = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    $remaining = @(Get-MapleSeasonPortListener -Port $Port -Scenario $Scenario)
     if ($remaining.Count -eq 0) { return }
     Start-Sleep -Milliseconds 100
   } while ([DateTime]::UtcNow -lt $deadline)
   throw "$Scenario browser server cleanup did not release governed port $Port."
+}
+
+function Initialize-MapleSeasonProcessInterop {
+  # Declared AFTER the Clear-MapleSeasonBrowserPort boundary on purpose:
+  # maple-season-browser-ownership.regression.ps1 slices everything above that line and dot-sources it as
+  # pure functions, and that suite must not start compiling interop to test string handling.
+  if ('MapleSeasonProcessInterop' -as [type]) { return }
+  Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class MapleSeasonProcessInterop {
+  public const uint PROCESS_TERMINATE = 0x0001;
+  public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+  public const uint SYNCHRONIZE = 0x00100000;
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern bool TerminateProcess(IntPtr process, uint exitCode);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern bool CloseHandle(IntPtr handle);
+}
+'@
+}
+
+function Get-MapleSeasonPortListener {
+  param(
+    [Parameter(Mandatory)][int]$Port,
+    [Parameter(Mandatory)][string]$Scenario
+  )
+  # -ErrorAction Stop, not SilentlyContinue. Both callers used to swallow every error, and both read the
+  # resulting empty list as "nothing is listening" - so a query that FAILED reported the port clean and
+  # the cleanup reported done. That fails OPEN, which is the one direction this file must never fail.
+  # Measured: an empty result raises Microsoft.PowerShell.Cmdletization.Cim.CimJobException with
+  # FullyQualifiedErrorId 'CmdletizationQuery_NotFound,Get-NetTCPConnection' and category ObjectNotFound,
+  # so "nothing is listening" IS distinguishable from a broken query. Only that one error means empty.
+  # This is the ONLY call to Get-NetTCPConnection in this file, pinned as such by
+  # scripts/foundation-static-guards.mjs, so no caller can reintroduce a fail-open probe of its own.
+  try {
+    return @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop)
+  } catch {
+    if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') { return @() }
+    throw "$Scenario could not read the listener table for governed port $Port, so it cannot tell an occupied port from a free one: $($_.Exception.Message)"
+  }
 }
 
 function Assert-MapleSeasonBrowserPortFree {
@@ -348,7 +453,10 @@ function Assert-MapleSeasonBrowserPortFree {
     [Parameter(Mandatory)][string]$PortVariable,
     [Parameter(Mandatory)][string]$Root
   )
-  $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+  # Through the shared helper, so a broken listener query THROWS instead of reporting the port clean.
+  # This preflight decides whether a scenario may launch; the old SilentlyContinue probe read a failed
+  # query as an empty port, which is the direction that lets a scenario launch into an occupied one.
+  $listeners = @(Get-MapleSeasonPortListener -Port $Port -Scenario $Scenario)
   if ($listeners.Count -eq 0) { return }
   $ownedHolders = [Collections.Generic.List[string]]::new()
   $foreignHolders = [Collections.Generic.List[string]]::new()

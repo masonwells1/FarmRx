@@ -257,7 +257,7 @@ try {
   $mutationDrill = @(& node scripts/verify-foundation-mutations.mjs)
   $mutationDrill | ForEach-Object { Write-Output $_ }
   if ($LASTEXITCODE -ne 0) { throw 'Foundation mutation drill failed.' }
-  $expectedStaticMarker = 'Foundation mutation drill: PASS (172 controlled mutations turned the gate red)'
+  $expectedStaticMarker = 'Foundation mutation drill: PASS (178 controlled mutations turned the gate red)'
   if ($mutationDrill -cnotcontains $expectedStaticMarker) {
     throw "Foundation mutation drill did not report its static half to this lane.`n  expected: $expectedStaticMarker"
   }

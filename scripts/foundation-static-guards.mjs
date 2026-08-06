@@ -259,8 +259,8 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "Write-Output 'Farm Rx foundation gate: PASS'", 'orchestrator:completion-marker')
 
   // The kill-authorizing predicate. This is the sole gate on the force kill in
-  // Clear-MapleSeasonBrowserPort - `$ownedProcess.Kill()`, on a process object taken before the check and
-  // not a re-looked-up id - so a false TRUE terminates a process Farm Rx does not own. Matching
+  // Clear-MapleSeasonBrowserPort - TerminateProcess through an OS handle opened before the check, so the
+  // id cannot change hands - so a false TRUE terminates a process Farm Rx does not own. Matching
   // the root text does not establish that the listener's path stays inside the tree that root names:
   // measured, root C:\FarmRx against `node.exe "C:\FarmRx\..\Other\scripts\factory-board.mjs"` answered
   // True. The traversal refusal is pinned here and executed by
@@ -351,7 +351,11 @@ export function foundationStaticGuard(root = process.cwd()) {
   // divergence is asserted in both directions rather than omitted from the table. Windows answers an empty
   // command line with the path of the process asking - a fact about the caller, useless as evidence about
   // a listener - so zero arguments is the fail-closed answer.
-  requireText(errors, seasonBrowserRegression, "Assert-True ($emptyFromWindows.Count -eq 1)", 'season-browser-regression:empty-divergence-is-asserted')
+  // Pin the CONTENT assertion, not a count. The count pin here was `-eq 1`, which was measured to be
+  // host-dependent: Windows tokenizes the caller path it invents for an empty command line, so the answer
+  // is 1 argument under Windows PowerShell 5.1 (C:\Windows\System32\...) and 2 under PowerShell 7
+  // (C:\Program Files\...). Rejoining and comparing to the asking process path holds on both.
+  requireText(errors, seasonBrowserRegression, "Assert-True (($emptyFromWindows -join ' ') -ceq $askingProcessPath)", 'season-browser-regression:empty-divergence-is-asserted')
   // The RUNTIME RECEIPT for that table. Everything this file pins about the 33 rows below - their spelling,
   // their pairing against the portable table in both directions, their total - is a statement that the rows
   // EXIST. A fresh-context review wrapped the `foreach` in `if ($false) { ... }` and every one of those checks
@@ -366,8 +370,20 @@ export function foundationStaticGuard(root = process.cwd()) {
   // recording is gated on the comparison's own result, and the result is cleared at the top of each row so a
   // stale agreement cannot carry over. Both the clearing and the gate are pinned; without the clearing, the
   // gate would pass on row two onwards from row one's answer.
+  //
+  // ALL THREE are cleared, and that is a repair, not tidiness. A fresh-context review found that only $agrees
+  // was cleared: wrap the two parses, force $agrees = $true, and $expected still held the PREVIOUS row's
+  // argument array, so `$tokenizerTokens += $expected.Count` credited this row with a count Windows produced
+  // for a different command line - and two rows in the table parse to the same number of arguments, so the
+  // carried value did not even look wrong. The clear is pinned as an ORDERED block ahead of the two parses,
+  // because a clear that lands after the parse it is meant to invalidate is worse than no clear at all.
   requireText(errors, seasonBrowserRegression, '$agrees = $null', 'season-browser-regression:tokenizer-agreement-cleared-per-row')
-  requireMatch(errors, seasonBrowserRegression, /Assert-True \$agrees "Split-MapleSeasonCommandLineArguments disagreed[^\n]*\n(?: *#[^\n]*\n)* *if \(\$agrees\) \{\n *\$tokenizerComparisons\+\+\n *\$tokenizerTokens \+= \$expected\.Count\n *\[void\]\$tokenizerLinesCompared\.Add\(\$commandLine\)\n/, 'season-browser-regression:tokenizer-receipt-recorded-after-the-comparison')
+  requireMatch(errors, seasonBrowserRegression, /\$agrees = \$null\n *\$expected = \$null\n *\$actual = \$null\n *\$expected = @\(\[MapleSeasonArgv\]::Parse\(\$commandLine\)\)\n *\$actual = @\(Split-MapleSeasonCommandLineArguments -CommandLine \$commandLine\)\n/, 'season-browser-regression:tokenizer-parses-cleared-per-row')
+  // The affirmative half of that repair, pinned in POSITION: a clear alone only makes a wrapped parse
+  // under-count, and the shortfall then surfaces two hundred lines later as a total that does not reconcile,
+  // which names the wrong thing. This assertion has to sit between the gate and the recording, so the regex
+  // holds the whole ordered sequence rather than the assertion's mere presence.
+  requireMatch(errors, seasonBrowserRegression, /Assert-True \$agrees "Split-MapleSeasonCommandLineArguments disagreed[^\n]*\n(?: *#[^\n]*\n)* *if \(\$agrees\) \{\n(?: *#[^\n]*\n)* *Assert-True \(\$null -ne \$expected -and \$expected\.Count -gt 0\)[^\n]*\n *\$tokenizerComparisons\+\+\n *\$tokenizerTokens \+= \$expected\.Count\n *\[void\]\$tokenizerLinesCompared\.Add\(\$commandLine\)\n/, 'season-browser-regression:tokenizer-receipt-recorded-after-the-comparison')
   requireText(errors, seasonBrowserRegression, '$tokenizerComparisons++', 'season-browser-regression:tokenizer-comparisons-counted')
   requireText(errors, seasonBrowserRegression, '[void]$tokenizerLinesCompared.Add($commandLine)', 'season-browser-regression:tokenizer-lines-recorded')
   requireText(errors, seasonBrowserRegression, '[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)', 'season-browser-regression:tokenizer-receipt-is-case-sensitive')
@@ -381,10 +397,31 @@ export function foundationStaticGuard(root = process.cwd()) {
   const julyWiringRegression = read(root, 'scripts/maple-july-db-clock-wiring.regression.ps1')
   requireText(errors, julyWiringRegression, "'TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true'", 'july-wiring-regression:tokenizer-receipt-asserted-by-the-caller')
   requireText(errors, seasonBrowser, '# ONE deliberate divergence from CommandLineToArgvW', 'season-browser:empty-divergence-is-declared')
-  // The force kill must go through the object that was validated, and the validated identity must still
-  // hold. A process id is not durable: the validated process can exit and Windows can reissue its number.
-  requireText(errors, seasonBrowser, '$ownedProcess.Kill()', 'season-browser:cleanup-kills-validated-object')
+  // The force kill must go through the identity that was validated, and that identity must still hold.
+  // A process id is not durable: the validated process can exit and Windows can reissue its number. The
+  // previous pins here held `$ownedProcess.Kill()` and read the .NET Process object as the pin. Measured,
+  // that object pins nothing - haveProcessHandle stayed False and m_processHandle stayed null across
+  // .StartTime, .HasExited and .Kill() - so each of those re-resolved the id at call time. An OS handle
+  // opened BEFORE the ownership check is what actually reserves the id, so these pins hold the handle.
+  requireText(errors, seasonBrowser, '[MapleSeasonProcessInterop]::OpenProcess(', 'season-browser:cleanup-opens-a-handle-before-validating')
+  requireText(errors, seasonBrowser, '[MapleSeasonProcessInterop]::TerminateProcess($target.Handle, 1)', 'season-browser:cleanup-terminates-through-the-validated-handle')
   requireText(errors, seasonBrowser, 'no longer identifies the listener it validated', 'season-browser:cleanup-rechecks-process-identity')
+  // The two-pass split is the F15 repair and it is load-bearing, not stylistic. Measured: the one-pass
+  // version terminated an OWNED listener and then reported "refusing to terminate it" on the foreign one
+  // sharing the same port. Pin the second pass reading a list built by the first, so collapsing the two
+  // back into a single validate-then-kill loop cannot pass silently.
+  requireText(errors, seasonBrowser, 'foreach ($target in $validated) {', 'season-browser:cleanup-validates-every-listener-before-terminating-any')
+  // Fail-closed listener probe, in ONE place. Every caller must go through Get-MapleSeasonPortListener,
+  // whose only swallowed error is the measured "nothing is listening" one; a bare SilentlyContinue probe
+  // reads a BROKEN query as a free port, which is the single direction this file must never fail.
+  requireText(errors, seasonBrowser, "if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') { return @() }", 'season-browser:listener-probe-fails-closed')
+  // Count CALL SITES, not mentions: the cmdlet name is discussed in three comments in this file, and a
+  // mention count would have to move every time one of those comments is reworded. A call always carries
+  // a parameter, so `Get-NetTCPConnection` followed by a dash is the invocation and the prose is not.
+  const seasonBrowserNetQueries = (seasonBrowser.match(/Get-NetTCPConnection\s+-/g) ?? []).length
+  if (seasonBrowserNetQueries !== 1) {
+    errors.push(`season-browser:listener-probe-is-the-only-net-query (found ${seasonBrowserNetQueries} Get-NetTCPConnection call sites, expected 1 - the one inside Get-MapleSeasonPortListener)`)
+  }
 
   // ---------------------------------------------------------------------------------------------------
   // Every pin above this line, and every mutation drilled against them, reads the kill-authorizing
@@ -727,7 +764,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // THE STATIC HALF IS HELD TOO. A fresh-context review observed that every static mutation could be wrapped
   // whole while the behavioural half still earned its own sentence, because no caller read the static marker at
   // all - a marker nobody consumes is decoration. Both callers now hold it with its count.
-  const staticClaim = 'Foundation mutation drill: PASS (172 controlled mutations turned the gate red)'
+  const staticClaim = 'Foundation mutation drill: PASS (178 controlled mutations turned the gate red)'
   requireText(errors, foundationWorkflow, `$expectedStatic = '${staticClaim}'`, 'workflow:mutation-drill-static-claim-held')
   requireText(errors, foundationOrchestrator, `$expectedStaticMarker = '${staticClaim}'`, 'orchestrator:mutation-drill-static-claim-held')
   requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedStatic', 'workflow:mutation-drill-static-claim-consumed')

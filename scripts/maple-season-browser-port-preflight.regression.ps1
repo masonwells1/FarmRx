@@ -45,6 +45,9 @@ $fakeRunner = Join-Path $tempRoot 'fake-playwright.js'
 $startedSentinel = Join-Path $tempRoot 'runner-started.txt'
 $scenario = 'Maple preflight regression'
 $listenerProcess = $null
+# The mixed-listener case below holds TWO processes at once, so one variable cannot carry them to the
+# cleanup in the finally.
+$mixedProcesses = [Collections.Generic.List[object]]::new()
 
 try {
   Assert-True ($port -ne 0) 'Port preflight regression could not find a free loopback port in 4289-4319.'
@@ -192,11 +195,83 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
     $listenerProcess = $null
   }
 
+  # ONE port, TWO listeners - one owned, one foreign. This is the case the two cases above cannot reach,
+  # because each of them puts a single listener on the port and the previous cleanup validated and killed
+  # one listener at a time. MEASURED against the previous version: it terminated the OWNED listener and
+  # then threw "refusing to terminate it" about the foreign one, so its refusal had already stopped a
+  # process. The repair validates every listener before terminating any, and this case is what proves it.
+  #
+  # A port really can hold two listeners: one bound to 127.0.0.1 and one to ::1 are separate sockets, and
+  # Get-NetTCPConnection returns both rows. The owned one binds ::1 because that is the row Windows was
+  # measured to enumerate FIRST, and enumeration order is not creation order. The order is checked at run
+  # time below rather than assumed: if the owned row is not first, the previous version would have refused
+  # on the foreign row before reaching its defect, so the case would pass on broken code. It says so
+  # instead of passing quietly.
+  # A local starter rather than a pipeline: `Where-Object` to pick the two processes back out of a list
+  # would put a shadowable cmdlet on the path of a safety-critical assertion, which is the shape this suite
+  # spent two reviews removing. Two named variables need no selection step at all.
+  function Start-MixedListener {
+    param([Parameter(Mandatory)][string]$Script, [Parameter(Mandatory)][string]$Ready, [Parameter(Mandatory)][string]$Bind, [Parameter(Mandatory)][string]$Label)
+    Set-Content -LiteralPath $Script -Value $listenerSource -Encoding Ascii -NoNewline
+    Remove-Item -LiteralPath $Ready -ErrorAction SilentlyContinue
+    $env:FARMRX_PREFLIGHT_READY_FILE = $Ready
+    $env:FARMRX_PREFLIGHT_BIND_ADDRESS = $Bind
+    $started = Start-Process -FilePath $node -ArgumentList @("`"$Script`"") -PassThru -WindowStyle Hidden
+    $mixedProcesses.Add($started)
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while (-not (Test-Path -LiteralPath $Ready) -and -not $started.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    Assert-True (Test-Path -LiteralPath $Ready) "Mixed-listener cleanup case could not start its $Label listener on port $port within twenty seconds."
+    return $started
+  }
+  $mixedOwned = Start-MixedListener -Script (Join-Path $tempRoot 'mixed-owned-listener.js') -Ready (Join-Path $tempRoot 'mixed-owned-ready.txt') -Bind '::1' -Label 'owned'
+  $mixedForeign = Start-MixedListener -Script (Join-Path $squatterRoot 'mixed-foreign-listener.js') -Ready (Join-Path $squatterRoot 'mixed-foreign-ready.txt') -Bind '127.0.0.1' -Label 'foreign'
+  $mixedRows = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+  Assert-True ($mixedRows.Count -eq 2) "Mixed-listener cleanup case needs one port held by two listeners; the listener table returned $($mixedRows.Count) rows, so it cannot tell a two-pass cleanup from a one-pass one."
+  Assert-True ([int]$mixedRows[0].OwningProcess -eq $mixedOwned.Id) "Mixed-listener cleanup case requires the OWNED listener to be enumerated first, or a one-pass cleanup would refuse before reaching its defect and this case would pass on broken code. Windows returned pid $($mixedRows[0].OwningProcess) first and the owned listener is pid $($mixedOwned.Id); swap which address family each listener binds and re-run."
+
+  $mixedFailure = $null
+  try {
+    Clear-MapleSeasonBrowserPort -Port $port -Root $tempRoot -Scenario $scenario
+  } catch {
+    $mixedFailure = $_.Exception.Message
+  }
+  Assert-True ($mixedFailure -ceq "$scenario found an unrecognized listener on governed port $port; refusing to terminate it.") "Mixed-listener cleanup did not refuse a port shared with a foreign listener using the exact message. Got: $mixedFailure"
+  # The two decisive assertions. Either one failing is the F15 defect: a refusal that terminated something.
+  Assert-True (-not $mixedOwned.HasExited) "Mixed-listener cleanup terminated its OWN listener on port $port and then reported that it refused to terminate anything; a refusal must validate every listener before terminating any."
+  Assert-True (-not $mixedForeign.HasExited) "Mixed-listener cleanup terminated a FOREIGN listener on port $port while reporting that it refused to."
+  Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 2) "Mixed-listener cleanup disturbed one of the two listeners on port $port."
+
+  foreach ($mixed in $mixedProcesses) {
+    if (-not $mixed.HasExited) { Stop-Process -Id $mixed.Id -Force -ErrorAction SilentlyContinue }
+    $mixed.WaitForExit(10000) | Out-Null
+  }
+  $mixedProcesses.Clear()
+  $released = [DateTime]::UtcNow.AddSeconds(10)
+  while (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -ne 0 -and [DateTime]::UtcNow -lt $released) { Start-Sleep -Milliseconds 100 }
+  Assert-True (@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count -eq 0) "Cleanup regression could not release port $port after the mixed-listener case."
+
+  # The listener probe must fail CLOSED. Every caller reads an empty list as "nothing is listening", so a
+  # query that FAILED used to report the port clean - the cleanup then reported done and the preflight let
+  # a scenario launch into an occupied port. Get-MapleSeasonPortListener now swallows exactly one error,
+  # the measured "nothing is listening" one, and throws on anything else. Drilled by handing it a port
+  # number Get-NetTCPConnection cannot accept: the failure must surface, not read as a free port.
+  $probeFailure = $null
+  try {
+    Get-MapleSeasonPortListener -Port 70000 -Scenario $scenario | Out-Null
+  } catch {
+    $probeFailure = $_.Exception.Message
+  }
+  Assert-True ($null -ne $probeFailure) 'The listener probe answered an unusable port number instead of throwing, so a broken listener query still reads as a free port.'
+  Assert-True ($probeFailure -clike "*could not read the listener table for governed port 70000*") "The listener probe threw, but not with its own fail-closed diagnosis, so the message an operator reads would not name the cause. Got: $probeFailure"
+  # And the other direction, which is what makes the refusal above a fail-CLOSED probe rather than a probe
+  # that refuses everything: a genuinely free port must still answer empty.
+  Assert-True (@(Get-MapleSeasonPortListener -Port $port -Scenario $scenario).Count -eq 0) 'The listener probe reported listeners on a free port; a probe that refuses every port would fail every cleanup instead of proving anything.'
+
   # Ownership boundary, asserted directly. The listener cases above can only put a process clearly
   # inside the owned root or clearly outside it, so they cannot reach the case that matters most:
   # a sibling directory that merely shares the root's name prefix. Test-MapleSeasonBrowserPortOwned
-  # gates the force kill in Clear-MapleSeasonBrowserPort - `$ownedProcess.Kill()` - so a true answer here
-  # would terminate somebody else's server.
+  # gates the force kill in Clear-MapleSeasonBrowserPort - `TerminateProcess` through an OS handle opened
+  # before this check runs - so a true answer here would terminate somebody else's server.
   $ownedRoot = 'C:\FarmRx'
   # ImageName is part of each case because the predicate tests the process image, not the command
   # line, for the node/npm/npx condition - an argument that merely mentions node_modules must not be
@@ -576,8 +651,17 @@ public static class MapleSeasonArgv {
       'node.exe "C:\FarmRx\.. .\Other\x.js"'
       "node.exe `"C:\FarmRx\`t\Other\x.js`""
     )) {
-      # Cleared FIRST so a stale agreement from the previous row cannot authorize the receipt below.
+      # Cleared FIRST - all THREE of them - so nothing from the previous row can authorize the receipt
+      # below. Clearing $agrees alone was not enough, and a fresh-context review said so: with the two
+      # parses wrapped in `if ($false) { … }` and `$agrees = $true` forced, $expected still held the
+      # PREVIOUS row's argument array, so `$tokenizerTokens += $expected.Count` credited this row with a
+      # count Windows produced for a different command line. Two rows in this table parse to the same
+      # number of arguments, so the carried value is not even necessarily wrong-looking. Clearing both
+      # arrays and requiring $expected to have been produced in THIS iteration is what makes the token
+      # total a per-row receipt rather than a plausible sum.
       $agrees = $null
+      $expected = $null
+      $actual = $null
       $expected = @([MapleSeasonArgv]::Parse($commandLine))
       $actual = @(Split-MapleSeasonCommandLineArguments -CommandLine $commandLine)
       $agrees = $expected.Count -eq $actual.Count
@@ -598,22 +682,45 @@ public static class MapleSeasonArgv {
       # fresh-context review defeated the gating-on-$agrees version by writing `$agrees = $true` immediately
       # after the $null clear and then wrapping the two parses and the comparison: $agrees is truthy without a
       # single call to CommandLineToArgvW, and every count above still reaches its expected total. Windows'
-      # own token count for each row cannot be produced without calling Windows, and an unset $expected counts
-      # zero, so a wrapped parse arrives at the reconciliation below as a shortfall no extra assignment fixes.
+      # own token count for each row cannot be produced without calling Windows. That last clause used to read
+      # "and an unset $expected counts zero", which was FALSE at the time it was written: only $agrees was
+      # cleared per iteration, so a wrapped parse left $expected holding the PREVIOUS row's array and the sum
+      # was carried forward rather than short. A fresh-context review found it. The clear above and the
+      # assertion below are what make the sentence true.
       if ($agrees) {
+        # AFFIRMATIVE, not just cleared. Clearing $expected makes a wrapped parse under-count; this makes it
+        # SAY SO. Without this line the shortfall only surfaced two hundred lines later as a receipt that did
+        # not reconcile, which names the wrong thing: the message would be about a total, not about the row
+        # that never reached Windows. Windows never answers a command line with zero arguments - even the
+        # empty line yields the asking process's own path - so a zero here means this iteration recorded a
+        # count it did not obtain.
+        Assert-True ($null -ne $expected -and $expected.Count -gt 0) "The tokenizer comparison recorded a receipt for '$commandLine' without a parse from CommandLineToArgvW in this iteration; a token total assembled from carried-over or absent parses is not evidence that Windows was consulted."
         $tokenizerComparisons++
         $tokenizerTokens += $expected.Count
         [void]$tokenizerLinesCompared.Add($commandLine)
       }
     }
     # The EMPTY command line is the one case where equivalence is not wanted, and it is asserted here
-    # rather than quietly left out of the table above. Measured: CommandLineToArgvW('') returns ONE
-    # argument, the path of the process that asked - powershell.exe on this workstation - which is a fact
-    # about the caller and not about the listener being judged. Zero arguments is the fail-closed answer.
-    # Both halves are pinned so a future edit cannot make this an accidental divergence in either
-    # direction: Windows must still return that one self-naming argument, and we must still return none.
+    # rather than quietly left out of the table above. CommandLineToArgvW('') answers with the path of the
+    # process that ASKED - a fact about the caller, not about the listener being judged - so zero arguments
+    # is the fail-closed answer. Both halves are pinned so a future edit cannot make this an accidental
+    # divergence in either direction: Windows must still invent that self-naming answer, and we must still
+    # return none.
+    #
+    # Assert the CONTENT, not the count. The count was pinned at 1 and that was host-dependent, because
+    # Windows tokenizes the path it invents: MEASURED, under Windows PowerShell 5.1 the host is
+    # C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe and the answer is 1 argument, while under
+    # PowerShell 7 it is C:\Program Files\PowerShell\7\pwsh.exe and the answer is 2 - 'C:\Program' and
+    # 'Files\PowerShell\7\pwsh.exe'. Get-FoundationProbeShell hands this chain pwsh.exe whenever the
+    # orchestrator itself runs on PowerShell 7, so the count pin failed the whole foundation gate with a
+    # message about CommandLineToArgvW changing behaviour when nothing had changed except which shell
+    # started it - the false-FALSE, wrong-diagnosis failure this suite exists to prevent. Rejoining the
+    # arguments with single spaces reconstructs the host path on both hosts, and it still proves the point:
+    # the answer is built from the caller and owes nothing to the input.
     $emptyFromWindows = @([MapleSeasonArgv]::Parse(''))
-    Assert-True ($emptyFromWindows.Count -eq 1) "CommandLineToArgvW no longer returns exactly one argument for an empty command line; it returned $($emptyFromWindows.Count), so the deliberate divergence below needs re-deciding rather than re-asserting."
+    $askingProcessPath = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    Assert-True ($emptyFromWindows.Count -ge 1) 'CommandLineToArgvW answered an empty command line with no arguments at all; the deliberate divergence below was justified by it inventing the caller path instead, so it needs re-deciding rather than re-asserting.'
+    Assert-True (($emptyFromWindows -join ' ') -ceq $askingProcessPath) "CommandLineToArgvW no longer answers an empty command line with the path of the process asking; it returned '$($emptyFromWindows -join ' ')' where this process is '$askingProcessPath', so the deliberate divergence below needs re-deciding rather than re-asserting."
     Assert-True (@(Split-MapleSeasonCommandLineArguments -CommandLine '').Count -eq 0) 'Split-MapleSeasonCommandLineArguments answered an empty command line with arguments; the only safe answer is none, because Windows answers it with the path of the process asking.'
   }
 
@@ -638,10 +745,18 @@ public static class MapleSeasonArgv {
   if ($null -eq $priorReadyFile) { Remove-Item Env:FARMRX_PREFLIGHT_READY_FILE -ErrorAction SilentlyContinue } else { $env:FARMRX_PREFLIGHT_READY_FILE = $priorReadyFile }
   if ($null -eq $priorStartedFile) { Remove-Item Env:FARMRX_PREFLIGHT_STARTED_FILE -ErrorAction SilentlyContinue } else { $env:FARMRX_PREFLIGHT_STARTED_FILE = $priorStartedFile }
   if ($null -eq $priorBindAddress) { Remove-Item Env:FARMRX_PREFLIGHT_BIND_ADDRESS -ErrorAction SilentlyContinue } else { $env:FARMRX_PREFLIGHT_BIND_ADDRESS = $priorBindAddress }
-  # Only ever stop the listener this regression started itself.
+  # Only ever stop the listeners this regression started itself.
   if ($null -ne $listenerProcess -and -not $listenerProcess.HasExited) {
     Stop-Process -Id $listenerProcess.Id -Force -ErrorAction SilentlyContinue
     $listenerProcess.WaitForExit(10000) | Out-Null
+  }
+  # The mixed-listener case holds two at once, and it is the one case that can fail with BOTH still
+  # running - that is the property it asserts - so leaving them behind would occupy the port for whatever
+  # ran next. Emptied on the success path, so this only fires when an assertion threw.
+  foreach ($orphan in $mixedProcesses) {
+    if ($null -eq $orphan -or $orphan.HasExited) { continue }
+    Stop-Process -Id $orphan.Id -Force -ErrorAction SilentlyContinue
+    $orphan.WaitForExit(10000) | Out-Null
   }
   foreach ($doomed in @($tempRoot, $squatterRoot)) {
     if (-not (Test-Path -LiteralPath $doomed)) { continue }
