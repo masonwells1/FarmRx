@@ -9,6 +9,30 @@ const requireText = (errors, source, text, label) => { if (!source.includes(text
 // a commented-out statement. Use requireMatch where the pin has to be a live statement rather than
 // merely present text.
 const requireMatch = (errors, source, pattern, label) => { if (!pattern.test(source)) errors.push(label) }
+// A pin over EXECUTABLE PowerShell that must name ONE place, and the two things it adds over requireText are
+// the two ways presence pins have actually been defeated in this repository rather than in theory.
+//
+// One: satisfied by a comment. These files carry long comments that quote the very statements they defend, so
+// `requireText('$process.Dispose()')` stays green over a file whose only occurrence of that text is the
+// sentence explaining why it matters. Comment-only lines are dropped first - the same rule
+// countPowerShellWrites uses, and sound for the same reason: a line PowerShell treats as a comment cannot
+// execute anything. It is only a COMPLETE strip while no line carries a trailing `#`, which is pinned below
+// as season-browser:no-inline-comments so a future `$x = 1 # $process.Dispose()` cannot satisfy a pin.
+//
+// Two: satisfied by a SECOND occurrence, which is the failure that actually happened. A repair added a
+// legitimate second `[MapleSeasonProcessInterop]::OpenProcess(` call site; String.replace renames only the
+// first, so the drill mutated one site, the pin found the other, the guard stayed green and the mutation went
+// undetected. Requiring exactly one occurrence makes that arrive as a named guard failure at the moment the
+// duplicate is introduced, instead of as a drill that silently stops testing anything. The two counts get
+// distinct labels because they are distinct defects and each is drilled separately.
+const powerShellStatements = (source) => source.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n')
+const requireStatementOnce = (errors, source, text, label) => {
+  const code = powerShellStatements(source)
+  let count = 0
+  for (let at = code.indexOf(text); at >= 0; at = code.indexOf(text, at + 1)) count++
+  if (count === 0) errors.push(label)
+  else if (count > 1) errors.push(`${label}-appears-more-than-once`)
+}
 // Every way PowerShell can WRITE a named variable, counted over lines. A fresh-context review defeated two
 // hand-rolled versions of this with spellings they did not allow for, so the rules are written out once here:
 // names are CASE-INSENSITIVE (`$NoNcE` is `$nonce`), a scope qualifier may sit inside or outside the braces
@@ -270,7 +294,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // command line for the root text and then classifying the boundary by hand. That hand classification
   // produced a different false-TRUE in each of three consecutive reviews, so the pins below hold the
   // tokenizer's load-bearing rules rather than any one boundary test.
-  requireText(errors, seasonBrowser, 'foreach ($argument in (Split-MapleSeasonCommandLineArguments -CommandLine $commandLine)) {', 'season-browser:ownership-compares-whole-arguments')
+  requireStatementOnce(errors, seasonBrowser, 'foreach ($argument in (Split-MapleSeasonCommandLineArguments -CommandLine $commandLine)) {', 'season-browser:ownership-compares-whole-arguments')
   // Windows splits on ASCII space and tab ONLY. [char]::IsWhiteSpace also accepts NBSP, which is legal in
   // a file name, so treating it as a separator made the sibling C:\FarmRx<NBSP>Backup look like our root
   // followed by a boundary. Measured True before this rule was ASCII-only. The rule is defined ONCE and
@@ -280,24 +304,24 @@ export function foundationStaticGuard(root = process.cwd()) {
   // with a truncated argument list was measured to be a false-TRUE of its own: on the sibling line the
   // drifted parse yields `node.exe`, `C:\FarmRx`, ``, and the bare exact root IS a containment match, so
   // the truncation authorized killing the sibling's listener. Refusing to answer is the only safe answer.
-  requireText(errors, seasonBrowser, "return ($Character -eq ' ' -or $Character -eq \"`t\")", 'season-browser:tokenizer-splits-on-ascii-space-and-tab-only')
-  requireText(errors, seasonBrowser, 'if ((-not $inQuotes) -and (Test-MapleSeasonCommandLineSeparator -Character $character)) { break }', 'season-browser:tokenizer-breaks-argument-at-shared-separator')
-  requireText(errors, seasonBrowser, 'while ($index -lt $length -and (Test-MapleSeasonCommandLineSeparator -Character $CommandLine[$index])) { $index++ }', 'season-browser:tokenizer-skips-shared-separator')
-  requireText(errors, seasonBrowser, 'throw "Split-MapleSeasonCommandLineArguments made no progress at index $index', 'season-browser:tokenizer-refuses-stalled-parse')
+  requireStatementOnce(errors, seasonBrowser, "return ($Character -eq ' ' -or $Character -eq \"`t\")", 'season-browser:tokenizer-splits-on-ascii-space-and-tab-only')
+  requireStatementOnce(errors, seasonBrowser, 'if ((-not $inQuotes) -and (Test-MapleSeasonCommandLineSeparator -Character $character)) { break }', 'season-browser:tokenizer-breaks-argument-at-shared-separator')
+  requireStatementOnce(errors, seasonBrowser, 'while ($index -lt $length -and (Test-MapleSeasonCommandLineSeparator -Character $CommandLine[$index])) { $index++ }', 'season-browser:tokenizer-skips-shared-separator')
+  requireStatementOnce(errors, seasonBrowser, 'throw "Split-MapleSeasonCommandLineArguments made no progress at index $index', 'season-browser:tokenizer-refuses-stalled-parse')
   // 2n backslashes then a quote: n backslashes, quote is a delimiter. 2n+1: n backslashes and a LITERAL
   // quote. Without this rule `--label "C:\FarmRx\safe\" --port 4177"` counted the escaped quote as a
   // closing delimiter and the predicate answered True for a listener running out of C:\Other. Measured.
-  requireText(errors, seasonBrowser, "[void]$builder.Append('\\', [int][Math]::Floor($backslashes / 2))", 'season-browser:tokenizer-halves-escaped-backslash-run')
-  requireText(errors, seasonBrowser, "if (($backslashes % 2) -eq 1) { [void]$builder.Append('\"'); $index++ }", 'season-browser:tokenizer-treats-odd-run-quote-as-literal')
+  requireStatementOnce(errors, seasonBrowser, "[void]$builder.Append('\\', [int][Math]::Floor($backslashes / 2))", 'season-browser:tokenizer-halves-escaped-backslash-run')
+  requireStatementOnce(errors, seasonBrowser, "if (($backslashes % 2) -eq 1) { [void]$builder.Append('\"'); $index++ }", 'season-browser:tokenizer-treats-odd-run-quote-as-literal')
   // CommandLineToArgvW's doubled-quote quirk, which the C runtime does NOT share: inside a quoted
   // argument '""' yields one literal quote and LEAVES quoted mode. Measured against the real API.
-  requireText(errors, seasonBrowser, "if ($inQuotes -and ($index + 1) -lt $length -and $CommandLine[$index + 1] -eq '\"') {", 'season-browser:tokenizer-handles-doubled-quote')
+  requireStatementOnce(errors, seasonBrowser, "if ($inQuotes -and ($index + 1) -lt $length -and $CommandLine[$index + 1] -eq '\"') {", 'season-browser:tokenizer-handles-doubled-quote')
   // Win32 strips trailing dots and spaces per component. The trim must take dots, spaces and tabs as ONE
   // set: chaining .TrimEnd(' ',tab) then .TrimEnd('.') is order-dependent and left '.. .' with a length of
   // three, so the component walk accepted it and the predicate claimed the parent directory. Measured.
-  requireText(errors, seasonBrowser, "return $Component.TrimEnd(' ', \"`t\", '.').Length -ne 0", 'season-browser:ownership-refuses-traversal')
-  requireText(errors, seasonBrowser, 'if (-not (Test-MapleSeasonPathComponentIsRealName -Component $component)) { return $false }', 'season-browser:ownership-walks-tail-components')
-  requireText(errors, seasonBrowser, 'if (-not (Test-MapleSeasonPathComponentIsRealName -Component $segment)) { return $false }', 'season-browser:ownership-walks-root-components')
+  requireStatementOnce(errors, seasonBrowser, "return $Component.TrimEnd(' ', \"`t\", '.').Length -ne 0", 'season-browser:ownership-refuses-traversal')
+  requireStatementOnce(errors, seasonBrowser, 'if (-not (Test-MapleSeasonPathComponentIsRealName -Component $component)) { return $false }', 'season-browser:ownership-walks-tail-components')
+  requireStatementOnce(errors, seasonBrowser, 'if (-not (Test-MapleSeasonPathComponentIsRealName -Component $segment)) { return $false }', 'season-browser:ownership-walks-root-components')
   // Windows has TWO argument grammars, and the construct below is the one whose disagreement was MEASURED
   // here - not the only construct on which they can disagree, which is what "exactly one" claimed before a
   // fresh-context review pointed out that nothing in this repository establishes it. CommandLineToArgvW - what
@@ -305,30 +329,30 @@ export function foundationStaticGuard(root = process.cwd()) {
   // `C:\FarmRx\safe`, so half a label reads as a path in our tree; node.exe is parsed by the Microsoft C
   // runtime, where the same label stays one argument naming nothing of ours. Both readings are defensible,
   // and guessing wrong authorizes a kill, so a doubled quote is refused rather than parsed. Measured.
-  requireText(errors, seasonBrowser, "if ($commandLine.Contains('\"\"')) { return $false }", 'season-browser:ownership-refuses-ambiguous-grammar')
+  requireStatementOnce(errors, seasonBrowser, "if ($commandLine.Contains('\"\"')) { return $false }", 'season-browser:ownership-refuses-ambiguous-grammar')
   // Containment is decided by the PLATFORM's path resolver, not by a hand-written walk over the text. The
   // walk this replaced refused `\\?\C:\FarmRx\x.js`, `C:\FarmRx\.\x.js` and `C:\FarmRx\sub\..\x.js`, all of
   // which ARE inside the tree - each would have declared our own listener foreign - and it ACCEPTED
   // `C:\FarmRx\NUL` and `C:\FarmRx\file:stream`, which name a device and a stream. All five measured.
-  requireText(errors, seasonBrowser, 'try { $resolved = [System.IO.Path]::GetFullPath($candidate) } catch { return $false }', 'season-browser:ownership-resolves-with-the-platform')
-  requireText(errors, seasonBrowser, "if ($candidate.StartsWith('\\\\?\\', [StringComparison]::Ordinal)) { $candidate = $candidate.Substring(4) }", 'season-browser:ownership-strips-extended-length-prefix')
+  requireStatementOnce(errors, seasonBrowser, 'try { $resolved = [System.IO.Path]::GetFullPath($candidate) } catch { return $false }', 'season-browser:ownership-resolves-with-the-platform')
+  requireStatementOnce(errors, seasonBrowser, "if ($candidate.StartsWith('\\\\?\\', [StringComparison]::Ordinal)) { $candidate = $candidate.Substring(4) }", 'season-browser:ownership-strips-extended-length-prefix')
   // An argument carrying a character Win32 forbids in a path is not a path at all. This is what refuses
   // the escaped-quote defeat, whose argument `C:\FarmRx\safe" --port 4177` starts with our root at a real
   // separator yet cannot name a file.
-  requireText(errors, seasonBrowser, "if ($candidate.IndexOfAny([char[]]@('\"', '<', '>', '|', '*', '?')) -ge 0) { return $false }", 'season-browser:ownership-refuses-non-path-characters')
-  requireText(errors, seasonBrowser, 'if ([char]::IsControl($character)) { return $false }', 'season-browser:ownership-refuses-control-characters')
+  requireStatementOnce(errors, seasonBrowser, "if ($candidate.IndexOfAny([char[]]@('\"', '<', '>', '|', '*', '?')) -ge 0) { return $false }", 'season-browser:ownership-refuses-non-path-characters')
+  requireStatementOnce(errors, seasonBrowser, 'if ([char]::IsControl($character)) { return $false }', 'season-browser:ownership-refuses-control-characters')
   // A colon past the drive letter names an alternate data stream, and a reserved device name is a device
   // rather than a file. Both are checked explicitly instead of being left to the resolver, so the answer
   // cannot change under a shell built on a different .NET.
-  requireText(errors, seasonBrowser, "if ($candidate.IndexOf(':', 2) -ge 0) { return $false }", 'season-browser:ownership-refuses-alternate-data-stream')
-  requireText(errors, seasonBrowser, "if ($bareName -match '(?i)^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$') { return $false }", 'season-browser:ownership-refuses-reserved-device-name')
+  requireStatementOnce(errors, seasonBrowser, "if ($candidate.IndexOf(':', 2) -ge 0) { return $false }", 'season-browser:ownership-refuses-alternate-data-stream')
+  requireStatementOnce(errors, seasonBrowser, "if ($bareName -match '(?i)^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$') { return $false }", 'season-browser:ownership-refuses-reserved-device-name')
   // Resolve only ABSOLUTE spellings. GetFullPath resolves a relative or drive-relative path against
   // process state - the current directory, or the current directory of a drive - and no part of a kill
   // authorization may depend on where the shell happens to be standing.
-  requireText(errors, seasonBrowser, "if (-not (($candidate -match '^[A-Za-z]:\\\\') -or ($candidate -match '^\\\\\\\\[^\\\\?.]'))) { return $false }", 'season-browser:ownership-refuses-shell-relative-path')
+  requireStatementOnce(errors, seasonBrowser, "if (-not (($candidate -match '^[A-Za-z]:\\\\') -or ($candidate -match '^\\\\\\\\[^\\\\?.]'))) { return $false }", 'season-browser:ownership-refuses-shell-relative-path')
   // The root must end at a real separator inside the argument, or be the whole argument. Without this,
   // root C:\FarmRx claimed a listener running out of C:\FarmRx2.
-  requireText(errors, seasonBrowser, "if ($tail.Length -gt 0 -and $tail[0] -ne '\\') { return $false }", 'season-browser:ownership-requires-separator-boundary')
+  requireStatementOnce(errors, seasonBrowser, "if ($tail.Length -gt 0 -and $tail[0] -ne '\\') { return $false }", 'season-browser:ownership-requires-separator-boundary')
   // The tokenizer's rules are checked against the real parser, not against my reading of the docs.
   const seasonBrowserRegression = read(root, 'scripts/maple-season-browser-port-preflight.regression.ps1')
   requireText(errors, seasonBrowserRegression, 'CommandLineToArgvW', 'season-browser-regression:tokenizer-compared-to-win32')
@@ -403,15 +427,19 @@ export function foundationStaticGuard(root = process.cwd()) {
   // handle that closes. Each assertion is held separately, because each of them can be removed on its own and
   // leave a suite that still prints its PASS marker.
   const browserTimeoutRegression = read(root, 'scripts/maple-season-browser-timeout.regression.ps1')
-  requireText(errors, browserTimeoutRegression, "Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season.config.ts' -Scenario 'Maple launch success regression'", 'timeout-regression:success-case-runs-the-real-helper')
-  requireText(errors, browserTimeoutRegression, 'Assert-True ($null -eq $successFailure)', 'timeout-regression:success-case-requires-no-failure')
-  requireText(errors, browserTimeoutRegression, 'Assert-True (Test-Path -LiteralPath $successReadyFile)', 'timeout-regression:success-case-requires-the-child-ran')
+  requireStatementOnce(errors, browserTimeoutRegression, "Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season.config.ts' -Scenario 'Maple launch success regression'", 'timeout-regression:success-case-runs-the-real-helper')
+  requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True ($null -eq $successFailure)', 'timeout-regression:success-case-requires-no-failure')
+  requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True (Test-Path -LiteralPath $successReadyFile)', 'timeout-regression:success-case-requires-the-child-ran')
   // Silence is the assertion here, so losing it is invisible: a leaked launch handle is only ever REPORTED,
   // through a warning, and a suite that stops collecting warnings passes while an id stays reserved.
-  requireText(errors, browserTimeoutRegression, 'Assert-True ($successWarnings.Count -eq 0)', 'timeout-regression:success-case-requires-no-leaked-handle')
-  requireText(errors, browserTimeoutRegression, 'Assert-True (@(Get-NetTCPConnection -LocalPort $successPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0)', 'timeout-regression:success-case-requires-the-port-released')
+  requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True ($successWarnings.Count -eq 0)', 'timeout-regression:success-case-requires-no-leaked-handle')
+  requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True (@(Get-NetTCPConnection -LocalPort $successPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0)', 'timeout-regression:success-case-requires-the-port-released')
   const julyWiringRegression = read(root, 'scripts/maple-july-db-clock-wiring.regression.ps1')
   requireText(errors, julyWiringRegression, "'TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true'", 'july-wiring-regression:tokenizer-receipt-asserted-by-the-caller')
+  // requireText, deliberately, and the ONE pin here that must stay a presence check: its needle IS a comment,
+  // so requireStatementOnce - which drops comment-only lines before looking - could never find it. What this
+  // pin protects is a declaration that the tokenizer diverges from the Win32 API on purpose; the divergence
+  // itself is asserted by the regression, executably, so nothing load-bearing rests on this text.
   requireText(errors, seasonBrowser, '# ONE deliberate divergence from CommandLineToArgvW', 'season-browser:empty-divergence-is-declared')
   // The force kill must go through the identity that was validated, and that identity must still hold.
   // A process id is not durable: the validated process can exit and Windows can reissue its number. The
@@ -428,35 +456,120 @@ export function foundationStaticGuard(root = process.cwd()) {
   // are told apart by the variable each assigns, and each is now held in position against the thing it must
   // precede: the cleanup handle before the ownership predicate that authorizes the kill, the launch handle
   // before the wait that can end in taskkill.
-  const cleanupHandleOpen = seasonBrowser.indexOf('$handle = [MapleSeasonProcessInterop]::OpenProcess(')
-  const cleanupOwnershipCall = seasonBrowser.indexOf('Test-MapleSeasonBrowserPortOwned -ListenerProcess')
+  //
+  // EVERY POSITION BELOW IS MEASURED OVER COMMENT-STRIPPED SOURCE. A fresh-context review pointed out that an
+  // index comparison is as satisfiable by a comment as a presence check is - these files quote their own
+  // statements at length, so a pin comparing raw offsets can be held in order by two sentences of prose while
+  // the real statements are gone or reordered. seasonBrowserCode is the same executable view
+  // requireStatementOnce uses, and season-browser:no-inline-comments below keeps that view complete.
+  const seasonBrowserCode = powerShellStatements(seasonBrowser)
+  // THE COMMENT-STRIPPED VIEW IS ONLY HONEST WHILE EVERY COMMENT IS ON ITS OWN LINE. powerShellStatements drops
+  // comment-ONLY lines; it cannot drop a comment that trails a statement, because telling a real `#` from a `#`
+  // inside a quoted string or a here-string needs a parser, and a wrong guess in that direction would delete
+  // executable text and take a pin down with it. So instead of parsing, hold the property the simple strip
+  // depends on: in these two files no line outside a comment-only line contains `#` at all. MEASURED today -
+  // zero such lines in either file, so the strip is currently exact, and this pin is what keeps it exact. If a
+  // trailing comment is ever genuinely wanted here, that is a deliberate decision to reopen the comment-
+  // satisfaction hole, and it should fail this guard first rather than quietly weaken every pin above.
+  for (const [label, source] of [
+    ['season-browser:no-inline-comments', seasonBrowser],
+    ['browser-timeout-regression:no-inline-comments', browserTimeoutRegression],
+  ]) {
+    const trailing = source.split('\n').filter((line) => !/^\s*#/.test(line) && line.includes('#'))
+    if (trailing.length > 0) errors.push(label)
+  }
+  const cleanupHandleOpen = seasonBrowserCode.indexOf('$handle = [MapleSeasonProcessInterop]::OpenProcess(')
+  const cleanupOwnershipCall = seasonBrowserCode.indexOf('Test-MapleSeasonBrowserPortOwned -ListenerProcess')
   if (cleanupHandleOpen < 0 || cleanupOwnershipCall < 0 || cleanupHandleOpen > cleanupOwnershipCall) {
     errors.push('season-browser:cleanup-opens-a-handle-before-validating')
   }
+  // The listener snapshot is read before any handle exists, so on its own it authorizes a kill on the strength
+  // of a row that may already have been historical: if the listener exited and its id was reused, the handle,
+  // the WMI row and the creation-time comparison all describe the REPLACEMENT and all agree. A fresh-context
+  // review found that. The re-read closes it, but only where it sits - AFTER the handle is open, so the id
+  // cannot change hands during the check, and BEFORE the predicate that authorizes the kill. Both halves are
+  // order, so both are held as order.
+  const cleanupListenerRebind = seasonBrowserCode.indexOf('$stillListening = @(@(Get-MapleSeasonPortListener -Port $Port -Scenario $Scenario) | Where-Object { [int]$_.OwningProcess -eq $listenerId })')
+  if (cleanupListenerRebind < 0 || cleanupHandleOpen < 0 || cleanupOwnershipCall < 0 ||
+      !(cleanupHandleOpen < cleanupListenerRebind && cleanupListenerRebind < cleanupOwnershipCall)) {
+    errors.push('season-browser:cleanup-rebinds-the-pinned-id-to-a-live-listener-row')
+  }
+  requireStatementOnce(errors, seasonBrowser, 'if ($stillListening.Count -eq 0) {', 'season-browser:cleanup-refuses-a-stale-listener-snapshot')
+  // The already-exited branch was the one place a failed CloseHandle stayed invisible: it was cast to void and
+  // then $handle was cleared, which removed the finally's only way to notice. A fresh-context review was right
+  // that the earlier claim to have closed that gap everywhere was false.
+  requireStatementOnce(errors, seasonBrowser, '$closeFailures.Add("the already-exited listener pid $listenerId', 'season-browser:cleanup-collects-the-exited-listener-close')
   // The launch side. Measured, .NET's own Process object already reserves this id (Process.Start leaves
   // haveProcessHandle True and m_processHandle open, still open after exit) - but that reservation is an
   // implementation detail of another library, invisible here, and a later `$process.Dispose()` or a
   // re-resolve through Get-Process would delete it with nothing in this repository noticing. The explicit
   // handle makes the invariant local and this pin makes it non-deletable; without it the whole reservation
   // could be removed and every gate would stay green.
-  const launchHandleOpen = seasonBrowser.indexOf('$launchedHandle = [MapleSeasonProcessInterop]::OpenProcess(')
-  const launchKill = seasonBrowser.indexOf('taskkill.exe /PID $process.Id /T /F')
+  const launchHandleOpen = seasonBrowserCode.indexOf('$launchedHandle = [MapleSeasonProcessInterop]::OpenProcess(')
+  const launchKill = seasonBrowserCode.indexOf('taskkill.exe /PID $process.Id /T /F')
   if (launchHandleOpen < 0 || launchKill < 0 || launchHandleOpen > launchKill) {
     errors.push('season-browser:launch-pins-the-id-it-will-kill')
   }
-  requireText(errors, seasonBrowser, 'if ($launchedHandle -eq [IntPtr]::Zero) {', 'season-browser:launch-refuses-an-unpinnable-id')
-  requireText(errors, seasonBrowser, '[MapleSeasonProcessInterop]::TerminateProcess($target.Handle, 1)', 'season-browser:cleanup-terminates-through-the-validated-handle')
-  requireText(errors, seasonBrowser, 'no longer identifies the listener it validated', 'season-browser:cleanup-rechecks-process-identity')
+  // NOTHING THAT CAN FAIL MAY SIT BETWEEN THE LAUNCH AND THE try. Compiling the interop and pinning the id used
+  // to live in that gap, so an Add-Type failure or an unpinnable id threw with a live node child - and the dev
+  // server grandchild holding the governed port - unwaited and unkilled while the scenario reported failure. A
+  // fresh-context review found it. Held as a gap PROHIBITION rather than an affirmation, because "the try is
+  // somewhere after the launch" is satisfied by a try that arrives too late: the two statements that were
+  // wrongly outside it are named, and either one reappearing in the gap fails here.
+  const launchStart = seasonBrowserCode.indexOf('if (-not $process.Start()) { throw')
+  const launchTry = launchStart < 0 ? -1 : seasonBrowserCode.indexOf('\n  try {', launchStart)
+  if (launchStart < 0 || launchTry < 0 || launchHandleOpen < 0 || !(launchStart < launchTry && launchTry < launchHandleOpen)) {
+    errors.push('season-browser:launch-manages-the-child-from-the-line-after-it-starts')
+  } else {
+    const launchGap = seasonBrowserCode.slice(launchStart, launchTry)
+    if (launchGap.includes('Initialize-MapleSeasonProcessInterop') || launchGap.includes('OpenProcess(')) {
+      errors.push('season-browser:launch-manages-the-child-from-the-line-after-it-starts')
+    }
+  }
+  // The pin's ACQUISITION was still inherited: between Start() returning and OpenProcess, the only thing
+  // reserving the id is .NET's private handle - the very dependency the explicit handle exists to remove. A
+  // fresh-context review made that point. $process.StartTime is read through .NET's own handle and so describes
+  // the real child whatever the id now means; $launchCreation is read through ours. Exact equality, because
+  // both are the same kernel FILETIME with no truncating provider in between - MEASURED delta 0 over 8 launches.
+  requireStatementOnce(errors, seasonBrowser, 'if ($launchCreation -ne $process.StartTime.ToUniversalTime().ToFileTimeUtc()) {', 'season-browser:launch-proves-its-pin-holds-the-process-it-started')
+  // The post-kill confirmation must read the KERNEL through this file's own handle. $process.WaitForExit and
+  // $process.HasExited both answer from .NET's private handle, so the previous version confirmed a force kill
+  // using exactly the reservation whose invisibility is the reason the pin was added, and these two rights
+  // - SYNCHRONIZE and PROCESS_QUERY_LIMITED_INFORMATION - were taken and never spent, which a fresh-context
+  // review correctly refused to call least privilege.
+  requireStatementOnce(errors, seasonBrowser, '$terminated = [MapleSeasonProcessInterop]::WaitForSingleObject($launchedHandle, 10000) -eq 0', 'season-browser:launch-confirms-the-kill-through-its-own-handle')
+  requireStatementOnce(errors, seasonBrowser, 'if ($killExitCode -ne 0 -or -not $terminated -or -not $readKilledTimes -or $killedExited -eq 0) {', 'season-browser:launch-requires-a-kernel-exit-time-after-the-kill')
+  // The salvage. Reaching the finally with the child still running means no branch managed it. Kill() goes
+  // through .NET's own handle, the one kill in this file that cannot reach another process, and the port
+  // cleanup then validates ownership of whatever a single-process kill left holding the port.
+  requireStatementOnce(errors, seasonBrowser, 'try { $process.Kill(); [void]$process.WaitForExit(10000) }', 'season-browser:launch-salvages-an-unmanaged-child')
+  requireStatementOnce(errors, seasonBrowser, 'try { Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario }', 'season-browser:launch-releases-the-port-after-salvaging')
+  // .NET's handle is a reservation too, and an undisposed Process keeps it - and the id - until a garbage
+  // collection nobody scheduled, so closing only OUR handle proves nothing about the id being released.
+  requireStatementOnce(errors, seasonBrowser, '$process.Dispose()', 'season-browser:launch-releases-the-runtime-reservation')
+  // On a SUCCESSFUL scenario this throws, matching the cleanup path: it was a warning either way before, so a
+  // season proof could return success having leaked the pin it reported, and only one regression happened to
+  // read the warning stream. -WarningAction Continue is part of the pin because Write-Warning honours
+  // $WarningPreference - MEASURED, a caller passing -WarningAction Stop turned this footnote into a terminating
+  // error inside the finally and it REPLACED the scenario's real diagnosis, which is the masking the
+  // $primaryFailure split exists to prevent.
+  requireStatementOnce(errors, seasonBrowser, 'if ($primaryFailure) { Write-Warning $report -WarningAction Continue } else { throw $report }', 'season-browser:launch-reports-a-leaked-pin')
+  requireStatementOnce(errors, seasonBrowser, 'if ($launchedHandle -eq [IntPtr]::Zero) {', 'season-browser:launch-refuses-an-unpinnable-id')
+  requireStatementOnce(errors, seasonBrowser, '[MapleSeasonProcessInterop]::TerminateProcess($target.Handle, 1)', 'season-browser:cleanup-terminates-through-the-validated-handle')
+  requireStatementOnce(errors, seasonBrowser, 'no longer identifies the listener it validated', 'season-browser:cleanup-rechecks-process-identity')
   // The measured bound, held as a NUMBER. CIM datetime granularity is ten FILETIME ticks; the disagreement
   // against the kernel was measured across 304 processes on this workstation at max 9. Widening this back
   // toward the old one-second window is the defect: it accepts a replacement process born inside the window
   // as the row that authorizes a force kill.
-  requireText(errors, seasonBrowser, 'if ([Math]::Abs($creation - $snapshotTicks) -gt 9) {', 'season-browser:cleanup-creation-window-is-the-measured-maximum')
+  requireStatementOnce(errors, seasonBrowser, 'if ([Math]::Abs($creation - $snapshotTicks) -gt 9) {', 'season-browser:cleanup-creation-window-is-the-measured-maximum')
   // A failed CloseHandle leaves an id reserved for the life of the session, so it must be REPORTED - and it
   // must never overwrite the diagnosis of why the cleanup failed in the first place. Both halves of that are
   // in one line, so pin the line: downgrading to a bare warning loses the leak from any successful run, and
   // a bare throw loses the real error behind a footnote about cleanup of the cleanup.
-  requireText(errors, seasonBrowser, 'if ($primaryFailure) { Write-Warning $leak } else { throw $leak }', 'season-browser:cleanup-reports-a-leaked-handle')
+  // -WarningAction Continue is inside the needle for the reason given on the launch-side pin above: without it
+  // a caller's $WarningPreference decides whether this footnote stays a footnote, and MEASURED, `Stop` turned
+  // it into a terminating error raised from the finally that replaced the cleanup's real diagnosis.
+  requireStatementOnce(errors, seasonBrowser, 'if ($primaryFailure) { Write-Warning $leak -WarningAction Continue } else { throw $leak }', 'season-browser:cleanup-reports-a-leaked-handle')
   // The two-pass split is the F15 repair and it is load-bearing, not stylistic. Measured: the one-pass
   // version terminated an OWNED listener and then reported "refusing to terminate it" on the foreign one
   // sharing the same port. This too was a presence pin - `foreach ($target in $validated) {` - and a fresh
@@ -464,9 +577,20 @@ export function foundationStaticGuard(root = process.cwd()) {
   // the validation pass is over. So hold the ORDER of three positions. A genuine one-pass implementation
   // puts the terminate call inside the validation loop, ahead of the loop that reads the finished list, and
   // that is exactly what now fails here.
-  const validationLoopStart = seasonBrowser.indexOf('foreach ($listener in $listeners) {')
-  const terminationLoopStart = seasonBrowser.indexOf('foreach ($target in $validated) {')
-  const firstTerminate = seasonBrowser.indexOf('[MapleSeasonProcessInterop]::TerminateProcess(')
+  //
+  // THE INDENTATION IS PART OF EACH NEEDLE, and that is the whole point of this repair. Order alone is
+  // satisfiable by NESTING: put the `$validated` loop INSIDE the `$listeners` loop, and an unanchored search
+  // still finds a `$validated` header sitting between the validation header and the terminate call, so the
+  // ordering check passes over code that terminates during validation - the exact defect it exists to catch.
+  // A leading newline plus FOUR spaces is the indentation of a statement at the top level of a function body
+  // here, so a nested loop (six spaces or more) cannot match. MEASURED: `\n    foreach ($target in
+  // $validated) {` occurs twice in the comment-stripped file, at lines 413 and 439, and 439 is the finally
+  // block's release loop, which sits AFTER the terminate call. So if the termination loop is nested away, this
+  // search falls through to line 439 and the ordering fails - which is the answer we want. The validation
+  // header is code-unique at this indentation, so it needs no such fallback.
+  const validationLoopStart = seasonBrowserCode.indexOf('\n    foreach ($listener in $listeners) {')
+  const terminationLoopStart = seasonBrowserCode.indexOf('\n    foreach ($target in $validated) {')
+  const firstTerminate = seasonBrowserCode.indexOf('[MapleSeasonProcessInterop]::TerminateProcess(')
   if (validationLoopStart < 0 || terminationLoopStart < 0 || firstTerminate < 0 ||
       !(validationLoopStart < terminationLoopStart && terminationLoopStart < firstTerminate)) {
     errors.push('season-browser:cleanup-validates-every-listener-before-terminating-any')
@@ -477,7 +601,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // -ceq against the COMPLETE id, not `-like 'CmdletizationQuery_NotFound*'`. The prefix form accepted any
   // future not-found id from any cmdlet as "the port is free"; the exact id was measured identical on
   // Windows PowerShell 5.1 and pwsh 7.6.3, and an invalid port produces a different id on both.
-  requireText(errors, seasonBrowser, "if ($_.FullyQualifiedErrorId -ceq 'CmdletizationQuery_NotFound,Get-NetTCPConnection') { return @() }", 'season-browser:listener-probe-fails-closed')
+  requireStatementOnce(errors, seasonBrowser, "if ($_.FullyQualifiedErrorId -ceq 'CmdletizationQuery_NotFound,Get-NetTCPConnection') { return @() }", 'season-browser:listener-probe-fails-closed')
   // Count CALL SITES, not mentions: the cmdlet name is discussed in three comments in this file, and a
   // mention count would have to move every time one of those comments is reworded. A call always carries
   // a parameter, so `Get-NetTCPConnection` followed by a dash is the invocation and the prose is not.
@@ -827,7 +951,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // THE STATIC HALF IS HELD TOO. A fresh-context review observed that every static mutation could be wrapped
   // whole while the behavioural half still earned its own sentence, because no caller read the static marker at
   // all - a marker nobody consumes is decoration. Both callers now hold it with its count.
-  const staticClaim = 'Foundation mutation drill: PASS (188 controlled mutations turned the gate red)'
+  const staticClaim = 'Foundation mutation drill: PASS (201 controlled mutations turned the gate red)'
   requireText(errors, foundationWorkflow, `$expectedStatic = '${staticClaim}'`, 'workflow:mutation-drill-static-claim-held')
   requireText(errors, foundationOrchestrator, `$expectedStaticMarker = '${staticClaim}'`, 'orchestrator:mutation-drill-static-claim-held')
   requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedStatic', 'workflow:mutation-drill-static-claim-consumed')
