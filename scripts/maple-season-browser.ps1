@@ -639,10 +639,6 @@ function Invoke-MapleSeasonBrowserProof {
   # review found that; nothing below the try can protect a process launched above it, so nothing is above it.
   $launchedHandle = [IntPtr]::Zero
   $primaryFailure = $false
-  # Whether a MANAGED path has already released the governed port. The salvage in the finally used to decide
-  # that from whether the parent was still alive, which is a different question with a different answer; see
-  # the comment on the release itself.
-  $portReleased = $false
   try {
     # PIN THE ID THIS FUNCTION WILL KILL BY, with a handle of this file's own, held until after the kill.
     # `taskkill /PID` names a NUMBER, and a number means one particular process only for as long as the
@@ -730,11 +726,20 @@ function Invoke-MapleSeasonBrowserProof {
       # owned process tree" was a claim about processes this branch never observed. A fresh-context review was
       # right about that too. The port cleanup below is what speaks for the descendant that matters - the dev
       # server holding the governed port - and it does so by validating ownership rather than by inference.
-      if ($killExitCode -ne 0 -or -not $terminated -or -not $readKilledTimes -or $killedExited -eq 0) {
+      # THE ROOT'S DEATH AND THE TREE WALK'S STATUS ARE TWO DIFFERENT CLAIMS, and folding them into one test made
+      # the diagnosis wrong in the more dangerous direction. The handle wait and the exit FILETIME are read on the
+      # launched process and they either prove IT died or they do not. `taskkill /T`'s exit status speaks for the
+      # WALK - a descendant it could not open, an access denial - and a nonzero status with the root's FILETIME
+      # sitting right there reported "could not prove the root terminated" about a process this branch had just
+      # proved dead, which sends the reader hunting the wrong process. A fresh-context review found it. Both still
+      # fail the scenario; they now fail it with the cause that is actually true.
+      if (-not $terminated -or -not $readKilledTimes -or $killedExited -eq 0) {
         throw "$Scenario browser timeout cleanup could not prove it terminated the root of its owned process tree."
       }
+      if ($killExitCode -ne 0) {
+        throw "$Scenario browser timeout cleanup proved the root of its owned process tree died, but the tree walk reported exit code $killExitCode, so a descendant of it may still be running."
+      }
       Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
-      $portReleased = $true
       throw "$Scenario browser scenario exceeded its bounded process limit after verified cleanup."
     }
     if (-not $process.HasExited -or $null -eq $process.ExitCode) {
@@ -743,7 +748,6 @@ function Invoke-MapleSeasonBrowserProof {
     $exitCode = [int]$process.ExitCode
 
     Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
-    $portReleased = $true
     if ($exitCode -ne 0) { throw "$Scenario browser scenario failed with exit code $exitCode." }
   } catch {
     # Bare `throw` rethrows the ErrorRecord unchanged; this records only that the scenario already has a
@@ -772,16 +776,32 @@ function Invoke-MapleSeasonBrowserProof {
       try { if (-not $process.HasExited) { $footnotes.Add("left the browser process it started running (pid $($process.Id))") } }
       catch { $footnotes.Add("could not confirm the browser process it started has exited (pid $($process.Id)): $($_.Exception.Message)") }
     }
-    # THE GOVERNED PORT IS RELEASED ON ITS OWN CONDITION, not on whether the PARENT is still alive. Those were
-    # the same line until a fresh-context review separated them, and the leak that hid behind the conflation is
-    # the whole reason this function governs a port at all: the node parent spawns the dev server that holds the
-    # port, and the parent can be gone while its child is still listening. So a launch-side failure that landed
-    # after the parent exited - an unpinnable id, an interop that would not compile, an identity check that
-    # refused - reached here, found HasExited true, and released nothing, leaving a live dev server on the
-    # governed port and every later scenario refusing that port with a wrong diagnosis. That is a process and a
-    # port left running on a real workstation, not a wording problem. $portReleased is set only where a managed
-    # path completed the release, so this neither skips a leak nor repeats a release that already happened.
-    if (-not $portReleased) {
+    # THE GOVERNED PORT IS RELEASED ON ITS OWN CONDITION, and that condition is THE PORT ITSELF - read here,
+    # now - not whether the parent is alive and not a flag remembering that some earlier call returned.
+    #
+    # It was the parent's liveness first. That is a different question with a different answer: the node parent
+    # spawns the dev server that holds the port, so a launch-side failure landing after the parent exited found
+    # HasExited true and released nothing, leaving a live dev server on the governed port and every later
+    # scenario refusing that port with a wrong diagnosis.
+    #
+    # The repair for that was a $portReleased flag, and a fresh-context review was right that a flag is still
+    # not the port. It records that a cleanup call RETURNED, and Clear-MapleSeasonBrowserPort returns on a
+    # single observation finding no listener, so a descendant binding a moment AFTER that observation left the
+    # flag true and the port held. Worse in the other direction: that function can terminate its listeners and
+    # then throw from its own finally over a handle it could not close, which left the flag false after a
+    # successful kill and sent this branch in to release the port a SECOND time. On a workstation where the
+    # ownership predicate cannot tell one repository-rooted node process from another - it says so itself - a
+    # blind second release is a force kill aimed at whatever holds that port by then. Reading the port instead
+    # closes both: nothing listening means nothing to do, and the only thing that authorizes a kill here is a
+    # listener observed at salvage time.
+    #
+    # The read fails OPEN toward releasing, for the same reason the liveness read above does: an unanswerable
+    # query must not be read as "the port is clean". Clear-MapleSeasonBrowserPort re-reads and re-validates
+    # ownership itself, so attempting it on a port that turns out to be free costs nothing.
+    $portStillHeld = $true
+    try { $portStillHeld = @(Get-MapleSeasonPortListener -Port $port -Scenario $Scenario).Count -gt 0 }
+    catch { $footnotes.Add("could not tell whether governed port $port is still held, so it attempted the release anyway: $($_.Exception.Message)") }
+    if ($portStillHeld) {
       try { Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario }
       catch { $footnotes.Add("could not release governed port $port after salvaging an unmanaged launch: $($_.Exception.Message)") }
     }

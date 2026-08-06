@@ -137,11 +137,22 @@ settle()
   Set-Content -LiteralPath $orphanRunner -Value $orphanRunnerSource -Encoding Ascii -NoNewline
   $orphanSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'maple-season-browser.ps1') -Raw
   $orphanNeedle = '    $completed = $process.WaitForExit($TimeoutMilliseconds)'
-  if (-not $orphanSource.Contains($orphanNeedle)) {
-    throw 'Browser orphan drill could not find the wait it injects its failure at; its needle is stale and the drill would prove nothing.'
+  # EXACTLY ONE OCCURRENCE, not at least one. Contains() was the whole check, and .Replace() patches EVERY match,
+  # so a second occurrence anywhere in the helper would have injected this throw into a path this case never
+  # reasons about while the case still printed PASS. A fresh-context review found it. The count is the refusal:
+  # nought means the needle went stale and the copy under test is the unmodified helper, more than one means the
+  # injection is not the single one described below, and neither may be reported as a proof of anything.
+  $orphanNeedleCount = ([regex]::Matches($orphanSource, [regex]::Escape($orphanNeedle))).Count
+  if ($orphanNeedleCount -ne 1) {
+    throw "Browser orphan drill needs exactly one occurrence of the wait it injects its failure at and found $orphanNeedleCount; its needle is stale and the drill would prove nothing."
   }
+  # THE WAIT'S BOOLEAN IS READ, not discarded. [void] threw it away, so the injected message could announce
+  # "after the parent exited" having waited out thirty seconds with the parent still running - and the premise
+  # this entire case rests on was carried by a sentence that could not fail. A fresh-context review found it. A
+  # wait that does not complete now throws a DIFFERENT message, which the injected-failure assertion below
+  # rejects by name, so the case fails instead of passing on an unproven premise.
   $orphanInjection = @(
-    '    [void]$process.WaitForExit(30000)',
+    '    if (-not $process.WaitForExit(30000)) { throw "$Scenario launch drill could not confirm its parent exited, so it proves nothing." }',
     '    throw "$Scenario launch drill failed on purpose after the parent exited."'
   ) -join "`n"
   Set-Content -LiteralPath $orphanScript -Value $orphanSource.Replace($orphanNeedle, $orphanInjection) -Encoding UTF8
@@ -187,12 +198,32 @@ settle()
   # suite's own temporary directory: this is a last resort in a test, not a second ownership predicate, so it
   # refuses anything it cannot positively tie to a file it created itself.
   foreach ($stranded in @(Get-NetTCPConnection -LocalPort 4290 -State Listen -ErrorAction SilentlyContinue)) {
-    $strandedProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$stranded.OwningProcess)" -ErrorAction SilentlyContinue
+    $strandedId = [int]$stranded.OwningProcess
+    # A PROCESS ID IS NOT DURABLE, and this branch force kills by one. The CIM read that AUTHORIZED the kill and
+    # the Stop-Process that performed it were two separate lookups of the same number, so the owner could exit
+    # between them and Windows could reissue that number to a process this suite never created - the exact hazard
+    # the helper under test was hardened against, reintroduced inside the test that guards it. A fresh-context
+    # review found it. Get-Process returns an object holding an OS handle, and a held handle keeps the id
+    # reserved, so the ownership re-read and the kill both speak about that one process and nothing else.
+    $strandedHandle = $null
+    try { $strandedHandle = Get-Process -Id $strandedId -ErrorAction Stop } catch { $strandedHandle = $null }
+    if ($null -eq $strandedHandle) { continue }
+    $strandedProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $strandedId" -ErrorAction SilentlyContinue
     if ($null -eq $strandedProcess) { continue }
-    if (([string]$strandedProcess.CommandLine).Contains($tempRoot)) {
-      Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED pid $($strandedProcess.ProcessId)"
-      Stop-Process -Id ([int]$strandedProcess.ProcessId) -Force -ErrorAction SilentlyContinue
-    }
+    if (-not ([string]$strandedProcess.CommandLine).Contains($tempRoot)) { continue }
+    Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED pid $strandedId"
+    # THE KILL IS VERIFIED, not merely attempted. -ErrorAction SilentlyContinue with no wait and no re-read let
+    # this announce a kill it had not performed, then delete the temporary directory that was the only thing
+    # tying the survivor to this suite, and exit as though the workstation were clean.
+    try { $strandedHandle.Kill(); [void]$strandedHandle.WaitForExit(10000) }
+    catch { Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_KILL_FAILED pid ${strandedId}: $($_.Exception.Message)" }
+    if (-not $strandedHandle.HasExited) { Write-Output "MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_ALIVE pid $strandedId" }
+  }
+  # The port, read last and independently of the loop above. A survivor this suite refused to claim still leaves
+  # the port held, and the next run needs to be told that by this run rather than discovering it as a preflight
+  # refusal it cannot explain.
+  if (@(Get-NetTCPConnection -LocalPort 4290 -State Listen -ErrorAction SilentlyContinue).Count -ne 0) {
+    Write-Output 'MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_PORT_STILL_HELD 4290'
   }
   if (Test-Path -LiteralPath $tempRoot) {
     $resolvedTemp = [IO.Path]::GetFullPath($tempRoot)

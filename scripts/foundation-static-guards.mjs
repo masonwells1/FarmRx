@@ -451,10 +451,35 @@ export function foundationStaticGuard(root = process.cwd()) {
   // A drill whose needle has gone stale patches nothing and then reports on unmodified source, which is the one
   // failure mode that makes an injection worse than no injection at all.
   requireStatementOnce(errors, browserTimeoutRegression, 'its needle is stale and the drill would prove nothing', 'timeout-regression:orphan-case-refuses-a-stale-needle')
+  // EXACTLY ONE OCCURRENCE, not at least one, and the CONDITION is the pin rather than the sentence it throws.
+  // Contains() was the whole check while .Replace() patches every match, so a second occurrence of the needle
+  // would have injected the drill's throw into a path this case never reasons about - and the case would still
+  // have printed PASS. A fresh-context review found it, and found that the pin above protects only the WORDING
+  // of the refusal: with the message intact and the test gone, the drill reports on source it never changed.
+  requireStatementOnce(errors, browserTimeoutRegression, 'if ($orphanNeedleCount -ne 1) {', 'timeout-regression:orphan-case-refuses-a-needle-that-is-not-unique')
+  requireStatementOnce(errors, browserTimeoutRegression, '$orphanNeedleCount = ([regex]::Matches($orphanSource, [regex]::Escape($orphanNeedle))).Count', 'timeout-regression:orphan-case-counts-its-needle')
+  // THE INJECTED WAIT'S BOOLEAN IS READ. [void] discarded it, so the injected failure could announce "after the
+  // parent exited" having waited out thirty seconds with the parent still running - the premise this whole case
+  // rests on, carried by a sentence that could not fail. A fresh-context review found it.
+  requireStatementOnce(errors, browserTimeoutRegression, 'if (-not $process.WaitForExit(30000)) { throw "$Scenario launch drill could not confirm its parent exited', 'timeout-regression:orphan-case-reads-the-parent-wait')
+  if (/\[void\]\$process\.WaitForExit\(30000\)/.test(browserTimeoutRegression)) errors.push('timeout-regression:orphan-case-discards-the-parent-wait')
   // A case that deliberately creates a process outliving its parent owes the workstation a guarantee that a
   // FAILING run - including one that failed because the repair under test is absent - does not leave it behind.
   // MEASURED: on the pre-repair helper this branch fired and killed a stranded node process.
-  requireStatementOnce(errors, browserTimeoutRegression, 'Stop-Process -Id ([int]$strandedProcess.ProcessId) -Force -ErrorAction SilentlyContinue', 'timeout-regression:orphan-case-cleans-up-after-itself')
+  // The safety net kills by a PROCESS ID, and it had the very PID-reuse hazard the helper it guards was hardened
+  // against: the CIM read that authorized the kill and the Stop-Process that performed it were two separate
+  // lookups of one number, so the owner could exit between them and Windows could reissue that number to
+  // something this suite never created. It also swallowed the outcome - SilentlyContinue, no wait, no re-read -
+  // so it could announce a kill it had not performed and then delete the temporary directory that was the only
+  // evidence tying the survivor to this suite. A fresh-context review found both. Get-Process hands back an
+  // object holding an OS handle; a held handle keeps the id reserved, so the ownership re-read and the kill both
+  // speak about that one process. MEASURED: on the pre-repair helper this branch fired and killed a stranded
+  // node process.
+  requireStatementOnce(errors, browserTimeoutRegression, 'try { $strandedHandle = Get-Process -Id $strandedId -ErrorAction Stop } catch { $strandedHandle = $null }', 'timeout-regression:orphan-cleanup-pins-the-id-it-kills')
+  requireStatementOnce(errors, browserTimeoutRegression, 'try { $strandedHandle.Kill(); [void]$strandedHandle.WaitForExit(10000) }', 'timeout-regression:orphan-case-cleans-up-after-itself')
+  requireStatementOnce(errors, browserTimeoutRegression, 'if (-not $strandedHandle.HasExited) {', 'timeout-regression:orphan-cleanup-verifies-its-kill')
+  requireStatementOnce(errors, browserTimeoutRegression, 'MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED_PORT_STILL_HELD', 'timeout-regression:orphan-cleanup-reports-a-still-held-port')
+  if (/Stop-Process[^\n]*-ErrorAction SilentlyContinue/.test(browserTimeoutRegression)) errors.push('timeout-regression:orphan-cleanup-swallows-its-kill-outcome')
   const julyWiringRegression = read(root, 'scripts/maple-july-db-clock-wiring.regression.ps1')
   requireText(errors, julyWiringRegression, "'TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true'", 'july-wiring-regression:tokenizer-receipt-asserted-by-the-caller')
   // requireText, deliberately, and the ONE pin here that must stay a presence check: its needle IS a comment,
@@ -568,7 +593,14 @@ export function foundationStaticGuard(root = process.cwd()) {
   // - SYNCHRONIZE and PROCESS_QUERY_LIMITED_INFORMATION - were taken and never spent, which a fresh-context
   // review correctly refused to call least privilege.
   requireStatementOnce(errors, seasonBrowser, '$terminated = [MapleSeasonProcessInterop]::WaitForSingleObject($launchedHandle, 10000) -eq 0', 'season-browser:launch-confirms-the-kill-through-its-own-handle')
-  requireStatementOnce(errors, seasonBrowser, 'if ($killExitCode -ne 0 -or -not $terminated -or -not $readKilledTimes -or $killedExited -eq 0) {', 'season-browser:launch-requires-a-kernel-exit-time-after-the-kill')
+  requireStatementOnce(errors, seasonBrowser, 'if (-not $terminated -or -not $readKilledTimes -or $killedExited -eq 0) {', 'season-browser:launch-requires-a-kernel-exit-time-after-the-kill')
+  // THE TREE WALK'S EXIT STATUS IS JUDGED SEPARATELY FROM THE ROOT'S DEATH, because they are two claims. Folded
+  // into one test, a nonzero taskkill status reported "could not prove it terminated the root" about a process
+  // whose exit FILETIME this branch had just read - true of the walk, false of the root, and it sends the reader
+  // hunting the wrong process. A fresh-context review found it. Both still fail the scenario; what is pinned is
+  // that they fail it separately, each naming the cause that is actually true.
+  requireStatementOnce(errors, seasonBrowser, 'if ($killExitCode -ne 0) {', 'season-browser:launch-judges-the-tree-walk-separately')
+  requireStatementOnce(errors, seasonBrowser, 'so a descendant of it may still be running.', 'season-browser:launch-names-the-surviving-descendant-risk')
   // The salvage. Reaching the finally with the child still running means no branch managed it. Kill() goes
   // through .NET's own handle, the one kill in this file that cannot reach another process, and the port
   // cleanup then validates ownership of whatever a single-process kill left holding the port.
@@ -579,21 +611,32 @@ export function foundationStaticGuard(root = process.cwd()) {
   // release used to sit between the two kernel reads and this test, so a throw inside it - a listener this file
   // refuses to claim, a row it cannot read - replaced "the force kill could not be proved" with "the port would
   // not release". Those are two different causes with two different fixes, and the more serious of them was the
-  // one being lost. A fresh-context review found it. `$portReleased = $true` is inside the needle on purpose:
-  // releasing the port without recording it re-arms the salvage below to release it a second time.
-  requireMatch(errors, seasonBrowserCode, /if \(\$killExitCode -ne 0 -or -not \$terminated -or -not \$readKilledTimes -or \$killedExited -eq 0\) \{\n *throw "\$Scenario browser timeout cleanup could not prove it terminated the root of its owned process tree\."\n *\}\n *Clear-MapleSeasonBrowserPort -Port \$port -Root \$ownedMarker -Scenario \$Scenario\n *\$portReleased = \$true\n/, 'season-browser:launch-judges-the-kill-before-housekeeping')
+  // one being lost. A fresh-context review found it. BOTH judgments are inside the needle: the split above is
+  // only worth having if neither half can be moved back below the housekeeping it was lifted above.
+  requireMatch(errors, seasonBrowserCode, /if \(-not \$terminated -or -not \$readKilledTimes -or \$killedExited -eq 0\) \{\n *throw "\$Scenario browser timeout cleanup could not prove it terminated the root of its owned process tree\."\n *\}\n *if \(\$killExitCode -ne 0\) \{\n *throw "[^"]*tree walk reported exit code \$killExitCode[^"]*"\n *\}\n *Clear-MapleSeasonBrowserPort -Port \$port -Root \$ownedMarker -Scenario \$Scenario\n *throw "\$Scenario browser scenario exceeded its bounded process limit after verified cleanup\."\n/, 'season-browser:launch-judges-the-kill-before-housekeeping')
   // THE PORT RELEASE IS CONDITIONED ON THE PORT, NOT ON THE PARENT, and of everything in this tranche it is the
   // one finding that describes a live process left running on a real workstation rather than a wording problem.
   // The salvage's release used to sit inside `if (-not $process.HasExited)`, which asks whether the node PARENT
   // is alive - a different question from whether anything is holding the governed port, because the parent
   // SPAWNS the dev server that does the listening. A launch-side failure landing after the parent exited found
-  // HasExited true and released nothing. A fresh-context review found it. Held three ways: the salvage's
-  // condition names the flag, the flag is written exactly three times - its initialiser and the two managed
-  // release sites, and nowhere else - and the behavioural half is the orphan case in the timeout regression,
-  // MEASURED red before this change and green after, with a stranded node process to kill on the red run.
-  requireStatementOnce(errors, seasonBrowser, 'if (-not $portReleased) {', 'season-browser:launch-releases-the-port-on-its-own-condition')
-  const portReleasedWrites = countPowerShellWrites(seasonBrowser.split('\n'), 'portReleased')
-  if (portReleasedWrites !== 3) errors.push(`season-browser:launch-port-release-flag-write-count:${portReleasedWrites}`)
+  // HasExited true and released nothing. A fresh-context review found it, and then found the REPAIR wanting too:
+  // the repair was a $portReleased flag, and a flag records that a cleanup call RETURNED, which is not the same
+  // fact as the port being free. Two ways it diverged, both real:
+  //   - Clear-MapleSeasonBrowserPort returns as soon as ONE observation finds no listener, so a descendant
+  //     binding a moment after that observation left the flag true and the port held. The orphan case cannot
+  //     cover that path, because its listener always binds before the parent exits.
+  //   - That function can terminate its listeners and THEN throw from its own finally over a handle it could not
+  //     close. The flag stayed false after a successful kill, and the salvage went in to release the port a
+  //     second time - a blind force kill aimed at whatever holds that port by then, on a workstation whose
+  //     ownership predicate states outright that it cannot distinguish another repository-rooted node process.
+  // So the condition is the PORT, read here, at salvage time. Held four ways: the read exists, it fails OPEN
+  // toward releasing, the release is conditioned on its result, and no release flag survives anywhere in the
+  // file - that last one as a FORBID, because the defect this replaces would come back as a helpful-looking
+  // optimisation long before it came back as a deliberate change.
+  requireStatementOnce(errors, seasonBrowser, 'try { $portStillHeld = @(Get-MapleSeasonPortListener -Port $port -Scenario $Scenario).Count -gt 0 }', 'season-browser:launch-reads-the-port-before-releasing-it')
+  requireStatementOnce(errors, seasonBrowser, '$portStillHeld = $true', 'season-browser:launch-assumes-the-port-held-when-it-cannot-tell')
+  requireStatementOnce(errors, seasonBrowser, 'if ($portStillHeld) {', 'season-browser:launch-releases-the-port-on-its-own-condition')
+  if (/portReleased/.test(seasonBrowserCode)) errors.push('season-browser:launch-still-remembers-a-release-flag')
   // EVERY STEP OF THE SALVAGE IS WRAPPED, including the steps that only READ. Four statements sat outside any
   // try - both HasExited reads, the handle close and Dispose - so housekeeping nobody expected to throw could
   // still raise a terminating error out of the finally and REPLACE the diagnosis it exists to annotate, which is
@@ -609,6 +652,41 @@ export function foundationStaticGuard(root = process.cwd()) {
   // redundant kill on a process that is already gone costs one footnote, and a skipped kill on a live one leaves
   // a browser process on the workstation. Only one of those two is recoverable by reading the report.
   requireStatementOnce(errors, seasonBrowser, '$stillRunning = $true', 'season-browser:launch-assumes-a-live-child-when-it-cannot-tell')
+  // THE CATCH BODIES ARE PINNED, NOT ONLY THE `try`. A wrapper says nothing about what its catch DOES, and
+  // `catch { throw }` satisfies every wrapping pin above while restoring the exact masking the wrapping was added
+  // to stop: a terminating error leaving this finally and REPLACING the diagnosis it exists to annotate. An empty
+  // catch is the other half - it swallows the fact instead of recording it, so the report says the salvage went
+  // cleanly. A fresh-context review found both. Each block is held as ONE CONTIGUOUS SHAPE rather than as a set
+  // of presences, which also closes what the $stillRunning initialiser pin left open: an initialiser pinned on
+  // its own permits a second write between it and the branch that reads it, and a contiguous shape does not.
+  // These overlap the individual pins above on purpose - the individual labels name WHICH property broke, and
+  // this one names the block whose annotation can no longer be quietly turned back into a rethrow.
+  requireStatementOnce(errors, seasonBrowser, [
+    '    $stillRunning = $true',
+    '    try { $stillRunning = -not $process.HasExited }',
+    '    catch { $footnotes.Add("could not tell whether the browser process it started is still running (pid $($process.Id)): $($_.Exception.Message)") }',
+    '    if ($stillRunning) {',
+  ].join('\n'), 'season-browser:launch-liveness-block-is-whole')
+  requireStatementOnce(errors, seasonBrowser, [
+    '      try { $process.Kill(); [void]$process.WaitForExit(10000) }',
+    '      catch { $footnotes.Add("could not terminate the browser process it started (pid $($process.Id)): $($_.Exception.Message)") }',
+    '      try { if (-not $process.HasExited) { $footnotes.Add("left the browser process it started running (pid $($process.Id))") } }',
+    '      catch { $footnotes.Add("could not confirm the browser process it started has exited (pid $($process.Id)): $($_.Exception.Message)") }',
+  ].join('\n'), 'season-browser:launch-kill-block-is-whole')
+  requireStatementOnce(errors, seasonBrowser, [
+    '    $portStillHeld = $true',
+    '    try { $portStillHeld = @(Get-MapleSeasonPortListener -Port $port -Scenario $Scenario).Count -gt 0 }',
+    '    catch { $footnotes.Add("could not tell whether governed port $port is still held, so it attempted the release anyway: $($_.Exception.Message)") }',
+    '    if ($portStillHeld) {',
+    '      try { Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario }',
+    '      catch { $footnotes.Add("could not release governed port $port after salvaging an unmanaged launch: $($_.Exception.Message)") }',
+    '    }',
+  ].join('\n'), 'season-browser:launch-port-block-is-whole')
+  requireStatementOnce(errors, seasonBrowser, [
+    '    try { $process.Dispose() }',
+    '    catch { $footnotes.Add("could not release the runtime reservation on the browser process id it started: $($_.Exception.Message)") }',
+  ].join('\n'), 'season-browser:launch-runtime-release-block-is-whole')
+  requireStatementOnce(errors, seasonBrowser, '$footnotes.Add("could not close the handle pinning the browser process it started: $($_.Exception.Message)")', 'season-browser:launch-handle-close-catch-annotates')
   // .NET's handle is a reservation too, and an undisposed Process keeps it - and the id - until a garbage
   // collection nobody scheduled, so closing only OUR handle proves nothing about the id being released.
   requireStatementOnce(errors, seasonBrowser, '$process.Dispose()', 'season-browser:launch-releases-the-runtime-reservation')
@@ -1016,7 +1094,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // THE STATIC HALF IS HELD TOO. A fresh-context review observed that every static mutation could be wrapped
   // whole while the behavioural half still earned its own sentence, because no caller read the static marker at
   // all - a marker nobody consumes is decoration. Both callers now hold it with its count.
-  const staticClaim = 'Foundation mutation drill: PASS (224 controlled mutations turned the gate red)'
+  const staticClaim = 'Foundation mutation drill: PASS (241 controlled mutations turned the gate red)'
   requireText(errors, foundationWorkflow, `$expectedStatic = '${staticClaim}'`, 'workflow:mutation-drill-static-claim-held')
   requireText(errors, foundationOrchestrator, `$expectedStaticMarker = '${staticClaim}'`, 'orchestrator:mutation-drill-static-claim-held')
   requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedStatic', 'workflow:mutation-drill-static-claim-consumed')
