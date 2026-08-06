@@ -471,6 +471,15 @@ export function foundationStaticGuard(root = process.cwd()) {
   // zero such lines in either file, so the strip is currently exact, and this pin is what keeps it exact. If a
   // trailing comment is ever genuinely wanted here, that is a deliberate decision to reopen the comment-
   // satisfaction hole, and it should fail this guard first rather than quietly weaken every pin above.
+  //
+  // BLOCK COMMENTS ARE CAUGHT BY THE SAME LINE, and that is worth saying out loud because it is currently a
+  // side effect rather than a design. MEASURED against this exact helper: the BODY of a `<# ... #>` block
+  // survives the line filter, so a statement quoted inside one would satisfy a pin that no code satisfies -
+  // the layer-nine defeat in a third shape. What saves it today is that `<#` contains a `#` and is never
+  // comment-ONLY by the test above, so the opener line is flagged in all three shapes measured: opener alone,
+  // indented opener, and a single-line `<# ... #>`. That is a coincidence of spelling, and a plausible tidy-up
+  // - widening the comment-only test to `/^\s*(#|<#)/` - would silently undo it. So the coincidence is held by
+  // an executed drill rather than by this paragraph: see the block-comment mutation in the drill file.
   for (const [label, source] of [
     ['season-browser:no-inline-comments', seasonBrowser],
     ['browser-timeout-regression:no-inline-comments', browserTimeoutRegression],
@@ -951,7 +960,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // THE STATIC HALF IS HELD TOO. A fresh-context review observed that every static mutation could be wrapped
   // whole while the behavioural half still earned its own sentence, because no caller read the static marker at
   // all - a marker nobody consumes is decoration. Both callers now hold it with its count.
-  const staticClaim = 'Foundation mutation drill: PASS (201 controlled mutations turned the gate red)'
+  const staticClaim = 'Foundation mutation drill: PASS (202 controlled mutations turned the gate red)'
   requireText(errors, foundationWorkflow, `$expectedStatic = '${staticClaim}'`, 'workflow:mutation-drill-static-claim-held')
   requireText(errors, foundationOrchestrator, `$expectedStaticMarker = '${staticClaim}'`, 'orchestrator:mutation-drill-static-claim-held')
   requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedStatic', 'workflow:mutation-drill-static-claim-consumed')

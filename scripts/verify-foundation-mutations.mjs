@@ -706,6 +706,18 @@ try {
   mutate('scripts/maple-season-browser-timeout.regression.ps1', (source) => source.replace('$port = 4288', '$port = 4288 # a trailing comment the strip cannot see'))
   detected('a trailing comment reopens the comment-satisfaction hole in the timeout regression', 'browser-timeout-regression:no-inline-comments')
   reset()
+  // A PowerShell BLOCK comment, which is the same hole in a third shape and is caught today only by a
+  // coincidence of spelling. MEASURED against the real helper: the body of a `<# ... #>` block survives the
+  // line filter, so a statement quoted inside one would satisfy a pin that no code satisfies. What catches it
+  // is that `<#` contains a `#` while not being comment-ONLY, so the opener line trips the same check - in all
+  // three shapes measured, opener alone, indented opener, and a single-line block. A plausible tidy-up of the
+  // comment-only test to `/^\s*(#|<#)/` would silently undo that, so it gets a drill of its own rather than a
+  // paragraph. The body here quotes a pinned statement deliberately: that is the attack, not decoration.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '    $process.Dispose()\n',
+    '    <#\n    $process.Dispose()\n    #>\n'))
+  detected('a block comment lets a pinned statement be satisfied by quoted prose', 'season-browser:no-inline-comments')
+  reset()
   // F15: terminate each listener as soon as it validates, instead of validating every listener first. One
   // port can hold two listeners - measured, one on 127.0.0.1 and one on ::1, enumerated IPv6-first - so a
   // one-pass cleanup kills the owned one and then refuses on the foreign one, having already killed.
