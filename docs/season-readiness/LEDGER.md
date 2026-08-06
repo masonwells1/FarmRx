@@ -1633,3 +1633,115 @@ Run at the exact tree that became this commit, one suite at a time, with no prob
 - `npx tsc -b --force` → exit 0. `node --check` on both changed `.mjs` files → parse-clean. `[Parser]::ParseFile` across every `.ps1` under `scripts/` → `bad=0`.
 
 Nothing was pushed, merged, or deployed. Production remains untouched at `https://farm-rx.vercel.app`.
+
+## SR-083 — Sol tranche I on `9a02994`: the two thrown paths that leaked without reporting, a FORBID rule that a space defeated, and the drill's own total finally said honestly
+
+Commit 4, one past the three-to-four Mason approved when he chose *"fix ownership properly, then stop hardening."* All four findings came from a fresh-context Sol review of the exact tree at `9a02994`; each was read out of the real file on this workstation before it was believed, and all four are closed here. Two SR-082 sentences are withdrawn.
+
+### R-05 — the job object's own leak report was written and then thrown away
+
+SR-082's R-04 gave `CreateKillOnCloseJob` a terminal `finally` that closed the job whenever the ownership flag still said the handle was this method's. Sol pointed at the line inside it: it called `CloseHandle` and **discarded the result**. That is R-03's defect — a silent close — surviving in the very block SR-082 added to fix the leak, and it is worse there than anywhere else in the file, because the thrown path is the one where nobody is watching.
+
+It could not be fixed in place, and the reason is the mechanism, not the syntax. A `finally` that discovers a failed close while an exception is already in flight **has nowhere to put the finding**: `out` parameters are not marshalled back to PowerShell from a method that threw (so the `stage` string the rest of the file reports through is unreachable), and throwing from a `finally` *replaces* the exception that was travelling, destroying the original diagnosis to report the secondary one.
+
+So the `finally` is now a `catch`, which is the only construct that holds both facts at once:
+
+```
+} catch (Exception thrown) {
+  if (!jobIsStillThisMethodsToLose) { throw; }
+  string leakedJob = CloseAndDescribe(job, "the job object being created", ref jobIsStillThisMethodsToLose);
+  if (leakedJob.Length == 0) { throw; }
+  throw new InvalidOperationException(thrown.Message + leakedJob, thrown);
+}
+```
+
+Nothing leaked, or the close succeeded → the original exception is rethrown **untouched**. Something leaked → the leak sentence is appended to the original message and the original is preserved as `InnerException`, so no diagnosis is lost in either direction.
+
+### R-06 — two handles became this method's the moment `CreateProcessW` returned, and a throw before either return leaked both, silently
+
+`StartInJob` gets a process handle and a thread handle from a successful `CreateProcessW`. Between that return and the point where each one is either closed or handed to the caller there are calls that can throw, and on any of those both handles were gone from the program and still open in the kernel — with no report, because the same `out`-parameter fact above applies here too.
+
+Everything after a successful `CreateProcessW` is now inside a `try`, with **two independent** ownership flags rather than one. Independent because the two handles stop being this method's at genuinely different moments: the thread handle is closed on the success path, while the process handle is *handed to the caller* and must not be closed. A single flag would have to lie about one of them.
+
+The `catch` closes only what is still flagged, and appends one sentence per handle it lost. **It deliberately does not kill the child** — a throw here says nothing about whether the child is a job member, and if it is, the job's `KILL_ON_JOB_CLOSE` is the thing that ends it; an unconditional kill in a `catch` would be this file spelling a kill outside `TerminateJobObject`, which is the boundary the last three tranches have been narrowing.
+
+### P-03 — clearing the ownership flag *after* the close is a double-close, and the second close can land on someone else's handle
+
+Mine, found while implementing R-05. `CloseAndDescribe` is now 3-arg and takes the flag by reference, and it clears the flag **before** calling `CloseHandle`:
+
+```
+private static string CloseAndDescribe(IntPtr handle, string label, ref bool stillOurs) {
+  stillOurs = false;
+  if (CloseHandle(handle)) { return ""; }
+  ...
+}
+```
+
+Clearing it afterwards leaves a window — the close itself, and the sentence-building after it — in which the flag still says "mine". A throw inside that window unwinds into the `catch`, which reads the flag, believes it, and closes the same handle a second time. That is not a harmless no-op: **Windows reissues handle values**, so a stale close can land on something this process opened in between. Doing it inside the helper means every call site gets the ordering right without having to know why.
+
+### R-07 — the FORBID rule SR-082 called permanent was defeated by one space
+
+SR-082 wrote that a static rule made the checked-close pattern permanent: *"any `CloseHandle(created.` anywhere in the helper's embedded C# reddens the gate."* **That claim is false and is withdrawn.** The rule was one exact character sequence, and C# does not require that spelling. `CloseHandle (created.hThread);` evades it. So does `CloseHandle((created.hThread));`. So does a local alias — `Func<IntPtr, bool> closer = CloseHandle; closer(created.hThread);` — which never spells the forbidden sequence at all. A rule about the *shape* of the code, written as a literal, is a rule about one way of typing it.
+
+It is replaced by a **census**, which inverts the question from "does the bad spelling appear" to "is every mention of this function one of the mentions we sanctioned":
+
+```
+const sanctionedCloseHandleLines = [
+  '  public static extern bool CloseHandle(IntPtr handle);',
+  '    if (CloseHandle(handle)) { return ""; }',
+]
+const unsanctionedCloseHandleMentions = seasonBrowserExecutable.split('\n')
+  .filter((line) => /CloseHandle/.test(line))
+  .filter((line) => !/::CloseHandle\s*\(/.test(line))
+  .filter((line) => !sanctionedCloseHandleLines.includes(line))
+```
+
+Two lines in the embedded C# may name `CloseHandle`: the declaration, and the single call inside `CloseAndDescribe`. Anything else — any spacing, any parenthesisation, any alias — is an unsanctioned mention and reddens the gate, because **the alias assignment itself has to name `CloseHandle`**. That closes the hole this file cannot otherwise close, and it closes it without needing the PowerShell parser that the open R-09/C-05 work is waiting on. Three drills prove all three evasions: the extra space, the extra parentheses, and the alias.
+
+### C-07 closed — the drill's summary sentence now says what the number actually counts
+
+Sol's fourth finding was that the sentence read *"N controlled mutations turned the gate red"* while the number is `detectedMutations.length` — and SR-082 itself recorded, in the same commit that printed it, that the figure is a count of `detected()` calls and therefore a **lower bound** on mutations applied. A marker whose own ledger entry explains that it overstates is worse than no marker.
+
+It is fixed here rather than deferred, because the propagation this tranche already owed touches the identical five lines. The sentence is now:
+
+**`Foundation mutation drill: PASS (307 controlled defects each turned the gate red under their own name)`**
+
+Every word of that is a claim the mechanism actually makes. A **defect** is one `detected()` call, planted by at least one real write — `mutate` refuses a needle that no longer applies, and `detected` refuses when nothing is pending. **Under their own name** is the label match: the gate did not merely go red, it reported the specific failure the drill was recreating. Several drills rewrite two or three anchors that only form a defect together, which is exactly why "mutations" was the wrong noun and "defects" is the right one. The reasoning is written into the accounting comment in the drill file, replacing a sentence there that claimed more than the code does.
+
+The two labels holding that sentence in the callers — `orchestrator:mutation-drill-static-claim-held` and `workflow:mutation-drill-static-claim-held` — were the last two labels in that section of the guard with **no drill behind them**. They now have one each, failing from the direction the mistake actually arrives from: a stale total left behind in one caller when the drill's own count moves.
+
+### Instrumentation
+
+Guard pins: the job-leak label renamed from `…cannot-leak-its-job-on-a-thrown-path` to `…closes-and-reports-its-job-on-a-thrown-path`, because the old name claimed prevention where the code performs reporting; the limit-close and helper-signature pins re-pointed to the three-argument helper including its `stillOurs = false;` line; both failure-path pins and the success-path pin re-pointed to the new indentation and split closes; two new labels for the launch path (`…tracks-both-child-handles-independently`, `…closes-and-reports-both-child-handles-on-a-thrown-path`); the census above replacing the literal FORBID rule.
+
+Sixteen drills written, one of them replacing the renamed job-leak case, so **fifteen net**: the job `catch` reverted to a discarding `finally` (the exact SR-082 regression); the `catch` dropped to a bare rethrow with no `InnerException`; the `catch` closing a handle it may already have closed; the resume path's two closes re-chained into one expression; the helper's flag clear moved back below the close; the three census evasions; six over the launch path's two flags and its `catch`; and the two stale-total cases above.
+
+Drill total **292 → 307**, taken from the drill's own printed tally, then propagated to all four live sites — the emitter, the guard's `staticClaim`, the guard's counted-not-asserted needle, and both callers' literals — with the full chain re-read afterwards and confirmed byte-identical.
+
+### What this commit deliberately does not close
+
+- **R-09 / C-05** and **R-10 / C-06** — the here-string body and the line-counting write census, both still waiting on a real PowerShell code view (`ParseFile`, token census). The census in R-07 sidesteps that dependency for one specific question; it does not remove it.
+- **C-09's code half** — the predicate rename and the three comments that still describe the ownership predicate as authorizing a kill.
+- **F13–F19**, the timeout regression's own safety net, planned in full and unchanged.
+- **The label census.** The label set moved again this tranche, so the stale 91-of-244 figure is not repeated as if it were current.
+
+### Corrections to SR-082
+
+1. **SR-082 said the FORBID rule meant "the next author cannot reintroduce a silent close without the guard saying so." That is false, and it is withdrawn.** They could, by adding one space. What is true now is the census: every mention of `CloseHandle` in the executable view must be one of two sanctioned lines or a PowerShell `::CloseHandle(` call.
+2. **SR-082 presented the terminal `finally` as R-04's repair without noting that the close inside it discarded its result.** The leak was closed; the reporting discipline the same commit's R-03 established across five other sites was not applied to the sixth. Recorded because SR-082's R-03 section counts the sites it fixed, and that count was taken as complete.
+3. **SR-082's evidence pointer `scratchpad/gate-tranche-h.log` does not resolve.** There is no `scratchpad/` directory in this repository and the path is not ignored — the log lived in a session-local temporary directory. This tranche's three logs are retained the same way and are named as such rather than cited as repository paths; the evidence that has to survive is the quoted lines above, in this file.
+
+### Evidence, all local, nothing pushed
+
+Run at the exact tree that became this commit, one suite at a time, with no probe or sabotage script running alongside.
+
+- `powershell scripts/verify-foundation.ps1` → **`Farm Rx foundation gate: PASS`**, `GATE_EXIT=0`, 1,468 lines, `62 passed (47.3s)`. Inside it: `Foundation static guards: PASS`; **`Foundation mutation drill: PASS (307 controlled defects each turned the gate red under their own name)`**; `Foundation behavioural mutation drill: PASS (5 broken subjects were reported by the suite that runs against them, 0 not measurable on this platform)`; `Foundation Windows lane runtime drill: PASS (6 of 6 cases executed and validated on win32)`; `Foundation orchestrator intermediate-failure probe: PASS`; `Foundation Windows execution lane accounting probe: PASS (4 rejected, 1 accepted)`; `MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS`; `MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS`; `Season fixture contract: PASS (101 fixtures; 6 scenarios; 6 isolation-scanned files)`; `Season contract regressions: PASS (9 rejected contract mutations; 18 rejected isolation mutations)`.
+
+  The line that matters most for C-07 is at **line 480 of that log**: the new sentence being *accepted* by `verify-foundation.ps1`'s own `-cnotcontains` check. The propagation is therefore proven by a real consumer refusing to proceed unless the drill prints the exact sentence, not by any assertion written about it.
+
+- The two **Windows-only** suites the foundation gate does not run — re-verified this session by grep that `verify-foundation.ps1` contains **zero** references to the preflight regression — executed directly and singly: `MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS` (exit 0) with `TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true` and **no teardown-problem line**; and `MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_PASS` (exit 0) with **no stranded-listener line**.
+- The mutation drill run standalone → exit 0, **307** `Mutation detected:` lines counted from the log, matching the printed total exactly.
+- `npx tsc -b --force` → exit 0, zero output lines. `node --check` on both changed `.mjs` files → parse-clean. `[Parser]::ParseFile` across every `.ps1` under `scripts/` → `bad=0`.
+- C# compile probe → `COMPILE_EXIT=0`, `CLOSEANDDESCRIBE_PARAMS=System.IntPtr:handle, System.String:label, System.Boolean&:stillOurs`, which is the `ref bool` P-03 depends on actually reaching the CLR rather than merely being typed.
+
+Nothing was pushed, merged, or deployed. Production remains untouched at `https://farm-rx.vercel.app`.

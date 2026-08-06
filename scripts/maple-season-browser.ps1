@@ -526,9 +526,19 @@ public static class MapleSeasonProcessInterop {
     // on a bad type or a bad pointer. Any of those unwinds straight out of this method with the job created,
     // nobody holding its handle, and no PowerShell statement able to name it - a leaked kernel object for the
     // life of the session. This flag is the whole fix: it stays true only while the job is still this method's
-    // to lose, and the outer finally closes the handle in exactly that case. It is cleared on the limit-failure
+    // to lose, and the catch below closes the handle in exactly that case. It is cleared on the limit-failure
     // path, which closes by hand because it has a stage sentence to write, and on the success path, where the
     // caller becomes responsible for it.
+    //
+    // IT IS A CATCH RATHER THAN A FINALLY, AND THAT IS THE CORRECTION THIS LINE CARRIES. An earlier version put
+    // the rescue close in a finally and discarded its result - which left the method claiming, in a guard label
+    // no less, that it could not leak the job on a thrown path while doing exactly that whenever the close
+    // failed. A finally cannot do better: a close failure discovered while an exception is already travelling
+    // has nowhere to go. The "out string stage" this method reports through is never marshalled back to
+    // PowerShell when the method throws, so writing the leak into it would be writing to a channel nobody will
+    // read, and throwing from a finally would replace the original exception and lose the reason the unwind
+    // started. A catch has both facts in hand, so it reports both: the original message, the leak sentence
+    // appended, and the original exception preserved as InnerException for anyone reading it in a debugger.
     bool jobIsStillThisMethodsToLose = true;
     try {
       JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
@@ -545,18 +555,18 @@ public static class MapleSeasonProcessInterop {
           // statement away from losing the only reference to. A close that fails leaks it for the life of the
           // session, and the caller is about to refuse the launch anyway, so saying so costs one sentence in a
           // message a human is already going to read.
-          if (!CloseHandle(job)) {
-            stage = "limit, and the unusable job object could not be closed (Windows error "
-              + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";
-          }
-          jobIsStillThisMethodsToLose = false;
+          string unusableJob = CloseAndDescribe(job, "the unusable job object", ref jobIsStillThisMethodsToLose);
+          if (unusableJob.Length > 0) { stage = "limit, and" + unusableJob; }
           return IntPtr.Zero;
         }
       } finally { Marshal.FreeHGlobal(buffer); }
       jobIsStillThisMethodsToLose = false;
       return job;
-    } finally {
-      if (jobIsStillThisMethodsToLose) { CloseHandle(job); }
+    } catch (Exception thrown) {
+      if (!jobIsStillThisMethodsToLose) { throw; }
+      string leakedJob = CloseAndDescribe(job, "the job object being created", ref jobIsStillThisMethodsToLose);
+      if (leakedJob.Length == 0) { throw; }
+      throw new InvalidOperationException(thrown.Message + leakedJob, thrown);
     }
   }
 
@@ -568,7 +578,21 @@ public static class MapleSeasonProcessInterop {
   // nothing, and a failure nobody records is a failure nobody fixes. This returns a sentence rather than a bool
   // so a caller can append it to the stage it is already reporting, and returns the empty string on success so
   // appending it costs nothing on the ordinary path.
-  private static string CloseAndDescribe(IntPtr handle, string label) {
+  //
+  // THE OWNERSHIP FLAG IS CLEARED BEFORE THE CLOSE, NOT AFTER, and that ordering is the entire reason the third
+  // parameter exists rather than each caller writing "flag = false" on the line after the call. A caller that
+  // closed a handle and then threw while building the sentence describing the close would, with an after-the-fact
+  // clear, still be holding a flag that says "mine" - and the unwinding catch would close the same handle a
+  // second time. Windows reissues handle values, so a second close is not a harmless no-op; it can close
+  // something else this process has since opened. Once this function has been entered for a handle nobody else
+  // may close it, and that is true on both outcomes: either the close succeeded, or it failed, and a handle
+  // CloseHandle has already refused is not going to be closed by asking again.
+  //
+  // Passing the flag by reference is also what lets the static guard state the rule as a shape rather than as a
+  // habit: this is the only place in the class that calls CloseHandle at all, so "every close reports its
+  // outcome and gives up ownership" is checkable by counting, not by reading every branch.
+  private static string CloseAndDescribe(IntPtr handle, string label, ref bool stillOurs) {
+    stillOurs = false;
     if (CloseHandle(handle)) { return ""; }
     return " " + label + " could not be closed (Windows error "
       + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session.";
@@ -606,47 +630,93 @@ public static class MapleSeasonProcessInterop {
       stage = "create";
       return false;
     }
-    if (!AssignProcessToJobObject(job, created.hProcess)) {
-      error = Marshal.GetLastWin32Error();
-      stage = "assign";
-      // THE RETURN VALUE IS CHECKED, because this is the one child KILL_ON_JOB_CLOSE cannot save. The
-      // assignment failed, so this process is not a member of the job, and nothing that happens to the job
-      // handle will ever touch it. It was created suspended, so it will never run and never exit on its own.
-      // A few lines below, both handles close and this script loses the ability to name it at all. So if the
-      // kill fails, the pid leaves through stage and processId and the refusal upstream tells a human which
-      // process to end, rather than reporting a cleanup that did not happen.
-      if (!TerminateProcess(created.hProcess, 1)) {
-        stage = "assign, and the suspended child could not be terminated (Windows error "
-          + Marshal.GetLastWin32Error().ToString() + ")";
-        processId = created.dwProcessId;
+    // TWO HANDLES BECAME THIS METHOD'S THE MOMENT CreateProcessW RETURNED TRUE, and from here to the return every
+    // path has to account for both of them - the thrown paths included. This is the job handle's defect one level
+    // down: the three deliberate exits below each close what they still own, but a MANAGED operation between them
+    // can throw. Building a stage sentence concatenates strings, which throws OutOfMemoryException when the
+    // process cannot satisfy the allocation; a Marshal call throws on a bad pointer. An exception between the two
+    // closes on a failure path leaves the second handle open forever, and an exception on the success path before
+    // the process handle reaches its out parameter loses the only reference this session had to a running child.
+    // Each handle gets its own flag, and CloseAndDescribe clears it at the moment ownership passes rather than
+    // afterwards, so the catch closes exactly what is still outstanding and cannot close anything twice.
+    //
+    // The catch does not kill the child, deliberately. On the two failure paths the child is already dead or
+    // already reaped; on the success path it is running and a job member, and the caller - which is about to see
+    // this exception - closes the job handle in its own finally, at which point KILL_ON_JOB_CLOSE reaps it. A
+    // TerminateProcess here would be a second executioner for a process that already has one.
+    bool threadHandleIsStillThisMethodsToLose = true;
+    bool processHandleIsStillThisMethodsToLose = true;
+    try {
+      if (!AssignProcessToJobObject(job, created.hProcess)) {
+        error = Marshal.GetLastWin32Error();
+        stage = "assign";
+        // THE RETURN VALUE IS CHECKED, because this is the one child KILL_ON_JOB_CLOSE cannot save. The
+        // assignment failed, so this process is not a member of the job, and nothing that happens to the job
+        // handle will ever touch it. It was created suspended, so it will never run and never exit on its own.
+        // A few lines below, both handles close and this script loses the ability to name it at all. So if the
+        // kill fails, the pid leaves through stage and processId and the refusal upstream tells a human which
+        // process to end, rather than reporting a cleanup that did not happen.
+        if (!TerminateProcess(created.hProcess, 1)) {
+          stage = "assign, and the suspended child could not be terminated (Windows error "
+            + Marshal.GetLastWin32Error().ToString() + ")";
+          processId = created.dwProcessId;
+        }
+        // EACH CLOSE IS ITS OWN STATEMENT, and the sentences are collected before either is appended to stage.
+        // Written as one chained expression - stage + close(thread) + close(process) - a throw while
+        // concatenating the first sentence would skip the second close entirely, which is the whole defect this
+        // block exists to close.
+        string unassignedThread = CloseAndDescribe(created.hThread, "the unassigned child's thread handle",
+          ref threadHandleIsStillThisMethodsToLose);
+        string unassignedProcess = CloseAndDescribe(created.hProcess, "the unassigned child's process handle",
+          ref processHandleIsStillThisMethodsToLose);
+        stage = stage + unassignedThread + unassignedProcess;
+        return false;
       }
-      stage = stage + CloseAndDescribe(created.hThread, "the unassigned child's thread handle")
-        + CloseAndDescribe(created.hProcess, "the unassigned child's process handle");
-      return false;
+      if (ResumeThread(created.hThread) == RESUME_THREAD_FAILED) {
+        error = Marshal.GetLastWin32Error();
+        stage = "resume";
+        // THE JOB KILL IS THE RIGHT PRIMITIVE HERE AND ITS RESULT IS DELIBERATELY NOT CHECKED, which is the
+        // opposite of the decision one branch up, so the difference is worth stating. This child IS a job member,
+        // so it has two independent executioners: this call, and the kernel reaping every member when the last
+        // job handle closes - which the caller's finally does, and which process exit does even if this session
+        // is killed outright. A failed TerminateJobObject here therefore strands nothing. The unassigned child
+        // above had exactly one executioner, which is why that one is checked.
+        TerminateJobObject(job, 1);
+        string unresumedThread = CloseAndDescribe(created.hThread, "the unresumed child's thread handle",
+          ref threadHandleIsStillThisMethodsToLose);
+        string unresumedProcess = CloseAndDescribe(created.hProcess, "the unresumed child's process handle",
+          ref processHandleIsStillThisMethodsToLose);
+        stage = stage + unresumedThread + unresumedProcess;
+        return false;
+      }
+      // THE THREAD HANDLE IS DONE WITH; THE PROCESS HANDLE IS THE CALLER'S NOW. A failed close of the thread
+      // handle does not make the launch a failure - the child is running, inside the job, and reachable - so this
+      // returns true either way and reports the leak through stage, which is empty on an ordinary success. The
+      // caller warns on a non-empty stage after a successful launch, because a channel nobody reads is not a
+      // report. The process handle's flag is cleared AFTER the assignment to processHandle, not before: until
+      // that assignment has happened the caller has nothing, so an exception before it must still close.
+      stage = CloseAndDescribe(created.hThread, "the launched child's thread handle",
+        ref threadHandleIsStillThisMethodsToLose);
+      processHandle = created.hProcess;
+      processHandleIsStillThisMethodsToLose = false;
+      processId = created.dwProcessId;
+      return true;
+    } catch (Exception thrown) {
+      // THE EXCEPTION IS THE ONLY CHANNEL LEFT, for the reason spelled out over CreateKillOnCloseJob's catch:
+      // out parameters are not marshalled back to PowerShell from a method that threw, so a leak recorded in
+      // stage would be a leak recorded nowhere.
+      string leaked = "";
+      if (threadHandleIsStillThisMethodsToLose) {
+        leaked = leaked + CloseAndDescribe(created.hThread, "the child's thread handle",
+          ref threadHandleIsStillThisMethodsToLose);
+      }
+      if (processHandleIsStillThisMethodsToLose) {
+        leaked = leaked + CloseAndDescribe(created.hProcess, "the child's process handle",
+          ref processHandleIsStillThisMethodsToLose);
+      }
+      if (leaked.Length == 0) { throw; }
+      throw new InvalidOperationException(thrown.Message + leaked, thrown);
     }
-    if (ResumeThread(created.hThread) == RESUME_THREAD_FAILED) {
-      error = Marshal.GetLastWin32Error();
-      stage = "resume";
-      // THE JOB KILL IS THE RIGHT PRIMITIVE HERE AND ITS RESULT IS DELIBERATELY NOT CHECKED, which is the
-      // opposite of the decision one branch up, so the difference is worth stating. This child IS a job member,
-      // so it has two independent executioners: this call, and the kernel reaping every member when the last
-      // job handle closes - which the caller's finally does, and which process exit does even if this session
-      // is killed outright. A failed TerminateJobObject here therefore strands nothing. The unassigned child
-      // above had exactly one executioner, which is why that one is checked.
-      TerminateJobObject(job, 1);
-      stage = stage + CloseAndDescribe(created.hThread, "the unresumed child's thread handle")
-        + CloseAndDescribe(created.hProcess, "the unresumed child's process handle");
-      return false;
-    }
-    // THE THREAD HANDLE IS DONE WITH; THE PROCESS HANDLE IS THE CALLER'S NOW. A failed close of the thread
-    // handle does not make the launch a failure - the child is running, inside the job, and reachable - so this
-    // returns true either way and reports the leak through stage, which is empty on an ordinary success. The
-    // caller warns on a non-empty stage after a successful launch, because a channel nobody reads is not a
-    // report.
-    stage = CloseAndDescribe(created.hThread, "the launched child's thread handle");
-    processHandle = created.hProcess;
-    processId = created.dwProcessId;
-    return true;
   }
 }
 '@

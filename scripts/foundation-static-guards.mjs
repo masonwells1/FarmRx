@@ -701,22 +701,30 @@ export function foundationStaticGuard(root = process.cwd()) {
     '        stage = "limit";',
   ].join('\n'), 'season-browser:job-limit-failure-reports-its-stage')
   pinBrowserOnce([
-    '          if (!CloseHandle(job)) {',
-    '            stage = "limit, and the unusable job object could not be closed (Windows error "',
-    '              + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";',
-    '          }',
-    '          jobIsStillThisMethodsToLose = false;',
+    '          string unusableJob = CloseAndDescribe(job, "the unusable job object", ref jobIsStillThisMethodsToLose);',
+    '          if (unusableJob.Length > 0) { stage = "limit, and" + unusableJob; }',
     '          return IntPtr.Zero;',
   ].join('\n'), 'season-browser:job-without-its-limit-is-closed-not-returned')
-  // AND THE PATHS NOBODY THOUGHT ABOUT ARE COVERED BY A FINALLY, which is the difference between "the two
-  // failures I enumerated close the job" and "the job cannot leak out of this method". A fresh-context review
-  // found the earlier version guarding only the unmanaged buffer: Marshal.AllocHGlobal throws OutOfMemoryException
-  // and SizeOf/StructureToPtr throw on a bad type or pointer, and any of those unwound out of the method with the
-  // job created and no PowerShell statement able to name its handle - a kernel object leaked for the session, on
-  // a path with no error code and no stage. Three pins, because this is a three-part invariant and dropping any
-  // one part reintroduces a different bug: the flag starts TRUE (drop that and nothing is ever closed), the
-  // success return clears it (drop that and the finally closes the handle it just returned, so the caller holds a
-  // dead handle and the child is reaped instantly), and the finally closes only while the job is still unowned.
+  // AND THE PATHS NOBODY THOUGHT ABOUT ARE COVERED BY A CATCH, which is the difference between "the two
+  // failures I enumerated close the job" and "the job cannot leak out of this method unreported". A fresh-context
+  // review found the earlier version guarding only the unmanaged buffer: Marshal.AllocHGlobal throws
+  // OutOfMemoryException and SizeOf/StructureToPtr throw on a bad type or pointer, and any of those unwound out of
+  // the method with the job created and no PowerShell statement able to name its handle - a kernel object leaked
+  // for the session, on a path with no error code and no stage. Three pins, because this is a three-part invariant
+  // and dropping any one part reintroduces a different bug: the flag starts TRUE (drop that and nothing is ever
+  // closed), the success return clears it (drop that and the rescue closes the handle it just returned, so the
+  // caller holds a dead handle and the child is reaped instantly), and the rescue closes only while the job is
+  // still unowned.
+  //
+  // AND THE RESCUE IS PINNED AS A CATCH THAT REPORTS, not as a finally that closes. The next fresh-context review
+  // found the finally form discarding the close's answer under a label promising the job could not leak on a
+  // thrown path - the label was a stronger claim than the code, which is the same defect as a comment that
+  // asserts a cleanup nobody checked. A finally has nowhere to put the discovery: `out string stage` is not
+  // marshalled back from a method that threw, and throwing from a finally would destroy the original exception.
+  // So the pin covers all four parts of the fix - the flag is consulted, the close is the reporting helper, an
+  // empty report rethrows the original untouched, and a non-empty one throws a message carrying both the leak and
+  // the original exception. Restoring the bare `CloseHandle(job)` reddens the gate; so does dropping the
+  // InnerException that makes the original diagnosable.
   pinBrowserOnce([
     '    bool jobIsStillThisMethodsToLose = true;',
     '    try {',
@@ -726,10 +734,13 @@ export function foundationStaticGuard(root = process.cwd()) {
     '      return job;',
   ].join('\n'), 'season-browser:job-creation-hands-ownership-to-the-caller-on-success')
   pinBrowserOnce([
-    '    } finally {',
-    '      if (jobIsStillThisMethodsToLose) { CloseHandle(job); }',
+    '    } catch (Exception thrown) {',
+    '      if (!jobIsStillThisMethodsToLose) { throw; }',
+    '      string leakedJob = CloseAndDescribe(job, "the job object being created", ref jobIsStillThisMethodsToLose);',
+    '      if (leakedJob.Length == 0) { throw; }',
+    '      throw new InvalidOperationException(thrown.Message + leakedJob, thrown);',
     '    }',
-  ].join('\n'), 'season-browser:job-creation-cannot-leak-its-job-on-a-thrown-path')
+  ].join('\n'), 'season-browser:job-creation-closes-and-reports-its-job-on-a-thrown-path')
 
   // ---- suspended, assigned, and only then resumed -----------------------------------------------------
   // THE ORDER IS THE ENTIRE GUARANTEE, so this compares three positions instead of asserting three presences.
@@ -747,9 +758,14 @@ export function foundationStaticGuard(root = process.cwd()) {
   }
   // BOTH FAILURE PATHS CLEAN UP, AND THEY CLEAN UP DIFFERENTLY, which is why these are two pins and not one.
   // A child that could not be ASSIGNED is not a job member, so nothing but TerminateProcess can reach it; a
-  // child that could not be RESUMED is already a member, so terminating the job is what kills it. The two
-  // CloseHandle pairs are identical text, so each needle runs to the statement that follows it - a needle that
-  // names both blocks names neither.
+  // child that could not be RESUMED is already a member, so terminating the job is what kills it. Each needle
+  // runs to the `return false` that follows it, so neither can be satisfied by the other block's text.
+  //
+  // AND EACH CLOSE IS PINNED AS ITS OWN STATEMENT. The earlier form appended both sentences in one chained
+  // expression - `stage = stage + close(thread) + close(process)` - which a fresh-context review read correctly as
+  // two closes with an unguarded string concatenation between them: a throw while building the first sentence
+  // skips the second close entirely. Splitting them is the repair, so the split is what the needle holds, along
+  // with the `ref` argument that hands ownership over inside the helper rather than on a following line.
   //
   // AND THE ASSIGN PATH'S KILL IS PINNED AS A CHECKED CALL, not as a call. A fresh-context review found the
   // earlier version invoking TerminateProcess and discarding its bool, under a comment promising every failure
@@ -757,20 +773,26 @@ export function foundationStaticGuard(root = process.cwd()) {
   // child that failed to be assigned is not a member and closing the job handle never touches it. So the pin is
   // on the `if (!...)` form: restoring the bare call reddens the gate.
   pinBrowserOnce([
-    '      if (!TerminateProcess(created.hProcess, 1)) {',
-    '        stage = "assign, and the suspended child could not be terminated (Windows error "',
-    '          + Marshal.GetLastWin32Error().ToString() + ")";',
-    '        processId = created.dwProcessId;',
-    '      }',
-    '      stage = stage + CloseAndDescribe(created.hThread, "the unassigned child\'s thread handle")',
-    '        + CloseAndDescribe(created.hProcess, "the unassigned child\'s process handle");',
-    '      return false;',
+    '        if (!TerminateProcess(created.hProcess, 1)) {',
+    '          stage = "assign, and the suspended child could not be terminated (Windows error "',
+    '            + Marshal.GetLastWin32Error().ToString() + ")";',
+    '          processId = created.dwProcessId;',
+    '        }',
+    '        string unassignedThread = CloseAndDescribe(created.hThread, "the unassigned child\'s thread handle",',
+    '          ref threadHandleIsStillThisMethodsToLose);',
+    '        string unassignedProcess = CloseAndDescribe(created.hProcess, "the unassigned child\'s process handle",',
+    '          ref processHandleIsStillThisMethodsToLose);',
+    '        stage = stage + unassignedThread + unassignedProcess;',
+    '        return false;',
   ].join('\n'), 'season-browser:launch-terminates-a-child-it-could-not-assign')
   pinBrowserOnce([
-    '      TerminateJobObject(job, 1);',
-    '      stage = stage + CloseAndDescribe(created.hThread, "the unresumed child\'s thread handle")',
-    '        + CloseAndDescribe(created.hProcess, "the unresumed child\'s process handle");',
-    '      return false;',
+    '        TerminateJobObject(job, 1);',
+    '        string unresumedThread = CloseAndDescribe(created.hThread, "the unresumed child\'s thread handle",',
+    '          ref threadHandleIsStillThisMethodsToLose);',
+    '        string unresumedProcess = CloseAndDescribe(created.hProcess, "the unresumed child\'s process handle",',
+    '          ref processHandleIsStillThisMethodsToLose);',
+    '        stage = stage + unresumedThread + unresumedProcess;',
+    '        return false;',
   ].join('\n'), 'season-browser:launch-kills-the-job-of-a-child-it-could-not-resume')
   // EVERY CHILD-HANDLE CLOSE GOES THROUGH THE REPORTING HELPER, and that is enforced by SHAPE rather than by
   // listing the call sites, because the failure mode is a NEW bare close appearing somewhere this file does not
@@ -779,20 +801,83 @@ export function foundationStaticGuard(root = process.cwd()) {
   // keeps that process id reserved for the life of the session. The helper returns the empty string on success,
   // so the ordinary path is unchanged and only a failure adds a sentence.
   pinBrowserOnce([
-    '  private static string CloseAndDescribe(IntPtr handle, string label) {',
+    '  private static string CloseAndDescribe(IntPtr handle, string label, ref bool stillOurs) {',
+    '    stillOurs = false;',
     '    if (CloseHandle(handle)) { return ""; }',
   ].join('\n'), 'season-browser:child-handle-closes-report-their-outcome')
-  if (/CloseHandle\(created\./.test(seasonBrowserExecutable)) errors.push('season-browser:a-child-handle-is-closed-without-reporting-the-outcome')
+  // AND THE ORDER INSIDE THE HELPER IS PART OF THE PIN. `stillOurs = false` sits ABOVE the close deliberately: a
+  // caller that closed a handle and then threw while building the sentence about it would, with the clear written
+  // afterwards, still be holding a flag that says "mine", and the unwinding catch would close the same handle
+  // twice. Windows reissues handle values, so the second close can land on something else this process has since
+  // opened. Swapping those two lines leaves both of them present and the invariant gone, which is exactly the kind
+  // of defect a presence pin misses and a contiguous needle catches.
+  //
+  // THE RULE IS A CENSUS, NOT A SPELLING. The earlier form forbade the literal `CloseHandle(created.` - which a
+  // fresh-context review defeated on paper three ways without changing behaviour: `CloseHandle (created.hThread)`,
+  // `CloseHandle((created.hThread))`, and a local alias that never writes the two tokens next to each other. A
+  // shape rule written as one exact character sequence is not a shape rule. So this counts instead: inside the
+  // embedded C# there are exactly TWO permitted mentions of CloseHandle - the DllImport declaration, and the one
+  // call inside CloseAndDescribe - and both of those lines are pinned above, so removing them from this census
+  // cannot hide anything. Any other mention at all is a failure, whether it is spelled as a call with unusual
+  // whitespace, a call wrapped in extra parentheses, or a bare method-group reference being handed to a delegate.
+  // The three PowerShell call sites are exempt because they go through `[MapleSeasonProcessInterop]::CloseHandle`
+  // and each is separately pinned as a checked call; C# has no `::` at all, so the exemption cannot cover a new
+  // close inside the class.
+  const sanctionedCloseHandleLines = [
+    '  public static extern bool CloseHandle(IntPtr handle);',
+    '    if (CloseHandle(handle)) { return ""; }',
+  ]
+  const unsanctionedCloseHandleMentions = seasonBrowserExecutable.split('\n')
+    .filter((line) => /CloseHandle/.test(line))
+    .filter((line) => !/::CloseHandle\s*\(/.test(line))
+    .filter((line) => !sanctionedCloseHandleLines.includes(line))
+  if (unsanctionedCloseHandleMentions.length > 0) {
+    errors.push('season-browser:a-child-handle-is-closed-without-reporting-the-outcome')
+  }
   // THE SUCCESS PATH CLOSES THE THREAD HANDLE AND REPORTS IT TOO, and does not turn that leak into a failed
   // launch: the child is running, inside the job, and reachable, so the launch really did succeed. `stage` is
   // ASSIGNED here rather than appended to, because on this path nothing has written to it yet - appending would
   // be the same value and reading a stale one is how an empty-means-clean contract breaks.
   pinBrowserOnce([
-    '    stage = CloseAndDescribe(created.hThread, "the launched child\'s thread handle");',
-    '    processHandle = created.hProcess;',
-    '    processId = created.dwProcessId;',
-    '    return true;',
+    '      stage = CloseAndDescribe(created.hThread, "the launched child\'s thread handle",',
+    '        ref threadHandleIsStillThisMethodsToLose);',
+    '      processHandle = created.hProcess;',
+    '      processHandleIsStillThisMethodsToLose = false;',
+    '      processId = created.dwProcessId;',
+    '      return true;',
   ].join('\n'), 'season-browser:launch-reports-a-thread-handle-it-could-not-close')
+  // AND THE LAUNCH PATH TRACKS ITS TWO CHILD HANDLES THE SAME WAY THE JOB IS TRACKED, one level down. A
+  // fresh-context review found the whole region between a successful CreateProcessW and the return unprotected:
+  // three deliberate exits that each close what they own, and no cover for a managed throw between them. String
+  // concatenation allocates, so a stage sentence can throw OutOfMemoryException; an exception between the two
+  // closes on a failure path leaves the second handle open for the session, and an exception on the success path
+  // before `processHandle = created.hProcess` loses the only reference this session had to a RUNNING child's
+  // process handle. Two flags rather than one, because the two handles stop being this method's at different
+  // moments - the thread handle at its close, the process handle at the hand-off - and one flag covering both
+  // would have to lie about one of them.
+  //
+  // The order in the success pin above is load-bearing for the same reason: the flag is cleared AFTER the
+  // assignment to processHandle, so a throw before the caller has anything still closes.
+  pinBrowserOnce([
+    '    bool threadHandleIsStillThisMethodsToLose = true;',
+    '    bool processHandleIsStillThisMethodsToLose = true;',
+    '    try {',
+  ].join('\n'), 'season-browser:launch-tracks-both-child-handles-independently')
+  pinBrowserOnce([
+    '    } catch (Exception thrown) {',
+    '      string leaked = "";',
+    '      if (threadHandleIsStillThisMethodsToLose) {',
+    '        leaked = leaked + CloseAndDescribe(created.hThread, "the child\'s thread handle",',
+    '          ref threadHandleIsStillThisMethodsToLose);',
+    '      }',
+    '      if (processHandleIsStillThisMethodsToLose) {',
+    '        leaked = leaked + CloseAndDescribe(created.hProcess, "the child\'s process handle",',
+    '          ref processHandleIsStillThisMethodsToLose);',
+    '      }',
+    '      if (leaked.Length == 0) { throw; }',
+    '      throw new InvalidOperationException(thrown.Message + leaked, thrown);',
+    '    }',
+  ].join('\n'), 'season-browser:launch-closes-and-reports-both-child-handles-on-a-thrown-path')
   // THE INTEROP SURFACE IS NARROWED TO WHAT IS ACTUALLY CALLED, and that is a HARD boundary rather than a rule
   // in a comment: TerminateProcess is PRIVATE, so no PowerShell statement can reach THIS FILE'S kill primitive -
   // only its C# can, on the one path that needs it. Stated narrowly on purpose. An earlier version of this
@@ -1349,7 +1434,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // THE STATIC HALF IS HELD TOO. A fresh-context review observed that every static mutation could be wrapped
   // whole while the behavioural half still earned its own sentence, because no caller read the static marker at
   // all - a marker nobody consumes is decoration. Both callers now hold it with its count.
-  const staticClaim = 'Foundation mutation drill: PASS (292 controlled mutations turned the gate red)'
+  const staticClaim = 'Foundation mutation drill: PASS (307 controlled defects each turned the gate red under their own name)'
   requireText(errors, foundationWorkflow, `$expectedStatic = '${staticClaim}'`, 'workflow:mutation-drill-static-claim-held')
   requireText(errors, foundationOrchestrator, `$expectedStaticMarker = '${staticClaim}'`, 'orchestrator:mutation-drill-static-claim-held')
   requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedStatic', 'workflow:mutation-drill-static-claim-consumed')
@@ -1387,7 +1472,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, mutationDrill, "['windows=false', 'windowsCases=0', 'cases=5']", 'mutation-drill:gap-manifest-fields-held')
   // Both sentences are printed LAST and from the counters, never as literals. The static marker used to print
   // before the behavioural half ran, so the behavioural half could be wrapped whole and the log still read PASS.
-  requireText(errors, mutationDrill, 'console.log(`Foundation mutation drill: PASS (${detectedMutations.length} controlled mutations turned the gate red)`)', 'mutation-drill:static-claim-counted-not-asserted')
+  requireText(errors, mutationDrill, 'console.log(`Foundation mutation drill: PASS (${detectedMutations.length} controlled defects each turned the gate red under their own name)`)', 'mutation-drill:static-claim-counted-not-asserted')
   requireText(errors, mutationDrill, 'console.log(`Foundation behavioural mutation drill: PASS (${behaviouralMutations.length} broken subjects were reported by the suite that runs against them, ${behaviourGaps.length} not measurable on this platform)`)', 'mutation-drill:behavioural-claim-counted-not-asserted')
   // COUNTING THE CALLS IS NOT COUNTING THE MUTATIONS. The pin above proves the total is computed rather than
   // written down, and a fresh-context review showed that is a weaker claim than the sentence makes: `detected`
