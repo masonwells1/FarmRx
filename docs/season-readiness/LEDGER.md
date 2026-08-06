@@ -1518,3 +1518,118 @@ Run at the exact tree that became this commit, with no probe or sabotage script 
 - The three claim sites were re-read after propagation and all hold the identical sentence at **285**.
 
 Nothing was pushed, merged, or deployed. Production remains untouched at `https://farm-rx.vercel.app`.
+
+## SR-082 — Sol tranche H on `d2d6e33`: the handles the tranche-G repairs leaked, the last swallow in the teardown, the teardown FAIL path proven on the real file, and three SR-081 claims withdrawn
+
+Commit 3 of the three-to-four Mason approved when he chose *"fix ownership properly, then stop hardening."* Six repairs, all six from a fresh-context Sol review of the exact tree at `d2d6e33`, each one verified on this workstation before it was believed. One SR-081 negative assertion is converted into a real proof. Three SR-081 sentences are withdrawn as false.
+
+### R-04 — the job handle leaked on every throwing path between its creation and its return
+
+`CreateKillOnCloseJob` created a job object, then did three things that can throw or return early — allocate unmanaged memory, marshal a struct into it, call `SetInformationJobObject` — and only the *last* of those had a close. On any other exit the handle was gone from the program and still open in the kernel, for the life of the PowerShell session. A leaked job handle is not inert: this job carries `KILL_ON_JOB_CLOSE`, so the handle is the thing keeping its members alive, and an accumulating set of them is an accumulating set of un-collectable process trees.
+
+The method now owns the handle explicitly. A local `bool jobIsStillThisMethodsToLose` starts `true`, is set `false` at each of the two points where ownership genuinely leaves (the checked close on the limit failure, and the successful `return job`), and a terminal `finally` closes the handle whenever the flag is still set. The flag name is the claim: it is not "did we succeed", it is "is this handle still mine to lose".
+
+### R-03 — five `CloseHandle` results were discarded, in the file whose whole point is that a failed close is reportable
+
+SR-081's repair checked the close on the limit-failure path and then, three lines later, discarded the results of the child's thread and process handle closes on the assign-failure path — and the same on the resume-failure path, and on the success path. Sol counted three; the real number, measured by reading every `CloseHandle` in the file, was **five**. That is the exact defect SR-081 says it fixed, surviving in the five siblings of the one line it fixed.
+
+All five now go through one helper:
+
+```
+private static string CloseAndDescribe(IntPtr handle, string label) {
+  if (CloseHandle(handle)) { return ""; }
+  return " " + label + " could not be closed (Windows error "
+    + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session.";
+}
+```
+
+It returns the empty string on success, so appending it to `stage` is free, and a leak is named by the handle it lost. A static FORBID rule now makes the pattern permanent: any `CloseHandle(created.` anywhere in the helper's embedded C# reddens the gate under `season-browser:a-child-handle-is-closed-without-reporting-the-outcome`, so the next author cannot reintroduce a silent close without the guard saying so.
+
+### P-01 — the stranded-pid sentence claimed more than the code could know, and the success path could not report a leak at all
+
+Two problems, both mine, both found while implementing R-03.
+
+The refusal message SR-081 added told Mason that a process *"is still running on this workstation."* The code does not know that. What it knows is that `TerminateProcess` returned false; between that return and the message being built, the child may well have exited on its own. The sentence is now *"…was created suspended, could not be added to the job, and its termination could not be confirmed, so it may still be running on this workstation and has to be checked and ended by hand."* Same instruction to Mason, no invented fact — and this is the second time in three tranches that a repair replaced one overstatement with another, which is why the weaker wording is now pinned.
+
+Second: `CloseAndDescribe` gives the **success** path a leak report it had no way to deliver, because a successful launch returns `true` and the old code had nowhere to put a stage string. The caller now checks for a non-empty stage after a successful start and emits `Write-Warning "<scenario> launched its browser process, but<stage>"`. A leaked thread handle on an otherwise-good run is now visible in the log instead of being invisible by construction.
+
+### R-01 — the last swallow left in the teardown was in the branch that mattered most, and the naive fix is a fresh defect
+
+SR-081 rewrote the preflight regression's teardown around a problem list and claimed the swallows were gone. One remained, and it was in the environment-restore branch that runs when a variable had **no prior value** — the case where the correct end state is that the variable does not exist, and where a failed removal leaves this session's temporary-path variable pointing at a directory that is about to be deleted. It read `-ErrorAction SilentlyContinue`, and **measured on this workstation**, an explicit `-ErrorAction` on a cmdlet *overrides* the file's `$ErrorActionPreference = 'Stop'`, so that one line was exempt from the `catch` that covered every other line in the block.
+
+It is **not** simply switched to `-ErrorAction Stop`, because that introduces a defect the naive fix hides: **measured**, `Remove-Item Env:<name>` on a variable that is not set throws `ItemNotFoundException`, and this branch runs precisely when there was no prior value — including the ordinary case where the run never got as far as setting it. Every clean run would then report "could not restore" about nothing to do, which is a false problem report in the mechanism whose entire value is that its reports are true. `Test-Path Env:<name>` answers cleanly in both directions (**measured**), so presence is checked first and only a real removal can fail.
+
+**Half of Sol's finding was wrong and is recorded as such.** Sol also flagged the `Set-Item` in the same `if/else` as a swallow. It is not: it carries no explicit `-ErrorAction`, so it inherits `Stop` and is caught. Repairing it would have been a change made to a correct line on a reviewer's word.
+
+### R-02 — the keep-or-delete decision was asked once and then applied to two directories
+
+The teardown deletes two temp trees, and keeps them when a problem was recorded, because a failed teardown is exactly when the evidence matters. The decision was computed **once, before the loop**, from the problem list as it stood before any deletion. So a failure deleting the *first* tree recorded a problem and the loop then deleted the *second* one anyway — destroying half the evidence in the one run that needed it, under a report sentence claiming both trees were kept.
+
+The keep-or-delete question is now asked **inside** the loop, per tree, so the first recorded problem preserves everything after it, and the kept-for-inspection message names the tree it is actually about.
+
+### P-02 — the one statement in the `finally` that could not be inside a `try`
+
+Mine, found while auditing R-02. SR-081's teardown guards every statement in the terminal `finally` with its own `try` so that no failure can skip the report. One statement could not be guarded that way: the construction of `$teardownProblems` itself, the block's **first** statement, with nothing before it to record into and no enclosing `try` of its own. A throw there skipped the entire teardown *and* its report — the single worst failure the block has, sitting in the one line the design could not cover.
+
+The list is now built **above** the `try`, so the `finally` opens with a variable that already exists and every statement in that block genuinely is inside a `try`. The reasoning is written where the construction used to be, because the next author will otherwise move it back.
+
+### R-08 closed — the teardown FAIL path is now proven on the real file, and SR-081's negative assertion is withdrawn
+
+SR-081 recorded the FAIL path as a **negative assertion**: proven in isolated probes and by inspection of the consumer, but not by making the real preflight regression fail. The stated reason was that the file resolves siblings through `$PSScriptRoot`, so the copy-it-elsewhere technique does not work. **That reason did not survive contact with the file.** The regression dot-sources exactly **one** sibling and reads that same sibling for its injected-CIM case, so an isolated copy needs two files and nothing else; `$root` becomes the parent of the copy's directory, which is harmless, because ownership in every executed case comes from `-OwnedCommandMarker`, not from `$root`.
+
+So it was done. Both files were copied into a fresh temp directory, and **the copy** — never the repository — had one line rewritten: the temp base every deletion is checked against was pointed at a directory that is not a prefix of the temp path, which makes the real directory-refusal branch record a real problem for the first tree. Measured:
+
+```
+C04_EXIT=1
+C04_PASS_MARKER_PRESENT=True
+C04_TEARDOWN_FAIL_LINE_PRESENT=True
+C04_FAIL_NAMES_THE_REFUSAL=True
+C04_FAIL_KEEPS_THE_SECOND_TREE=True
+C04_NO_ASSERTION_FAILURE=True
+C04_TEARDOWN_FAIL_PATH_PROVEN=True
+```
+
+with the FAIL line reading, in full: `MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_FAIL teardown left this workstation dirty: refused to delete …\farmrx-maple-port-preflight-b105a43c… because it is not under …\farmrx-c04-not-the-temp-base, so it was left in place; kept …\farmrx-foreign-listener-b105a43c… for inspection because this teardown reported a problem.`
+
+Three things are proven together by that one run, on a run **all of whose assertions passed**: the suite prints its PASS marker, the `finally` still prints the FAIL marker, and the exit code is 1. And the second clause of that sentence is R-02's repair working — the first tree's refusal preserved the second tree instead of deleting it, which is the behaviour that did not exist before this commit. The proof harness snapshotted `%TEMP%` before the run and removed only its own litter afterwards; the isolated copy and both kept trees were deleted, confirmed.
+
+### Layer 24 for the defect list: a substring pin can be broken by re-indentation in one place and stay silently green in another
+
+The most transferable thing in this tranche, and the harness caught it against me twice in one sitting. `pinBrowserOnce` matches its needle as a **substring** of the file. For a multi-line needle that means the **first** line may be under-indented and still match — the match simply starts mid-whitespace — while every **subsequent** line must match indentation exactly. So when R-04 wrapped a method body in a `try` and shifted the block right by two spaces, some pins went red and named themselves, and others silently kept matching. Red is the safe direction; **silently green is not**, and there is no way to tell which you got except by reading the real file. Both affected needles were corrected against the file rather than against the diff.
+
+Separately, stale needles surfaced in **four** separate drills — the two limit-close drills, the assign-path drill and the resume-path drill — and every one of them failed in the safe direction, throwing `Mutation no longer applies to …; its needle is stale`. One of those staleness cases was self-inflicted in the way the mechanism exists to catch: a comment **I** added earlier in this same tranche sat between `stage = "resume";` and the `TerminateJobObject` line the drill anchored on.
+
+### Instrumentation
+
+Guard pins: the limit-block needle re-indented to the real file, the limit-close pin re-indented and given the new ownership-flag line, three new job-leak pins, the assign and resume pins rewritten to the `CloseAndDescribe` form, a presence pin on the helper itself, the FORBID rule above, a new success-path pin, and the `$strandedClause` pin updated to the weaker wording plus a pin on the success-path leak warning.
+
+Seven new drills, each recreating the repaired defect from the direction of the defect: the ownership flag starts out already disclaimed; the successful return keeps claiming the job it handed away; the job is left to leak on a thrown path; the close helper always claims success; a child handle is closed again without reporting the outcome; the successful launch throws away its own leak report; a successful launch stops reporting the handle it leaked.
+
+Drill total **285 → 292**, taken from the drill's own printed tally rather than computed, then propagated to all three claim sites and each one re-read afterwards and confirmed to hold the identical sentence.
+
+**The C-07 gap is now larger, and the sentence must be read accordingly.** The printed total is `detectedMutations.length` — a count of `detected()` calls, not of applied mutations — so with seven more drills added, several of which apply more than one `.replace`, the number is further below the count of mutations actually applied than it was at SR-081. It remains a **lower bound**, and the marker sentence still says "controlled mutations". Not taken here; recorded so nobody reads 292 as a mutation count.
+
+### What this commit deliberately does not close
+
+- **R-09 / C-05** — a here-string **body** still satisfies `requireStatementOnce`, because the comment-stripped view is still text and knows only `#`. This now covers the new limit-stage, checked-close, ownership-flag, `CloseAndDescribe` and stranded-clause pins as well. It belongs to the open task that gives the guard a real PowerShell code view (`ParseFile`, token census), because stripping here-strings blind would break pins that legitimately match generated child-script text.
+- **R-10 / C-06** — `countPowerShellWrites` counts matching **lines**, not writes, and its grammar omits `++`, `--`, `Set-Item Variable:`, `New-Variable -Force`. Same task, same reason.
+- **C-09's code half** — the three comments that still describe the ownership predicate as authorizing a kill stay with the rename commit, because a drill regex-needles the label line and splitting that across two commits is how a self-drill goes stale unnoticed.
+- **F13–F19**, the timeout regression's own safety net.
+- **The label census.** 91 of 244 guard labels had no drill when it was last taken; the label set has changed twice since, so that number is stale and is not repeated here as if it were current.
+
+### Corrections to SR-081
+
+1. **SR-081 said the resume-failure path "discards its `TerminateProcess` result too." That is false, and it is withdrawn.** The resume path calls **`TerminateJobObject`**, not `TerminateProcess`, and its result is discarded **deliberately and correctly**: at that point the child *is* a job member, so `KILL_ON_JOB_CLOSE` backstops the kill when the handle closes. The whole asymmetry the tranche turns on is that the **assign**-failure path has no such backstop, because the child never became a member — which is why that one, and only that one, must check its result. Describing both paths as the same defect erases the reason one of them is not a defect.
+2. **SR-081 said the new `CreateKillOnCloseJob` signature was "propagated to all four call sites." That is false, and it is withdrawn.** There are **two** executable call sites: `scripts/maple-season-browser.ps1:846` and `scripts/maple-season-browser-port-preflight.regression.ps1:286`. The other references are a **text assertion** in `maple-july-db-clock-wiring.regression.ps1:84` and instrumentation needles in the guard and drill files. Counting a string that *describes* a call as a call site inflates the coverage claim in exactly the direction this whole layer of the harness exists to resist.
+3. **SR-081's replacement for the SR-080 overstatement is itself false, and it is withdrawn.** SR-081 withdrew a false boundary claim and put in its place: *"the season browser helper's own launch and cleanup path can no longer spell a kill other than `TerminateJobObject`."* The helper's launch path calls **`TerminateProcess`** at `scripts/maple-season-browser.ps1:618`, and that call is not incidental — it is the assign-failure kill that R-03 and P-01 are about. The true and narrow claim is: **no PowerShell statement can spell a kill other than `TerminateJobObject`, because `TerminateProcess` is declared `private` and is reachable only from inside the interop class's own launch path, where it is the only primitive that can reach a non-member child.** Three tranches in a row have now produced a false version of this sentence, each one narrower than the last; the reason is that it is a claim about what *cannot* happen, and those are the sentences that need a mechanism rather than a comment.
+
+### Evidence, all local, nothing pushed
+
+Run at the exact tree that became this commit, one suite at a time, with no probe or sabotage script running alongside.
+
+- `powershell scripts/verify-foundation.ps1` → **`Farm Rx foundation gate: PASS`**, `GATE_EXIT=0`, 1,453 lines, `62 passed (52.3s)`. Inside it: `Foundation static guards: PASS`; **`Foundation mutation drill: PASS (292 controlled mutations turned the gate red)`**; `Foundation behavioural mutation drill: PASS (5 broken subjects were reported by the suite that runs against them, 0 not measurable on this platform)`; `Foundation Windows lane runtime drill: PASS (6 of 6 cases executed and validated on win32)`; `Foundation orchestrator intermediate-failure probe: PASS`; `Foundation Windows execution lane accounting probe: PASS (4 rejected, 1 accepted)`; `MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS`; `MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS`; `Season fixture contract: PASS (101 fixtures; 6 scenarios; 6 isolation-scanned files)`; `Season contract regressions: PASS (9 rejected contract mutations; 18 rejected isolation mutations)`; `PROBE disposable migration suite: PASS`; `PROBE RLS role matrix: PASS`; probes 0036 through 0043 all PASS. The full log is kept at `scratchpad/gate-tranche-h.log`.
+- The two **Windows-only** suites the foundation gate does not run — verified again this session by grep that `verify-foundation.ps1` does not invoke the preflight regression — executed directly and singly: `MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS` (exit 0) with `TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true` **and no teardown-problem line**, which is the repaired teardown reporting zero problems on a clean run; and `MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_PASS` (exit 0).
+- The R-08 real-path proof, measured values quoted in full above.
+- `npx tsc -b --force` → exit 0. `node --check` on both changed `.mjs` files → parse-clean. `[Parser]::ParseFile` across every `.ps1` under `scripts/` → `bad=0`.
+
+Nothing was pushed, merged, or deployed. Production remains untouched at `https://farm-rx.vercel.app`.

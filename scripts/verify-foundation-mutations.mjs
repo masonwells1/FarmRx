@@ -653,8 +653,8 @@ try {
   // The opposite half: a job whose limit could not be set, handed back instead of closed. It governs membership
   // correctly and reaps nothing, so the failure shows up only as a stranded browser tree after a killed session.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
-    '        if (!CloseHandle(job)) {\n          stage = "limit, and the unusable job object could not be closed (Windows error "\n            + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";\n        }\n        return IntPtr.Zero;\n',
-    '        return job;\n'))
+    '          if (!CloseHandle(job)) {\n            stage = "limit, and the unusable job object could not be closed (Windows error "\n              + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";\n          }\n          jobIsStillThisMethodsToLose = false;\n          return IntPtr.Zero;\n',
+    '          jobIsStillThisMethodsToLose = false;\n          return job;\n'))
   detected('a job without its limit is handed back rather than closed', 'season-browser:job-without-its-limit-is-closed-not-returned')
   reset()
   // AND THE REGRESSION THAT MOTIVATED THE CHECK: the close is made but its result is thrown away, which is the
@@ -662,9 +662,38 @@ try {
   // a leaked kernel object goes unmentioned for the life of the session. This one is invisible to any pin that
   // asks only whether CloseHandle is called.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
-    '        if (!CloseHandle(job)) {\n          stage = "limit, and the unusable job object could not be closed (Windows error "\n            + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";\n        }\n',
-    '        CloseHandle(job);\n'))
+    '          if (!CloseHandle(job)) {\n            stage = "limit, and the unusable job object could not be closed (Windows error "\n              + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";\n          }\n',
+    '          CloseHandle(job);\n'))
   detected('the job close result is discarded again', 'season-browser:job-without-its-limit-is-closed-not-returned')
+  reset()
+  // THE THIRD WAY THIS METHOD CAN LEAK ITS JOB, and the one no enumerated failure path covers: a MANAGED throw
+  // between creating the job and returning it. AllocHGlobal throws OutOfMemoryException, SizeOf and StructureToPtr
+  // throw on a bad type or pointer, and any of them unwinds out of the method with the job created and nobody
+  // holding its handle. Three drills, one per part of the invariant, because each part fails differently.
+  //
+  // First, the flag starts FALSE: every enumerated path still behaves, the success return is unchanged, and the
+  // outer finally simply never closes anything - so this is the original defect restored with the fix still
+  // visibly present in the file.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '    bool jobIsStillThisMethodsToLose = true;',
+    '    bool jobIsStillThisMethodsToLose = false;'))
+  detected('the job-ownership flag starts out already disclaimed', 'season-browser:job-creation-tracks-whether-the-handle-is-still-its-own')
+  reset()
+  // Second, the success return stops clearing it - which is the OPPOSITE failure and a far worse one: the finally
+  // closes the handle it just returned, so the caller holds a dead handle, KILL_ON_JOB_CLOSE fires on a job with
+  // no members yet, and every subsequent AssignProcessToJobObject fails on a closed handle. Every launch breaks,
+  // which is the good case; the point of the drill is that the pin catches it here rather than at run time.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '      jobIsStillThisMethodsToLose = false;\n      return job;\n',
+    '      return job;\n'))
+  detected('the successful return keeps claiming the job it handed away', 'season-browser:job-creation-hands-ownership-to-the-caller-on-success')
+  reset()
+  // Third, the finally is emptied. Valid C#, every other pin in this section green, and the leak is back on
+  // exactly the path that has no error code and no stage to report it through.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '    } finally {\n      if (jobIsStillThisMethodsToLose) { CloseHandle(job); }\n    }\n',
+    '    } finally {\n    }\n'))
+  detected('the job is left to leak on a thrown path', 'season-browser:job-creation-cannot-leak-its-job-on-a-thrown-path')
   reset()
 
   // ---- SUSPENDED, ASSIGNED, AND ONLY THEN RESUMED -----------------------------------------------------
@@ -703,13 +732,13 @@ try {
       '          + Marshal.GetLastWin32Error().ToString() + ")";',
       '        processId = created.dwProcessId;',
       '      }',
-      '      CloseHandle(created.hThread);',
-      '      CloseHandle(created.hProcess);',
+      '      stage = stage + CloseAndDescribe(created.hThread, "the unassigned child\'s thread handle")',
+      '        + CloseAndDescribe(created.hProcess, "the unassigned child\'s process handle");',
       '      return false;',
       '    }',
       '',
     ].join('\n')
-    const reinsertAnchor = '    CloseHandle(created.hThread);\n    processHandle = created.hProcess;'
+    const reinsertAnchor = '    stage = CloseAndDescribe(created.hThread, "the launched child\'s thread handle");\n    processHandle = created.hProcess;'
     // Both anchors checked before either is used, for the reason spelled out on the try-after-launch drill
     // below: with two replaces, a stale needle rides along on a live one and mutate() sees a changed file.
     if (!source.includes(assignBlock) || !source.includes(reinsertAnchor)) {
@@ -758,9 +787,39 @@ try {
   // And the mirror: a child that could not be RESUMED is already a member, so terminating the JOB is what kills
   // it. Delete that and the stranded suspended process is a job member with nothing left holding the job.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
-    '      stage = "resume";\n      TerminateJobObject(job, 1);\n',
-    '      stage = "resume";\n'))
+    '      TerminateJobObject(job, 1);\n      stage = stage + CloseAndDescribe(created.hThread, "the unresumed child\'s thread handle")\n',
+    '      stage = stage + CloseAndDescribe(created.hThread, "the unresumed child\'s thread handle")\n'))
   detected('a child that could not be resumed is abandoned inside its job', 'season-browser:launch-kills-the-job-of-a-child-it-could-not-resume')
+  reset()
+
+  // ---- AND EVERY CHILD-HANDLE CLOSE REPORTS ITS OUTCOME ------------------------------------------------
+  // The helper always claiming success. The close still happens, every call site still appends its result, and
+  // the result is now the empty string whatever the kernel said - so a handle that would not close is a leaked
+  // kernel handle that keeps a process id reserved for the session, reported nowhere. Invisible to any pin that
+  // asks only whether the helper is called.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '    if (CloseHandle(handle)) { return ""; }',
+    '    CloseHandle(handle); return "";'))
+  detected('the child-handle close helper always claims success', 'season-browser:child-handle-closes-report-their-outcome')
+  reset()
+  // A BARE CLOSE REAPPEARING SOMEWHERE, which is the shape the forbid exists for: the five original bare calls
+  // are gone, and nothing stops a sixth being written at a new call site. This restores two of them at the
+  // assign path. It reddens that path's own pin as well - the label aimed at is the forbid, which is the one
+  // that has no line number and therefore covers call sites this file has not thought of.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '      stage = stage + CloseAndDescribe(created.hThread, "the unassigned child\'s thread handle")\n        + CloseAndDescribe(created.hProcess, "the unassigned child\'s process handle");\n',
+    '      CloseHandle(created.hThread);\n      CloseHandle(created.hProcess);\n'))
+  detected('a child handle is closed again without reporting the outcome', 'season-browser:a-child-handle-is-closed-without-reporting-the-outcome')
+  reset()
+  // And the success path's report DISCARDED rather than the close removed, which is the subtler half. The handle
+  // still closes and the helper still describes a failure - into nothing. `stage` stays at whatever StartInJob
+  // last wrote, which on this path is nothing at all, so the caller's warning never fires and a launch that
+  // leaked a handle is indistinguishable from a clean one. Deliberately does not spell a bare CloseHandle, so
+  // the forbid above stays green and this drill can only be caught by the pin it names.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '    stage = CloseAndDescribe(created.hThread, "the launched child\'s thread handle");',
+    '    CloseAndDescribe(created.hThread, "the launched child\'s thread handle");'))
+  detected('the successful launch throws away its own leak report', 'season-browser:launch-reports-a-thread-handle-it-could-not-close')
   reset()
 
   // ---- THE NARROWED INTEROP SURFACE, WHICH IS A HARD BOUNDARY AND NOT A RULE ---------------------------
@@ -1004,6 +1063,15 @@ try {
     '      if ($launchedId -ne 0) {',
     '      if ($false) {'))
   detected('the stranded-pid clause is never populated', 'season-browser:launch-names-a-child-it-could-not-terminate')
+  reset()
+  // AND THE SAME DEFECT ON THE SUCCESS SIDE OF THE SAME CHANNEL. StartInJob can return TRUE with a non-empty
+  // stage - the launch worked and closing the finished thread handle did not - and deleting this block puts the
+  // report back into a variable nobody reads, which is the state a fresh-context review found. No throw is
+  // involved and no assertion changes, so nothing else in the repository notices.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '    if ($launchStage -ne \'\') {\n      Write-Warning "$Scenario launched its browser process, but$launchStage"\n    }\n',
+    ''))
+  detected('a successful launch stops reporting the handle it leaked', 'season-browser:launch-reports-a-leak-on-a-successful-start')
   reset()
   // A SECOND CLEANUP CALL SITE, which is how three review rounds of conditional cleanup returned each time. This
   // one is placed on the timeout path and looks entirely reasonable there - release the port before reporting the

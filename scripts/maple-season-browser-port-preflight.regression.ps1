@@ -54,6 +54,12 @@ $mixedProcesses = [Collections.Generic.List[object]]::new()
 # left running inside a job.
 $clearJobs = [Collections.Generic.List[IntPtr]]::new()
 $clearHandles = [Collections.Generic.List[IntPtr]]::new()
+# THE TEARDOWN'S OWN PROBLEM LIST IS BUILT HERE, ahead of the try, and not inside the finally that uses it. It
+# was constructed as the finally's first statement, which is the one statement in that block a throw could not
+# be caught by - there is nothing before it to record into and no enclosing try of its own - and a throw as the
+# finally's first statement skips the entire teardown AND its report. Constructing it out here means the finally
+# opens with a variable that already exists, so every statement in that block genuinely is inside a try.
+$teardownProblems = [Collections.Generic.List[string]]::new()
 
 try {
   Assert-True ($port -ne 0) 'Port preflight regression could not find a free loopback port in 4289-4319.'
@@ -975,7 +981,10 @@ public static class MapleSeasonArgv {
   # so an unguarded failure here would not merely be unreported, it would suppress the report of everything
   # below it. That is why every statement in this block is inside its own try, including the ones that look
   # incapable of failing, and why the directory-refusal below records a problem instead of throwing.
-  $teardownProblems = [Collections.Generic.List[string]]::new()
+  #
+  # The one statement that could NOT be covered that way was the construction of $teardownProblems itself - the
+  # first statement here, with nothing before it to record into - so it is now built before the try above instead,
+  # and this block only ever appends to it.
   foreach ($restore in @(
     @{ Name = 'FARMRX_SEASON_JANUARY_PORT'; Value = $priorPort },
     @{ Name = 'FARMRX_PREFLIGHT_READY_FILE'; Value = $priorReadyFile },
@@ -986,7 +995,20 @@ public static class MapleSeasonArgv {
     # which meant a throw on the first left three of this session's environment variables pointing at a deleted
     # temporary directory for whatever ran next in the same shell.
     try {
-      if ($null -eq $restore.Value) { Remove-Item -LiteralPath "Env:$($restore.Name)" -ErrorAction SilentlyContinue }
+      # THE `SilentlyContinue` HERE WAS THE LAST SWALLOW LEFT IN THIS BLOCK, and it was in the branch that matters
+      # most: the variable had no prior value, so the correct end state is that it does not exist, and a failed
+      # removal leaves this session's temporary path pointing at a directory that is about to be deleted. An
+      # explicit -ErrorAction on a cmdlet OVERRIDES the file's $ErrorActionPreference = 'Stop' - MEASURED on this
+      # workstation - so this one line was exempt from the catch below while every other line was covered by it.
+      #
+      # It is NOT simply switched to -ErrorAction Stop, because that would introduce a fresh defect the naive fix
+      # hides: MEASURED, `Remove-Item Env:<name>` on a variable that is not set throws ItemNotFoundException, and
+      # this branch runs precisely when there was no prior value - including the ordinary case where the run never
+      # got as far as setting it. That would report "could not restore" about nothing to do. Test-Path answers
+      # cleanly in both directions (MEASURED), so presence is checked first and only a real removal can fail.
+      if ($null -eq $restore.Value) {
+        if (Test-Path -LiteralPath "Env:$($restore.Name)") { Remove-Item -LiteralPath "Env:$($restore.Name)" -ErrorAction Stop }
+      }
       else { Set-Item -LiteralPath "Env:$($restore.Name)" -Value $restore.Value }
     } catch {
       $teardownProblems.Add("could not restore environment variable $($restore.Name): $($_.Exception.Message)")
@@ -1058,35 +1080,41 @@ public static class MapleSeasonArgv {
   # this teardown, the scripts and sentinel files that describe what was running are the only evidence of what
   # is still on the workstation, and deleting them to keep the temp directory tidy destroys exactly the record
   # a human needs. On a clean teardown they go, as before.
-  if ($teardownProblems.Count -gt 0) {
-    $teardownProblems.Add("kept $tempRoot and $squatterRoot for inspection because this teardown reported a problem")
-  } else {
-    foreach ($doomed in @($tempRoot, $squatterRoot)) {
-      try {
-        if (-not (Test-Path -LiteralPath $doomed)) { continue }
-        $resolvedTemp = [IO.Path]::GetFullPath($doomed)
-        $resolvedBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
-        # RECORDED, NOT THROWN. A throw here is a throw inside a finally: it ends the run at exit 1 and skips
-        # the report below, so the one path that most needs to say what it refused to delete would say nothing.
-        if (-not $resolvedTemp.StartsWith($resolvedBase, [StringComparison]::OrdinalIgnoreCase)) {
-          $teardownProblems.Add("refused to delete $resolvedTemp because it is not under $resolvedBase, so it was left in place")
-          continue
-        }
-        # BOUNDED RETRY, because the processes that were holding files under this tree were stopped seconds ago
-        # and Windows releases their file handles asynchronously. Without the retry, -ErrorAction Stop would
-        # turn an ordinary handle-release delay into a reported teardown failure - a flaky red, which is its own
-        # kind of dishonesty. Ten attempts over two seconds, and then it really is a failure worth reporting.
-        $deleteError = $null
-        for ($attempt = 1; $attempt -le 10; $attempt++) {
-          try { Remove-Item -LiteralPath $resolvedTemp -Recurse -Force -ErrorAction Stop; $deleteError = $null; break }
-          catch { $deleteError = $_; Start-Sleep -Milliseconds 200 }
-        }
-        if ($null -ne $deleteError -and (Test-Path -LiteralPath $resolvedTemp)) {
-          $teardownProblems.Add("could not delete the temporary directory $resolvedTemp after ten attempts over two seconds: $($deleteError.Exception.Message)")
-        }
-      } catch {
-        $teardownProblems.Add("could not delete the temporary directory $doomed`: $($_.Exception.Message)")
+  #
+  # THE DECISION IS RE-ASKED FOR EACH TREE, not once before the loop. Decided once, the answer was computed from
+  # the problem list as it stood BEFORE any deletion, so a failure deleting the first tree recorded a problem and
+  # then the loop deleted the second one anyway - destroying half the evidence in the one run that needed it, and
+  # doing so under a sentence that claims both trees were kept. Asking again per tree means the first recorded
+  # problem preserves everything after it, and the message names the tree it is actually about.
+  foreach ($doomed in @($tempRoot, $squatterRoot)) {
+    try {
+      if (-not (Test-Path -LiteralPath $doomed)) { continue }
+      if ($teardownProblems.Count -gt 0) {
+        $teardownProblems.Add("kept $doomed for inspection because this teardown reported a problem")
+        continue
       }
+      $resolvedTemp = [IO.Path]::GetFullPath($doomed)
+      $resolvedBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+      # RECORDED, NOT THROWN. A throw here is a throw inside a finally: it ends the run at exit 1 and skips
+      # the report below, so the one path that most needs to say what it refused to delete would say nothing.
+      if (-not $resolvedTemp.StartsWith($resolvedBase, [StringComparison]::OrdinalIgnoreCase)) {
+        $teardownProblems.Add("refused to delete $resolvedTemp because it is not under $resolvedBase, so it was left in place")
+        continue
+      }
+      # BOUNDED RETRY, because the processes that were holding files under this tree were stopped seconds ago
+      # and Windows releases their file handles asynchronously. Without the retry, -ErrorAction Stop would
+      # turn an ordinary handle-release delay into a reported teardown failure - a flaky red, which is its own
+      # kind of dishonesty. Ten attempts over two seconds, and then it really is a failure worth reporting.
+      $deleteError = $null
+      for ($attempt = 1; $attempt -le 10; $attempt++) {
+        try { Remove-Item -LiteralPath $resolvedTemp -Recurse -Force -ErrorAction Stop; $deleteError = $null; break }
+        catch { $deleteError = $_; Start-Sleep -Milliseconds 200 }
+      }
+      if ($null -ne $deleteError -and (Test-Path -LiteralPath $resolvedTemp)) {
+        $teardownProblems.Add("could not delete the temporary directory $resolvedTemp after ten attempts over two seconds: $($deleteError.Exception.Message)")
+      }
+    } catch {
+      $teardownProblems.Add("could not delete the temporary directory $doomed`: $($_.Exception.Message)")
     }
   }
   # THE MARKER AND THE EXIT CODE, which this block previously had neither of. The harness reads the marker line

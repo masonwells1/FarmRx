@@ -518,28 +518,60 @@ public static class MapleSeasonProcessInterop {
     stage = "";
     IntPtr job = CreateJobObjectW(IntPtr.Zero, null);
     if (job == IntPtr.Zero) { error = Marshal.GetLastWin32Error(); stage = "create"; return IntPtr.Zero; }
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
-    IntPtr buffer = Marshal.AllocHGlobal(size);
+    // EVERY EXIT FROM HERE ON EITHER HANDS THE JOB TO THE CALLER OR CLOSES IT, INCLUDING THE THROWN ONES.
+    // An earlier version guarded only the unmanaged buffer with a finally, which covered the two failures it
+    // had thought about - the limit call failing, and the buffer needing to be freed - and left a third
+    // uncovered: a MANAGED operation between creating the job and returning it can throw. Marshal.AllocHGlobal
+    // throws OutOfMemoryException when the process cannot satisfy the request; SizeOf and StructureToPtr throw
+    // on a bad type or a bad pointer. Any of those unwinds straight out of this method with the job created,
+    // nobody holding its handle, and no PowerShell statement able to name it - a leaked kernel object for the
+    // life of the session. This flag is the whole fix: it stays true only while the job is still this method's
+    // to lose, and the outer finally closes the handle in exactly that case. It is cleared on the limit-failure
+    // path, which closes by hand because it has a stage sentence to write, and on the success path, where the
+    // caller becomes responsible for it.
+    bool jobIsStillThisMethodsToLose = true;
     try {
-      Marshal.StructureToPtr(limits, buffer, false);
-      if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, buffer, (uint)size)) {
-        error = Marshal.GetLastWin32Error();
-        stage = "limit";
-        // THIS CLOSE IS CHECKED TOO. The job never received its KILL_ON_JOB_CLOSE limit, so it will never reap
-        // anything and leaking it strands no process - but it is a kernel object this process opened and is one
-        // statement away from losing the only reference to. A close that fails leaks it for the life of the
-        // session, and the caller is about to refuse the launch anyway, so saying so costs one sentence in a
-        // message a human is already going to read.
-        if (!CloseHandle(job)) {
-          stage = "limit, and the unusable job object could not be closed (Windows error "
-            + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";
+      JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+      limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+      int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+      IntPtr buffer = Marshal.AllocHGlobal(size);
+      try {
+        Marshal.StructureToPtr(limits, buffer, false);
+        if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, buffer, (uint)size)) {
+          error = Marshal.GetLastWin32Error();
+          stage = "limit";
+          // THIS CLOSE IS CHECKED TOO. The job never received its KILL_ON_JOB_CLOSE limit, so it will never reap
+          // anything and leaking it strands no process - but it is a kernel object this process opened and is one
+          // statement away from losing the only reference to. A close that fails leaks it for the life of the
+          // session, and the caller is about to refuse the launch anyway, so saying so costs one sentence in a
+          // message a human is already going to read.
+          if (!CloseHandle(job)) {
+            stage = "limit, and the unusable job object could not be closed (Windows error "
+              + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";
+          }
+          jobIsStillThisMethodsToLose = false;
+          return IntPtr.Zero;
         }
-        return IntPtr.Zero;
-      }
-    } finally { Marshal.FreeHGlobal(buffer); }
-    return job;
+      } finally { Marshal.FreeHGlobal(buffer); }
+      jobIsStillThisMethodsToLose = false;
+      return job;
+    } finally {
+      if (jobIsStillThisMethodsToLose) { CloseHandle(job); }
+    }
+  }
+
+  // A CLOSE IS AN OPERATION, AND OPERATIONS FAIL. Every CloseHandle in this class used to discard its answer
+  // except the one on the unusable job object, which is an odd place to draw the line: the reason that one is
+  // checked - a kernel object this process opened and is about to lose the only reference to - is equally true
+  // of a child's process and thread handles. The consequence is smaller (a leaked handle keeps a process id
+  // reserved; it strands no process, because the child is a job member and the kernel reaps it) but it is not
+  // nothing, and a failure nobody records is a failure nobody fixes. This returns a sentence rather than a bool
+  // so a caller can append it to the stage it is already reporting, and returns the empty string on success so
+  // appending it costs nothing on the ordinary path.
+  private static string CloseAndDescribe(IntPtr handle, string label) {
+    if (CloseHandle(handle)) { return ""; }
+    return " " + label + " could not be closed (Windows error "
+      + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session.";
   }
 
   // CREATE_SUSPENDED IS THE WHOLE POINT, and assigning after the child is already running would not do.
@@ -588,19 +620,30 @@ public static class MapleSeasonProcessInterop {
           + Marshal.GetLastWin32Error().ToString() + ")";
         processId = created.dwProcessId;
       }
-      CloseHandle(created.hThread);
-      CloseHandle(created.hProcess);
+      stage = stage + CloseAndDescribe(created.hThread, "the unassigned child's thread handle")
+        + CloseAndDescribe(created.hProcess, "the unassigned child's process handle");
       return false;
     }
     if (ResumeThread(created.hThread) == RESUME_THREAD_FAILED) {
       error = Marshal.GetLastWin32Error();
       stage = "resume";
+      // THE JOB KILL IS THE RIGHT PRIMITIVE HERE AND ITS RESULT IS DELIBERATELY NOT CHECKED, which is the
+      // opposite of the decision one branch up, so the difference is worth stating. This child IS a job member,
+      // so it has two independent executioners: this call, and the kernel reaping every member when the last
+      // job handle closes - which the caller's finally does, and which process exit does even if this session
+      // is killed outright. A failed TerminateJobObject here therefore strands nothing. The unassigned child
+      // above had exactly one executioner, which is why that one is checked.
       TerminateJobObject(job, 1);
-      CloseHandle(created.hThread);
-      CloseHandle(created.hProcess);
+      stage = stage + CloseAndDescribe(created.hThread, "the unresumed child's thread handle")
+        + CloseAndDescribe(created.hProcess, "the unresumed child's process handle");
       return false;
     }
-    CloseHandle(created.hThread);
+    // THE THREAD HANDLE IS DONE WITH; THE PROCESS HANDLE IS THE CALLER'S NOW. A failed close of the thread
+    // handle does not make the launch a failure - the child is running, inside the job, and reachable - so this
+    // returns true either way and reports the leak through stage, which is empty on an ordinary success. The
+    // caller warns on a non-empty stage after a successful launch, because a channel nobody reads is not a
+    // report.
+    stage = CloseAndDescribe(created.hThread, "the launched child's thread handle");
     processHandle = created.hProcess;
     processId = created.dwProcessId;
     return true;
@@ -822,11 +865,26 @@ function Invoke-MapleSeasonBrowserProof {
       # failed, resume-failure is reaped by the job. So an id here is a suspended process that is not a job
       # member, cannot be reaped by closing the job handle, will never run, and will never exit - and this is
       # the last statement that can name it. The pid goes in the refusal because a human has to end it.
+      #
+      # THE WORDING IS DELIBERATELY WEAKER THAN "IT IS STILL RUNNING", because that is more than this line can
+      # know. What actually happened is that TerminateProcess returned false; by the time this message is built
+      # the process handle has been closed inside StartInJob, so nothing here can re-ask whether the child is
+      # alive, and an antivirus product or another administrator may have ended it in between. A pid reliably
+      # means "this scenario could not confirm it killed that child", and a refusal that says so sends a human to
+      # check rather than telling them a fact it made up.
       $strandedClause = ''
       if ($launchedId -ne 0) {
-        $strandedClause = " Process id $launchedId was created suspended, could not be added to the job, and could not be terminated, so it is still running on this workstation and has to be ended by hand."
+        $strandedClause = " Process id $launchedId was created suspended, could not be added to the job, and its termination could not be confirmed, so it may still be running on this workstation and has to be checked and ended by hand."
       }
       throw "$Scenario browser process did not start (failed at the $launchStage stage, Windows error $launchError).$strandedClause"
+    }
+    # A LAUNCH CAN SUCCEED AND STILL HAVE LEAKED SOMETHING. StartInJob leaves the stage empty on an ordinary
+    # success and fills it only when closing the finished thread handle failed, which keeps that child's process
+    # id reserved for the life of the session. Not a launch failure, so this does not throw; but a leak reported
+    # into a variable nobody reads is not reported at all, so it is a warning on the stream the season evidence
+    # log captures.
+    if ($launchStage -ne '') {
+      Write-Warning "$Scenario launched its browser process, but$launchStage"
     }
     # WAIT ON THE HANDLE, not on a .NET Process object. There is no Process object in this path any more, and
     # that is a simplification rather than a loss: every previous version had to prove that .NET's private,

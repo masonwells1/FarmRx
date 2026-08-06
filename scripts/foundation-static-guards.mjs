@@ -677,8 +677,8 @@ export function foundationStaticGuard(root = process.cwd()) {
   // Proven behaviourally on this workstation - two ports went from held to free after the probe closed both
   // handles, made no kill call and made no cleanup call.
   pinBrowserOnce([
-    '    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;',
-    '    int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));',
+    '      limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;',
+    '      int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));',
   ].join('\n'), 'season-browser:job-asks-for-kill-on-job-close')
   // A LIMIT ASKED FOR AND NEVER APPLIED IS NOT A LIMIT. The info class is inside the needle deliberately:
   // passing any other class leaves this call succeeding, the struct ignored, and the backstop silently absent.
@@ -701,12 +701,35 @@ export function foundationStaticGuard(root = process.cwd()) {
     '        stage = "limit";',
   ].join('\n'), 'season-browser:job-limit-failure-reports-its-stage')
   pinBrowserOnce([
-    '        if (!CloseHandle(job)) {',
-    '          stage = "limit, and the unusable job object could not be closed (Windows error "',
-    '            + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";',
-    '        }',
-    '        return IntPtr.Zero;',
+    '          if (!CloseHandle(job)) {',
+    '            stage = "limit, and the unusable job object could not be closed (Windows error "',
+    '              + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session";',
+    '          }',
+    '          jobIsStillThisMethodsToLose = false;',
+    '          return IntPtr.Zero;',
   ].join('\n'), 'season-browser:job-without-its-limit-is-closed-not-returned')
+  // AND THE PATHS NOBODY THOUGHT ABOUT ARE COVERED BY A FINALLY, which is the difference between "the two
+  // failures I enumerated close the job" and "the job cannot leak out of this method". A fresh-context review
+  // found the earlier version guarding only the unmanaged buffer: Marshal.AllocHGlobal throws OutOfMemoryException
+  // and SizeOf/StructureToPtr throw on a bad type or pointer, and any of those unwound out of the method with the
+  // job created and no PowerShell statement able to name its handle - a kernel object leaked for the session, on
+  // a path with no error code and no stage. Three pins, because this is a three-part invariant and dropping any
+  // one part reintroduces a different bug: the flag starts TRUE (drop that and nothing is ever closed), the
+  // success return clears it (drop that and the finally closes the handle it just returned, so the caller holds a
+  // dead handle and the child is reaped instantly), and the finally closes only while the job is still unowned.
+  pinBrowserOnce([
+    '    bool jobIsStillThisMethodsToLose = true;',
+    '    try {',
+  ].join('\n'), 'season-browser:job-creation-tracks-whether-the-handle-is-still-its-own')
+  pinBrowserOnce([
+    '      jobIsStillThisMethodsToLose = false;',
+    '      return job;',
+  ].join('\n'), 'season-browser:job-creation-hands-ownership-to-the-caller-on-success')
+  pinBrowserOnce([
+    '    } finally {',
+    '      if (jobIsStillThisMethodsToLose) { CloseHandle(job); }',
+    '    }',
+  ].join('\n'), 'season-browser:job-creation-cannot-leak-its-job-on-a-thrown-path')
 
   // ---- suspended, assigned, and only then resumed -----------------------------------------------------
   // THE ORDER IS THE ENTIRE GUARANTEE, so this compares three positions instead of asserting three presences.
@@ -739,16 +762,37 @@ export function foundationStaticGuard(root = process.cwd()) {
     '          + Marshal.GetLastWin32Error().ToString() + ")";',
     '        processId = created.dwProcessId;',
     '      }',
-    '      CloseHandle(created.hThread);',
-    '      CloseHandle(created.hProcess);',
+    '      stage = stage + CloseAndDescribe(created.hThread, "the unassigned child\'s thread handle")',
+    '        + CloseAndDescribe(created.hProcess, "the unassigned child\'s process handle");',
     '      return false;',
   ].join('\n'), 'season-browser:launch-terminates-a-child-it-could-not-assign')
   pinBrowserOnce([
     '      TerminateJobObject(job, 1);',
-    '      CloseHandle(created.hThread);',
-    '      CloseHandle(created.hProcess);',
+    '      stage = stage + CloseAndDescribe(created.hThread, "the unresumed child\'s thread handle")',
+    '        + CloseAndDescribe(created.hProcess, "the unresumed child\'s process handle");',
     '      return false;',
   ].join('\n'), 'season-browser:launch-kills-the-job-of-a-child-it-could-not-resume')
+  // EVERY CHILD-HANDLE CLOSE GOES THROUGH THE REPORTING HELPER, and that is enforced by SHAPE rather than by
+  // listing the call sites, because the failure mode is a NEW bare close appearing somewhere this file does not
+  // yet pin. There were five bare `CloseHandle(created.…)` calls discarding their answer under a comment that
+  // said every failure was reported; each one is a kernel handle this process opened, and a leaked process handle
+  // keeps that process id reserved for the life of the session. The helper returns the empty string on success,
+  // so the ordinary path is unchanged and only a failure adds a sentence.
+  pinBrowserOnce([
+    '  private static string CloseAndDescribe(IntPtr handle, string label) {',
+    '    if (CloseHandle(handle)) { return ""; }',
+  ].join('\n'), 'season-browser:child-handle-closes-report-their-outcome')
+  if (/CloseHandle\(created\./.test(seasonBrowserExecutable)) errors.push('season-browser:a-child-handle-is-closed-without-reporting-the-outcome')
+  // THE SUCCESS PATH CLOSES THE THREAD HANDLE AND REPORTS IT TOO, and does not turn that leak into a failed
+  // launch: the child is running, inside the job, and reachable, so the launch really did succeed. `stage` is
+  // ASSIGNED here rather than appended to, because on this path nothing has written to it yet - appending would
+  // be the same value and reading a stale one is how an empty-means-clean contract breaks.
+  pinBrowserOnce([
+    '    stage = CloseAndDescribe(created.hThread, "the launched child\'s thread handle");',
+    '    processHandle = created.hProcess;',
+    '    processId = created.dwProcessId;',
+    '    return true;',
+  ].join('\n'), 'season-browser:launch-reports-a-thread-handle-it-could-not-close')
   // THE INTEROP SURFACE IS NARROWED TO WHAT IS ACTUALLY CALLED, and that is a HARD boundary rather than a rule
   // in a comment: TerminateProcess is PRIVATE, so no PowerShell statement can reach THIS FILE'S kill primitive -
   // only its C# can, on the one path that needs it. Stated narrowly on purpose. An earlier version of this
@@ -867,13 +911,31 @@ export function foundationStaticGuard(root = process.cwd()) {
   // handle will never reap, that will never run and never exit, and whose pid this is the last statement able to
   // name. Contiguous with the throw, so a repair that keeps the clause but stops interpolating it is not
   // satisfied by this pin.
+  //
+  // AND THE WORDING IS PINNED AS THE WEAKER CLAIM, deliberately. The previous sentence said the child "is still
+  // running on this workstation", which this line cannot know: what it observed is that TerminateProcess returned
+  // false, and by the time the message is built StartInJob has closed the process handle, so nothing here can
+  // re-ask whether the child is alive - an antivirus product or another administrator may have ended it in the
+  // interval. A refusal that overstates what it measured sends a human looking for a process that is not there,
+  // and this file's whole subject is the difference between a call returning and an outcome being true.
   pinBrowserOnce([
     '      $strandedClause = \'\'',
     '      if ($launchedId -ne 0) {',
-    '        $strandedClause = " Process id $launchedId was created suspended, could not be added to the job, and could not be terminated, so it is still running on this workstation and has to be ended by hand."',
+    '        $strandedClause = " Process id $launchedId was created suspended, could not be added to the job, and its termination could not be confirmed, so it may still be running on this workstation and has to be checked and ended by hand."',
     '      }',
     '      throw "$Scenario browser process did not start (failed at the $launchStage stage, Windows error $launchError).$strandedClause"',
   ].join('\n'), 'season-browser:launch-names-a-child-it-could-not-terminate')
+  // A CHANNEL NOBODY READS IS NOT A REPORT. StartInJob can now return TRUE with a non-empty stage - the launch
+  // succeeded and closing the finished thread handle failed - and the previous arrangement had no statement
+  // anywhere that looked at the stage on the success path, so that leak was written into a variable and dropped.
+  // A warning rather than a throw because the launch really did succeed, on the stream the season evidence log
+  // captures. Contiguous with its condition, because a warning that fires unconditionally would print an empty
+  // sentence on every ordinary launch and be trained away within a week.
+  pinBrowserOnce([
+    '    if ($launchStage -ne \'\') {',
+    '      Write-Warning "$Scenario launched its browser process, but$launchStage"',
+    '    }',
+  ].join('\n'), 'season-browser:launch-reports-a-leak-on-a-successful-start')
   // EXACTLY ONE CLEANUP CALL SITE, and it is the unconditional one in the finally. Every previous version of
   // this function had two or three, each guarded by a different condition - the parent's liveness, then a
   // $portReleased flag, then a $verifiedPortRelease flag - and every one of those conditions was an attempt to
@@ -1287,7 +1349,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // THE STATIC HALF IS HELD TOO. A fresh-context review observed that every static mutation could be wrapped
   // whole while the behavioural half still earned its own sentence, because no caller read the static marker at
   // all - a marker nobody consumes is decoration. Both callers now hold it with its count.
-  const staticClaim = 'Foundation mutation drill: PASS (285 controlled mutations turned the gate red)'
+  const staticClaim = 'Foundation mutation drill: PASS (292 controlled mutations turned the gate red)'
   requireText(errors, foundationWorkflow, `$expectedStatic = '${staticClaim}'`, 'workflow:mutation-drill-static-claim-held')
   requireText(errors, foundationOrchestrator, `$expectedStaticMarker = '${staticClaim}'`, 'orchestrator:mutation-drill-static-claim-held')
   requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedStatic', 'workflow:mutation-drill-static-claim-consumed')
