@@ -9,6 +9,10 @@ const files = [
   'docs/password-recovery-support.md',
   'src/App.tsx', 'src/main.tsx', 'src/sw.ts', 'src/auth/AuthProvider.tsx', 'src/auth/passwordRecovery.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json', 'vite.config.ts',
   'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1',
+  // The three files the Windows-lane guards read besides the orchestrator: the out-of-process drill, the
+  // kill-authorizing predicate, and the workflow that asserts the orchestrator's completion marker from
+  // outside it. All three have to exist in the baseline copy or the guard cannot run against it.
+  'scripts/foundation-windows-lane-runtime-drill.mjs', 'scripts/maple-season-browser.ps1', '.github/workflows/foundation.yml',
   // The season start fixture and every script that applies it. The static guard discovers the
   // consumers by scanning scripts/, so all of them have to exist here or the baseline is not the
   // same shape as the repository.
@@ -22,7 +26,18 @@ const files = [
   'src/data/QueuedProgramsRepository.ts', 'src/data/QueuedScoutingRepository.ts',
 ]
 const reset = () => { for (const path of files) { const target = join(temporary, path); mkdirSync(dirname(target), { recursive: true }); cpSync(join(root, path), target) } }
-const mutate = (path, replace) => { const target = join(temporary, path); writeFileSync(target, replace(readFileSync(target, 'utf8'))) }
+// A mutation is only a test if it actually applies. String.replace with a needle that no longer occurs
+// returns the original silently, so the drill then runs the static guard against UNMODIFIED source, the
+// guard is green because nothing was broken, and the failure surfaces as an empty "Observed:" list that
+// reads like the guard went blind. Measured: that is exactly how a stale needle presented after the
+// accounting probe was rewritten. Refusing a no-op mutation names the stale needle instead.
+const mutate = (path, replace) => {
+  const target = join(temporary, path)
+  const before = readFileSync(target, 'utf8')
+  const after = replace(before)
+  if (after === before) throw new Error(`Mutation no longer applies to ${path}; its needle is stale: ${replace.toString()}`)
+  writeFileSync(target, after)
+}
 // Count the drills instead of restating the total in the summary line. The hand-written count went
 // stale the moment a drill was added, which made the summary claim coverage it had not measured.
 const detectedMutations = []
@@ -79,8 +94,13 @@ try {
   mutate('scripts/verify-foundation.ps1', (source) => source.replace('\n  Assert-FoundationWindowsExecutionLaneAccountingIsFatal\n', '\n  # Assert-FoundationWindowsExecutionLaneAccountingIsFatal\n'))
   detected('Windows execution lane accounting probe commented out', 'orchestrator:windows-execution-lane-accounting-probe-called')
   reset()
-  mutate('scripts/verify-foundation.ps1', (source) => source.replace('if (-not $detected) { throw "Foundation Windows execution lane accounting accepted an outcome of [$($case.Label)]." }', 'if (-not $detected) { Write-Output \'tolerated\' }'))
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('if ($null -eq $failure) { throw "Foundation Windows execution lane accounting accepted an outcome of [$($case.Label)]." }', 'if ($null -eq $failure) { Write-Output \'tolerated\' }'))
   detected('Windows execution lane accounting probe stops asserting', 'orchestrator:windows-execution-lane-accounting-probe-asserts')
+  reset()
+  // Without the evidence cross-check, a lane that assigns its outcome at the top and returns satisfies
+  // the runtime accounting while running nothing, and no text assertion can see the difference.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("if ($script:windowsExecutionLaneOutcome -ceq 'executed' -and $script:windowsExecutionOutput -cnotcontains 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS') {", 'if ($false) {'))
+  detected('Windows execution lane execution claim no longer needs evidence', 'orchestrator:windows-execution-lane-evidenced-execution')
   reset()
   // Replacing the platform test with something always true makes the lane skip on every platform,
   // including the Windows workstation where it is the only real coverage.
@@ -117,6 +137,51 @@ try {
   // would be hollowed out while still appearing to be present.
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("if ($onWindows -and $script:windowsExecutionLaneOutcome -cne 'executed') {", 'if ($false) {'))
   detected('Windows execution lane allowed to skip itself on Windows', 'orchestrator:windows-execution-lane-windows-must-execute')
+  reset()
+  // The accounting probe's positive control. Removing it leaves a rejection-only probe, which a forged
+  // accounting that throws unconditionally satisfies - measured, exactly that forgery then passed both
+  // the probe and the real check.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("      @{ Outcome = 'executed'; Output = @('a preceding line', $marker); Expected = $null; Label = 'executed with evidence' }", "      @{ Outcome = 'ran'; Output = @(); Expected = 'Foundation Windows execution lane recorded an unknown outcome: ran.'; Label = 'a second rejection' }"))
+  detected('Windows execution lane accounting probe loses its positive control', 'orchestrator:windows-execution-lane-accounting-probe-positive-control')
+  reset()
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('throw "Foundation Windows execution lane accounting rejected an evidenced execution [$($case.Label)]: $failure"', 'Write-Output "ignored"'))
+  detected('Windows execution lane accounting probe stops asserting its accept case', 'orchestrator:windows-execution-lane-accounting-probe-accept-asserts')
+  reset()
+  // The out-of-process behavioral drill: its lane, and the two cases that carry the coverage. Commenting
+  // the lane out with the name left in place is the same one-character defeat the whole-line pins exist
+  // for, so it is drilled the same way.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("\n  Invoke-FoundationLane { & node scripts/foundation-windows-lane-runtime-drill.mjs } 'Foundation Windows lane runtime drill failed.'\n", "\n  # Invoke-FoundationLane { & node scripts/foundation-windows-lane-runtime-drill.mjs } 'Foundation Windows lane runtime drill failed.'\n"))
+  detected('Windows lane runtime drill lane commented out with the name left in place', 'orchestrator:windows-lane-runtime-drill-lane')
+  reset()
+  mutate('scripts/foundation-windows-lane-runtime-drill.mjs', (source) => source.replace("label: 'lane call removed entirely'", "label: 'lane call left in place'"))
+  detected('runtime drill drops the case a forged accounting cannot survive', 'runtime-drill:lane-call-removed-case')
+  reset()
+  mutate('scripts/foundation-windows-lane-runtime-drill.mjs', (source) => source.replace("label: 'accounting forged to recognize its own probe'", "label: 'accounting left alone'"))
+  detected('runtime drill drops the probe-forgery regression', 'runtime-drill:probe-forgery-case')
+  reset()
+  mutate('scripts/foundation-windows-lane-runtime-drill.mjs', (source) => source.replace("label: 'an evidenced execution is accepted'", "label: 'an evidenced execution is ignored'"))
+  detected('runtime drill drops its own positive control', 'runtime-drill:positive-control-case')
+  reset()
+  mutate('scripts/foundation-windows-lane-runtime-drill.mjs', (source) => source.replace('if (anchorIndex < 0) throw new Error(', 'if (false) throw new Error('))
+  detected('runtime drill no longer fails closed on a missing slice anchor', 'runtime-drill:slice-anchor-fails-closed')
+  reset()
+  // The completion marker, and the assertion over it that lives outside the orchestrator. A top-level
+  // `return` above the lanes keeps every text pin in the script and skips this line, so the marker is
+  // the only thing that edit cannot preserve - and the check on it has to live in another file.
+  mutate('.github/workflows/foundation.yml', (source) => source.replace("Select-String -LiteralPath foundation-gate.log -SimpleMatch -CaseSensitive -Pattern 'Farm Rx foundation gate: PASS' -Quiet", 'Select-String -LiteralPath foundation-gate.log -SimpleMatch -Pattern \'gate\' -Quiet'))
+  detected('CI stops asserting the foundation completion marker', 'workflow:foundation-completion-marker-asserted')
+  reset()
+  mutate('.github/workflows/foundation.yml', (source) => source.replace("throw 'Foundation gate did not print its completion marker.'", "Write-Output 'marker missing'"))
+  detected('CI marker assertion downgraded to a message', 'workflow:foundation-completion-marker-fatal')
+  reset()
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("Write-Output 'Farm Rx foundation gate: PASS'", "Write-Output 'done'"))
+  detected('foundation completion marker renamed', 'orchestrator:completion-marker')
+  reset()
+  // The kill-authorizing predicate's traversal refusal. Without it, root C:\FarmRx claims a listener
+  // running at C:\FarmRx\..\Other - outside the repository - and the sole gate on Stop-Process -Force
+  // authorizes terminating it.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace("if ($tokenTail.Split('\\') -notcontains '..') { $rooted = $true; break }", '$rooted = $true; break'))
+  detected('ownership predicate stops refusing a traversing command line', 'season-browser:ownership-refuses-traversal')
   reset()
   mutate('src/data/QueuedScoutingRepository.ts', (source) => source.replace('const verifyRead = () => verifyQueuedReadContext', 'const verifyRead = () => verifyQueuedOperationContext'))
   detected('queued read identity fence removal', 'read-context:src/data/QueuedScoutingRepository.ts')

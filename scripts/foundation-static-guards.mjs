@@ -40,15 +40,16 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh.exe')", 'orchestrator:windows-core-probe-shell')
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh')", 'orchestrator:unix-core-probe-shell')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & $probeShell -NoProfile -Command 'exit 23' } $expected", 'orchestrator:resolved-probe-shell')
-  // What this count actually counts: statements beginning with `Invoke-FoundationLane`. That is 22 -
-  // one intermediate-failure probe, twenty in the orchestration body, and one nested inside
+  // What this count actually counts: statements beginning with `Invoke-FoundationLane`. That is 23 -
+  // one intermediate-failure probe, twenty-one in the orchestration body, and one nested inside
   // Invoke-FoundationWindowsExecutionLane. It does NOT count the Windows lane's own call site, because
   // this pattern requires whitespace immediately after `Invoke-FoundationLane` and
-  // `Invoke-FoundationWindowsExecutionLane` continues with a letter. So the rise from 21 to 22 came
-  // from the nested call, not from a new top-level lane; the lane itself is pinned separately below.
+  // `Invoke-FoundationWindowsExecutionLane` continues with a letter. So the earlier rise from 21 to 22
+  // came from the nested call, not from a new top-level lane, and 22 to 23 is the runtime drill lane
+  // added below; the Windows lane itself is pinned separately.
   // The label says invoke-lane-statements rather than all-lanes-checked for that reason - the old
   // label implied this one number covered every lane in the file, which it does not.
-  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 22) errors.push('orchestrator:invoke-lane-statements')
+  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 23) errors.push('orchestrator:invoke-lane-statements')
   // Pin both season lanes by name. The count above only proves nobody added a lane without
   // updating this guard; it does not prove these two specific lanes survived, and they are the only
   // thing making the season contract gate reachable from an automated gate rather than by hand.
@@ -62,11 +63,22 @@ export function foundationStaticGuard(root = process.cwd()) {
   // the same way, by leaving the pinned words present: replacing the platform test with something
   // always true, inserting a bare `return`, deleting the marker check while its literal survived in a
   // comment, and swapping the child invocation for one that echoes the marker itself. The first three
-  // are now caught at RUNTIME by Assert-FoundationWindowsExecutionLaneAccountedFor, pinned below, which
-  // is the only non-text check over this lane; the last is caught by pinning the invocation line whole.
-  // What text can and cannot do here: these assertions prove the lane is still wired, not that it ran,
-  // and on this Linux CI job the lane reports a skip and the ownership predicate goes unexecuted, so
-  // execution credit exists only on a Windows run.
+  // are caught at RUNTIME by Assert-FoundationWindowsExecutionLaneAccountedFor, pinned below; the last
+  // is caught by pinning the invocation line whole.
+  //
+  // State the limit of everything in this block honestly, because an adversarial review read more into
+  // it than it earns. These are narrow text tripwires. Every one of them can be satisfied by an edit
+  // that leaves the pinned line intact and unreachable - the general form is to put the exact line on a
+  // branch that never runs, or to insert a `return` above it. Whole-line matching raises the bar over a
+  // substring test and nothing more: it proves text occupies a line, never that control reaches it.
+  // The behavioral coverage lives in three other places, and the pins here only keep those reachable:
+  // Assert-FoundationWindowsExecutionLaneAccountedFor, which cross-checks the lane's claim against the
+  // child's own marker; scripts/foundation-windows-lane-runtime-drill.mjs, which re-runs that accounting
+  // out of process against mutated copies of the orchestrator; and the completion-marker assertion in
+  // .github/workflows/foundation.yml, which sits outside the script and so cannot be skipped by a
+  // top-level `return` inside it. Even together those do not prove the lane ran on any given run: on
+  // this Linux CI job the lane reports a skip and the ownership predicate goes unexecuted, so real
+  // execution credit for the predicate exists only on a Windows run.
   requireMatch(errors, foundationOrchestrator, /^ {2}Invoke-FoundationWindowsExecutionLane$/m, 'orchestrator:windows-execution-lane-called')
   requireMatch(errors, foundationOrchestrator, /^ {2}Assert-FoundationWindowsExecutionLaneAccountedFor$/m, 'orchestrator:windows-execution-lane-accounted-for-called')
   // The runtime check carries the coverage text cannot, which makes it the one thing here that must not
@@ -81,11 +93,57 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "if ($script:windowsExecutionOutput -cnotcontains 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS') {", 'orchestrator:windows-execution-lane-marker')
   requireText(errors, foundationOrchestrator, 'SKIPPED (Windows-only cmdlets; no credit claimed)', 'orchestrator:windows-execution-lane-honest-skip')
   requireText(errors, foundationOrchestrator, "if ($onWindows -and $script:windowsExecutionLaneOutcome -cne 'executed') {", 'orchestrator:windows-execution-lane-windows-must-execute')
+  // Rejecting the unset, unknown, and skipped-on-Windows outcomes closes the branches reachable by
+  // deleting work. The remaining branch is reachable by ASSERTING success: assign the outcome at the top
+  // of the lane and return, and every line pinned above is still present while nothing runs. The
+  // accounting therefore requires a claim of execution to be corroborated by the chain's own marker in
+  // the output that run captured, so faking the outcome now also means faking the child's output.
+  requireText(errors, foundationOrchestrator, "if ($script:windowsExecutionLaneOutcome -ceq 'executed' -and $script:windowsExecutionOutput -cnotcontains 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS') {", 'orchestrator:windows-execution-lane-evidenced-execution')
   // The redirect that must NOT come back. Under Windows PowerShell 5.1, merging a native command's
   // stderr into the success stream while $ErrorActionPreference is 'Stop' raises a terminating
   // NativeCommandError, so a child that exits 0 after one npm notice reddened the whole gate and a
   // failing child relayed nothing. The chain runs `npx tsx`, which makes that reachable.
   if (/-File \$wiring 2>&1/.test(foundationOrchestrator)) errors.push('orchestrator:windows-execution-lane-no-stderr-merge')
+  // The probe's positive control. A rejection-only probe is satisfied by an accounting function that
+  // throws unconditionally, and that is not hypothetical: a review demonstrated a forged accounting
+  // which recognizes the probe by reading its loop variable out of the caller's scope, throws each
+  // expected message back, and returns silently for the real call. Measured, that defeat passed a
+  // rejection-only probe end to end. Requiring one evidenced execution to be ACCEPTED is what turns it
+  // red, so the accept case is pinned as tightly as the reject cases.
+  requireText(errors, foundationOrchestrator, "@{ Outcome = 'executed'; Output = @('a preceding line', $marker); Expected = $null; Label = 'executed with evidence' }", 'orchestrator:windows-execution-lane-accounting-probe-positive-control')
+  requireText(errors, foundationOrchestrator, 'throw "Foundation Windows execution lane accounting rejected an evidenced execution [$($case.Label)]: $failure"', 'orchestrator:windows-execution-lane-accounting-probe-accept-asserts')
+  // The out-of-process behavioral drill, and its lane. Everything else in this block is text; this is
+  // the only guard over the Windows lane that runs the accounting for real, and the only one that does
+  // so on the ubuntu CI runner.
+  requireMatch(errors, foundationOrchestrator, /^ {2}Invoke-FoundationLane \{ & node scripts\/foundation-windows-lane-runtime-drill\.mjs \} 'Foundation Windows lane runtime drill failed\.'$/m, 'orchestrator:windows-lane-runtime-drill-lane')
+  const windowsLaneRuntimeDrill = read(root, 'scripts/foundation-windows-lane-runtime-drill.mjs')
+  // Pin the two cases that carry the coverage, by the assertion each one makes rather than by name. The
+  // first is the case a forged accounting cannot survive, because out of process there is no probe frame
+  // for it to detect. The second is this drill's own positive control - without it, an accounting that
+  // threw on everything would pass every other case and the drill would report success for a detector
+  // that no longer works.
+  requireText(errors, windowsLaneRuntimeDrill, "label: 'lane call removed entirely'", 'runtime-drill:lane-call-removed-case')
+  requireText(errors, windowsLaneRuntimeDrill, "label: 'accounting forged to recognize its own probe'", 'runtime-drill:probe-forgery-case')
+  requireText(errors, windowsLaneRuntimeDrill, "label: 'an evidenced execution is accepted'", 'runtime-drill:positive-control-case')
+  requireText(errors, windowsLaneRuntimeDrill, 'if (anchorIndex < 0) throw new Error(', 'runtime-drill:slice-anchor-fails-closed')
+
+  // The completion marker, asserted from outside the script that prints it. Every guard above reads
+  // scripts/verify-foundation.ps1 as text, so a top-level `return` inserted above its lanes keeps all of
+  // them present, runs nothing, and exits 0. The last line the orchestrator prints is the one thing that
+  // edit cannot keep, and the workflow is a second file it would also have to rewrite.
+  const foundationWorkflow = read(root, '.github/workflows/foundation.yml')
+  requireText(errors, foundationWorkflow, "Select-String -LiteralPath foundation-gate.log -SimpleMatch -CaseSensitive -Pattern 'Farm Rx foundation gate: PASS' -Quiet", 'workflow:foundation-completion-marker-asserted')
+  requireText(errors, foundationWorkflow, "throw 'Foundation gate did not print its completion marker.'", 'workflow:foundation-completion-marker-fatal')
+  requireText(errors, foundationOrchestrator, "Write-Output 'Farm Rx foundation gate: PASS'", 'orchestrator:completion-marker')
+
+  // The kill-authorizing predicate. This is the sole gate on the Stop-Process -Force in
+  // Clear-MapleSeasonBrowserPort, so a false TRUE terminates a process Farm Rx does not own. Matching
+  // the root text does not establish that the listener's path stays inside the tree that root names:
+  // measured, root C:\FarmRx against `node.exe "C:\FarmRx\..\Other\scripts\factory-board.mjs"` answered
+  // True. The traversal refusal is pinned here and executed by
+  // scripts/maple-season-browser-port-preflight.regression.ps1.
+  const seasonBrowser = read(root, 'scripts/maple-season-browser.ps1')
+  requireText(errors, seasonBrowser, "if ($tokenTail.Split('\\') -notcontains '..') { $rooted = $true; break }", 'season-browser:ownership-refuses-traversal')
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
 

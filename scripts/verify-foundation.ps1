@@ -32,6 +32,13 @@ function Assert-IntermediateLaneFailureIsFatal {
 }
 
 function Invoke-FoundationWindowsExecutionLane {
+  # Clear both of this lane's variables before anything else, so no answer can be inherited from
+  # earlier in the run. Without this, a value seeded above the lane stands in for one the lane
+  # produced: measured, assigning 'executed' plus a forged marker line before this call, and leaving
+  # the pinned call itself on a branch that never runs, presented a lane that did nothing as a real
+  # execution to the accounting below.
+  $script:windowsExecutionLaneOutcome = $null
+  $script:windowsExecutionOutput = @()
   # Every guard the repository holds over the governed-port preflight reads it as text. Nothing
   # executed the ownership predicate that gates the Stop-Process in Clear-MapleSeasonBrowserPort: the
   # regression chain that does exercise it sat in scripts/ with no caller at all, so a defect in it
@@ -56,7 +63,6 @@ function Invoke-FoundationWindowsExecutionLane {
   # This one file chains the forced-timeout cleanup regression and the governed-port preflight
   # regression, so a single lane reaches all three.
   $wiring = Join-Path $PSScriptRoot 'maple-july-db-clock-wiring.regression.ps1'
-  $script:windowsExecutionOutput = @()
   try {
     # No 2>&1 here, and that is the whole point of this line. `npm run verify:foundation` runs under
     # Windows PowerShell 5.1, where merging a native command's stderr into the success stream while
@@ -68,6 +74,15 @@ function Invoke-FoundationWindowsExecutionLane {
     # `npx tsx`, so one npm notice was enough to trigger it. Without the redirect all three shapes
     # behave: stdout is captured, the exit code survives, and stderr passes through to the operator's
     # console where they can still read it.
+    #
+    # State the cost plainly, because it is real: stderr is NOT in $script:windowsExecutionOutput, so it
+    # is neither relayed by the finally below nor passed through Get-FoundationRedactedLine. A child
+    # that writes a machine path to stderr writes it to the console unredacted. Redirecting to a file
+    # instead of the success stream does not avoid this - measured on this workstation under 5.1, a
+    # child exiting 0 after one stderr line threw `RemoteException :: <the line>` with `2> $file` just
+    # as it did with 2>&1, because the trap is the error stream, not the destination. Capturing both
+    # streams needs ProcessStartInfo with separate readers, which is a rewrite of this line rather than
+    # a flag, and this line is the one the whole lane depends on.
     Invoke-FoundationLane { $script:windowsExecutionOutput = @(& (Get-FoundationProbeShell) -NoProfile -ExecutionPolicy Bypass -File $wiring) } 'Windows season execution regressions failed.'
   } finally {
     # Relay the child's output either way. Invoke-FoundationLane throws on a non-zero exit, so without
@@ -95,9 +110,19 @@ function Assert-FoundationWindowsExecutionLaneAccountedFor {
   # every text assertion over the lane can be defeated by an edit that leaves the words in place.
   # Measured against the guard file: commenting out the single call site keeps the identifier count at
   # two and stays green; inserting a bare `return` at the top of the lane stays green; replacing the
-  # platform test with something always true stays green. None of those survive here, because the lane
-  # only ever sets this variable by reaching the end of one of its two real branches - and claiming
+  # platform test with something always true stays green. None of those three survive here, because the
+  # lane only ever sets this variable by reaching the end of one of its two real branches - and claiming
   # 'skipped' on Windows is a contradiction rather than a platform report.
+  #
+  # What this check is NOT: a proof that the lane executed. It is a consistency test between two
+  # variables, and an edit that writes both of them honestly-looking values defeats it. Measured: a
+  # forgery inserted at the top of this very function, which detects that it is being driven by the
+  # probe below (the probe's loop variable is visible in the caller's scope), reproduces each expected
+  # message, and then returns silently for the real call - that defeat passed both this function and a
+  # rejection-only probe end to end. The probe now carries a positive control for that reason, and
+  # scripts/foundation-windows-lane-runtime-drill.mjs re-runs this accounting out of process, where no
+  # probe scope exists to detect. Those raise the cost of a forgery; they do not make it impossible.
+  # Only executing the lane on a runner that does not take the Windows skip does that.
   if ($null -eq $script:windowsExecutionLaneOutcome) {
     throw 'Foundation Windows execution lane never ran; its outcome was never recorded.'
   }
@@ -107,6 +132,15 @@ function Assert-FoundationWindowsExecutionLaneAccountedFor {
   $onWindows = ($PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows)
   if ($onWindows -and $script:windowsExecutionLaneOutcome -cne 'executed') {
     throw 'Foundation Windows execution lane skipped itself on Windows, where it is required to execute.'
+  }
+  # 'executed' has to be corroborated, not merely claimed. Rejecting the unset, unknown, and
+  # skipped-on-Windows outcomes above closes the branches that can be reached by deleting work, but not
+  # the one that can be reached by asserting success: assigning this variable at the top of the lane and
+  # returning leaves every pinned line present, runs nothing, and would satisfy all three. So the two
+  # variables are compared against each other - a claim of execution must be backed by the chain's own
+  # marker sitting in the output this run captured, which only the real child writes.
+  if ($script:windowsExecutionLaneOutcome -ceq 'executed' -and $script:windowsExecutionOutput -cnotcontains 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS') {
+    throw 'Foundation Windows execution lane reported an execution it cannot evidence; the chain completion marker is absent from the output it captured.'
   }
   Write-Output "Foundation Windows execution lane outcome: $script:windowsExecutionLaneOutcome (on Windows: $onWindows)"
 }
@@ -123,38 +157,73 @@ function Assert-FoundationWindowsExecutionLaneAccountingIsFatal {
   # from a real answer, and every case restores what it found so this probe can never decide the real
   # check's verdict later in the run.
   $saved = $script:windowsExecutionLaneOutcome
+  $savedOutput = $script:windowsExecutionOutput
   try {
+    $marker = 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS'
     $cases = @(
-      @{ Outcome = $null; Expected = 'Foundation Windows execution lane never ran; its outcome was never recorded.'; Label = '<unset>' },
-      @{ Outcome = 'ran'; Expected = 'Foundation Windows execution lane recorded an unknown outcome: ran.'; Label = 'ran' }
+      @{ Outcome = $null; Output = @(); Expected = 'Foundation Windows execution lane never ran; its outcome was never recorded.'; Label = '<unset>' },
+      @{ Outcome = 'ran'; Output = @(); Expected = 'Foundation Windows execution lane recorded an unknown outcome: ran.'; Label = 'ran' },
+      # The unevidenced-success case. Deliberately driven with an empty captured output, which is exactly
+      # the state a lane leaves behind when it claims 'executed' without running its child.
+      @{ Outcome = 'executed'; Output = @(); Expected = 'Foundation Windows execution lane reported an execution it cannot evidence; the chain completion marker is absent from the output it captured.'; Label = 'executed without evidence' },
+      # The positive control, and it is not symmetry for its own sake. A rejection-only probe is
+      # satisfied by an accounting function that throws unconditionally, so it cannot tell a working
+      # detector apart from a broken one. Measured: a forgery that detects this probe by reading the
+      # caller's scope, throws each expected message back, and returns silently for the real call passed
+      # a rejection-only probe end to end. Requiring one evidenced execution to be ACCEPTED means a
+      # throw-always accounting fails here instead of being credited.
+      @{ Outcome = 'executed'; Output = @('a preceding line', $marker); Expected = $null; Label = 'executed with evidence' }
     )
     if ($PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows) {
       # Only a contradiction on Windows. On the ubuntu CI runner 'skipped' is the honest answer, and
       # asserting a throw there would fail the gate for telling the truth.
-      $cases += @{ Outcome = 'skipped'; Expected = 'Foundation Windows execution lane skipped itself on Windows, where it is required to execute.'; Label = 'skipped' }
+      $cases += @{ Outcome = 'skipped'; Output = @(); Expected = 'Foundation Windows execution lane skipped itself on Windows, where it is required to execute.'; Label = 'skipped' }
     }
     foreach ($case in $cases) {
       $script:windowsExecutionLaneOutcome = $case.Outcome
-      $detected = $false
+      $script:windowsExecutionOutput = @($case.Output)
+      $failure = $null
       try {
         Assert-FoundationWindowsExecutionLaneAccountedFor | Out-Null
       } catch {
-        if ($_.Exception.Message -ne $case.Expected) { throw }
-        $detected = $true
+        $failure = $_.Exception.Message
       }
-      if (-not $detected) { throw "Foundation Windows execution lane accounting accepted an outcome of [$($case.Label)]." }
+      if ($null -eq $case.Expected) {
+        if ($null -ne $failure) { throw "Foundation Windows execution lane accounting rejected an evidenced execution [$($case.Label)]: $failure" }
+        continue
+      }
+      if ($null -eq $failure) { throw "Foundation Windows execution lane accounting accepted an outcome of [$($case.Label)]." }
+      # A rejection with the wrong message is its own defect, and reporting it as an acceptance would
+      # send the next reader looking for the wrong thing.
+      if ($failure -ne $case.Expected) { throw "Foundation Windows execution lane accounting rejected [$($case.Label)] with an unexpected message: $failure" }
     }
   } finally {
     $script:windowsExecutionLaneOutcome = $saved
+    $script:windowsExecutionOutput = $savedOutput
   }
-  Write-Output "Foundation Windows execution lane accounting probe: PASS ($($cases.Count) rejected outcomes)"
+  $rejectedCount = @($cases | Where-Object { $null -ne $_.Expected }).Count
+  Write-Output "Foundation Windows execution lane accounting probe: PASS ($rejectedCount rejected, $($cases.Count - $rejectedCount) accepted)"
 }
 
 function Get-FoundationRedactedLine {
   param($Line)
   $text = [string]$Line
   foreach ($machinePath in @([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile), [IO.Path]::GetTempPath())) {
-    if (-not [string]::IsNullOrEmpty($machinePath)) { $text = $text.Replace($machinePath.TrimEnd('\'), '<redacted-path>') }
+    if ([string]::IsNullOrEmpty($machinePath)) { continue }
+    $needle = $machinePath.TrimEnd('\', '/')
+    if ([string]::IsNullOrEmpty($needle)) { continue }
+    # Match both separator spellings and ignore case. .Replace() did neither, and both gaps let a real
+    # machine path through into a gate log: Node and npm diagnostics write some paths with forward
+    # slashes, and a drive letter or directory that differs in case from what GetFolderPath returns
+    # names the same directory on Windows. The text itself is left alone rather than normalized, so a
+    # URL in a child's message keeps its own slashes.
+    #
+    # Deliberately unbounded on the right: this replaces the prefix wherever it appears, so a sibling
+    # directory such as <profile>ry is rewritten too. Over-redaction costs readability; a missed
+    # spelling writes a real path into season evidence, which is the error that matters here.
+    foreach ($spelling in @($needle, $needle.Replace('\', '/'))) {
+      $text = [Regex]::Replace($text, [Regex]::Escape($spelling), '<redacted-path>', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    }
   }
   return $text
 }
@@ -169,6 +238,11 @@ try {
   Invoke-FoundationLane { & npm audit --audit-level=high } 'Dependency audit failed.'
   Invoke-FoundationLane { & node scripts/foundation-static-guards.mjs } 'Foundation static guard failed.'
   Invoke-FoundationLane { & node scripts/verify-foundation-mutations.mjs } 'Foundation mutation drill failed.'
+  # Behavioral, not textual, and out of process. The two lanes above assert that lines exist and that
+  # deleting one turns a named guard red; this one runs the Windows lane's accounting for real against
+  # mutated copies of this file's own functions. It is the only lane over the Windows lane that also
+  # executes on the ubuntu CI runner, because it never starts the Windows-only regression chain.
+  Invoke-FoundationLane { & node scripts/foundation-windows-lane-runtime-drill.mjs } 'Foundation Windows lane runtime drill failed.'
   # The season contract gate was reachable only when an operator typed `npm run verify:season` by
   # hand - no workflow and no hook ran it - so the structural guards it holds, including the
   # governed-port preflight checks, could regress without anything failing. Both are pure node with

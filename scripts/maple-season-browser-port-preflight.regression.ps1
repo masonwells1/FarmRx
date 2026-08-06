@@ -233,6 +233,28 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   # rejected every leading dot instead of only '.' and '..' would refuse the real tree.
   $dotSegmentOwned = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx\.claude\worktrees\b\node_modules\vite\bin\vite.js"' }
   Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $dotSegmentOwned -Root 'C:\FarmRx\.claude\worktrees\b') 'Ownership test refused an owned root containing a dot-prefixed directory segment.'
+  # A VALID root plus a traversing command line. The cases above reject a root that navigates back to
+  # the drive; these reject the mirror image, where the root is exactly this repository and the
+  # LISTENER's path walks back out of it. Measured against the predicate before this repair, root
+  # C:\FarmRx against `node.exe "C:\FarmRx\..\Other\scripts\factory-board.mjs" --port 4177` answered
+  # True: the root text was found at a real separator, so the sole gate on Stop-Process -Force
+  # authorized terminating a process running one directory over, outside the repository entirely.
+  # Matching the root text does not establish that the path stays inside the tree the root names.
+  foreach ($case in @(
+    @{ Label = 'quoted traversal out of the root'; CommandLine = 'node.exe "C:\FarmRx\..\Other\scripts\factory-board.mjs" --port 4177' }
+    @{ Label = 'unquoted traversal out of the root'; CommandLine = 'node.exe C:\FarmRx\..\Other\scripts\factory-board.mjs' }
+    @{ Label = 'traversal deeper in the same token'; CommandLine = 'node.exe C:\FarmRx\app\..\..\Other\app.js' }
+    @{ Label = 'traversal at the end of the command line'; CommandLine = 'node.exe C:\FarmRx\..' }
+    @{ Label = 'traversal ending at a closing quote'; CommandLine = 'node.exe "C:\FarmRx\.."' }
+  )) {
+    $traversingListener = [pscustomobject]@{ Name = 'node.exe'; CommandLine = $case.CommandLine }
+    Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $traversingListener -Root 'C:\FarmRx')) "Ownership test did not fail closed for a $($case.Label)."
+  }
+  # A traversing occurrence must not mask a legitimate one later in the same command line, for the same
+  # reason the scan does not stop at the first match: declaring our own server foreign fails the month
+  # at cleanup with a wrong diagnosis.
+  $traversalThenOwned = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe --require C:\FarmRx\..\Other\hook.js C:\FarmRx\app\server.mjs' }
+  Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $traversalThenOwned -Root 'C:\FarmRx') 'Ownership test let a traversing argument mask an owned path later in the same command line.'
   # A non-string root must fail closed rather than throw. Dropping the [string] cast from the
   # parameter sent an integer straight into .Replace() and raised a method-not-found error, which is
   # the one answer the callers cannot use - they depend on this function returning false.
@@ -251,6 +273,14 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $uncOwned -Root '\\server\share\FarmRx') 'Ownership test refused an owned UNC root.'
   $uncSibling = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "\\server\share\FarmRx2\node_modules\vite\bin\vite.js"' }
   Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $uncSibling -Root '\\server\share\FarmRx')) 'Ownership test claimed a UNC sibling that shares the root prefix.'
+  # Mirrors of the traversal repair, and the same kind of over-strictness guard: a segment that merely
+  # begins with dots is a real directory name, and this repository's own root already depends on one
+  # ('.claude'), so a repair that refused every dot-bearing segment would refuse the tree the season
+  # proofs actually run in.
+  $dotsOwned = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx\...odd\server.mjs"' }
+  Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $dotsOwned -Root 'C:\FarmRx') 'Ownership test refused an owned path whose segment merely begins with dots.'
+  $spaceSegmentOwned = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe C:\FarmRx\my app\server.mjs' }
+  Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $spaceSegmentOwned -Root 'C:\FarmRx') 'Ownership test refused an owned path containing a space-bearing directory segment.'
 
   Write-Output 'MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS'
   exit 0

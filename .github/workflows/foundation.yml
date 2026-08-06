@@ -23,7 +23,18 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Run foundation gate
         shell: pwsh
-        run: ./scripts/verify-foundation.ps1
+        # Require the orchestrator's own final marker, not just a clean exit. Every guard inside
+        # scripts/verify-foundation.ps1 reads that file as text, so an edit that inserts a top-level
+        # `return` above the lanes leaves all of them present, runs nothing, and exits 0 - and the one
+        # thing such an edit cannot keep is the last line the script prints. Asserting the marker from
+        # here puts that check in a second file, outside the script that would be lying.
+        # Tee-Object passes the output through, so the gate still streams to the job log.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/verify-foundation.ps1 | Tee-Object -FilePath foundation-gate.log
+          if (-not (Select-String -LiteralPath foundation-gate.log -SimpleMatch -CaseSensitive -Pattern 'Farm Rx foundation gate: PASS' -Quiet)) {
+            throw 'Foundation gate did not print its completion marker.'
+          }
       - name: Upload browser evidence on failure
         if: failure()
         uses: actions/upload-artifact@v4

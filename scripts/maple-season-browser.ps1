@@ -71,8 +71,24 @@ function Test-MapleSeasonBrowserPortOwned {
     $matchIndex = $normalizedCommandLine.IndexOf($normalizedRoot, $searchIndex, [StringComparison]::OrdinalIgnoreCase)
     if ($matchIndex -lt 0) { break }
     $boundaryIndex = $matchIndex + $normalizedRoot.Length
-    if ($boundaryIndex -ge $normalizedCommandLine.Length) { $rooted = $true; break }
-    if ([string]$normalizedCommandLine[$boundaryIndex] -match '[\\"]') { $rooted = $true; break }
+    $endsAtEndOfCommandLine = $boundaryIndex -ge $normalizedCommandLine.Length
+    $endsAtDirectoryBoundary = (-not $endsAtEndOfCommandLine) -and ([string]$normalizedCommandLine[$boundaryIndex] -match '[\\"]')
+    if ($endsAtEndOfCommandLine -or $endsAtDirectoryBoundary) {
+      # A boundary-valid occurrence still has to stay inside the tree it names, and matching the root
+      # text does not establish that. Measured with root C:\FarmRx against
+      # `node.exe "C:\FarmRx\..\Other\scripts\factory-board.mjs" --port 4177`: the root was found at a
+      # real separator, this predicate answered True, and it would have authorized Stop-Process -Force
+      # against a process running wholly outside the repository - the parent directory reached by
+      # another spelling. Walk the rest of that path token, up to the closing double quote or the end
+      # of the command line, and refuse if any segment is a parent traversal. Farm Rx builds these
+      # paths through [IO.Path]::GetFullPath, which leaves no '..' behind, so no legitimate listener
+      # loses its match; and refusing is the fail-closed answer, which costs a cleanup diagnosis
+      # rather than a wrong termination.
+      $tokenTail = $normalizedCommandLine.Substring($boundaryIndex)
+      $closingQuoteIndex = $tokenTail.IndexOf('"')
+      if ($closingQuoteIndex -ge 0) { $tokenTail = $tokenTail.Substring(0, $closingQuoteIndex) }
+      if ($tokenTail.Split('\') -notcontains '..') { $rooted = $true; break }
+    }
     # Keep scanning. Stopping at the first occurrence let an unrelated leading argument such as
     # --require C:\FarmRx2\hook.js mask the real owned path later in the same command line, which
     # declared our own server foreign and failed the month at cleanup with a wrong diagnosis.
