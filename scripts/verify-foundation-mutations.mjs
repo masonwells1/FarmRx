@@ -55,27 +55,68 @@ try {
   detected('push direct-table write revoke removal', 'table:push-direct-write-revoked')
   reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1') }", "& (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1')"))
-  detected('intermediate foundation exit check removal', 'orchestrator:all-lanes-checked')
+  detected('intermediate foundation exit check removal', 'orchestrator:invoke-lane-statements')
   reset()
   // The Windows execution lane is the only thing in the repository that runs the port-ownership
-  // predicate gating Stop-Process. Four ways to lose that coverage, each of which must be reported as
-  // itself rather than as a generic count mismatch. The call is matched with its two-space indent so
-  // this drill hits the call site and not the function definition.
-  mutate('scripts/verify-foundation.ps1', (source) => source.replace('  Invoke-FoundationWindowsExecutionLane', '  # lane call removed'))
-  detected('Windows execution lane call removal', 'orchestrator:windows-execution-lane-called')
+  // predicate gating Stop-Process, so every way of losing that coverage gets its own drill and must be
+  // reported as itself rather than as a generic count mismatch.
+  //
+  // The first drill is the one that matters most, and it is here because an adversarial review defeated
+  // the previous version of this block. The old drill replaced the call with '# lane call removed',
+  // which deletes the identifier and so was caught by an occurrence count. Simply COMMENTING the call
+  // out - prepending one '#' - leaves the identifier present, keeps the count at two, and stays green
+  // while the lane never runs. That is the mutation below, and the pin it must trip is a whole-line
+  // match rather than a count.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('\n  Invoke-FoundationWindowsExecutionLane\n', '\n  # Invoke-FoundationWindowsExecutionLane\n'))
+  detected('Windows execution lane call commented out with the name left in place', 'orchestrator:windows-execution-lane-called')
+  reset()
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('\n  Assert-FoundationWindowsExecutionLaneAccountedFor\n', '\n  # Assert-FoundationWindowsExecutionLaneAccountedFor\n'))
+  detected('Windows execution lane runtime accounting check commented out', 'orchestrator:windows-execution-lane-accounted-for-called')
+  reset()
+  // The runtime accounting check is the only non-text coverage over this lane, so losing the probe that
+  // proves it still throws would leave it trusted rather than tested. Both its call site and its
+  // assertion are mutated: silence the probe, and a runtime check quietly reduced to a no-op stays green.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('\n  Assert-FoundationWindowsExecutionLaneAccountingIsFatal\n', '\n  # Assert-FoundationWindowsExecutionLaneAccountingIsFatal\n'))
+  detected('Windows execution lane accounting probe commented out', 'orchestrator:windows-execution-lane-accounting-probe-called')
+  reset()
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('if (-not $detected) { throw "Foundation Windows execution lane accounting accepted an outcome of [$($case.Label)]." }', 'if (-not $detected) { Write-Output \'tolerated\' }'))
+  detected('Windows execution lane accounting probe stops asserting', 'orchestrator:windows-execution-lane-accounting-probe-asserts')
+  reset()
+  // Replacing the platform test with something always true makes the lane skip on every platform,
+  // including the Windows workstation where it is the only real coverage.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("if (-not ($PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows)) {", 'if ($true) {'))
+  detected('Windows execution lane platform gate always skips', 'orchestrator:windows-execution-lane-platform-gate')
+  reset()
+  // Swapping the child invocation for one that echoes the marker itself satisfies both the exit-code
+  // check and the marker check while executing nothing. The chain pin cannot see it, because a mutation
+  // like this keeps the $wiring assignment line intact.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('-ExecutionPolicy Bypass -File $wiring)', "-Command 'Write-Output \"MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS\"')"))
+  detected('Windows execution lane child replaced by an echo of its own marker', 'orchestrator:windows-execution-lane-invocation')
+  reset()
+  // Restoring the 2>&1 redirect. Under Windows PowerShell 5.1 that turns one stderr line from a
+  // PASSING child into a terminating NativeCommandError, so the gate goes red on a good run and relays
+  // nothing on a bad one.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('-ExecutionPolicy Bypass -File $wiring)', '-ExecutionPolicy Bypass -File $wiring 2>&1)'))
+  detected('Windows execution lane stderr merge reintroduced', 'orchestrator:windows-execution-lane-no-stderr-merge')
   reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace('maple-july-db-clock-wiring.regression.ps1', 'unrelated.regression.ps1'))
   detected('Windows execution lane points at another chain', 'orchestrator:windows-execution-lane-chain')
   reset()
   // Dropping the marker requirement leaves an exit-code check, which a child that dies early or does
-  // nothing at all can satisfy.
-  mutate('scripts/verify-foundation.ps1', (source) => source.replace('MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS', 'ANY_OUTPUT_AT_ALL'))
+  // nothing at all can satisfy. Mutating the whole statement, not just the marker string, because the
+  // string alone also occurs in the comment above it.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("if ($script:windowsExecutionOutput -cnotcontains 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS') {", 'if ($false) {'))
   detected('Windows execution lane completion marker removal', 'orchestrator:windows-execution-lane-marker')
   reset()
   // Turning the honest skip into a pass is the failure mode that matters most on CI, where the skip is
   // the branch actually taken: it would report earned coverage on a platform that ran nothing.
   mutate('scripts/verify-foundation.ps1', (source) => source.replace('SKIPPED (Windows-only cmdlets; no credit claimed)', 'PASS'))
   detected('Windows execution lane skip reported as a pass', 'orchestrator:windows-execution-lane-honest-skip')
+  reset()
+  // Letting the lane report 'skipped' on Windows without objecting is how the runtime accounting check
+  // would be hollowed out while still appearing to be present.
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("if ($onWindows -and $script:windowsExecutionLaneOutcome -cne 'executed') {", 'if ($false) {'))
+  detected('Windows execution lane allowed to skip itself on Windows', 'orchestrator:windows-execution-lane-windows-must-execute')
   reset()
   mutate('src/data/QueuedScoutingRepository.ts', (source) => source.replace('const verifyRead = () => verifyQueuedReadContext', 'const verifyRead = () => verifyQueuedOperationContext'))
   detected('queued read identity fence removal', 'read-context:src/data/QueuedScoutingRepository.ts')

@@ -5,6 +5,10 @@ import { createHash } from 'node:crypto'
 
 const read = (root, path) => readFileSync(resolve(root, path), 'utf8')
 const requireText = (errors, source, text, label) => { if (!source.includes(text)) errors.push(label) }
+// requireText is a substring test, so it is satisfied by the same words appearing inside a comment or
+// a commented-out statement. Use requireMatch where the pin has to be a live statement rather than
+// merely present text.
+const requireMatch = (errors, source, pattern, label) => { if (!pattern.test(source)) errors.push(label) }
 
 export function foundationStaticGuard(root = process.cwd()) {
   const errors = []
@@ -36,22 +40,52 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh.exe')", 'orchestrator:windows-core-probe-shell')
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh')", 'orchestrator:unix-core-probe-shell')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & $probeShell -NoProfile -Command 'exit 23' } $expected", 'orchestrator:resolved-probe-shell')
-  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 22) errors.push('orchestrator:all-lanes-checked')
+  // What this count actually counts: statements beginning with `Invoke-FoundationLane`. That is 22 -
+  // one intermediate-failure probe, twenty in the orchestration body, and one nested inside
+  // Invoke-FoundationWindowsExecutionLane. It does NOT count the Windows lane's own call site, because
+  // this pattern requires whitespace immediately after `Invoke-FoundationLane` and
+  // `Invoke-FoundationWindowsExecutionLane` continues with a letter. So the rise from 21 to 22 came
+  // from the nested call, not from a new top-level lane; the lane itself is pinned separately below.
+  // The label says invoke-lane-statements rather than all-lanes-checked for that reason - the old
+  // label implied this one number covered every lane in the file, which it does not.
+  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 22) errors.push('orchestrator:invoke-lane-statements')
   // Pin both season lanes by name. The count above only proves nobody added a lane without
   // updating this guard; it does not prove these two specific lanes survived, and they are the only
   // thing making the season contract gate reachable from an automated gate rather than by hand.
   requireText(errors, foundationOrchestrator, 'Invoke-FoundationLane { & node scripts/verify-season-contract.mjs }', 'orchestrator:checked-season-contract')
   requireText(errors, foundationOrchestrator, 'Invoke-FoundationLane { & node scripts/verify-season-contract.regression.mjs }', 'orchestrator:checked-season-contract-regression')
-  // Pin the Windows execution lane: the definition and the call, the chain it runs, and the marker it
-  // demands. Requiring exactly two occurrences of the name is what catches the call being deleted while
-  // the function stays behind, which a presence check cannot see. Be clear about what this is worth:
-  // these are text assertions, so they prove the lane is still wired, not that it ran. On this Linux CI
-  // job the lane itself reports a skip, and the ownership predicate goes unexecuted; the execution
-  // credit exists only on a Windows run.
-  if ((foundationOrchestrator.match(/Invoke-FoundationWindowsExecutionLane/g) ?? []).length !== 2) errors.push('orchestrator:windows-execution-lane-called')
+  // Pin the Windows execution lane. An earlier version of this block counted occurrences of the lane
+  // name and required exactly two, on the theory that this catches the call being deleted while the
+  // function stays behind. It does not: commenting the call out - one character - leaves the identifier
+  // in place, keeps the count at two, and stays green while the lane never runs. The call is therefore
+  // matched as a whole uncommented statement on its own line. Four more edits defeated the old block
+  // the same way, by leaving the pinned words present: replacing the platform test with something
+  // always true, inserting a bare `return`, deleting the marker check while its literal survived in a
+  // comment, and swapping the child invocation for one that echoes the marker itself. The first three
+  // are now caught at RUNTIME by Assert-FoundationWindowsExecutionLaneAccountedFor, pinned below, which
+  // is the only non-text check over this lane; the last is caught by pinning the invocation line whole.
+  // What text can and cannot do here: these assertions prove the lane is still wired, not that it ran,
+  // and on this Linux CI job the lane reports a skip and the ownership predicate goes unexecuted, so
+  // execution credit exists only on a Windows run.
+  requireMatch(errors, foundationOrchestrator, /^ {2}Invoke-FoundationWindowsExecutionLane$/m, 'orchestrator:windows-execution-lane-called')
+  requireMatch(errors, foundationOrchestrator, /^ {2}Assert-FoundationWindowsExecutionLaneAccountedFor$/m, 'orchestrator:windows-execution-lane-accounted-for-called')
+  // The runtime check carries the coverage text cannot, which makes it the one thing here that must not
+  // be allowed to rot into a no-op nobody has seen fail. Its own probe runs before the lane and asserts
+  // each rejection branch actually throws, exactly as Assert-IntermediateLaneFailureIsFatal does for the
+  // lane wrapper. Pin the probe's call site too, or the runtime check is trusted rather than tested.
+  requireMatch(errors, foundationOrchestrator, /^ {2}Assert-FoundationWindowsExecutionLaneAccountingIsFatal$/m, 'orchestrator:windows-execution-lane-accounting-probe-called')
+  requireText(errors, foundationOrchestrator, "throw \"Foundation Windows execution lane accounting accepted an outcome of [$($case.Label)].\"", 'orchestrator:windows-execution-lane-accounting-probe-asserts')
+  requireText(errors, foundationOrchestrator, "if (-not ($PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows)) {", 'orchestrator:windows-execution-lane-platform-gate')
+  requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { $script:windowsExecutionOutput = @(& (Get-FoundationProbeShell) -NoProfile -ExecutionPolicy Bypass -File $wiring) } 'Windows season execution regressions failed.'", 'orchestrator:windows-execution-lane-invocation')
   requireText(errors, foundationOrchestrator, "Join-Path $PSScriptRoot 'maple-july-db-clock-wiring.regression.ps1'", 'orchestrator:windows-execution-lane-chain')
-  requireText(errors, foundationOrchestrator, 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS', 'orchestrator:windows-execution-lane-marker')
+  requireText(errors, foundationOrchestrator, "if ($script:windowsExecutionOutput -cnotcontains 'MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS') {", 'orchestrator:windows-execution-lane-marker')
   requireText(errors, foundationOrchestrator, 'SKIPPED (Windows-only cmdlets; no credit claimed)', 'orchestrator:windows-execution-lane-honest-skip')
+  requireText(errors, foundationOrchestrator, "if ($onWindows -and $script:windowsExecutionLaneOutcome -cne 'executed') {", 'orchestrator:windows-execution-lane-windows-must-execute')
+  // The redirect that must NOT come back. Under Windows PowerShell 5.1, merging a native command's
+  // stderr into the success stream while $ErrorActionPreference is 'Stop' raises a terminating
+  // NativeCommandError, so a child that exits 0 after one npm notice reddened the whole gate and a
+  // failing child relayed nothing. The chain runs `npx tsx`, which makes that reachable.
+  if (/-File \$wiring 2>&1/.test(foundationOrchestrator)) errors.push('orchestrator:windows-execution-lane-no-stderr-merge')
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
 

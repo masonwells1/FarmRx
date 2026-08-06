@@ -39,9 +39,26 @@ function Test-MapleSeasonBrowserPortOwned {
   # same shape of problem: root '.' matched the '.' in `node .`, and in most command lines besides.
   # Requiring a named directory under the root rejects 'C:\', 'C:', '.', '\\server\share', and any
   # bare relative name, all of which are too broad to identify one tree.
+  # A device or extended-length prefix is rejected before the share shape is considered, because
+  # '\\.\C:\FarmRx' satisfies the share pattern below - it reads as share '\\.\C:' with a directory
+  # 'FarmRx' under it - and would then be accepted as a named tree. These spellings alias a path this
+  # predicate may already hold under its normal name, so accepting them means the same tree can be
+  # matched two ways and only one of them was ever tested.
+  if ($normalizedRoot -match '^\\\\[.?]\\') { return $false }
   $rootNamesDirectoryUnderDrive = $normalizedRoot -match '^[A-Za-z]:\\[^\\]'
   $rootNamesDirectoryUnderShare = $normalizedRoot -match '^\\\\[^\\]+\\[^\\]+\\[^\\]'
   if (-not ($rootNamesDirectoryUnderDrive -or $rootNamesDirectoryUnderShare)) { return $false }
+  # The shape check above is necessary but not sufficient, and the gap fails OPEN. It only demands one
+  # character after the root separator, and '.', '..', a space, and a tab are all one character, so
+  # 'C:\.', 'C:\..', 'C:\ ', and "C:\`t" passed it and each one claimed an unrelated listener - the
+  # same authorize-a-kill answer the plain 'C:\' hole gave. 'C:\FarmRx\..' passed too and names the
+  # drive root by another spelling. Require every segment below the drive or share root to be a real
+  # directory name: not empty, not whitespace, and not a relative navigation segment.
+  $rootTail = if ($rootNamesDirectoryUnderDrive) { $normalizedRoot.Substring(3) } else { ($normalizedRoot -replace '^\\\\[^\\]+\\[^\\]+\\', '') }
+  foreach ($segment in $rootTail.Split('\')) {
+    if ([string]::IsNullOrWhiteSpace($segment)) { return $false }
+    if ($segment -eq '.' -or $segment -eq '..') { return $false }
+  }
   # Neither a space nor an apostrophe is a boundary. Both are legal in a Windows directory name, so
   # treating either as a terminator lets root C:\FarmRx claim a different tree and this predicate
   # authorizes killing what it finds there: a space accepted "C:\FarmRx Backup\node_modules\vite\..."

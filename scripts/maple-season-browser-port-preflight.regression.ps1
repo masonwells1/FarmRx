@@ -191,20 +191,56 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   $anyListener = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx\node_modules\vite\bin\vite.js"' }
   Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $anyListener)) 'Ownership test did not fail closed for a missing root.'
   Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $anyListener -Root '\')) 'Ownership test did not fail closed for a degenerate root.'
-  # A root that does not name a directory under a drive or share is too broad to identify one tree,
-  # and rejecting only the empty root was not enough to catch that. Each of these answered true
-  # against an unrelated listener before the root-shape check existed, and true here authorizes
-  # Stop-Process: 'C:\' trims to 'C:', which every absolute path on that drive continues with a
-  # separator - a legal boundary - so it claimed every node process on the machine; '.' matched the
-  # dot in `node .`; a lone space matched the space in nearly any command line.
+  # A root that does not name a directory under a drive or share is too broad to identify one tree, and
+  # rejecting only the empty root was not enough to catch that. True here authorizes Stop-Process.
+  #
+  # Be exact about which of these are regressions, because an earlier version of this comment claimed
+  # all of them were and that was wrong. Measured against the predicate at 599818e using the very
+  # $unrelatedListener defined below: 'C:\', 'C:', 'C:/', and a lone space each answered TRUE and are
+  # genuine regressions - 'C:\' trims to 'C:', which every absolute path on that drive continues with a
+  # separator, a legal boundary, so it claimed every node process on the machine; a lone space matched
+  # the space present in nearly any command line. The other three - '.', 'FarmRx', and a bare share root
+  # - answered FALSE against that listener already; they are invariant guards against a future widening,
+  # not regressions of anything. (Root '.' does answer TRUE against command line `node .`, which is why
+  # the old comment sounded right, but that input is not the one asserted here.)
   $unrelatedListener = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\Other\app.js"' }
   foreach ($overBroadRoot in @('C:\', 'C:', 'C:/', '.', ' ', 'FarmRx', '\\server\share')) {
     Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $unrelatedListener -Root $overBroadRoot)) "Ownership test did not fail closed for the over-broad root '$overBroadRoot'."
   }
+  # Root '.' against the command line it actually matches, so the case the comment above describes is
+  # asserted rather than merely mentioned.
+  Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess ([pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node .' }) -Root '.')) 'Ownership test did not fail closed for a relative root against a bare relative command line.'
+  # Roots that ARE the drive root under another spelling, or that navigate back to it. Each of these
+  # satisfied the first version of the shape check - which only demanded one character after 'C:\', and
+  # '.', '..', a space, and a tab are all one character - and each then claimed a listener in an
+  # unrelated tree. A device or extended-length prefix is rejected for a different reason: it aliases a
+  # path this predicate may already hold under its normal name, so the same tree could be matched two
+  # ways and only one of them was ever tested.
+  foreach ($case in @(
+    @{ Root = 'C:\.'; CommandLine = 'node.exe "C:\.\app.js"' }
+    @{ Root = 'C:\..'; CommandLine = 'node.exe "C:\..\app.js"' }
+    @{ Root = 'C:\FarmRx\..'; CommandLine = 'node.exe "C:\FarmRx\..\Other\app.js"' }
+    @{ Root = 'C:\ '; CommandLine = 'node.exe "C:\ \app.js"' }
+    @{ Root = "C:\`t"; CommandLine = "node.exe `"C:\`t\app.js`"" }
+    @{ Root = '\\.\C:\FarmRx'; CommandLine = 'node.exe "\\.\C:\FarmRx\app.js"' }
+    @{ Root = '\\?\C:\FarmRx'; CommandLine = 'node.exe "\\?\C:\FarmRx\app.js"' }
+  )) {
+    $aliasListener = [pscustomobject]@{ Name = 'node.exe'; CommandLine = $case.CommandLine }
+    Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $aliasListener -Root $case.Root)) "Ownership test did not fail closed for the drive-root alias '$($case.Root)'."
+  }
+  # The mirror: a legitimate directory whose name merely BEGINS with a dot must still be recognized.
+  # This repository's own governed root is C:\FarmRx\.claude\worktrees\<branch>, so a segment check that
+  # rejected every leading dot instead of only '.' and '..' would refuse the real tree.
+  $dotSegmentOwned = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\FarmRx\.claude\worktrees\b\node_modules\vite\bin\vite.js"' }
+  Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $dotSegmentOwned -Root 'C:\FarmRx\.claude\worktrees\b') 'Ownership test refused an owned root containing a dot-prefixed directory segment.'
   # A non-string root must fail closed rather than throw. Dropping the [string] cast from the
   # parameter sent an integer straight into .Replace() and raised a method-not-found error, which is
   # the one answer the callers cannot use - they depend on this function returning false.
   Assert-True (-not (Test-MapleSeasonBrowserPortOwned -ListenerProcess $unrelatedListener -Root 4174)) 'Ownership test did not fail closed for a non-string root.'
+  # The three assertions below are guards against an over-strict future repair, not regressions: all
+  # three answer the same way against the predicate at 599818e as they do now. They are here so that a
+  # narrowing fix cannot pass the false-TRUE cases above by refusing legitimate trees as well.
+  #
   # The mirror of the apostrophe case: removing the apostrophe from the boundary set must not stop a
   # genuinely owned tree from being recognized when the owned path itself contains one. Without this,
   # a repair that simply refused every apostrophe would pass the case above and still fail the month.
