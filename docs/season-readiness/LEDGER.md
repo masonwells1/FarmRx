@@ -1054,3 +1054,60 @@ Sol reviewed `bd2d995` with fresh context and returned REQUEST-CHANGES with twen
 **Decisions still waiting on Mason, unchanged:** the Job Object rewrite together with F1/F4's ownership semantics; a Windows CI job, because no runner executes the ten Windows-only refusals that protect this workstation from a false TRUE; wiring the orphaned PowerShell regressions into a gate behind a blanket "every regression must have a caller" guard; and the earlier seven-file repair-plan approval question.
 
 **Authority, stated plainly:** local commit only, on `claude/gauntlet-testing-sweep-013d65`. Nothing was pushed, merged, or deployed. A green gate is not approval for an outward action.
+
+## SR-076 — the drill's own last seven pins, a census of what is still undrilled, and Sol's tranche C on `d040b1e`
+
+Two separable things happened, and they are recorded separately because only the first is repaired here.
+
+### What this commit does: the mutation drill finishes drilling itself
+
+Thirteen guard pins stand over `scripts/verify-foundation-mutations.mjs` — the file that breaks other files on purpose. Six of them had drills. Seven did not, so the file that exists to argue "a pin nobody has broken is a pin nobody has proved bites" had been applying that argument to every file except itself. All seven now have drills, and `mutation-drill:` is the fourth label family to be **fully drilled** (13/13).
+
+**Measured before a line was written,** because a drill that does not apply is worse than no drill — it reports green while testing unmodified source. `scratchpad/probe-drill-selfpins.mjs` asked three questions of each proposed mutation against the real file: does the needle apply, does it change the **intended line** rather than its own copy inside the needle, and does it move the named pin from holding to broken. **All seven answered yes on the first run**, at lines 960, 963, 1006, 1036, 1070, 1101 and 1102.
+
+Every needle is anchored to line-start, for the reason this file already had written down: a plain substring matches **itself** first, because the needle is spelled out in the file above the code it aims at. All seven targets sit *below* the drill block, so an unanchored needle would have mutated the drill and left the runner untouched.
+
+The seven, and the defect each recreates rather than merely breaking adjacent text:
+
+- **`subject-runner-returns-the-child-result`** — the runner returns stdout and drops stderr. A PowerShell suite that dies with an exception writes its diagnosis to stderr, so every scoring criterion then receives an output that *cannot* contain the sentence it looks for, and `detectedByBehaviour` reports "went red but never said what was wrong" about a suite that said exactly what was wrong.
+- **`subject-runner-refuses-a-hang`** — the `|| result.signal` half deleted. This is not the redundant half: `spawnSync`'s timeout kills the child and reports status `null` **with a signal** and often no `error.code`, so that is the branch that fires on a real hang. Without it a five-minute hang reaches the scoring criteria as `null` and gets diagnosed as anything except a hang.
+- **`detection-requires-the-named-sentence`** — accepts a red suite that never named the defect.
+- **`gap-requires-a-complete-run`** — records a blind spot from a run that stopped short of its own PASS marker.
+- **`gap-manifest-fields-held`** — the expectation emptied at the **call site**. The already-drilled `gap-requires-the-expected-manifest` breaks the loop that reads the list; this breaks the list the loop reads. Two routes to one hole, and only one of them was pinned.
+- **`static-claim-counted-not-asserted`** and **`behavioural-claim-counted-not-asserted`** — the two summary sentences fabricated instead of counted. `202` is the count that was true one commit ago, which is exactly the shape this pin refuses: the file's own comment records that a hand-written total went stale the moment a drill was added and then claimed coverage nothing had measured.
+
+The drill count moved **202 → 209** in the three places that state it, each verified to hold it exactly once first. The count is *arrived at*, not asserted: the drill printed `PASS (209 controlled mutations turned the gate red)` on its own count, and the foundation gate then **consumed** that exact sentence, which is what proves the three literals agree with reality.
+
+### A census, because "seven undrilled" turned out to be the wrong number
+
+With `mutation-drill:` closed, the obvious question is what else is undrilled. `scratchpad/probe-undrilled-labels.mjs` reads every label the guard can push and every label a drill waits for: **91 of 244 guard labels have no drill.** Fully drilled families: `mutation-drill:` (13), `timeout-regression:` (5), `runtime-drill:` (4), `table:` (1). Largest gaps: `auth:` 15, `orchestrator:` 14, `ownership-regression:` 14, `season-browser-regression:` 11, `workflow:` 6. `season-browser:` is 40/42.
+
+**The probe was wrong twice before it was right, and both wrong versions produced a confident number,** which is why the corrections are written down rather than quietly fixed:
+
+- It first collected `node:fs`, `node:path`, `node:crypto` and `node:url` as guard labels. Those are **import specifiers**. A "4 undrilled `node:` pins" line would have sent someone hunting for pins that do not exist.
+- It matched drills with a pattern that cannot span a comma, so every drill whose description contains a comma scored as **undrilled** — including `season-browser:cleanup-rebinds-the-pinned-id-to-a-live-listener-row`, which was drilled in `d040b1e`.
+- It then read only single-quoted labels, missing every **template-literal** label (`${id}:ownership-…`), understating both sides by roughly two dozen.
+
+The rule that holds for every call in both files is that the label is the last quoted-or-backticked argument before the closing paren, and under that rule **zero calls on either side are unreadable**. One limit is stated rather than hidden: labels the guard emits from **inside a loop** are invisible to a line scanner, so 28 drill assertions appear to name no guard label when they in fact name generated ones (`season-browser:no-inline-comments` among them). That makes 244 a slight undercount of pins; it does not inflate the 91, because every one of those 91 is a label the guard names literally and no drill names at all. This is a triage list for later tranches, not a gate.
+
+### Sol's tranche C on `d040b1e`: REQUEST-CHANGES, seventeen findings, and two of my own claims are false
+
+Sol reviewed the immutable `d040b1e` with fresh context and noted correctly that `99ff8b0` appeared on the branch mid-review — a process error on my side, recorded in SR-075's stead here: **do not commit while a review is running.** Sol confirmed the exact-commit guard PASS, replayed all thirteen `d040b1e` drills in memory and found each raised exactly its asserted label and no other, and independently reconciled the count arithmetic. It could not run the full drill (its sandbox refused the temp directory with `EPERM`) or reproduce the workstation-only probes.
+
+**Two findings were reproduced on this workstation before anything was written here,** against the real guard on a throwaway copy whose baseline was green (`scratchpad/probe-sol-076-f6-f8.mjs`). Both passed the guard, and both make an SR-075 claim false:
+
+- **Finding 6 — the here-string bypass, which is layer ten.** `$process.Dispose()` deleted and its exact text parked inside a single-quoted here-string: **the guard passed.** `powerShellStatements` drops comment-*only* lines and does nothing whatever about a here-string body, so a line of inert data still reads as code. SR-075's "the pins stop being satisfiable by prose" and "comment-stripped executable view" are **wrong** — the comment hole was closed and a string hole of the same shape was left wide open. My own SR-075 probe counted here-strings in these files and then asked the wrong question of them: whether a here-string contained anything that *looked like a comment*, rather than whether a here-string could *contain a pinned statement*.
+- **Finding 8 — the indentation anchor is not a nesting defence.** The `$validated` termination loop moved **inside** the `$listeners` validation loop while keeping its four-space indentation: **the guard passed**, and that recreates the exact "terminate an owned listener before discovering a foreign one" defect the ordering check exists to catch. SR-075:1035 asserted that a nested loop necessarily carries six or more spaces. PowerShell has no semantic indentation; that was a claim about formatting habits presented as a measurement.
+
+Sol's remaining findings, carried to the repair tranche and **not** repaired here: 1 and 2 (the creation-time comparison does not independently prove identity — if .NET's retained handle exists it already prevents reuse, and if it does not, both reads can resolve the same replacement; the F1 claim is overstated); 3 (the gap prohibition names only two statements, and Sol inserted a bare `throw` into the gap with the guard still green); 4 (**a code defect, not a claim**: the salvage path puts *both* `$process.Kill()` and the port release inside `if (-not $process.HasExited)`, so a parent that already exited leaves its dev-server child and the governed port uncleaned); 5 (the `HasExited` reads, the handle close and `Dispose` sit outside any `try`, so housekeeping can still replace the diagnosis it was meant to annotate); 7 (the rebind check has the same string bypass and is neither scope- nor uniqueness-checked); 9 (`no-inline-comments` fires on `'#not-a-comment'`, a false positive, and does nothing about the string bypass); 10 (exact-once pins say nothing about reachability — `if ($false)` satisfies them); 11 (the listener re-read does not match the original local address or restrict to loopback); 12 and 13 (the evidence proves the **root** process died, not the tree; `/T`'s blast radius is understated, and Playwright's descendants are more than one node process); 14 (post-kill evidence is evaluated only after the port cleanup, so a throw there hides which guarantee failed); 15 (the predicate still accepts any `node`/`npm`/`npx` with an argument in the tree — a live false-TRUE path); 16 (a failed `CloseHandle` does not establish that a valid handle remains open); 17 (six named behavioural gaps beyond the one SR-075 recorded).
+
+**Ran and watched, not "tests pass".**
+
+- `node --check scripts/verify-foundation-mutations.mjs` → OK.
+- `node scripts/foundation-static-guards.mjs` → `Foundation static guards: PASS`.
+- `node scripts/verify-foundation-mutations.mjs` → `PASS (209 controlled mutations turned the gate red)` and `PASS (5 broken subjects …, 0 not measurable on this platform)`. All seven new drills confirmed present in the output **by name**.
+- `powershell scripts/verify-foundation.ps1` → `Farm Rx foundation gate: PASS` (62 passed, 14 skipped). This is the run that consumes the `209` sentence.
+- `npx tsc -b --force` → clean, exit 0.
+- `scratchpad/probe-sol-076-f6-f8.mjs` → baseline GREEN, then F6 and F8 each `PASSED (the sabotage was NOT caught)`.
+
+**Authority, stated plainly:** local commit only, on `claude/gauntlet-testing-sweep-013d65`. Nothing was pushed, merged, or deployed. A green gate is not approval for an outward action. The Job Object rewrite, the ownership semantics, a Windows CI job, wiring the orphaned regressions into a gate, and the seven-file repair plan all remain open decisions for Mason.

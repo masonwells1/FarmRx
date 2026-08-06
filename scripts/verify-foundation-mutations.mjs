@@ -929,6 +929,51 @@ try {
   reset()
   mutate(drillFile, (source) => source.replace(/^( *)if \(behaviourBaseline\.status !== 0 \|\|/m, '$1if (false &&'))
   detected('the drill stops requiring its behavioural baseline to be green', 'mutation-drill:behavioural-baseline-must-be-green')
+  reset()
+  // THE OTHER SEVEN PINS OVER THIS FILE, which stood undrilled while the six above were drilled. A pin nobody
+  // has broken on purpose is a pin nobody has proved bites - that is the whole argument this file exists to
+  // make, and leaving seven of its own pins unexercised applied the argument to every file except itself.
+  // Each mutation below was measured against the real file before being written here: it applies, it changes
+  // the INTENDED line rather than its own copy inside the needle, and it moves the named pin from holding to
+  // broken. Line-anchored for the reason given above; a plain substring would match itself first.
+  //
+  // Only stderr survives. A PowerShell suite that dies with an exception writes its diagnosis to stderr, so a
+  // runner that returns stdout alone hands every scoring criterion an output that cannot contain the sentence
+  // it is looking for. `detectedByBehaviour` would then report "went red but never said what was wrong" about
+  // a suite that said precisely what was wrong - a real defect that reads as a suite failure.
+  mutate(drillFile, (source) => source.replace(/^( *)return \{ status: result\.status, output: `\$\{result\.stdout \?\? ''\}\$\{result\.stderr \?\? ''\}` \}$/m, '$1return { status: result.status, output: `${result.stdout ?? \'\'}` }'))
+  detected("the drill's subject runner drops the child's stderr", 'mutation-drill:subject-runner-returns-the-child-result')
+  reset()
+  // The signal half of the hang refusal, deleted. This is not the redundant half: spawnSync's `timeout` kills
+  // the child and reports status null WITH a signal, and often no `error.code` at all, so `result.signal` is
+  // the branch that actually fires on a hang. Without it a hung suite falls through to the scoring criteria as
+  // status null - not 1, so `detectedByBehaviour` calls it a crash, and `unseenByBehaviour` calls it red - and
+  // a five-minute hang gets diagnosed as anything except a hang.
+  mutate(drillFile, (source) => source.replace(/^( *)if \(result\.error\?\.code === 'ETIMEDOUT' \|\| result\.signal\) \{$/m, "$1if (result.error?.code === 'ETIMEDOUT') {"))
+  detected('the drill stops recognising a hang that was killed by signal', 'mutation-drill:subject-runner-refuses-a-hang')
+  reset()
+  mutate(drillFile, (source) => source.replace(/^( *)if \(!output\.includes\(expected\)\) \{$/m, '$1if (false) {'))
+  detected('the drill accepts a red suite that never named the defect', 'mutation-drill:detection-requires-the-named-sentence')
+  reset()
+  mutate(drillFile, (source) => source.replace(/^( *)if \(!output\.includes\('MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS'\)\) \{$/m, '$1if (false) {'))
+  detected('the drill records a blind spot from a run that stopped short of the end', 'mutation-drill:gap-requires-a-complete-run')
+  reset()
+  // The expectation itself, emptied at the CALL SITE. The already-drilled `gap-requires-the-expected-manifest`
+  // breaks the loop that reads this list; this breaks the list the loop reads. Both leave the loop iterating
+  // nothing, and that is the point - two ways to reach one hole, and only one of them was pinned before.
+  mutate(drillFile, (source) => source.replace(/^( *unseenByBehaviour\('kill-authorizing predicate refuses everything',.*?)\['windows=false', 'windowsCases=0', 'cases=5'\]\)$/m, '$1[])'))
+  detected('the off-Windows gap stops stating the shape of run it is claimed about', 'mutation-drill:gap-manifest-fields-held')
+  reset()
+  // THE TWO SUMMARY SENTENCES, fabricated rather than counted. `202` is chosen deliberately: it is the count
+  // that was true one commit ago, which is the exact shape this pin exists to refuse. The comment on
+  // `detectedMutations` says it happened - a hand-written total went stale the moment a drill was added, and
+  // the sentence claimed coverage nothing had measured. A literal here would let this file report 202 drills
+  // while running three, and both callers that consume the sentence would be satisfied by the claim.
+  mutate(drillFile, (source) => source.replace(/^( *)console\.log\(`Foundation mutation drill: PASS \(\$\{detectedMutations\.length\}/m, '$1console.log(`Foundation mutation drill: PASS (202'))
+  detected('the static half states a fabricated total instead of counting its drills', 'mutation-drill:static-claim-counted-not-asserted')
+  reset()
+  mutate(drillFile, (source) => source.replace(/^( *)console\.log\(`Foundation behavioural mutation drill: PASS \(\$\{behaviouralMutations\.length\}/m, '$1console.log(`Foundation behavioural mutation drill: PASS (5'))
+  detected('the behavioural half states a fabricated total instead of counting its subjects', 'mutation-drill:behavioural-claim-counted-not-asserted')
 
   // ---------------------------------------------------------------------------------------------------
   // THE BEHAVIOURAL HALF. Every drill above asks the STATIC guard whether it noticed, and every one of

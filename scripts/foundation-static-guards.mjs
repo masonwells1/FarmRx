@@ -960,7 +960,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // THE STATIC HALF IS HELD TOO. A fresh-context review observed that every static mutation could be wrapped
   // whole while the behavioural half still earned its own sentence, because no caller read the static marker at
   // all - a marker nobody consumes is decoration. Both callers now hold it with its count.
-  const staticClaim = 'Foundation mutation drill: PASS (202 controlled mutations turned the gate red)'
+  const staticClaim = 'Foundation mutation drill: PASS (209 controlled mutations turned the gate red)'
   requireText(errors, foundationWorkflow, `$expectedStatic = '${staticClaim}'`, 'workflow:mutation-drill-static-claim-held')
   requireText(errors, foundationOrchestrator, `$expectedStaticMarker = '${staticClaim}'`, 'orchestrator:mutation-drill-static-claim-held')
   requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedStatic', 'workflow:mutation-drill-static-claim-consumed')
