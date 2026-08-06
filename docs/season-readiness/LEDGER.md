@@ -1111,3 +1111,63 @@ Sol's remaining findings, carried to the repair tranche and **not** repaired her
 - `scratchpad/probe-sol-076-f6-f8.mjs` → baseline GREEN, then F6 and F8 each `PASSED (the sabotage was NOT caught)`.
 
 **Authority, stated plainly:** local commit only, on `claude/gauntlet-testing-sweep-013d65`. Nothing was pushed, merged, or deployed. A green gate is not approval for an outward action. The Job Object rewrite, the ownership semantics, a Windows CI job, wiring the orphaned regressions into a gate, and the seven-file repair plan all remain open decisions for Mason.
+
+## SR-077 — a real leaked process on the workstation, fixed and proven by watching it leak
+
+This is the first tranche in a while that repairs **running behaviour** rather than the strength of a proof. Sol's tranche C on `d040b1e` named three code defects in the `finally` of `Invoke-MapleSeasonBrowserProof`; all three are fixed here, and the most serious one was reproduced as a live leak on this workstation before anything was written.
+
+### F4 — the leak, in plain terms
+
+The cleanup block asked **"is the browser process I started still alive?"** and, only if the answer was yes, released the governed port. Those are two different questions. The process it starts is a Node runner that **spawns** the dev server; the dev server is what holds the port. So the parent can be gone while its child is still listening — and in that case the old code skipped the release entirely and left a live server holding a port on Mason's machine. The next scenario then fails its free-port preflight for a reason that has nothing to do with the next scenario.
+
+The fix is a flag, `$portReleased`, set by every managed path that releases the port. The salvage now tests **the port's own condition** instead of the parent's liveness.
+
+**Measured, in this order, which is the only order that proves anything:**
+
+1. Wrote the failing test first — CASE THREE of `scripts/maple-season-browser-timeout.regression.ps1`, which stands up a detached listener that deliberately outlives its parent, then injects a launch failure that lands *after* the parent has exited.
+2. Ran it against the **pre-repair** helper, restored byte-exact from `git show HEAD:scripts/maple-season-browser.ps1`:
+   ```
+   MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_FAIL Browser orphan drill left a detached dev server
+     holding its governed port after a launch failure that landed with the parent already exited.
+   MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_STRANDED pid 45476
+   exit=1
+   ```
+   **pid 45476 was a real node process holding port 4290**, and the suite's own safety net had to kill it.
+3. Restored the repaired helper and ran the same suite: `MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_PASS`, `exit=0`, and **no `STRANDED` line** — nothing to clean up, because nothing leaked.
+
+Both directions of that swap used `cp` from scratchpad snapshots, never `git checkout`, for the reason this ledger already records: a `git checkout --` on this file destroyed four repairs once.
+
+### F5 — housekeeping that could replace the diagnosis it was meant to annotate
+
+Four statements in the `finally` sat outside any `try`: two `HasExited` reads, the `CloseHandle`, and `Dispose`. A throw from any of them **replaces** the failure being reported with a failure about the cleanup — the error Mason would see names the wrong thing. All four are wrapped now, each adding a footnote instead of a replacement.
+
+One direction is deliberate and pinned: if the liveness read itself cannot be answered, the code **assumes the child is running** and attempts the kill anyway. Assuming "already exited" would leave a browser process on the workstation, which is the wrong way for a salvage to fail.
+
+### F14 — evidence judged before housekeeping
+
+On the timeout path the post-kill evidence was evaluated only *after* the port cleanup ran, so a throw in the cleanup answered "the force-kill could not be proved" with "the port would not release" — a different cause with a different fix, and the more serious of the two was the one being lost. The four kernel reads are now judged first. The message was also corrected: it says the **root** of the tree died, which is what the evidence actually establishes. Sol's F12/F13 (the tree beyond the root, and `/T`'s blast radius) remain open.
+
+### Fifteen pins, fifteen drills, and two stale needles the drill refused to skip
+
+Eight guard pins over the helper and seven over the new regression case — and **every one has a drill**, each recreating the defect from the direction of the defect rather than by breaking adjacent text. The port-release flag is caught as a **write count** (exactly three) rather than as text, because the defect reached from the other end is an *extra* write — initialising the flag `$true` disarms the salvage while leaving every pinned string intact, and a presence pin cannot see that.
+
+**Three pre-existing drills went red as STALE NEEDLES rather than quietly passing**, which is the entire reason `mutate` refuses a no-op: wrapping `Dispose` in a `try` invalidated the needles of the deletion drill, the duplication drill, and the block-comment drill, and adding the `$portReleased` declaration invalidated the trailing-comment drill's two-line anchor. A drill whose needle does not apply reports green while testing unmodified source — the worst failure mode available to this file. All four re-anchored, and one honest consequence is written into the drill itself: `try { $process.Dispose() }` **contains** `$process.Dispose()`, so no deletion can break the inner pin without breaking the outer one. The wrapping pin is separable only by a mutation that UNWRAPS, which is what its drill does.
+
+The count moved **209 → 224** in the three places that state it, each verified to hold `209` exactly once first. As always the count is *arrived at*: the drill printed its total from its own tally and the foundation gate then consumed that exact sentence.
+
+### What this tranche does NOT fix
+
+F5 has no behavioural proof — no test injects a throw into the housekeeping and watches the original diagnosis survive. The wrapping is pinned and reviewed, not executed under failure. Stated rather than glossed.
+
+Also still open from tranche C: F1/F2 (creation-time comparison does not independently prove identity), F3 (the launch-gap prohibition names two statements and Sol slipped a bare `throw` past it), F6/F7/F9 (the here-string bypass — every `requireStatementOnce` pin remains satisfiable by inert data), F8 (indentation is not a nesting defence), F10 (`if ($false)` satisfies an exact-once pin), F11, F12, F13, F15 (the predicate still accepts any `node`/`npm`/`npx` with an argument in the tree — a live false-TRUE path), F16, and five of F17's six behavioural gaps.
+
+**Ran and watched, not "tests pass".**
+
+- `node --check scripts/verify-foundation-mutations.mjs` → OK. PowerShell parse of both edited scripts → `PARSE OK`.
+- `node scripts/foundation-static-guards.mjs` → `Foundation static guards: PASS`.
+- `node scripts/verify-foundation-mutations.mjs` → `PASS (224 controlled mutations turned the gate red)` and `PASS (5 broken subjects …, 0 not measurable on this platform)`. All fifteen new drills confirmed in the output **by name**.
+- `powershell scripts/verify-foundation.ps1` → `Farm Rx foundation gate: PASS`, 62 passed / 14 skipped. This is the run that consumes the `224` sentence.
+- `powershell scripts/maple-season-browser-timeout.regression.ps1` → `PASS`, exit 0, no `STRANDED` line.
+- `npx tsc -b --force` → clean, exit 0.
+
+**Authority, stated plainly:** local commit only, on `claude/gauntlet-testing-sweep-013d65`. Nothing was pushed, merged, or deployed. A green gate is not approval for an outward action. The Job Object rewrite together with F1/F4/F15's ownership semantics, a Windows CI job (no runner executes the Windows-only refusals that protect this workstation from a false TRUE, and none executes the orphan case either), and wiring the orphaned PowerShell regressions into a gate all remain open decisions for Mason.

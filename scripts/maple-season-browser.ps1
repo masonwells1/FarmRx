@@ -639,6 +639,10 @@ function Invoke-MapleSeasonBrowserProof {
   # review found that; nothing below the try can protect a process launched above it, so nothing is above it.
   $launchedHandle = [IntPtr]::Zero
   $primaryFailure = $false
+  # Whether a MANAGED path has already released the governed port. The salvage in the finally used to decide
+  # that from whether the parent was still alive, which is a different question with a different answer; see
+  # the comment on the release itself.
+  $portReleased = $false
   try {
     # PIN THE ID THIS FUNCTION WILL KILL BY, with a handle of this file's own, held until after the kill.
     # `taskkill /PID` names a NUMBER, and a number means one particular process only for as long as the
@@ -713,10 +717,24 @@ function Invoke-MapleSeasonBrowserProof {
       $terminated = [MapleSeasonProcessInterop]::WaitForSingleObject($launchedHandle, 10000) -eq 0
       $killedCreation = 0L; $killedExited = 0L; $killedKernel = 0L; $killedUser = 0L
       $readKilledTimes = [MapleSeasonProcessInterop]::GetProcessTimes($launchedHandle, [ref]$killedCreation, [ref]$killedExited, [ref]$killedKernel, [ref]$killedUser)
-      Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
+      # THE EVIDENCE IS JUDGED BEFORE THE HOUSEKEEPING RUNS, and the order is the repair. The port release used
+      # to sit between the two reads above and the test below, so a throw inside it - a listener this file
+      # refuses to claim, a row it cannot read - replaced "the force kill could not be proved" with "the port
+      # would not release". Those have different causes and different fixes, and the one that matters more was
+      # the one being lost. A fresh-context review found it. Nothing leaks by testing first: the finally
+      # releases the port on its own condition, not on this branch reaching the call below.
+      #
+      # WHAT THIS PROVES IS THAT THE ROOT DIED, and the message says so. The wait and the exit FILETIME are read
+      # through a handle opened on the launched process and on nothing else; taskkill /T walked the descendants,
+      # but no handle here reserved any of their ids and nothing here reads their exit state, so "terminated its
+      # owned process tree" was a claim about processes this branch never observed. A fresh-context review was
+      # right about that too. The port cleanup below is what speaks for the descendant that matters - the dev
+      # server holding the governed port - and it does so by validating ownership rather than by inference.
       if ($killExitCode -ne 0 -or -not $terminated -or -not $readKilledTimes -or $killedExited -eq 0) {
-        throw "$Scenario browser timeout cleanup did not terminate its owned process tree."
+        throw "$Scenario browser timeout cleanup could not prove it terminated the root of its owned process tree."
       }
+      Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
+      $portReleased = $true
       throw "$Scenario browser scenario exceeded its bounded process limit after verified cleanup."
     }
     if (-not $process.HasExited -or $null -eq $process.ExitCode) {
@@ -725,6 +743,7 @@ function Invoke-MapleSeasonBrowserProof {
     $exitCode = [int]$process.ExitCode
 
     Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario
+    $portReleased = $true
     if ($exitCode -ne 0) { throw "$Scenario browser scenario failed with exit code $exitCode." }
   } catch {
     # Bare `throw` rethrows the ErrorRecord unchanged; this records only that the scenario already has a
@@ -733,25 +752,53 @@ function Invoke-MapleSeasonBrowserProof {
     throw
   } finally {
     $footnotes = [Collections.Generic.List[string]]::new()
-    # SALVAGE. Reaching here with the child still running means no branch above managed it - the pin failed,
-    # the interop would not compile, the identity check refused. Kill() goes through .NET's own handle, so it
-    # is the one kill in this file that cannot possibly reach another process, and the port cleanup then
-    # validates ownership of anything the single-process kill left holding the port. Both are wrapped,
-    # because housekeeping that throws out of a finally destroys the diagnosis it was meant to annotate.
-    if (-not $process.HasExited) {
+    # SALVAGE, AND EVERY STEP OF IT IS WRAPPED - including the steps that only READ. Reaching here with the
+    # child still running means no branch above managed it: the pin failed, the interop would not compile, the
+    # identity check refused. Kill() goes through .NET's own handle, so it is the one kill in this file that
+    # cannot possibly reach another process. The wrapping is not decoration: a fresh-context review was right
+    # that the two HasExited reads, the handle close and Dispose all sat outside any try, so four statements
+    # nobody expected to throw could still raise a terminating error out of this finally and REPLACE the
+    # diagnosis they exist to annotate - which is the exact masking the $primaryFailure split was added to stop.
+    #
+    # If the liveness read itself is what fails, assume RUNNING and attempt the kill anyway. A redundant kill on
+    # a process that is already gone costs one footnote; a skipped kill on a live one leaves a browser process
+    # on the workstation, and only one of those two mistakes is recoverable by reading the report.
+    $stillRunning = $true
+    try { $stillRunning = -not $process.HasExited }
+    catch { $footnotes.Add("could not tell whether the browser process it started is still running (pid $($process.Id)): $($_.Exception.Message)") }
+    if ($stillRunning) {
       try { $process.Kill(); [void]$process.WaitForExit(10000) }
       catch { $footnotes.Add("could not terminate the browser process it started (pid $($process.Id)): $($_.Exception.Message)") }
-      if (-not $process.HasExited) { $footnotes.Add("left the browser process it started running (pid $($process.Id))") }
+      try { if (-not $process.HasExited) { $footnotes.Add("left the browser process it started running (pid $($process.Id))") } }
+      catch { $footnotes.Add("could not confirm the browser process it started has exited (pid $($process.Id)): $($_.Exception.Message)") }
+    }
+    # THE GOVERNED PORT IS RELEASED ON ITS OWN CONDITION, not on whether the PARENT is still alive. Those were
+    # the same line until a fresh-context review separated them, and the leak that hid behind the conflation is
+    # the whole reason this function governs a port at all: the node parent spawns the dev server that holds the
+    # port, and the parent can be gone while its child is still listening. So a launch-side failure that landed
+    # after the parent exited - an unpinnable id, an interop that would not compile, an identity check that
+    # refused - reached here, found HasExited true, and released nothing, leaving a live dev server on the
+    # governed port and every later scenario refusing that port with a wrong diagnosis. That is a process and a
+    # port left running on a real workstation, not a wording problem. $portReleased is set only where a managed
+    # path completed the release, so this neither skips a leak nor repeats a release that already happened.
+    if (-not $portReleased) {
       try { Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario }
       catch { $footnotes.Add("could not release governed port $port after salvaging an unmanaged launch: $($_.Exception.Message)") }
     }
-    if ($launchedHandle -ne [IntPtr]::Zero -and -not [MapleSeasonProcessInterop]::CloseHandle($launchedHandle)) {
-      $footnotes.Add("could not close the handle pinning browser pid $($process.Id) (Windows error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())), so that id stays reserved for the life of this session")
+    try {
+      if ($launchedHandle -ne [IntPtr]::Zero -and -not [MapleSeasonProcessInterop]::CloseHandle($launchedHandle)) {
+        $footnotes.Add("could not close the handle pinning browser pid $($process.Id) (Windows error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())), so that id stays reserved for the life of this session")
+      }
+    } catch {
+      $footnotes.Add("could not close the handle pinning the browser process it started: $($_.Exception.Message)")
     }
     # .NET's own handle is a reservation too, and leaving the object undisposed keeps it - and therefore the
     # id - alive until a garbage collection nobody scheduled. A fresh-context review was right that closing
-    # only OUR handle proves nothing about the id being released.
-    $process.Dispose()
+    # only OUR handle proves nothing about the id being released. This footnote names no pid on purpose: the
+    # only way to reach it is a Process object that would not dispose, and asking that object for its id is how
+    # a footnote turns into the terminating error the wrapping was added to prevent.
+    try { $process.Dispose() }
+    catch { $footnotes.Add("could not release the runtime reservation on the browser process id it started: $($_.Exception.Message)") }
     if ($footnotes.Count -gt 0) {
       $report = "$Scenario " + ($footnotes -join '; ') + '.'
       # ON A SUCCESSFUL SCENARIO THIS THROWS, matching the cleanup path. It was a warning either way before,

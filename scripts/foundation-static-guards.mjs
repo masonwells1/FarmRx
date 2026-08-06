@@ -434,6 +434,27 @@ export function foundationStaticGuard(root = process.cwd()) {
   // through a warning, and a suite that stops collecting warnings passes while an id stays reserved.
   requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True ($successWarnings.Count -eq 0)', 'timeout-regression:success-case-requires-no-leaked-handle')
   requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True (@(Get-NetTCPConnection -LocalPort $successPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0)', 'timeout-regression:success-case-requires-the-port-released')
+  // THE ORPHAN CASE, and it is the only executed proof in this repository that the governed port gets released
+  // when the process this function launched is already gone. Every other case has the parent alive at the moment
+  // the salvage runs, which is why the leak survived: the release was gated on the parent, and the listener was
+  // never the parent. Reaching that state needs a launch-side failure AFTER the parent exits, which no
+  // environment knob produces, so the failure is INJECTED into a copy of the helper - the ownership regression's
+  // technique - and the injection waits for the parent before throwing, which makes the ordering deterministic
+  // instead of a race. Five assertions, each held separately: the detached listener really took the port, the
+  // failure that came out is the injected one and not an earlier throw, the port is free afterwards, and the
+  // salvage completed without a footnote. Losing any one of them leaves a case that still prints PASS.
+  requireStatementOnce(errors, browserTimeoutRegression, "Invoke-MapleSeasonBrowserProof -Root $root -Config 'playwright.season.config.ts' -Scenario 'Maple orphan drill'", 'timeout-regression:orphan-case-runs-the-injected-helper')
+  requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True (Test-Path -LiteralPath $orphanReadyFile)', 'timeout-regression:orphan-case-requires-the-detached-listener')
+  requireStatementOnce(errors, browserTimeoutRegression, "Assert-True ($orphanFailure -ceq 'Maple orphan drill launch drill failed on purpose after the parent exited.')", 'timeout-regression:orphan-case-requires-its-injected-failure')
+  requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True (@(Get-NetTCPConnection -LocalPort $orphanPort -State Listen -ErrorAction SilentlyContinue).Count -eq 0)', 'timeout-regression:orphan-case-requires-the-port-released')
+  requireStatementOnce(errors, browserTimeoutRegression, 'Assert-True ($orphanWarnings.Count -eq 0)', 'timeout-regression:orphan-case-requires-a-complete-salvage')
+  // A drill whose needle has gone stale patches nothing and then reports on unmodified source, which is the one
+  // failure mode that makes an injection worse than no injection at all.
+  requireStatementOnce(errors, browserTimeoutRegression, 'its needle is stale and the drill would prove nothing', 'timeout-regression:orphan-case-refuses-a-stale-needle')
+  // A case that deliberately creates a process outliving its parent owes the workstation a guarantee that a
+  // FAILING run - including one that failed because the repair under test is absent - does not leave it behind.
+  // MEASURED: on the pre-repair helper this branch fired and killed a stranded node process.
+  requireStatementOnce(errors, browserTimeoutRegression, 'Stop-Process -Id ([int]$strandedProcess.ProcessId) -Force -ErrorAction SilentlyContinue', 'timeout-regression:orphan-case-cleans-up-after-itself')
   const julyWiringRegression = read(root, 'scripts/maple-july-db-clock-wiring.regression.ps1')
   requireText(errors, julyWiringRegression, "'TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true'", 'july-wiring-regression:tokenizer-receipt-asserted-by-the-caller')
   // requireText, deliberately, and the ONE pin here that must stay a presence check: its needle IS a comment,
@@ -553,6 +574,41 @@ export function foundationStaticGuard(root = process.cwd()) {
   // cleanup then validates ownership of whatever a single-process kill left holding the port.
   requireStatementOnce(errors, seasonBrowser, 'try { $process.Kill(); [void]$process.WaitForExit(10000) }', 'season-browser:launch-salvages-an-unmanaged-child')
   requireStatementOnce(errors, seasonBrowser, 'try { Clear-MapleSeasonBrowserPort -Port $port -Root $ownedMarker -Scenario $Scenario }', 'season-browser:launch-releases-the-port-after-salvaging')
+  // THE EVIDENCE IS JUDGED BEFORE THE HOUSEKEEPING RUNS, and this is held as one SHAPE rather than as three
+  // presences, because what matters is the order and an order is not a set of things being present. The port
+  // release used to sit between the two kernel reads and this test, so a throw inside it - a listener this file
+  // refuses to claim, a row it cannot read - replaced "the force kill could not be proved" with "the port would
+  // not release". Those are two different causes with two different fixes, and the more serious of them was the
+  // one being lost. A fresh-context review found it. `$portReleased = $true` is inside the needle on purpose:
+  // releasing the port without recording it re-arms the salvage below to release it a second time.
+  requireMatch(errors, seasonBrowserCode, /if \(\$killExitCode -ne 0 -or -not \$terminated -or -not \$readKilledTimes -or \$killedExited -eq 0\) \{\n *throw "\$Scenario browser timeout cleanup could not prove it terminated the root of its owned process tree\."\n *\}\n *Clear-MapleSeasonBrowserPort -Port \$port -Root \$ownedMarker -Scenario \$Scenario\n *\$portReleased = \$true\n/, 'season-browser:launch-judges-the-kill-before-housekeeping')
+  // THE PORT RELEASE IS CONDITIONED ON THE PORT, NOT ON THE PARENT, and of everything in this tranche it is the
+  // one finding that describes a live process left running on a real workstation rather than a wording problem.
+  // The salvage's release used to sit inside `if (-not $process.HasExited)`, which asks whether the node PARENT
+  // is alive - a different question from whether anything is holding the governed port, because the parent
+  // SPAWNS the dev server that does the listening. A launch-side failure landing after the parent exited found
+  // HasExited true and released nothing. A fresh-context review found it. Held three ways: the salvage's
+  // condition names the flag, the flag is written exactly three times - its initialiser and the two managed
+  // release sites, and nowhere else - and the behavioural half is the orphan case in the timeout regression,
+  // MEASURED red before this change and green after, with a stranded node process to kill on the red run.
+  requireStatementOnce(errors, seasonBrowser, 'if (-not $portReleased) {', 'season-browser:launch-releases-the-port-on-its-own-condition')
+  const portReleasedWrites = countPowerShellWrites(seasonBrowser.split('\n'), 'portReleased')
+  if (portReleasedWrites !== 3) errors.push(`season-browser:launch-port-release-flag-write-count:${portReleasedWrites}`)
+  // EVERY STEP OF THE SALVAGE IS WRAPPED, including the steps that only READ. Four statements sat outside any
+  // try - both HasExited reads, the handle close and Dispose - so housekeeping nobody expected to throw could
+  // still raise a terminating error out of the finally and REPLACE the diagnosis it exists to annotate, which is
+  // exactly the masking the $primaryFailure split was added to stop, left open on the statements least likely to
+  // be suspected. A fresh-context review found it. Each wrap is its own pin because each can be unwrapped on its
+  // own and leave every other pin here green.
+  requireStatementOnce(errors, seasonBrowser, 'try { $stillRunning = -not $process.HasExited }', 'season-browser:launch-wraps-the-liveness-read')
+  requireStatementOnce(errors, seasonBrowser, 'try { if (-not $process.HasExited) { $footnotes.Add("left the browser process it started running (pid $($process.Id))") } }', 'season-browser:launch-wraps-the-survivor-report')
+  requireStatementOnce(errors, seasonBrowser, 'try { $process.Dispose() }', 'season-browser:launch-wraps-the-runtime-release')
+  requireMatch(errors, seasonBrowserCode, /try \{\n *if \(\$launchedHandle -ne \[IntPtr\]::Zero -and -not \[MapleSeasonProcessInterop\]::CloseHandle\(\$launchedHandle\)\) \{/, 'season-browser:launch-wraps-the-handle-close')
+  // The liveness read fails OPEN toward killing, and that direction is carried entirely by its initialiser, so
+  // the initialiser is the pin. If the read cannot be answered the salvage must still attempt the kill: a
+  // redundant kill on a process that is already gone costs one footnote, and a skipped kill on a live one leaves
+  // a browser process on the workstation. Only one of those two is recoverable by reading the report.
+  requireStatementOnce(errors, seasonBrowser, '$stillRunning = $true', 'season-browser:launch-assumes-a-live-child-when-it-cannot-tell')
   // .NET's handle is a reservation too, and an undisposed Process keeps it - and the id - until a garbage
   // collection nobody scheduled, so closing only OUR handle proves nothing about the id being released.
   requireStatementOnce(errors, seasonBrowser, '$process.Dispose()', 'season-browser:launch-releases-the-runtime-reservation')
@@ -960,7 +1016,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // THE STATIC HALF IS HELD TOO. A fresh-context review observed that every static mutation could be wrapped
   // whole while the behavioural half still earned its own sentence, because no caller read the static marker at
   // all - a marker nobody consumes is decoration. Both callers now hold it with its count.
-  const staticClaim = 'Foundation mutation drill: PASS (209 controlled mutations turned the gate red)'
+  const staticClaim = 'Foundation mutation drill: PASS (224 controlled mutations turned the gate red)'
   requireText(errors, foundationWorkflow, `$expectedStatic = '${staticClaim}'`, 'workflow:mutation-drill-static-claim-held')
   requireText(errors, foundationOrchestrator, `$expectedStaticMarker = '${staticClaim}'`, 'orchestrator:mutation-drill-static-claim-held')
   requireText(errors, foundationWorkflow, '$drill -cnotcontains $expectedStatic', 'workflow:mutation-drill-static-claim-consumed')
