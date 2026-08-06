@@ -225,8 +225,10 @@ function Test-MapleSeasonBrowserPortOwned {
   if ([string]::IsNullOrWhiteSpace($Root)) { return $false }
   # Windows has TWO argument grammars, and this predicate cannot know which one built the process it is
   # judging. CommandLineToArgvW is what this file reproduces and what the equivalence table checks; node
-  # itself enters at wmain and gets the Microsoft C runtime's parse, and the two disagree about exactly one
-  # construct - a doubled quote. Measured with the real API on
+  # itself enters at wmain and gets the Microsoft C runtime's parse, and the two were MEASURED disagreeing
+  # about a doubled quote. The earlier wording "exactly one construct" is withdrawn: no measurement here
+  # enumerated every construct, so the claim that stands is the disagreement observed. Measured with the real
+  # API on
   # `node.exe C:\Other\server.js --label "C:\Other"" C:\FarmRx\safe"`: shell32 splits the label into
   # `C:\Other"` and `C:\FarmRx\safe`, so the second half reads as a path in our tree, while under the
   # documented C runtime rule the label stays one argument that names nothing of ours. Both readings are

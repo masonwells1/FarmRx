@@ -42,7 +42,10 @@ param(
   #      double quotes, because one challenge row is `"C:\Program Files\nodejs\node.exe" ...`, and passing it
   #      through `-File` truncated it AT THE FIRST QUOTE - challenge 1 came back as argv=<C:\Program> and
   #      challenges 2 and 3 were never asked, while the suite still printed its completion marker. A delimiter
-  #      no command line can contain does not help when the QUOTING is what breaks.
+  #      does not help when the QUOTING is what breaks. And U+001F is not in fact impossible in a Windows
+  #      command line: `A<U+001F>B` handed to a Node child was measured arriving as three characters with code
+  #      point 31 in the middle. Each caller therefore REFUSES to send a row containing the delimiter, rather
+  #      than this file trusting a claim about what cannot happen.
   #   3. Base64 is the answer because its alphabet has no space, no quote, no backslash and no metacharacter,
   #      so there is nothing left for any shell, `-File` binder or YAML block scalar to reinterpret.
   # The manifest reports how many challenges were actually decoded, so "fewer challenges asked" fails by name
@@ -57,6 +60,32 @@ function Assert-True {
   param([bool]$Condition, [string]$Message)
   if (-not $Condition) { $script:failures += $Message }
 }
+
+# THE ASSERTION HELPER PROVES ITSELF, AT RUN TIME, BEFORE ANY REAL ASSERTION RUNS.
+#
+# This is not caution. A fresh-context review changed the line above from `if (-not $Condition)` to
+# `if ($false)` and this file still printed its completion marker, still published a manifest with every
+# table at full size, still answered all four caller challenges correctly from the real tokenizer and the
+# real predicate, and exited 0 - with every single one of its ~100 table assertions disabled. Reproduced
+# here before this canary was written. The manifest cannot catch it, because table SIZES are counted
+# independently of whether their assertions do anything. The challenge cannot catch it either, because the
+# challenge answers are computed outside Assert-True.
+#
+# So the helper is checked the only way a helper can be: by handing it something that MUST fail and
+# refusing to continue if it does not notice. `throw` rather than Assert-True, because Assert-True is the
+# thing on trial.
+$script:assertionCanary = 'assertion-helper-canary: Assert-True accepted a false condition'
+Assert-True $false $script:assertionCanary
+if ($script:failures -notcontains $script:assertionCanary) {
+  throw 'Assertion helper did not record a deliberately-false assertion, so every other check in this file is inert. Refusing to report a result.'
+}
+$script:failures = @($script:failures | Where-Object { $_ -cne $script:assertionCanary })
+if ($script:failures.Count -ne 0) {
+  throw 'Assertion helper self-test left unexpected failures behind; this file cannot report on itself.'
+}
+# `canary=caught` in the manifest is how each CALLER learns the self-test ran. A caller that stops
+# requiring it is a mutation drill away from red.
+$script:assertionCanaryCaught = 'caught'
 
 $sourcePath = Join-Path $PSScriptRoot 'maple-season-browser.ps1'
 $source = Get-Content -Raw $sourcePath
@@ -360,7 +389,11 @@ $resolverRefusals = @(
 
 $windowsCasesRun = 0
 if (-not $onWindows) {
-  Write-Output 'Ownership TRUE cases skipped: containment is decided by the platform path resolver, and a Windows-shaped root cannot resolve off Windows.'
+  # Says only what is known. The earlier wording here asserted that a Windows-shaped root "cannot resolve
+  # off Windows", which was withdrawn as unmeasured: off Windows `GetFullPath` prefixes the current
+  # directory to the argument and the root alike, so the prefix comparison can still match, and no Linux
+  # .NET run has settled it on this workstation. The honest statement is that these cases are not run here.
+  Write-Output 'Ownership TRUE cases skipped: this platform is not Windows, and the off-Windows verdict for a Windows-shaped root is not measured. Run the Windows lane for those cases.'
 } else {
   foreach ($case in $ownedCases) {
     Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess (New-Listener -CommandLine $case.CommandLine) -Root $case.Root) "The ownership predicate refused $($case.Label), which would declare our own listener foreign and fail a proof month with a wrong diagnosis."
@@ -399,7 +432,7 @@ $challengeLines = @()
 if ($Challenge.Length -gt 0) {
   $challengeLines = @([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Challenge)) -split ([char]0x1F))
 }
-Write-Output ("OWNERSHIP_MANIFEST tokenizer={0} refusals={1} gutted={2} windows={3} windowsCases={4} challenges={5}" -f $tokenizerTable.Count, $portableRefusals.Count, $guttedClaims.Count, ($onWindows.ToString().ToLowerInvariant()), $windowsCasesRun, $challengeLines.Count)
+Write-Output ("OWNERSHIP_MANIFEST tokenizer={0} refusals={1} gutted={2} windows={3} windowsCases={4} challenges={5} canary={6}" -f $tokenizerTable.Count, $portableRefusals.Count, $guttedClaims.Count, ($onWindows.ToString().ToLowerInvariant()), $windowsCasesRun, $challengeLines.Count, $script:assertionCanaryCaught)
 for ($index = 0; $index -lt $challengeLines.Count; $index++) {
   $challengeLine = $challengeLines[$index]
   $challengeArgv = @(Split-MapleSeasonCommandLineArguments -CommandLine $challengeLine)

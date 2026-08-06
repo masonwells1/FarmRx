@@ -312,7 +312,80 @@ try {
     mutate(path, (source) => source.replace(`[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(((${collection} | ForEach-Object { $_.Line }) -join ([char]0x1F))))`, `((${collection} | ForEach-Object { $_.Line }) -join ([char]0x1F))`))
     detected(`${id} sends the challenge payload unencoded, as the transport that ate it did`, `${id}:ownership-challenge-base64-encoded`)
     reset()
+    // The four fixed challenge rows are satisfiable by a stub that hard-codes the answers and never runs the
+    // predicate. Removing either nonce row - the owned one or the unowned one - restores that hole.
+    mutate(path, (source) => source.replace(/\n *@\{ Line = "node\.exe C:\\FarmRx\\node_modules\\vite\\bin\\vite\.js --nonce \$\w+";[^\n]*\n/, '\n'))
+    detected(`${id} drops the owned per-run nonce challenge row`, `${id}:ownership-challenge-nonce-row-owned`)
+    reset()
+    mutate(path, (source) => source.replace(/\n *@\{ Line = "node\.exe C:\\Other\\server\.js --nonce \$\w+";[^\n]*\n/, '\n'))
+    detected(`${id} drops the unowned per-run nonce challenge row`, `${id}:ownership-challenge-nonce-row-unowned`)
+    reset()
+    mutate(path, (source) => source.replace("[Guid]::NewGuid().ToString('N')", "'fixed'"))
+    detected(`${id} freezes the challenge nonce, making the rows hard-codeable again`, `${id}:ownership-challenge-nonce-generated`)
+    reset()
+    // U+001F splits the payload. It is NOT impossible in a Windows command line - measured surviving into a
+    // child's argv - so a row containing it would become phantom challenges unless the encoder refuses.
+    mutate(path, (source) => source.replace(/^( *)if \(\$\w+\.Line\.Contains\(\[char\]0x1F\)\) \{ throw "Ownership challenge row/m, '$1if ($false) { throw "Ownership challenge row'))
+    detected(`${id} stops refusing a challenge row that contains the payload delimiter`, `${id}:ownership-challenge-delimiter-refused`)
+    reset()
+    // The assertion-helper self-test, reported through the manifest. Dropping `canary=caught` is what let a
+    // suite with every table assertion disabled pass: full manifest, right answers, exit 0.
+    mutate(path, (source) => source.replace(' canary=caught"', '"'))
+    detected(`${id} stops requiring the ownership regression's assertion-helper self-test`, `${id}:ownership-assertion-canary-required`)
+    reset()
+    // Answers must be counted as INSTANCES of output. Filtering this caller's own candidate strings instead
+    // accepts a child that prints both verdicts for one index, or the same index twice.
+    mutate(path, (source) => source.replace("| Where-Object { $_.StartsWith('OWNERSHIP_CHALLENGE ', [StringComparison]::Ordinal) })", '| Where-Object { $_ -like \'OWNERSHIP_CHALLENGE *\' } | Select-Object -Unique)'))
+    detected(`${id} stops counting challenge answers as distinct output instances`, `${id}:ownership-answers-counted-as-instances`)
+    reset()
+    mutate(path, (source) => source.replace(/ challenge answers for \$\(/, ' challenge answers, which is fine $('))
+    detected(`${id} stops requiring one challenge answer per challenge sent`, `${id}:ownership-answer-total-asserted`)
+    reset()
+    mutate(path, (source) => source.replace(/^( *)if \((\$\w*[Ff]orIndex)\.Count -ne 1 -or (\$\w+) -cnotcontains \2\[0\]\) \{/m, '$1if ($3.Count -eq 0) {'))
+    detected(`${id} stops requiring exactly one answer per challenge index and stops checking it is accepted`, `${id}:ownership-answer-must-be-a-candidate`)
+    reset()
   }
+  // THE ASSERTION HELPER ITSELF. A fresh-context review changed its condition to `if ($false)` and the suite
+  // still printed its marker, still published a full-size manifest, still answered every challenge correctly
+  // from the real predicate, and exited 0 - with roughly a hundred table assertions dead. Two layers now stand
+  // in the way: the helper's body is pinned statically, and the suite hands the helper a must-fail condition at
+  // run time and throws if it is not recorded. Both are drilled.
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('if (-not $Condition) { $script:failures += $Message }', 'if ($false) { $script:failures += $Message }'))
+  detected('ownership regression assertion helper stops recording failures', 'ownership-regression:assertion-helper-records-failures')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('Assert-True $false $script:assertionCanary', '# self-test removed'))
+  detected('ownership regression stops handing its assertion helper a must-fail condition', 'ownership-regression:assertion-helper-self-tested')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace("throw 'Assertion helper did not record a deliberately-false assertion", "Write-Output 'Assertion helper did not record a deliberately-false assertion"))
+  detected('ownership regression reports a result even when its assertion helper is inert', 'ownership-regression:assertion-helper-self-test-is-terminating')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace("$script:assertionCanaryCaught = 'caught'", "$script:assertionCanaryCaught = 'skipped'"))
+  detected('ownership regression stops publishing the assertion-helper verdict its callers require', 'ownership-regression:assertion-canary-published')
+  reset()
+  mutate('scripts/maple-season-browser-ownership.regression.ps1', (source) => source.replace('challenges={5} canary={6}', 'challenges={5}'))
+  detected('ownership regression drops the assertion-helper field from its manifest', 'ownership-regression:publishes-a-manifest')
+  reset()
+  // THE PAIRING, in both directions. The portable tables in the ownership suite are only meaningful if the
+  // live CommandLineToArgvW table re-derives them, and the first version searched the whole live file as text -
+  // a live row COMMENTED OUT stopped executing while still satisfying the search. So the live table is now
+  // parsed into rows, and both drills below start from a green gate.
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace("\n      'node.exe C:\\FarmRx\\x.js'\n", "\n      # 'node.exe C:\\FarmRx\\x.js'\n"))
+  detected('a live tokenizer row is commented out while its text stays in the file', 'ownership-regression:tokenizer-literal-rederived:node.exe C:\\FarmRx\\x.js')
+  reset()
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace("\n      'node.exe C:\\FarmRx\\x.js'\n", "\n      'node.exe C:\\FarmRx\\x.js'\n      'node.exe C:\\FarmRx\\unasserted.js'\n"))
+  detected('the live tokenizer table grows a row the portable side never asserts', "ownership-regression:live-row-unaccounted:'node.exe C:\\FarmRx\\unasserted.js'")
+  reset()
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace('"node.exe`tC:\\FarmRx\\x.js`t--port`t4177"', '"node.exe C:\\FarmRx\\x.js --port 4177"'))
+  detected('a hand-paired live tokenizer row loses the spelling its portable twin exists for', 'ownership-regression:hand-paired-row-rederived:tab-separated-arguments')
+  reset()
+  mutate('scripts/maple-season-browser-port-preflight.regression.ps1', (source) => source.replace("\n      'node.exe \"a\"\"b c\"'\n", '\n'))
+  detected('an enumerated live-only tokenizer row is deleted', 'ownership-regression:live-only-row-present:doubled-quote-inside-a-quoted-argument')
+  reset()
+  // The job-level hole, in the direction the first guard missed. `if: false` on the line AFTER `runs-on:` is
+  // valid YAML, disables all five steps at once, and the adjacency check it replaced stayed green.
+  mutate('.github/workflows/foundation.yml', (source) => source.replace('  foundation:\n    runs-on: ubuntu-latest\n', '  foundation:\n    runs-on: ubuntu-latest\n    if: false\n'))
+  detected('the foundation job is disabled by a condition placed after runs-on', 'workflow:foundation-job-unconditional')
+  reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Write-Output 'Farm Rx foundation gate: PASS'", "Write-Output 'done'"))
   detected('foundation completion marker renamed', 'orchestrator:completion-marker')
   reset()

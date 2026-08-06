@@ -57,22 +57,40 @@ jobs:
           # expectations are longhand in both callers on purpose: a challenge is only a challenge if the party
           # asking holds the answer independently. Row 1 is the live unrelated Node process that holds this
           # port on the author's workstation and must never be judged ours - FALSE in every world, as are rows
-          # 2 and 3, each refused before the platform path resolver is consulted or by prefix arithmetic no
-          # resolver changes. Row 0 is `ResolverDependent`: TRUE on Windows, and off Windows this step requires
+          # 2 and 3. Row 2 carries a doubled quote and is refused before any path is resolved, which is the one
+          # row here that genuinely never reaches the resolver; rows 1 and 3 are FALSE by prefix arithmetic
+          # instead, and their off-Windows verdict is not an argument but an observation - this job runs on
+          # ubuntu and asserts them. The earlier wording claimed all three were refused ahead of the resolver,
+          # which was true of one of them. Row 0 is `ResolverDependent`: TRUE on Windows, and off Windows this step requires
           # the exact argv and requires an answer, but does not claim which verdict is right, because nobody
           # has measured .NET's GetFullPath on Linux against this predicate. This job is ubuntu-latest, so that
           # unclaimed case is the one that applies here, and the manifest states which world ran.
+          # The last two rows carry a NONCE that differs on every run. The four fixed rows can be satisfied by a
+          # stub that hard-codes their answers without ever running the predicate - the same shape of defeat this
+          # challenge exists to catch one layer up - and a nonce cannot be hard-coded. Hexadecimal only, so no
+          # space, quote or backslash, which is why the expected argv is plain concatenation and this step never
+          # re-implements the tokenizer. It reaches no product code, database or artifact, so the season proof's
+          # determinism is untouched.
+          $nonce = [Guid]::NewGuid().ToString('N')
           $rows = @(
             @{ Line = 'node.exe C:\FarmRx\node_modules\vite\bin\vite.js --port 4177'; Argv = '<node.exe>|<C:\FarmRx\node_modules\vite\bin\vite.js>|<--port>|<4177>'; Owned = $true; ResolverDependent = $true }
             @{ Line = '"C:\Program Files\nodejs\node.exe" scripts/factory-board.mjs --port 4177'; Argv = '<C:\Program Files\nodejs\node.exe>|<scripts/factory-board.mjs>|<--port>|<4177>'; Owned = $false; ResolverDependent = $false }
             @{ Line = 'node.exe "C:\FarmRx"" Backup"\x.js'; Argv = '<node.exe>|<C:\FarmRx">|<Backup\x.js>'; Owned = $false; ResolverDependent = $false }
             @{ Line = 'node.exe C:\FarmRx2\node_modules\vite\bin\vite.js'; Argv = '<node.exe>|<C:\FarmRx2\node_modules\vite\bin\vite.js>'; Owned = $false; ResolverDependent = $false }
+            @{ Line = "node.exe C:\FarmRx\node_modules\vite\bin\vite.js --nonce $nonce"; Argv = "<node.exe>|<C:\FarmRx\node_modules\vite\bin\vite.js>|<--nonce>|<$nonce>"; Owned = $true; ResolverDependent = $true }
+            @{ Line = "node.exe C:\Other\server.js --nonce $nonce"; Argv = "<node.exe>|<C:\Other\server.js>|<--nonce>|<$nonce>"; Owned = $false; ResolverDependent = $false }
           )
           $onWindows = ($null -eq $IsWindows) -or $IsWindows
           # U+001F-joined then Base64 encoded, the same encoding the orchestrator uses. This step calls the suite
           # in-process, so it never hit the `-File` binder defects the encoding exists to survive - it matches
           # the orchestrator anyway, because two callers that encode differently would let a decode regression
           # pass on one side and fail on the other.
+          # U+001F is NOT impossible in a Windows command line - passing `A<U+001F>B` to a Node child was
+          # measured to arrive intact, so the earlier claim to the contrary is withdrawn. A row containing the
+          # delimiter would split into phantom challenges, so the encoder refuses it rather than assuming.
+          foreach ($row in $rows) {
+            if ($row.Line.Contains([char]0x1F)) { throw "Ownership challenge row contains the U+001F delimiter, which would split into phantom challenges: $($row.Line)" }
+          }
           $challenge = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((($rows | ForEach-Object { $_.Line }) -join ([char]0x1F))))
           $ownership = @(./scripts/maple-season-browser-ownership.regression.ps1 -Challenge $challenge -ChallengeRoot 'C:\FarmRx')
           $ownership | ForEach-Object { Write-Output $_ }
@@ -81,14 +99,26 @@ jobs:
           }
           $manifest = @($ownership | Where-Object { $_ -like 'OWNERSHIP_MANIFEST *' })
           if ($manifest.Count -ne 1) { throw "Season browser ownership regression printed $($manifest.Count) manifest lines instead of exactly one; it did not run to completion." }
-          $expected = "OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=$($onWindows.ToString().ToLowerInvariant()) windowsCases=$(if ($onWindows) { 24 } else { 0 }) challenges=$($rows.Count)"
+          # `canary=caught` is the child's report that its assertion helper was handed a must-fail condition and
+          # noticed. Without it this step cannot tell a run with a hundred live assertions from a run with all of
+          # them silently disabled, which was measured by no-op'ing the helper and watching everything else stay
+          # green.
+          $expected = "OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=$($onWindows.ToString().ToLowerInvariant()) windowsCases=$(if ($onWindows) { 24 } else { 0 }) challenges=$($rows.Count) canary=caught"
           if ($manifest[0] -cne $expected) { throw "Season browser ownership regression reported a different shape than this step requires.`n  expected: $expected`n  reported: $($manifest[0])" }
+          # Counted as INSTANCES, not searched for. Filtering this step's own candidate strings by whether the
+          # output contains them measures nothing about how many lines the child printed, so a child answering
+          # both TRUE and FALSE for one index, or answering twice, used to pass. A child that contradicts
+          # itself has not answered.
+          $answered = @($ownership | Where-Object { $_.StartsWith('OWNERSHIP_CHALLENGE ', [StringComparison]::Ordinal) })
+          if ($answered.Count -ne $rows.Count) {
+            throw "Season browser ownership regression printed $($answered.Count) challenge answers for $($rows.Count) challenges.`n  " + ($answered -join "`n  ")
+          }
           for ($i = 0; $i -lt $rows.Count; $i++) {
             $verdicts = if ($rows[$i].ResolverDependent -and (-not $onWindows)) { @('TRUE', 'FALSE') } elseif ($rows[$i].Owned) { @('TRUE') } else { @('FALSE') }
             $candidates = @($verdicts | ForEach-Object { "OWNERSHIP_CHALLENGE $i owned=$_ argv=$($rows[$i].Argv)" })
-            $matched = @($candidates | Where-Object { $ownership -ccontains $_ })
-            if ($matched.Count -ne 1) {
-              throw "Season browser ownership regression did not answer challenge $i as this step requires.`n  accepted: $($candidates -join ' OR ')`n  command line: $($rows[$i].Line)"
+            $forIndex = @($answered | Where-Object { $_.StartsWith("OWNERSHIP_CHALLENGE $i ", [StringComparison]::Ordinal) })
+            if ($forIndex.Count -ne 1 -or $candidates -cnotcontains $forIndex[0]) {
+              throw "Season browser ownership regression did not answer challenge $i as this step requires.`n  accepted: $($candidates -join ' OR ')`n  printed: $($forIndex -join ' AND ')`n  command line: $($rows[$i].Line)"
             }
           }
       - name: Run foundation gate

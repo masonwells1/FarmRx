@@ -166,7 +166,21 @@ export function foundationStaticGuard(root = process.cwd()) {
     }
   }
   // The job itself is the same hole one level up: `if: false` on the job disables all five steps at once.
-  requireMatch(errors, foundationWorkflow, /^ {2}foundation:\n {4}runs-on: /m, 'workflow:foundation-job-unconditional')
+  //
+  // The first version of this check required `foundation:` to be followed IMMEDIATELY by `runs-on:`, on the
+  // reasoning that a condition would have to be inserted between them. A fresh-context review put `if: false`
+  // on the line AFTER `runs-on:` instead - valid YAML, whole job disabled, and this guard stayed green.
+  // Reproduced before this rewrite. Adjacency was never the property worth asserting; the absence of a
+  // job-level condition ANYWHERE in the job is. Job keys sit at four spaces and step keys at eight, so this
+  // scans for a gating key at job level regardless of where in the block it appears.
+  for (let index = 0; index < workflowLines.length; index += 1) {
+    if (!/^ {2}foundation:\s*$/.test(workflowLines[index])) continue
+    for (const jobLine of workflowLines.slice(index + 1)) {
+      if (/^ {0,2}\S/.test(jobLine)) break
+      if (/^ {4}(if|continue-on-error):/.test(jobLine)) errors.push('workflow:foundation-job-unconditional')
+    }
+  }
+  requireMatch(errors, foundationWorkflow, /^ {2}foundation:\n {4}runs-on: /m, 'workflow:foundation-job-declared')
   requireText(errors, foundationOrchestrator, "Write-Output 'Farm Rx foundation gate: PASS'", 'orchestrator:completion-marker')
 
   // The kill-authorizing predicate. This is the sole gate on the force kill in
@@ -324,20 +338,67 @@ export function foundationStaticGuard(root = process.cwd()) {
   const portableTokenizerLines = [...ownershipRegression.matchAll(/^ {4}@\{ Line = '((?:[^']|'')*)'; Expected =/gm)].map((match) => match[1].replace(/''/g, "'"))
   if (portableTokenizerLines.length !== 26) errors.push('ownership-regression:tokenizer-literal-count')
   const preflightRegression = read(root, 'scripts/maple-season-browser-port-preflight.regression.ps1')
+  // The live side is PARSED into its actual rows, not searched as text, and the pairing is then asserted in
+  // BOTH directions. The previous version searched the whole live file for each portable literal, and a
+  // fresh-context review defeated it by COMMENTING OUT a live row: the row stopped executing, the substring
+  // was still in the file, and the guard stayed green. Reproduced before this rewrite. A commented row is not
+  // a re-derivation, so comment lines are excluded here by construction.
+  const preflightLines = preflightRegression.split(/\r?\n/)
+  const liveTableStart = preflightLines.findIndex((line) => line.trim() === 'foreach ($commandLine in @(')
+  const liveTableEnd = preflightLines.findIndex((line, index) => index > liveTableStart && line === '    )) {')
+  if (liveTableStart < 0 || liveTableEnd < 0) errors.push('ownership-regression:live-tokenizer-table-not-found')
+  const liveTokenizerRows = liveTableStart < 0 || liveTableEnd < 0
+    ? []
+    : preflightLines.slice(liveTableStart + 1, liveTableEnd).map((line) => line.trim()).filter((line) => line.length > 0 && !line.startsWith('#'))
+  // 33 = the 26 single-quoted portable literals + the 3 hand-paired rows + the 4 live-only rows enumerated
+  // below. Stating the live total is the reverse half of the pairing: without it the live table can grow rows
+  // that nothing on the portable side asserts, which is how the tables drifted apart the first time.
+  if (liveTokenizerRows.length !== 33) errors.push('ownership-regression:live-tokenizer-row-count')
+  const liveTokenizerRowSet = new Set(liveTokenizerRows)
   for (const line of portableTokenizerLines) {
-    if (!preflightRegression.includes(`'${line.replace(/'/g, "''")}'`)) errors.push(`ownership-regression:tokenizer-literal-rederived:${line}`)
+    if (!liveTokenizerRowSet.has(`'${line.replace(/'/g, "''")}'`)) errors.push(`ownership-regression:tokenizer-literal-rederived:${line}`)
   }
   // The three expression-built rows, each named, each with the spelling that must exist on BOTH sides.
   const handPairedTokenizerRows = [
-    { label: 'tab-separated-arguments', portable: "@{ Line = 'node.exe'+[char]9+'C:\\FarmRx\\x.js'+[char]9+'--port'+[char]9+'4177'", live: 'node.exe`tC:\\FarmRx\\x.js`t--port`t4177' },
+    { label: 'tab-separated-arguments', portable: "@{ Line = 'node.exe'+[char]9+'C:\\FarmRx\\x.js'+[char]9+'--port'+[char]9+'4177'", live: '"node.exe`tC:\\FarmRx\\x.js`t--port`t4177"' },
     { label: 'non-breaking-space-in-a-path', portable: "@{ Line = ('node.exe C:\\FarmRx'+[char]0x00A0+'Backup\\server.js')", live: '("node.exe C:\\FarmRx{0}Backup\\server.js" -f $nonBreakingSpace)' },
-    { label: 'tab-inside-a-quoted-path', portable: "@{ Line = ('node.exe \"C:\\FarmRx\\'+[char]9+'\\Other\\x.js\"')", live: 'node.exe `"C:\\FarmRx\\`t\\Other\\x.js`"' },
+    { label: 'tab-inside-a-quoted-path', portable: "@{ Line = ('node.exe \"C:\\FarmRx\\'+[char]9+'\\Other\\x.js\"')", live: '"node.exe `"C:\\FarmRx\\`t\\Other\\x.js`""' },
   ]
   for (const row of handPairedTokenizerRows) {
     requireText(errors, ownershipRegression, row.portable, `ownership-regression:hand-paired-row-present:${row.label}`)
-    requireText(errors, preflightRegression, row.live, `ownership-regression:hand-paired-row-rederived:${row.label}`)
+    if (!liveTokenizerRowSet.has(row.live)) errors.push(`ownership-regression:hand-paired-row-rederived:${row.label}`)
   }
-  requireText(errors, ownershipRegression, 'OWNERSHIP_MANIFEST tokenizer={0} refusals={1} gutted={2} windows={3} windowsCases={4} challenges={5}', 'ownership-regression:publishes-a-manifest')
+  // The reverse direction, named row by named row. Any live row that is NOT one of the 29 paired rows must be
+  // one of these four, and each of these four must still be there - so neither table can gain or lose a row
+  // without a failure that says which row and which side.
+  const liveOnlyTokenizerRows = [
+    { label: 'doubled-quote-inside-a-quoted-argument', live: '\'node.exe "a""b c"\'' },
+    { label: 'even-backslashes-then-doubled-quote', live: '\'node.exe a\\\\""b c\'' },
+    { label: 'even-backslashes-then-doubled-quote-inside-quotes', live: '\'node.exe "a\\\\""b" c\'' },
+    { label: 'traversal-out-of-the-tree-unterminated-quote', live: '\'node.exe "C:\\FarmRx\\..\\Other\\x.js\'' },
+  ]
+  const pairedLiveRows = new Set([
+    ...portableTokenizerLines.map((line) => `'${line.replace(/'/g, "''")}'`),
+    ...handPairedTokenizerRows.map((row) => row.live),
+  ])
+  for (const row of liveOnlyTokenizerRows) {
+    if (!liveTokenizerRowSet.has(row.live)) errors.push(`ownership-regression:live-only-row-present:${row.label}`)
+  }
+  const enumeratedLiveOnly = new Set(liveOnlyTokenizerRows.map((row) => row.live))
+  for (const row of liveTokenizerRows) {
+    if (!pairedLiveRows.has(row) && !enumeratedLiveOnly.has(row)) errors.push(`ownership-regression:live-row-unaccounted:${row}`)
+  }
+  requireText(errors, ownershipRegression, 'OWNERSHIP_MANIFEST tokenizer={0} refusals={1} gutted={2} windows={3} windowsCases={4} challenges={5} canary={6}', 'ownership-regression:publishes-a-manifest')
+  // The assertion-helper self-test. A fresh-context review turned `Assert-True`'s condition into `if ($false)`
+  // and this suite still printed its marker, still published a manifest with every table at full size, still
+  // answered all four challenges correctly, and exited 0 - with roughly a hundred table assertions dead. The
+  // manifest cannot catch that (sizes are counted, not asserted) and the challenge cannot either (its answers
+  // are computed outside the helper). Only handing the helper a must-fail condition can, so the block that
+  // does it and the `throw` that refuses to continue without it are both pinned.
+  requireText(errors, ownershipRegression, 'if (-not $Condition) { $script:failures += $Message }', 'ownership-regression:assertion-helper-records-failures')
+  requireText(errors, ownershipRegression, 'Assert-True $false $script:assertionCanary', 'ownership-regression:assertion-helper-self-tested')
+  requireText(errors, ownershipRegression, "throw 'Assertion helper did not record a deliberately-false assertion", 'ownership-regression:assertion-helper-self-test-is-terminating')
+  requireText(errors, ownershipRegression, "$script:assertionCanaryCaught = 'caught'", 'ownership-regression:assertion-canary-published')
   requireText(errors, ownershipRegression, 'OWNERSHIP_CHALLENGE {0} owned={1} argv={2}', 'ownership-regression:answers-the-challenge')
   // The challenge payload is Base64 on both sides. Two transport defects were MEASURED in this one parameter -
   // `-File` binding an array to its first element only, and `-File` truncating a plain string at the first
@@ -361,19 +422,47 @@ export function foundationStaticGuard(root = process.cwd()) {
   // are no longer the whole gate: a marker is text, and these are behaviour. Both callers are pinned
   // separately and deliberately hold the expectations longhand - a challenge whose answers live in one shared
   // place is one edit away from being no challenge at all.
-  for (const [caller, id] of [[foundationWorkflow, 'workflow'], [foundationOrchestrator, 'orchestrator']]) {
+  // The two callers name their locals differently, so each occurrence pin carries that caller's own spelling -
+  // a pin that matched either spelling would be satisfied by the wrong caller's line appearing in a comment.
+  for (const [caller, id, collect, candidates, forIndex, index] of [
+    [foundationWorkflow, 'workflow', '$answered = @($ownership', '$candidates', '$forIndex', '$i'],
+    [foundationOrchestrator, 'orchestrator', '$ownershipAnswered = @($script:ownershipOutput', '$ownershipCandidates', '$ownershipForIndex', '$ownershipIndex'],
+  ]) {
     requireText(errors, caller, 'OWNERSHIP_MANIFEST tokenizer=29 refusals=25 gutted=25 windows=', `${id}:ownership-manifest-shape-asserted`)
     requireText(errors, caller, 'manifest lines instead of exactly one; it did not run to completion.', `${id}:ownership-manifest-required-once`)
     // The count of challenges the suite says it decoded, checked against the count this caller sent. Without
     // this, a transport that eats challenges is caught only if a surviving argv happens to look wrong.
     requireText(errors, caller, 'challenges=$(', `${id}:ownership-challenge-count-asserted`)
     requireText(errors, caller, '[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(', `${id}:ownership-challenge-base64-encoded`)
+    // U+001F splits the payload into challenges, and it is NOT impossible in a Windows command line - it was
+    // measured surviving into a Node child's argv. A row containing it would become phantom challenges, so each
+    // caller refuses to send one instead of relying on the withdrawn claim that it cannot happen.
+    // Anchored so that only a LIVE statement satisfies it: a commented-out refusal starts with `#`.
+    requireMatch(errors, caller, /^ *if \(\$\w+\.Line\.Contains\(\[char\]0x1F\)\) \{ throw "Ownership challenge row contains the U\+001F delimiter/m, `${id}:ownership-challenge-delimiter-refused`)
     requireText(errors, caller, 'OWNERSHIP_CHALLENGE $', `${id}:ownership-challenge-lines-required`)
+    // Answers counted as INSTANCES of output, not as membership of this caller's own candidate strings. The
+    // membership form was measured to accept a child that printed BOTH verdicts for one index, or the same
+    // index twice, because it filtered the candidates rather than the output.
+    requireText(errors, caller, `${collect} | Where-Object { $_.StartsWith('OWNERSHIP_CHALLENGE ', [StringComparison]::Ordinal) })`, `${id}:ownership-answers-counted-as-instances`)
+    requireText(errors, caller, 'challenge answers for $(', `${id}:ownership-answer-total-asserted`)
+    requireText(errors, caller, `${forIndex} = @(${collect.split(' = ')[0]} | Where-Object { $_.StartsWith("OWNERSHIP_CHALLENGE ${index} ", [StringComparison]::Ordinal) })`, `${id}:ownership-answer-per-index-selected`)
+    requireText(errors, caller, `if (${forIndex}.Count -ne 1 -or ${candidates} -cnotcontains ${forIndex}[0]) {`, `${id}:ownership-answer-must-be-a-candidate`)
+    // The suite's assertion-helper self-test, reported through the manifest. A caller that stops requiring
+    // `canary=caught` cannot tell a run with ~100 live assertions from a run with all of them disabled.
+    // Anchored to the live expected-manifest statement: the surrounding comment also says `canary=caught`, and
+    // a substring pin satisfied by prose is exactly the mistake this whole tranche keeps repairing.
+    requireMatch(errors, caller, /^ *\$\w+ = "OWNERSHIP_MANIFEST [^\n"]*canary=caught"$/m, `${id}:ownership-assertion-canary-required`)
     // The live unrelated Node process that holds the governed port on the author's workstation. If the
     // predicate ever answers TRUE for this line, the cleanup path force-kills it. Both callers must keep
     // asking about exactly this string.
     requireText(errors, caller, '"C:\\Program Files\\nodejs\\node.exe" scripts/factory-board.mjs --port 4177', `${id}:ownership-challenge-includes-the-live-foreign-listener`)
     requireText(errors, caller, 'ResolverDependent', `${id}:ownership-challenge-marks-resolver-dependent-rows`)
+    // A per-run nonce, in an owned row AND an unowned row. Fixed rows are satisfiable by a stub that hard-codes
+    // the answers without running the predicate at all; a nonce forces the child to tokenize and judge text it
+    // has never seen. Anchored to live statements so a commented-out row cannot satisfy them.
+    requireText(errors, caller, "[Guid]::NewGuid().ToString('N')", `${id}:ownership-challenge-nonce-generated`)
+    requireMatch(errors, caller, /^ *@\{ Line = "node\.exe C:\\FarmRx\\node_modules\\vite\\bin\\vite\.js --nonce \$\w+"; .*Owned = \$true;/m, `${id}:ownership-challenge-nonce-row-owned`)
+    requireMatch(errors, caller, /^ *@\{ Line = "node\.exe C:\\Other\\server\.js --nonce \$\w+"; .*Owned = \$false;/m, `${id}:ownership-challenge-nonce-row-unowned`)
   }
 
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)

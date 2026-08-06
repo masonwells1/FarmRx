@@ -372,7 +372,10 @@ fs.writeFileSync(process.env.FARMRX_PREFLIGHT_STARTED_FILE, 'started')
   $spaceRootQuoted = [pscustomobject]@{ Name = 'node.exe'; CommandLine = 'node.exe "C:\Mason FarmRx\node_modules\vite\bin\vite.js"' }
   Assert-True (Test-MapleSeasonBrowserPortOwned -ListenerProcess $spaceRootQuoted -Root 'C:\Mason FarmRx') 'Ownership test refused a quoted owned root whose own name contains a space.'
 
-  # Windows has TWO argument grammars and they disagree about exactly one construct. CommandLineToArgvW,
+  # Windows has TWO argument grammars, and this file has MEASURED them disagreeing about one construct: the
+  # doubled quote inside a quoted argument. "Exactly one" was the earlier wording and is withdrawn - nothing
+  # here enumerated the grammars exhaustively, so the honest claim is the disagreement that was observed, not
+  # a count of all disagreements that exist. CommandLineToArgvW,
   # which the table below checks this tokenizer against, is what shell32 and PowerShell use; node.exe
   # enters at wmain and is parsed by the Microsoft C runtime, where a doubled quote inside a quoted
   # argument yields one literal quote and does NOT leave quoted mode. Measured with the real API on the
