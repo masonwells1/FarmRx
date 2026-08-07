@@ -1915,3 +1915,78 @@ Nothing was pushed, merged, or deployed. Production remains untouched at `https:
 ### Where the sweep stops
 
 This closes the hardening loop Mason bounded. The foundation harness is declared done as of this commit: one fresh-context Sol review is opened against it, and its verdict is recorded in this file rather than acted on. The remaining gauntlet work — the season scenarios and the two physical installed-PWA phone gates in `docs/customer-zero-readiness-runbook.md` — is unaffected by this decision and still stands where it stood.
+
+## SR-085 — Sol tranche K on `ef63f0c`: REJECT, recorded and not repaired, and seven SR-084 statements withdrawn
+
+**No code changed in this entry.** Mason's instruction for tranche J was explicit: one repair commit, one fresh-context review, and **stop hardening regardless of what that review says.** The review said REJECT. That instruction is honoured — nothing here fixes anything. This entry exists because the alternative was leaving statements in an append-only evidence file that I now know to be false, and a ledger that asserts more than it proved is the exact defect the last five tranches kept finding.
+
+Sol's verdict on `ef63f0c`, in its own words: *"The principal handle-ordering repair is useful, and the stranded-child PID repair works on ordinary exception paths. However, two of the six new drills recreate no behavioral defect, SR-084 contains several false or unsupported claims, and a remaining exception path can still lose handle-leak diagnoses."*
+
+Every finding below was checked against the real files on this workstation before being recorded. **Sol was right on all of them.**
+
+### The finding that matters: SR-084 claimed to have avoided a sin it then committed twice
+
+SR-084's C-11 section is about a drill that passed while recreating no defect — the guard reddened because pinned text moved. It then says, of this very commit: *"I wrote the same sin again in this commit and caught it before running."* **I caught one instance and shipped two.**
+
+**The `EntryPoint` drill recreates nothing.** Its mutation rewrites
+
+```
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool CloseHandle(IntPtr handle);
+```
+
+to add `EntryPoint = "CloseHandle"`. For a managed method already named `CloseHandle`, that is **an explicit spelling of the default entry point** — the compiled binding is byte-for-byte the same function. The drill's own comment says it *"re-points the DllImport … at a different entry point, so every close in the class calls something that is not CloseHandle."* **That comment is false.** The guard reddens solely because the pinned attribute text changed. A real mutation would have to name a genuinely different export or library.
+
+**The accumulator drill probably recreates nothing either.** Its mutation restores `leakedThread = leakedThread + CloseAndDescribe(…)`. At that point `leakedThread` is the empty string, and C# compiles `a + b` to `String.Concat`, which returns the other operand unchanged when one side is empty. So no allocation is reliably introduced, and the mutation is behaviourally identical to the code it replaces.
+
+That second one has a consequence for the repair itself, below.
+
+### R-11's second property was never true of the code
+
+SR-084 listed three properties that make the two-handle rescue safe, the second being: *"Both closes complete before any string is built. Each close's return value goes into its own local; nothing is concatenated until both handles are gone."*
+
+**That is false and is withdrawn.** `CloseAndDescribe` builds its failure sentence **inside itself**, so the first call allocates before the second close is ever reached. Removing the outer concatenation moved nothing meaningful — which is precisely why a drill that restores it recreates no defect.
+
+What is actually true, and what actually makes the second close reachable, is **property 1 alone**: the helper cannot throw while describing a failure, because its sentence-building sits in a `try` whose fallback is a compile-time constant. The repair works; the reason given for it was wrong. The code's own comment at the helper (*"the sentence built INSIDE this helper is still an allocation"*) states this correctly — the ledger entry did not.
+
+### "Cannot throw" is too broad
+
+`CloseAndDescribe` wraps its **reporting** in a `try`. The `CloseHandle` P/Invoke itself sits **outside** it, so an interop-resolution failure — `DllNotFoundException`, `EntryPointNotFoundException` — escapes, and in the job rescue it escapes *after* the ownership flag has been cleared, so the `catch` rethrows without reporting. The accurate, narrower claim: **the helpers suppress ordinary managed exceptions arising while formatting or allocating their reports.** That is what they do and it is worth having. "Cannot throw" is withdrawn.
+
+### One new code finding, recorded and deliberately not fixed
+
+On the two **deliberate** (non-throwing) failure branches — assign-failed-then-killed, and resume-failed — both closes happen, their reports go into locals inside the `try`, and the last statement concatenates them into `stage`. If **that** concatenation throws, the locals are unreachable from the `catch`, which creates its own empty ones, finds nothing to report, and rethrows the original exception untouched. **Any failed-close diagnosis is lost.**
+
+No handle is stranded by this — both closes have already been attempted — and no process is orphaned. What is lost is the *report* of a leak, on an out-of-memory path. It is real, it is conditional, and per Mason's instruction it is written down rather than repaired. It also means SR-083's withdrawn phrase *"no diagnosis is lost in either direction"* is still not true of the current code, by a different route than the one SR-084 closed.
+
+### The gate's own PASS sentence is now known to overstate
+
+The gate prints, and two callers require verbatim:
+
+**`Foundation mutation drill: PASS (313 controlled defects each turned the gate red under their own name)`**
+
+Of those 313, **at least three are not defects**: the two named above, plus the ordering drill SR-084 itself relabelled in C-11. What the mechanism proves per case is still real and checked — a green baseline, at least one genuine edit, and the specific expected label — but the word **defect** claims behaviour, and for those three there is none.
+
+SR-084 filed this as accepted limitation 4. **Sol's classification is better and is adopted here:** this is a live reporting defect, not a neutral limitation, because a CI job asserts a sentence its author knows to be stronger than the evidence. Fixing it is code work and therefore outside the tranche Mason bounded, so it is recorded as an open defect and put to him as a decision rather than silently corrected or silently kept.
+
+### Seven SR-084 statements withdrawn
+
+1. **The heading and opening say "three SR-083 claims withdrawn"; the corrections section enumerates four.** The commit message says four. Four is correct.
+2. **"Nine findings are closed here … and four are recorded below as limitations"** — from twelve findings, that totals thirteen. The true accounting: **eight fully closed, one (the `CloseHandle` census) partly closed and partly a limitation, three limitations.** The parenthetical "four cost nothing extra" did not explain the overlap.
+3. **C-10 reverses which line was pinned.** SR-084 says *"The declaration was pinned; the call line was not."* It is the other way round: the **call** line was pinned, the **declaration** was not — which is what the guard's corrected source comment says, and what the new pins imply. The underlying finding stands; my account of it was backwards.
+4. **R-11's property 2** — see above.
+5. **"The close primitive cannot throw"** — see above.
+6. **The instrumentation section describes the new drills as "a second `DllImport` re-pointed by `EntryPoint`" and "the accumulator restored between the two closes."** Both descriptions claim behavioural mutations that are not behavioural.
+7. **C-11's "I caught it before running"** understates the count: one draft was caught, two shipped.
+
+Sol also notes, fairly, that SR-084's evidence lines cite log line numbers, a line count, an elapsed time, and probe output that **exist only in session-local logs and cannot be verified from the repository.** They were observed and are accurately transcribed, but they are **unverified execution claims, not repository-proven facts**, and future readers should treat them as such. That is a limitation of how this project records evidence, not a correction to the numbers.
+
+### What Sol checked and found clean
+
+Recorded so the difference between "checked and clean" and "not reached" survives: both `catch` blocks attempt owned handles in the correct order; the process handle is handed over before its flag clears; **no double-close path exists** on ordinary behaviour; `strandedChildId` is recorded before the kill-error sentence is formatted; `Decorate` does prevent ordinary formatting failures from replacing the original exception; the constant fallbacks are appropriate for out-of-memory degradation; the 307 → 313 updates are internally coordinated; and both callers hold the intended sentence. Sol's full path audit of `CreateKillOnCloseJob` and `StartInJob` found the two SR-084 repairs correct on every ordinary path, and confirmed **four of the six new drills recreate real conditional regressions.**
+
+### Disposition
+
+The hardening loop stops here, as instructed. The two fake drills, the concatenation that can lose a close report, and the overstated PASS sentence are **open, recorded defects in the harness** — not accepted limitations, and not fixed. Sol's recommended disposition (repair the two drills, preserve close reports across the `stage` concatenations, narrow the language, correct the ledger) is recorded in full; only the last of the four is performed.
+
+Nothing was pushed, merged, or deployed. Production remains untouched at `https://farm-rx.vercel.app`.
