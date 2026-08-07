@@ -700,7 +700,7 @@ try {
   // gone is the report: when the close fails the handle leaks for the session and nothing anywhere says so, under
   // a guard label that promised the job could not leak on a thrown path. Valid C#, and every other pin green.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
-    '    } catch (Exception thrown) {\n      if (!jobIsStillThisMethodsToLose) { throw; }\n      string leakedJob = CloseAndDescribe(job, "the job object being created", ref jobIsStillThisMethodsToLose);\n      if (leakedJob.Length == 0) { throw; }\n      throw new InvalidOperationException(thrown.Message + leakedJob, thrown);\n    }\n',
+    '    } catch (Exception thrown) {\n      if (!jobIsStillThisMethodsToLose) { throw; }\n      string leakedJob = CloseAndDescribe(job, "the job object being created", ref jobIsStillThisMethodsToLose);\n      if (leakedJob.Length == 0) { throw; }\n      InvalidOperationException decorated = Decorate(thrown, leakedJob, "", "");\n      if (decorated == null) { throw; }\n      throw decorated;\n    }\n',
     '    } finally {\n      if (jobIsStillThisMethodsToLose) { CloseHandle(job); }\n    }\n'))
   detected('the job is left to leak unreported on a thrown path', 'season-browser:job-creation-closes-and-reports-its-job-on-a-thrown-path')
   reset()
@@ -709,8 +709,8 @@ try {
   // about a handle. Whoever reads the refusal learns that a job leaked and loses the fact that explains why the
   // method was unwinding at all, which is the more actionable of the two.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
-    '      throw new InvalidOperationException(thrown.Message + leakedJob, thrown);',
-    '      throw new InvalidOperationException(thrown.Message + leakedJob);'))
+    '      InvalidOperationException decorated = Decorate(thrown, leakedJob, "", "");',
+    '      InvalidOperationException decorated = new InvalidOperationException(thrown.Message + leakedJob);'))
   detected('the job leak report throws away the exception that caused it', 'season-browser:job-creation-closes-and-reports-its-job-on-a-thrown-path')
   reset()
   // Fifth, the flag is no longer CONSULTED. The limit-failure path has already closed this handle and cleared the
@@ -755,10 +755,20 @@ try {
       '        // A few lines below, both handles close and this script loses the ability to name it at all. So if the',
       '        // kill fails, the pid leaves through stage and processId and the refusal upstream tells a human which',
       '        // process to end, rather than reporting a cleanup that did not happen.',
+      '        //',
+      '        // AND THE PID IS RECORDED BEFORE THE SENTENCE THAT REPORTS IT, not after. A fresh-context review found',
+      '        // the order the other way round: the concatenation came first, and a concatenation allocates, so an',
+      '        // OutOfMemoryException there unwound out of this method with a live unowned suspended child and every',
+      '        // name for it lost - `processId` unassigned, and unassignable anyway, because out parameters do not',
+      '        // survive a throw. Three statements, in the only order that survives a failure of any of them: read the',
+      '        // error while it is still the last error, record the id where the catch can reach it, then build the',
+      '        // sentence that is merely the nicest way of saying it.',
       '        if (!TerminateProcess(created.hProcess, 1)) {',
-      '          stage = "assign, and the suspended child could not be terminated (Windows error "',
-      '            + Marshal.GetLastWin32Error().ToString() + ")";',
+      '          int killError = Marshal.GetLastWin32Error();',
+      '          strandedChildId = created.dwProcessId;',
       '          processId = created.dwProcessId;',
+      '          stage = "assign, and the suspended child could not be terminated (Windows error "',
+      '            + killError.ToString() + ")";',
       '        }',
       '        // EACH CLOSE IS ITS OWN STATEMENT, and the sentences are collected before either is appended to stage.',
       '        // Written as one chained expression - stage + close(thread) + close(process) - a throw while',
@@ -793,9 +803,11 @@ try {
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
     [
       '        if (!TerminateProcess(created.hProcess, 1)) {',
-      '          stage = "assign, and the suspended child could not be terminated (Windows error "',
-      '            + Marshal.GetLastWin32Error().ToString() + ")";',
+      '          int killError = Marshal.GetLastWin32Error();',
+      '          strandedChildId = created.dwProcessId;',
       '          processId = created.dwProcessId;',
+      '          stage = "assign, and the suspended child could not be terminated (Windows error "',
+      '            + killError.ToString() + ")";',
       '        }',
       '',
     ].join('\n'),
@@ -811,9 +823,11 @@ try {
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
     [
       '        if (!TerminateProcess(created.hProcess, 1)) {',
-      '          stage = "assign, and the suspended child could not be terminated (Windows error "',
-      '            + Marshal.GetLastWin32Error().ToString() + ")";',
+      '          int killError = Marshal.GetLastWin32Error();',
+      '          strandedChildId = created.dwProcessId;',
       '          processId = created.dwProcessId;',
+      '          stage = "assign, and the suspended child could not be terminated (Windows error "',
+      '            + killError.ToString() + ")";',
       '        }',
     ].join('\n'),
     '        TerminateProcess(created.hProcess, 1);'))
@@ -847,14 +861,53 @@ try {
   detected('the child-handle close helper always claims success', 'season-browser:child-handle-closes-report-their-outcome')
   reset()
   // AND THE ORDER OF THE TWO LINES INSIDE IT, which is the whole reason the flag is passed by reference instead of
-  // cleared by each caller on the following line. Here the clear moves BELOW the close: both statements are still
-  // present, every caller is unchanged, and a caller that closed a handle and then threw while building the
-  // sentence about it is left holding a flag that still says "mine" - so the unwinding catch closes the same handle
-  // a second time, onto a handle value Windows may have reissued to something else this process opened.
+  // cleared by each caller on the following line.
+  //
+  // THIS DRILL PROVES A PINNED ORDERING AND NOT A BEHAVIOURAL FAILURE, and saying so is the point of this comment.
+  // It used to be labelled "the close helper disclaims ownership only after the close", claiming it recreated the
+  // double-close defect - and a fresh-context review checked the mutated code and found no defect in it at all. On
+  // the mutated failure path the flag is still cleared before anything that can throw, so no unwinding catch can
+  // ever see a stale "mine". The guard went red because a contiguous text pin moved, which is the exact confusion
+  // this whole harness exists to expose: a drill that passes without a defect behind it is a receipt for nothing.
+  //
+  // It is kept, at its honest strength, because the ordering IS worth holding: it is defence in depth for the day
+  // someone adds a throwing statement between the close and the clear, which is what the helper looked like before
+  // the sentence-building moved inside a try. The drill below - the accumulator restored between the two closes in
+  // the launch rescue - is the one that plants the real version of this defect.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
     '    stillOurs = false;\n    if (CloseHandle(handle)) { return ""; }',
     '    if (CloseHandle(handle)) { stillOurs = false; return ""; }\n    stillOurs = false;'))
-  detected('the close helper disclaims ownership only after the close', 'season-browser:child-handle-closes-report-their-outcome')
+  detected('the close helper clears ownership after the close rather than before it', 'season-browser:child-handle-closes-report-their-outcome')
+  reset()
+  // AND THE HELPER CANNOT THROW, which is the property that makes two-closes-in-a-row safe anywhere in this class.
+  // Here the guarded sentence goes back to being an unguarded one: the close still happens, the outcome is still
+  // reported, and building the report allocates - so a failed close in the first of two consecutive calls can throw
+  // OutOfMemoryException out of the helper and the second handle never closes at all. Valid C#, identical on every
+  // ordinary run, and the defect only appears on the one workstation state where the rescue matters.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '    int windowsError = Marshal.GetLastWin32Error();\n    try {\n      return " " + label + " could not be closed (Windows error "\n        + windowsError.ToString() + "), so it leaked for the life of this session.";\n    } catch (Exception) { return CLOSE_FAILED_INDESCRIBABLY; }\n',
+    '    return " " + label + " could not be closed (Windows error "\n      + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session.";\n'))
+  detected('the close helper can throw while describing a failed close', 'season-browser:child-handle-closes-cannot-throw-while-describing-a-failure')
+  reset()
+  // AND DECORATING AN EXCEPTION CANNOT REPLACE IT. Here the decorator throws instead of degrading: the try is gone,
+  // so on the out-of-memory state that makes AllocHGlobal fail in the first place, the concatenation fails a second
+  // time and the OutOfMemoryException raised inside the catch REPLACES the exception travelling through it. The
+  // refusal a human reads then says "out of memory" where it used to say why the launch actually failed. Both
+  // rescues in the class route through this one helper, so this single mutation is the whole class's regression.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '    try {\n      return new InvalidOperationException(thrown.Message + first + second + third, thrown);\n    } catch (Exception) { return null; }\n',
+    '    return new InvalidOperationException(thrown.Message + first + second + third, thrown);\n'))
+  detected('decorating an exception can replace the diagnosis it was adding to', 'season-browser:exception-decoration-cannot-replace-the-original-diagnosis')
+  reset()
+  // AND THE CLOSE PRIMITIVE IS REALLY kernel32's CloseHandle, which the census alone cannot establish: a census
+  // says "no line mentions CloseHandle except these two", and this mutation changes NEITHER of those lines. It
+  // re-points the DllImport above the declaration at a different entry point, so every close in the class calls
+  // something that is not CloseHandle while the managed name, the call site, and the census all stay exactly as
+  // they were. A fresh-context review named this hole; the attribute is pinned with its declaration to close it.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '  [DllImport("kernel32.dll", SetLastError = true)]\n  public static extern bool CloseHandle(IntPtr handle);',
+    '  [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "CloseHandle")]\n  public static extern bool CloseHandle(IntPtr handle);'))
+  detected('the close primitive is rebound through a re-pointed DllImport attribute', 'season-browser:the-close-primitive-is-bound-to-kernel32-closehandle')
   reset()
   // A BARE CLOSE REAPPEARING SOMEWHERE, which is the shape the forbid exists for: the five original bare calls
   // are gone, and nothing stops a sixth being written at a new call site. This restores two of them at the
@@ -937,22 +990,53 @@ try {
   // Fourth, the rescue stops CONSULTING a flag: the thread handle closes unconditionally, so a throw after the
   // success path already closed it closes the same handle twice - onto a value Windows may have reissued.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
-    '      if (threadHandleIsStillThisMethodsToLose) {\n        leaked = leaked + CloseAndDescribe(created.hThread, "the child\'s thread handle",',
-    '      if (true) {\n        leaked = leaked + CloseAndDescribe(created.hThread, "the child\'s thread handle",'))
-  detected('the launch rescue closes a thread handle it may already have closed', 'season-browser:launch-closes-and-reports-both-child-handles-on-a-thrown-path')
+    '      if (threadHandleIsStillThisMethodsToLose) {\n        leakedThread = CloseAndDescribe(created.hThread, "the child\'s thread handle",',
+    '      if (true) {\n        leakedThread = CloseAndDescribe(created.hThread, "the child\'s thread handle",'))
+  detected('the launch rescue closes a thread handle it may already have closed', 'season-browser:launch-catch-closes-both-handles-before-building-any-sentence')
   reset()
   // Fifth, the rescue reports the leak and DESTROYS THE REASON IT WAS UNWINDING, exactly as on the job path.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
-    '      throw new InvalidOperationException(thrown.Message + leaked, thrown);',
-    '      throw new InvalidOperationException(thrown.Message + leaked);'))
+    '      InvalidOperationException decorated = Decorate(thrown, stranded, leakedThread, leakedProcess);',
+    '      InvalidOperationException decorated = new InvalidOperationException(thrown.Message + leakedThread + leakedProcess);'))
   detected('the launch leak report throws away the exception that caused it', 'season-browser:launch-closes-and-reports-both-child-handles-on-a-thrown-path')
   reset()
   // Sixth, the rescue closes the PROCESS handle and says nothing about it - the half of the pair that is easiest to
   // drop, because the thread handle's report is right above it and reads as covering both.
   mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
-    '        leaked = leaked + CloseAndDescribe(created.hProcess, "the child\'s process handle",\n          ref processHandleIsStillThisMethodsToLose);\n',
+    '        leakedProcess = CloseAndDescribe(created.hProcess, "the child\'s process handle",\n          ref processHandleIsStillThisMethodsToLose);\n',
     '        CloseAndDescribe(created.hProcess, "the child\'s process handle",\n          ref processHandleIsStillThisMethodsToLose);\n'))
-  detected('the launch rescue drops its process-handle leak report', 'season-browser:launch-closes-and-reports-both-child-handles-on-a-thrown-path')
+  detected('the launch rescue drops its process-handle leak report', 'season-browser:launch-catch-closes-both-handles-before-building-any-sentence')
+  reset()
+  // Seventh, THE ACCUMULATOR COMES BACK BETWEEN THE TWO CLOSES, which is the defect a fresh-context review found in
+  // the rescue itself: `leaked = leaked + CloseAndDescribe(...)` performs a string concatenation between closing the
+  // first handle and closing the second, and OutOfMemoryException is the likeliest reason this catch is running at
+  // all. A throw there leaks the process handle - the very handle the rescue exists to save - and does it inside the
+  // block whose comment claimed the split had closed that hole. Both closes are still written, both still report,
+  // and the ordering that makes the second one reachable is gone. This is the mutation that plants the real version
+  // of the double-close-window defect the helper-ordering drill above only pins textually.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '        leakedThread = CloseAndDescribe(created.hThread, "the child\'s thread handle",',
+    '        leakedThread = leakedThread + CloseAndDescribe(created.hThread, "the child\'s thread handle",'))
+  detected('the launch rescue reintroduces an allocation between its two closes', 'season-browser:launch-catch-closes-both-handles-before-building-any-sentence')
+  reset()
+  // Eighth, THE STRANDED CHILD'S ID IS NEVER RECORDED. The kill is still checked and its failure still reported
+  // through stage, so every "does this path check its kill" question answers yes - and the one path in the file that
+  // can leave a live, suspended, unowned process behind loses the pid on any throw after this point, because out
+  // parameters are not marshalled back from a method that threw. What a human loses is the process id they need to
+  // end it by hand.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '          strandedChildId = created.dwProcessId;\n          processId = created.dwProcessId;\n',
+    '          processId = created.dwProcessId;\n'))
+  detected('the id of a child nothing will reap is never recorded for the rescue', 'season-browser:launch-terminates-a-child-it-could-not-assign')
+  reset()
+  // Ninth, IT IS RECORDED AND THEN NEVER REPORTED - the other half, and the easier one to write by accident, because
+  // the rescue reads as complete without it: two handles closed, two leaks reported, and no mention of the process.
+  // The `if` then rethrows the original untouched whenever both closes succeeded, so a stranded child on a
+  // successful-close path is silent.
+  mutate('scripts/maple-season-browser.ps1', (source) => source.replace(
+    '      if (leakedThread.Length == 0 && leakedProcess.Length == 0 && stranded.Length == 0) { throw; }\n',
+    '      if (leakedThread.Length == 0 && leakedProcess.Length == 0) { throw; }\n'))
+  detected('a stranded child is recorded and then left out of the rescue report', 'season-browser:launch-closes-and-reports-both-child-handles-on-a-thrown-path')
   reset()
 
   // ---- THE NARROWED INTEROP SURFACE, WHICH IS A HARD BOUNDARY AND NOT A RULE ---------------------------
@@ -1703,10 +1787,10 @@ try {
   // demanding a sentence this drill can no longer print - which is a red lane, not a silent hole, but it is
   // a red lane discovered by CI rather than here. These two cases were the last labels in this section with
   // no drill behind them: they fail from the direction the mistake actually arrives from, a stale count.
-  mutate('scripts/verify-foundation.ps1', (source) => source.replace('(307 controlled defects', '(292 controlled defects'))
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace('(313 controlled defects', '(292 controlled defects'))
   detected('orchestrator holds a stale total in the static claim it demands', 'orchestrator:mutation-drill-static-claim-held')
   reset()
-  mutate('.github/workflows/foundation.yml', (source) => source.replace('(307 controlled defects', '(292 controlled defects'))
+  mutate('.github/workflows/foundation.yml', (source) => source.replace('(313 controlled defects', '(292 controlled defects'))
   detected('CI holds a stale total in the static claim it demands', 'workflow:mutation-drill-static-claim-held')
   reset()
   // And the behavioural claim is PLATFORM-SPECIFIC, which is how a real CI break got in with no adversarial

@@ -566,7 +566,9 @@ public static class MapleSeasonProcessInterop {
       if (!jobIsStillThisMethodsToLose) { throw; }
       string leakedJob = CloseAndDescribe(job, "the job object being created", ref jobIsStillThisMethodsToLose);
       if (leakedJob.Length == 0) { throw; }
-      throw new InvalidOperationException(thrown.Message + leakedJob, thrown);
+      InvalidOperationException decorated = Decorate(thrown, leakedJob, "", "");
+      if (decorated == null) { throw; }
+      throw decorated;
     }
   }
 
@@ -591,11 +593,62 @@ public static class MapleSeasonProcessInterop {
   // Passing the flag by reference is also what lets the static guard state the rule as a shape rather than as a
   // habit: this is the only place in the class that calls CloseHandle at all, so "every close reports its
   // outcome and gives up ownership" is checkable by counting, not by reading every branch.
+  //
+  // AND IT CANNOT THROW, WHICH IS A LOAD-BEARING PROPERTY RATHER THAN A TIDINESS ONE. Two callers below close two
+  // handles one after the other, and a throw out of the FIRST call would skip the second close - the exact defect
+  // those call sites were split into separate statements to prevent. A fresh-context review found the prevention
+  // incomplete: splitting the statements moved the concatenation out from between the closes, but the sentence
+  // built INSIDE this helper is still an allocation, and OutOfMemoryException is the likeliest reason a rescue
+  // path is running at all. So the sentence is built inside a try, and a failure to describe the failure degrades
+  // to a constant that needs no allocation at the point of use. The close itself has already happened by then:
+  // what a degraded report loses is the Windows error number, not the fact that a handle leaked.
+  private const string CLOSE_FAILED_INDESCRIBABLY =
+    " a handle could not be closed, and the sentence describing that failure could not be built either (the"
+    + " process is out of memory), so a handle leaked for the life of this session and its Windows error is lost.";
+
   private static string CloseAndDescribe(IntPtr handle, string label, ref bool stillOurs) {
     stillOurs = false;
     if (CloseHandle(handle)) { return ""; }
-    return " " + label + " could not be closed (Windows error "
-      + Marshal.GetLastWin32Error().ToString() + "), so it leaked for the life of this session.";
+    int windowsError = Marshal.GetLastWin32Error();
+    try {
+      return " " + label + " could not be closed (Windows error "
+        + windowsError.ToString() + "), so it leaked for the life of this session.";
+    } catch (Exception) { return CLOSE_FAILED_INDESCRIBABLY; }
+  }
+
+  // DECORATING AN EXCEPTION IS ITSELF AN ALLOCATION, so it happens here, where failing to do it is harmless.
+  // Both rescue paths in this class want to append a leak sentence to the exception that is already travelling.
+  // Doing that concatenates strings and constructs an exception object - and if the unwind started because the
+  // process is out of memory, those are precisely the operations most likely to fail a second time. A throw from
+  // inside a catch REPLACES the exception that was travelling, so an OutOfMemoryException raised while decorating
+  // the original would destroy the diagnosis it was trying to improve, and the caller would be told "out of
+  // memory" in place of the real reason the launch failed.
+  //
+  // Returning null instead lets the caller write `throw;` and rethrow the original untouched. The leak sentence
+  // is lost, which is the lesser of the two losses: the handles have already been closed by the time this is
+  // called, so what is at stake here is only the quality of the report. SR-083 claimed "no diagnosis is lost in
+  // either direction" of the earlier form; that was too strong, and this is what makes it true.
+  private static InvalidOperationException Decorate(Exception thrown, string first, string second, string third) {
+    try {
+      return new InvalidOperationException(thrown.Message + first + second + third, thrown);
+    } catch (Exception) { return null; }
+  }
+
+  // THE ONE PROCESS IN THIS FILE THAT NOTHING WILL EVER REAP gets its process id written into the exception
+  // message, because on a thrown path that message is the only channel out. A child that was created, could not
+  // be assigned to the job, and then could not be terminated is alive, suspended, and outside the job: the
+  // kernel's KILL_ON_JOB_CLOSE backstop cannot see it, and `out uint processId` is not marshalled back to
+  // PowerShell from a method that threw. Non-throwing for the same reason CloseAndDescribe is.
+  private const string STRANDED_CHILD_INDESCRIBABLY =
+    " a suspended child that is not a job member could not be terminated, and its process id could not be"
+    + " formatted (the process is out of memory), so it must be found and ended by hand.";
+
+  private static string DescribeStrandedChild(uint strandedChildId) {
+    if (strandedChildId == 0) { return ""; }
+    try {
+      return " a suspended child (process id " + strandedChildId.ToString() + ") is not a job member and could"
+        + " not be terminated, so nothing will ever reap it: it must be ended by hand.";
+    } catch (Exception) { return STRANDED_CHILD_INDESCRIBABLY; }
   }
 
   // CREATE_SUSPENDED IS THE WHOLE POINT, and assigning after the child is already running would not do.
@@ -640,12 +693,23 @@ public static class MapleSeasonProcessInterop {
     // Each handle gets its own flag, and CloseAndDescribe clears it at the moment ownership passes rather than
     // afterwards, so the catch closes exactly what is still outstanding and cannot close anything twice.
     //
-    // The catch does not kill the child, deliberately. On the two failure paths the child is already dead or
-    // already reaped; on the success path it is running and a job member, and the caller - which is about to see
-    // this exception - closes the job handle in its own finally, at which point KILL_ON_JOB_CLOSE reaps it. A
-    // TerminateProcess here would be a second executioner for a process that already has one.
+    // The catch does not kill the child, deliberately, and on three of the four ways out of here that is right:
+    // on the resume-failure path the child is a job member and the job kill plus KILL_ON_JOB_CLOSE both reach
+    // it, on the success path it is running and a job member so the caller's own finally reaps it, and on the
+    // assign-failure path where TerminateProcess SUCCEEDED it is already dead. A TerminateProcess in the catch
+    // would be a second executioner for a process that already has one.
+    //
+    // AN EARLIER VERSION OF THIS COMMENT SAID "on the two failure paths the child is already dead or already
+    // reaped", AND THAT IS FALSE ON THE FOURTH WAY OUT. A fresh-context review found it: if the child could not
+    // be assigned AND could not then be terminated, it is alive, suspended, and outside the job, so nothing will
+    // ever reap it - and if the very next statement (formatting the Windows error into a sentence) throws, the
+    // pid leaves through `out uint processId`, which a method that threw does not marshal back. The id is
+    // therefore recorded in the field below the moment it is known, and the catch reads it and puts it in the
+    // exception message. The catch still does not kill: by the time it runs the process handle may already be
+    // closed, and a kill needs the handle, not the id. What it can do is name the process a human must end.
     bool threadHandleIsStillThisMethodsToLose = true;
     bool processHandleIsStillThisMethodsToLose = true;
+    uint strandedChildId = 0;
     try {
       if (!AssignProcessToJobObject(job, created.hProcess)) {
         error = Marshal.GetLastWin32Error();
@@ -656,10 +720,20 @@ public static class MapleSeasonProcessInterop {
         // A few lines below, both handles close and this script loses the ability to name it at all. So if the
         // kill fails, the pid leaves through stage and processId and the refusal upstream tells a human which
         // process to end, rather than reporting a cleanup that did not happen.
+        //
+        // AND THE PID IS RECORDED BEFORE THE SENTENCE THAT REPORTS IT, not after. A fresh-context review found
+        // the order the other way round: the concatenation came first, and a concatenation allocates, so an
+        // OutOfMemoryException there unwound out of this method with a live unowned suspended child and every
+        // name for it lost - `processId` unassigned, and unassignable anyway, because out parameters do not
+        // survive a throw. Three statements, in the only order that survives a failure of any of them: read the
+        // error while it is still the last error, record the id where the catch can reach it, then build the
+        // sentence that is merely the nicest way of saying it.
         if (!TerminateProcess(created.hProcess, 1)) {
-          stage = "assign, and the suspended child could not be terminated (Windows error "
-            + Marshal.GetLastWin32Error().ToString() + ")";
+          int killError = Marshal.GetLastWin32Error();
+          strandedChildId = created.dwProcessId;
           processId = created.dwProcessId;
+          stage = "assign, and the suspended child could not be terminated (Windows error "
+            + killError.ToString() + ")";
         }
         // EACH CLOSE IS ITS OWN STATEMENT, and the sentences are collected before either is appended to stage.
         // Written as one chained expression - stage + close(thread) + close(process) - a throw while
@@ -705,17 +779,31 @@ public static class MapleSeasonProcessInterop {
       // THE EXCEPTION IS THE ONLY CHANNEL LEFT, for the reason spelled out over CreateKillOnCloseJob's catch:
       // out parameters are not marshalled back to PowerShell from a method that threw, so a leak recorded in
       // stage would be a leak recorded nowhere.
-      string leaked = "";
+      //
+      // BOTH CLOSES HAPPEN BEFORE ANY STRING IS BUILT, and the two results are held in their own variables for
+      // exactly that reason. A fresh-context review found the earlier accumulating form - `leaked = leaked +
+      // CloseAndDescribe(...)` - putting an allocation between the two closes: OutOfMemoryException is the
+      // likeliest reason this catch is running at all, and a throw while appending the FIRST sentence skipped
+      // the second close and leaked the handle this block exists to rescue. The rescue had the same defect as
+      // the paths it was rescuing. CloseAndDescribe now cannot throw either, so between the first close and the
+      // second there is nothing left but a flag test and an assignment.
+      string leakedThread = "";
+      string leakedProcess = "";
       if (threadHandleIsStillThisMethodsToLose) {
-        leaked = leaked + CloseAndDescribe(created.hThread, "the child's thread handle",
+        leakedThread = CloseAndDescribe(created.hThread, "the child's thread handle",
           ref threadHandleIsStillThisMethodsToLose);
       }
       if (processHandleIsStillThisMethodsToLose) {
-        leaked = leaked + CloseAndDescribe(created.hProcess, "the child's process handle",
+        leakedProcess = CloseAndDescribe(created.hProcess, "the child's process handle",
           ref processHandleIsStillThisMethodsToLose);
       }
-      if (leaked.Length == 0) { throw; }
-      throw new InvalidOperationException(thrown.Message + leaked, thrown);
+      // A stranded child is worth reporting even when nothing leaked, because it is the one condition here that
+      // costs a human something: a suspended process on their workstation that no cleanup path will ever reach.
+      string stranded = DescribeStrandedChild(strandedChildId);
+      if (leakedThread.Length == 0 && leakedProcess.Length == 0 && stranded.Length == 0) { throw; }
+      InvalidOperationException decorated = Decorate(thrown, stranded, leakedThread, leakedProcess);
+      if (decorated == null) { throw; }
+      throw decorated;
     }
   }
 }

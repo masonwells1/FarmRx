@@ -1745,3 +1745,173 @@ Run at the exact tree that became this commit, one suite at a time, with no prob
 - C# compile probe → `COMPILE_EXIT=0`, `CLOSEANDDESCRIBE_PARAMS=System.IntPtr:handle, System.String:label, System.Boolean&:stillOurs`, which is the `ref bool` P-03 depends on actually reaching the CLR rather than merely being typed.
 
 Nothing was pushed, merged, or deployed. Production remains untouched at `https://farm-rx.vercel.app`.
+
+## SR-084 — Sol tranche J on `47ca047`: the rescue that could throw away the diagnosis it existed to carry, an orphan whose only name was lost, a drill that recreated nothing, and three SR-083 claims withdrawn
+
+The last hardening commit. Mason was given the count honestly — twelve findings from a fresh-context Sol review of the exact tree at `47ca047`, of which four were genuinely wrong rather than merely improvable — and he chose *"one more commit, then stop":* fix those four, write the rest down as known limitations, declare the harness done, and stop regardless of what the review of this commit says. Nine findings are closed here (four cost nothing extra once the same lines were open) and four are recorded below as limitations rather than repairs. Every finding was read out of the real file on this workstation before it was believed; two were confirmed by grep against the source rather than from Sol's description. Three SR-083 sentences are withdrawn.
+
+### R-11 — the two-handle rescue could strand the second handle, because the sentence about the first one allocates
+
+SR-083's R-06 gave `StartInJob` a `catch` that closes whichever of the child's two handles is still this method's. It accumulated the report as it went:
+
+```
+leaked = leaked + CloseAndDescribe(created.hThread, "the child's thread handle", ref …);
+…
+leaked = leaked + CloseAndDescribe(created.hProcess, "the child's process handle", ref …);
+```
+
+String concatenation allocates. So does building the failure sentence inside the helper. Between the first close and the second there was therefore an allocation — and **the likeliest reason this rescue is running at all is that the process is out of memory.** An `OutOfMemoryException` on that concatenation unwinds straight out of the `catch`, leaving the process handle open forever, unreported, in a rescue block whose entire purpose was to not do that.
+
+Three properties make a two-handle rescue actually safe, and the repair installs all three:
+
+1. **The close primitive cannot throw.** `CloseAndDescribe` now wraps its sentence-building in a `try`/`catch` and falls back to a compile-time constant string. A `const` is not allocated at use, so the fallback path is reachable with no memory at all.
+2. **Both closes complete before any string is built.** Each close's return value goes into its own local; nothing is concatenated until both handles are gone. The accumulator was itself the defect, not merely the style.
+3. **Decorating the exception degrades to null rather than throwing** — R-13 below.
+
+```
+} catch (Exception thrown) {
+  string leakedThread = "";
+  string leakedProcess = "";
+  if (threadHandleIsStillThisMethodsToLose) {
+    leakedThread = CloseAndDescribe(created.hThread, "the child's thread handle",
+      ref threadHandleIsStillThisMethodsToLose);
+  }
+  if (processHandleIsStillThisMethodsToLose) {
+    leakedProcess = CloseAndDescribe(created.hProcess, "the child's process handle",
+      ref processHandleIsStillThisMethodsToLose);
+  }
+  …
+}
+```
+
+A consequence worth recording: because the helper can no longer throw, **the window P-03 was written to close is now structurally absent.** P-03 remains correct — the flag is still cleared before the close — but see C-11 for what its drill was actually proving.
+
+### R-12 — a suspended child that could not be killed became an orphan with no name
+
+`StartInJob` creates the child suspended, then assigns it to the job. If `AssignProcessToJobObject` fails the child is not a job member, so `KILL_ON_JOB_CLOSE` will never reap it, and SR-081's repair terminates it directly. If **that** kill also fails, a live suspended process exists that nothing in the system will ever end.
+
+The old code reported its process id by assigning `processId`, an `out` parameter, and then threw. **`out` parameters are not marshalled back to PowerShell from a method that threw at all** — so on the failing path the id was written to a location the caller never receives. Reordering the statements does not fix it; there is no ordering in which a discarded `out` parameter arrives.
+
+The id now goes into a method-scope field the `catch` can read, and is reported through the exception message:
+
+```
+if (!TerminateProcess(created.hProcess, 1)) {
+  int killError = Marshal.GetLastWin32Error();
+  strandedChildId = created.dwProcessId;
+  processId = created.dwProcessId;
+  stage = "assign, and the suspended child could not be terminated (Windows error "
+    + killError.ToString() + ")";
+}
+```
+
+Three statements in the only order that survives a failure of any of them: read the Windows error while it is still the last error, record the id where the `catch` can reach it, then build the sentence — which is merely the nicest way of saying what is already recorded. `DescribeStrandedChild` turns a non-zero id into a human sentence and has the same non-throwing fallback as R-11's helper, because formatting a number allocates too.
+
+**The comment above this block was false and is corrected in the same edit.** It read *"On the two failure paths the child is already dead or already reaped."* It is not: this is the path where it is alive and unowned. The replacement names all four ways out of the method and states plainly which one leaves a live process, and records that the earlier comment claimed otherwise.
+
+### R-13 — decorating an exception could destroy the exception it was decorating
+
+Both `catch` blocks appended their leak sentence by constructing `new InvalidOperationException(thrown.Message + …, thrown)`. That constructor call, and the concatenation feeding it, allocate. **A throw from inside a `catch` replaces the exception travelling through it.** So on the one path where memory has run out, the attempt to add a leak sentence could delete the original diagnosis and substitute `OutOfMemoryException` — losing exactly the information the block was added to preserve.
+
+Both sites now go through a helper that cannot fail:
+
+```
+private static InvalidOperationException Decorate(Exception thrown, string first, string second, string third) {
+  try {
+    return new InvalidOperationException(thrown.Message + first + second + third, thrown);
+  } catch (Exception) { return null; }
+}
+```
+
+and both callers read `if (decorated == null) { throw; }` before throwing it. Null means "the decoration could not be built" and the original exception is rethrown untouched, which is strictly better than replacing it.
+
+**This is the finding that forced SR-083's strongest sentence to be withdrawn** — see correction 4.
+
+### R-14 (part) — the census counts one spelling of a binding, and a second binding was free to appear beside it
+
+SR-083's R-07 replaced a FORBID rule with a census: every line in the executable view mentioning `CloseHandle` must be one of two sanctioned lines. Sol's finding is that a census over a literal identifier is still a text rule. Several ways of closing a handle never spell `CloseHandle` in the C# at all — `GetProcAddress`, `NativeLibrary.GetExport`, a reflection delegate, a `SafeHandle` subclass whose `Dispose` does it — and one way *does* spell it but harmlessly-looking: a **second `DllImport` with a different `EntryPoint`**, which the census would accept as long as its declaration line matched the sanctioned one.
+
+That last variant is closed here, by pinning the attribute together with the declaration it decorates so the pair cannot be duplicated without the guard noticing:
+
+```
+pinBrowserOnce([
+  '  [DllImport("kernel32.dll", SetLastError = true)]',
+  '  public static extern bool CloseHandle(IntPtr handle);',
+].join('\n'), 'season-browser:the-close-primitive-is-bound-to-kernel32-closehandle')
+```
+
+**The other three variants are not closed and are recorded as a limitation below.** They cannot be closed by any text rule; they need the code view the open R-09/C-05 work is waiting on.
+
+### C-10 — a comment in the guard claimed both sanctioned lines were pinned; only one was
+
+Sol read the census's own comment against the census's own pins. The comment said *"both of those lines are pinned above."* The declaration was pinned; `'    if (CloseHandle(handle)) { return ""; }'` was not. The comment now says what is true, and records that the earlier sentence was false. The declaration line is now pinned *with its attribute* (R-14), and the call line's own pin arrived with the non-throwing helper in R-11 — so the comment is true as written for the first time.
+
+### C-11 — a drill that passed while recreating no defect at all
+
+The worst finding in the tranche, and the one that most deserved a commit. The P-03 drill was labelled *"the close helper disclaims ownership only after the close"* and its mutation moved `stillOurs = false;` below the `CloseHandle` call. The guard went red. But the guard went red **because a pinned contiguous block of text had changed**, not because any behaviour broke — and, after R-11, the double-close window that ordering was protecting against does not exist, so there is no behaviour left for the mutation to break.
+
+That is the exact failure mode this entire harness exists to detect, sitting inside the harness: a green receipt for a check that verifies nothing. It is not deleted, because pinning the ordering is still worth doing — the next author who writes a throwing helper reopens the window. It is **relabelled to say what it proves**, `'the close helper clears ownership after the close rather than before it'`, above a comment stating in full that this drill proves a pinned ordering and not a behavioural failure, and that a drill which passes without a defect behind it is a receipt for nothing.
+
+**I wrote the same sin again in this commit and caught it before running.** My first draft of the new R-11 drill inserted an unused local variable — a mutation that changes pinned text and breaks nothing. It was replaced with the accumulator (`leakedThread = leakedThread + CloseAndDescribe(…)`), which genuinely puts an allocation between the two closes and is therefore the real defect R-11 removed. A second draft, for the R-12 rescue, would have left `strandedChildId` written but never read — a compile warning rather than a defect — and was replaced by dropping `&& stranded.Length == 0` from the rescue's condition.
+
+### Behavioural evidence, not an assertion
+
+R-13's claim — that decoration degrades to null instead of throwing — is the kind of thing a test written by its own author rubber-stamps. It was proven by **execution** instead. A probe loads the real helper, reflects the compiled type out of the live `Add-Type` assembly, and invokes `Decorate` with an exception whose `Message` getter throws `OutOfMemoryException`, which is the only way to force that branch without exhausting the machine:
+
+```
+COMPILE_EXIT=0
+DECORATE=InvalidOperationException(Exception:thrown, String:first, String:second, String:third)
+DESCRIBESTRANDEDCHILD=String(UInt32:strandedChildId)
+CLOSE_FAILED_INDESCRIBABLY=LITERAL   STRANDED_CHILD_INDESCRIBABLY=LITERAL
+DECORATE_DEGRADES_TO_NULL=true
+DECORATE_MESSAGE=[original reason one two three]   DECORATE_INNER=[original reason]
+STRANDED_ZERO=[]   STRANDED_4242=[ a suspended child (process id 4242) …]
+PROBE_PASS=true
+```
+
+`LITERAL` on both constants is load-bearing: it is the CLR confirming they are compile-time constants, so using a fallback string on the out-of-memory path allocates nothing. **The gate does not run this probe** — see the limitations.
+
+### Instrumentation
+
+Guard pins: the job `catch` pin re-pointed onto the `Decorate` form and a new pin added for `Decorate` itself; the assign-failure pin re-pointed onto the seven-line ordered block; a new pin for the non-throwing close helper; the flags pin extended with `uint strandedChildId = 0;`; the launch `catch` split into two labels, one asserting both closes complete before any sentence is built and one asserting both handles and the stranded child are reported on a thrown path; the `DllImport` pair pin from R-14.
+
+Six drills written and seven existing needles mechanically re-pointed. The new six: the helper made throwing again; `Decorate`'s degradation removed; a second `DllImport` re-pointed by `EntryPoint`; the accumulator restored between the two closes; `strandedChildId = created.dwProcessId;` deleted; and `&& stranded.Length == 0` dropped from the rescue's condition. Drill total **307 → 313**, taken from the drill's own printed tally and propagated to five coordinated locations plus two self-drill needles.
+
+### What this commit deliberately does not close — written down, not fixed
+
+Mason's instruction was to record these rather than chase them, and they are recorded as *known limitations of the harness*, not as pending work:
+
+1. **Three ways to close a handle without naming `CloseHandle`** remain outside the census: `GetProcAddress` / `NativeLibrary.GetExport`, a reflection delegate, and a `SafeHandle` subclass. No text rule can see them.
+2. **`pinBrowserOnce` proves where text sits in a file, not that the text is inside the compiled body.** A pin is satisfied by a matching line anywhere in the executable view. The hand-run compile probe above answers this for the three helpers it reflects, by reading them out of the live CLR type — but **the gate does not run that probe**, so the property is proven for this tree and not enforced for the next one.
+3. **The two ownership flags are named more strongly than they behave.** `threadHandleIsStillThisMethodsToLose` is cleared *before* a close that may fail, so between the clear and the failed close the name is false: the handle is still open and no longer claimed. That ordering is deliberate (P-03) and the leak is still reported, but the name asserts a property the code does not hold at every instant.
+4. **The 313 sentence proves less than it sounds like.** What the mechanism establishes per defect is real and checked: the guard was green on the unmutated copy (`verify-foundation-mutations.mjs:91` throws otherwise), at least one genuine edit landed (`mutate` refuses a stale needle), and the guard then reported the *specific* expected label. What it does not establish is that each individual write in a multi-anchor mutation was necessary, nor — as C-11 shows by example — that the label went red for a behavioural reason rather than a textual one.
+
+Also still open and unchanged: **R-09/C-05** and **R-10/C-06** (the here-string body and the line-counting write census, both waiting on a real PowerShell code view); **C-09's code half**, the predicate rename and the three comments still describing the ownership predicate as authorizing a kill; **F13–F19**, the timeout regression's own safety net; a **Windows CI job**, since no runner executes the Windows-only refusals or the orphan case; and the **label census**, whose 91-of-244 figure is stale again because the label set moved again.
+
+### Corrections to SR-083
+
+1. **SR-083 said the old `catch` leaked "both handles" on any throw. That overstates it and is withdrawn.** Which handles were at risk depended on where the throw landed; on the success path the thread handle is already closed and the process handle already handed over. The defect was real and is fixed, but the failure was conditional, not universal.
+2. **SR-083 said the total was propagated to "all four live sites" and confirmed "byte-identical." Both halves are wrong and are withdrawn.** There are **five** live sites, and they are not byte-identical: three carry the sentence as a literal (the guard's `staticClaim`, `verify-foundation.ps1`, the workflow) and two carry it as a template around `${detectedMutations.length}` (the emitter, and the guard's counted-not-asserted needle). Two further needles in the drill file hold a fragment of it as a find-string. The propagation was in fact correct; the sentence describing it was not, and it undercounted what a future author has to keep in step.
+3. **SR-083's "all four are closed" was not supported by SR-083 itself.** Three of the four repairs were argued in the entry; the fourth's closure was asserted. The claim happens to have held, but the entry did not show it, and an append-only ledger that asserts its own completeness is the thing this whole tranche keeps finding.
+4. **SR-083's "no diagnosis is lost in either direction" was too strong for the form it described, and is withdrawn.** In that form the decoration itself could throw and replace the original exception. The sentence is true of the code as of this commit, because of `Decorate` in R-13 — but it was not true when it was written.
+
+### Evidence, all local, nothing pushed
+
+Run at the exact tree that became this commit, one suite at a time, with no probe or sabotage script running alongside.
+
+- `powershell scripts/verify-foundation.ps1` → **`Farm Rx foundation gate: PASS`**, `GATE_EXIT=0`, 1,474 lines, `62 passed (48.5s)`. Inside it: `Foundation static guards: PASS` (log line 166); **`Foundation mutation drill: PASS (313 controlled defects each turned the gate red under their own name)`** (log line 486); `Foundation behavioural mutation drill: PASS (5 broken subjects were reported by the suite that runs against them, 0 not measurable on this platform)`; `Foundation Windows lane runtime drill: PASS (6 of 6 cases executed and validated on win32)`; `Foundation orchestrator intermediate-failure probe: PASS`; `Foundation Windows execution lane accounting probe: PASS (4 rejected, 1 accepted)`; `MAPLE_SEASON_BROWSER_OWNERSHIP_REGRESSION_PASS`; `MAPLE_JULY_DB_CLOCK_WIRING_REGRESSION_PASS`; `Season fixture contract: PASS (101 fixtures; 6 scenarios; 6 isolation-scanned files)`; `Season contract regressions: PASS (9 rejected contract mutations; 18 rejected isolation mutations)`.
+
+  The gate reaching PASS is itself the propagation proof for the new total. `verify-foundation.ps1` holds that sentence as a literal and refuses to proceed unless the drill prints it exactly, so **313 is confirmed by a real consumer rejecting any other value**, not by an assertion written about it.
+
+- Counted independently out of that same run: **313** `Mutation detected:` lines, matching the printed total exactly. The count and the claim come from one process, so neither can drift from the other.
+
+- The two **Windows-only** suites the foundation gate does not run, executed directly and singly afterwards: `MAPLE_SEASON_BROWSER_PORT_PREFLIGHT_REGRESSION_PASS` (exit 0) with `TOKENIZER_RECEIPT comparisons=33 distinct=33 tokens=90 windows=true` and **no teardown-problem line**; and `MAPLE_SEASON_BROWSER_TIMEOUT_REGRESSION_PASS` (exit 0) with **no stranded-listener line**.
+
+- The mutation drill run standalone → exit 0, **313** `Mutation detected:` lines counted from the log, matching the printed total exactly.
+- `npx tsc -b --force` → exit 0. `node --check` on both changed `.mjs` files → parse-clean. The IDE's TypeScript service emits phantom `[1128]` diagnostics for these `.mjs` files; `node --check` is the authority and both are clean.
+- The C# reflection and forced-out-of-memory probe above → `PROBE_PASS=true`, `EXIT=0`.
+
+Nothing was pushed, merged, or deployed. Production remains untouched at `https://farm-rx.vercel.app`.
+
+### Where the sweep stops
+
+This closes the hardening loop Mason bounded. The foundation harness is declared done as of this commit: one fresh-context Sol review is opened against it, and its verdict is recorded in this file rather than acted on. The remaining gauntlet work — the season scenarios and the two physical installed-PWA phone gates in `docs/customer-zero-readiness-runbook.md` — is unaffected by this decision and still stands where it stood.
