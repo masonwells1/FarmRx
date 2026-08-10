@@ -25,6 +25,30 @@ The work starts from the completed Farmer Simplicity hardening: guided Fields se
 - Do not invent a pending Crop RX delivery UI, a standalone planting-actual entity, automatic grain-lot creation, a year-end finalization action, or a product/database `run_id` column.
 - The future Crop RX delivery sync, live machine-data integrations, licensed market-data feeds, and other roadmap integrations remain absent unless Mason separately changes scope.
 
+## Owner scope amendment — 2026-08-10
+
+**Owner:** Mason Wells · **Directed:** 2026-08-10 (`America/Chicago`).
+
+Mason authorizes two new bounded build initiatives beyond the season-readiness proof scope. For these two initiatives only, this amendment supersedes the "no standalone modules … or speculative features" line of the Product boundary above. Every other boundary line — no vendors, no broad redesigns, no proof-only `run_id` product column, no invented pending integrations — remains in force, and the season-readiness initiative's own scope, statuses, and carried gates are unchanged.
+
+### Initiative CW — Connect Workflows (one writer session, two sequenced tranches)
+
+- **CW-1 Weather→Spray prefill.** From an existing Weather-page forecast/spray-window view, a farmer-visible action starts a new spray/application record with the date and observed weather values (temperature, wind) prefilled from that forecast. The farmer reviews and explicitly saves; nothing writes without that save. This is prefill convenience only — it creates no background write, no automatic integration, and no claim of weather provenance beyond recording which prefilled values the farmer accepted.
+- **CW-2 Program→Inventory matching.** When a program pass is marked applied, the app may offer to match that pass's product lines to existing Inventory products and, only on explicit farmer confirmation, draw down on-hand quantities accordingly. Free-typed or unmatched products remain unmatched and cause no Inventory change. No silent mutation.
+- **Fence:** Initiative CW must not modify the Grain module, the Harvest module, or bin/contract/delivery code, repositories, or tables while the separate in-flight Harvest→Grain / Bin-out→Delivery work remains unmerged. If a CW tranche appears to require such a change, stop and return to Mason.
+
+### Initiative SRX — Soil Rx (one writer session, three sequenced tranches)
+
+- **SRX-1 Soil test storage.** Per-field soil test records (lab name, sample date, pH, organic matter, CEC, P, K, Ca, Mg, S, base saturations, optional micronutrients), with multi-year history per field and optional attachment of the lab report file. New tables, migrations, and screens are authorized. Soil data is farm-scoped, private by default, and covered by Row Level Security consistent with the existing privacy model.
+- **SRX-2 Interpretation.** A plain-English, descriptive read of a stored soil test in the Kinsey-Albrecht style. Descriptive only: it states what the test shows and directs the farmer to their Crop RX agronomist for recommendations. It must not output product rates, prescriptions, or purchase recommendations, and must carry a plain-language "this is not agronomic advice" note consistent with the Grain-page compliance stance.
+- **SRX-3 Nutrient removal.** Harvest actual bushels → estimated pounds of N, P, and K removed per field using standard published removal coefficients (source cited in the implementation), displayed alongside stored soil test levels. Read-only consumption of harvest data; no writes to Grain or Harvest.
+
+### Shared rules for both initiatives
+
+- Each initiative runs on its own branch and worktree cut from current `main`, follows the discipline of [`season-readiness/ORCHESTRATOR-RUNBOOK.md`](season-readiness/ORCHESTRATOR-RUNBOOK.md) — one bounded tranche, one immutable commit, fresh-context read-only Sol review of each exact commit, repairs as new commits — and keeps its own append-only ledger at `docs/initiatives/<initiative>/LEDGER.md`.
+- All runbook approval gates remain: no push, pull-request mutation, merge, deploy, live migration, live data, secret/auth/permission, customer, or destructive action without Mason's named approval.
+- **Recorded backlog, not authorized:** a Today/home "needs attention" view summarizing all modules. Do not build it under this amendment.
+
 ## Current capability truth
 
 These statements are the baseline. A test must not claim more coupling than the product has.
