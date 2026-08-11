@@ -11,8 +11,8 @@ Import-Module (Join-Path $root 'scripts/harvest-ridge-db-clock.psm1') -Force
 function Assert-CedarContract {
   $required = @($manifestPath,$contractPath,$fixture,$verify,(Join-Path $root 'tests/e2e/season/cedar-creek.spec.ts'),(Join-Path $root 'playwright.cedar-creek.config.ts'))
   if (@($required | Where-Object { -not (Test-Path -LiteralPath $_) }).Count) { throw 'CEDAR_CREEK_PACKET_MISSING_REQUIRED_FILE' }
-  $head = (Get-ChildItem (Join-Path $root 'supabase/migrations') -File | Sort-Object Name | Select-Object -Last 1).Name
-  if ($head -cne $migration) { throw "CEDAR_CREEK_MIGRATION_HEAD_MISMATCH:$head" }
+  $migrationPath = Join-Path $root "supabase/migrations/$migration"
+  if (-not (Test-Path -LiteralPath $migrationPath)) { throw "CEDAR_CREEK_REQUIRED_MIGRATION_MISSING:$migration" }
   $actualBlob = (& git -C $root hash-object (Join-Path $root "supabase/migrations/$migration")).Trim()
   if ($actualBlob -cne $migrationBlob) { throw 'CEDAR_CREEK_MIGRATION_BLOB_MISMATCH' }
   $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
@@ -63,6 +63,7 @@ try {
     Reset-Cedar $supabase
     $env:VITE_LOCAL_SUPABASE_PROJECT_REF='farmrxlocalsimplicity2027'; $env:VITE_LOCAL_SUPABASE_URL=$boundary.ApiUrl; $env:VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY=$boundary.PublishableKey; $env:FARMRX_CC_VIEWPORT=$viewport; $env:FARMRX_CC_CLIENT_INSTANT='2027-07-07T13:20:00-05:00'
     $token = Get-CedarAccessToken $boundary.PublishableKey
+    $verifySql = Get-Content -Raw -Encoding UTF8 -LiteralPath $verify
     $action = {
       $browserOutput = @(& npx playwright test --config playwright.cedar-creek.config.ts 2>&1)
       $browserExit = $LASTEXITCODE
@@ -73,7 +74,8 @@ try {
         throw "CEDAR_CREEK_BROWSER_FAILED:$viewport:exit=$browserExit"
       }
       Write-Host "CEDAR_CREEK_PLAYWRIGHT_EXIT:${viewport}:$browserExit"
-      if (-not (Invoke-MapleSeasonSqlFile -Path $verify -ExpectedContainer $db)) { throw "CEDAR_CREEK_VERIFY_FAILED:$viewport" }
+      $verifyOutput = @($verifySql | docker exec -i $db psql -X -q -U postgres -d postgres -v ON_ERROR_STOP=1 -P pager=off 2>&1)
+      if ($LASTEXITCODE -ne 0 -or [string]::Join("`n", [string[]]$verifyOutput) -notmatch 'CEDAR_CREEK_2027_VERIFY_PASS') { throw "CEDAR_CREEK_VERIFY_FAILED:$viewport" }
       return $true
     }.GetNewClosure()
     $clockResult = @(Invoke-HarvestRidgeClockPhase -Root $root -Phase "cedar-$viewport" -FrozenInstant '2027-07-07 18:20:00+00:00' -ApiUrl $boundary.ApiUrl -PublishableKey $boundary.PublishableKey -AccessToken $token -ProofFarmId '27010000-0000-4000-8000-000000000005' -ProofFarmName 'Cedar Creek' -Action $action)

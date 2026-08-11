@@ -27,6 +27,25 @@ function Get-HarvestRidgeAccessToken([string]$PublishableKey){
   finally{$password=$null;$payload=$null;$response=$null}
 }
 
+function Wait-HarvestRidgeFarmApi([string]$PublishableKey,[string]$AccessToken){
+  for($attempt=1;$attempt-le30;$attempt++){
+    try{
+      $response=Invoke-WebRequest -UseBasicParsing -Method Get -Uri "$apiUrl/rest/v1/farms?id=eq.27010000-0000-4000-8000-000000000004&select=id,name" -Headers @{apikey=$PublishableKey;Authorization="Bearer $AccessToken"} -TimeoutSec 2
+      $rows=@($response.Content|ConvertFrom-Json -ErrorAction Stop)
+      if($response.StatusCode-eq200-and$rows.Count-eq1-and$rows[0].id-ceq'27010000-0000-4000-8000-000000000004'-and$rows[0].name-ceq'Harvest Ridge'){return}
+    }catch{}
+    if($attempt-lt30){Start-Sleep -Milliseconds 500}
+  }
+  throw 'Harvest Ridge disposable authenticated farm API did not become ready.'
+}
+
+function Restart-HarvestRidgeGateway([string]$PublishableKey,[string]$AccessToken){
+  docker restart $gateway|Out-Null
+  if($LASTEXITCODE-ne0){throw 'Harvest Ridge gateway refresh failed.'}
+  Wait-HarvestRidgeAuth
+  Wait-HarvestRidgeFarmApi $PublishableKey $AccessToken
+}
+
 function Invoke-HarvestRidgeSql([string]$Sql){
   $output=@($Sql|docker exec -i $db psql -X -q -At -v ON_ERROR_STOP=1 -U postgres -d postgres 2>&1);if($LASTEXITCODE-ne0){throw 'Harvest Ridge focused SQL assertion failed.'};return [string]::Join("`n",[string[]]$output)
 }
@@ -65,7 +84,17 @@ function Invoke-HarvestRidgePhase {
     if($before-cne$after){throw "Harvest Ridge phase changed a row outside its exact allowance: $Name"}
     return $true
   }.GetNewClosure()
-  $result=@(Invoke-HarvestRidgeClockPhase -Root $root -Phase $Name -FrozenInstant $FrozenUtc -ApiUrl $apiUrl -PublishableKey $PublishableKey -AccessToken $AccessToken -Action $action)
+  try{
+    $result=@(Invoke-HarvestRidgeClockPhase -Root $root -Phase $Name -FrozenInstant $FrozenUtc -ApiUrl $apiUrl -PublishableKey $PublishableKey -AccessToken $AccessToken -Action $action)
+  }catch{
+    $journal=Join-Path ([IO.Path]::GetTempPath()) "farmrx-harvest-ridge-clock-$Name.json"
+    if($_.Exception.Message-notmatch'authenticated API read failed'-or-not(Test-Path -LiteralPath $journal)){throw}
+    Restart-HarvestRidgeGateway $PublishableKey $AccessToken
+    $recovery=@(Invoke-HarvestRidgeClockPhase -Root $root -Phase $Name -FrozenInstant $FrozenUtc -ApiUrl $apiUrl -PublishableKey $PublishableKey -AccessToken $AccessToken -Action {$true} -ResumeRecovery)
+    if($recovery[-1]-ne$true){throw "Harvest Ridge governed route recovery did not return exact success: $Name"}
+    Restart-HarvestRidgeGateway $PublishableKey $AccessToken
+    $result=@(Invoke-HarvestRidgeClockPhase -Root $root -Phase $Name -FrozenInstant $FrozenUtc -ApiUrl $apiUrl -PublishableKey $PublishableKey -AccessToken $AccessToken -Action $action)
+  }
   foreach($line in @($result|Where-Object{$_-is[string]})){Write-Output $line}
   if($result[-1]-ne$true){throw "Harvest Ridge clock phase did not return exact success: $Name"}
 }
@@ -99,6 +128,7 @@ try{
   Enter-MapleSeasonCredential
   Reset-HarvestRidge $supabase
   $token=Get-HarvestRidgeAccessToken $boundary.PublishableKey
+  Wait-HarvestRidgeFarmApi $boundary.PublishableKey $token
   $env:VITE_LOCAL_SUPABASE_PROJECT_REF='farmrxlocalsimplicity2027';$env:VITE_LOCAL_SUPABASE_URL=$boundary.ApiUrl;$env:VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY=$boundary.PublishableKey
 
   Invoke-HarvestRidgePhase hr1 '2027-10-11 22:30:00+00:00' '2027-10-11T17:30:00-05:00' '@harvest-ridge-canonical-hr1' @{crop_assignments=@('id:27030000-0000-4000-8000-000000000004');repository_write_receipts=@('operation_id:27076000-0000-4000-8000-000000000004')} @"
@@ -130,7 +160,7 @@ do `$hr`$ begin if not exists(select 1 from public.production_estimates where id
   Invoke-HarvestRidgePhase phone '2027-11-06 15:05:00+00:00' '2027-11-06T09:05:00-06:00' '@harvest-ridge-canonical-phone' @{} "select 1;" $boundary.PublishableKey $token
   Get-Content -Raw -Encoding UTF8 -LiteralPath $verify|docker exec -i $db psql -X -q -U postgres -d postgres -v ON_ERROR_STOP=1 -P pager=off;if($LASTEXITCODE-ne0){throw 'Harvest Ridge final canonical database assertions failed.'}
 
-  Reset-HarvestRidge $supabase;$token=Get-HarvestRidgeAccessToken $boundary.PublishableKey
+  Reset-HarvestRidge $supabase;$token=Get-HarvestRidgeAccessToken $boundary.PublishableKey;Wait-HarvestRidgeFarmApi $boundary.PublishableKey $token
   Invoke-HarvestRidgePhase reverse-hr5 '2027-11-06 15:05:00+00:00' '2027-11-06T09:05:00-06:00' '@harvest-ridge-reverse-hr5' @{grain_contract_deliveries=@('id:27072000-0000-4000-8000-000000000005')} "do `$hr`$ begin if (select count(*) from public.grain_contract_deliveries where id='27072000-0000-4000-8000-000000000005' and created_at=timestamptz '2027-11-06 15:05:00+00') <> 1 then raise exception 'HR reverse delivery/server timestamp'; end if; if exists(select 1 from public.bin_transactions) then raise exception 'HR reverse delivery changed bin'; end if; end `$hr`$;" $boundary.PublishableKey $token
   Invoke-HarvestRidgePhase reverse-hr4 '2027-11-06 15:00:00+00:00' '2027-11-06T09:00:00-06:00' '@harvest-ridge-reverse-hr4' @{bin_transactions=@('id:27074000-0000-4000-8000-000000000006')} "do `$hr`$ begin if (select count(*) from public.bin_transactions where id='27074000-0000-4000-8000-000000000006' and created_at=timestamptz '2027-11-06 15:00:00+00') <> 1 then raise exception 'HR reverse out/server timestamp'; end if; if (select created_at from public.grain_contract_deliveries where id='27072000-0000-4000-8000-000000000005') <> timestamptz '2027-11-06 15:05:00+00' then raise exception 'HR reverse delivery instant changed'; end if; end `$hr`$;" $boundary.PublishableKey $token
   Get-Content -Raw -Encoding UTF8 -LiteralPath $reverseVerify|docker exec -i $db psql -X -q -U postgres -d postgres -v ON_ERROR_STOP=1 -P pager=off;if($LASTEXITCODE-ne0){throw 'Harvest Ridge final reverse database assertions failed.'}
