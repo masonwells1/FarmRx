@@ -14,7 +14,7 @@ import { readNeedsAttention } from './needsAttentionStore'
 import { getSaveReceipt } from '../lib/saveReceipt'
 import { readFileSync } from 'node:fs'
 import type { FieldsRepository } from './fields'
-import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, ProfitabilityMatrixStep } from './profitability'
+import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, EquipmentCostSnapshotRequest, ProfitabilityMatrixStep } from './profitability'
 import type { StorageLike } from './writeQueue'
 
 const stamp = '2026-07-11T00:00:00.000Z'
@@ -29,13 +29,15 @@ function fixture() {
   const commodity = fields.commodities[0].id
   const assignment = fields.crop_assignments.find((item) => item.commodity_id === commodity)!
   const budget = { id: uid(1), farm_id: farm, crop_year: assignment.crop_year, commodity_id: commodity, operating_entity_id: null, enterprise_label: null, name: 'Base', expected_yield_per_acre: '200', expected_price_per_bushel: 4.5, rp_coverage_pct: '80', rp_aph_yield: 180, rp_projected_price: '4.62', rp_premium_per_acre: 0, copied_from_budget_id: null, notes: null, created_at: microStamp, updated_at: stamp }
-  const line1 = { id: uid(2), farm_id: farm, budget_id: budget.id, category: 'seed', label: 'Seed', amount_per_acre: '120', source_kind: 'manual', source_record_id: null, sort_order: 0, notes: null, created_at: stamp, updated_at: stamp }
-  const line2 = { id: uid(3), farm_id: farm, budget_id: budget.id, category: 'fertilizer', label: 'Fertilizer', amount_per_acre: 150, source_kind: 'manual', source_record_id: null, sort_order: 1, notes: null, created_at: stamp, updated_at: stamp }
+  const emptyEquipmentProvenance = { equipment_period_start: null, equipment_period_end: null, equipment_total_source_amount: null, equipment_allocation_acres: null, equipment_included_row_count: null, equipment_excluded_null_cost_count: null, equipment_captured_at: null }
+  const line1 = { id: uid(2), farm_id: farm, budget_id: budget.id, category: 'seed', label: 'Seed', amount_per_acre: '120', source_kind: 'manual', source_record_id: null, sort_order: 0, notes: null, ...emptyEquipmentProvenance, created_at: stamp, updated_at: stamp }
+  const line2 = { id: uid(3), farm_id: farm, budget_id: budget.id, category: 'fertilizer', label: 'Fertilizer', amount_per_acre: 150, source_kind: 'manual', source_record_id: null, sort_order: 1, notes: null, ...emptyEquipmentProvenance, created_at: stamp, updated_at: stamp }
   const priceSteps = [3.8, 4.2, 4.6].map((value, index) => ({ id: uid(10 + index), farm_id: farm, budget_id: budget.id, axis: 'price', step_order: index, value, created_at: stamp, updated_at: stamp }))
   const yieldSteps = [180, 200, 220].map((value, index) => ({ id: uid(20 + index), farm_id: farm, budget_id: budget.id, axis: 'yield', step_order: index, value, created_at: stamp, updated_at: stamp }))
   const allocation = { id: uid(30), farm_id: farm, budget_id: budget.id, crop_assignment_id: assignment.id, allocated_acres: 50, expected_yield_override: null, expected_price_override: null, notes: null, created_at: stamp, updated_at: stamp }
   const scope = { farm_id: farm, crop_year: assignment.crop_year, commodity_id: commodity, operating_entity_id: null as string | null, enterprise_label: null as string | null }
-  return { fields, scope, assignment, bundle: { budgets: [budget], cost_lines: [line1, line2], matrix_steps: [...priceSteps, ...yieldSteps], allocations: [allocation] } }
+  const equipment = { id: uid(40), farm_id: farm, name: 'Sprayer 4', status: 'active' }
+  return { fields, scope, assignment, equipment, bundle: { budgets: [budget], cost_lines: [line1, line2], matrix_steps: [...priceSteps, ...yieldSteps], allocations: [allocation], equipment: [equipment] } }
 }
 type Mutators = { budget?: (v: Record<string, unknown>) => Record<string, unknown>; costLine?: (v: Record<string, unknown>) => Record<string, unknown>; allocation?: (v: Record<string, unknown>) => Record<string, unknown>; matrix?: (v: Record<string, unknown>[]) => Record<string, unknown>[]; copy?: (v: Record<string, unknown>) => Record<string, unknown>; deleteEcho?: (id: string) => string }
 class FakeGateway implements ProfitabilityDataGateway {
@@ -43,6 +45,7 @@ class FakeGateway implements ProfitabilityDataGateway {
   budgetInputs: CropBudget[] = []; costLineInputs: BudgetCostLineWrite[] = []; deletedCostLineIds: string[] = []
   allocationInputs: BudgetFieldAllocation[] = []; deletedAllocationIds: string[] = []
   matrixInputs: ReplaceMatrixStepsInput[] = []; copyInputs: CopyBudgetInput[] = []; insuranceCalls = 0; afterInsuranceMutation: (() => void) | null = null
+  snapshotInputs: Array<{ request: EquipmentCostSnapshotRequest; action: string }> = []
   private guard() { if (this.throwError) throw this.throwError }
   async loadWorkspace(_farmId: string): Promise<ProfitabilityRowBundle> { if (this.fail) throw new Error('network timeout'); return structuredClone(this.state.bundle) }
   async upsertBudget(_farmId: string, row: CropBudget) {
@@ -59,10 +62,18 @@ class FakeGateway implements ProfitabilityDataGateway {
     this.guard(); this.costLineInputs.push(structuredClone(row))
     const siblings = this.state.bundle.cost_lines as Array<Record<string, unknown>>
     if (siblings.some((line) => line.budget_id === row.budget_id && line.id !== row.id && line.sort_order === row.sort_order)) throw Object.assign(new Error('duplicate key value violates unique constraint "budget_cost_lines_budget_id_sort_order_key"'), { code: '23505' })
-    const response = { id: row.id, farm_id: this.state.scope.farm_id, budget_id: row.budget_id, category: row.category, label: row.name, amount_per_acre: row.amount_per_acre, source_kind: 'manual', source_record_id: null, sort_order: row.sort_order, notes: null, created_at: row.created_at, updated_at: row.updated_at }
+    const response = { id: row.id, farm_id: this.state.scope.farm_id, budget_id: row.budget_id, category: row.category, label: row.name, amount_per_acre: row.amount_per_acre, source_kind: 'manual', source_record_id: null, sort_order: row.sort_order, notes: null, equipment_period_start: null, equipment_period_end: null, equipment_total_source_amount: null, equipment_allocation_acres: null, equipment_included_row_count: null, equipment_excluded_null_cost_count: null, equipment_captured_at: null, created_at: row.created_at, updated_at: row.updated_at }
     return this.mutate.costLine ? this.mutate.costLine(response) : response
   }
   async deleteCostLine(_farmId: string, id: string) { this.guard(); this.deletedCostLineIds.push(id); return this.mutate.deleteEcho ? this.mutate.deleteEcho(id) : id }
+  async equipmentCostSnapshot(_farmId: string, request: EquipmentCostSnapshotRequest, action: 'preview' | 'insert' | 'replace') {
+    this.guard(); this.snapshotInputs.push({ request: structuredClone(request), action })
+    const total = '300.75'; const amount = String(300.75 / request.allocation_acres)
+    const candidate = { line_id: request.line_id, budget_id: request.budget_id, equipment_id: request.equipment_id, equipment_name: this.state.equipment.name, category: 'repairs', label: 'Sprayer 4 service costs 2027-01-01 to 2027-12-31', amount_per_acre: amount, period_start: request.period_start, period_end: request.period_end, total_source_amount: total, allocation_acres: String(request.allocation_acres), included_row_count: 2, excluded_null_cost_count: 1, captured_at: microStamp }
+    if (action === 'preview') return { action, candidate, existing: null }
+    if (request.expected?.total_source_amount !== total || request.expected.included_row_count !== 2 || request.expected.excluded_null_cost_count !== 1) throw new Error('service costs changed after review')
+    return { action, candidate, line: { id: request.line_id, farm_id: this.state.scope.farm_id, budget_id: request.budget_id, category: 'repairs', label: candidate.label, amount_per_acre: amount, source_kind: 'equipment', source_record_id: request.equipment_id, sort_order: 2, notes: null, equipment_period_start: request.period_start, equipment_period_end: request.period_end, equipment_total_source_amount: total, equipment_allocation_acres: request.allocation_acres, equipment_included_row_count: 2, equipment_excluded_null_cost_count: 1, equipment_captured_at: microStamp, created_at: stamp, updated_at: stamp } }
+  }
   async upsertAllocation(_farmId: string, row: BudgetFieldAllocation) {
     this.guard(); this.allocationInputs.push(structuredClone(row))
     const response = { id: row.id, farm_id: this.state.scope.farm_id, budget_id: row.budget_id, crop_assignment_id: row.crop_assignment_id, allocated_acres: row.allocated_acres, expected_yield_override: row.expected_yield_override, expected_price_override: row.expected_price_override, notes: null, created_at: row.created_at, updated_at: row.updated_at }
@@ -112,6 +123,7 @@ async function run() {
   // 1: strict mapping — numeric strings, microsecond+offset timestamps, label->name, step_order->sort_order round-trip.
   assert(workspace.budgets.length === 1 && workspace.budgets[0].expected_yield_per_acre === 200 && workspace.budgets[0].created_at === microStamp && workspace.budgets[0].rp_coverage_pct === 80 && workspace.budgets[0].rp_projected_price === 4.62, 'Budget mapping must round-trip RP columns, coerce numeric strings, and accept microsecond+offset timestamps.')
   assert(workspace.cost_lines.find((line) => line.id === uid(2))?.name === 'Seed' && workspace.cost_lines.find((line) => line.id === uid(2))?.amount_per_acre === 120, 'Cost line label->name mapping failed.')
+  assert(workspace.equipment.length === 1 && workspace.equipment[0]?.id === uid(40) && workspace.equipment[0]?.farm_id === workspace.fields.farm.id, 'Profitability equipment choices must map strictly and stay farm-bound.')
   assert(workspace.matrix_steps.find((step) => step.id === uid(10))?.sort_order === 0, 'Matrix step_order->sort_order mapping failed.')
   assert(!('sort_order' in (workspace.cost_lines[0] as object)) || (workspace.cost_lines[0] as { sort_order?: unknown }).sort_order === undefined, 'Public cost lines must not leak the DB-only sort_order column.')
   // 2: ordering is deterministic.
@@ -122,6 +134,7 @@ async function run() {
   // 4: fail-closed mapping — missing key, bad enum, non-positive matrix value, malformed timestamp.
   const missingKey = structuredClone(gateway.state.bundle); delete (missingKey.budgets[0] as Record<string, unknown>).name; gateway.state.bundle.budgets = missingKey.budgets; await rejects(() => repo.getWorkspace(), 'A budget missing a required key must reject.'); gateway.state.bundle.budgets = fixture().bundle.budgets
   const badCategory = structuredClone(gateway.state.bundle); (badCategory.cost_lines[0] as Record<string, unknown>).category = 'mystery'; gateway.state.bundle.cost_lines = badCategory.cost_lines; await rejects(() => repo.getWorkspace(), 'An unknown cost category must reject.'); gateway.state.bundle.cost_lines = fixture().bundle.cost_lines
+  const sourced = structuredClone(gateway.state.bundle); Object.assign(sourced.cost_lines[0] as Record<string, unknown>, { source_kind: 'equipment', source_record_id: uid(40), equipment_period_start: '2027-01-01', equipment_period_end: '2027-12-31', equipment_total_source_amount: '300.75', equipment_allocation_acres: '125', equipment_included_row_count: 2, equipment_excluded_null_cost_count: 1, equipment_captured_at: microStamp }); gateway.state.bundle.cost_lines = sourced.cost_lines; const sourcedWorkspace = await repo.getWorkspace(); const sourcedLine = sourcedWorkspace.cost_lines[0]; assert(sourcedLine.source_record_id === uid(40) && sourcedLine.equipment_snapshot?.total_source_amount === 300.75 && sourcedLine.equipment_snapshot.excluded_null_cost_count === 1, 'Equipment source id and structured provenance must survive the strict client mapper.'); gateway.state.bundle.cost_lines = fixture().bundle.cost_lines
   const badStamp = structuredClone(gateway.state.bundle); (badStamp.budgets[0] as Record<string, unknown>).updated_at = 'not-a-date'; gateway.state.bundle.budgets = badStamp.budgets; await rejects(() => repo.getWorkspace(), 'A malformed timestamp must reject.'); gateway.state.bundle.budgets = fixture().bundle.budgets
   // 5: farm/scope isolation — an orphaned child row referencing an unknown budget or unknown field fails closed.
   const orphanLine = structuredClone(gateway.state.bundle); (orphanLine.cost_lines[0] as Record<string, unknown>).budget_id = uid(999); gateway.state.bundle.cost_lines = orphanLine.cost_lines; await rejects(() => repo.getWorkspace(), 'A cost line referencing an unknown budget must reject.'); gateway.state.bundle.cost_lines = fixture().bundle.cost_lines
@@ -197,7 +210,14 @@ async function run() {
   assert(gateway.costLineInputs.at(-1)?.sort_order === 2, 'A brand-new cost line must be assigned max(sort_order)+1.')
   await repo.saveCostLine({ ...workspace.cost_lines[0], amount_per_acre: 999 })
   assert(gateway.costLineInputs.at(-1)?.sort_order === 0, 'Updating an existing cost line must keep its own sort_order.')
-  // 10: a forced duplicate sort_order fails closed (simulating the DB's unique constraint).
+  // 10: equipment imports are server-derived previews, then exact reviewed saves.
+  const snapshotRequest: EquipmentCostSnapshotRequest = { budget_id: savedBudget.id, equipment_id: uid(40), period_start: '2027-01-01', period_end: '2027-12-31', allocation_acres: 125, line_id: uid(702) }
+  const preview = await repo.previewEquipmentCostSnapshot(snapshotRequest)
+  assert(preview.existing === null && preview.candidate.total_source_amount === '300.75' && preview.candidate.included_row_count === 2 && preview.candidate.excluded_null_cost_count === 1, 'Equipment snapshot preview must expose the exact server sum and both row counts.')
+  await rejects(() => repo.saveEquipmentCostSnapshot(snapshotRequest, 'insert'), 'Saving without the exact reviewed server totals must reject before the gateway write.')
+  await repo.saveEquipmentCostSnapshot({ ...snapshotRequest, expected: { total_source_amount: preview.candidate.total_source_amount, included_row_count: preview.candidate.included_row_count, excluded_null_cost_count: preview.candidate.excluded_null_cost_count } }, 'insert')
+  assert(gateway.snapshotInputs.at(-1)?.action === 'insert', 'The reviewed equipment snapshot must use the narrow server insert action.')
+  // 11: a forced duplicate sort_order fails closed (simulating the DB's unique constraint).
   const operationContext = { projectRef: 'test', userId: uid(10), farmId: gateway.state.fields.farm.id, generation: 1, token: uid(999), serverEpoch: 1 }
   await rejects(() => repo.saveCostLineOperation({ id: uid(701), budget_id: savedBudget.id, category: 'labor', name: 'Labor', amount_per_acre: 10, sort_order: 0, created_at: stamp, updated_at: stamp }, operationContext), 'A forced duplicate sort_order must fail closed.')
   // 11: matrix validation — fewer than two steps per axis, and duplicate values, are rejected before the gateway is called.
@@ -213,10 +233,12 @@ async function run() {
   await rejects(() => repo.replaceMatrixStepsOperation(savedBudget.id, validSteps, validSteps.map((step, index) => index === 0 ? { ...step, value: step.value + 1 } : step), operationContext), 'The fake gateway must enforce the expected matrix snapshot with MATRIX_CHANGED_ON_ANOTHER_DEVICE.')
   // 13: deep-copy integrity — new ids for the budget and every child, re-parented, no shared references.
   const sourceLine = workspace.cost_lines.find((line) => line.budget_id === savedBudget.id)!
+  ;(gateway.state.bundle.cost_lines as Array<Record<string, unknown>>).push({ id: uid(719), farm_id: gateway.state.scope.farm_id, budget_id: savedBudget.id, category: 'repairs', label: 'Sprayer 4 service costs 2027-01-01 to 2027-12-31', amount_per_acre: '2.4060', source_kind: 'equipment', source_record_id: uid(40), sort_order: 2, notes: null, equipment_period_start: '2027-01-01', equipment_period_end: '2027-12-31', equipment_total_source_amount: '300.75', equipment_allocation_acres: '125', equipment_included_row_count: 2, equipment_excluded_null_cost_count: 1, equipment_captured_at: microStamp, created_at: stamp, updated_at: stamp })
   await repo.copyBudget(savedBudget.id, { ...savedBudget, id: uid(720), name: 'Deep copy', copied_from_budget_id: null })
   const copyCall = gateway.copyInputs.at(-1)!
   assert(copyCall.budget.id === uid(720) && copyCall.budget.copied_from_budget_id === savedBudget.id, 'copyBudget must mint a new budget id and set lineage.')
   assert(copyCall.costLines.every((line) => line.budget_id === uid(720) && line.id !== sourceLine.id), 'copyBudget must mint new cost-line ids and re-parent them.')
+  assert(copyCall.costLines.length === 2 && copyCall.costLines.every((line, index) => line.source_kind !== 'equipment' && line.sort_order === index), 'copyBudget must omit dated equipment snapshots instead of disguising them as manual costs.')
   assert(copyCall.matrixSteps.every((step) => step.budget_id === uid(720)), 'copyBudget must re-parent every matrix step to the new budget.')
   assert((copyCall.costLines[0] as unknown as object) !== (sourceLine as unknown as object), 'copyBudget must not share object references with the source.')
   // 14: farm isolation — a budget copy request outside this farm rejects.

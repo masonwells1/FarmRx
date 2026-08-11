@@ -16,8 +16,8 @@ STEAL (proven in CRX daily use):
   Sort overdue-first inside a column. (CRX StaleTasksAlert getEscalationLevel pattern.)
 - KPI tiles above the board, each a one-tap filter: Open · Mine · Overdue · Done this week.
 - Quick-add a task from another record with the link prefilled (CRX QuickTaskModal):
-  Farm Rx v1 = "Add service task" button on an equipment card; field-linked quick-add can
-  come later.
+  Farm Rx v1 = "Add service task" button on an equipment card; the V2 field-linked
+  quick-add extension is now accepted locally on the V2 backlog branch.
 - Linked-record chip on the card that deep-links to the field or machine (CRX EntityBadge).
 - Completed history stays visible (Done column shows who/when).
 
@@ -28,8 +28,9 @@ DROP for v1 (farm crew, not a software team — handoff: "dead simple"):
   farm recurrence; no RRULE.
 - Email reminders: deferred until an email provider key exists (same blocker as grain
   alerts). In-app = the board itself + My-tasks tile.
-- Photo/document attachments on equipment: deferred (no storage-bucket infrastructure in
-  Farm Rx yet). Parked in GOAL.md.
+- Photo/document attachments on equipment were deferred in v1. Farm Rx now has a proven
+  private scouting-storage pattern, and Mason approved a separate V2 equipment bucket
+  design/proof tranche on 2026-08-10. No live bucket or policy change is implied.
 - DOT fleet compliance (DVIRs, IFTA, CDL/medical cards): handoff says confirm with Mason
   first — NOT built.
 
@@ -112,7 +113,7 @@ client mappers' 10k default).
 - Append-only like readings (edits = corrections appended; owner/manager may DELETE a
   wrong row).
 - Cost-per-machine = SUM(cost) per equipment (client aggregates from rows in v1;
-  Profitability integration later).
+  the V2 Profitability snapshot extension below defines the later integration).
 
 ### farm_tasks  (the board)
 - title text NOT NULL
@@ -232,3 +233,29 @@ reading jump 50) → generate creates the task idempotently (call twice, still o
 board shows it with escalation, worker account can move it to Done, service-log entry
 with cost + interval link resets the cycle, cost-to-date updates, Postgres rows
 verified via execute_sql, worker CAN see both pages (ordinary member data), rep CANNOT.
+
+## V2 extension — Equipment service costs into Profitability (2026-08-10)
+
+The integration is an explicit snapshot, never an automatic financial rewrite:
+
+- The farmer chooses one crop budget, one current-farm machine, an inclusive service-date
+  range (defaulting to that crop year), and the acres across which to allocate the cost.
+- The server sums only non-null `equipment_service_log.cost` rows for that machine and
+  range. Purchase price is excluded. Null-cost service rows are counted and disclosed,
+  not treated as zero-dollar evidence.
+- Review is read-only. Save carries the exact reviewed total and included/excluded counts;
+  if service history changes before save, the database rejects it and requires a new review.
+- One `source_kind='equipment'` budget line records the machine, period, source total,
+  allocation acres, row counts, and capture time. The established `numeric(14,4)` per-acre
+  contract remains intact; source total and acres preserve the auditable calculation.
+- The same budget/machine/period may have only one snapshot. Re-import shows the saved
+  snapshot beside the current server total and requires explicit **Replace old snapshot**
+  or **Keep old**. No silent refresh is allowed.
+- Equipment-sourced lines cannot be edited by hand, but may be removed under the existing
+  cost-line delete rules. Copying a crop budget omits dated equipment snapshots rather than
+  disguising them as manual costs; the copied budget can import a fresh snapshot.
+- Allocation acres above currently allocated budget acres warn but do not block; the farmer
+  may intentionally spread a farm-wide machine cost over a different acre base.
+- Preview/save are connection-required RPC operations and are never replayed from an offline
+  queue. Existing farm-operation context, access-epoch, edit, private-financial, RLS, and
+  exact-echo guards remain mandatory.

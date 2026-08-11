@@ -136,6 +136,16 @@ percentages. Closes the upgrade-spec V2 report pair.
 **Later (roadmap, not this loop):** CRX product-master price auto-fill (needs CRX↔FarmRx
 inbox), actuals-vs-budget living breakeven, farmdoc benchmark comparison, year-over-year.
 
+### V2 equipment-cost snapshot extension — 2026-08-10
+
+The next local extension connects dated Equipment service costs to an existing crop budget
+through an explicit server-derived snapshot. It stores machine/date provenance, source total,
+allocation acres, included and excluded-null row counts, and capture time; purchase price is
+never included. Review writes nothing, save rejects a changed server total, and re-import
+requires an explicit replace. Later service-log changes never silently rewrite Profitability.
+Copied budgets omit equipment snapshots and can import a fresh period deliberately. Mason
+directed that Resend/email information and work remain deferred for this V2 backlog loop.
+
 ## Chunk status ledger (update as gates pass)
 
 - [x] Chunk 1 Cost of Carry — DONE 2026-07-13: Terra build → Sol review (2 P1 + 1 P2, all

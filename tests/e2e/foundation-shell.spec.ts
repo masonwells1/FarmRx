@@ -146,6 +146,7 @@ const profitabilityReadQueries: Record<string, (farm: FarmFixture) => Record<str
   budget_cost_lines: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'budget_id.asc,sort_order.asc' }),
   profitability_matrix_steps: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'budget_id.asc,axis.asc,step_order.asc' }),
   budget_field_allocations: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'budget_id.asc,crop_assignment_id.asc' }),
+  equipment: (farm) => ({ select: 'id,farm_id,name,status', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' }),
 }
 function grainRows(table: string, farm: FarmFixture) {
   if (table === 'production_estimates') return [{ id: '00000000-0000-4000-8000-000000000051', farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, planted_acres: 80, aph_yield: 190, expected_bushels: 15_200, actual_bushels: null, drives_math: 'projected', notes: null, created_at: now, updated_at: now }]

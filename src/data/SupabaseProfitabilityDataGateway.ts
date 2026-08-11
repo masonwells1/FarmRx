@@ -1,6 +1,6 @@
 import { supabase } from '../lib/supabaseClient'
 import type { BudgetCostLineWrite, CopyBudgetInput, ProfitabilityDataGateway, ProfitabilityRowBundle, ReplaceMatrixStepsInput } from './ProfitabilityDataGateway'
-import type { BudgetFieldAllocation, CropBudget, InsuranceBudgetPatch } from './profitability'
+import type { BudgetFieldAllocation, CropBudget, EquipmentCostSnapshotRequest, InsuranceBudgetPatch } from './profitability'
 import { DELETE_PERMISSION_MESSAGE, SAVE_DURABILITY_UPDATE_MESSAGE } from './saveDurability'
 import { optimisticSave } from './optimisticSave'
 import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
@@ -42,21 +42,38 @@ export class SupabaseProfitabilityDataGateway implements ProfitabilityDataGatewa
     return this.durabilityCapability
   }
   async loadWorkspace(farmId: string): Promise<ProfitabilityRowBundle> {
-    const [permission, budgets, cost_lines, matrix_steps, allocations] = await Promise.all([
+    const [permission, budgets, cost_lines, matrix_steps, allocations, equipment] = await Promise.all([
       supabase.rpc('can_read_private_financials', { target_farm_id: farmId }),
       supabase.from('crop_budgets').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('id'),
       supabase.from('budget_cost_lines').select('*').eq('farm_id', farmId).order('budget_id').order('sort_order'),
       supabase.from('profitability_matrix_steps').select('*').eq('farm_id', farmId).order('budget_id').order('axis').order('step_order'),
       supabase.from('budget_field_allocations').select('*').eq('farm_id', farmId).order('budget_id').order('crop_assignment_id'),
+      supabase.from('equipment').select('id,farm_id,name,status').eq('farm_id', farmId).order('name').order('id'),
     ])
     if (permission.error) throw permission.error
     if (permission.data !== true) throw new Error('PROFITABILITY_PRIVATE_ACCESS_DENIED')
-    return { budgets: rows(budgets.data, budgets.error), cost_lines: rows(cost_lines.data, cost_lines.error), matrix_steps: rows(matrix_steps.data, matrix_steps.error), allocations: rows(allocations.data, allocations.error) }
+    return { budgets: rows(budgets.data, budgets.error), cost_lines: rows(cost_lines.data, cost_lines.error), matrix_steps: rows(matrix_steps.data, matrix_steps.error), allocations: rows(allocations.data, allocations.error), equipment: rows(equipment.data, equipment.error) }
   }
   async upsertBudget(farmId: string, value: CropBudget, context: FarmOperationContext) { return optimisticSave('crop_budgets', farmId, value.id, budgetColumns({ ...value, farm_id: farmId }), value.updated_at, context) }
   async patchBudgetInsurance(farmId: string, budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt: string | null | undefined, context: FarmOperationContext) { return optimisticSave('crop_budgets', farmId, budgetId, insuranceColumns(patch), expectedUpdatedAt, context) }
   async upsertCostLine(farmId: string, value: BudgetCostLineWrite, context: FarmOperationContext) { return optimisticSave('budget_cost_lines', farmId, value.id, costLineColumns({ ...value, farm_id: farmId }), value.updated_at, context) }
   async deleteCostLine(farmId: string, id: string, context: FarmOperationContext) { return confirmDelete('budget_cost_lines', farmId, id, context) }
+  async equipmentCostSnapshot(farmId: string, request: EquipmentCostSnapshotRequest, action: 'preview' | 'insert' | 'replace', context: FarmOperationContext) {
+    const { data, error } = await bindFarmOperationRequest(supabase.rpc('upsert_equipment_cost_snapshot', {
+      p_farm_id: farmId,
+      p_budget_id: request.budget_id,
+      p_equipment_id: request.equipment_id,
+      p_period_start: request.period_start,
+      p_period_end: request.period_end,
+      p_allocation_acres: request.allocation_acres,
+      p_action: action,
+      p_line_id: request.line_id,
+      p_expected_total: request.expected?.total_source_amount ?? null,
+      p_expected_included_count: request.expected?.included_row_count ?? null,
+      p_expected_excluded_null_count: request.expected?.excluded_null_cost_count ?? null,
+    }), context)
+    return row(data, error)
+  }
   async upsertAllocation(farmId: string, value: BudgetFieldAllocation, context: FarmOperationContext) { return optimisticSave('budget_field_allocations', farmId, value.id, allocationColumns({ ...value, farm_id: farmId }), value.updated_at, context) }
   async deleteAllocation(farmId: string, id: string, context: FarmOperationContext) { return confirmDelete('budget_field_allocations', farmId, id, context) }
   async replaceMatrixSteps(input: ReplaceMatrixStepsInput) { const encode = (steps: import('./profitability').ProfitabilityMatrixStep[]) => steps.slice().sort((a, b) => a.axis.localeCompare(b.axis) || a.sort_order - b.sort_order || a.id.localeCompare(b.id)).map(({ id, budget_id, axis, value, sort_order }) => ({ id, budget_id, axis, value, sort_order })); const { data, error } = await bindFarmOperationRequest(supabase.rpc('replace_profitability_matrix_steps', { p_farm_id: input.farmId, p_budget_id: input.budgetId, p_steps: encode(input.steps), p_expected_steps: input.expectedSteps === undefined ? null : encode(input.expectedSteps ?? []) }), input.context); if (error && (error.code === 'PGRST202' || error.code === '42883')) throw new Error(SAVE_DURABILITY_UPDATE_MESSAGE); return rows(data, error) }
