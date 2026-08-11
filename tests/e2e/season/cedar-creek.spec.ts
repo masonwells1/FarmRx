@@ -58,12 +58,14 @@ test('@connect-workflows-cw1 weather prefill stays local until the farmer saves'
 
   await prefill.click()
   const spray = page.locator('form.spray-form')
+  const line = spray.locator('.spray-product-row').first()
   await expect(spray.getByLabel('Field')).toHaveValue(ids.field)
   await expect(spray.getByLabel('Date')).toHaveValue('2027-07-07')
   await expect(spray.getByLabel('Wind mph')).toHaveValue('8')
   await expect(spray.getByLabel('Wind direction')).toHaveValue('SW')
   await expect(spray.getByLabel('Temperature °F')).toHaveValue('74')
   for (const name of ['crop', 'acres', 'time', 'pest', 'applicator', 'license', 'humidity']) await expect(spray.locator(`[name="${name}"]`)).toHaveValue('')
+  await expect(line.getByLabel('Product')).toHaveValue('')
   await spray.getByLabel('Wind mph').fill('9')
   await spray.getByLabel('Wind direction').selectOption('W')
   await spray.getByLabel('Temperature °F').fill('75')
@@ -74,7 +76,7 @@ test('@connect-workflows-cw1 weather prefill stays local until the farmer saves'
 
   await spray.getByLabel('Crop assignment').selectOption({ label: 'Soybeans · 40 ac' })
   await spray.getByLabel('Applied acres').fill('40.00')
-  const line = spray.locator('.spray-product-row').first()
+  await line.getByLabel('Product').selectOption({ label: 'Synthetic Cedar Herbicide 41' })
   await line.getByRole('spinbutton', { name: 'Rate', exact: true }).fill('0.125')
   await line.getByLabel('Rate unit').selectOption('gal')
   await line.getByLabel('Total used').fill('5.00')
