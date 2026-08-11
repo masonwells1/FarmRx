@@ -9,6 +9,8 @@ const farmId = '00000000-0000-4000-8000-000000000001'
 const budgetId = '00000000-0000-4000-8000-000000000002'
 const equipmentId = '00000000-0000-4000-8000-000000000003'
 const lineId = '00000000-0000-4000-8000-000000000004'
+const otherBudgetId = '00000000-0000-4000-8000-000000000005'
+const otherEquipmentId = '00000000-0000-4000-8000-000000000006'
 const stamp = '2027-12-31T12:00:00.000000+00:00'
 const budget: CropBudget = { id: budgetId, farm_id: farmId, crop_year: 2027, commodity_id: 'corn', operating_entity_id: null, enterprise_label: null, name: '2027 Corn', expected_yield_per_acre: 200, expected_price_per_bushel: 4.5, rp_coverage_pct: null, rp_aph_yield: null, rp_projected_price: null, rp_premium_per_acre: null, copied_from_budget_id: null, created_at: stamp, updated_at: stamp }
 const equipment: ProfitabilityEquipment[] = [{ id: equipmentId, farm_id: farmId, name: 'Sprayer 4', status: 'active' }]
@@ -47,10 +49,49 @@ try {
   assert(saveCount() === 0 && !container.textContent?.includes('Old snapshot vs current server total'), 'Keep old must make no write.')
   await act(async () => { button('Review server total')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
   await act(async () => { button('Replace old snapshot')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
-  assert(saveCount() === 1 && saves[0]?.action === 'replace' && saves[0]?.request.line_id === lineId && saves[0]?.request.expected?.total_source_amount === '300.75' && saves[0]?.request.expected.included_row_count === 2 && saves[0]?.request.expected.excluded_null_cost_count === 1, 'Replace must carry the exact reviewed server totals and existing line id.')
+  assert(saveCount() === 1 && saves[0]?.action === 'replace' && saves[0]?.request.line_id === lineId && saves[0]?.request.budget_id === budgetId && saves[0]?.request.equipment_id === equipmentId && saves[0]?.request.period_start === '2027-01-01' && saves[0]?.request.period_end === '2027-12-31' && saves[0]?.request.allocation_acres === 125 && saves[0]?.request.expected?.total_source_amount === '300.75' && saves[0]?.request.expected.included_row_count === 2 && saves[0]?.request.expected.excluded_null_cost_count === 1, 'Replace must carry only the exact reviewed budget, machine, period, acres, server totals, and existing line id.')
   assert(container.textContent?.includes('Purchase price is never included') && container.textContent.includes('Later service-log changes do not change a saved snapshot'), 'Snapshot truth and purchase-price exclusion must stay visible.')
 } finally {
-  await act(async () => root.unmount()); container.remove(); win.close()
+  await act(async () => root.unmount()); container.remove()
+}
+
+const deferredContainer = document.createElement('div'); document.body.append(deferredContainer); const deferredRoot = createRoot(deferredContainer)
+const deferredResolvers: Array<(value: EquipmentCostSnapshotPreview) => void> = []
+const deferredRequests: EquipmentCostSnapshotRequest[] = []
+const deferredSaves: EquipmentCostSnapshotRequest[] = []
+const deferredRequestCount = () => deferredRequests.length
+const deferredRepository = {
+  previewEquipmentCostSnapshot: (request: EquipmentCostSnapshotRequest) => {
+    deferredRequests.push(structuredClone(request))
+    return new Promise<EquipmentCostSnapshotPreview>((resolve) => deferredResolvers.push(resolve))
+  },
+  saveEquipmentCostSnapshot: async (request: EquipmentCostSnapshotRequest) => { deferredSaves.push(structuredClone(request)); return 'saved' as const },
+}
+const otherBudget: CropBudget = { ...budget, id: otherBudgetId, name: '2027 Corn Other Budget' }
+const deferredEquipment: ProfitabilityEquipment[] = [...equipment, { id: otherEquipmentId, farm_id: farmId, name: 'Sprayer 5', status: 'active' }]
+const deferredProps = (selectedBudget: CropBudget) => ({ budget: selectedBudget, equipment: deferredEquipment, budgetAcres: 125, onSaved: async () => undefined, onError: () => undefined, repository: deferredRepository })
+const deferredButton = (label: string) => [...deferredContainer.querySelectorAll('button')].find((item) => item.textContent?.trim() === label)
+try {
+  await act(async () => { deferredRoot.render(createElement(EquipmentCostImporter, deferredProps(budget))); await flush() })
+  await act(async () => { deferredButton('Import equipment service costs')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+  await act(async () => { deferredButton('Review server total')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+  assert(deferredRequestCount() === 1 && deferredResolvers.length === 1, 'Deferred preview did not begin from the first budget.')
+  await act(async () => { deferredRoot.render(createElement(EquipmentCostImporter, deferredProps(otherBudget))); await flush() })
+  await act(async () => { deferredResolvers.shift()!(preview); await flush() })
+  assert(!deferredContainer.textContent?.includes('Old snapshot vs current server total') && deferredSaves.length === 0, 'A preview resolving after the selected budget changed must be discarded without a write.')
+
+  await act(async () => { deferredRoot.render(createElement(EquipmentCostImporter, deferredProps(budget))); await flush() })
+  await act(async () => { deferredButton('Review server total')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+  assert(deferredRequestCount() === 2 && deferredResolvers.length === 1, 'Deferred preview did not restart after returning to the first budget.')
+  const deferredMachine = deferredContainer.querySelector('select') as HTMLSelectElement
+  const valueSetter = Object.getOwnPropertyDescriptor(win.HTMLSelectElement.prototype, 'value')?.set
+  assert(valueSetter, 'Happy DOM select value setter is unavailable.')
+  await act(async () => { valueSetter.call(deferredMachine, otherEquipmentId); deferredMachine.dispatchEvent(new Event('change', { bubbles: true, composed: true })); await flush() })
+  assert(deferredMachine.value === otherEquipmentId, 'Deferred preview regression did not change the selected machine through React.')
+  await act(async () => { deferredResolvers.shift()!(preview); await flush() })
+  assert(!deferredContainer.textContent?.includes('Old snapshot vs current server total') && deferredSaves.length === 0, 'A preview resolving after reviewed inputs changed must be discarded without a write.')
+} finally {
+  await act(async () => deferredRoot.unmount()); deferredContainer.remove(); win.close()
 }
 console.log('Profitability equipment-cost snapshot UI regression passed')
 // ProfitabilityModule imports the real app data graph, whose Supabase runtime keeps

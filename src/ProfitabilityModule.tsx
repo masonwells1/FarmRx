@@ -903,8 +903,9 @@ export function EquipmentCostImporter({
     budgetAcres > 0 ? String(budgetAcres) : "",
   );
   const [lineId, setLineId] = useState(() => crypto.randomUUID());
-  const [preview, setPreview] = useState<EquipmentCostSnapshotPreview | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [reviewed, setReviewed] = useState<{ preview: EquipmentCostSnapshotPreview; request: EquipmentCostSnapshotRequest } | null>(null);
+  const [busy, setBusy] = useState<"review" | "save" | null>(null);
+  const reviewRevision = useRef(0);
 
   useEffect(() => {
     setEquipmentId(equipment[0]?.id ?? "");
@@ -912,7 +913,9 @@ export function EquipmentCostImporter({
     setPeriodEnd(defaultEnd);
     setAllocationAcres(budgetAcres > 0 ? String(budgetAcres) : "");
     setLineId(crypto.randomUUID());
-    setPreview(null);
+    reviewRevision.current += 1;
+    setReviewed(null);
+    setBusy((current) => current === "review" ? null : current);
   }, [budget.id]);
 
   const request = (): EquipmentCostSnapshotRequest => ({
@@ -923,29 +926,38 @@ export function EquipmentCostImporter({
     allocation_acres: Number(allocationAcres),
     line_id: lineId,
   });
-  const clearPreview = () => setPreview(null);
+  const clearPreview = () => {
+    reviewRevision.current += 1;
+    setReviewed(null);
+    setBusy((current) => current === "review" ? null : current);
+  };
   const review = async () => {
     const next = request();
     if (!next.equipment_id || !next.period_start || !next.period_end || next.period_start > next.period_end || !Number.isFinite(next.allocation_acres) || next.allocation_acres <= 0) {
       onError("Choose one machine, valid dates, and allocation acres greater than zero.");
       return;
     }
-    setBusy(true);
+    const revision = reviewRevision.current + 1;
+    reviewRevision.current = revision;
+    setReviewed(null);
+    setBusy("review");
     try {
       onError("");
-      setPreview(await repository.previewEquipmentCostSnapshot(next));
+      const preview = await repository.previewEquipmentCostSnapshot(next);
+      if (reviewRevision.current === revision) setReviewed({ preview, request: structuredClone(next) });
     } catch (caught) {
-      onError(farmerError(caught, "review equipment service costs"));
+      if (reviewRevision.current === revision) onError(farmerError(caught, "review equipment service costs"));
     } finally {
-      setBusy(false);
+      if (reviewRevision.current === revision) setBusy((current) => current === "review" ? null : current);
     }
   };
   const confirm = async (action: "insert" | "replace") => {
-    if (!preview) return;
+    if (!reviewed) return;
+    const { preview, request: reviewedRequest } = reviewed;
     const saveId = action === "replace" ? preview.existing?.id : preview.candidate.line_id;
     if (!saveId) return;
     const next: EquipmentCostSnapshotRequest = {
-      ...request(),
+      ...structuredClone(reviewedRequest),
       line_id: saveId,
       expected: {
         total_source_amount: preview.candidate.total_source_amount,
@@ -953,20 +965,20 @@ export function EquipmentCostImporter({
         excluded_null_cost_count: preview.candidate.excluded_null_cost_count,
       },
     };
-    setBusy(true);
+    setBusy("save");
     setSaveReceipt(saveId, "saving");
     try {
       onError("");
       await repository.saveEquipmentCostSnapshot(next, action);
       setSaveReceipt(saveId, "saved");
       await onSaved();
-      setPreview(null);
+      setReviewed(null);
       setLineId(crypto.randomUUID());
     } catch (caught) {
       setSaveReceipt(saveId, "needs attention");
       onError(farmerError(caught, "save equipment service costs"));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -987,7 +999,7 @@ export function EquipmentCostImporter({
             Farm Rx sums the selected machine&apos;s dated service-log costs on the server. Purchase price is never included. Later service-log changes do not change a saved snapshot.
           </p>
         </div>
-        <button className="secondary-action" type="button" onClick={() => { setOpen(false); setPreview(null); }}>
+        <button className="secondary-action" type="button" disabled={busy === "save"} onClick={() => { setOpen(false); clearPreview(); }}>
           Close
         </button>
       </div>
@@ -997,7 +1009,7 @@ export function EquipmentCostImporter({
         <div className="cost-add-row">
           <label>
             Machine
-            <select value={equipmentId} onChange={(event) => { setEquipmentId(event.target.value); clearPreview(); }}>
+            <select value={equipmentId} disabled={busy === "save"} onChange={(event) => { setEquipmentId(event.target.value); clearPreview(); }}>
               {equipment.map((machine) => (
                 <option key={machine.id} value={machine.id}>{machine.name}{machine.status === "active" ? "" : ` (${machine.status})`}</option>
               ))}
@@ -1005,18 +1017,18 @@ export function EquipmentCostImporter({
           </label>
           <label>
             Period starts
-            <input type="date" value={periodStart} onChange={(event) => { setPeriodStart(event.target.value); clearPreview(); }} />
+            <input type="date" value={periodStart} disabled={busy === "save"} onChange={(event) => { setPeriodStart(event.target.value); clearPreview(); }} />
           </label>
           <label>
             Period ends
-            <input type="date" value={periodEnd} onChange={(event) => { setPeriodEnd(event.target.value); clearPreview(); }} />
+            <input type="date" value={periodEnd} disabled={busy === "save"} onChange={(event) => { setPeriodEnd(event.target.value); clearPreview(); }} />
           </label>
           <label>
             Acres to spread across
-            <input inputMode="decimal" value={allocationAcres} onChange={(event) => { setAllocationAcres(event.target.value); clearPreview(); }} />
+            <input inputMode="decimal" value={allocationAcres} disabled={busy === "save"} onChange={(event) => { setAllocationAcres(event.target.value); clearPreview(); }} />
           </label>
-          <button className="primary-action" type="button" disabled={busy} onClick={() => void review()}>
-            {busy ? "Checking…" : "Review server total"}
+          <button className="primary-action" type="button" disabled={busy !== null} onClick={() => void review()}>
+            {busy === "review" ? "Checking…" : "Review server total"}
           </button>
         </div>
       )}
@@ -1025,28 +1037,28 @@ export function EquipmentCostImporter({
           Heads up: {decimal.format(Number(allocationAcres))} acres is more than this budget&apos;s {decimal.format(budgetAcres)} allocated acres. You can continue if that is intentional.
         </p>
       )}
-      {preview && (
+      {reviewed && (
         <div className="profitability-card" role="status">
-          <h4>{preview.existing ? "Old snapshot vs current server total" : "Review this snapshot"}</h4>
-          {preview.existing?.equipment_snapshot && (
+          <h4>{reviewed.preview.existing ? "Old snapshot vs current server total" : "Review this snapshot"}</h4>
+          {reviewed.preview.existing?.equipment_snapshot && (
             <p>
-              <strong>Saved snapshot:</strong> {money.format(preview.existing.equipment_snapshot.total_source_amount)} total across {decimal.format(preview.existing.equipment_snapshot.allocation_acres)} acres = {money.format(preview.existing.amount_per_acre)}/ac, captured {new Date(preview.existing.equipment_snapshot.captured_at).toLocaleString()}.
+              <strong>Saved snapshot:</strong> {money.format(reviewed.preview.existing.equipment_snapshot.total_source_amount)} total across {decimal.format(reviewed.preview.existing.equipment_snapshot.allocation_acres)} acres = {money.format(reviewed.preview.existing.amount_per_acre)}/ac, captured {new Date(reviewed.preview.existing.equipment_snapshot.captured_at).toLocaleString()}.
             </p>
           )}
           <p>
-            <strong>Current server total:</strong> {money.format(Number(preview.candidate.total_source_amount))} from {preview.candidate.included_row_count} costed service {preview.candidate.included_row_count === 1 ? "entry" : "entries"}; {preview.candidate.excluded_null_cost_count} {preview.candidate.excluded_null_cost_count === 1 ? "entry has" : "entries have"} no cost and {preview.candidate.excluded_null_cost_count === 1 ? "is" : "are"} excluded.
+            <strong>Current server total:</strong> {money.format(Number(reviewed.preview.candidate.total_source_amount))} from {reviewed.preview.candidate.included_row_count} costed service {reviewed.preview.candidate.included_row_count === 1 ? "entry" : "entries"}; {reviewed.preview.candidate.excluded_null_cost_count} {reviewed.preview.candidate.excluded_null_cost_count === 1 ? "entry has" : "entries have"} no cost and {reviewed.preview.candidate.excluded_null_cost_count === 1 ? "is" : "are"} excluded.
           </p>
           <p>
-            Spread across {decimal.format(Number(preview.candidate.allocation_acres))} acres: <strong>{money.format(Number(preview.candidate.amount_per_acre))}/ac</strong>. The source total and acres stay recorded; the per-acre cost is stored to four decimals and dollars display rounded to cents.
+            Spread across {decimal.format(Number(reviewed.preview.candidate.allocation_acres))} acres: <strong>{money.format(Number(reviewed.preview.candidate.amount_per_acre))}/ac</strong>. The source total and acres stay recorded; the per-acre cost is stored to four decimals and dollars display rounded to cents.
           </p>
           <div className="cost-add-row">
-            {preview.existing ? (
+            {reviewed.preview.existing ? (
               <>
-                <button className="primary-action" type="button" disabled={busy} onClick={() => void confirm("replace")}>Replace old snapshot</button>
-                <button className="secondary-action" type="button" disabled={busy} onClick={() => setPreview(null)}>Keep old</button>
+                <button className="primary-action" type="button" disabled={busy !== null} onClick={() => void confirm("replace")}>Replace old snapshot</button>
+                <button className="secondary-action" type="button" disabled={busy !== null} onClick={clearPreview}>Keep old</button>
               </>
             ) : (
-              <button className="primary-action" type="button" disabled={busy} onClick={() => void confirm("insert")}>Add this snapshot</button>
+              <button className="primary-action" type="button" disabled={busy !== null} onClick={() => void confirm("insert")}>Add this snapshot</button>
             )}
           </div>
         </div>

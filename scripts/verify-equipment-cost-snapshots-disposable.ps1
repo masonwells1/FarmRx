@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $name = "farmrx-equipment-cost-$PID"
 $root = Split-Path -Parent $PSScriptRoot
 $passed = $false
+$failure = $null
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
   throw 'Docker CLI is required for the disposable equipment-cost proof.'
@@ -82,6 +83,9 @@ do $$
 declare
   v_type text;
   v_trigger_count integer;
+  v_stream_trigger_count integer;
+  v_rpc_source text;
+  v_lock_source text;
 begin
   select format_type(a.atttypid,a.atttypmod) into v_type
   from pg_attribute a
@@ -98,6 +102,18 @@ begin
   select count(*) into v_trigger_count from pg_trigger
   where tgrelid='public.budget_cost_lines'::regclass and tgname='budget_cost_lines_guard_equipment_snapshot' and not tgisinternal;
   if v_trigger_count <> 1 then raise exception 'equipment snapshot direct-write trigger is missing'; end if;
+  select count(*) into v_stream_trigger_count from pg_trigger
+  where tgrelid='public.equipment_service_log'::regclass and tgname='equipment_service_log_cost_stream_lock'
+    and not tgisinternal and (tgtype & 28) = 28;
+  if v_stream_trigger_count <> 1 then raise exception 'equipment service-log stream lock trigger is missing insert/update/delete coverage'; end if;
+  select pg_get_functiondef('public.upsert_equipment_cost_snapshot(uuid,uuid,uuid,date,date,numeric,text,uuid,numeric,integer,integer)'::regprocedure)
+    into v_rpc_source;
+  select pg_get_functiondef('public.lock_equipment_service_cost_stream()'::regprocedure) into v_lock_source;
+  if position('hashtextextended(p_equipment_id::text, 2026081101)' in v_rpc_source)=0
+    or position('hashtextextended(new.equipment_id::text, 2026081101)' in v_lock_source)=0
+    or position('hashtextextended(old.equipment_id::text, 2026081101)' in v_lock_source)=0
+    or position('old.equipment_id::text < new.equipment_id::text' in v_lock_source)=0
+  then raise exception 'equipment snapshot and service-log mutations do not share the deterministic equipment lock'; end if;
   if not exists(
     select 1 from pg_indexes where schemaname='public' and tablename='budget_cost_lines'
       and indexname='budget_cost_lines_equipment_snapshot_key'
@@ -207,6 +223,68 @@ end $$;
 commit;
 '@ 'Authenticated equipment-cost behavior proof failed.'
 
+  $raceWriterSql = @'
+begin;
+select set_config('request.jwt.claims','{"role":"service_role","sub":"10000000-0000-4000-8000-000000000001"}',true);
+select set_config('request.headers',jsonb_build_object(
+  'x-farm-rx-expected-user-id','10000000-0000-4000-8000-000000000001',
+  'x-farm-rx-access-epochs',jsonb_build_object('10000000-0000-4000-8000-000000000010',(select access_epoch from public.farm_access_epochs where farm_id='10000000-0000-4000-8000-000000000010' and user_id='10000000-0000-4000-8000-000000000001'))::text
+)::text,true);
+insert into public.equipment_service_log(id,farm_id,equipment_id,service_date,work_performed,cost,created_by)
+values ('10000000-0000-4000-8000-000000000117','10000000-0000-4000-8000-000000000010','10000000-0000-4000-8000-000000000100','2027-10-01','Concurrent serialized service',25.00,'10000000-0000-4000-8000-000000000001');
+select pg_sleep(4);
+commit;
+'@
+  $raceJob = Start-Job -ArgumentList $name,$raceWriterSql -ScriptBlock {
+    param([string]$container,[string]$sql)
+    $output = @($sql | docker exec -i $container psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "concurrent service-log writer failed: $($output -join '|')" }
+    $output
+  }
+  try {
+    $writerHasLock = $false
+    for ($attempt = 0; $attempt -lt 100; $attempt++) {
+      if ($raceJob.State -in @('Completed','Failed','Stopped')) {
+        $earlyOutput = @(Receive-Job -Job $raceJob -Keep -ErrorAction SilentlyContinue)
+        $reason = $raceJob.ChildJobs[0].JobStateInfo.Reason
+        throw "concurrent service-log writer exited before holding the equipment lock: state=$($raceJob.State) reason=$reason output=$($earlyOutput -join '|')"
+      }
+      $lockProbe = @'
+begin;
+select not pg_try_advisory_xact_lock(hashtextextended('10000000-0000-4000-8000-000000000100',2026081101));
+rollback;
+'@ | docker exec -i $name psql -q -At -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable
+      if ($LASTEXITCODE -ne 0) { throw 'could not inspect the concurrent equipment lock' }
+      if (($lockProbe -join '') -ceq 't') { $writerHasLock = $true; break }
+      Start-Sleep -Milliseconds 100
+    }
+    if (-not $writerHasLock) { throw 'concurrent service-log writer never acquired the equipment lock' }
+
+    $raceSnapshotSql = @'
+begin;
+select set_config('request.jwt.claims','{"role":"authenticated","sub":"10000000-0000-4000-8000-000000000001"}',true);
+select set_config('request.headers',jsonb_build_object(
+  'x-farm-rx-expected-user-id','10000000-0000-4000-8000-000000000001',
+  'x-farm-rx-access-epochs',jsonb_build_object('10000000-0000-4000-8000-000000000010',(select access_epoch from public.farm_access_epochs where farm_id='10000000-0000-4000-8000-000000000010' and user_id='10000000-0000-4000-8000-000000000001'))::text
+)::text,true);
+set local role authenticated;
+select public.upsert_equipment_cost_snapshot(
+  '10000000-0000-4000-8000-000000000010','10000000-0000-4000-8000-000000000200','10000000-0000-4000-8000-000000000100',
+  '2027-01-01','2027-12-31',125,'preview','10000000-0000-4000-8000-000000000303'
+) #>> '{candidate,total_source_amount}';
+rollback;
+'@
+    $raceTotal = @($raceSnapshotSql | docker exec -i $name psql -q -At -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable)
+    if ($LASTEXITCODE -ne 0 -or $raceTotal[-1] -cne '525.75') {
+      throw "snapshot did not wait for and include the serialized concurrent service cost: $($raceTotal -join '|')"
+    }
+    Receive-Job -Job $raceJob -Wait -ErrorAction Stop | Out-Null
+    if ($raceJob.State -ne 'Completed') { throw 'concurrent service-log writer did not complete cleanly' }
+  } finally {
+    if ($raceJob.State -eq 'Running') { Stop-Job -Job $raceJob -ErrorAction SilentlyContinue }
+    Remove-Job -Job $raceJob -Force -ErrorAction SilentlyContinue
+  }
+
   Invoke-ExpectedFailure @'
 begin;
 select set_config('request.jwt.claims','{"role":"authenticated","sub":"10000000-0000-4000-8000-000000000002"}',true);
@@ -230,10 +308,13 @@ select public.upsert_equipment_cost_snapshot('10000000-0000-4000-8000-0000000000
 
   $passed = $true
   Write-Output 'Disposable equipment-cost snapshot proof passed.'
+} catch {
+  $failure = $_
 } finally {
   $priorPreference = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   docker rm -f $name 2>$null | Out-Null
   $ErrorActionPreference = $priorPreference
-  if (-not $passed) { Write-Error 'Disposable equipment-cost snapshot proof failed; container cleanup was attempted.' }
+  if (-not $passed) { Write-Warning 'Disposable equipment-cost snapshot proof failed; container cleanup was attempted.' }
 }
+if ($failure) { throw $failure }

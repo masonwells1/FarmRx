@@ -145,6 +145,8 @@ never included. Review writes nothing, save rejects a changed server total, and 
 requires an explicit replace. Later service-log changes never silently rewrite Profitability.
 Copied budgets omit equipment snapshots and can import a fresh period deliberately. Mason
 directed that Resend/email information and work remain deferred for this V2 backlog loop.
+Delayed review responses are revision-bound and discarded after a budget or input change;
+database capture is serialized with insert/update/delete activity on that machine's service log.
 
 ## Chunk status ledger (update as gates pass)
 

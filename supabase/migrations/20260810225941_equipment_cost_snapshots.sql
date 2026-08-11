@@ -73,6 +73,49 @@ create trigger budget_cost_lines_guard_equipment_snapshot
 before insert or update on public.budget_cost_lines
 for each row execute function public.guard_equipment_cost_snapshot_write();
 
+-- Serialize every service-log mutation with a snapshot read for the same machine.
+-- Moving a row between machines takes both locks in UUID-text order to avoid a
+-- two-machine deadlock. The RPC below takes the identical one-machine lock
+-- before establishing its capture timestamp or aggregate snapshot.
+create or replace function public.lock_equipment_service_cost_stream()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_first uuid;
+  v_second uuid;
+begin
+  if tg_op = 'INSERT' then
+    perform pg_advisory_xact_lock(hashtextextended(new.equipment_id::text, 2026081101));
+    return new;
+  elsif tg_op = 'DELETE' then
+    perform pg_advisory_xact_lock(hashtextextended(old.equipment_id::text, 2026081101));
+    return old;
+  end if;
+
+  if old.equipment_id = new.equipment_id then
+    perform pg_advisory_xact_lock(hashtextextended(new.equipment_id::text, 2026081101));
+  else
+    if old.equipment_id::text < new.equipment_id::text then
+      v_first := old.equipment_id;
+      v_second := new.equipment_id;
+    else
+      v_first := new.equipment_id;
+      v_second := old.equipment_id;
+    end if;
+    perform pg_advisory_xact_lock(hashtextextended(v_first::text, 2026081101));
+    perform pg_advisory_xact_lock(hashtextextended(v_second::text, 2026081101));
+  end if;
+  return new;
+end;
+$$;
+
+create trigger equipment_service_log_cost_stream_lock
+before insert or update or delete on public.equipment_service_log
+for each row execute function public.lock_equipment_service_cost_stream();
+
 create or replace function public.upsert_equipment_cost_snapshot(
   p_farm_id uuid,
   p_budget_id uuid,
@@ -102,7 +145,7 @@ declare
   v_excluded integer;
   v_sort_order smallint;
   v_label text;
-  v_captured_at timestamptz := clock_timestamp();
+  v_captured_at timestamptz;
   v_candidate jsonb;
 begin
   if auth.uid() is null then
@@ -139,6 +182,9 @@ begin
   if not found then
     raise exception 'the selected machine does not belong to this farm';
   end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_equipment_id::text, 2026081101));
+  v_captured_at := clock_timestamp();
 
   select
     coalesce(sum(cost) filter (where cost is not null), 0),
@@ -307,6 +353,8 @@ end;
 $$;
 
 revoke all on function public.guard_equipment_cost_snapshot_write()
+  from public, anon, authenticated;
+revoke all on function public.lock_equipment_service_cost_stream()
   from public, anon, authenticated;
 revoke all on function public.upsert_equipment_cost_snapshot(
   uuid, uuid, uuid, date, date, numeric, text, uuid, numeric, integer, integer

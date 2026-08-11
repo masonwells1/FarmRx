@@ -245,6 +245,8 @@ The integration is an explicit snapshot, never an automatic financial rewrite:
   not treated as zero-dollar evidence.
 - Review is read-only. Save carries the exact reviewed total and included/excluded counts;
   if service history changes before save, the database rejects it and requires a new review.
+  The UI binds the result to the exact reviewed budget, machine, dates, acres, and request
+  revision; a delayed result is discarded after any of those inputs changes.
 - One `source_kind='equipment'` budget line records the machine, period, source total,
   allocation acres, row counts, and capture time. The established `numeric(14,4)` per-acre
   contract remains intact; source total and acres preserve the auditable calculation.
@@ -259,3 +261,6 @@ The integration is an explicit snapshot, never an automatic financial rewrite:
 - Preview/save are connection-required RPC operations and are never replayed from an offline
   queue. Existing farm-operation context, access-epoch, edit, private-financial, RLS, and
   exact-echo guards remain mandatory.
+- A shared per-machine transaction lock serializes the snapshot aggregate with every service-
+  log insert, update, and delete. Moving a log between machines locks both machine streams in
+  deterministic order. The capture timestamp is assigned only after that lock is held.
