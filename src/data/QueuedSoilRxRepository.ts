@@ -2,12 +2,13 @@ import { isTransportFailure } from './QueuedFieldsRepository'
 import { appendNeedsAttention, dismissNeedsAttention, readNeedsAttention } from './needsAttentionStore'
 import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 import { queueTransaction } from './queueTransaction'
-import { drainSoilRxCleanupOutbox, recordSoilRxCleanup, soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
+import { beginSoilRxAttachmentCustody, drainSoilRxCleanupOutbox, readSoilRxAttachmentCustody, readSoilRxCleanupOutbox, releaseSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey, type SoilRxAttachmentCustodyEntry } from './soilRxCleanupOutbox'
 import { SoilRxWriteQueue, parseSoilRxQueue, soilRxWriteQueueKey, type QueuedSoilTestDraft, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
 import { normalizeSoilTestDraft, sortSoilTestsNewestFirst, validateSoilTestDraft, type SoilReportMime, type SoilRxData, type SoilRxRepository, type SoilTest, type SoilTestDraft } from './soilRx'
 import { validateSoilReportFile } from './soilRxStorage'
+import { setModuleSyncStatus } from './syncStatus'
 import type { SupabaseSoilRxRepository } from './SupabaseSoilRxRepository'
-import { launchReplayInBackground, type StorageLike } from './writeQueue'
+import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
 import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, writeWorkspaceCache } from './workspaceCache'
 import type { FarmOperationContext } from './farmOperationContext'
 
@@ -20,7 +21,8 @@ type Dependencies = {
   createId: () => string
   clock: () => string
   isOffline: () => boolean
-  uploadReport: (farmId: string, fieldId: string, testId: string, file: File, context: FarmOperationContext) => Promise<string>
+  createReportPath: (farmId: string, fieldId: string, testId: string, file: File) => string
+  uploadReport: (path: string, file: File, context: FarmOperationContext) => Promise<void>
   removeReports: (paths: string[], context: FarmOperationContext) => Promise<string[]>
 }
 const attention = 'A saved Soil Rx change needs attention. Nothing was deleted.'
@@ -46,23 +48,61 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
   }
   private async retain(source: Source, data: SoilRxData) { this.workspace = data; await writeWorkspaceCache(this.cacheScope(source.context), data, captureWorkspaceCacheFence(this.cacheScope(source.context))); await verifyQueuedReadContext(this.d, source.operationContext) }
   private cleanupKey(userId: string) { return soilRxCleanupOutboxKey(this.d.projectRef, userId) }
-  private recordCleanup(source: Source, path: string) { if (!recordSoilRxCleanup(this.d.storage, this.cleanupKey(source.context.userId), { path, ...source.context, recordedAt: this.d.clock() })) console.warn('Farm Rx could not retain Soil Rx file-cleanup custody on this device.') }
-  private async drainCleanup(source: Source) {
+  private refreshSync(source: Source) {
+    const queued = source.queue.read().entries.length
+    const parked = readNeedsAttention(this.d.storage, source.queue.key).length
+    const cleanup = readSoilRxCleanupOutbox(this.d.storage, this.cleanupKey(source.context.userId)).filter((entry) => entry.userId === source.context.userId && entry.farmId === source.context.farmId).length
+    if (cleanup) setModuleSyncStatus('soilRx', { kind: 'blocked', pending: queued + parked + cleanup, message: `${cleanup} Soil Rx attachment ${cleanup === 1 ? 'cleanup needs' : 'cleanups need'} attention. Retry when connected.` })
+    else if (parked) setModuleSyncStatus('soilRx', { kind: 'blocked', pending: queued + parked, message: `${parked} Soil Rx ${parked === 1 ? 'save needs' : 'saves need'} attention.` })
+    else if (queued) setModuleSyncStatus('soilRx', { kind: 'pending', pending: queued })
+    else setModuleSyncStatus('soilRx', { kind: 'synced', pending: 0 })
+  }
+
+  private async cleanAttachmentResources(source: Source, custody: SoilRxAttachmentCustodyEntry, verify: () => void) {
+    await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+    const rollback = await this.live.rollbackTestOperation(custody.testId, source.operationContext)
+    verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+    const paths = [...new Set([...custody.paths, ...rollback.storage_paths])]
+    const confirmed = await this.d.removeReports(paths, source.operationContext)
+    verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+    if (paths.some((path) => !confirmed.includes(path))) throw new Error('Farm Rx could not confirm Soil Rx attachment cleanup. The cleanup remains safely queued.')
+  }
+  private async forgetRolledBackTest(source: Source, testId: string) {
+    if (!this.workspace?.tests.some((test) => test.id === testId)) return
+    await this.retain(source, { tests: this.workspace.tests.filter((test) => test.id !== testId) })
+  }
+  private async drainCleanup(source: Source, verify: () => void) {
     if (this.d.isOffline()) return
-    await drainSoilRxCleanupOutbox(this.d.storage, this.cleanupKey(source.context.userId), source.context.userId, source.context.farmId, async (paths) => {
+    const key = this.cleanupKey(source.context.userId)
+    const attachmentEntries = readSoilRxCleanupOutbox(this.d.storage, key).filter((entry): entry is SoilRxAttachmentCustodyEntry => entry.kind === 'attachment_save' && entry.userId === source.context.userId && entry.farmId === source.context.farmId)
+    for (const custody of attachmentEntries) {
+      try {
+        await this.cleanAttachmentResources(source, custody, verify)
+        await this.forgetRolledBackTest(source, custody.testId)
+        verify(); releaseSoilRxAttachmentCustody(this.d.storage, key, custody.userId, custody.farmId, custody.testId)
+      } catch (error) {
+        if (isFarmReplayContextChangedError(error)) throw error
+        this.refreshSync(source)
+        throw new Error('A Soil Rx attachment cleanup still needs attention. Retry when connected.')
+      }
+    }
+    await drainSoilRxCleanupOutbox(this.d.storage, key, source.context.userId, source.context.farmId, async (paths) => {
       await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
       const confirmed = await this.d.removeReports(paths, source.operationContext)
-      await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+      verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
       return confirmed
     })
+    const remaining = readSoilRxCleanupOutbox(this.d.storage, key).some((entry) => entry.userId === source.context.userId && entry.farmId === source.context.farmId)
+    if (remaining) { this.refreshSync(source); throw new Error('A Soil Rx attachment cleanup still needs attention. Retry when connected.') }
   }
 
   async getData(fieldId?: string) {
-    const source = await this.source(); const entries = source.queue.read().entries
+    const source = await this.source()
+    await queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => { await this.drainCleanup(source, verify) })
+    const entries = source.queue.read().entries; this.refreshSync(source)
     try {
       const data = await this.live.getData(fieldId); await verifyQueuedReadContext(this.d, source.operationContext)
       if (!fieldId) await this.retain(source, data)
-      await this.drainCleanup(source)
       return this.overlay(data, entries.filter((entry) => !fieldId || entry.draft.field_id === fieldId))
     } catch (error) {
       await verifyQueuedReadContext(this.d, source.operationContext)
@@ -82,47 +122,80 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     if (report) {
       const fileError = validateSoilReportFile(report); if (fileError) throw new Error(fileError)
       if (this.d.isOffline()) throw new Error('Connect to the internet to attach a lab report. Text-only Soil Rx records can still save offline.')
-      await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
-      const saved = await this.live.saveTestOperation(normalized, source.operationContext)
-      await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
-      const path = await this.d.uploadReport(source.context.farmId, normalized.field_id, normalized.id, report, source.operationContext)
-      await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
-      try {
-        const complete = await this.live.saveAttachmentOperation(saved, { id: this.d.createId(), storagePath: path, originalFilename: report.name.trim(), mimeType: report.type.toLowerCase() as SoilReportMime, sizeBytes: report.size }, source.operationContext)
-        await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.tests ?? []).filter((test) => test.id !== complete.id), complete]) })
-        return complete
-      } catch (error) {
-        await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
-        try { const confirmed = await this.d.removeReports([path], source.operationContext); if (!confirmed.includes(path)) this.recordCleanup(source, path) } catch { this.recordCleanup(source, path) }
-        throw error
-      }
+      return queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
+        const custodyKey = this.cleanupKey(source.context.userId)
+        const path = this.d.createReportPath(source.context.farmId, normalized.field_id, normalized.id, report)
+        const nextCustody = { testId: normalized.id, path, ...source.context, recordedAt: this.d.clock() }
+        const existing = readSoilRxAttachmentCustody(this.d.storage, custodyKey, source.context.userId, source.context.farmId, normalized.id)
+        if (existing) {
+          try { await this.cleanAttachmentResources(source, existing, verify); verify(); replaceSoilRxAttachmentCustody(this.d.storage, custodyKey, nextCustody) }
+          catch (error) { this.refreshSync(source); throw error }
+        } else { verify(); beginSoilRxAttachmentCustody(this.d.storage, custodyKey, nextCustody) }
+        try {
+          await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+          const saved = await this.live.saveTestOperation(normalized, source.operationContext)
+          verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+          await this.d.uploadReport(path, report, source.operationContext)
+          verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+          const complete = await this.live.saveAttachmentOperation(saved, { id: this.d.createId(), storagePath: path, originalFilename: report.name.trim(), mimeType: report.type.toLowerCase() as SoilReportMime, sizeBytes: report.size }, source.operationContext)
+          verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+          await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.tests ?? []).filter((test) => test.id !== complete.id), complete]) })
+          verify(); releaseSoilRxAttachmentCustody(this.d.storage, custodyKey, source.context.userId, source.context.farmId, normalized.id)
+          this.refreshSync(source)
+          return complete
+        } catch (error) {
+          const custody = readSoilRxAttachmentCustody(this.d.storage, custodyKey, source.context.userId, source.context.farmId, normalized.id)
+          if (custody) {
+            try { await this.cleanAttachmentResources(source, custody, verify); await this.forgetRolledBackTest(source, normalized.id); verify(); releaseSoilRxAttachmentCustody(this.d.storage, custodyKey, source.context.userId, source.context.farmId, normalized.id) }
+            catch { this.refreshSync(source); /* durable custody remains for matching-context replay */ }
+          }
+          throw error
+        }
+      })
     }
     const entry: SoilRxQueueEntryV1 = { version: 1, module: 'soilRx', kind: 'saveTest', operationId: this.d.createId(), userId: source.context.userId, farmId: source.context.farmId, enqueuedAt: this.d.clock(), draft: normalized }
     return queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
       await verifyQueuedOperationContext(this.d, source.operationContext, source.context); verify()
-      const enqueue = async () => { source.queue.append(entry); const pending = this.pending(entry); await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.tests ?? []).filter((test) => test.id !== pending.id), pending]) }); return pending }
+      const enqueue = async () => { const envelope = source.queue.append(entry); setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); const pending = this.pending(entry); await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.tests ?? []).filter((test) => test.id !== pending.id), pending]) }); return pending }
       if (this.d.isOffline() || source.queue.read().entries.length) { const result = await enqueue(); launchReplayInBackground(() => this.inspectAndReplay()); return result }
-      try { const saved = await this.live.saveTestOperation(normalized, source.operationContext); verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context); await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.tests ?? []).filter((test) => test.id !== saved.id), saved]) }); return saved }
+      try { const saved = await this.live.saveTestOperation(normalized, source.operationContext); verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context); await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.tests ?? []).filter((test) => test.id !== saved.id), saved]) }); this.refreshSync(source); return saved }
       catch (error) { await verifyQueuedOperationContext(this.d, source.operationContext, source.context); if (!isTransportFailure(error, this.d.isOffline())) throw error; return enqueue() }
     })
   }
 
   async inspectAndReplay() {
-    const source = await this.source(); if (this.d.isOffline()) return
-    await queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
-      let envelope = source.queue.read()
-      while (envelope.entries.length) {
-        const entry = envelope.entries[0]!
-        await verifyQueuedOperationContext(this.d, source.operationContext, { userId: entry.userId, farmId: entry.farmId })
-        try { const saved = await this.live.saveTestOperation(entry.draft, source.operationContext); verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context); envelope = source.queue.removeConfirmedHead(entry.operationId); if (this.workspace) this.workspace = { tests: sortSoilTestsNewestFirst([...this.workspace.tests.filter((test) => test.id !== saved.id), saved]) } }
-        catch (error) { await verifyQueuedOperationContext(this.d, source.operationContext, source.context); if (isTransportFailure(error, this.d.isOffline())) return; appendNeedsAttention(this.d.storage, source.queue.key, { id: entry.operationId, module: 'soilRx', createdAt: entry.enqueuedAt, message: attention, entry, reason: 'database_update_required' }); envelope = source.queue.removeConfirmedHead(entry.operationId) }
-      }
-    })
-    await this.drainCleanup(source)
+    const source = await this.source()
+    try {
+      await queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
+        await this.drainCleanup(source, verify)
+        let envelope = source.queue.read()
+        if (!envelope.entries.length) { this.refreshSync(source); return }
+        if (this.d.isOffline()) { setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); return }
+        while (envelope.entries.length) {
+          const entry = envelope.entries[0]!
+          await verifyQueuedOperationContext(this.d, source.operationContext, { userId: entry.userId, farmId: entry.farmId })
+          setModuleSyncStatus('soilRx', { kind: 'syncing', pending: envelope.entries.length })
+          try {
+            const saved = await this.live.saveTestOperation(entry.draft, source.operationContext)
+            verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+            envelope = source.queue.removeConfirmedHead(entry.operationId)
+            if (this.workspace) this.workspace = { tests: sortSoilTestsNewestFirst([...this.workspace.tests.filter((test) => test.id !== saved.id), saved]) }
+          } catch (error) {
+            await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+            if (isTransportFailure(error, this.d.isOffline())) { setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); return }
+            verify(); appendNeedsAttention(this.d.storage, source.queue.key, { id: entry.operationId, module: 'soilRx', createdAt: entry.enqueuedAt, message: attention, entry })
+            envelope = source.queue.removeConfirmedHead(entry.operationId)
+          }
+        }
+        this.refreshSync(source)
+      })
+    } catch (error) {
+      if (isFarmReplayContextChangedError(error)) throw error
+      setModuleSyncStatus('soilRx', { kind: 'blocked', pending: Math.max(1, source.queue.read().entries.length + readNeedsAttention(this.d.storage, source.queue.key).length), message: attention })
+    }
   }
-  async deleteTest(id: string) { const source = await this.source(); if (this.d.isOffline()) throw new Error('Connect to the internet to delete a Soil Rx record.'); const result = await this.live.deleteTestOperation(id, source.operationContext); await verifyQueuedOperationContext(this.d, source.operationContext, source.context); if (this.workspace) this.workspace = { tests: this.workspace.tests.filter((test) => test.id !== id) }; return result }
   async getReportUrl(path: string) { const source = await this.source(); if (this.d.isOffline()) throw new Error('Connect to the internet to open this lab report.'); return this.live.getReportUrlOperation(path, source.operationContext) }
-  async getNeedsAttentionQueueKey() { return (await this.source()).queue.key }
-  async retryNeedsAttention(queueKey: string, operationId: string) { const source = await this.source(); if (source.queue.key !== queueKey) throw new Error('The selected farm changed before this Soil Rx retry could begin.'); const record = readNeedsAttention(this.d.storage, queueKey).find((item) => item.id === operationId); if (!record) return; const entry = parseSoilRxQueue(JSON.stringify({ version: 1, entries: [record.entry] })).entries[0]!; await queueTransaction(queueKey, this.d.storage, this.d.createId, async (verify) => { verify(); source.queue.append(entry); dismissNeedsAttention(this.d.storage, queueKey, operationId) }); await this.inspectAndReplay() }
-  async dismissNeedsAttention(queueKey: string, operationId: string) { const source = await this.source(); if (source.queue.key !== queueKey) throw new Error('The selected farm changed before this Soil Rx item could be dismissed.'); dismissNeedsAttention(this.d.storage, queueKey, operationId) }
+  async getNeedsAttentionQueueKey() { const source = await this.source(); this.refreshSync(source); return source.queue.key }
+  async retryNeedsAttention(queueKey: string, operationId: string) { const source = await this.source(); if (source.queue.key !== queueKey) throw new Error('The selected farm changed before this Soil Rx retry could begin.'); const record = readNeedsAttention(this.d.storage, queueKey).find((item) => item.id === operationId); if (!record) { this.refreshSync(source); return } const entry = parseSoilRxQueue(JSON.stringify({ version: 1, entries: [record.entry] })).entries[0]!; await queueTransaction(queueKey, this.d.storage, this.d.createId, async (verify) => { verify(); source.queue.append(entry); dismissNeedsAttention(this.d.storage, queueKey, operationId) }); this.refreshSync(source); await this.inspectAndReplay() }
+  async dismissNeedsAttention(queueKey: string, operationId: string) { const source = await this.source(); if (source.queue.key !== queueKey) throw new Error('The selected farm changed before this Soil Rx item could be dismissed.'); dismissNeedsAttention(this.d.storage, queueKey, operationId); this.refreshSync(source) }
 }

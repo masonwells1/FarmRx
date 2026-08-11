@@ -65,8 +65,14 @@ try {
     $token = Get-CedarAccessToken $boundary.PublishableKey
     $verifySql = Get-Content -Raw -Encoding UTF8 -LiteralPath $verify
     $action = {
-      $browserOutput = @(& npx playwright test --config playwright.cedar-creek.config.ts 2>&1)
-      $browserExit = $LASTEXITCODE
+      $priorErrorActionPreference = $ErrorActionPreference
+      try {
+        $ErrorActionPreference = 'Continue'
+        $browserOutput = @(& npx playwright test --config playwright.cedar-creek.config.ts 2>&1)
+        $browserExit = $LASTEXITCODE
+      } finally {
+        $ErrorActionPreference = $priorErrorActionPreference
+      }
       $browserOutput | Out-Host
       $browserText = [string]::Join("`n", [string[]]$browserOutput)
       if ($browserExit -ne 0 -or $browserText -match '(?m)^\s*\d+ failed\s*$') {

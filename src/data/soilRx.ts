@@ -13,12 +13,10 @@ export interface SoilTestDraft extends SoilMeasurements { id?: string; field_id:
 export interface SoilTestAttachment { id: string; farm_id: string; field_id: string; test_id: string; storage_path: string; original_filename: string; mime_type: SoilReportMime; size_bytes: number; created_by: string; created_at: string }
 export interface SoilTest extends SoilMeasurements { id: string; farm_id: string; field_id: string; sample_date: string; lab_name: string; created_by: string; created_at: string; updated_at: string; attachment: SoilTestAttachment | null; pending?: boolean }
 export interface SoilRxData { tests: SoilTest[] }
-export interface SoilTestDeleteReceipt { id: string; deleted: true; storage_path: string | null }
 export type SoilReportMime = 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/heic' | 'image/heif'
 export interface SoilRxRepository {
   getData(fieldId?: string): Promise<SoilRxData>
   saveTest(draft: SoilTestDraft, report?: File): Promise<SoilTest>
-  deleteTest(id: string): Promise<SoilTestDeleteReceipt>
   getReportUrl(storagePath: string): Promise<string>
   getNeedsAttentionQueueKey?(): Promise<string>
   retryNeedsAttention?(queueKey: string, operationId: string): Promise<void>

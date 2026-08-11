@@ -23,10 +23,10 @@ class Gateway implements SoilRxDataGateway {
   async loadAttachments() { return this.attachments }
   async saveTest() { return this.saved }
   async saveAttachment() { return this.attachmentSaved }
-  async deleteTest() { this.deletes += 1; return { id: testId } }
+  async deleteTest() { this.deletes += 1; return [{ id: testId }] }
 }
 const gateway = new Gateway()
-const repository = new SupabaseSoilRxRepository({ gateway, getFarmId: async () => farm, getOperationContext: async () => context, verifyOperationContext: async (expected) => assert.deepEqual(expected, context), createId: () => operation, createReportUrl: async () => 'https://signed.invalid/report', removeReports: async (paths) => paths })
+const repository = new SupabaseSoilRxRepository({ gateway, getFarmId: async () => farm, getOperationContext: async () => context, verifyOperationContext: async (expected) => assert.deepEqual(expected, context), createId: () => operation, createReportUrl: async () => 'https://signed.invalid/report' })
 
 const loaded = await repository.getData()
 assert.equal(loaded.tests.length, 1)
@@ -41,7 +41,7 @@ gateway.attachmentSaved = { id: attachmentId, farm_id: farm, field_id: field, te
 const attached = await repository.saveAttachmentOperation(loaded.tests[0]!, { id: attachmentId, storagePath: path, originalFilename: 'soil.pdf', mimeType: 'application/pdf', sizeBytes: 1024 }, context)
 assert.equal(attached.attachment?.storage_path, path)
 gateway.attachments = [gateway.attachmentSaved]
-assert.deepEqual(await repository.deleteTest(testId), { id: testId, deleted: true, storage_path: path })
+assert.deepEqual(await repository.rollbackTestOperation(testId, context), { id: testId, storage_paths: [path] })
 assert.equal(gateway.deletes, 1)
 
 const queueStorage = new MemoryStorage(); const queueKey = soilRxWriteQueueKey('test-project', user, farm); const queue = new SoilRxWriteQueue(queueStorage, queueKey)
@@ -51,7 +51,9 @@ assert.throws(() => parseSoilRxQueue(JSON.stringify({ version: 1, entries: [{ ..
 
 const cleanupKey = soilRxCleanupOutboxKey('test-project', user)
 assert.equal(recordSoilRxCleanup(queueStorage, cleanupKey, { path, userId: user, farmId: farm, recordedAt: stamp }), true)
-assert.equal(readSoilRxCleanupOutbox(queueStorage, cleanupKey)[0]?.path, path)
+const cleanup = readSoilRxCleanupOutbox(queueStorage, cleanupKey)[0]
+assert.equal(cleanup?.kind, 'report_path')
+assert.equal(cleanup?.kind === 'report_path' ? cleanup.path : null, path)
 
 const mockStorage = new MemoryStorage(); mockStorage.setItem('unrelated', 'keep-byte-for-byte')
 const mock = new MockSoilRxRepository({ storage: mockStorage, key: 'soil-rx-mock', farmId: farm, userId: user, createId: () => testId, clock: () => stamp })

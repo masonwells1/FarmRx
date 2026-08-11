@@ -12,7 +12,7 @@ import { parseEquipmentTasksQueue } from './equipmentTasksWriteQueue'
 import { parseNotificationsQueue } from './notificationsWriteQueue'
 import { parseProgramsQueue } from './programsWriteQueue'
 import { parseSoilRxQueue } from './soilRxWriteQueue'
-import { soilRxCleanupOutboxKey, type SoilRxCleanupEntry } from './soilRxCleanupOutbox'
+import { readSoilRxCleanupOutbox, soilRxCleanupOutboxKey, type SoilRxStoredCleanupEntry } from './soilRxCleanupOutbox'
 import type { FarmOperationContext } from './farmOperationContext'
 
 export type RevokedWorkKind = 'queue' | 'needs_attention' | 'scouting_cleanup' | 'soil_rx_cleanup'
@@ -103,12 +103,18 @@ function validScoutingCleanup(value: unknown, farmId: string, userId: string): v
   const [pathFarm, fieldId, noteId, file, ...extra] = entry.path.split('/')
   return extra.length === 0 && pathFarm === farmId && uuid.test(fieldId ?? '') && uuid.test(noteId ?? '') && !!file && file !== '.' && file !== '..'
 }
-function validSoilRxCleanup(value: unknown, farmId: string, userId: string): value is SoilRxCleanupEntry {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 4) return false
+function validSoilRxCleanup(value: unknown, farmId: string, userId: string): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const entry = value as Record<string, unknown>
-  if (entry.userId !== userId || !uuid.test(String(entry.userId)) || entry.farmId !== farmId || !uuid.test(String(entry.farmId)) || typeof entry.recordedAt !== 'string' || Number.isNaN(Date.parse(entry.recordedAt)) || typeof entry.path !== 'string') return false
-  const [pathFarm, fieldId, testId, file, ...extra] = entry.path.split('/')
-  return extra.length === 0 && pathFarm === farmId && uuid.test(fieldId ?? '') && uuid.test(testId ?? '') && !!file && file !== '.' && file !== '..'
+  if (entry.userId !== userId || !uuid.test(String(entry.userId)) || entry.farmId !== farmId || !uuid.test(String(entry.farmId)) || typeof entry.recordedAt !== 'string' || Number.isNaN(Date.parse(entry.recordedAt))) return false
+  const validPath = (valueToCheck: unknown, expectedTestId?: string) => {
+    if (typeof valueToCheck !== 'string') return false
+    const [pathFarm, fieldId, testId, file, ...extra] = valueToCheck.split('/')
+    return extra.length === 0 && pathFarm === farmId && uuid.test(fieldId ?? '') && uuid.test(testId ?? '') && (!expectedTestId || testId === expectedTestId) && !!file && file !== '.' && file !== '..'
+  }
+  if (!Object.hasOwn(entry, 'kind')) return Object.keys(entry).length === 4 && validPath(entry.path)
+  if (entry.kind === 'report_path') return Object.keys(entry).length === 5 && validPath(entry.path)
+  return entry.kind === 'attachment_save' && Object.keys(entry).length === 6 && typeof entry.testId === 'string' && uuid.test(entry.testId) && Array.isArray(entry.paths) && entry.paths.length > 0 && new Set(entry.paths).size === entry.paths.length && entry.paths.every((path) => validPath(path, entry.testId as string))
 }
 function parse(raw: string | null): Envelope {
   if (raw === null) return { version: 1, records: [] }
@@ -157,9 +163,9 @@ export function quarantineRevokedFarmWork(storage: EnumeratedStorage, scope: Sco
   quarantineLegacyScoutingCleanup(storage, scope.projectRef)
   const soilCleanupKey = soilRxCleanupOutboxKey(scope.projectRef, scope.userId)
   const soilCleanupRaw = storage.getItem(soilCleanupKey)
-  let soilCleanupAll: SoilRxCleanupEntry[] = []
+  let soilCleanupAll: SoilRxStoredCleanupEntry[] = []
   if (soilCleanupRaw !== null) {
-    try { const parsed: unknown = JSON.parse(soilCleanupRaw); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).length !== 2 || (parsed as { version?: unknown }).version !== 1 || !Array.isArray((parsed as { entries?: unknown }).entries) || !(parsed as { entries: unknown[] }).entries.every((entry) => !!entry && typeof entry === 'object' && !Array.isArray(entry) && typeof (entry as { farmId?: unknown }).farmId === 'string' && validSoilRxCleanup(entry, (entry as { farmId: string }).farmId, scope.userId))) throw new Error(); soilCleanupAll = (parsed as { entries: SoilRxCleanupEntry[] }).entries } catch { throw new Error('Farm Rx could not safely read saved Soil Rx cleanup work. Nothing was cleared.') }
+    try { soilCleanupAll = readSoilRxCleanupOutbox(storage, soilCleanupKey); if (!soilCleanupAll.every((entry) => validSoilRxCleanup(entry, entry.farmId, scope.userId))) throw new Error() } catch { throw new Error('Farm Rx could not safely read saved Soil Rx cleanup work. Nothing was cleared.') }
     const partition = soilCleanupAll.filter((entry) => entry.farmId === scope.farmId)
     if (partition.length) candidate.push({ key: soilCleanupKey, kind: 'soil_rx_cleanup', payload: partition })
   }
@@ -180,7 +186,7 @@ export function quarantineRevokedFarmWork(storage: EnumeratedStorage, scope: Sco
       const bytes = JSON.stringify({ version: 2, entries: cleanupAll.filter((entry) => entry.farmId !== scope.farmId || entry.userId !== scope.userId) })
       storage.setItem(item.key, bytes); if (storage.getItem(item.key) !== bytes) throw new Error('Farm Rx could not remove active scouting cleanup work after recovery was saved.')
     } else if (item.kind === 'soil_rx_cleanup') {
-      const bytes = JSON.stringify({ version: 1, entries: soilCleanupAll.filter((entry) => entry.farmId !== scope.farmId || entry.userId !== scope.userId) })
+      const bytes = JSON.stringify({ version: 2, entries: soilCleanupAll.filter((entry) => entry.farmId !== scope.farmId || entry.userId !== scope.userId) })
       storage.setItem(item.key, bytes); if (storage.getItem(item.key) !== bytes) throw new Error('Farm Rx could not remove active Soil Rx cleanup work after recovery was saved.')
     } else { storage.removeItem(item.key); if (storage.getItem(item.key) !== null) throw new Error('Farm Rx could not remove active saved work after recovery was saved.') }
   }

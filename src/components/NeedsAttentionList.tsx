@@ -7,12 +7,12 @@ import { ProfitabilityWriteQueue } from '../data/profitabilityWriteQueue'
 import { ScoutingWriteQueue } from '../data/scoutingWriteQueue'
 import { SAVE_DURABILITY_UPDATE_MESSAGE } from '../data/saveDurability'
 
-type Module = 'inventory' | 'grain' | 'equipment_tasks' | 'profitability' | 'scouting' | 'fieldLog'
+type Module = 'inventory' | 'grain' | 'equipment_tasks' | 'profitability' | 'scouting' | 'fieldLog' | 'soilRx'
 type Row = NeedsAttentionRecord & { queueKey: string }
 function records(queueKey: string | null): Row[] { return typeof window === 'undefined' || !queueKey ? [] : readNeedsAttention(window.localStorage, queueKey).map((record) => ({ ...record, queueKey })) }
 function label(entry: unknown) {
   const kind = entry && typeof entry === 'object' ? String((entry as { kind?: unknown }).kind ?? '') : ''
-  return ({ saveProduct: 'Product', saveReceiptBundle: 'Receipt', cancelReceipt: 'Receipt cancellation', addAdjustment: 'Count adjustment', saveApplicationBundle: 'Spray record', saveProductionEstimate: 'Production estimate', saveContract: 'Grain contract', replaceMarketingPlan: 'Marketing plan', saveCashBid: 'Cash bid', saveMarketingAlertRule: 'Marketing alert', deleteMarketingAlertRule: 'Marketing alert removal', saveFirmOffer: 'Firm offer', deleteFirmOffer: 'Firm offer removal', upsertGrainBin: 'Grain bin', appendBinTransaction: 'Bin movement', saveGrainAlertSettings: 'Alert settings', saveEquipment: 'Machine', addMeterReading: 'Meter reading', saveInterval: 'Service reminder', addServiceLogEntry: 'Service record', saveTask: 'Task', deleteTask: 'Task removal', deleteServiceLogEntry: 'Service record removal', deleteInterval: 'Service reminder removal', saveNote: 'Scouting note', saveEntry: 'Field log entry', deleteEntry: 'Field log entry removal', createBudget: 'Budget', saveBudget: 'Budget', saveCostLine: 'Budget cost', deleteCostLine: 'Budget cost removal', replaceMatrixSteps: 'Profitability matrix', saveAllocation: 'Field allocation', deleteAllocation: 'Field allocation removal', copyBudget: 'Budget copy' } as Record<string, string>)[kind] ?? 'Saved change'
+  return ({ saveProduct: 'Product', saveReceiptBundle: 'Receipt', cancelReceipt: 'Receipt cancellation', addAdjustment: 'Count adjustment', saveApplicationBundle: 'Spray record', saveProductionEstimate: 'Production estimate', saveContract: 'Grain contract', replaceMarketingPlan: 'Marketing plan', saveCashBid: 'Cash bid', saveMarketingAlertRule: 'Marketing alert', deleteMarketingAlertRule: 'Marketing alert removal', saveFirmOffer: 'Firm offer', deleteFirmOffer: 'Firm offer removal', upsertGrainBin: 'Grain bin', appendBinTransaction: 'Bin movement', saveGrainAlertSettings: 'Alert settings', saveEquipment: 'Machine', addMeterReading: 'Meter reading', saveInterval: 'Service reminder', addServiceLogEntry: 'Service record', saveTask: 'Task', deleteTask: 'Task removal', deleteServiceLogEntry: 'Service record removal', deleteInterval: 'Service reminder removal', saveNote: 'Scouting note', saveTest: 'Soil test', saveEntry: 'Field log entry', deleteEntry: 'Field log entry removal', createBudget: 'Budget', saveBudget: 'Budget', saveCostLine: 'Budget cost', deleteCostLine: 'Budget cost removal', replaceMatrixSteps: 'Profitability matrix', saveAllocation: 'Field allocation', deleteAllocation: 'Field allocation removal', copyBudget: 'Budget copy' } as Record<string, string>)[kind] ?? 'Saved change'
 }
 function legacyFieldLog(entry: unknown) { return !!entry && typeof entry === 'object' && (entry as { version?: unknown }).version === 1 && (entry as { module?: unknown }).module === 'fieldLog' }
 function legacyFieldLogDetail(entry: unknown) {
@@ -35,6 +35,7 @@ function append(module: Module, queueKey: string, entry: unknown) {
   if (module === 'grain') return new GrainWriteQueue(window.localStorage, queueKey).append(entry as never)
   if (module === 'equipment_tasks') return new EquipmentTasksWriteQueue(window.localStorage, queueKey).append(entry as never)
   if (module === 'scouting') return new ScoutingWriteQueue(window.localStorage, queueKey).append(entry as never)
+  if (module === 'soilRx') throw new Error('Use the guarded Soil Rx retry action.')
   return new ProfitabilityWriteQueue(window.localStorage, queueKey).append(entry as never)
 }
 
