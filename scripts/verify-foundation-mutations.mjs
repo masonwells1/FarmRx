@@ -9,6 +9,7 @@ const files = [
   'docs/password-recovery-support.md',
   'src/App.tsx', 'src/main.tsx', 'src/sw.ts', 'src/auth/AuthProvider.tsx', 'src/auth/passwordRecovery.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json', 'vite.config.ts', 'playwright.config.ts', 'playwright.password-form.config.ts',
   'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1', 'scripts/verify-password-form-browser.ps1', 'scripts/verify-push-access-revocation-disposable.ps1',
+  'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/queuedOperationGuard.ts',
@@ -62,6 +63,9 @@ try {
   reset()
   mutate('scripts/verify-push-access-revocation-disposable.ps1', (source) => source.replace("if (select endpoint from first_authorized_rep_claim) is distinct from 'https://push.example.test/removed-rep-device' then", 'if false then'))
   detected('authorized rep exact endpoint control removal', 'push:authorized-rep-exact-endpoint-control')
+  reset()
+  mutate('supabase/functions/_shared/pushDeliveryLogic.ts', (source) => source.replace('const stillAuthorized = await callBeforeAbort(() => database.revalidateTarget(target.target_id, controller.signal), controller.signal)', 'const stillAuthorized = true'))
+  detected('provider send-time access revalidation removal', 'push:provider-preflight-revalidation')
   reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1') }", "& (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1')"))
   detected('intermediate foundation exit check removal', 'orchestrator:all-lanes-checked')
@@ -134,7 +138,7 @@ try {
   reset()
   mutate('src/App.tsx', (source) => source.replace('{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}\n          {error && <p className="auth-error" role="alert">{error}</p>}', '{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}'))
   detected('reset storage failure loses visible error', 'auth:reset-storage-error-rendered')
-  console.log('Foundation mutation drill: PASS (31/31 controlled mutations turned the gate red; parenthesized auth-form regression accepted)')
+  console.log('Foundation mutation drill: PASS (32/32 controlled mutations turned the gate red; parenthesized auth-form regression accepted)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

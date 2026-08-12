@@ -144,6 +144,29 @@ where farm_id='00000000-0000-4000-8000-000000000010'
 
 do $$
 declare
+  claimed_target uuid;
+  claimed_subscription uuid;
+begin
+  select target_id into claimed_target from first_authorized_claim;
+  select subscription_id into claimed_subscription
+  from public.push_delivery_targets
+  where id=claimed_target;
+  if public.revalidate_claimed_push_delivery_target(claimed_target) then
+    raise exception 'revoked recipient remained authorized immediately before provider send';
+  end if;
+  if (select status from public.push_delivery_targets where id=claimed_target) <> 'gone' then
+    raise exception 'send-time revalidation did not terminalize the revoked target';
+  end if;
+  if not exists (
+    select 1 from public.push_subscriptions
+    where id=claimed_subscription
+  ) then
+    raise exception 'access revocation incorrectly deleted the valid device subscription';
+  end if;
+end $$;
+
+do $$
+declare
   reclaimed_count integer;
 begin
   select count(*) into reclaimed_count
@@ -263,6 +286,11 @@ begin
     or has_function_privilege('authenticated','public.push_recipient_has_current_farm_access(uuid,uuid)','EXECUTE')
     or has_function_privilege('service_role','public.push_recipient_has_current_farm_access(uuid,uuid)','EXECUTE') then
     raise exception 'internal push access helper is directly executable by an API role';
+  end if;
+  if has_function_privilege('anon','public.revalidate_claimed_push_delivery_target(uuid)','EXECUTE')
+    or has_function_privilege('authenticated','public.revalidate_claimed_push_delivery_target(uuid)','EXECUTE')
+    or not has_function_privilege('service_role','public.revalidate_claimed_push_delivery_target(uuid)','EXECUTE') then
+    raise exception 'send-time push revalidation grants are not service-role only';
   end if;
 end $$;
 '@ | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable

@@ -220,6 +220,95 @@ begin
 end;
 $$;
 
+-- A batch claim may return more targets than the Edge worker can send at once.
+-- Revalidate each target immediately before provider I/O so a revoke committed
+-- after the batch claim still suppresses prefetched work. This cannot recall a
+-- provider request already accepted, but it closes the avoidable local window.
+create function public.revalidate_claimed_push_delivery_target(p_target_id uuid)
+returns boolean
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_target public.push_delivery_targets%rowtype;
+  v_farm_id uuid;
+  v_user_id uuid;
+begin
+  if not public.request_uses_service_role() then
+    raise exception 'server delivery only';
+  end if;
+
+  select *
+  into v_target
+  from public.push_delivery_targets
+  where id = p_target_id
+  for update;
+
+  if not found then
+    raise exception 'push delivery target not found';
+  end if;
+  if v_target.status <> 'sending' then
+    return false;
+  end if;
+
+  select notification.farm_id, notification.user_id
+  into v_farm_id, v_user_id
+  from public.push_deliveries delivery
+  join public.notifications notification
+    on notification.id = delivery.notification_id
+  where delivery.id = v_target.delivery_id;
+
+  if public.push_recipient_has_current_farm_access(v_farm_id, v_user_id) then
+    return true;
+  end if;
+
+  update public.push_delivery_targets
+  set status = 'gone',
+      updated_at = now(),
+      last_error = 'farm access removed'
+  where id = p_target_id;
+
+  update public.push_deliveries delivery
+  set status = case
+        when exists (
+          select 1 from public.push_delivery_targets target
+          where target.delivery_id = delivery.id
+            and target.status = 'failed'
+            and target.attempts >= 10
+        ) then 'failed'
+        when exists (
+          select 1 from public.push_delivery_targets target
+          where target.delivery_id = delivery.id
+            and target.status not in ('sent','gone')
+        ) then case
+          when exists (
+            select 1 from public.push_delivery_targets target
+            where target.delivery_id = delivery.id
+              and target.status = 'failed'
+          ) then 'failed' else 'pending' end
+        else 'sent'
+      end,
+      sent_at = case
+        when not exists (
+          select 1 from public.push_delivery_targets target
+          where target.delivery_id = delivery.id
+            and target.status not in ('sent','gone')
+        ) then coalesce(delivery.sent_at, now()) else null end,
+      last_error = case
+        when exists (
+          select 1 from public.push_delivery_targets target
+          where target.delivery_id = delivery.id
+            and target.status = 'failed'
+        ) then delivery.last_error else null end,
+      updated_at = now()
+  where delivery.id = v_target.delivery_id;
+
+  return false;
+end;
+$$;
+
 -- The helper is internal to the definer-owned claim function. API roles call
 -- only the narrow claim RPC, which performs its own service-role assertion.
 revoke all on function public.push_recipient_has_current_farm_access(uuid,uuid)
@@ -228,4 +317,9 @@ from public, anon, authenticated, service_role;
 revoke all on function public.claim_push_delivery_targets(uuid,integer)
 from public, anon, authenticated;
 grant execute on function public.claim_push_delivery_targets(uuid,integer)
+to service_role;
+
+revoke all on function public.revalidate_claimed_push_delivery_target(uuid)
+from public, anon, authenticated;
+grant execute on function public.revalidate_claimed_push_delivery_target(uuid)
 to service_role;

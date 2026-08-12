@@ -28,7 +28,8 @@ Done means each repair is an immutable local commit, its focused regression prov
 
 ## WRITTEN, NOT PROVEN
 
-- The PR-review follow-up that standardizes both new SECURITY DEFINER search paths and adds an authorized-rep positive claim control requires a new immutable commit, full proof, and fresh exact-SHA review before release credit.
+- Exact SHA `37436064767d2ac4b91a6f4adf37624d2aef8a71` standardized both new SECURITY DEFINER search paths, added an authorized-rep positive claim control, passed the full foundation ladder, and received fresh-context Sol acceptance with no P0/P1/P2 finding.
+- The follow-up that closes the avoidable revoke-after-batch-claim window with per-target revalidation immediately before provider I/O requires a new immutable commit, full proof, and fresh exact-SHA review before release credit.
 
 ## NOT STARTED
 
