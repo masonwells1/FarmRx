@@ -29,7 +29,8 @@ Done means each repair is an immutable local commit, its focused regression prov
 ## WRITTEN, NOT PROVEN
 
 - Exact SHA `37436064767d2ac4b91a6f4adf37624d2aef8a71` standardized both new SECURITY DEFINER search paths, added an authorized-rep positive claim control, passed the full foundation ladder, and received fresh-context Sol acceptance with no P0/P1/P2 finding.
-- The follow-up that closes the avoidable revoke-after-batch-claim window with per-target revalidation immediately before provider I/O requires a new immutable commit, full proof, and fresh exact-SHA review before release credit.
+- Exact SHA `c2bdc02786a79afe0b88e87f0aeeb9ac2e7733d2` closed the avoidable revoke-after-batch-claim window with per-target revalidation immediately before provider I/O, but fresh-context Sol review blocked it on concurrent parent-delivery reconciliation and an unfrozen Deno dependency graph.
+- The current bounded repair serializes every target outcome on the parent delivery, adds a real two-connection positive proof plus a deterministic lock-removal mutation, and freezes the `send-push` Deno graph. It requires one new immutable commit, a complete exact-worktree proof, and fresh exact-SHA Sol acceptance before release credit.
 
 ## NOT STARTED
 

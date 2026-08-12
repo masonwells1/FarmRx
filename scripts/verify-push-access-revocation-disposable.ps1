@@ -1,3 +1,5 @@
+param([switch]$MutateParentDeliveryLock)
+
 $ErrorActionPreference = 'Stop'
 $name = "farmrx-push-revocation-$PID"
 $root = Split-Path -Parent $PSScriptRoot
@@ -26,11 +28,54 @@ try {
   Get-ChildItem (Join-Path $root 'supabase/migrations') -Filter '*.sql' |
     Sort-Object Name |
     ForEach-Object {
-      (Get-Content -Raw $_.FullName) | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable
+      $sql = Get-Content -Raw $_.FullName
+      if ($MutateParentDeliveryLock -and $_.Name -eq '20260812135210_deny_revoked_push_delivery.sql') {
+        $mutated = $sql -replace '(?ms)(from public\.push_deliveries\s+where id = p_delivery_id)\s+for update;', '$1;'
+        $mutated = $mutated -replace '(?m)^  where delivery\.id = p_delivery_id;$', "  where delivery.id = p_delivery_id`r`n    and public.mutation_push_reconciliation_barrier(delivery.id);"
+        if ($mutated -eq $sql -or $mutated -notmatch 'mutation_push_reconciliation_barrier\(delivery\.id\)') {
+          throw 'Parent-delivery lock mutation did not change both required reconciliation sites.'
+        }
+        $mutationPrelude = @'
+create sequence public.mutation_push_reconciliation_barrier_sequence;
+create function public.mutation_push_reconciliation_barrier(p_delivery_id uuid)
+returns boolean
+language plpgsql
+volatile
+set search_path = public, pg_temp
+as $$
+declare
+  v_arrival bigint;
+begin
+  if not exists (
+    select 1
+    from public.push_deliveries delivery
+    where delivery.id=p_delivery_id
+      and delivery.notification_id='00000000-0000-4000-8000-000000000034'
+  ) then
+    return true;
+  end if;
+
+  -- This test-only predicate runs inside the parent UPDATE statement, after
+  -- its READ COMMITTED snapshot is fixed. Both sessions must therefore try
+  -- to reconcile from the same pre-commit view when the production lock is
+  -- intentionally removed, making the lost-finalization mutation repeatable.
+  v_arrival := nextval('public.mutation_push_reconciliation_barrier_sequence');
+  if v_arrival=1 then
+    while (select last_value from public.mutation_push_reconciliation_barrier_sequence)<2 loop
+      perform pg_sleep(0.01);
+    end loop;
+  end if;
+  return true;
+end;
+$$;
+'@
+        $sql = "$mutationPrelude`r`n$mutated"
+      }
+      $sql | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable
       if ($LASTEXITCODE -ne 0) { throw "Migration failed in disposable push-revocation proof: $($_.Name)" }
     }
 
-  @'
+  $probeOutput = @'
 insert into auth.users(id,email) values
   ('00000000-0000-4000-8000-000000000001','owner@example.test'),
   ('00000000-0000-4000-8000-000000000002','removed@example.test'),
@@ -165,6 +210,113 @@ begin
   end if;
 end $$;
 
+-- Reproduce the six-worker Edge shape with two real PostgreSQL connections.
+-- A non-transactional sequence is a deterministic barrier after each target
+-- becomes gone but before parent reconciliation. Without the parent row lock,
+-- each transaction sees the other target as sending and leaves the parent
+-- pending even though both targets commit gone.
+update public.farm_memberships
+set status='active'
+where farm_id='00000000-0000-4000-8000-000000000010'
+  and user_id='00000000-0000-4000-8000-000000000002';
+insert into public.notifications(id,farm_id,user_id,category,title,body,link,dedupe_key,created_by)
+values (
+  '00000000-0000-4000-8000-000000000034',
+  '00000000-0000-4000-8000-000000000010',
+  '00000000-0000-4000-8000-000000000002',
+  'task',
+  'Synthetic concurrent revoke',
+  'Concurrent send-time denials must reconcile one terminal parent.',
+  '/tasks',
+  'push-concurrent-revalidation-probe',
+  '00000000-0000-4000-8000-000000000001'
+);
+create temporary table concurrent_claims as
+select * from public.claim_push_delivery_targets('00000000-0000-4000-8000-000000000034', 10);
+do $$ begin
+  if (select count(*) from concurrent_claims) <> 2 then
+    raise exception 'concurrency probe did not claim exactly two targets';
+  end if;
+end $$;
+update public.farm_memberships
+set status='revoked'
+where farm_id='00000000-0000-4000-8000-000000000010'
+  and user_id='00000000-0000-4000-8000-000000000002';
+
+create extension dblink;
+create sequence public.push_revalidation_race_barrier_sequence;
+create function public.pause_concurrent_push_revalidation()
+returns trigger language plpgsql set search_path = public, pg_temp as $$
+declare
+  v_arrival bigint;
+begin
+  if old.status='sending' and new.status='gone' and exists (
+    select 1
+    from public.push_deliveries delivery
+    where delivery.id=new.delivery_id
+      and delivery.notification_id='00000000-0000-4000-8000-000000000034'
+  ) then
+    v_arrival := nextval('public.push_revalidation_race_barrier_sequence');
+    if v_arrival=1 then
+      while (select last_value from public.push_revalidation_race_barrier_sequence)<2 loop
+        perform pg_sleep(0.01);
+      end loop;
+    end if;
+    -- Give both sessions the same release delay. Without this rendezvous the
+    -- second arrival can finish reconciliation before the first leaves its
+    -- polling loop, hiding the missing parent lock under a lucky schedule.
+    perform pg_sleep(0.25);
+  end if;
+  return new;
+end;
+$$;
+create trigger pause_concurrent_push_revalidation
+after update of status on public.push_delivery_targets
+for each row execute function public.pause_concurrent_push_revalidation();
+
+select dblink_connect('push_race_a','dbname=farmrx_disposable user=postgres');
+select dblink_connect('push_race_b','dbname=farmrx_disposable user=postgres');
+select * from dblink('push_race_a', $$select set_config('request.jwt.claims','{"role":"service_role"}',false)$$) as configured(value text);
+select * from dblink('push_race_b', $$select set_config('request.jwt.claims','{"role":"service_role"}',false)$$) as configured(value text);
+select dblink_send_query('push_race_a', format(
+  'select public.revalidate_claimed_push_delivery_target(%L::uuid)',
+  (select target_id from concurrent_claims order by target_id limit 1)
+));
+select dblink_send_query('push_race_b', format(
+  'select public.revalidate_claimed_push_delivery_target(%L::uuid)',
+  (select target_id from concurrent_claims order by target_id offset 1 limit 1)
+));
+do $$ begin
+  while dblink_is_busy('push_race_a')=1 or dblink_is_busy('push_race_b')=1 loop
+    perform pg_sleep(0.01);
+  end loop;
+end $$;
+create temporary table push_race_a_result as
+select * from dblink_get_result('push_race_a') as result(allowed boolean);
+create temporary table push_race_b_result as
+select * from dblink_get_result('push_race_b') as result(allowed boolean);
+select dblink_disconnect('push_race_a');
+select dblink_disconnect('push_race_b');
+drop trigger pause_concurrent_push_revalidation on public.push_delivery_targets;
+drop function public.pause_concurrent_push_revalidation();
+drop sequence public.push_revalidation_race_barrier_sequence;
+
+do $$
+begin
+  if (select bool_or(allowed) from push_race_a_result) or (select bool_or(allowed) from push_race_b_result) then
+    raise exception 'concurrent revoked targets retained send authorization';
+  end if;
+  if (select count(*) from public.push_delivery_targets target join public.push_deliveries delivery on delivery.id=target.delivery_id where delivery.notification_id='00000000-0000-4000-8000-000000000034' and target.status='gone')<>2 then
+    raise exception 'concurrent revoked targets did not both become gone';
+  end if;
+  if not exists (select 1 from public.push_deliveries where notification_id='00000000-0000-4000-8000-000000000034' and status='sent' and sent_at is not null) then
+    raise exception 'concurrent terminal targets left their parent non-terminal';
+  end if;
+  if (select count(*) from public.push_subscriptions where user_id='00000000-0000-4000-8000-000000000002')<>2 then
+    raise exception 'concurrent access denial deleted a valid device subscription';
+  end if;
+end $$;
+
 do $$
 declare
   reclaimed_count integer;
@@ -293,8 +445,15 @@ begin
     raise exception 'send-time push revalidation grants are not service-role only';
   end if;
 end $$;
-'@ | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable
-  if ($LASTEXITCODE -ne 0) { throw 'Revoked queued-push deny-path probe failed.' }
+'@ | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable 2>&1
+  $probeExitCode = $LASTEXITCODE
+  $probeOutput | Write-Output
+  if ($probeExitCode -ne 0) {
+    if ($MutateParentDeliveryLock -and (($probeOutput | Out-String) -match 'concurrent terminal targets left their parent non-terminal')) {
+      throw 'EXPECTED_PARENT_RECONCILIATION_MUTATION_DETECTED'
+    }
+    throw 'Revoked queued-push deny-path probe failed.'
+  }
 
   $passed = $true
 } finally {

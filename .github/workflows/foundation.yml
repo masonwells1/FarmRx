@@ -19,6 +19,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.4
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - name: Run foundation gate
