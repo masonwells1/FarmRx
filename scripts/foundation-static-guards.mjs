@@ -119,6 +119,8 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, app, "window.location.replace(recoveryCompleteUrl)", 'auth:completion-automatically-signals-canonical-cleanup')
   requireText(errors, app, 'if (isPasswordRecoveryStorageError(error))', 'auth:reset-storage-error-distinguished')
   requireText(errors, app, 'setError(passwordRecoveryStorageErrorMessage)', 'auth:reset-storage-error-shown')
+  requireText(errors, app, '<form key="password-reset" className="login-card" onSubmit={handlePasswordReset}>', 'auth:reset-form-distinct-dom-identity')
+  requireText(errors, app, '<form key="sign-in" className="login-card" onSubmit={handleSubmit}>', 'auth:sign-in-form-distinct-dom-identity')
   requireText(errors, app, '{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}\n          {error && <p className="auth-error" role="alert">{error}</p>}', 'auth:reset-storage-error-rendered')
   const main = read(root, 'src/main.tsx')
   requireText(errors, main, 'isPasswordRecoveryHostname(window.location.hostname) && window.location.pathname !== passwordRecoveryRoute', 'auth:recovery-host-route-confinement')

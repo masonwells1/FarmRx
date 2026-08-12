@@ -100,12 +100,15 @@ try {
   mutate('src/App.tsx', (source) => source.replace('if (isPasswordRecoveryStorageError(error))', 'if (false)'))
   detected('reset storage failure falls through to public email success', 'auth:reset-storage-error-distinguished')
   reset()
+  mutate('src/App.tsx', (source) => source.replace('key="password-reset"', 'key="sign-in"'))
+  detected('reset and sign-in forms share one DOM identity', 'auth:reset-form-distinct-dom-identity')
+  reset()
   mutate('docs/password-recovery-support.md', (source) => source.replace('If any prior farmer client exists or any\n   known proof client cannot be enumerated and retired, stop and keep recovery unavailable.', 'Proceed after deployment readiness alone.'))
   detected('stale-client customer-zero transition gate removal', 'auth:runbook-stale-client-customer-zero-gate')
   reset()
   mutate('src/App.tsx', (source) => source.replace('{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}\n          {error && <p className="auth-error" role="alert">{error}</p>}', '{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}'))
   detected('reset storage failure loses visible error', 'auth:reset-storage-error-rendered')
-  console.log('Foundation mutation drill: PASS (26/26 controlled mutations turned the gate red)')
+  console.log('Foundation mutation drill: PASS (27/27 controlled mutations turned the gate red)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }
