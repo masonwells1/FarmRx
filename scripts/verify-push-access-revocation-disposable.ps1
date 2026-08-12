@@ -45,6 +45,7 @@ set search_path = public, pg_temp
 as $$
 declare
   v_arrival bigint;
+  v_attempts integer := 0;
 begin
   if not exists (
     select 1
@@ -62,6 +63,10 @@ begin
   v_arrival := nextval('public.mutation_push_reconciliation_barrier_sequence');
   if v_arrival=1 then
     while (select last_value from public.mutation_push_reconciliation_barrier_sequence)<2 loop
+      v_attempts := v_attempts + 1;
+      if v_attempts >= 500 then
+        raise exception 'push revalidation barrier timed out';
+      end if;
       perform pg_sleep(0.01);
     end loop;
   end if;
@@ -249,6 +254,7 @@ create function public.pause_concurrent_push_revalidation()
 returns trigger language plpgsql set search_path = public, pg_temp as $$
 declare
   v_arrival bigint;
+  v_attempts integer := 0;
 begin
   if old.status='sending' and new.status='gone' and exists (
     select 1
@@ -259,6 +265,10 @@ begin
     v_arrival := nextval('public.push_revalidation_race_barrier_sequence');
     if v_arrival=1 then
       while (select last_value from public.push_revalidation_race_barrier_sequence)<2 loop
+        v_attempts := v_attempts + 1;
+        if v_attempts >= 500 then
+          raise exception 'push revalidation barrier timed out';
+        end if;
         perform pg_sleep(0.01);
       end loop;
     end if;

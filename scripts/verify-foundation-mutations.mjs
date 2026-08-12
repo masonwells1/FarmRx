@@ -19,7 +19,13 @@ const files = [
   'src/data/QueuedProgramsRepository.ts', 'src/data/QueuedScoutingRepository.ts',
 ]
 const reset = () => { for (const path of files) { const target = join(temporary, path); mkdirSync(dirname(target), { recursive: true }); cpSync(join(root, path), target) } }
-const mutate = (path, replace) => { const target = join(temporary, path); writeFileSync(target, replace(readFileSync(target, 'utf8'))) }
+const mutate = (path, replace) => {
+  const target = join(temporary, path)
+  const source = readFileSync(target, 'utf8')
+  const mutated = replace(source)
+  if (mutated === source) throw new Error(`Mutation for ${path} did not change the file.`)
+  writeFileSync(target, mutated)
+}
 const detected = (label, expected) => {
   const failures = foundationStaticGuard(temporary)
   if (!failures.includes(expected)) throw new Error(`${label} mutation was not detected. Observed: ${failures.join(', ')}`)
