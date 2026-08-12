@@ -61,6 +61,6 @@ Migration `20260812135210` intentionally changed execution ACLs on the push func
 
 ## FIRST ACTION
 
-If this closeout is not yet on `main`, finish its documentation-only exact-SHA review and green pull-request publication. Otherwise perform one fresh read-only archive audit; do not repeat the runtime rollout.
+If this closeout is not yet on `main`, complete its documentation-only exact-SHA review. Push, mutate a pull request, or merge only after Mason explicitly approves those exact outward actions. If it is already on `main`, perform one fresh read-only archive audit; do not repeat the runtime rollout.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.
