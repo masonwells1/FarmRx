@@ -165,8 +165,11 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, passwordPlaywright, "testMatch: 'password-form-isolation.spec.ts'", 'auth:password-form-dedicated-test-match')
   requireText(errors, passwordPlaywright, "{ name: 'password-form-desktop'", 'auth:password-form-desktop-project')
   requireText(errors, passwordPlaywright, "{ name: 'password-form-phone'", 'auth:password-form-phone-project')
+  requireText(errors, passwordPlaywright, "['json', { outputFile: reportFile }]", 'auth:password-form-json-report')
   requireText(errors, passwordBrowserProof, "$env:VITE_PASSWORD_EMAIL_DELIVERY_ENABLED = 'true'", 'auth:password-form-feature-enabled-by-proof')
-  requireText(errors, passwordBrowserProof, '& npx playwright test --config=playwright.password-form.config.ts', 'auth:password-form-dedicated-proof-command')
+  requireText(errors, passwordBrowserProof, '$reportPath = Join-Path ([IO.Path]::GetTempPath())', 'auth:password-form-fresh-report-path')
+  if (!/^\s*& npx playwright test --config=playwright\.password-form\.config\.ts\s*$/m.test(passwordBrowserProof)) errors.push('auth:password-form-real-playwright-command')
+  if (!/^\s*& node scripts\/verify-password-form-report\.mjs \$reportPath\s*$/m.test(passwordBrowserProof)) errors.push('auth:password-form-real-report-verifier-command')
 
   const widget = read(root, 'src/components/MarketQuote.tsx')
   requireText(errors, widget, 'sandbox="allow-scripts"', 'widget:opaque-sandbox')

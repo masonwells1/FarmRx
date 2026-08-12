@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const reportFile = process.env.FARMRX_PASSWORD_FORM_REPORT
+if (!reportFile) throw new Error('FARMRX_PASSWORD_FORM_REPORT is required for the password-form proof.')
+
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: 'password-form-isolation.spec.ts',
@@ -7,7 +10,7 @@ export default defineConfig({
   forbidOnly: true,
   retries: 0,
   workers: 1,
-  reporter: 'list',
+  reporter: [['list'], ['json', { outputFile: reportFile }]],
   use: {
     baseURL: 'http://127.0.0.1:4175',
     serviceWorkers: 'block',
