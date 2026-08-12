@@ -43,24 +43,6 @@ test('login blocks empty credentials and keeps the login brand legible on dark g
   }
 })
 
-test('forgot password replaces the credential input and starts with a blank email', async ({ page }) => {
-  test.skip(process.env.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED !== 'true', 'This journey requires the guarded email-delivery configuration.')
-  const syntheticPassword = 'SYNTHETIC-PASSWORD-MUST-NEVER-BECOME-EMAIL'
-  await page.goto('/login')
-  const password = page.locator('#password')
-  await password.fill(syntheticPassword)
-  await password.evaluate((node) => {
-    (window as typeof window & { __farmRxCredentialInput?: Element }).__farmRxCredentialInput = node
-  })
-
-  await page.getByRole('button', { name: 'Forgot password?' }).click()
-
-  const resetEmail = page.locator('#reset-email')
-  await expect(resetEmail).toBeVisible()
-  await expect(resetEmail).toHaveValue('')
-  expect(await resetEmail.evaluate((node) => node === (window as typeof window & { __farmRxCredentialInput?: Element }).__farmRxCredentialInput)).toBe(false)
-})
-
 test('password recovery reports a failed storage preflight without claiming an email was sent', async ({ page }) => {
   test.skip(process.env.VITE_PASSWORD_EMAIL_DELIVERY_ENABLED !== 'true', 'This journey requires the guarded email-delivery configuration.')
   const resetRequests: string[] = []

@@ -7,8 +7,8 @@ const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
 const files = [
   'docs/password-recovery-support.md',
-  'src/App.tsx', 'src/main.tsx', 'src/sw.ts', 'src/auth/AuthProvider.tsx', 'src/auth/passwordRecovery.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json', 'vite.config.ts',
-  'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1',
+  'src/App.tsx', 'src/main.tsx', 'src/sw.ts', 'src/auth/AuthProvider.tsx', 'src/auth/passwordRecovery.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json', 'vite.config.ts', 'playwright.config.ts', 'playwright.password-form.config.ts',
+  'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1', 'scripts/verify-password-form-browser.ps1',
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/queuedOperationGuard.ts',
@@ -100,8 +100,11 @@ try {
   mutate('src/App.tsx', (source) => source.replace('if (isPasswordRecoveryStorageError(error))', 'if (false)'))
   detected('reset storage failure falls through to public email success', 'auth:reset-storage-error-distinguished')
   reset()
-  mutate('src/App.tsx', (source) => source.replace('key="password-reset"', 'key="sign-in"'))
-  detected('reset and sign-in forms share one DOM identity', 'auth:reset-form-distinct-dom-identity')
+  mutate('src/App.tsx', (source) => source
+    .replace('key="password-reset" ', '')
+    .replace('key="sign-in" ', '')
+    .replace('function LoginPage()', '// <form key="password-reset"> <form key="sign-in">\nfunction LoginPage()'))
+  detected('functional form keys removed behind comment decoys', 'auth:login-form-distinct-ast-identity')
   reset()
   mutate('docs/password-recovery-support.md', (source) => source.replace('If any prior farmer client exists or any\n   known proof client cannot be enumerated and retired, stop and keep recovery unavailable.', 'Proceed after deployment readiness alone.'))
   detected('stale-client customer-zero transition gate removal', 'auth:runbook-stale-client-customer-zero-gate')

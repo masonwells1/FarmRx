@@ -2,9 +2,37 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
+import * as ts from 'typescript'
 
 const read = (root, path) => readFileSync(resolve(root, path), 'utf8')
 const requireText = (errors, source, text, label) => { if (!source.includes(text)) errors.push(label) }
+
+function hasDistinctLoginFormIdentities(source) {
+  const file = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const attribute = (element, name) => {
+    const value = element.openingElement.attributes.properties.find((candidate) => ts.isJsxAttribute(candidate) && candidate.name.getText(file) === name)
+    if (!value?.initializer) return null
+    if (ts.isStringLiteral(value.initializer)) return value.initializer.text
+    if (ts.isJsxExpression(value.initializer) && value.initializer.expression) return value.initializer.expression.getText(file)
+    return null
+  }
+  let protectedForms = false
+  const visit = (node) => {
+    if (ts.isConditionalExpression(node)
+      && node.condition.getText(file) === 'forgotPassword'
+      && ts.isJsxElement(node.whenTrue)
+      && ts.isJsxElement(node.whenFalse)
+      && node.whenTrue.openingElement.tagName.getText(file) === 'form'
+      && node.whenFalse.openingElement.tagName.getText(file) === 'form'
+      && attribute(node.whenTrue, 'onSubmit') === 'handlePasswordReset'
+      && attribute(node.whenFalse, 'onSubmit') === 'handleSubmit'
+      && attribute(node.whenTrue, 'key') === 'password-reset'
+      && attribute(node.whenFalse, 'key') === 'sign-in') protectedForms = true
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return protectedForms
+}
 
 export function foundationStaticGuard(root = process.cwd()) {
   const errors = []
@@ -36,7 +64,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh.exe')", 'orchestrator:windows-core-probe-shell')
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh')", 'orchestrator:unix-core-probe-shell')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & $probeShell -NoProfile -Command 'exit 23' } $expected", 'orchestrator:resolved-probe-shell')
-  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 20) errors.push('orchestrator:all-lanes-checked')
+  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 21) errors.push('orchestrator:all-lanes-checked')
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
 
@@ -47,6 +75,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, pushAccessRevocation, "last_error = 'farm access removed'", 'push:revoked-target-reason')
   requireText(errors, pushAccessRevocation, 'revoke all on function public.push_recipient_has_current_farm_access(uuid,uuid)\nfrom public, anon, authenticated, service_role;', 'push:internal-access-helper-not-rpc')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-push-access-revocation-disposable.ps1') }", 'orchestrator:checked-push-access-revocation')
+  requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-password-form-browser.ps1') }", 'orchestrator:checked-password-form-browser')
 
   const queues = [
     'src/data/fieldLocation.ts',
@@ -119,8 +148,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, app, "window.location.replace(recoveryCompleteUrl)", 'auth:completion-automatically-signals-canonical-cleanup')
   requireText(errors, app, 'if (isPasswordRecoveryStorageError(error))', 'auth:reset-storage-error-distinguished')
   requireText(errors, app, 'setError(passwordRecoveryStorageErrorMessage)', 'auth:reset-storage-error-shown')
-  requireText(errors, app, '<form key="password-reset" className="login-card" onSubmit={handlePasswordReset}>', 'auth:reset-form-distinct-dom-identity')
-  requireText(errors, app, '<form key="sign-in" className="login-card" onSubmit={handleSubmit}>', 'auth:sign-in-form-distinct-dom-identity')
+  if (!hasDistinctLoginFormIdentities(app)) errors.push('auth:login-form-distinct-ast-identity')
   requireText(errors, app, '{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}\n          {error && <p className="auth-error" role="alert">{error}</p>}', 'auth:reset-storage-error-rendered')
   const main = read(root, 'src/main.tsx')
   requireText(errors, main, 'isPasswordRecoveryHostname(window.location.hostname) && window.location.pathname !== passwordRecoveryRoute', 'auth:recovery-host-route-confinement')
@@ -129,6 +157,16 @@ export function foundationStaticGuard(root = process.cwd()) {
   const vite = read(root, 'vite.config.ts')
   requireText(errors, vite, 'injectRegister: false', 'service-worker:no-unconditional-injection')
   if (/supabase\.co|api\/v1|rest\/v1/.test(serviceWorker)) errors.push('service-worker:private-api-runtime-cache')
+
+  const defaultPlaywright = read(root, 'playwright.config.ts')
+  const passwordPlaywright = read(root, 'playwright.password-form.config.ts')
+  const passwordBrowserProof = read(root, 'scripts/verify-password-form-browser.ps1')
+  requireText(errors, defaultPlaywright, "'**/password-form-isolation.spec.ts'", 'auth:password-form-proof-excluded-from-optional-suite')
+  requireText(errors, passwordPlaywright, "testMatch: 'password-form-isolation.spec.ts'", 'auth:password-form-dedicated-test-match')
+  requireText(errors, passwordPlaywright, "{ name: 'password-form-desktop'", 'auth:password-form-desktop-project')
+  requireText(errors, passwordPlaywright, "{ name: 'password-form-phone'", 'auth:password-form-phone-project')
+  requireText(errors, passwordBrowserProof, "$env:VITE_PASSWORD_EMAIL_DELIVERY_ENABLED = 'true'", 'auth:password-form-feature-enabled-by-proof')
+  requireText(errors, passwordBrowserProof, '& npx playwright test --config=playwright.password-form.config.ts', 'auth:password-form-dedicated-proof-command')
 
   const widget = read(root, 'src/components/MarketQuote.tsx')
   requireText(errors, widget, 'sandbox="allow-scripts"', 'widget:opaque-sandbox')
