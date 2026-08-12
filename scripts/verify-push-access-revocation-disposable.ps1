@@ -190,6 +190,42 @@ values (
   'push-rep-revocation-probe',
   '00000000-0000-4000-8000-000000000001'
 );
+
+-- Use a separate notification to prove the grant's positive path without
+-- initializing the queued-then-revoked negative control above.
+insert into public.notifications(id,farm_id,user_id,category,title,body,link,dedupe_key,created_by)
+values (
+  '00000000-0000-4000-8000-000000000033',
+  '00000000-0000-4000-8000-000000000010',
+  '00000000-0000-4000-8000-000000000003',
+  'general',
+  'Synthetic authorized rep notice',
+  'An enabled named rep must receive this private payload.',
+  '/fields',
+  'push-rep-authorized-probe',
+  '00000000-0000-4000-8000-000000000001'
+);
+
+create temporary table first_authorized_rep_claim as
+select * from public.claim_push_delivery_targets('00000000-0000-4000-8000-000000000033', 10);
+
+do $$
+begin
+  if (select count(*) from first_authorized_rep_claim) <> 1 then
+    raise exception 'authorized rep did not receive exactly one private payload';
+  end if;
+  if (select endpoint from first_authorized_rep_claim) is distinct from 'https://push.example.test/removed-rep-device' then
+    raise exception 'authorized rep claim returned the wrong subscription endpoint';
+  end if;
+  if not exists (
+    select 1 from public.farm_access_epochs
+    where farm_id='00000000-0000-4000-8000-000000000010'
+      and user_id='00000000-0000-4000-8000-000000000003'
+  ) then
+    raise exception 'authorized rep did not retain a farm access epoch';
+  end if;
+end $$;
+
 update public.farms
 set share_with_rep=false
 where id='00000000-0000-4000-8000-000000000010';

@@ -22,17 +22,17 @@ Done means each repair is an immutable local commit, its focused regression prov
 - The existing push claim function snapshots targets and returns notification payload without recalculating the recipient's current farm access.
 - The existing sign-in and reset branches render unkeyed forms at the same tree position with uncontrolled inputs, allowing React to reuse the password input DOM node as the email input.
 - The worktree began clean and contains no live customer data or secrets.
+- Push access repair commit `be2570bce5f280518a670a2f0f07951aadbf9cb7` received fresh-context exact-SHA Sol acceptance.
+- Password-form isolation commit `68f736869d04bc34c900d51ae75cc90db2ade771` received fresh-context implementation acceptance; its strengthened non-skippable browser gate and exact-count proof culminated in accepted exact SHA `2a75eda15640c145e5e58a01726caaf22fc684a9`.
+- At `2a75eda15640c145e5e58a01726caaf22fc684a9`, the full foundation ladder passed with the disposable member/rep revocation proof, browser desktop/phone proof, and 28/28 controlled mutations.
 
 ## WRITTEN, NOT PROVEN
 
-- This handoff only. No repair code or migration has been credited as proven yet.
+- The PR-review follow-up that standardizes both new SECURITY DEFINER search paths and adds an authorized-rep positive claim control requires a new immutable commit, full proof, and fresh exact-SHA review before release credit.
 
 ## NOT STARTED
 
-- Disposable-database reproduction and push repair.
-- Push mutation proof and broader repository proof.
-- Password-form repair and real-browser regression.
-- Exact-commit fresh-context Sol reviews.
+- Production migration apply, merge-triggered deployment, and post-deploy verification remain behind Mason's explicit production approval.
 
 ## APPROVAL BOUNDARY
 

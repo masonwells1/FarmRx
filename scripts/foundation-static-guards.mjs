@@ -9,6 +9,7 @@ const requireText = (errors, source, text, label) => { if (!source.includes(text
 
 function hasDistinctLoginFormIdentities(source) {
   const file = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const unwrap = (node) => ts.isParenthesizedExpression(node) ? unwrap(node.expression) : node
   const attribute = (element, name) => {
     const value = element.openingElement.attributes.properties.find((candidate) => ts.isJsxAttribute(candidate) && candidate.name.getText(file) === name)
     if (!value?.initializer) return null
@@ -18,16 +19,18 @@ function hasDistinctLoginFormIdentities(source) {
   }
   let protectedForms = false
   const visit = (node) => {
+    const whenTrue = ts.isConditionalExpression(node) ? unwrap(node.whenTrue) : null
+    const whenFalse = ts.isConditionalExpression(node) ? unwrap(node.whenFalse) : null
     if (ts.isConditionalExpression(node)
       && node.condition.getText(file) === 'forgotPassword'
-      && ts.isJsxElement(node.whenTrue)
-      && ts.isJsxElement(node.whenFalse)
-      && node.whenTrue.openingElement.tagName.getText(file) === 'form'
-      && node.whenFalse.openingElement.tagName.getText(file) === 'form'
-      && attribute(node.whenTrue, 'onSubmit') === 'handlePasswordReset'
-      && attribute(node.whenFalse, 'onSubmit') === 'handleSubmit'
-      && attribute(node.whenTrue, 'key') === 'password-reset'
-      && attribute(node.whenFalse, 'key') === 'sign-in') protectedForms = true
+      && ts.isJsxElement(whenTrue)
+      && ts.isJsxElement(whenFalse)
+      && whenTrue.openingElement.tagName.getText(file) === 'form'
+      && whenFalse.openingElement.tagName.getText(file) === 'form'
+      && attribute(whenTrue, 'onSubmit') === 'handlePasswordReset'
+      && attribute(whenFalse, 'onSubmit') === 'handleSubmit'
+      && attribute(whenTrue, 'key') === 'password-reset'
+      && attribute(whenFalse, 'key') === 'sign-in') protectedForms = true
     ts.forEachChild(node, visit)
   }
   visit(file)
@@ -69,11 +72,15 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
 
   const pushAccessRevocation = read(root, 'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql')
+  const pushAccessProof = read(root, 'scripts/verify-push-access-revocation-disposable.ps1')
   if ((pushAccessRevocation.match(/public\.push_recipient_has_current_farm_access\(notification\.farm_id, notification\.user_id\)/g) ?? []).length !== 3) errors.push('push:current-access-at-every-claim-boundary')
+  if ((pushAccessRevocation.match(/set search_path = public, pg_temp/g) ?? []).length !== 2) errors.push('push:security-definer-fixed-search-paths')
   requireText(errors, pushAccessRevocation, 'for share;', 'push:access-epoch-linearization-lock')
   requireText(errors, pushAccessRevocation, "and not public.push_recipient_has_current_farm_access(notification.farm_id, notification.user_id);", 'push:revoked-target-terminalization')
   requireText(errors, pushAccessRevocation, "last_error = 'farm access removed'", 'push:revoked-target-reason')
   requireText(errors, pushAccessRevocation, 'revoke all on function public.push_recipient_has_current_farm_access(uuid,uuid)\nfrom public, anon, authenticated, service_role;', 'push:internal-access-helper-not-rpc')
+  requireText(errors, pushAccessProof, 'if (select count(*) from first_authorized_rep_claim) <> 1 then', 'push:authorized-rep-positive-control')
+  requireText(errors, pushAccessProof, "if (select endpoint from first_authorized_rep_claim) is distinct from 'https://push.example.test/removed-rep-device' then", 'push:authorized-rep-exact-endpoint-control')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-push-access-revocation-disposable.ps1') }", 'orchestrator:checked-push-access-revocation')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-password-form-browser.ps1') }", 'orchestrator:checked-password-form-browser')
 

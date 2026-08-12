@@ -8,7 +8,7 @@ const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
 const files = [
   'docs/password-recovery-support.md',
   'src/App.tsx', 'src/main.tsx', 'src/sw.ts', 'src/auth/AuthProvider.tsx', 'src/auth/passwordRecovery.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json', 'vite.config.ts', 'playwright.config.ts', 'playwright.password-form.config.ts',
-  'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1', 'scripts/verify-password-form-browser.ps1',
+  'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1', 'scripts/verify-password-form-browser.ps1', 'scripts/verify-push-access-revocation-disposable.ps1',
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/queuedOperationGuard.ts',
@@ -23,6 +23,11 @@ const detected = (label, expected) => {
   const failures = foundationStaticGuard(temporary)
   if (!failures.includes(expected)) throw new Error(`${label} mutation was not detected. Observed: ${failures.join(', ')}`)
   console.log(`Mutation detected: ${label}`)
+}
+const accepted = (label) => {
+  const failures = foundationStaticGuard(temporary)
+  if (failures.length) throw new Error(`${label} regression was rejected. Observed: ${failures.join(', ')}`)
+  console.log(`Regression accepted: ${label}`)
 }
 
 try {
@@ -48,6 +53,15 @@ try {
   reset()
   mutate('supabase/migrations/20260812135210_deny_revoked_push_delivery.sql', (source) => source.replace('and not public.push_recipient_has_current_farm_access(notification.farm_id, notification.user_id);', 'and false;'))
   detected('revoked push target terminalization removal', 'push:revoked-target-terminalization')
+  reset()
+  mutate('supabase/migrations/20260812135210_deny_revoked_push_delivery.sql', (source) => source.replace('set search_path = public, pg_temp', 'set search_path = pg_catalog'))
+  detected('push security-definer fixed search path removal', 'push:security-definer-fixed-search-paths')
+  reset()
+  mutate('scripts/verify-push-access-revocation-disposable.ps1', (source) => source.replace('if (select count(*) from first_authorized_rep_claim) <> 1 then', 'if false then'))
+  detected('authorized rep positive control removal', 'push:authorized-rep-positive-control')
+  reset()
+  mutate('scripts/verify-push-access-revocation-disposable.ps1', (source) => source.replace("if (select endpoint from first_authorized_rep_claim) is distinct from 'https://push.example.test/removed-rep-device' then", 'if false then'))
+  detected('authorized rep exact endpoint control removal', 'push:authorized-rep-exact-endpoint-control')
   reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1') }", "& (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1')"))
   detected('intermediate foundation exit check removal', 'orchestrator:all-lanes-checked')
@@ -109,12 +123,18 @@ try {
     .replace('function LoginPage()', '// <form key="password-reset"> <form key="sign-in">\nfunction LoginPage()'))
   detected('functional form keys removed behind comment decoys', 'auth:login-form-distinct-ast-identity')
   reset()
+  mutate('src/App.tsx', (source) => source
+    .replace('{forgotPassword ? <form key="password-reset"', '{forgotPassword ? (<form key="password-reset"')
+    .replace('</form> : <form key="sign-in"', '</form>) : (<form key="sign-in"')
+    .replace('</form>}\n        <p className="slogan">', '</form>)}\n        <p className="slogan">'))
+  accepted('parenthesized keyed auth form branches')
+  reset()
   mutate('docs/password-recovery-support.md', (source) => source.replace('If any prior farmer client exists or any\n   known proof client cannot be enumerated and retired, stop and keep recovery unavailable.', 'Proceed after deployment readiness alone.'))
   detected('stale-client customer-zero transition gate removal', 'auth:runbook-stale-client-customer-zero-gate')
   reset()
   mutate('src/App.tsx', (source) => source.replace('{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}\n          {error && <p className="auth-error" role="alert">{error}</p>}', '{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}'))
   detected('reset storage failure loses visible error', 'auth:reset-storage-error-rendered')
-  console.log('Foundation mutation drill: PASS (28/28 controlled mutations turned the gate red)')
+  console.log('Foundation mutation drill: PASS (31/31 controlled mutations turned the gate red; parenthesized auth-form regression accepted)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

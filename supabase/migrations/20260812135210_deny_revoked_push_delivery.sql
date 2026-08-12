@@ -10,7 +10,7 @@ returns boolean
 language plpgsql
 volatile
 security definer
-set search_path = pg_catalog
+set search_path = public, pg_temp
 as $$
 declare
   v_access_epoch bigint;
@@ -75,7 +75,7 @@ returns table(
 )
 language plpgsql
 security definer
-set search_path = pg_catalog
+set search_path = public, pg_temp
 as $$
 declare
   v_delivery_id uuid;
