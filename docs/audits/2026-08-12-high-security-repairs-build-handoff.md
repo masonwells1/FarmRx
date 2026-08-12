@@ -31,7 +31,10 @@ Done means each repair is an immutable local commit, its focused regression prov
 - Production push delivery was drained fail-closed through temporary `send-push` v4. After the old 20-second execution budget elapsed, live state still showed zero open deliveries and zero sending/failed targets.
 - Migration `20260812135210_deny_revoked_push_delivery` is present in the live Supabase migration ledger. Read-only verification found all three current-access claim checks, the parent `FOR UPDATE` reconciliation lock, both outcome paths using the reconciler, service-role-only revalidation, no API execution grant on the internal reconciler, and zero open/in-flight work.
 - Final `send-push` v5 is `ACTIVE` with JWT verification enabled and deployment hash `c205a1e0d18891045d1c28c11c44bc58a5eea0a9b37e9a0dcc060d05165323fb`. Both deployed files matched the reviewed repository files exactly. A non-writing live call reached v5 and returned the expected `401 {"error":"sign in required"}`; Edge logs showed no post-resume 5xx result.
-- A live Playwright check on `https://farm-rx.vercel.app/login` filled only the password node with synthetic text, marked that node, switched to password reset, and observed a distinct blank email node with no marker. The only console error was the unrelated pre-existing favicon `404`.
+
+## OPERATOR-OBSERVED
+
+- A live Playwright check on `https://farm-rx.vercel.app/login` filled only the password node with synthetic text, marked that node, switched to password reset, and observed a distinct blank email node with no marker. The only console error was the unrelated pre-existing favicon `404`. No screenshot, trace, HAR, or equivalent artifact was committed, so this observation does not receive durable **PROVEN** credit.
 
 ## WRITTEN, NOT PROVEN
 
@@ -45,7 +48,7 @@ Done means each repair is an immutable local commit, its focused regression prov
 
 Mason explicitly approved PR #24 merge, normal production deployment, safely draining/resuming push processing, applying migration `20260812135210`, deploying `send-push`, and post-deployment verification. Those authorized actions are complete.
 
-No live customer data, Auth setting, secret, permission, account, customer communication, or destructive action was changed. Any different outward action still requires its own current authority.
+Migration `20260812135210` intentionally changed execution ACLs on the push functions so revalidation is service-role-only and internal helpers are restricted. No live customer data, Auth setting, secret, unrelated project/customer permission, account, customer communication, or destructive action was changed. Any different outward action still requires its own current authority.
 
 ## GATES
 
