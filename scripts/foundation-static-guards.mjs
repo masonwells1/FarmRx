@@ -36,9 +36,17 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh.exe')", 'orchestrator:windows-core-probe-shell')
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh')", 'orchestrator:unix-core-probe-shell')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & $probeShell -NoProfile -Command 'exit 23' } $expected", 'orchestrator:resolved-probe-shell')
-  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 19) errors.push('orchestrator:all-lanes-checked')
+  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 20) errors.push('orchestrator:all-lanes-checked')
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
+
+  const pushAccessRevocation = read(root, 'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql')
+  if ((pushAccessRevocation.match(/public\.push_recipient_has_current_farm_access\(notification\.farm_id, notification\.user_id\)/g) ?? []).length !== 3) errors.push('push:current-access-at-every-claim-boundary')
+  requireText(errors, pushAccessRevocation, 'for share;', 'push:access-epoch-linearization-lock')
+  requireText(errors, pushAccessRevocation, "and not public.push_recipient_has_current_farm_access(notification.farm_id, notification.user_id);", 'push:revoked-target-terminalization')
+  requireText(errors, pushAccessRevocation, "last_error = 'farm access removed'", 'push:revoked-target-reason')
+  requireText(errors, pushAccessRevocation, 'revoke all on function public.push_recipient_has_current_farm_access(uuid,uuid)\nfrom public, anon, authenticated, service_role;', 'push:internal-access-helper-not-rpc')
+  requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-push-access-revocation-disposable.ps1') }", 'orchestrator:checked-push-access-revocation')
 
   const queues = [
     'src/data/fieldLocation.ts',

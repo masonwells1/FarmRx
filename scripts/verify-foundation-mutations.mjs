@@ -10,6 +10,7 @@ const files = [
   'src/App.tsx', 'src/main.tsx', 'src/sw.ts', 'src/auth/AuthProvider.tsx', 'src/auth/passwordRecovery.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json', 'vite.config.ts',
   'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1',
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
+  'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/queuedOperationGuard.ts',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
   'src/data/QueuedFieldsRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/QueuedHarvestRepository.ts',
@@ -44,6 +45,9 @@ try {
   reset()
   mutate('supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql', (source) => source.replace('revoke insert, update, delete on table public.push_subscriptions from public, anon, authenticated;', 'grant insert, update, delete on table public.push_subscriptions to authenticated;'))
   detected('push direct-table write revoke removal', 'table:push-direct-write-revoked')
+  reset()
+  mutate('supabase/migrations/20260812135210_deny_revoked_push_delivery.sql', (source) => source.replace('and not public.push_recipient_has_current_farm_access(notification.farm_id, notification.user_id);', 'and false;'))
+  detected('revoked push target terminalization removal', 'push:revoked-target-terminalization')
   reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1') }", "& (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1')"))
   detected('intermediate foundation exit check removal', 'orchestrator:all-lanes-checked')
@@ -101,7 +105,7 @@ try {
   reset()
   mutate('src/App.tsx', (source) => source.replace('{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}\n          {error && <p className="auth-error" role="alert">{error}</p>}', '{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}'))
   detected('reset storage failure loses visible error', 'auth:reset-storage-error-rendered')
-  console.log('Foundation mutation drill: PASS (25/25 controlled mutations turned the gate red)')
+  console.log('Foundation mutation drill: PASS (26/26 controlled mutations turned the gate red)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }
