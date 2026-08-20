@@ -400,7 +400,7 @@ async function run() {
       && adapter.includes(replacementArtifact.ref) && adapter.includes(replacementArtifact.id) && adapter.includes(replacementArtifact.tag) && adapter.includes(replacementArtifact.token)
       && adapterRegression.includes(replacementArtifact.ref) && adapterRegression.includes(replacementArtifact.id) && adapterRegression.includes(replacementArtifact.tag) && adapterRegression.includes(replacementArtifact.token)
       && topology.split(replacementArtifact.ref).length - 1 === 2 && topology.split(replacementArtifact.id).length - 1 === 4 && topology.includes('Observed=$true;LabelsVerified=$true') && topologyRegression.split(replacementArtifact.ref).length - 1 === 1
-      && canonicalManifestRegression.includes('$paths.Sort([StringComparer]::Ordinal)') && canonicalManifestRegression.includes('HashSet[string]') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CANONICAL_MANIFEST_PASS') && !canonicalManifestRegression.includes('Sort-Object')
+      && canonicalManifestRegression.includes('$paths.Sort([StringComparer]::Ordinal)') && canonicalManifestRegression.includes('HashSet[string]') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CANONICAL_MANIFEST_PASS') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CLEAN_FALLBACK_PASS') && canonicalManifestRegression.includes("@('diff-tree','--no-commit-id','--name-only','-r','HEAD^','HEAD')") && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY') && !canonicalManifestRegression.includes('Sort-Object')
       && spike.includes(replacementArtifact.tag) && spike.includes(replacementArtifact.ref) && spike.includes(replacementArtifact.id) && spike.split('Assert-ExactReusableArtifact').length === 3 && [
         "'farmrx.synthetic-bootstrap'='b9ad08aeb66ed961e8426b2cce527365'", "'farmrx.synthetic-owner'='maple-faketime-bootstrap'", "'farmrx.synthetic-role'='faketime-artifacts'", "'farmrx.source-digest'='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818'", "'farmrx.package-contract'='libfaketime=0.9.10-2.1;gcc;libc6-dev'"
       ].every((label) => spike.includes(label))
@@ -414,6 +414,34 @@ async function run() {
   }
   const replacementArtifactSources = [harvestClockSource, clockAdapterSource, clockAdapterRegressionSource, topologyPlanSource, topologyPlanRegressionSource, canonicalManifestRegressionSource, clockSpikeRunnerSource, artifactEvidenceSource, frozenArtifactEvidenceSource, artifactEvidenceManifestSource, frozenClockDockerfileSource] as const
   assert(completeFaketimeArtifactReplacementContract(replacementArtifactSources), 'Every owning faketime path must use the exact reviewed replacement identity, preserve the retired evidence, inspect both reusable names, and never clean up the reusable artifact.')
+  const canonicalManifestDiscoveryContract = (source: string) => {
+    const dirty = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff','--name-only') 'FAKETIME_ARTIFACT_MANIFEST_DIRTY_DIFF_GIT_FAILED'")
+    const untracked = source.indexOf("Invoke-Cw2ArtifactGitPathList @('ls-files','--others','--exclude-standard') 'FAKETIME_ARTIFACT_MANIFEST_UNTRACKED_GIT_FAILED'")
+    const fallback = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff-tree','--no-commit-id','--name-only','-r','HEAD^','HEAD') 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_GIT_FAILED'")
+    const empty = source.indexOf("if($paths.Count-eq0){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY'}")
+    const forced = source.indexOf('$cleanFallback=Get-Cw2ArtifactCanonicalManifest -ForceCleanFallback')
+    const forcedRefusal = source.indexOf("if($cleanFallback.Source-cne'exact-previous-commit-diff'-or$cleanFallback.Lines.Count-eq0-or-not$cleanFallback.Canonical.EndsWith(\"`n\")){throw 'FAKETIME_ARTIFACT_MANIFEST_CLEAN_FALLBACK_PROOF_FAILED'}")
+    return source.includes('function Invoke-Cw2ArtifactGitPathList([string[]]$Arguments,[string]$FailureMarker)')
+      && source.includes('$output=@(& git -C $root @Arguments 2>&1);$exitCode=$LASTEXITCODE')
+      && source.includes('if($exitCode-ne0){$detail=')
+      && source.includes('if(-not$ForceCleanFallback){')
+      && dirty >= 0 && untracked > dirty && fallback > untracked && empty > fallback && forced > empty && forcedRefusal > forced
+  }
+  assert(canonicalManifestDiscoveryContract(canonicalManifestRegressionSource), 'The artifact manifest regression must use dirty paths first, then a captured exact HEAD^..HEAD fallback, and directly prove the clean fallback.')
+  const canonicalManifestDiscoveryMutations = [
+    { name: 'dirty manifest discovery bypassed before fallback', from: 'if(-not$ForceCleanFallback){', to: 'if($false){' },
+    { name: 'clean fallback replaced with working diff', from: "@('diff-tree','--no-commit-id','--name-only','-r','HEAD^','HEAD')", to: "@('diff','--name-only')" },
+    { name: 'clean fallback empty refusal removed', from: "if($paths.Count-eq0){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY'}", to: 'if($false){throw \'CW2_REMOVED_PREVIOUS_COMMIT_EMPTY_REFUSAL\'}' },
+    { name: 'git failure capture bypassed', from: '$output=@(& git -C $root @Arguments 2>&1);$exitCode=$LASTEXITCODE', to: '$output=@(& git -C $root @Arguments 2>&1);$exitCode=0' },
+    { name: 'forced clean fallback proof omitted', from: '$cleanFallback=Get-Cw2ArtifactCanonicalManifest -ForceCleanFallback', to: '$cleanFallback=$canonical' },
+    { name: 'forced clean fallback refusal removed', from: "if($cleanFallback.Source-cne'exact-previous-commit-diff'-or$cleanFallback.Lines.Count-eq0-or-not$cleanFallback.Canonical.EndsWith(\"`n\")){throw 'FAKETIME_ARTIFACT_MANIFEST_CLEAN_FALLBACK_PROOF_FAILED'}", to: 'if($false){throw \'CW2_REMOVED_CLEAN_FALLBACK_PROOF\'}' },
+  ] as const
+  assert(canonicalManifestDiscoveryMutations.length === 6, 'The artifact manifest discovery mutation matrix must retain dirty-first discovery, exact previous-commit fallback, captured Git failures, empty fallback refusal, and forced clean proof.')
+  for (const mutation of canonicalManifestDiscoveryMutations) {
+    const changed = canonicalManifestRegressionSource.replace(mutation.from, mutation.to)
+    assert(changed !== canonicalManifestRegressionSource, `Artifact manifest discovery mutation must target source: ${mutation.name}.`)
+    assert(!canonicalManifestDiscoveryContract(changed), `Artifact manifest discovery mutation must turn the contract red: ${mutation.name}.`)
+  }
   const artifactReplacementMutations = [
     { name: 'retired image ID restored in Harvest Ridge owner', index: 0, from: replacementArtifact.id, to: retiredArtifact.id },
     { name: 'replacement tag drifted in adapter', index: 1, from: replacementArtifact.tag, to: 'maple-faketime-artifacts-wrong:synthetic' },
@@ -440,7 +468,7 @@ async function run() {
     assert(!completeFaketimeArtifactReplacementContract(changed), `Artifact replacement mutation must turn the contract red: ${mutation.name}.`)
   }
   const artifactReplacementRegressionSource = readFileSync(fileURLToPath(import.meta.url), 'utf8')
-  for (const marker of ['const replacementArtifact = {', 'const retiredArtifact = {', 'const completeFaketimeArtifactReplacementContract =', 'const artifactReplacementMutations = [', 'artifactReplacementMutations.length === 18', 'for (const mutation of artifactReplacementMutations)', 'canonical comparator weakened', 'durable artifact evidence manifest removed', 'copied preload source provenance removed', 'derived image proof identity removed', 'reusable postcleanup attestation removed', 'spike runner reusable inspection invocation removed', 'broad image cleanup added']) {
+  for (const marker of ['const replacementArtifact = {', 'const retiredArtifact = {', 'const completeFaketimeArtifactReplacementContract =', 'const canonicalManifestDiscoveryContract =', 'const canonicalManifestDiscoveryMutations = [', 'canonicalManifestDiscoveryMutations.length === 6', 'for (const mutation of canonicalManifestDiscoveryMutations)', 'clean fallback replaced with working diff', 'forced clean fallback proof omitted', 'const artifactReplacementMutations = [', 'artifactReplacementMutations.length === 18', 'for (const mutation of artifactReplacementMutations)', 'canonical comparator weakened', 'durable artifact evidence manifest removed', 'copied preload source provenance removed', 'derived image proof identity removed', 'reusable postcleanup attestation removed', 'spike runner reusable inspection invocation removed', 'broad image cleanup added']) {
     assert(artifactReplacementRegressionSource.includes(marker), `Artifact replacement proof-of-proof marker must be present: ${marker}.`)
   }
   const disposableSource = readFileSync(new URL('../../scripts/verify-connect-workflows-cw2-disposable.ps1', import.meta.url), 'utf8')
