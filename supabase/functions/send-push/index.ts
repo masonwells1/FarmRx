@@ -5,7 +5,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { deliverClaimedPushTargets, type ClaimedPushTarget, type PushTargetOutcome } from '../_shared/pushDeliveryLogic.ts'
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-server-delivery-key', 'Access-Control-Allow-Methods': 'POST, OPTIONS' }
-const json = (status: number, body: Record<string, unknown>) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } })
+const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } })
 const rate = new Map<string, { count: number; reset: number }>()
 const allow = (key: string) => { const now = Date.now(); const current = rate.get(key); if (!current || current.reset <= now) { rate.set(key, { count: 1, reset: now + 60_000 }); return true } if (current.count >= 20) return false; current.count += 1; return true }
 function sameSecret(left: string, right: string) { if (left.length !== right.length) return false; let result = 0; for (let i=0;i<left.length;i++) result |= left.charCodeAt(i)^right.charCodeAt(i); return result===0 }
@@ -48,6 +48,11 @@ Deno.serve(async (req) => {
         const { data, error } = await admin.rpc('claim_push_delivery_targets', { p_notification_id: notificationId, p_limit: limit }).abortSignal(signal)
         if (error || !Array.isArray(data)) throw new Error('could not claim push delivery targets')
         return data as ClaimedPushTarget[]
+      },
+      async revalidateTarget(targetId, signal) {
+        const { data, error } = await admin.rpc('revalidate_claimed_push_delivery_target', { p_target_id: targetId }).abortSignal(signal)
+        if (error || typeof data !== 'boolean') throw new Error('could not revalidate push delivery target')
+        return data
       },
       async finishTarget(targetId, outcome: PushTargetOutcome, errorText, signal) {
         const { error } = await admin.rpc('finish_push_delivery_target', { p_target_id: targetId, p_outcome: outcome, p_error: errorText }).abortSignal(signal)

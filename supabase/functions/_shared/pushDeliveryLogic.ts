@@ -14,6 +14,7 @@ export interface ClaimedPushTarget {
 
 export interface PushDeliveryDatabase {
   claimTargets(notificationId: string | null, limit: number, signal: AbortSignal): Promise<ClaimedPushTarget[]>
+  revalidateTarget(targetId: string, signal: AbortSignal): Promise<boolean>
   finishTarget(targetId: string, outcome: PushTargetOutcome, error: string | null, signal: AbortSignal): Promise<void>
   getHealth(notificationId: string | null, signal: AbortSignal): Promise<{ terminalFailed: number; retryable: number }>
 }
@@ -100,6 +101,8 @@ export async function deliverClaimedPushTargets(
     })
     try {
       if (controller.signal.aborted) throw new DOMException(budgetExpired, 'AbortError')
+      const stillAuthorized = await callBeforeAbort(() => database.revalidateTarget(target.target_id, controller.signal), controller.signal)
+      if (!stillAuthorized) { gone += 1; return }
       const providerTimeoutMs = Math.min(providerMaxMs, deadlineAt - Date.now() - completionReserveMs)
       if (providerTimeoutMs < 1) { controller.abort(); throw new DOMException(budgetExpired, 'AbortError') }
       await callBeforeAbort(() => provider.send(target, payload, controller.signal, providerTimeoutMs), controller.signal)

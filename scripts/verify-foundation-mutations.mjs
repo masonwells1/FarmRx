@@ -7,9 +7,11 @@ const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
 const files = [
   'docs/password-recovery-support.md',
-  'src/App.tsx', 'src/main.tsx', 'src/sw.ts', 'src/auth/AuthProvider.tsx', 'src/auth/passwordRecovery.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json', 'vite.config.ts',
-  'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1',
+  'src/App.tsx', 'src/main.tsx', 'src/sw.ts', 'src/auth/AuthProvider.tsx', 'src/auth/passwordRecovery.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json', 'vite.config.ts', 'playwright.config.ts', 'playwright.password-form.config.ts',
+  'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1', 'scripts/verify-password-form-browser.ps1', 'scripts/verify-push-access-revocation-disposable.ps1', 'scripts/verify-push-access-concurrency-mutation.ps1',
+  'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
+  'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/queuedOperationGuard.ts',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
   'src/data/QueuedFieldsRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/QueuedHarvestRepository.ts',
@@ -17,11 +19,22 @@ const files = [
   'src/data/QueuedProgramsRepository.ts', 'src/data/QueuedScoutingRepository.ts',
 ]
 const reset = () => { for (const path of files) { const target = join(temporary, path); mkdirSync(dirname(target), { recursive: true }); cpSync(join(root, path), target) } }
-const mutate = (path, replace) => { const target = join(temporary, path); writeFileSync(target, replace(readFileSync(target, 'utf8'))) }
+const mutate = (path, replace) => {
+  const target = join(temporary, path)
+  const source = readFileSync(target, 'utf8')
+  const mutated = replace(source)
+  if (mutated === source) throw new Error(`Mutation for ${path} did not change the file.`)
+  writeFileSync(target, mutated)
+}
 const detected = (label, expected) => {
   const failures = foundationStaticGuard(temporary)
   if (!failures.includes(expected)) throw new Error(`${label} mutation was not detected. Observed: ${failures.join(', ')}`)
   console.log(`Mutation detected: ${label}`)
+}
+const accepted = (label) => {
+  const failures = foundationStaticGuard(temporary)
+  if (failures.length) throw new Error(`${label} regression was rejected. Observed: ${failures.join(', ')}`)
+  console.log(`Regression accepted: ${label}`)
 }
 
 try {
@@ -45,8 +58,32 @@ try {
   mutate('supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql', (source) => source.replace('revoke insert, update, delete on table public.push_subscriptions from public, anon, authenticated;', 'grant insert, update, delete on table public.push_subscriptions to authenticated;'))
   detected('push direct-table write revoke removal', 'table:push-direct-write-revoked')
   reset()
+  mutate('supabase/migrations/20260812135210_deny_revoked_push_delivery.sql', (source) => source.replace('and not public.push_recipient_has_current_farm_access(notification.farm_id, notification.user_id);', 'and false;'))
+  detected('revoked push target terminalization removal', 'push:revoked-target-terminalization')
+  reset()
+  mutate('supabase/migrations/20260812135210_deny_revoked_push_delivery.sql', (source) => source.replace('set search_path = public, pg_temp', 'set search_path = pg_catalog'))
+  detected('push security-definer fixed search path removal', 'push:security-definer-fixed-search-paths')
+  reset()
+  mutate('scripts/verify-push-access-revocation-disposable.ps1', (source) => source.replace('if (select count(*) from first_authorized_rep_claim) <> 1 then', 'if false then'))
+  detected('authorized rep positive control removal', 'push:authorized-rep-positive-control')
+  reset()
+  mutate('scripts/verify-push-access-revocation-disposable.ps1', (source) => source.replace("if (select endpoint from first_authorized_rep_claim) is distinct from 'https://push.example.test/removed-rep-device' then", 'if false then'))
+  detected('authorized rep exact endpoint control removal', 'push:authorized-rep-exact-endpoint-control')
+  reset()
+  mutate('supabase/functions/_shared/pushDeliveryLogic.ts', (source) => source.replace('const stillAuthorized = await callBeforeAbort(() => database.revalidateTarget(target.target_id, controller.signal), controller.signal)', 'const stillAuthorized = true'))
+  detected('provider send-time access revalidation removal', 'push:provider-preflight-revalidation')
+  reset()
+  mutate('supabase/migrations/20260812135210_deny_revoked_push_delivery.sql', (source) => source.replace('from public.push_deliveries\n  where id = p_delivery_id\n  for update;', 'from public.push_deliveries\n  where id = p_delivery_id;'))
+  detected('parent-delivery reconciliation lock removal', 'push:parent-delivery-reconciliation-lock')
+  reset()
+  mutate('scripts/verify-push-access-concurrency-mutation.ps1', (source) => source.replace("if ($_.Exception.Message -ne 'EXPECTED_PARENT_RECONCILIATION_MUTATION_DETECTED') { throw }", "if ($_.Exception.Message -notmatch 'failed') { throw }"))
+  detected('concurrency mutation broad failure acceptance', 'push:concurrency-mutation-rejects-unrelated-failures')
+  reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1') }", "& (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1')"))
   detected('intermediate foundation exit check removal', 'orchestrator:all-lanes-checked')
+  reset()
+  mutate('scripts/verify-password-form-browser.ps1', (source) => source.replace('  & npx playwright test --config=playwright.password-form.config.ts', '  & node --version # & npx playwright test --config=playwright.password-form.config.ts'))
+  detected('password browser runner replaced behind a comment decoy', 'auth:password-form-real-playwright-command')
   reset()
   mutate('src/data/QueuedScoutingRepository.ts', (source) => source.replace('const verifyRead = () => verifyQueuedReadContext', 'const verifyRead = () => verifyQueuedOperationContext'))
   detected('queued read identity fence removal', 'read-context:src/data/QueuedScoutingRepository.ts')
@@ -96,12 +133,24 @@ try {
   mutate('src/App.tsx', (source) => source.replace('if (isPasswordRecoveryStorageError(error))', 'if (false)'))
   detected('reset storage failure falls through to public email success', 'auth:reset-storage-error-distinguished')
   reset()
+  mutate('src/App.tsx', (source) => source
+    .replace('key="password-reset" ', '')
+    .replace('key="sign-in" ', '')
+    .replace('function LoginPage()', '// <form key="password-reset"> <form key="sign-in">\nfunction LoginPage()'))
+  detected('functional form keys removed behind comment decoys', 'auth:login-form-distinct-ast-identity')
+  reset()
+  mutate('src/App.tsx', (source) => source
+    .replace('{forgotPassword ? <form key="password-reset"', '{forgotPassword ? (<form key="password-reset"')
+    .replace('</form> : <form key="sign-in"', '</form>) : (<form key="sign-in"')
+    .replace('</form>}\n        <p className="slogan">', '</form>)}\n        <p className="slogan">'))
+  accepted('parenthesized keyed auth form branches')
+  reset()
   mutate('docs/password-recovery-support.md', (source) => source.replace('If any prior farmer client exists or any\n   known proof client cannot be enumerated and retired, stop and keep recovery unavailable.', 'Proceed after deployment readiness alone.'))
   detected('stale-client customer-zero transition gate removal', 'auth:runbook-stale-client-customer-zero-gate')
   reset()
   mutate('src/App.tsx', (source) => source.replace('{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}\n          {error && <p className="auth-error" role="alert">{error}</p>}', '{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}'))
   detected('reset storage failure loses visible error', 'auth:reset-storage-error-rendered')
-  console.log('Foundation mutation drill: PASS (25/25 controlled mutations turned the gate red)')
+  console.log('Foundation mutation drill: PASS (34/34 controlled mutations turned the gate red; parenthesized auth-form regression accepted)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }
