@@ -22,24 +22,30 @@ reviews:
 
   # Skip churn that cannot contain a bug. FarmRx shares one CodeRabbit org (and
   # one review budget) with CRX Manager, so wasted attempts here throttle both.
+  #
+  # Lock files (package-lock.json, deno.lock) are deliberately NOT excluded.
+  # Excluding them means a PR that changes only a lockfile drops to zero
+  # reviewable files and is skipped outright, so nothing inspects the version
+  # bumps or integrity hashes - and this repo has shipped deno.lock as the sole
+  # functional change before. Raised by the Codex reviewer on PR #26.
   path_filters:
     - "!docs/archive/**"
     - "!docs/audits/**"
     - "!docs/handoffs/**"
     - "!test-results/**"
     - "!dist/**"
-    - "!**/package-lock.json"
-    - "!**/*.lock"
 
   auto_review:
     enabled: true
     drafts: false
     base_branches:
       - main
-    # Review on PR open and once after the first round of fixes, then pause.
-    # The number governs only mid-work drafts - the pre-merge gate is a fresh
-    # `@coderabbitai review` on the FINAL commit. See CRX Manager's
-    # docs/manual/DECISION_LOG.md (2026-08-20) for the measurement behind this.
+    # Pause AUTOMATIC review after 2 reviewed commits on a PR (this applies to
+    # ordinary non-draft PRs, not just drafts). Later pushes are then not
+    # auto-reviewed until someone comments `@coderabbitai review`, which
+    # resumes it. This number is NOT the pre-merge gate and must never be
+    # treated as one: the gate is a fresh `@coderabbitai review` on the FINAL
+    # commit. See CRX Manager's docs/manual/DECISION_LOG.md (2026-08-20).
     auto_pause_after_reviewed_commits: 2
 
   # Project-specific review guidance, mirroring the rules and gotchas in this
