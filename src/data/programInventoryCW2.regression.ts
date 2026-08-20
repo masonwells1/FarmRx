@@ -1,7 +1,9 @@
-import { readFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { isAbsolute, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import type { ProgramsDataGateway } from './ProgramsDataGateway'
 import { SupabaseProgramsRepository } from './SupabaseProgramsRepository'
 import { canonicalProgramInventoryProduct, confirmedProgramInventoryActuals, formatProgramInventoryQuantity, isProgramInventoryQuantity, parseProgramInventoryQuantityInput, programApplyConfirmation, PROGRAM_INVENTORY_QUANTITY_MAX, validateActualProgramProducts, type ActualProgramProduct, type ProgramInventoryProduct } from './programs'
@@ -400,7 +402,7 @@ async function run() {
       && adapter.includes(replacementArtifact.ref) && adapter.includes(replacementArtifact.id) && adapter.includes(replacementArtifact.tag) && adapter.includes(replacementArtifact.token)
       && adapterRegression.includes(replacementArtifact.ref) && adapterRegression.includes(replacementArtifact.id) && adapterRegression.includes(replacementArtifact.tag) && adapterRegression.includes(replacementArtifact.token)
       && topology.split(replacementArtifact.ref).length - 1 === 2 && topology.split(replacementArtifact.id).length - 1 === 4 && topology.includes('Observed=$true;LabelsVerified=$true') && topologyRegression.split(replacementArtifact.ref).length - 1 === 1
-      && canonicalManifestRegression.includes('$paths.Sort([StringComparer]::Ordinal)') && canonicalManifestRegression.includes('HashSet[string]') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CANONICAL_MANIFEST_PASS') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CLEAN_FALLBACK_PASS') && canonicalManifestRegression.includes("@('diff-tree','--no-commit-id','--name-only','-r','HEAD^','HEAD')") && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY') && !canonicalManifestRegression.includes('Sort-Object')
+      && canonicalManifestRegression.includes('$paths.Sort([StringComparer]::Ordinal)') && canonicalManifestRegression.includes('HashSet[string]') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CANONICAL_MANIFEST_PASS') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CLEAN_FALLBACK_PASS') && canonicalManifestRegression.includes("@('diff-tree','--no-commit-id','--name-only','-r','-z','HEAD^','HEAD')") && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY') && !canonicalManifestRegression.includes('Sort-Object')
       && spike.includes(replacementArtifact.tag) && spike.includes(replacementArtifact.ref) && spike.includes(replacementArtifact.id) && spike.split('Assert-ExactReusableArtifact').length === 3 && [
         "'farmrx.synthetic-bootstrap'='b9ad08aeb66ed961e8426b2cce527365'", "'farmrx.synthetic-owner'='maple-faketime-bootstrap'", "'farmrx.synthetic-role'='faketime-artifacts'", "'farmrx.source-digest'='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818'", "'farmrx.package-contract'='libfaketime=0.9.10-2.1;gcc;libc6-dev'"
       ].every((label) => spike.includes(label))
@@ -409,39 +411,190 @@ async function run() {
       && !/artifact(?:LocalTag|Ref|Id)|(?:image|system)\s+prune|@\('image','prune'/.test(cleanupSource)
       && evidence.includes(retiredArtifact.id) && evidence.includes(replacementArtifact.ref) && evidence.includes('No continuity')
       && frozenEvidence.includes(retiredArtifact.tag) && frozenEvidence.includes(replacementArtifact.tag) && frozenEvidence.includes('historical')
-      && evidenceManifest.includes(replacementArtifact.ref) && evidenceManifest.includes(replacementArtifact.id) && evidenceManifest.includes(replacementArtifact.tag) && evidenceManifest.includes('d8b95bfa5a83c56b3236a5579ad33043456e0fb5b09d1f93005efb1ec48e4276') && evidenceManifest.includes('97cbbca788a38b14b11e7780fdeb00b6852a224bf39076174ef626f7411e29de') && evidenceManifest.includes('5ee6803f958a960c0ee11b423e63b81d6bcfb1f5301afe99f8fa86531eaeff48') && evidenceManifest.includes('9ecb1ceb867d28184bd21187901c909e9901a71b7cf86f2c3cadcf332bf1bed8') && evidenceManifest.includes('9f1400fc2b3dcf6a9454551e827bfcc58883e730772771583f2f466c92babc4e') && evidenceManifest.includes('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855') && evidenceManifest.includes('aed05d2f6937223d8bbd53ea79a3043ce79a4436ce7e29d7569c04c66d77dbf2') && evidenceManifest.includes('clear-ld-preload.c') && evidenceManifest.includes('b6d9b439ccbfdf88f87b9c2f2d89b560d2370964074759373949c2bbb67cd66e') && evidenceManifest.includes('derived_image_proof') && evidenceManifest.includes('0ba1615005224ec79d44fcdb3998021d') && evidenceManifest.includes('sha256:ac2901f891cd4a96d70cde28c9dd9f1db6ca518f4d9e5db821518ecb518a0f74') && evidenceManifest.includes('eb43ca8c6035e8125e9ddbd7498f3bea8674a5a34c164c4e7ac4a1d1c9fc06d1') && evidenceManifest.includes('reusable_postcleanup_attestation') && evidenceManifest.includes('5469560cee6b3f5f863ea84aaab8376a38b3a909d2b2145e03671a32e5578eb5') && evidenceManifest.includes('efd709072eb35f838fcf5b81c22da204baadf3f54e016f5dfa64e4735d073163') && evidenceManifest.includes('combined_source_artifact_identity_recipe')
+      && evidenceManifest.includes(replacementArtifact.ref) && evidenceManifest.includes(replacementArtifact.id) && evidenceManifest.includes(replacementArtifact.tag) && evidenceManifest.includes('d8b95bfa5a83c56b3236a5579ad33043456e0fb5b09d1f93005efb1ec48e4276') && evidenceManifest.includes('97cbbca788a38b14b11e7780fdeb00b6852a224bf39076174ef626f7411e29de') && evidenceManifest.includes('5ee6803f958a960c0ee11b423e63b81d6bcfb1f5301afe99f8fa86531eaeff48') && evidenceManifest.includes('9ecb1ceb867d28184bd21187901c909e9901a71b7cf86f2c3cadcf332bf1bed8') && evidenceManifest.includes('9f1400fc2b3dcf6a9454551e827bfcc58883e730772771583f2f466c92babc4e') && evidenceManifest.includes('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855') && evidenceManifest.includes('aed05d2f6937223d8bbd53ea79a3043ce79a4436ce7e29d7569c04c66d77dbf2') && evidenceManifest.includes('clear-ld-preload.c') && evidenceManifest.includes('b6d9b439ccbfdf88f87b9c2f2d89b560d2370964074759373949c2bbb67cd66e') && evidenceManifest.includes('derived_image_proof') && evidenceManifest.includes('0ba1615005224ec79d44fcdb3998021d') && evidenceManifest.includes('sha256:ac2901f891cd4a96d70cde28c9dd9f1db6ca518f4d9e5db821518ecb518a0f74') && evidenceManifest.includes('eb43ca8c6035e8125e9ddbd7498f3bea8674a5a34c164c4e7ac4a1d1c9fc06d1') && evidenceManifest.includes('reusable_postcleanup_attestation') && evidenceManifest.includes('5469560cee6b3f5f863ea84aaab8376a38b3a909d2b2145e03671a32e5578eb5') && evidenceManifest.includes('efd709072eb35f838fcf5b81c22da204baadf3f54e016f5dfa64e4735d073163') && evidenceManifest.includes('combined_source_artifact_identity_recipe') && evidenceManifest.includes('NUL-delimited dirty tracked, staged, and untracked existing source') && evidenceManifest.includes('refusing missing/deleted paths')
       && dockerfile.includes('ARG FAKETIME_ARTIFACTS_IMAGE') && !dockerfile.includes('ARG FAKETIME_ARTIFACTS_IMAGE=') && !dockerfile.match(/apt-get|curl|wget|https?:\/\//)
   }
   const replacementArtifactSources = [harvestClockSource, clockAdapterSource, clockAdapterRegressionSource, topologyPlanSource, topologyPlanRegressionSource, canonicalManifestRegressionSource, clockSpikeRunnerSource, artifactEvidenceSource, frozenArtifactEvidenceSource, artifactEvidenceManifestSource, frozenClockDockerfileSource] as const
   assert(completeFaketimeArtifactReplacementContract(replacementArtifactSources), 'Every owning faketime path must use the exact reviewed replacement identity, preserve the retired evidence, inspect both reusable names, and never clean up the reusable artifact.')
+  const focusedExecutablePath = fileURLToPath(import.meta.url)
+  const focusedSourceOverride = process.env.CW2_ARTIFACT_MATRIX_SOURCE_PATH
+  assert(!focusedSourceOverride || (process.env.CW2_ARTIFACT_MATRIX_CHILD === '1' && isAbsolute(focusedSourceOverride)), 'A focused matrix source override is allowed only for an explicit child and must be absolute.')
+  assert((process.env.CW2_ARTIFACT_MATRIX_CHILD === '1') === Boolean(focusedSourceOverride), 'Focused matrix child mode and its explicit source path must be present together.')
+  const focusedProofSourcePath = focusedSourceOverride ?? focusedExecutablePath
+  if (focusedSourceOverride) assert(focusedProofSourcePath.toLowerCase().startsWith(join(tmpdir(), 'farmrx-cw2-artifact-matrix-').toLowerCase()), 'The focused matrix child source must live in its unique operating-system temp root.')
+  const focusedProofSource = readFileSync(focusedProofSourcePath, 'utf8')
   const canonicalManifestDiscoveryContract = (source: string) => {
-    const dirty = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff','--name-only') 'FAKETIME_ARTIFACT_MANIFEST_DIRTY_DIFF_GIT_FAILED'")
-    const untracked = source.indexOf("Invoke-Cw2ArtifactGitPathList @('ls-files','--others','--exclude-standard') 'FAKETIME_ARTIFACT_MANIFEST_UNTRACKED_GIT_FAILED'")
-    const fallback = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff-tree','--no-commit-id','--name-only','-r','HEAD^','HEAD') 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_GIT_FAILED'")
+    const normalized = source.replace(/\r\n/g, '\n')
+    const dirty = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff','--name-only','-z') 'FAKETIME_ARTIFACT_MANIFEST_DIRTY_DIFF_GIT_FAILED'")
+    const staged = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff','--cached','--name-only','-z') 'FAKETIME_ARTIFACT_MANIFEST_STAGED_DIFF_GIT_FAILED'")
+    const untracked = source.indexOf("Invoke-Cw2ArtifactGitPathList @('ls-files','--others','--exclude-standard','-z') 'FAKETIME_ARTIFACT_MANIFEST_UNTRACKED_GIT_FAILED'")
+    const fallback = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff-tree','--no-commit-id','--name-only','-r','-z','HEAD^','HEAD') 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_GIT_FAILED'")
     const empty = source.indexOf("if($paths.Count-eq0){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY'}")
     const forced = source.indexOf('$cleanFallback=Get-Cw2ArtifactCanonicalManifest -ForceCleanFallback')
     const forcedRefusal = source.indexOf("if($cleanFallback.Source-cne'exact-previous-commit-diff'-or$cleanFallback.Lines.Count-eq0-or-not$cleanFallback.Canonical.EndsWith(\"`n\")){throw 'FAKETIME_ARTIFACT_MANIFEST_CLEAN_FALLBACK_PROOF_FAILED'}")
+    const forcedGitFailure = source.indexOf("try{[void](Invoke-Cw2ArtifactGitPathList @('rev-parse','--verify',$forcedGitMissingRef) 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE')}catch{$forcedGitFailure=$_.Exception.Message;$forcedGitExit=$LASTEXITCODE}")
+    const forcedGitRefusal = source.indexOf("if($forcedGitFailure-notmatch'^FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE:exit=([1-9][0-9]*):detail=.+$'){throw \"FAKETIME_ARTIFACT_MANIFEST_GIT_FAILURE_CAPTURE_PROOF_FAILED:$forcedGitFailure\"}")
+    const forcedGitEapRefusal = source.indexOf("if($ErrorActionPreference-cne$expectedErrorActionPreference){throw 'FAKETIME_ARTIFACT_MANIFEST_GIT_FAILURE_EAP_RESTORE_FAILED'}")
+    const forcedGitPass = source.indexOf("Write-Output 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_FAILURE_CAPTURE_PASS'")
+    const forcedSequence = "try{[void](Invoke-Cw2ArtifactGitPathList @('rev-parse','--verify',$forcedGitMissingRef) 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE')}catch{$forcedGitFailure=$_.Exception.Message;$forcedGitExit=$LASTEXITCODE}\n  if($forcedGitFailure-notmatch'^FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE:exit=([1-9][0-9]*):detail=.+$'){throw \"FAKETIME_ARTIFACT_MANIFEST_GIT_FAILURE_CAPTURE_PROOF_FAILED:$forcedGitFailure\"}"
+    const nulSplit = "@($joined.Split([char[]]@([char]0),[StringSplitOptions]::RemoveEmptyEntries))"
+    const pathCustody = [
+      '$seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal);$paths=[Collections.Generic.List[string]]::new()',
+      'if(-not(Test-Path -LiteralPath (Join-Path $root $dirtyPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_DIRTY_PATH_MISSING:$dirtyPath"}',
+      'if($seen.Add($dirtyNormalized)){[void]$paths.Add($dirtyNormalized)}',
+      'if(-not(Test-Path -LiteralPath (Join-Path $root $stagedPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_STAGED_PATH_MISSING:$stagedPath"}',
+      'if($seen.Add($stagedNormalized)){[void]$paths.Add($stagedNormalized)}',
+      'if(-not(Test-Path -LiteralPath (Join-Path $root $untrackedPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_UNTRACKED_PATH_MISSING:$untrackedPath"}',
+      'if($seen.Add($untrackedNormalized)){[void]$paths.Add($untrackedNormalized)}',
+      'if(-not(Test-Path -LiteralPath (Join-Path $root $previousPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_PATH_MISSING:$previousPath"}',
+      'if($seen.Add($previousNormalized)){[void]$paths.Add($previousNormalized)}',
+      '$paths.Sort([StringComparer]::Ordinal)',
+    ]
     return source.includes('function Invoke-Cw2ArtifactGitPathList([string[]]$Arguments,[string]$FailureMarker)')
-      && source.includes('$output=@(& git -C $root @Arguments 2>&1);$exitCode=$LASTEXITCODE')
+      && source.includes('$previousErrorActionPreference=$ErrorActionPreference')
+      && source.includes("try{$ErrorActionPreference='Continue';$output=@(& $gitExe -C $root @Arguments 2>&1);$exitCode=$LASTEXITCODE}finally{$ErrorActionPreference=$previousErrorActionPreference}")
       && source.includes('if($exitCode-ne0){$detail=')
+      && source.includes('throw "${FailureMarker}:exit=${exitCode}:detail=${detail}"')
+      && source.includes("if($ErrorActionPreference-cne$expectedErrorActionPreference){throw 'FAKETIME_ARTIFACT_MANIFEST_GIT_SUCCESS_EAP_RESTORE_FAILED'}")
+      && source.includes("Write-Output 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_EAP_RESTORE_PASS'")
+      && source.includes('function Get-Cw2ForcedGitFailureAstContract([string]$Source)')
+      && source.includes('function Invoke-Cw2ForcedGitFailureControlFlowProof([string]$Source,[pscustomobject]$Contract)')
+      && source.includes('$node-is[System.Management.Automation.Language.CommandAst]')
+      && source.includes('[object]::ReferenceEquals($outerTry.Parent.Parent,$ast)')
+      && source.includes('$assignments.Count-ne2')
+      && source.includes('$exitAssignments.Count-ne2')
+      && source.includes("if(-not$forcedGitAstContract.Valid){throw 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_CONTRACT_FAILED'}")
+      && source.includes('if(-not$ControlFlowChild){Invoke-Cw2ForcedGitFailureControlFlowProof $selfSource $forcedGitAstContract}')
+      && source.includes('FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS')
+      && source.includes("$gitExe=[IO.Path]::GetFullPath($gitCommands[0].Source)")
+      && source.includes("$matchingStarts.Count-ne1-or$matchingExits.Count-ne1")
+      && source.includes("FAKETIME_ARTIFACT_REPLACEMENT_GIT_TRACE_OBSERVATION_PASS")
+      && source.includes("farmrx-cw2-artifact-git-ast-")
+      && source.includes("-RepositoryRoot $root -InitialErrorActionPreference $case.Preference")
+      && source.includes("if([IO.File]::Exists($path)){[IO.File]::Delete($path)}")
+      && source.includes("[IO.Directory]::Delete($tempRoot,$false)")
+      && source.split(nulSplit).length - 1 === 1
+      && pathCustody.every((needle) => source.includes(needle))
+      && normalized.includes(forcedSequence)
       && source.includes('if(-not$ForceCleanFallback){')
-      && dirty >= 0 && untracked > dirty && fallback > untracked && empty > fallback && forced > empty && forcedRefusal > forced
+      && dirty >= 0 && staged > dirty && untracked > staged && fallback > untracked && empty > fallback && forced > empty && forcedRefusal > forced && forcedGitFailure > forcedRefusal && forcedGitRefusal > forcedGitFailure && forcedGitEapRefusal > forcedGitRefusal && forcedGitPass > forcedGitEapRefusal
   }
   assert(canonicalManifestDiscoveryContract(canonicalManifestRegressionSource), 'The artifact manifest regression must use dirty paths first, then a captured exact HEAD^..HEAD fallback, and directly prove the clean fallback.')
+  const focusedChildStart = '// CW2_ARTIFACT_MANIFEST_TS_CHILD_PROOF_' + 'BEGIN'
+  const focusedChildEnd = '// CW2_ARTIFACT_MANIFEST_TS_CHILD_PROOF_' + 'END'
+  assert(focusedProofSource.split(focusedChildStart).length - 1 === 1 && focusedProofSource.split(focusedChildEnd).length - 1 === 1, 'The focused TypeScript child proof must have one exact source boundary.')
+  const focusedChildStartIndex = focusedProofSource.indexOf(focusedChildStart)
+  const focusedChildEndIndex = focusedProofSource.indexOf(focusedChildEnd, focusedChildStartIndex)
+  const focusedChildSpan = focusedProofSource.slice(focusedChildStartIndex, focusedChildEndIndex + focusedChildEnd.length)
+  const focusedMatrixChildContract = (source: string) => [
+    "if (process.env.CW2_ARTIFACT_MATRIX_CHILD !== '1')",
+    'const focusedMatrixTempRoot = join(tmpdir(), `farmrx-cw2-artifact-matrix-${process.pid}-${randomUUID()}`)',
+    'mkdirSync(focusedMatrixTempRoot)',
+    "const baselinePath = join(focusedMatrixTempRoot, 'baseline-source.txt')",
+    "const omittedPath = join(focusedMatrixTempRoot, 'matrix-omitted-source.txt')",
+    "CW2_ARTIFACT_MATRIX_SOURCE_PATH: baselinePath",
+    "CW2_ARTIFACT_MATRIX_SOURCE_PATH: omittedPath",
+    'spawnSync(process.execPath, [tsxCli, focusedExecutablePath]',
+    'if (existsSync(path)) unlinkSync(path)',
+    'assert(!existsSync(path), `Focused matrix child temp file remains: ${path}`)',
+    'if (existsSync(focusedMatrixTempRoot)) rmdirSync(focusedMatrixTempRoot)',
+    'assert(!existsSync(focusedMatrixTempRoot), `Focused matrix child temp root remains: ${focusedMatrixTempRoot}`)',
+  ].every((needle) => source.includes(needle)) && !source.includes("new URL(`./programInventoryCW2.matrix-")
+  assert(focusedMatrixChildContract(focusedChildSpan), 'The focused TypeScript matrix proof must use one unique operating-system temp root, execute the repository source with an explicit child source path, and clean every owned file/root fail closed.')
+  // CW2_ARTIFACT_MANIFEST_DISCOVERY_MATRIX_BEGIN
   const canonicalManifestDiscoveryMutations = [
-    { name: 'dirty manifest discovery bypassed before fallback', from: 'if(-not$ForceCleanFallback){', to: 'if($false){' },
-    { name: 'clean fallback replaced with working diff', from: "@('diff-tree','--no-commit-id','--name-only','-r','HEAD^','HEAD')", to: "@('diff','--name-only')" },
-    { name: 'clean fallback empty refusal removed', from: "if($paths.Count-eq0){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY'}", to: 'if($false){throw \'CW2_REMOVED_PREVIOUS_COMMIT_EMPTY_REFUSAL\'}' },
-    { name: 'git failure capture bypassed', from: '$output=@(& git -C $root @Arguments 2>&1);$exitCode=$LASTEXITCODE', to: '$output=@(& git -C $root @Arguments 2>&1);$exitCode=0' },
-    { name: 'forced clean fallback proof omitted', from: '$cleanFallback=Get-Cw2ArtifactCanonicalManifest -ForceCleanFallback', to: '$cleanFallback=$canonical' },
-    { name: 'forced clean fallback refusal removed', from: "if($cleanFallback.Source-cne'exact-previous-commit-diff'-or$cleanFallback.Lines.Count-eq0-or-not$cleanFallback.Canonical.EndsWith(\"`n\")){throw 'FAKETIME_ARTIFACT_MANIFEST_CLEAN_FALLBACK_PROOF_FAILED'}", to: 'if($false){throw \'CW2_REMOVED_CLEAN_FALLBACK_PROOF\'}' },
+    { target: 'manifest', name: 'dirty manifest discovery bypassed before fallback', from: 'if(-not$ForceCleanFallback){', to: 'if($false){' },
+    { target: 'manifest', name: 'staged manifest discovery omitted', from: "foreach($stagedPath in (Invoke-Cw2ArtifactGitPathList @('diff','--cached','--name-only','-z') 'FAKETIME_ARTIFACT_MANIFEST_STAGED_DIFF_GIT_FAILED'))", to: "foreach($stagedPath in @())" },
+    { target: 'manifest', name: 'clean fallback replaced with working diff', from: "@('diff-tree','--no-commit-id','--name-only','-r','-z','HEAD^','HEAD')", to: "@('diff','--name-only','-z')" },
+    { target: 'manifest', name: 'clean fallback empty refusal removed', from: "if($paths.Count-eq0){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY'}", to: 'if($false){throw \'CW2_REMOVED_PREVIOUS_COMMIT_EMPTY_REFUSAL\'}' },
+    { target: 'manifest', name: 'git failure capture bypassed', from: '$exitCode=$LASTEXITCODE', to: '$exitCode=0' },
+    { target: 'manifest', name: 'forced clean fallback proof omitted', from: '$cleanFallback=Get-Cw2ArtifactCanonicalManifest -ForceCleanFallback', to: '$cleanFallback=$canonical' },
+    { target: 'manifest', name: 'forced clean fallback refusal removed', from: "if($cleanFallback.Source-cne'exact-previous-commit-diff'-or$cleanFallback.Lines.Count-eq0-or-not$cleanFallback.Canonical.EndsWith(\"`n\")){throw 'FAKETIME_ARTIFACT_MANIFEST_CLEAN_FALLBACK_PROOF_FAILED'}", to: 'if($false){throw \'CW2_REMOVED_CLEAN_FALLBACK_PROOF\'}' },
+    { target: 'manifest', name: 'git failure interpolation malformed', from: 'throw "${FailureMarker}:exit=${exitCode}:detail=${detail}"', to: 'throw "$FailureMarker:exit=$exitCode:detail=$detail"' },
+    { target: 'manifest', name: 'forced git failure invocation omitted', from: "try{[void](Invoke-Cw2ArtifactGitPathList @('rev-parse','--verify',$forcedGitMissingRef) 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE')}catch{$forcedGitFailure=$_.Exception.Message;$forcedGitExit=$LASTEXITCODE}", to: "$forcedGitFailure='FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE:exit=1:detail=synthetic';$forcedGitExit=1" },
+    { target: 'manifest', name: 'forced git failure refusal bypassed', from: "if($forcedGitFailure-notmatch'^FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE:exit=([1-9][0-9]*):detail=.+$'){throw \"FAKETIME_ARTIFACT_MANIFEST_GIT_FAILURE_CAPTURE_PROOF_FAILED:$forcedGitFailure\"}", to: "if($false){throw 'CW2_REMOVED_GIT_FAILURE_CAPTURE_REFUSAL'}" },
+    { target: 'manifest', name: 'git error scope restore removed', from: 'finally{$ErrorActionPreference=$previousErrorActionPreference}', to: 'finally{}' },
+    { target: 'manifest', name: 'git error capture broadened beyond helper', from: '$previousErrorActionPreference=$ErrorActionPreference', to: "$previousErrorActionPreference='Continue'" },
+    { target: 'manifest', name: 'forced git call dead with synthetic result', from: "try{[void](Invoke-Cw2ArtifactGitPathList @('rev-parse','--verify',$forcedGitMissingRef) 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE')}catch{$forcedGitFailure=$_.Exception.Message;$forcedGitExit=$LASTEXITCODE}", to: "if($false){try{[void](Invoke-Cw2ArtifactGitPathList @('rev-parse','--verify',$forcedGitMissingRef) 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE')}catch{$forcedGitFailure=$_.Exception.Message;$forcedGitExit=$LASTEXITCODE}};$forcedGitFailure='FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE:exit=1:detail=synthetic';$forcedGitExit=1" },
+    { target: 'manifest', name: 'forced git synthetic result injected', from: "try{[void](Invoke-Cw2ArtifactGitPathList @('rev-parse','--verify',$forcedGitMissingRef) 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE')}catch{$forcedGitFailure=$_.Exception.Message;$forcedGitExit=$LASTEXITCODE}", to: "try{[void](Invoke-Cw2ArtifactGitPathList @('rev-parse','--verify',$forcedGitMissingRef) 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE')}catch{$forcedGitFailure=$_.Exception.Message;$forcedGitExit=$LASTEXITCODE};$forcedGitFailure='FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE:exit=1:detail=synthetic'" },
+    { target: 'manifest', name: 'forced git AST contract bypassed', from: "if(-not$forcedGitAstContract.Valid){throw 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_CONTRACT_FAILED'}", to: "if($false){throw 'CW2_REMOVED_FORCED_GIT_AST_CONTRACT'}" },
+    { target: 'manifest', name: 'forced git AST child proof omitted', from: 'if(-not$ControlFlowChild){Invoke-Cw2ForcedGitFailureControlFlowProof $selfSource $forcedGitAstContract}', to: 'if($false){Invoke-Cw2ForcedGitFailureControlFlowProof $selfSource $forcedGitAstContract}' },
+    { target: 'manifest', name: 'forced git AST child cleanup weakened', from: 'if([IO.File]::Exists($path)){[IO.File]::Delete($path)}', to: 'if($false){[IO.File]::Delete($path)}' },
+    { target: 'manifest', name: 'forced git trace observation bypassed', from: "if($matchingStarts.Count-ne1-or$matchingExits.Count-ne1){throw 'FAKETIME_ARTIFACT_MANIFEST_GIT_TRACE_EXACT_INVOCATION_MISSING'}", to: "if($false){throw 'CW2_REMOVED_EXACT_GIT_TRACE_OBSERVATION'}" },
+    { target: 'manifest', name: 'NUL delimiter parsing weakened', from: "@($joined.Split([char[]]@([char]0),[StringSplitOptions]::RemoveEmptyEntries))", to: "@($joined.Split([char[]]@([char]10),[StringSplitOptions]::RemoveEmptyEntries))" },
+    { target: 'manifest', name: 'dirty path accumulation removed', from: 'if($seen.Add($dirtyNormalized)){[void]$paths.Add($dirtyNormalized)}', to: 'if($seen.Add($dirtyNormalized)){}' },
+    { target: 'manifest', name: 'staged path accumulation removed', from: 'if($seen.Add($stagedNormalized)){[void]$paths.Add($stagedNormalized)}', to: 'if($seen.Add($stagedNormalized)){}' },
+    { target: 'manifest', name: 'untracked path accumulation removed', from: 'if($seen.Add($untrackedNormalized)){[void]$paths.Add($untrackedNormalized)}', to: 'if($seen.Add($untrackedNormalized)){}' },
+    { target: 'manifest', name: 'previous commit path accumulation removed', from: 'if($seen.Add($previousNormalized)){[void]$paths.Add($previousNormalized)}', to: 'if($seen.Add($previousNormalized)){}' },
+    { target: 'manifest', name: 'dirty missing path refusal removed', from: 'if(-not(Test-Path -LiteralPath (Join-Path $root $dirtyPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_DIRTY_PATH_MISSING:$dirtyPath"}', to: 'if($false){throw "CW2_REMOVED_DIRTY_PATH_REFUSAL"}' },
+    { target: 'manifest', name: 'staged missing path refusal removed', from: 'if(-not(Test-Path -LiteralPath (Join-Path $root $stagedPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_STAGED_PATH_MISSING:$stagedPath"}', to: 'if($false){throw "CW2_REMOVED_STAGED_PATH_REFUSAL"}' },
+    { target: 'manifest', name: 'untracked missing path refusal removed', from: 'if(-not(Test-Path -LiteralPath (Join-Path $root $untrackedPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_UNTRACKED_PATH_MISSING:$untrackedPath"}', to: 'if($false){throw "CW2_REMOVED_UNTRACKED_PATH_REFUSAL"}' },
+    { target: 'manifest', name: 'previous commit missing path refusal removed', from: 'if(-not(Test-Path -LiteralPath (Join-Path $root $previousPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_PATH_MISSING:$previousPath"}', to: 'if($false){throw "CW2_REMOVED_PREVIOUS_PATH_REFUSAL"}' },
+    { target: 'manifest', name: 'path dedup comparator weakened', from: '$seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)', to: '$seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)' },
+    { target: 'manifest', name: 'manifest path sort removed', from: '$paths.Sort([StringComparer]::Ordinal)', to: '$paths.Sort([StringComparer]::OrdinalIgnoreCase)' },
+    { target: 'focused', name: 'focused child proof omitted', from: "if (process.env.CW2_ARTIFACT_MATRIX_CHILD !== '1')", to: 'if (false)' },
+    { target: 'focused', name: 'focused child temp location moved into repository', from: 'const focusedMatrixTempRoot = join(tmpdir(), `farmrx-cw2-artifact-matrix-${process.pid}-${randomUUID()}`)', to: "const focusedMatrixTempRoot = join(fileURLToPath(new URL('./', import.meta.url)), `farmrx-cw2-artifact-matrix-${process.pid}-${randomUUID()}`)" },
+    { target: 'focused', name: 'focused child source override removed', from: 'CW2_ARTIFACT_MATRIX_SOURCE_PATH: baselinePath', to: 'CW2_ARTIFACT_MATRIX_SOURCE_PATH: focusedExecutablePath' },
+    { target: 'focused', name: 'focused child file cleanup removed', from: 'if (existsSync(path)) unlinkSync(path)', to: 'if (false) unlinkSync(path)' },
+    { target: 'focused', name: 'focused child directory cleanup removed', from: 'if (existsSync(focusedMatrixTempRoot)) rmdirSync(focusedMatrixTempRoot)', to: 'if (false) rmdirSync(focusedMatrixTempRoot)' },
   ] as const
-  assert(canonicalManifestDiscoveryMutations.length === 6, 'The artifact manifest discovery mutation matrix must retain dirty-first discovery, exact previous-commit fallback, captured Git failures, empty fallback refusal, and forced clean proof.')
+  assert(canonicalManifestDiscoveryMutations.length === 34, 'The artifact manifest discovery mutation matrix must retain NUL-delimited dirty/staged/untracked discovery, exact path accumulation/refusals/dedup/order, exact previous-commit fallback, scoped Git stderr capture/restoration, trace/AST-bound actual forced Git failure, and repository-external focused child location/cleanup.')
   for (const mutation of canonicalManifestDiscoveryMutations) {
-    const changed = canonicalManifestRegressionSource.replace(mutation.from, mutation.to)
-    assert(changed !== canonicalManifestRegressionSource, `Artifact manifest discovery mutation must target source: ${mutation.name}.`)
-    assert(!canonicalManifestDiscoveryContract(changed), `Artifact manifest discovery mutation must turn the contract red: ${mutation.name}.`)
+    const source = mutation.target === 'focused' ? focusedChildSpan : canonicalManifestRegressionSource
+    const changed = source.replace(mutation.from, mutation.to)
+    assert(changed !== source, `Artifact manifest discovery mutation must target source: ${mutation.name}.`)
+    const survived = mutation.target === 'focused' ? focusedMatrixChildContract(changed) : canonicalManifestDiscoveryContract(changed)
+    assert(!survived, `Artifact manifest discovery mutation must turn the contract red: ${mutation.name}.`)
   }
+  // CW2_ARTIFACT_MANIFEST_DISCOVERY_MATRIX_END
+  const discoveryMatrixStart = '// CW2_ARTIFACT_MANIFEST_DISCOVERY_' + 'MATRIX_BEGIN'
+  const discoveryMatrixEnd = '// CW2_ARTIFACT_MANIFEST_DISCOVERY_' + 'MATRIX_END'
+  assert(focusedProofSource.split(discoveryMatrixStart).length - 1 === 1 && focusedProofSource.split(discoveryMatrixEnd).length - 1 === 1, 'The artifact manifest discovery matrix span must have exactly one immutable boundary pair.')
+  const discoveryStart = focusedProofSource.indexOf(discoveryMatrixStart)
+  const discoveryEnd = focusedProofSource.indexOf(discoveryMatrixEnd, discoveryStart)
+  const discoveryMatrixSpan = focusedProofSource.slice(discoveryStart, discoveryEnd + discoveryMatrixEnd.length)
+  const discoveryMatrixSha256 = createHash('sha256').update(discoveryMatrixSpan).digest('hex')
+  assert(discoveryMatrixSha256 === 'b2a744acd29d74885fcc28031dd22b6d5d57fad290d286abe3f4d6003a434782', 'The executable artifact manifest discovery matrix bytes changed or were omitted.')
+  const discoveryMatrixOmittedSource = focusedProofSource.slice(0, discoveryStart) + discoveryMatrixStart + '\n' + discoveryMatrixEnd + focusedProofSource.slice(discoveryEnd + discoveryMatrixEnd.length)
+  const omittedStart = discoveryMatrixOmittedSource.indexOf(discoveryMatrixStart)
+  const omittedEnd = discoveryMatrixOmittedSource.indexOf(discoveryMatrixEnd, omittedStart)
+  const omittedSpan = discoveryMatrixOmittedSource.slice(omittedStart, omittedEnd + discoveryMatrixEnd.length)
+  assert(createHash('sha256').update(omittedSpan).digest('hex') !== discoveryMatrixSha256, 'Deleting only the executable artifact manifest discovery matrix must turn the independent span proof red.')
+  // CW2_ARTIFACT_MANIFEST_TS_CHILD_PROOF_BEGIN
+  if (process.env.CW2_ARTIFACT_MATRIX_CHILD !== '1') {
+    const focusedMatrixTempRoot = join(tmpdir(), `farmrx-cw2-artifact-matrix-${process.pid}-${randomUUID()}`)
+    mkdirSync(focusedMatrixTempRoot)
+    const baselinePath = join(focusedMatrixTempRoot, 'baseline-source.txt')
+    const omittedPath = join(focusedMatrixTempRoot, 'matrix-omitted-source.txt')
+    const childPaths = [baselinePath, omittedPath]
+    let primary: unknown = null
+    const cleanupErrors: Error[] = []
+    try {
+      writeFileSync(baselinePath, focusedProofSource, 'utf8')
+      writeFileSync(omittedPath, discoveryMatrixOmittedSource, 'utf8')
+      const tsxCli = fileURLToPath(new URL('../../node_modules/tsx/dist/cli.mjs', import.meta.url))
+      const baselineEnv = { ...process.env, CW2_ARTIFACT_MATRIX_CHILD: '1', CW2_ARTIFACT_MATRIX_SOURCE_PATH: baselinePath }
+      const omittedEnv = { ...process.env, CW2_ARTIFACT_MATRIX_CHILD: '1', CW2_ARTIFACT_MATRIX_SOURCE_PATH: omittedPath }
+      const baselineChild = spawnSync(process.execPath, [tsxCli, focusedExecutablePath], { cwd: fileURLToPath(new URL('../../', import.meta.url)), encoding: 'utf8', env: baselineEnv })
+      const baselineText = `${baselineChild.stdout ?? ''}\n${baselineChild.stderr ?? ''}`
+      assert(baselineChild.status === 0 && baselineText.includes('Program Inventory CW2 regression passed'), `The baseline focused matrix child failed: ${baselineText}`)
+      const omittedChild = spawnSync(process.execPath, [tsxCli, focusedExecutablePath], { cwd: fileURLToPath(new URL('../../', import.meta.url)), encoding: 'utf8', env: omittedEnv })
+      assert(omittedChild.status !== 0, 'Deleting only the executable artifact manifest discovery matrix must turn the owning focused child regression red.')
+    } catch (error) { primary = error }
+    finally {
+      for (const path of childPaths) {
+        try { if (existsSync(path)) unlinkSync(path); assert(!existsSync(path), `Focused matrix child temp file remains: ${path}`) }
+        catch (error) { cleanupErrors.push(error instanceof Error ? error : new Error(String(error))) }
+      }
+      try { if (existsSync(focusedMatrixTempRoot)) rmdirSync(focusedMatrixTempRoot); assert(!existsSync(focusedMatrixTempRoot), `Focused matrix child temp root remains: ${focusedMatrixTempRoot}`) }
+      catch (error) { cleanupErrors.push(error instanceof Error ? error : new Error(String(error))) }
+    }
+    if (primary && cleanupErrors.length > 0) throw new AggregateError([primary, ...cleanupErrors], 'Focused matrix proof and cleanup failed.')
+    if (primary) throw primary
+    if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, 'Focused matrix child cleanup failed.')
+    console.log('Program Inventory CW2 manifest matrix outer proof passed')
+  }
+  // CW2_ARTIFACT_MANIFEST_TS_CHILD_PROOF_END
   const artifactReplacementMutations = [
     { name: 'retired image ID restored in Harvest Ridge owner', index: 0, from: replacementArtifact.id, to: retiredArtifact.id },
     { name: 'replacement tag drifted in adapter', index: 1, from: replacementArtifact.tag, to: 'maple-faketime-artifacts-wrong:synthetic' },
@@ -461,14 +614,15 @@ async function run() {
     { name: 'copied preload source provenance removed', index: 9, from: 'b6d9b439ccbfdf88f87b9c2f2d89b560d2370964074759373949c2bbb67cd66e', to: 'CW2_REMOVED_PRELOAD_SOURCE_PROVENANCE' },
     { name: 'derived image proof identity removed', index: 9, from: 'sha256:ac2901f891cd4a96d70cde28c9dd9f1db6ca518f4d9e5db821518ecb518a0f74', to: 'CW2_REMOVED_DERIVED_IMAGE_PROOF' },
     { name: 'reusable postcleanup attestation removed', index: 9, from: '5469560cee6b3f5f863ea84aaab8376a38b3a909d2b2145e03671a32e5578eb5', to: 'CW2_REMOVED_REUSABLE_POSTCLEANUP' },
+    { name: 'manifest discovery recipe weakened', index: 9, from: 'NUL-delimited dirty tracked, staged, and untracked existing source', to: 'newline dirty changed/untracked source' },
   ] as const
-  assert(artifactReplacementMutations.length === 18, 'The artifact replacement mutation matrix must retain every stale-identity, canonical identity, provenance, complete build-input evidence, derived-image proof, reusable postcleanup attestation, standalone attestation, absence, and exact cleanup guard.')
+  assert(artifactReplacementMutations.length === 19, 'The artifact replacement mutation matrix must retain every stale-identity, canonical identity, provenance, complete build-input evidence, derived-image proof, reusable postcleanup attestation, NUL-safe discovery recipe, standalone attestation, absence, and exact cleanup guard.')
   for (const mutation of artifactReplacementMutations) {
     const changed = [...replacementArtifactSources]; changed[mutation.index] = changed[mutation.index].replace(mutation.from, mutation.to)
     assert(!completeFaketimeArtifactReplacementContract(changed), `Artifact replacement mutation must turn the contract red: ${mutation.name}.`)
   }
   const artifactReplacementRegressionSource = readFileSync(fileURLToPath(import.meta.url), 'utf8')
-  for (const marker of ['const replacementArtifact = {', 'const retiredArtifact = {', 'const completeFaketimeArtifactReplacementContract =', 'const canonicalManifestDiscoveryContract =', 'const canonicalManifestDiscoveryMutations = [', 'canonicalManifestDiscoveryMutations.length === 6', 'for (const mutation of canonicalManifestDiscoveryMutations)', 'clean fallback replaced with working diff', 'forced clean fallback proof omitted', 'const artifactReplacementMutations = [', 'artifactReplacementMutations.length === 18', 'for (const mutation of artifactReplacementMutations)', 'canonical comparator weakened', 'durable artifact evidence manifest removed', 'copied preload source provenance removed', 'derived image proof identity removed', 'reusable postcleanup attestation removed', 'spike runner reusable inspection invocation removed', 'broad image cleanup added']) {
+  for (const marker of ['const replacementArtifact = {', 'const retiredArtifact = {', 'const completeFaketimeArtifactReplacementContract =', 'const canonicalManifestDiscoveryContract =', 'const canonicalManifestDiscoveryMutations = [', 'canonicalManifestDiscoveryMutations.length === 34', 'for (const mutation of canonicalManifestDiscoveryMutations)', 'staged manifest discovery omitted', 'clean fallback replaced with working diff', 'forced clean fallback proof omitted', 'git failure interpolation malformed', 'forced git failure invocation omitted', 'forced git failure refusal bypassed', 'git error scope restore removed', 'git error capture broadened beyond helper', 'forced git call dead with synthetic result', 'forced git synthetic result injected', 'forced git AST contract bypassed', 'forced git AST child proof omitted', 'forced git AST child cleanup weakened', 'forced git trace observation bypassed', 'NUL delimiter parsing weakened', 'dirty path accumulation removed', 'staged path accumulation removed', 'untracked path accumulation removed', 'previous commit path accumulation removed', 'dirty missing path refusal removed', 'staged missing path refusal removed', 'untracked missing path refusal removed', 'previous commit missing path refusal removed', 'path dedup comparator weakened', 'manifest path sort removed', 'focused child proof omitted', 'focused child temp location moved into repository', 'focused child source override removed', 'focused child file cleanup removed', 'focused child directory cleanup removed', 'CW2_ARTIFACT_MANIFEST_DISCOVERY_MATRIX_BEGIN', 'CW2_ARTIFACT_MANIFEST_DISCOVERY_MATRIX_END', 'CW2_ARTIFACT_MANIFEST_TS_CHILD_PROOF_BEGIN', 'CW2_ARTIFACT_MANIFEST_TS_CHILD_PROOF_END', 'Program Inventory CW2 manifest matrix outer proof passed', 'const artifactReplacementMutations = [', 'artifactReplacementMutations.length === 19', 'for (const mutation of artifactReplacementMutations)', 'canonical comparator weakened', 'manifest discovery recipe weakened', 'durable artifact evidence manifest removed', 'copied preload source provenance removed', 'derived image proof identity removed', 'reusable postcleanup attestation removed', 'spike runner reusable inspection invocation removed', 'broad image cleanup added']) {
     assert(artifactReplacementRegressionSource.includes(marker), `Artifact replacement proof-of-proof marker must be present: ${marker}.`)
   }
   const disposableSource = readFileSync(new URL('../../scripts/verify-connect-workflows-cw2-disposable.ps1', import.meta.url), 'utf8')

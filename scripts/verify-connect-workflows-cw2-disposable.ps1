@@ -1,6 +1,10 @@
-param([switch]$StaticOnly,[switch]$DiagnosticSelfTest,[switch]$Proof005Child,[switch]$BaselineResetOnly)
+param([switch]$StaticOnly,[switch]$DiagnosticSelfTest,[switch]$Proof005Child,[switch]$BaselineResetOnly,[string]$Proof005RepositoryRoot)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+if(-not[string]::IsNullOrWhiteSpace($Proof005RepositoryRoot)){
+  if(-not$Proof005Child-or-not[IO.Path]::IsPathRooted($Proof005RepositoryRoot)){throw 'CONNECT_WORKFLOWS_CW2_PROOF_005_REPOSITORY_ROOT_REFUSED'}
+  $root=[IO.Path]::GetFullPath($Proof005RepositoryRoot)
+}
 $runnerPath = $PSCommandPath
 $project = 'farmrx-farmer-simplicity-2027-local'
 $db = "supabase_db_$project"
@@ -1587,6 +1591,29 @@ function Invoke-Cw2FkIndexMigrationMutationProof([string]$Source) {
 }
 # CW2_FK_INDEX_EXECUTABLE_MATRIX_END
 
+# CW2_ARTIFACT_MANIFEST_FOCUSED_STATIC_GUARD_BEGIN
+function Test-Cw2ArtifactManifestFocusedMatrix([string]$Source) {
+  try {
+    $start='// CW2_ARTIFACT_MANIFEST_DISCOVERY_'+'MATRIX_BEGIN';$end='// CW2_ARTIFACT_MANIFEST_DISCOVERY_'+'MATRIX_END'
+    $span=Get-Cw2UniqueSourceSpan $Source $start $end
+    $childStart='// CW2_ARTIFACT_MANIFEST_TS_CHILD_PROOF_'+'BEGIN';$childEnd='// CW2_ARTIFACT_MANIFEST_TS_CHILD_PROOF_'+'END'
+    $childSpan=Get-Cw2UniqueSourceSpan $Source $childStart $childEnd
+    return (Get-Cw2Proof005TextSha256 $span)-ceq'b2a744acd29d74885fcc28031dd22b6d5d57fad290d286abe3f4d6003a434782'-and(Get-Cw2Proof005TextSha256 $childSpan)-ceq'01551b9dad86fafa82b99224c2f2317d699be3a08edd1863cd9467a7b9dae092'
+  } catch { return $false }
+}
+# CW2_ARTIFACT_MANIFEST_FOCUSED_STATIC_GUARD_END
+
+# CW2_ARTIFACT_MANIFEST_FOCUSED_OUTER_MATRIX_BEGIN
+function Invoke-Cw2ArtifactManifestFocusedMatrixProof([string]$Source) {
+  $start='// CW2_ARTIFACT_MANIFEST_DISCOVERY_'+'MATRIX_BEGIN';$end='// CW2_ARTIFACT_MANIFEST_DISCOVERY_'+'MATRIX_END'
+  $span=Get-Cw2UniqueSourceSpan $Source $start $end
+  $omitted=$Source.Replace($span,"$start`n$end")
+  if($omitted-ceq$Source-or-not(Test-Cw2ArtifactManifestFocusedMatrix $Source)-or(Test-Cw2ArtifactManifestFocusedMatrix $omitted)){throw 'CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_FOCUSED_MATRIX_OMISSION_PROOF_FAILED'}
+  Write-Output 'CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_FOCUSED_MATRIX_OMISSION_PASS'
+}
+# CW2_ARTIFACT_MANIFEST_FOCUSED_OUTER_MATRIX_END
+
+# CW2_ARTIFACT_MANIFEST_OUTER_SELFTEST_BEGIN
 function Invoke-Cw2Proof005OuterSelfTest([string]$RunnerSource) {
   $guardStart = '# CW2_PROOF_005_' + 'STATIC_GUARD_BEGIN'; $guardEnd = '# CW2_PROOF_005_' + 'STATIC_GUARD_END'
   $matrixStart = '# CW2_PROOF_005_' + 'EXECUTABLE_MATRIX_BEGIN'; $matrixEnd = '# CW2_PROOF_005_' + 'EXECUTABLE_MATRIX_END'
@@ -1598,6 +1625,10 @@ function Invoke-Cw2Proof005OuterSelfTest([string]$RunnerSource) {
   $fkIndexMatrixStart='# CW2_FK_INDEX_' + 'EXECUTABLE_MATRIX_BEGIN'; $fkIndexMatrixEnd='# CW2_FK_INDEX_' + 'EXECUTABLE_MATRIX_END'
   $fkIndexGuardSpan=Get-Cw2UniqueSourceSpan $RunnerSource $fkIndexGuardStart $fkIndexGuardEnd
   $fkIndexMatrixSpan=Get-Cw2UniqueSourceSpan $RunnerSource $fkIndexMatrixStart $fkIndexMatrixEnd
+  $artifactFocusedGuardStart='# CW2_ARTIFACT_MANIFEST_FOCUSED_'+'STATIC_GUARD_BEGIN';$artifactFocusedGuardEnd='# CW2_ARTIFACT_MANIFEST_FOCUSED_'+'STATIC_GUARD_END'
+  $artifactFocusedMatrixStart='# CW2_ARTIFACT_MANIFEST_FOCUSED_'+'OUTER_MATRIX_BEGIN';$artifactFocusedMatrixEnd='# CW2_ARTIFACT_MANIFEST_FOCUSED_'+'OUTER_MATRIX_END'
+  $artifactFocusedGuardSpan=Get-Cw2UniqueSourceSpan $RunnerSource $artifactFocusedGuardStart $artifactFocusedGuardEnd
+  $artifactFocusedMatrixSpan=Get-Cw2UniqueSourceSpan $RunnerSource $artifactFocusedMatrixStart $artifactFocusedMatrixEnd
   $fkIndexInvocation='  Invoke-Cw2FkIndexMigrationMutation' + 'Proof ([Text.UTF8Encoding]::new($false).GetString($fkIndexMigrationBytes))'
   if ([regex]::Matches($RunnerSource,[regex]::Escape($fkIndexInvocation)).Count -ne 1) { throw 'CONNECT_WORKFLOWS_CW2_FK_INDEX_MATRIX_INVOCATION_AMBIGUOUS' }
   $cases = @(
@@ -1609,29 +1640,46 @@ function Invoke-Cw2Proof005OuterSelfTest([string]$RunnerSource) {
     [pscustomobject]@{Name='fk-index-matrix-invocation deletion';Source=$RunnerSource.Replace($fkIndexInvocation,'');ExpectedExit=1},
     [pscustomobject]@{Name='fk-index-guard-only deletion';Source=$RunnerSource.Replace($fkIndexGuardSpan,'');ExpectedExit=1},
     [pscustomobject]@{Name='fk-index-guard-and-matrix deletion';Source=$RunnerSource.Replace($fkIndexGuardSpan,'').Replace($fkIndexMatrixSpan,'');ExpectedExit=1},
+    [pscustomobject]@{Name='artifact-focused-matrix-only deletion';Source=$RunnerSource.Replace($artifactFocusedMatrixSpan,'');ExpectedExit=1},
+    [pscustomobject]@{Name='artifact-focused-guard-only deletion';Source=$RunnerSource.Replace($artifactFocusedGuardSpan,'');ExpectedExit=1},
+    [pscustomobject]@{Name='artifact-focused-guard-and-matrix deletion';Source=$RunnerSource.Replace($artifactFocusedGuardSpan,'').Replace($artifactFocusedMatrixSpan,'');ExpectedExit=1},
     [pscustomobject]@{Name='guard-only deletion';Source=$RunnerSource.Replace($guardSpan,'');ExpectedExit=1},
     [pscustomobject]@{Name='guard-and-matrix deletion';Source=$RunnerSource.Replace($guardSpan,'').Replace($matrixSpan,'');ExpectedExit=1}
   )
-  $expectedCaseNames=@('baseline','matrix-only deletion','credential-matrix-only deletion','credential-fixture-native deletion','fk-index-matrix-only deletion','fk-index-matrix-invocation deletion','fk-index-guard-only deletion','fk-index-guard-and-matrix deletion','guard-only deletion','guard-and-matrix deletion')
-  if ($cases.Count -ne 10 -or [string]::Join('|',[string[]]$cases.Name) -cne [string]::Join('|',$expectedCaseNames)) { throw 'CONNECT_WORKFLOWS_CW2_PROOF_005_OUTER_CASES_INVALID' }
-  $powershellExe = (Get-Command powershell.exe -CommandType Application -ErrorAction Stop).Source; $scriptsRoot = Split-Path -Parent $runnerPath; $paths = [Collections.Generic.List[string]]::new()
+  $expectedCaseNames=@('baseline','matrix-only deletion','credential-matrix-only deletion','credential-fixture-native deletion','fk-index-matrix-only deletion','fk-index-matrix-invocation deletion','fk-index-guard-only deletion','fk-index-guard-and-matrix deletion','artifact-focused-matrix-only deletion','artifact-focused-guard-only deletion','artifact-focused-guard-and-matrix deletion','guard-only deletion','guard-and-matrix deletion')
+  if ($cases.Count -ne 13 -or [string]::Join('|',[string[]]$cases.Name) -cne [string]::Join('|',$expectedCaseNames)) { throw 'CONNECT_WORKFLOWS_CW2_PROOF_005_OUTER_CASES_INVALID' }
+  $powershellExe = (Get-Command powershell.exe -CommandType Application -ErrorAction Stop).Source
+  $tempRoot=Join-Path ([IO.Path]::GetTempPath())("farmrx-cw2-proof005-$([guid]::NewGuid().ToString('N'))")
+  [void][IO.Directory]::CreateDirectory($tempRoot)
+  $paths = [Collections.Generic.List[string]]::new();$primary=$null;$cleanupErrors=[Collections.Generic.List[Exception]]::new()
   try {
     foreach ($case in $cases) {
-      $path = Join-Path $scriptsRoot ("cw2-proof005-$([guid]::NewGuid().ToString('N')).ps1"); $paths.Add($path)
+      $path = Join-Path $tempRoot ("cw2-proof005-$([guid]::NewGuid().ToString('N')).ps1"); $paths.Add($path)
       [IO.File]::WriteAllText($path,$case.Source,[Text.UTF8Encoding]::new($false))
       $savedPreference = $ErrorActionPreference
-      try { $ErrorActionPreference='Continue'; $output=@(& $powershellExe -NoProfile -ExecutionPolicy Bypass -File $path -StaticOnly -Proof005Child 2>&1); $exitCode=$LASTEXITCODE }
+      try { $ErrorActionPreference='Continue'; $output=@(& $powershellExe -NoProfile -ExecutionPolicy Bypass -File $path -StaticOnly -Proof005Child -Proof005RepositoryRoot $root 2>&1); $exitCode=$LASTEXITCODE }
       finally { $ErrorActionPreference=$savedPreference }
       if ($case.ExpectedExit -eq 0) {
         if ($exitCode -ne 0 -or ([string]::Join("`n",[string[]]$output)) -notmatch '(?m)^CONNECT_WORKFLOWS_CW2_STATIC_CONTRACT_PASS$') { throw "CONNECT_WORKFLOWS_CW2_PROOF_005_BASELINE_FAILED:$exitCode" }
       } elseif ($exitCode -eq 0) { throw "CONNECT_WORKFLOWS_CW2_PROOF_005_OUTER_MUTATION_SURVIVED:$($case.Name)" }
     }
-  } finally { foreach ($path in $paths) { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force } } }
+  } catch { $primary=$_.Exception }
+  finally {
+    foreach($path in $paths){try{if([IO.File]::Exists($path)){[IO.File]::Delete($path)};if([IO.File]::Exists($path)){throw "CONNECT_WORKFLOWS_CW2_PROOF_005_TEMP_REMAINS:$path"}}catch{$cleanupErrors.Add($_.Exception)}}
+    try{if([IO.Directory]::Exists($tempRoot)){[IO.Directory]::Delete($tempRoot,$false)};if([IO.Directory]::Exists($tempRoot)){throw "CONNECT_WORKFLOWS_CW2_PROOF_005_TEMP_ROOT_REMAINS:$tempRoot"}}catch{$cleanupErrors.Add($_.Exception)}
+  }
+  if($null-ne$primary-and$cleanupErrors.Count-gt0){throw[AggregateException]::new('CONNECT_WORKFLOWS_CW2_PROOF_005_PRIMARY_AND_CLEANUP_FAILED',[Exception[]]@($primary)+[Exception[]]$cleanupErrors.ToArray())}
+  if($null-ne$primary){throw$primary}
+  if($cleanupErrors.Count-gt0){throw[AggregateException]::new('CONNECT_WORKFLOWS_CW2_PROOF_005_CLEANUP_FAILED',[Exception[]]$cleanupErrors.ToArray())}
   Write-Output 'CONNECT_WORKFLOWS_CW2_PROOF_005_OUTER_SELFTEST_PASS'
 }
+# CW2_ARTIFACT_MANIFEST_OUTER_SELFTEST_END
 
 function Assert-Cw2Contract {
   $runnerSource = Get-Content -Raw -LiteralPath $runnerPath
+  $artifactOuterSelfTestStart='# CW2_ARTIFACT_MANIFEST_'+'OUTER_SELFTEST_BEGIN';$artifactOuterSelfTestEnd='# CW2_ARTIFACT_MANIFEST_'+'OUTER_SELFTEST_END'
+  $artifactOuterSelfTestSpan=Get-Cw2UniqueSourceSpan $runnerSource $artifactOuterSelfTestStart $artifactOuterSelfTestEnd
+  if((Get-Cw2Proof005TextSha256 $artifactOuterSelfTestSpan)-cne'e5be35dee0e81bcced54e752eb15b2ffa039c2d6b7cfdec4f5a55a6ec4457ea9'){throw 'CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_OUTER_SELFTEST_PIN_MISMATCH'}
   $required = @(
     $baseFixture,$cw2Fixture,$verify,$concurrencyFixtureVerify,$concurrencyVerify,$specPath,$configPath,$migrationPath,$fkIndexMigrationPath,
     (Join-Path $root 'src/ProgramsModule.tsx'),
@@ -1697,7 +1745,7 @@ function Assert-Cw2Contract {
   if ($clockAdapterSource -notmatch [regex]::Escape('$artifactByRef=& $inspectImage $artifactRef') -or $clockAdapterSource -notmatch [regex]::Escape('$artifactByTag=& $inspectImage $artifactLocalTag') -or $cleanupTargets.Count -ne 2 -or @($cleanupTargets | Where-Object {$_ -cne '$Inventory.derived_tag' -and $_ -cne '$Inventory.snapshot_tag'}).Count -ne 0 -or $cleanupBlock -match '(?i)(artifactLocalTag|artifactRef|artifactId|image\s+prune|system\s+prune)') { throw 'CONNECT_WORKFLOWS_CW2_REUSABLE_FAKETIME_ARTIFACT_CLEANUP_OR_INSPECT_DRIFTED' }
   $expectedArtifactEvidenceFiles = [ordered]@{'artifact-identity.json'='d8b95bfa5a83c56b3236a5579ad33043456e0fb5b09d1f93005efb1ec48e4276';'build-input-completeness.json'='97cbbca788a38b14b11e7780fdeb00b6852a224bf39076174ef626f7411e29de';'build-input.json'='5ee6803f958a960c0ee11b423e63b81d6bcfb1f5301afe99f8fa86531eaeff48';'build.jsonl'='9ecb1ceb867d28184bd21187901c909e9901a71b7cf86f2c3cadcf332bf1bed8';'stderr.log'='9f1400fc2b3dcf6a9454551e827bfcc58883e730772771583f2f466c92babc4e';'stdout.log'='e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'}
   $expectedArtifactLabels=[ordered]@{'farmrx.synthetic-bootstrap'=$replacementArtifactToken;'farmrx.synthetic-owner'='maple-faketime-bootstrap';'farmrx.synthetic-role'='faketime-artifacts';'farmrx.source-digest'='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818';'farmrx.package-contract'='libfaketime=0.9.10-2.1;gcc;libc6-dev'}
-  if ($artifactEvidenceManifest.schema -cne 'farmrx.faketime-artifact-replacement.v1' -or $artifactEvidenceManifest.artifact.ref -cne $replacementArtifactRef -or $artifactEvidenceManifest.artifact.id -cne $replacementArtifactId -or $artifactEvidenceManifest.artifact.tag -cne $replacementArtifactTag -or $artifactEvidenceManifest.artifact.bootstrap_token -cne $replacementArtifactToken -or $artifactEvidenceManifest.evidence.combined_sha256 -cne 'aed05d2f6937223d8bbd53ea79a3043ce79a4436ce7e29d7569c04c66d77dbf2' -or $artifactEvidenceManifest.combined_source_artifact_identity_recipe -notmatch 'canonical dirty changed/untracked source path\|sha256' -or $artifactEvidenceManifest.combined_source_artifact_identity_recipe -notmatch 'previous-commit HEAD\^\.\.HEAD') { throw 'CONNECT_WORKFLOWS_CW2_FAKETIME_ARTIFACT_EVIDENCE_MANIFEST_DRIFT' }
+  if ($artifactEvidenceManifest.schema -cne 'farmrx.faketime-artifact-replacement.v1' -or $artifactEvidenceManifest.artifact.ref -cne $replacementArtifactRef -or $artifactEvidenceManifest.artifact.id -cne $replacementArtifactId -or $artifactEvidenceManifest.artifact.tag -cne $replacementArtifactTag -or $artifactEvidenceManifest.artifact.bootstrap_token -cne $replacementArtifactToken -or $artifactEvidenceManifest.evidence.combined_sha256 -cne 'aed05d2f6937223d8bbd53ea79a3043ce79a4436ce7e29d7569c04c66d77dbf2' -or $artifactEvidenceManifest.combined_source_artifact_identity_recipe -notmatch 'canonical NUL-delimited dirty tracked, staged, and untracked existing source path\|sha256' -or $artifactEvidenceManifest.combined_source_artifact_identity_recipe -notmatch 'refusing missing/deleted paths' -or $artifactEvidenceManifest.combined_source_artifact_identity_recipe -notmatch 'previous-commit HEAD\^\.\.HEAD') { throw 'CONNECT_WORKFLOWS_CW2_FAKETIME_ARTIFACT_EVIDENCE_MANIFEST_DRIFT' }
   foreach($key in $expectedArtifactLabels.Keys){if($artifactEvidenceManifest.artifact.labels.PSObject.Properties[$key].Value-cne$expectedArtifactLabels[$key]){throw "CONNECT_WORKFLOWS_CW2_FAKETIME_ARTIFACT_EVIDENCE_MANIFEST_LABEL_DRIFT:$key"}}
   foreach($key in $expectedArtifactEvidenceFiles.Keys){if($artifactEvidenceManifest.evidence.files.PSObject.Properties[$key].Value-cne$expectedArtifactEvidenceFiles[$key]){throw "CONNECT_WORKFLOWS_CW2_FAKETIME_ARTIFACT_EVIDENCE_MANIFEST_FILE_DRIFT:$key"}}
   if(@($artifactEvidenceManifest.evidence.files.PSObject.Properties).Count-ne$expectedArtifactEvidenceFiles.Count-or$artifactEvidenceManifest.evidence.files.'build-input-completeness.json'-cne'97cbbca788a38b14b11e7780fdeb00b6852a224bf39076174ef626f7411e29de'){throw 'CONNECT_WORKFLOWS_CW2_FAKETIME_ARTIFACT_EVIDENCE_MANIFEST_FILESET_DRIFT'}
@@ -1736,17 +1784,40 @@ function Assert-Cw2Contract {
   foreach($key in $expectedArtifactLabels.Keys){if($postcleanupResult.reusable_labels.PSObject.Properties[$key].Value-cne$expectedArtifactLabels[$key]){throw "CONNECT_WORKFLOWS_CW2_REUSABLE_POSTCLEANUP_LABEL_DRIFT:$key"}}
   if ($artifactEvidenceSource -notmatch [regex]::Escape($retiredArtifact) -or $artifactEvidenceSource -notmatch [regex]::Escape($replacementArtifactRef) -or $frozenArtifactEvidenceSource -notmatch [regex]::Escape('Replacement relationship') -or $frozenArtifactEvidenceSource -notmatch [regex]::Escape($replacementArtifactTag)) { throw 'CONNECT_WORKFLOWS_CW2_FAKETIME_ARTIFACT_HISTORY_OR_REPLACEMENT_EVIDENCE_MISSING' }
   $artifactRegressionSource = Get-Content -Raw -LiteralPath (Join-Path $root 'src/data/programInventoryCW2.regression.ts')
-  foreach ($needle in @('const replacementArtifact = {','const retiredArtifact = {','const completeFaketimeArtifactReplacementContract =','const canonicalManifestDiscoveryContract =','const canonicalManifestDiscoveryMutations = [','canonicalManifestDiscoveryMutations.length === 6','for (const mutation of canonicalManifestDiscoveryMutations)','clean fallback replaced with working diff','forced clean fallback proof omitted','const artifactReplacementMutations = [','artifactReplacementMutations.length === 18','for (const mutation of artifactReplacementMutations)','canonical comparator weakened','derived image proof identity removed','reusable postcleanup attestation removed','reusable artifact ref cleanup added','reusable artifact ID cleanup added','broad image cleanup added','durable artifact evidence manifest removed','copied preload source provenance removed','spike runner reusable inspection invocation removed')) {
+  if(-not(Test-Cw2ArtifactManifestFocusedMatrix $artifactRegressionSource)){throw 'CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_FOCUSED_MATRIX_PIN_MISMATCH'}
+  Invoke-Cw2ArtifactManifestFocusedMatrixProof $artifactRegressionSource
+  foreach ($needle in @('const replacementArtifact = {','const retiredArtifact = {','const completeFaketimeArtifactReplacementContract =','const canonicalManifestDiscoveryContract =','const canonicalManifestDiscoveryMutations = [','canonicalManifestDiscoveryMutations.length === 34','for (const mutation of canonicalManifestDiscoveryMutations)','staged manifest discovery omitted','clean fallback replaced with working diff','forced clean fallback proof omitted','git failure interpolation malformed','forced git failure invocation omitted','forced git failure refusal bypassed','git error scope restore removed','git error capture broadened beyond helper','forced git call dead with synthetic result','forced git synthetic result injected','forced git AST contract bypassed','forced git AST child proof omitted','forced git AST child cleanup weakened','forced git trace observation bypassed','NUL delimiter parsing weakened','dirty path accumulation removed','staged path accumulation removed','untracked path accumulation removed','previous commit path accumulation removed','dirty missing path refusal removed','staged missing path refusal removed','untracked missing path refusal removed','previous commit missing path refusal removed','path dedup comparator weakened','manifest path sort removed','focused child proof omitted','focused child temp location moved into repository','focused child source override removed','focused child file cleanup removed','focused child directory cleanup removed','CW2_ARTIFACT_MANIFEST_TS_CHILD_PROOF_BEGIN','CW2_ARTIFACT_MANIFEST_TS_CHILD_PROOF_END','Program Inventory CW2 manifest matrix outer proof passed','const artifactReplacementMutations = [','artifactReplacementMutations.length === 19','for (const mutation of artifactReplacementMutations)','canonical comparator weakened','manifest discovery recipe weakened','derived image proof identity removed','reusable postcleanup attestation removed','reusable artifact ref cleanup added','reusable artifact ID cleanup added','broad image cleanup added','durable artifact evidence manifest removed','copied preload source provenance removed','spike runner reusable inspection invocation removed')) {
     if ($artifactRegressionSource -notmatch [regex]::Escape($needle)) { throw "CONNECT_WORKFLOWS_CW2_ARTIFACT_REPLACEMENT_MUTATION_BLOCK_MISSING:$needle" }
   }
   $artifactManifestRegressionSource=Get-Content -Raw -LiteralPath (Join-Path $root 'scripts/faketime-artifact-replacement-manifest.regression.ps1')
-  $artifactDirtyDiscovery=$artifactManifestRegressionSource.IndexOf("Invoke-Cw2ArtifactGitPathList @('diff','--name-only') 'FAKETIME_ARTIFACT_MANIFEST_DIRTY_DIFF_GIT_FAILED'")
-  $artifactUntrackedDiscovery=$artifactManifestRegressionSource.IndexOf("Invoke-Cw2ArtifactGitPathList @('ls-files','--others','--exclude-standard') 'FAKETIME_ARTIFACT_MANIFEST_UNTRACKED_GIT_FAILED'")
-  $artifactPreviousCommitFallback=$artifactManifestRegressionSource.IndexOf("Invoke-Cw2ArtifactGitPathList @('diff-tree','--no-commit-id','--name-only','-r','HEAD^','HEAD') 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_GIT_FAILED'")
+  $artifactDirtyDiscovery=$artifactManifestRegressionSource.IndexOf("Invoke-Cw2ArtifactGitPathList @('diff','--name-only','-z') 'FAKETIME_ARTIFACT_MANIFEST_DIRTY_DIFF_GIT_FAILED'")
+  $artifactUntrackedDiscovery=$artifactManifestRegressionSource.IndexOf("Invoke-Cw2ArtifactGitPathList @('ls-files','--others','--exclude-standard','-z') 'FAKETIME_ARTIFACT_MANIFEST_UNTRACKED_GIT_FAILED'")
+  $artifactPreviousCommitFallback=$artifactManifestRegressionSource.IndexOf("Invoke-Cw2ArtifactGitPathList @('diff-tree','--no-commit-id','--name-only','-r','-z','HEAD^','HEAD') 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_GIT_FAILED'")
   $artifactFallbackEmptyRefusal=$artifactManifestRegressionSource.IndexOf("if(`$paths.Count-eq0){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY'}")
   $artifactForcedCleanFallback=$artifactManifestRegressionSource.IndexOf('$cleanFallback=Get-Cw2ArtifactCanonicalManifest -ForceCleanFallback')
   $artifactForcedCleanRefusal=$artifactManifestRegressionSource.IndexOf('FAKETIME_ARTIFACT_MANIFEST_CLEAN_FALLBACK_PROOF_FAILED')
-  if($artifactManifestRegressionSource-notmatch[regex]::Escape('function Invoke-Cw2ArtifactGitPathList([string[]]$Arguments,[string]$FailureMarker)')-or$artifactManifestRegressionSource-notmatch[regex]::Escape('$output=@(& git -C $root @Arguments 2>&1);$exitCode=$LASTEXITCODE')-or$artifactManifestRegressionSource-notmatch[regex]::Escape('if($exitCode-ne0){$detail=')-or$artifactManifestRegressionSource-notmatch[regex]::Escape('if(-not$ForceCleanFallback){')-or$artifactDirtyDiscovery-lt0-or$artifactUntrackedDiscovery-le$artifactDirtyDiscovery-or$artifactPreviousCommitFallback-le$artifactUntrackedDiscovery-or$artifactFallbackEmptyRefusal-le$artifactPreviousCommitFallback-or$artifactForcedCleanFallback-le$artifactFallbackEmptyRefusal-or$artifactForcedCleanRefusal-le$artifactForcedCleanFallback){throw 'CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_CLEAN_FALLBACK_STATIC_DRIFT'}
+  $artifactForcedGitInvocation=$artifactManifestRegressionSource.IndexOf("try{[void](Invoke-Cw2ArtifactGitPathList @('rev-parse','--verify',`$forcedGitMissingRef) 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE')}")
+  $artifactForcedGitRefusal=$artifactManifestRegressionSource.IndexOf('FAKETIME_ARTIFACT_MANIFEST_GIT_FAILURE_CAPTURE_PROOF_FAILED')
+  $artifactForcedGitEapRefusal=$artifactManifestRegressionSource.IndexOf('FAKETIME_ARTIFACT_MANIFEST_GIT_FAILURE_EAP_RESTORE_FAILED')
+  $artifactForcedGitTracePass=$artifactManifestRegressionSource.IndexOf("Write-Output 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_TRACE_OBSERVATION_PASS'")
+  $artifactForcedGitEapPass=$artifactManifestRegressionSource.IndexOf("Write-Output 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_EAP_RESTORE_PASS'")
+  $artifactForcedGitPass=$artifactManifestRegressionSource.IndexOf("Write-Output 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_FAILURE_CAPTURE_PASS'")
+  $artifactStagedDiscovery=$artifactManifestRegressionSource.IndexOf("Invoke-Cw2ArtifactGitPathList @('diff','--cached','--name-only','-z')")
+  if($artifactManifestRegressionSource-notmatch[regex]::Escape('function Invoke-Cw2ArtifactGitPathList([string[]]$Arguments,[string]$FailureMarker)')-or$artifactManifestRegressionSource-notmatch[regex]::Escape('$previousErrorActionPreference=$ErrorActionPreference')-or$artifactManifestRegressionSource-notmatch[regex]::Escape("try{`$ErrorActionPreference='Continue';`$output=@(& `$gitExe -C `$root @Arguments 2>&1);`$exitCode=`$LASTEXITCODE}finally{`$ErrorActionPreference=`$previousErrorActionPreference}")-or$artifactManifestRegressionSource-notmatch[regex]::Escape('throw "${FailureMarker}:exit=${exitCode}:detail=${detail}"')-or$artifactManifestRegressionSource-notmatch[regex]::Escape('$gitExe=[IO.Path]::GetFullPath($gitCommands[0].Source)')-or$artifactManifestRegressionSource-notmatch[regex]::Escape("@('rev-parse','--verify',`$forcedGitMissingRef)")-or$artifactManifestRegressionSource-notmatch[regex]::Escape('$matchingStarts.Count-ne1-or$matchingExits.Count-ne1')-or$artifactManifestRegressionSource-notmatch[regex]::Escape('farmrx-cw2-artifact-git-ast-')-or$artifactManifestRegressionSource-notmatch[regex]::Escape('-RepositoryRoot $root -InitialErrorActionPreference $case.Preference')-or$artifactManifestRegressionSource-notmatch[regex]::Escape('if($exitCode-ne0){$detail=')-or$artifactManifestRegressionSource-notmatch[regex]::Escape('FAKETIME_ARTIFACT_MANIFEST_GIT_SUCCESS_EAP_RESTORE_FAILED')-or$artifactManifestRegressionSource-notmatch[regex]::Escape('if(-not$ForceCleanFallback){')-or$artifactDirtyDiscovery-lt0-or$artifactStagedDiscovery-le$artifactDirtyDiscovery-or$artifactUntrackedDiscovery-le$artifactStagedDiscovery-or$artifactPreviousCommitFallback-le$artifactUntrackedDiscovery-or$artifactFallbackEmptyRefusal-le$artifactPreviousCommitFallback-or$artifactForcedCleanFallback-le$artifactFallbackEmptyRefusal-or$artifactForcedCleanRefusal-le$artifactForcedCleanFallback-or$artifactForcedGitInvocation-le$artifactForcedCleanRefusal-or$artifactForcedGitRefusal-le$artifactForcedGitInvocation-or$artifactForcedGitEapRefusal-le$artifactForcedGitRefusal-or$artifactForcedGitTracePass-le$artifactForcedGitEapRefusal-or$artifactForcedGitEapPass-le$artifactForcedGitTracePass-or$artifactForcedGitPass-le$artifactForcedGitEapPass){throw 'CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_CLEAN_FALLBACK_STATIC_DRIFT'}
+  $artifactPathCustodyNeedles=@(
+    '@($joined.Split([char[]]@([char]0),[StringSplitOptions]::RemoveEmptyEntries))',
+    '$seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal);$paths=[Collections.Generic.List[string]]::new()',
+    'if(-not(Test-Path -LiteralPath (Join-Path $root $dirtyPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_DIRTY_PATH_MISSING:$dirtyPath"}',
+    'if($seen.Add($dirtyNormalized)){[void]$paths.Add($dirtyNormalized)}',
+    'if(-not(Test-Path -LiteralPath (Join-Path $root $stagedPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_STAGED_PATH_MISSING:$stagedPath"}',
+    'if($seen.Add($stagedNormalized)){[void]$paths.Add($stagedNormalized)}',
+    'if(-not(Test-Path -LiteralPath (Join-Path $root $untrackedPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_UNTRACKED_PATH_MISSING:$untrackedPath"}',
+    'if($seen.Add($untrackedNormalized)){[void]$paths.Add($untrackedNormalized)}',
+    'if(-not(Test-Path -LiteralPath (Join-Path $root $previousPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_PATH_MISSING:$previousPath"}',
+    'if($seen.Add($previousNormalized)){[void]$paths.Add($previousNormalized)}',
+    '$paths.Sort([StringComparer]::Ordinal)'
+  )
+  foreach($needle in $artifactPathCustodyNeedles){if([regex]::Matches($artifactManifestRegressionSource,[regex]::Escape($needle)).Count-ne1){throw "CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_PATH_CUSTODY_STATIC_DRIFT:$needle"}}
   $spec = Get-Content -Raw -LiteralPath $specPath
   foreach ($needle in @(
     "test('@connect-workflows-cw2 exact Program match changes Inventory only after explicit no-record confirmation'",
