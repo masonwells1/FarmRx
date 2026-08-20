@@ -13,11 +13,34 @@ reviews:
   poem: false
   review_status: true
   collapse_walkthrough: false
+
+  # Report sections (sequence diagrams, related PRs/issues, linked-issue
+  # assessment, suggested labels/reviewers, changed-files summary) are left at
+  # their defaults - ON. Mason's call, 2026-08-20: he raised the CodeRabbit
+  # usage spending cap rather than trade any possible review context for a
+  # cheaper report. Deliberate: do not turn these off to save spend.
+
+  # Skip churn that cannot contain a bug. FarmRx shares one CodeRabbit org (and
+  # one review budget) with CRX Manager, so wasted attempts here throttle both.
+  path_filters:
+    - "!docs/archive/**"
+    - "!docs/audits/**"
+    - "!docs/handoffs/**"
+    - "!test-results/**"
+    - "!dist/**"
+    - "!**/package-lock.json"
+    - "!**/*.lock"
+
   auto_review:
     enabled: true
     drafts: false
     base_branches:
       - main
+    # Review on PR open and once after the first round of fixes, then pause.
+    # The number governs only mid-work drafts - the pre-merge gate is a fresh
+    # `@coderabbitai review` on the FINAL commit. See CRX Manager's
+    # docs/manual/DECISION_LOG.md (2026-08-20) for the measurement behind this.
+    auto_pause_after_reviewed_commits: 2
 
   # Project-specific review guidance, mirroring the rules and gotchas in this
   # repo's CLAUDE.md so CodeRabbit flags Farm Rx's real risk areas.
@@ -53,6 +76,15 @@ reviews:
         Deno.env only and must never be logged or returned to the client. Flag
         any hardcoded secret value and any service-role client that is exposed
         to an unauthenticated caller.
+
+# Teach CodeRabbit this repo's own written rules so it reviews against the
+# actual house standard instead of only the path instructions above.
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "AGENTS.md"
+      - "CLAUDE.md"
 
 chat:
   auto_reply: true
