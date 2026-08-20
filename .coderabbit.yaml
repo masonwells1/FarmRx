@@ -23,12 +23,17 @@ reviews:
   # Skip churn that cannot contain a bug. FarmRx shares one CodeRabbit org (and
   # one review budget) with CRX Manager, so wasted attempts here throttle both.
   #
-  # Lock files (package-lock.json, deno.lock) are deliberately NOT excluded.
-  # Excluding them means a PR that changes only a lockfile drops to zero
+  # Lock files are POSITIVELY included. CodeRabbit ships a default ignore list
+  # that already covers package-lock.json and deno.lock, so merely declining to
+  # exclude them is not enough - a positive pattern is required to override a
+  # default exclusion. Without this, a PR that changes only a lockfile has zero
   # reviewable files and is skipped outright, so nothing inspects the version
-  # bumps or integrity hashes - and this repo has shipped deno.lock as the sole
-  # functional change before. Raised by the Codex reviewer on PR #26.
+  # bumps or integrity hashes, and this repo has shipped deno.lock as the sole
+  # functional change before. Raised by the Codex reviewer and CodeRabbit on
+  # PR #26.
   path_filters:
+    - "package-lock.json"
+    - "deno.lock"
     - "!docs/archive/**"
     - "!docs/audits/**"
     - "!docs/handoffs/**"
@@ -42,10 +47,14 @@ reviews:
       - main
     # Pause AUTOMATIC review after 2 reviewed commits on a PR (this applies to
     # ordinary non-draft PRs, not just drafts). Later pushes are then not
-    # auto-reviewed until someone comments `@coderabbitai review`, which
-    # resumes it. This number is NOT the pre-merge gate and must never be
-    # treated as one: the gate is a fresh `@coderabbitai review` on the FINAL
-    # commit. See CRX Manager's docs/manual/DECISION_LOG.md (2026-08-20).
+    # auto-reviewed. Two different commands restart things, and they are not
+    # interchangeable: `@coderabbitai resume` restarts AUTOMATIC review for the
+    # PR, while `@coderabbitai review` runs ONE incremental review of the
+    # current commit and stops again.
+    #
+    # This number is NOT the pre-merge gate and must never be treated as one:
+    # the gate is one fresh `@coderabbitai review` on the FINAL commit. See CRX
+    # Manager's docs/manual/DECISION_LOG.md (2026-08-20).
     auto_pause_after_reviewed_commits: 2
 
   # Project-specific review guidance, mirroring the rules and gotchas in this
