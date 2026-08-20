@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'foundation-native-lane.ps1')
 
 function Invoke-FoundationLane([scriptblock]$Command, [string]$Failure) {
   $global:LASTEXITCODE = 0
@@ -17,6 +18,13 @@ function Get-FoundationProbeShell {
   return (Join-Path $PSHOME 'pwsh')
 }
 
+function Get-FoundationNpmNativeCommand {
+  if ($PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows) {
+    return (Get-Command npm.cmd -ErrorAction Stop).Source
+  }
+  return (Get-Command npm -ErrorAction Stop).Source
+}
+
 function Assert-IntermediateLaneFailureIsFatal {
   $expected = 'Controlled intermediate foundation lane failed.'
   $detected = $false
@@ -31,9 +39,22 @@ function Assert-IntermediateLaneFailureIsFatal {
   Write-Output 'Foundation orchestrator intermediate-failure probe: PASS'
 }
 
+function Assert-FoundationBrowserPortIsFree {
+  $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 4173)
+  try {
+    $probe.Start()
+  } catch {
+    throw 'FOUNDATION_BROWSER_PORT_4173_OCCUPIED: refusing to reuse an existing server.'
+  } finally {
+    $probe.Stop()
+  }
+}
+
 Push-Location $root
 try {
+  Assert-FoundationBrowserPortIsFree
   Assert-IntermediateLaneFailureIsFatal
+  Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'foundation-native-lane.regression.ps1') } 'Foundation native-lane regression failed.'
   Invoke-FoundationLane { & npx tsc -b --force } 'Forced TypeScript failed.'
   Invoke-FoundationLane { & npm run regression } 'Fast regression suite failed.'
   Invoke-FoundationLane { & npm run build } 'Production build failed.'
@@ -52,7 +73,8 @@ try {
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0043-disposable.ps1') } 'Disposable 0043 proof failed.'
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-soil-rx-disposable.ps1') } 'Disposable Soil Rx proof failed.'
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') } 'Disposable RLS role matrix failed.'
-  Invoke-FoundationLane { & npm run test:e2e } 'Built-browser foundation suite failed.'
+  $nativeNpm = Get-FoundationNpmNativeCommand
+  Invoke-FoundationNativeLane -Lane 'built-browser' -Executable $nativeNpm -Arguments @('run','test:e2e') -Failure 'Built-browser foundation suite failed.' | Out-Null
   Write-Output 'Farm Rx foundation gate: PASS'
 } finally {
   Pop-Location

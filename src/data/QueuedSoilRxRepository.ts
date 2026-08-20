@@ -1,9 +1,9 @@
 import { isTransportFailure } from './QueuedFieldsRepository'
-import { appendNeedsAttention, dismissNeedsAttention, readNeedsAttention } from './needsAttentionStore'
+import { appendNeedsAttention, dismissNeedsAttention, readNeedsAttention, type NeedsAttentionRecord } from './needsAttentionStore'
 import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 import { queueTransaction } from './queueTransaction'
 import { beginSoilRxAttachmentCustody, drainSoilRxCleanupOutbox, readSoilRxAttachmentCustody, readSoilRxCleanupOutbox, releaseSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey, type SoilRxAttachmentCustodyEntry } from './soilRxCleanupOutbox'
-import { SoilRxWriteQueue, parseSoilRxQueue, soilRxWriteQueueKey, type QueuedSoilTestDraft, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
+import { createSoilRxQueueEntry, SoilRxWriteQueue, parseSoilRxQueue, soilRxWriteQueueKey, type QueuedSoilTestDraft, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
 import { normalizeSoilTestDraft, sortSoilTestsNewestFirst, validateSoilTestDraft, type SoilReportMime, type SoilRxData, type SoilRxRepository, type SoilTest, type SoilTestDraft } from './soilRx'
 import { validateSoilReportFile } from './soilRxStorage'
 import { setModuleSyncStatus } from './syncStatus'
@@ -26,6 +26,9 @@ type Dependencies = {
   removeReports: (paths: string[], context: FarmOperationContext) => Promise<string[]>
 }
 const attention = 'A saved Soil Rx change needs attention. Nothing was deleted.'
+const parkedBlocked = 'This saved Soil Rx change no longer matches the signed-in account, farm, or original save. Nothing was changed.'
+const sameOperationContext = (left: FarmOperationContext, right: FarmOperationContext) => left.projectRef === right.projectRef && left.userId === right.userId && left.farmId === right.farmId && left.generation === right.generation && left.token === right.token && left.serverEpoch === right.serverEpoch
+const sameEntry = (left: SoilRxQueueEntryV1, right: SoilRxQueueEntryV1) => left.payloadBytes === right.payloadBytes && JSON.stringify(left) === JSON.stringify(right)
 
 export class QueuedSoilRxRepository implements SoilRxRepository {
   private workspace: SoilRxData | null = null
@@ -153,7 +156,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
         }
       })
     }
-    const entry: SoilRxQueueEntryV1 = { version: 1, module: 'soilRx', kind: 'saveTest', operationId: this.d.createId(), userId: source.context.userId, farmId: source.context.farmId, enqueuedAt: this.d.clock(), draft: normalized }
+    const entry = createSoilRxQueueEntry({ version: 1, module: 'soilRx', kind: 'saveTest', operationId: this.d.createId(), userId: source.context.userId, farmId: source.context.farmId, enqueuedAt: this.d.clock(), operationContext: source.operationContext, draft: normalized })
     return queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
       await verifyQueuedOperationContext(this.d, source.operationContext, source.context); verify()
       const enqueue = async () => { const envelope = source.queue.append(entry); setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); const pending = this.pending(entry); await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.tests ?? []).filter((test) => test.id !== pending.id), pending]) }); return pending }
@@ -173,15 +176,15 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
         if (this.d.isOffline()) { setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); return }
         while (envelope.entries.length) {
           const entry = envelope.entries[0]!
-          await verifyQueuedOperationContext(this.d, source.operationContext, { userId: entry.userId, farmId: entry.farmId })
+          await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
           setModuleSyncStatus('soilRx', { kind: 'syncing', pending: envelope.entries.length })
           try {
             const saved = await this.live.saveTestOperation(entry.draft, source.operationContext)
-            verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+            verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
             envelope = source.queue.removeConfirmedHead(entry.operationId)
             if (this.workspace) this.workspace = { tests: sortSoilTestsNewestFirst([...this.workspace.tests.filter((test) => test.id !== saved.id), saved]) }
           } catch (error) {
-            await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+            await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
             if (isTransportFailure(error, this.d.isOffline())) { setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); return }
             verify(); appendNeedsAttention(this.d.storage, source.queue.key, { id: entry.operationId, module: 'soilRx', createdAt: entry.enqueuedAt, message: attention, entry })
             envelope = source.queue.removeConfirmedHead(entry.operationId)
@@ -196,6 +199,49 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
   }
   async getReportUrl(path: string) { const source = await this.source(); if (this.d.isOffline()) throw new Error('Connect to the internet to open this lab report.'); return this.live.getReportUrlOperation(path, source.operationContext) }
   async getNeedsAttentionQueueKey() { const source = await this.source(); this.refreshSync(source); return source.queue.key }
-  async retryNeedsAttention(queueKey: string, operationId: string) { const source = await this.source(); if (source.queue.key !== queueKey) throw new Error('The selected farm changed before this Soil Rx retry could begin.'); const record = readNeedsAttention(this.d.storage, queueKey).find((item) => item.id === operationId); if (!record) { this.refreshSync(source); return } const entry = parseSoilRxQueue(JSON.stringify({ version: 1, entries: [record.entry] })).entries[0]!; await queueTransaction(queueKey, this.d.storage, this.d.createId, async (verify) => { verify(); source.queue.append(entry); dismissNeedsAttention(this.d.storage, queueKey, operationId) }); this.refreshSync(source); await this.inspectAndReplay() }
-  async dismissNeedsAttention(queueKey: string, operationId: string) { const source = await this.source(); if (source.queue.key !== queueKey) throw new Error('The selected farm changed before this Soil Rx item could be dismissed.'); dismissNeedsAttention(this.d.storage, queueKey, operationId); this.refreshSync(source) }
+  private async parkedSave(source: Source, expectedQueueKey: string, operationId: string, expectedRecordBytes?: string) {
+    if (source.queue.key !== expectedQueueKey) throw new Error(parkedBlocked)
+    const records = readNeedsAttention(this.d.storage, source.queue.key).filter((item) => item.id === operationId)
+    if (records.length !== 1) throw new Error(parkedBlocked)
+    const record = records[0] as NeedsAttentionRecord
+    const recordBytes = JSON.stringify(record)
+    if (expectedRecordBytes !== undefined && recordBytes !== expectedRecordBytes) throw new Error(parkedBlocked)
+    if (record.id !== operationId || record.module !== 'soilRx') throw new Error(parkedBlocked)
+    const entry = parseSoilRxQueue(JSON.stringify({ version: 1, entries: [record.entry] })).entries[0]!
+    if (entry.operationId !== operationId || entry.module !== 'soilRx' || entry.kind !== 'saveTest' || entry.userId !== source.context.userId || entry.farmId !== source.context.farmId || entry.operationContext.projectRef !== this.d.projectRef || record.createdAt !== entry.enqueuedAt || !sameOperationContext(entry.operationContext, source.operationContext)) throw new Error(parkedBlocked)
+    await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
+    return { entry, record, recordBytes }
+  }
+  async retryNeedsAttention(queueKey: string, operationId: string) {
+    const source = await this.source()
+    await queueTransaction(queueKey, this.d.storage, this.d.createId, async (verify) => {
+      let parked = await this.parkedSave(source, queueKey, operationId)
+      let active = source.queue.read().entries.filter((candidate) => candidate.operationId === operationId)
+      if (active.length > 1 || (active[0] && !sameEntry(active[0], parked.entry))) throw new Error(parkedBlocked)
+      if (!active.length) {
+        parked = await this.parkedSave(source, queueKey, operationId, parked.recordBytes); verify()
+        active = source.queue.read().entries.filter((candidate) => candidate.operationId === operationId)
+        if (active.length > 1 || (active[0] && !sameEntry(active[0], parked.entry))) throw new Error(parkedBlocked)
+        if (!active.length) source.queue.append(parked.entry)
+      }
+      active = source.queue.read().entries.filter((candidate) => candidate.operationId === operationId)
+      if (active.length !== 1 || !sameEntry(active[0]!, parked.entry)) throw new Error(parkedBlocked)
+      parked = await this.parkedSave(source, queueKey, operationId, parked.recordBytes); verify()
+      dismissNeedsAttention(this.d.storage, queueKey, operationId)
+    })
+    this.refreshSync(source)
+    await this.inspectAndReplay()
+  }
+  async dismissNeedsAttention(queueKey: string, operationId: string) {
+    const source = await this.source()
+    await queueTransaction(queueKey, this.d.storage, this.d.createId, async (verify) => {
+      const parked = await this.parkedSave(source, queueKey, operationId)
+      const active = source.queue.read().entries.filter((candidate) => candidate.operationId === operationId)
+      if (active.length) throw new Error(parkedBlocked)
+      if (source.queue.read().entries.some((candidate) => candidate.operationId === operationId)) throw new Error(parkedBlocked)
+      await this.parkedSave(source, queueKey, operationId, parked.recordBytes); verify()
+      dismissNeedsAttention(this.d.storage, queueKey, operationId)
+    })
+    this.refreshSync(source)
+  }
 }

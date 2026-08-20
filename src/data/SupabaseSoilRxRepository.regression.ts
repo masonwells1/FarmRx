@@ -5,7 +5,7 @@ import { MockSoilRxRepository } from './MockSoilRxRepository'
 import type { SoilRxDataGateway } from './SoilRxDataGateway'
 import { readSoilRxCleanupOutbox, recordSoilRxCleanup, soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
 import { soilMeasurementKeys, type SoilTestDraft } from './soilRx'
-import { parseSoilRxQueue, SoilRxWriteQueue, soilRxWriteQueueKey, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
+import { createSoilRxQueueEntry, parseSoilRxQueue, SoilRxWriteQueue, soilRxWriteQueueKey } from './soilRxWriteQueue'
 import { SupabaseSoilRxRepository, mapSoilTest } from './SupabaseSoilRxRepository'
 import type { StorageLike } from './writeQueue'
 
@@ -14,7 +14,7 @@ const farm = uid(1), field = uid(2), user = uid(3), testId = uid(4), operation =
 const stamp = '2027-01-15T12:00:00.000Z'
 const measurements = Object.fromEntries(soilMeasurementKeys.map((key) => [key, null])) as Pick<SoilTestDraft, typeof soilMeasurementKeys[number]>
 const draft: SoilTestDraft = { ...measurements, id: testId, field_id: field, sample_date: '2027-01-10', lab_name: 'Midwest Lab' }
-const context: FarmOperationContext = { projectRef: 'test-project', userId: user, farmId: farm, generation: 1, token: 'fence-token', serverEpoch: 2 }
+const context: FarmOperationContext = { projectRef: 'test-project', userId: user, farmId: farm, generation: 1, token: 'fence-token-0001', serverEpoch: 2 }
 const row = (overrides: Record<string, unknown> = {}) => ({ id: testId, farm_id: farm, field_id: field, sample_date: '2027-01-10', lab_name: 'Midwest Lab', ...measurements, created_by: user, created_at: stamp, updated_at: stamp, ...overrides })
 class MemoryStorage implements StorageLike { private data = new Map<string, string>(); getItem(key: string) { return this.data.get(key) ?? null } setItem(key: string, value: string) { this.data.set(key, value) } removeItem(key: string) { this.data.delete(key) } }
 class Gateway implements SoilRxDataGateway {
@@ -45,9 +45,10 @@ assert.deepEqual(await repository.rollbackTestOperation(testId, context), { id: 
 assert.equal(gateway.deletes, 1)
 
 const queueStorage = new MemoryStorage(); const queueKey = soilRxWriteQueueKey('test-project', user, farm); const queue = new SoilRxWriteQueue(queueStorage, queueKey)
-const entry: SoilRxQueueEntryV1 = { version: 1, module: 'soilRx', kind: 'saveTest', operationId: operation, userId: user, farmId: farm, enqueuedAt: stamp, draft: draft as SoilTestDraft & { id: string } }
+const entry = createSoilRxQueueEntry({ version: 1, module: 'soilRx', kind: 'saveTest', operationId: operation, userId: user, farmId: farm, enqueuedAt: stamp, operationContext: context, draft: draft as SoilTestDraft & { id: string } })
 queue.append(entry); assert.equal(queue.read().entries[0]?.draft.id, testId); queue.removeConfirmedHead(operation); assert.equal(queue.read().entries.length, 0)
 assert.throws(() => parseSoilRxQueue(JSON.stringify({ version: 1, entries: [{ ...entry, farmId: 'wrong' }] })), /need attention/)
+assert.throws(() => parseSoilRxQueue(JSON.stringify({ version: 1, entries: [{ ...entry, draft: { ...entry.draft, lab_name: 'Changed without byte binding' } }] })), /need attention/)
 
 const cleanupKey = soilRxCleanupOutboxKey('test-project', user)
 assert.equal(recordSoilRxCleanup(queueStorage, cleanupKey, { path, userId: user, farmId: farm, recordedAt: stamp }), true)
