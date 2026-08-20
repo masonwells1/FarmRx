@@ -14,8 +14,8 @@ const staleEnvelope = { version: 1, fetched_at: '2027-07-07T11:40:00-05:00', bun
 
 declare global { interface Window { __cedarArmInventory?: () => void; __cedarArmScouting?: () => void; __cedarIds?: string[] } }
 
-async function fence(page: Page) {
-  const requests = createSeasonRequestClassifier({ targetMutationRpcs: ['save_inventory_application_bundle', 'save_scouting_note'], blockUnexpectedNonReadRequests: true })
+async function fence(page: Page, targetMutationRpcs: string[] = ['save_inventory_application_bundle', 'save_scouting_note']) {
+  const requests = createSeasonRequestClassifier({ targetMutationRpcs, blockUnexpectedNonReadRequests: true })
   const external: string[] = []; const scoutingRpcResponses: string[] = []; let stale = false; let weatherRequests = 0
   await page.route('**/*', async route => { const request = route.request(); const url = new URL(request.url()); if (request.url() === weatherUrl) { weatherRequests += 1; if (stale) await route.abort('blockedbyclient'); else await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(weatherPayload) }); return } if (url.hostname === 'api.open-meteo.com') { external.push(`UNEXPECTED_WEATHER ${request.method()} ${request.url()}`); await route.abort('blockedbyclient'); return } if (['http:','https:','ws:','wss:'].includes(url.protocol) && (url.hostname !== '127.0.0.1' || !['4186','4187','55321'].includes(url.port))) { external.push(`${request.method()} ${url.href}`); await route.abort('blockedbyclient'); return } if (url.origin === 'http://127.0.0.1:55321' && requests.observe(request.method(), request.url()).block) { await route.abort('blockedbyclient'); return } await route.continue() })
   await page.on('response', async response => { if (new URL(response.url()).pathname === '/rest/v1/rpc/save_scouting_note') scoutingRpcResponses.push(`${response.status()} ${await response.text()}`) })
@@ -95,6 +95,77 @@ test('@connect-workflows-cw1 weather prefill stays local until the farmer saves'
   await page.reload()
   await expect(page.getByRole('button', { name: 'Start spray record with this weather' })).toHaveCount(0)
   expect(network.requests.observedTargetMutationRpcs).toEqual(['save_inventory_application_bundle'])
+  expect(network.requests.unexpectedRpcs).toEqual([])
+  expect(network.requests.blockedNonReadRequests).toEqual([])
+  expect(network.external).toEqual([])
+})
+
+test('@connect-workflows-cw2 exact Program match changes Inventory only after explicit no-record confirmation', async ({ page }) => {
+  const network = await fence(page, ['mark_program_pass_applied'])
+  await signIn(page)
+  await page.goto('/programs')
+  await page.getByRole('button', { name: 'Season progress' }).click()
+
+  const assignment = page.locator('.assignment-track').filter({ hasText: 'Cedar CW-2 exact Inventory program' })
+  const pass = assignment.locator('.tracker-pass').filter({ hasText: 'CW-2 confirmed draw-down pass' })
+  await expect(pass.getByText('Planned', { exact: true })).toBeVisible()
+  await journeyActionsAtLeast48(pass.getByRole('button', { name: 'Mark applied' }))
+  await pass.getByRole('button', { name: 'Mark applied' }).click()
+
+  const form = pass.locator('form.tracker-form')
+  const recordChoice = form.getByLabel('Application record (optional)')
+  const productName = form.getByLabel('Product', { exact: true })
+  await expect(recordChoice).toHaveValue('create')
+  await expect(form.getByText('Choose “Do not add an application record” to confirm a Program-to-Inventory draw-down.')).toBeVisible()
+  await expect(form.getByLabel('Confirm exact Inventory product: Synthetic Cedar Herbicide 41')).toHaveCount(0)
+  expect(network.requests.observedTargetMutationRpcs).toEqual([])
+
+  await recordChoice.selectOption('none')
+  const confirmMatch = form.getByLabel('Confirm exact Inventory product: Synthetic Cedar Herbicide 41')
+  await expect(confirmMatch).toBeVisible()
+  await expect(confirmMatch).not.toBeChecked()
+  await expect(form.getByLabel('Quantity to remove (gal)')).toHaveCount(0)
+  expect(network.requests.observedTargetMutationRpcs).toEqual([])
+
+  await productName.fill('Free-typed Cedar product')
+  await expect(confirmMatch).toHaveCount(0)
+  await expect(form.getByText('No single active Inventory product exactly matches this product name. Inventory on hand will not change for this line.')).toBeVisible()
+  expect(network.requests.observedTargetMutationRpcs).toEqual([])
+
+  await productName.fill('Synthetic Cedar Herbicide 41')
+  await confirmMatch.check()
+  const quantity = form.getByLabel('Quantity to remove (gal)')
+  await expect(form.getByText(/exact Inventory match will reduce on hand/i)).toHaveCount(0)
+  await expect(form.getByText(/does NOT change inventory on hand/i)).toBeVisible()
+  await expect(form).not.toContainText('NaN')
+  await quantity.fill('0.001')
+  await expect(quantity).toHaveValue('0.001')
+  await expect(form.getByText('1 exact Inventory match will reduce on hand by the quantities you confirm.')).toBeVisible()
+
+  await recordChoice.selectOption('create')
+  await expect(confirmMatch).toHaveCount(0)
+  await expect(quantity).toHaveCount(0)
+  expect(network.requests.observedTargetMutationRpcs).toEqual([])
+  await recordChoice.selectOption('none')
+  await confirmMatch.check()
+  await form.getByLabel('Quantity to remove (gal)').fill('0.001')
+
+  await journeyActionsAtLeast48(form.getByRole('button', { name: 'Confirm applied' }))
+  expect(network.requests.observedTargetMutationRpcs).toEqual([])
+  await form.getByRole('button', { name: 'Confirm applied' }).click()
+  await expect(pass.getByText('Applied 2027-07-07 · 40 acres · 1 confirmed Inventory match reduced on hand.')).toBeVisible()
+  await expect(pass.getByText('Synthetic Cedar Herbicide 41 · Inventory reduced by 0.001 gal')).toBeVisible()
+  expect(network.requests.observedTargetMutationRpcs).toEqual(['mark_program_pass_applied'])
+
+  await page.reload()
+  await page.getByRole('button', { name: 'Season progress' }).click()
+  const reloadedPass = page.locator('.tracker-pass').filter({ hasText: 'CW-2 confirmed draw-down pass' })
+  await expect(reloadedPass.getByText('Synthetic Cedar Herbicide 41 · Inventory reduced by 0.001 gal')).toBeVisible()
+  await page.goto('/inventory')
+  const shelf = page.locator('.shelf-card').filter({ hasText: 'Synthetic Cedar Herbicide 41' })
+  await expect(shelf.locator('strong')).toHaveText('19.999 gal')
+  await noOverflow(page)
+  expect(network.requests.observedTargetMutationRpcs).toEqual(['mark_program_pass_applied'])
   expect(network.requests.unexpectedRpcs).toEqual([])
   expect(network.requests.blockedNonReadRequests).toEqual([])
   expect(network.external).toEqual([])

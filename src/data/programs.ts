@@ -3,6 +3,11 @@ export type ProgramKind = 'chemical' | 'fertility' | 'fungicide' | 'other'
 export type ProgramPassType = 'pre' | 'post' | 'fungicide' | 'planter_fertility' | 'custom'
 export type ProgramActivityType = 'spray' | 'fertility' | 'other'
 export type AssignedPassStatus = 'planned' | 'applied' | 'skipped' | 'cancelled'
+export type ProgramInventoryUnit = 'gal' | 'qt' | 'pt' | 'fl_oz' | 'l' | 'ml' | 'lb' | 'oz' | 'ton' | 'kg' | 'g' | 'each' | 'bag' | 'case' | 'tote' | 'seed_unit' | 'bulk_unit'
+export const PROGRAM_INVENTORY_QUANTITY_MAX = 10_000_000
+const PROGRAM_INVENTORY_QUANTITY_SCALE = 100_000_000
+const PROGRAM_INVENTORY_QUANTITY_SCALED_MAX = 1_000_000_000_000_000
+const programInventoryQuantityFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 8 })
 
 export interface ProgramProductDraft { id: string | null; product_name: string; rate_text: string; unit_text: string; estimated_cost_per_acre: number | null; notes: string | null }
 export interface ProgramPassDraft { id: string | null; name: string; pass_type: ProgramPassType; activity_type: ProgramActivityType; timing_label: string | null; target_date: string | null; planting_offset_days: number | null; reminder_lead_days: number; notes: string | null }
@@ -11,14 +16,17 @@ export interface ProgramProduct extends Omit<ProgramProductDraft, 'id'> { id: st
 export interface ProgramPass extends Omit<ProgramPassDraft, 'id'> { id: string; farm_id: string; program_id: string; sequence: number; is_archived: boolean; products: ProgramProduct[]; pending?: boolean }
 export interface Program extends Omit<ProgramDraft, 'id'> { id: string; farm_id: string; revision: number; is_archived: boolean; passes: ProgramPass[]; pending?: boolean }
 export interface CropAssignmentChoice { id: string; farm_id: string; field_id: string; field_name: string; commodity_id: string; commodity_name: string; crop_year: number; planting_sequence: number; planting_date: string | null; planted_acres: number; latitude: number | null; longitude: number | null }
-export interface AssignedProgramProduct { id: string; farm_id: string; assigned_pass_id: string; source_program_pass_product_id: string | null; sequence: number; product_name: string; rate_text: string; unit_text: string; estimated_cost_per_acre: number | null; notes: string | null; actual_product_name: string | null; actual_rate_text: string | null; actual_unit_text: string | null; actual_cost_per_acre: number | null }
-export interface ActualProgramProduct { id: string; actual_product_name: string; actual_rate_text: string; actual_unit_text: string; actual_cost_per_acre: number | null }
+export interface ProgramInventoryProduct { id: string; farm_id: string; name: string; inventory_unit: ProgramInventoryUnit; is_active: boolean }
+export interface ProgramInventoryMatchInput { inventory_product_id: string; quantity_in_inventory_unit: number; inventory_unit: ProgramInventoryUnit }
+export interface ProgramInventoryMatch { farm_id: string; assigned_product_id: string; inventory_product_id: string; quantity_in_inventory_unit: number; inventory_product_name_snapshot: string; inventory_unit_snapshot: ProgramInventoryUnit; operation_id: string; confirmed_by: string; confirmed_at: string }
+export interface AssignedProgramProduct { id: string; farm_id: string; assigned_pass_id: string; source_program_pass_product_id: string | null; sequence: number; product_name: string; rate_text: string; unit_text: string; estimated_cost_per_acre: number | null; notes: string | null; actual_product_name: string | null; actual_rate_text: string | null; actual_unit_text: string | null; actual_cost_per_acre: number | null; inventory_match: ProgramInventoryMatch | null }
+export interface ActualProgramProduct { id: string; actual_product_name: string; actual_rate_text: string; actual_unit_text: string; actual_cost_per_acre: number | null; inventory_match?: ProgramInventoryMatchInput | null }
 export interface AssignedProgramPass { id: string; assignment_id: string; source_program_pass_id: string | null; source_revision: number; sequence: number; name: string; pass_type: ProgramPassType; activity_type: ProgramActivityType; timing_label: string | null; target_date: string | null; planting_offset_days: number | null; reminder_lead_days: number; notes: string | null; due_on: string | null; due_source: 'template_date' | 'planting_offset' | 'manual' | 'unscheduled'; is_field_override: boolean; status: AssignedPassStatus; applied_on: string | null; applied_acres: number | null; skipped_on: string | null; skip_reason: string | null; cancelled_at: string | null; cancel_reason: string | null; application_record_id: string | null; products: AssignedProgramProduct[]; pending?: boolean }
 export interface ProgramApplicationRecord { id: string; farm_id: string; crop_assignment_id: string; application_date: string; applied_acres: number; status: 'draft' | 'completed' }
 export interface ProgramAssignmentCost { assignment_id: string; farm_id: string; crop_assignment_id: string; planned_cost_is_complete: boolean; planned_cost_per_acre: number | null; planned_known_cost_per_acre: number | null; total_planned_cost: number | null; actual_cost_is_complete: boolean; actual_cost_per_acre: number | null; actual_known_cost_per_acre: number | null; total_actual_cost: number | null }
 export interface ProgramCropCostRollup { crop_assignment_id: string; farm_id: string; planted_acres: number; planned_cost_is_complete: boolean; planned_cost_per_acre: number | null; planned_known_cost_per_acre: number | null; total_planned_cost: number | null; actual_cost_is_complete: boolean; actual_cost_per_acre: number | null; actual_known_cost_per_acre: number | null; total_actual_cost: number | null }
 export interface ProgramAssignment extends CropAssignmentChoice { assignment_id: string; program_id: string; program_name_snapshot: string; program_kind_snapshot: ProgramKind | null; assignment_status: 'active' | 'archived'; template_revision: number; current_template_revision: number; passes: AssignedProgramPass[]; cost?: ProgramAssignmentCost | null; pending?: boolean }
-export interface ProgramsData { programs: Program[]; assignments: ProgramAssignment[]; cropAssignments: CropAssignmentChoice[]; applicationRecords: ProgramApplicationRecord[]; assignmentCosts: ProgramAssignmentCost[]; cropCostRollups: ProgramCropCostRollup[]; viewer: { user_id: string; role: FarmViewerRole } }
+export interface ProgramsData { programs: Program[]; assignments: ProgramAssignment[]; cropAssignments: CropAssignmentChoice[]; applicationRecords: ProgramApplicationRecord[]; assignmentCosts: ProgramAssignmentCost[]; cropCostRollups: ProgramCropCostRollup[]; inventoryProducts: ProgramInventoryProduct[]; inventoryMatches: ProgramInventoryMatch[]; viewer: { user_id: string; role: FarmViewerRole } }
 export interface AssignmentProductIdentityPlan { source_program_pass_product_id: string; assigned_product_id: string }
 export interface AssignmentPassIdentityPlan { source_program_pass_id: string; assigned_pass_id: string; products: AssignmentProductIdentityPlan[] }
 export interface AssignmentIdentityPlan { crop_assignment_id: string; assignment_id: string; expected_program_revision: number; passes: AssignmentPassIdentityPlan[] }
@@ -51,15 +59,24 @@ export function validAssignmentIdentityPlans(value: unknown): value is Assignmen
 }
 const text = (value: unknown, maximum: number, required = false) => typeof value === 'string' && value.length <= maximum && (!required || value.trim().length > 0)
 const nullableText = (value: unknown, maximum: number) => value === null || text(value, maximum)
+const inventoryUnits = new Set<ProgramInventoryUnit>(['gal', 'qt', 'pt', 'fl_oz', 'l', 'ml', 'lb', 'oz', 'ton', 'kg', 'g', 'each', 'bag', 'case', 'tote', 'seed_unit', 'bulk_unit'])
 export function roundDecimalHalfUp(value: number, places = 4) { if (!Number.isFinite(value)) return value; const factor = 10 ** places; const shifted = Number((Math.abs(value) * factor).toPrecision(15)); return Math.sign(value) * Math.floor(shifted + 0.5) / factor }
 export function canEditPrograms(role: FarmViewerRole) { return role === 'owner' || role === 'manager' || role === 'worker' }
-/** Audit P2-15: at the moment of confirming a pass, the farmer must see exactly what the
- * save does and does not do — program progress is never a spray record or an on-hand change. */
+/** At the moment of confirming a pass, the farmer must see exactly what the save does:
+ * application records and explicitly confirmed Inventory draw-downs are separate choices. */
 export type ProgramApplyRecordChoice = 'none' | 'create' | 'link'
 export function defaultProgramApplyRecordChoice(activityType: ProgramActivityType): ProgramApplyRecordChoice {
   return activityType === 'spray' ? 'create' : 'none'
 }
-export function programApplyConfirmation(choice: ProgramApplyRecordChoice): string {
+export function programApplyConfirmation(choice: ProgramApplyRecordChoice, confirmedInventoryMatches = 0, confirmedInventorySummary?: string): string {
+  if (!Number.isInteger(confirmedInventoryMatches) || confirmedInventoryMatches < 0) return 'Check the confirmed Inventory products and quantities before saving.'
+  if (confirmedInventoryMatches > 0) {
+    if (choice !== 'none') return 'Choose “Do not add an application record” before confirming an Inventory draw-down.'
+    const summary = typeof confirmedInventorySummary === 'string' && confirmedInventorySummary.trim().length > 0
+      ? ` Confirmed Inventory draw-down: ${confirmedInventorySummary.trim()}.`
+      : ''
+    return `This marks the pass done without adding an application record. ${confirmedInventoryMatches} exact ${confirmedInventoryMatches === 1 ? 'Inventory match will' : 'Inventory matches will'} reduce on hand by the quantities you confirm.${summary} Free-typed and unmatched lines will not change Inventory.`
+  }
   if (choice === 'none') return 'Progress only: this marks the pass done in your program plan. It does NOT create a spray/application record and does NOT change inventory on hand.'
   if (choice === 'create') return 'This marks the pass done AND creates a new draft application record. Inventory on hand still does not change — products here are free-typed, not matched to your shelf.'
   return 'This marks the pass done and links it to the application record you chose. Inventory on hand does not change here.'
@@ -101,5 +118,54 @@ export function validateProgramProductDraft(value: ProgramProductDraft | Record<
   if (!nullableText(product.notes, 1000)) return 'Product notes must be 1,000 characters or less.'
   return null
 }
-export function validateActualProgramProducts(value: ActualProgramProduct[]): string | null { if (!Array.isArray(value) || new Set(value.map((p) => p.id)).size !== value.length || value.some((p) => !uuid.test(p.id) || !text(p.actual_product_name, 200, true) || !text(p.actual_rate_text, 80, true) || !text(p.actual_unit_text, 80, true) || p.actual_cost_per_acre !== null && (!Number.isFinite(p.actual_cost_per_acre) || p.actual_cost_per_acre < 0))) return 'Check every actual product name, rate, unit, and cost.'; return null }
+export function canonicalProgramInventoryProduct(actualProductName: string, farmId: string, products: ProgramInventoryProduct[]): ProgramInventoryProduct | null {
+  if (typeof actualProductName !== 'string' || !uuid.test(farmId) || !Array.isArray(products)) return null
+  const name = actualProductName.trim()
+  const matches = products.filter((product) => product.farm_id === farmId && product.is_active && product.name.trim() === name)
+  return matches.length === 1 ? matches[0] : null
+}
+export function parseProgramInventoryQuantityInput(value: string): number | null {
+  if (typeof value !== 'string') return null
+  const parsed = /^(0|[1-9]\d{0,7})(?:\.(\d{1,8}))?$/.exec(value)
+  if (!parsed) return null
+  const scaledText = `${parsed[1]}${(parsed[2] ?? '').padEnd(8, '0')}`
+  const scaled = Number(scaledText)
+  if (!Number.isSafeInteger(scaled) || scaled < 1 || scaled > PROGRAM_INVENTORY_QUANTITY_SCALED_MAX) return null
+  return scaled / PROGRAM_INVENTORY_QUANTITY_SCALE
+}
+export function isProgramInventoryQuantity(value: unknown): value is number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > PROGRAM_INVENTORY_QUANTITY_MAX) return false
+  const parsed = parseProgramInventoryQuantityInput(value.toFixed(8))
+  return parsed !== null && parsed === value
+}
+export function confirmedProgramInventoryActuals(actuals: ActualProgramProduct[]): Array<ActualProgramProduct & { inventory_match: ProgramInventoryMatchInput }> {
+  return actuals.filter((product): product is ActualProgramProduct & { inventory_match: ProgramInventoryMatchInput } =>
+    product.inventory_match !== null
+    && product.inventory_match !== undefined
+    && isProgramInventoryQuantity(product.inventory_match.quantity_in_inventory_unit))
+}
+export function formatProgramInventoryQuantity(value: number) { return programInventoryQuantityFormatter.format(value) }
+export function validateActualProgramProducts(value: ActualProgramProduct[]): string | null {
+  if (!Array.isArray(value) || new Set(value.map((p) => p?.id)).size !== value.length) return 'Check every actual product name, rate, unit, cost, and confirmed inventory quantity.'
+  for (const candidate of value as unknown[]) {
+    if (!record(candidate)) return 'Check every actual product name, rate, unit, cost, and confirmed inventory quantity.'
+    const hasInventoryMatch = Object.hasOwn(candidate, 'inventory_match')
+    const acceptedKeys = hasInventoryMatch
+      ? ['id', 'actual_product_name', 'actual_rate_text', 'actual_unit_text', 'actual_cost_per_acre', 'inventory_match']
+      : ['id', 'actual_product_name', 'actual_rate_text', 'actual_unit_text', 'actual_cost_per_acre']
+    if (!exact(candidate, acceptedKeys)
+      || typeof candidate.id !== 'string' || !uuid.test(candidate.id)
+      || !text(candidate.actual_product_name, 200, true)
+      || !text(candidate.actual_rate_text, 80, true)
+      || !text(candidate.actual_unit_text, 80, true)
+      || candidate.actual_cost_per_acre !== null && (typeof candidate.actual_cost_per_acre !== 'number' || !Number.isFinite(candidate.actual_cost_per_acre) || candidate.actual_cost_per_acre < 0)) return 'Check every actual product name, rate, unit, cost, and confirmed inventory quantity.'
+    if (!hasInventoryMatch || candidate.inventory_match === null) continue
+    if (!record(candidate.inventory_match) || !exact(candidate.inventory_match, ['inventory_product_id', 'quantity_in_inventory_unit', 'inventory_unit'])) return 'Check every actual product name, rate, unit, cost, and confirmed inventory quantity.'
+    const quantity = candidate.inventory_match.quantity_in_inventory_unit
+    if (typeof candidate.inventory_match.inventory_product_id !== 'string' || !uuid.test(candidate.inventory_match.inventory_product_id)
+      || !isProgramInventoryQuantity(quantity)
+      || typeof candidate.inventory_match.inventory_unit !== 'string' || !inventoryUnits.has(candidate.inventory_match.inventory_unit as ProgramInventoryUnit)) return 'Check every actual product name, rate, unit, cost, and confirmed inventory quantity.'
+  }
+  return null
+}
 export function normalizeProgramProductDraft(product: ProgramProductDraft): ProgramProductDraft { return { ...product, product_name: product.product_name.trim(), rate_text: product.rate_text.trim(), unit_text: product.unit_text.trim(), notes: product.notes?.trim() || null, estimated_cost_per_acre: product.estimated_cost_per_acre === null ? null : roundDecimalHalfUp(product.estimated_cost_per_acre) } }

@@ -1,0 +1,67 @@
+{
+  "schema": "farmrx.faketime-artifact-replacement.v1",
+  "artifact": {
+    "bootstrap_token": "b9ad08aeb66ed961e8426b2cce527365",
+    "tag": "maple-faketime-artifacts-b9ad08aeb66ed961e8426b2cce527365:synthetic",
+    "ref": "maple-faketime-artifacts-b9ad08aeb66ed961e8426b2cce527365@sha256:7cbc0a183ba33c4318a9784dae376104e55282e8e0c716511336afaf924f3302",
+    "id": "sha256:7cbc0a183ba33c4318a9784dae376104e55282e8e0c716511336afaf924f3302",
+    "labels": {
+      "farmrx.synthetic-bootstrap": "b9ad08aeb66ed961e8426b2cce527365",
+      "farmrx.synthetic-owner": "maple-faketime-bootstrap",
+      "farmrx.synthetic-role": "faketime-artifacts",
+      "farmrx.source-digest": "debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+      "farmrx.package-contract": "libfaketime=0.9.10-2.1;gcc;libc6-dev"
+    }
+  },
+  "evidence": {
+    "relative_directory": ".playwright-local/connect-workflows-cw2-diagnostics/faketime-artifact-replacement-b9ad08aeb66ed961e8426b2cce527365",
+    "files": {
+      "artifact-identity.json": "d8b95bfa5a83c56b3236a5579ad33043456e0fb5b09d1f93005efb1ec48e4276",
+      "build-input-completeness.json": "97cbbca788a38b14b11e7780fdeb00b6852a224bf39076174ef626f7411e29de",
+      "build-input.json": "5ee6803f958a960c0ee11b423e63b81d6bcfb1f5301afe99f8fa86531eaeff48",
+      "build.jsonl": "9ecb1ceb867d28184bd21187901c909e9901a71b7cf86f2c3cadcf332bf1bed8",
+      "stderr.log": "9f1400fc2b3dcf6a9454551e827bfcc58883e730772771583f2f466c92babc4e",
+      "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "combined_sha256": "aed05d2f6937223d8bbd53ea79a3043ce79a4436ce7e29d7569c04c66d77dbf2"
+  },
+  "build_inputs": {
+    "dockerfile": {
+      "path": "tests/season/faketime-artifacts.Dockerfile",
+      "sha256": "26eded17061445add0e3c4b43ad0c8dd8552d6745d6d615969372f9dfbc696a3"
+    },
+    "copied_local_inputs": {
+      "tests/season/clear-ld-preload.c": "b6d9b439ccbfdf88f87b9c2f2d89b560d2370964074759373949c2bbb67cd66e"
+    }
+  },
+  "derived_image_proof": {
+    "relative_directory": ".playwright-local/connect-workflows-cw2-diagnostics/faketime-derived-proof-0ba1615005224ec79d44fcdb3998021d",
+    "token": "0ba1615005224ec79d44fcdb3998021d",
+    "tag": "farmrx-cw2-derived-proof-0ba1615005224ec79d44fcdb3998021d:synthetic",
+    "image_id": "sha256:ac2901f891cd4a96d70cde28c9dd9f1db6ca518f4d9e5db821518ecb518a0f74",
+    "files": {
+      "build-input.json": "236d7d011d2302a937ff6d7fca2724832c06712c158c41c8a3113e2388a7ed16",
+      "build.jsonl": "8e71f38b8357d0bf7afcda8ec541fac0e49d4dedea764365a18ed45b8c4cf75d",
+      "result.json": "bd373487d083e13562e35d9497529dfe47842e0519ab573d86b6ed82d993e438",
+      "stderr.log": "99c55516d457c8a08362e6018dade4b1bd534661adc509839242b7a743e11820",
+      "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "combined_sha256": "eb43ca8c6035e8125e9ddbd7498f3bea8674a5a34c164c4e7ac4a1d1c9fc06d1",
+    "contract": "The derived image was built locally with --pull=false from the reviewed reusable artifact tag after both tag and immutable ref were verified to the same ID and labels. The proof image had zero container references, the ordinary DB remained pinned and healthy, and only the exact proof image was removed."
+  },
+  "reusable_postcleanup_attestation": {
+    "relative_directory": ".playwright-local/connect-workflows-cw2-diagnostics/faketime-reusable-postcleanup-0ba1615005224ec79d44fcdb3998021d",
+    "derived_proof_token": "0ba1615005224ec79d44fcdb3998021d",
+    "reusable_id": "sha256:7cbc0a183ba33c4318a9784dae376104e55282e8e0c716511336afaf924f3302",
+    "files": {
+      "input.json": "ee9f2040529fcf479502ebc76102f1fb0889306f8435193ddd3130701d4c8b63",
+      "inspection.jsonl": "620864573e9161eb682234a0d0053ef817af7a1c5224fbaf4c35f3c8bf327f26",
+      "result.json": "efd709072eb35f838fcf5b81c22da204baadf3f54e016f5dfa64e4735d073163",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout.log": "c0b4b4fb26c1008595b7023db1f7f864f7f7a15b2bc2e45765aa78488f7bc6b7"
+    },
+    "combined_sha256": "5469560cee6b3f5f863ea84aaab8376a38b3a909d2b2145e03671a32e5578eb5",
+    "contract": "After exact owned derived-image removal, the reusable artifact immutable ref and mutable tag were re-inspected to the reviewed ID and five labels; it had zero container references and the ordinary DB remained unchanged and ready."
+  },
+  "combined_source_artifact_identity_recipe": "UTF-8 without BOM: canonical changed/untracked source path|sha256 lines sorted with StringComparer.Ordinal and LF final delimiter, including this manifest as a source leaf; independently require the evidence files to match evidence.files, and require evidence.combined_sha256 to equal the SHA-256 of the six filename|sha256 lines sorted ordinal and LF-final."
+}
