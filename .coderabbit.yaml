@@ -39,6 +39,12 @@ reviews:
   #
   # CRX Manager deliberately does NOT carry this include - it stays
   # exclusion-only there until this form is proven on a review here.
+  #
+  # The `**` above opts OUT of CodeRabbit's curated default ignore list, so the
+  # categories it used to drop for free - dependencies, build output, binaries,
+  # media, source maps, generated code - have to be excluded by hand here.
+  # Leaving them in would inflate every review and re-create the budget problem
+  # this config exists to fix.
   path_filters:
     - "**"
     - "**/package-lock.json"
@@ -48,6 +54,23 @@ reviews:
     - "!docs/handoffs/**"
     - "!test-results/**"
     - "!dist/**"
+    - "!**/node_modules/**"
+    - "!**/build/**"
+    - "!**/generated/**"
+    - "!**/__generated__/**"
+    - "!**/*.min.js"
+    - "!**/*.map"
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.jpeg"
+    - "!**/*.gif"
+    - "!**/*.ico"
+    - "!**/*.webp"
+    - "!**/*.svg"
+    - "!**/*.woff"
+    - "!**/*.woff2"
+    - "!**/*.ttf"
+    - "!**/*.eot"
 
   auto_review:
     enabled: true
