@@ -48,6 +48,7 @@
       "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "combined_sha256": "eb43ca8c6035e8125e9ddbd7498f3bea8674a5a34c164c4e7ac4a1d1c9fc06d1",
+    "custody": "historical-untracked-record-only; raw files are not an executable input. Current proof validates the tracked artifact identity and performs a fresh reusable-artifact inspection.",
     "contract": "The derived image was built locally with --pull=false from the reviewed reusable artifact tag after both tag and immutable ref were verified to the same ID and labels. The proof image had zero container references, the ordinary DB remained pinned and healthy, and only the exact proof image was removed."
   },
   "reusable_postcleanup_attestation": {
@@ -62,7 +63,8 @@
       "stdout.log": "c0b4b4fb26c1008595b7023db1f7f864f7f7a15b2bc2e45765aa78488f7bc6b7"
     },
     "combined_sha256": "5469560cee6b3f5f863ea84aaab8376a38b3a909d2b2145e03671a32e5578eb5",
+    "custody": "historical-untracked-record-only; raw files are not an executable input. Current proof validates the tracked artifact identity and performs a fresh reusable-artifact inspection.",
     "contract": "After exact owned derived-image removal, the reusable artifact immutable ref and mutable tag were re-inspected to the reviewed ID and five labels; it had zero container references and the ordinary DB remained unchanged and ready."
   },
-  "combined_source_artifact_identity_recipe": "UTF-8 without BOM: canonical NUL-delimited dirty tracked, staged, and untracked existing source path|sha256 lines sorted with StringComparer.Ordinal and LF final delimiter, refusing missing/deleted paths; or when every dirty source is empty, the exact NUL-delimited previous-commit HEAD^..HEAD existing path|sha256 fallback; including this manifest as a source leaf. evidence.files and evidence.combined_sha256 are historical untracked records only; current proof requires the tracked build-input pins and fresh reusable-artifact inspection."
+  "combined_source_artifact_identity_recipe": "UTF-8 without BOM: canonical NUL-delimited dirty tracked, staged, and untracked existing source path|sha256 lines sorted with StringComparer.Ordinal and LF final delimiter, refusing missing/deleted paths; or when every dirty source is empty, the exact NUL-delimited previous-commit HEAD^..HEAD existing path|sha256 fallback; including this manifest as a source leaf. evidence.files, derived_image_proof.files, reusable_postcleanup_attestation.files, and their combined SHA-256 values are historical untracked records only; current proof requires the tracked build-input pins and fresh reusable-artifact inspection."
 }
