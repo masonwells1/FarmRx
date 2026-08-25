@@ -41,7 +41,7 @@ export type FarmAccessProfile = {
   capabilities: FarmAccessCapabilities
 }
 export type LoadedFarmAccessProfile = FarmAccessProfile & { operationContext: FarmRevocationSnapshot }
-export type FarmAppModule = 'fields' | 'grain' | 'inventory' | 'profitability' | 'equipment' | 'tasks' | 'weather' | 'field_log' | 'scouting' | 'harvest' | 'programs' | 'notifications'
+export type FarmAppModule = 'fields' | 'grain' | 'inventory' | 'profitability' | 'equipment' | 'tasks' | 'weather' | 'field_log' | 'scouting' | 'harvest' | 'programs' | 'notifications' | 'soil_rx'
 const membershipOnlyModules = new Set<FarmAppModule>(['equipment', 'tasks', 'field_log', 'scouting', 'harvest', 'programs'])
 const privateFinancialModules = new Set<FarmAppModule>(['grain', 'profitability'])
 export function canAccessFarmModule(profile: FarmAccessProfile, module: FarmAppModule): boolean {

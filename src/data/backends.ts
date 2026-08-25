@@ -9,6 +9,7 @@ export const moduleBackends = Object.freeze({
   harvest: 'supabase',
   programs: 'supabase',
   notifications: 'supabase',
+  soilRx: 'supabase',
 } as const satisfies {
   fields: 'supabase'
   grain: 'mock' | 'supabase'
@@ -20,4 +21,5 @@ export const moduleBackends = Object.freeze({
   harvest: 'supabase'
   programs: 'supabase'
   notifications: 'supabase'
+  soilRx: 'supabase'
 })

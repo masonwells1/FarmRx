@@ -5,7 +5,10 @@ $root = Split-Path -Parent $PSScriptRoot
 $farmDb = 'supabase_db_farmrx-farmer-simplicity-2027-local'
 $baseImage = 'public.ecr.aws/supabase/postgres@sha256:ba10e934f0a59990379f78ab9ed93926f1c291dd61a12fe4026f4202f1b89770'
 $baseImageId = 'sha256:ba10e934f0a59990379f78ab9ed93926f1c291dd61a12fe4026f4202f1b89770'
-$artifactImage = 'maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7:synthetic'
+$artifactImage = 'maple-faketime-artifacts-b9ad08aeb66ed961e8426b2cce527365:synthetic'
+$artifactRef = 'maple-faketime-artifacts-b9ad08aeb66ed961e8426b2cce527365@sha256:7cbc0a183ba33c4318a9784dae376104e55282e8e0c716511336afaf924f3302'
+$artifactId = 'sha256:7cbc0a183ba33c4318a9784dae376104e55282e8e0c716511336afaf924f3302'
+$artifactLabels = [ordered]@{'farmrx.synthetic-bootstrap'='b9ad08aeb66ed961e8426b2cce527365';'farmrx.synthetic-owner'='maple-faketime-bootstrap';'farmrx.synthetic-role'='faketime-artifacts';'farmrx.source-digest'='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818';'farmrx.package-contract'='libfaketime=0.9.10-2.1;gcc;libc6-dev'}
 $derivedImage = 'farmrx-frozen-clock-spike:ba10e934-july-2027'
 $volume = 'farmrx_maple_clock_spike_ba10e934'
 $emptyVolume = 'farmrx_maple_clock_spike_empty_ba10e934'
@@ -25,6 +28,14 @@ function Invoke-Docker([string[]]$Arguments, [switch]$AllowFailure) {
 function Assert-Absent([string]$Kind,[string]$Name) {
   $result = if($Kind -eq 'image'){ Invoke-Docker @('image','inspect',$Name) -AllowFailure }elseif($Kind -eq 'volume'){ Invoke-Docker @('volume','inspect',$Name) -AllowFailure }else{ Invoke-Docker @('container','inspect',$Name) -AllowFailure }
   if($result.Exit -eq 0){ throw "MAPLE_CLOCK_SPIKE_REFUSED: pre-existing $Kind target $Name." }
+}
+function Assert-ExactReusableArtifact {
+  foreach($name in @($artifactRef,$artifactImage)){
+    $json=(Invoke-Docker @('image','inspect','--format','{"Id":{{json .Id}},"Labels":{{json .Config.Labels}}}',$name)).Output -join ''
+    try{$artifact=$json|ConvertFrom-Json}catch{throw "MAPLE_CLOCK_SPIKE_REFUSED: reusable faketime artifact $name returned malformed inspection JSON."}
+    if($artifact.Id-cne$artifactId){throw "MAPLE_CLOCK_SPIKE_REFUSED: reusable faketime artifact $name did not resolve to the reviewed ID."}
+    foreach($key in $artifactLabels.Keys){if($artifact.Labels.$key-cne$artifactLabels[$key]){throw "MAPLE_CLOCK_SPIKE_REFUSED: reusable faketime artifact $name label $key drifted."}}
+  }
 }
 function Get-FarmIdentity {
   $core=(Invoke-Docker @('inspect','--format','{{.Id}}|{{.Image}}|{{.State.Running}}|{{.State.Health.Status}}',$farmDb)).Output -join ''
@@ -52,6 +63,7 @@ if($farmBefore.EndsWith("|$volume") -or $farmBefore.EndsWith("|$emptyVolume")){ 
 foreach($name in @($initContainer,$clockContainer,$emptyContainer)){ Assert-Absent container $name }
 foreach($name in @($volume,$emptyVolume)){ Assert-Absent volume $name }
 Assert-Absent image $derivedImage
+Assert-ExactReusableArtifact
 
 Push-Location $root
 try {
