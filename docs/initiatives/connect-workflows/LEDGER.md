@@ -1253,3 +1253,9 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 
 - **Date/time:** 2026-08-25 (America/Chicago). The restored closed season command passed the season contract and all fourteen isolation mutations. The full `npm run regression` chain also completed successfully again; its fast-regression command is unchanged from CW-135 and continues to use `pwsh` for the three Linux Foundation PowerShell regressions. This remains local test evidence only and grants no backend/disposable, browser, migration, deployment, or live credit.
 - **Current gate:** `git diff --check`, commit this successor packet, obtain a fresh independent exact-SHA read-only review, then update protected PR #28 and wait for authoritative Linux Foundation, Vercel, and review gates.
+
+## CW-138 — POSIX atomic journal replacement repair
+
+- **Date/time:** 2026-08-25 (America/Chicago). Linux Foundation passed all preceding fast regressions then correctly failed the Maple Docker-adapter regression: its POSIX journal writer used the two-argument `File.Move`, which refuses to replace the existing journal destination while Windows uses `MoveFileEx` with replacement semantics.
+- **Smallest repair:** retain the existing Windows atomic path and use the POSIX `File.Move` overwrite overload. The journal still writes and flushes a unique temp file before replacement, and existing cleanup remains fail-closed. The focused Maple Docker-adapter regression passed under `pwsh`; no Docker/backend, migration, browser, product, or live action ran.
+- **Current gate:** commit this exact local repair, obtain fresh independent exact-SHA review, update PR #28 only after acceptance, then require authoritative Foundation and review gates.
