@@ -1207,3 +1207,15 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Date/time:** 2026-08-25 (America/Chicago). Final source inspection found that the derived-image and reusable-postcleanup raw diagnostic blocks were also ignored historical evidence, but CW-128 had not labeled them as such. CW-128 Stage A remains a truthful execution but **NO CREDIT** for this successor packet.
 - **Smallest complete correction:** all three raw Faketime evidence blocks now declare historical-only custody; the tracked recipe names all three file sets and their combined hashes as non-executable historical records. The runner rejects either missing derived/postcleanup custody declaration, and the focused matrix adds raw-custody and whole-recipe removal mutations, with its copied outer proof pin updated to 23 cases. Current load-bearing inputs remain tracked source hashes, the pinned artifact identity/labels, and a later fresh reusable-artifact inspection.
 - **Boundary and next gate:** no product, migration, schema, fixture, backend, Docker, Supabase, browser, Foundation, scenario, package, ref, or outward action changed or ran. Restart focused/static proof, commit locally only if green, restart the ten-command backend-free Stage A from command 1, then require a fresh exact-SHA read-only review. No push, pull request, merge, deploy, migration, live action, or customer action is authorized.
+
+## CW-130 — cross-platform CW diagnostic launcher repair
+
+- **Date/time:** 2026-08-25 (America/Chicago). Protected PR Foundation CI correctly failed before acceptance: its Linux runner reached the CW focused regression, whose nested diagnostic used Windows-only node.exe and powershell.exe executable names. The local Windows proof had not exercised that operating-system boundary. No product, migration, database, browser, or live action ran before the CI failure.
+- **Smallest repair:** resolve Node by its cross-platform command name and choose powershell.exe only on Windows, otherwise pwsh. The TypeScript focused regression uses the same platform-aware PowerShell choice for its nested diagnostic self-test. This changes proof infrastructure only; no product, migration, fixture, business behavior, runtime, or customer-facing code changes.
+- **Current gate:** rerun the focused/static and CI-equivalent Foundation proof on the repaired exact commit, obtain a fresh exact-SHA review, then update the protected PR without bypassing any failed gate.
+
+## CW-131 — cross-platform outer-self-test span repin
+
+- **Date/time:** 2026-08-25 (America/Chicago). The first local CW-130 focused run failed closed before credit because the intentional launcher change altered the runner's independently pinned outer-self-test span. No runtime, backend, browser, migration, or live action ran.
+- **Smallest correction:** recompute and replace only that exact UTF-8 outer-self-test SHA-256 pin. The pin remains mandatory; it was not weakened or removed.
+- **Current gate:** restart focused/static proof, then run the CI-equivalent Foundation gate and obtain a fresh exact-SHA review before updating PR #28.

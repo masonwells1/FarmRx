@@ -275,7 +275,7 @@ function Invoke-Cw2BaselineRecoveryEvidenceSelfTest {
 function Invoke-Cw2DiagnosticSelfTest {
   $log = New-Cw2DiagnosticLog 'selftest'
   $marker = 'CONNECT_WORKFLOWS_CW2_SELFTEST_SQL_PASS'
-  $nodeExe = (Get-Command node.exe -CommandType Application -ErrorAction Stop).Source
+  $nodeExe = (Get-Command node -CommandType Application -ErrorAction Stop).Source
   function New-Cw2NodeArguments([string]$Script) { $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Script)); "-e `"eval(Buffer.from('$encoded','base64').toString('utf8'))`"" }
   $stdinBytes = [byte[]](0x61,0x6c,0x70,0x68,0x61,0x0d,0x0a,0xce,0xb2,0x65,0x74,0x61,0x0d,0x0a)
   $successScript = "const fs=require('fs');const input=fs.readFileSync(0);process.stdout.write(input);process.stdout.write(Buffer.from('$marker\n'));process.stderr.write('routine stderr');"
@@ -1648,7 +1648,8 @@ function Invoke-Cw2Proof005OuterSelfTest([string]$RunnerSource) {
   )
   $expectedCaseNames=@('baseline','matrix-only deletion','credential-matrix-only deletion','credential-fixture-native deletion','fk-index-matrix-only deletion','fk-index-matrix-invocation deletion','fk-index-guard-only deletion','fk-index-guard-and-matrix deletion','artifact-focused-matrix-only deletion','artifact-focused-guard-only deletion','artifact-focused-guard-and-matrix deletion','guard-only deletion','guard-and-matrix deletion')
   if ($cases.Count -ne 13 -or [string]::Join('|',[string[]]$cases.Name) -cne [string]::Join('|',$expectedCaseNames)) { throw 'CONNECT_WORKFLOWS_CW2_PROOF_005_OUTER_CASES_INVALID' }
-  $powershellExe = (Get-Command powershell.exe -CommandType Application -ErrorAction Stop).Source
+  $powerShellCommand = if($env:OS -eq 'Windows_NT'){'powershell.exe'}else{'pwsh'}
+  $powershellExe = (Get-Command $powerShellCommand -CommandType Application -ErrorAction Stop).Source
   $tempRoot=Join-Path ([IO.Path]::GetTempPath())("farmrx-cw2-proof005-$([guid]::NewGuid().ToString('N'))")
   [void][IO.Directory]::CreateDirectory($tempRoot)
   $paths = [Collections.Generic.List[string]]::new();$primary=$null;$cleanupErrors=[Collections.Generic.List[Exception]]::new()
@@ -1679,7 +1680,7 @@ function Assert-Cw2Contract {
   $runnerSource = Get-Content -Raw -LiteralPath $runnerPath
   $artifactOuterSelfTestStart='# CW2_ARTIFACT_MANIFEST_'+'OUTER_SELFTEST_BEGIN';$artifactOuterSelfTestEnd='# CW2_ARTIFACT_MANIFEST_'+'OUTER_SELFTEST_END'
   $artifactOuterSelfTestSpan=Get-Cw2UniqueSourceSpan $runnerSource $artifactOuterSelfTestStart $artifactOuterSelfTestEnd
-  if((Get-Cw2Proof005TextSha256 $artifactOuterSelfTestSpan)-cne'e5be35dee0e81bcced54e752eb15b2ffa039c2d6b7cfdec4f5a55a6ec4457ea9'){throw 'CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_OUTER_SELFTEST_PIN_MISMATCH'}
+  if((Get-Cw2Proof005TextSha256 $artifactOuterSelfTestSpan)-cne'82bd46587304bc5dac4ab3c65ce952ef6dbe9234c043936e2ddb689ce00623ea'){throw 'CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_OUTER_SELFTEST_PIN_MISMATCH'}
   $required = @(
     $baseFixture,$cw2Fixture,$verify,$concurrencyFixtureVerify,$concurrencyVerify,$specPath,$configPath,$migrationPath,$fkIndexMigrationPath,
     (Join-Path $root 'src/ProgramsModule.tsx'),

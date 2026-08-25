@@ -1436,7 +1436,8 @@ async function run() {
   assert(browserProofSource.includes("test('@connect-workflows-cw2 exact Program match changes Inventory only after explicit no-record confirmation'") && browserProofSource.includes("fill('0.001')") && browserProofSource.includes("toHaveText('19.999 gal')") && browserProofSource.includes("toEqual(['mark_program_pass_applied'])") && browserProofSource.includes("getByText(/exact Inventory match will reduce on hand/i)).toHaveCount(0)") && browserProofSource.includes("not.toContainText('NaN')"), 'The Cedar browser proof must cover the blank checked intermediate state, one confirmed 0.001 draw, and its exact reloaded shelf result.')
   assert(browserConfigSource.includes('grep: /@connect-workflows-cw2/') && browserConfigSource.includes("baseURL: 'http://127.0.0.1:4187'") && browserConfigSource.includes('FARMRX_CW2_VIEWPORT'), 'The dedicated CW-2 desktop/phone browser lane must remain isolated on governed port 4187.')
 
-  const diagnosticSelfTest = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/verify-connect-workflows-cw2-disposable.ps1', '-DiagnosticSelfTest'], { cwd: fileURLToPath(new URL('../../', import.meta.url)), encoding: 'utf8' })
+  const diagnosticPowerShell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh'
+  const diagnosticSelfTest = spawnSync(diagnosticPowerShell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/verify-connect-workflows-cw2-disposable.ps1', '-DiagnosticSelfTest'], { cwd: fileURLToPath(new URL('../../', import.meta.url)), encoding: 'utf8' })
   const diagnosticSelfTestText = `${diagnosticSelfTest.stdout ?? ''}\n${diagnosticSelfTest.stderr ?? ''}`
   assert(diagnosticSelfTest.status === 0 && diagnosticSelfTestText.includes('CONNECT_WORKFLOWS_CW2_DIAGNOSTIC_SELFTEST_PASS'), `The executable CW-2 SQL diagnostic self-test failed closed: ${diagnosticSelfTestText}`)
 
