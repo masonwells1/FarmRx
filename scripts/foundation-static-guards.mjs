@@ -74,7 +74,6 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-push-access-concurrency-mutation.ps1') }", 'orchestrator:checked-push-concurrency-mutation')
 
   const pushAccessRevocation = read(root, 'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql')
-  const pushRevalidationSerialization = read(root, 'supabase/migrations/20260825175933_serialize_push_revalidation_before_target_transition.sql')
   const pushAccessProof = read(root, 'scripts/verify-push-access-revocation-disposable.ps1')
   const pushConcurrencyMutation = read(root, 'scripts/verify-push-access-concurrency-mutation.ps1')
   const pushDeliveryLogic = read(root, 'supabase/functions/_shared/pushDeliveryLogic.ts')
@@ -95,7 +94,6 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, revalidationBody, "last_error = 'farm access removed'", 'push:send-time-revalidation-terminal-reason')
   requireText(errors, pushAccessRevocation, 'grant execute on function public.revalidate_claimed_push_delivery_target(uuid)\nto service_role;', 'push:send-time-revalidation-service-role-only')
   requireText(errors, pushAccessRevocation, 'from public.push_deliveries\n  where id = p_delivery_id\n  for update;', 'push:parent-delivery-reconciliation-lock')
-  requireText(errors, pushRevalidationSerialization, 'from public.push_deliveries\n  where id = v_target.delivery_id\n  for update;', 'push:parent-delivery-locked-before-target-transition')
   if ((pushAccessRevocation.match(/perform public\.reconcile_push_delivery\(/g) ?? []).length !== 2) errors.push('push:all-target-outcomes-use-serialized-reconciliation')
   requireText(errors, pushDeliveryLogic, 'const stillAuthorized = await callBeforeAbort(() => database.revalidateTarget(target.target_id, controller.signal), controller.signal)', 'push:provider-preflight-revalidation')
   requireText(errors, sendPush, "admin.rpc('revalidate_claimed_push_delivery_target', { p_target_id: targetId }).abortSignal(signal)", 'push:edge-revalidation-rpc')

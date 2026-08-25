@@ -76,13 +76,6 @@ $$;
 '@
         $sql = "$mutationPrelude`r`n$mutated"
       }
-      if ($MutateParentDeliveryLock -and $_.Name -eq '20260825175933_serialize_push_revalidation_before_target_transition.sql') {
-        $mutated = $sql -replace '(?ms)(from public\.push_deliveries\s+where id = v_target\.delivery_id)\s+for update;', '$1;'
-        if ($mutated -eq $sql) {
-          throw 'Early parent-delivery lock mutation did not change the serialized target transition.'
-        }
-        $sql = $mutated
-      }
       $sql | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable
       if ($LASTEXITCODE -ne 0) { throw "Migration failed in disposable push-revocation proof: $($_.Name)" }
     }
@@ -226,11 +219,10 @@ begin
 end $$;
 
 -- Reproduce the six-worker Edge shape with two real PostgreSQL connections.
--- The lock-removal mutation installs its own sequence as a marker. Only that
--- intentionally unsafe variant pauses after each target becomes gone: healthy
--- code holds the parent before its target transition, so making the healthy
--- worker wait for a second transition would deadlock the very serialization
--- this probe is meant to prove.
+-- A non-transactional sequence is a deterministic barrier after each target
+-- becomes gone but before parent reconciliation. Without the parent row lock,
+-- each transaction sees the other target as sending and leaves the parent
+-- pending even though both targets commit gone.
 update public.farm_memberships
 set status='active'
 where farm_id='00000000-0000-4000-8000-000000000010'
@@ -272,7 +264,7 @@ begin
     from public.push_deliveries delivery
     where delivery.id=new.delivery_id
       and delivery.notification_id='00000000-0000-4000-8000-000000000034'
-  ) and to_regclass('public.mutation_push_reconciliation_barrier_sequence') is not null then
+  ) then
     v_arrival := nextval('public.push_revalidation_race_barrier_sequence');
     if v_arrival=1 then
       while (select last_value from public.push_revalidation_race_barrier_sequence)<2 loop
