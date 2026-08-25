@@ -77,7 +77,7 @@ function Invoke-Cw2ForcedGitFailureControlFlowProof([string]$Source,[pscustomobj
   )
   $expectedNames=@('baseline-stop','baseline-continue','dead-call-with-synthetic-result','synthetic-result-after-call')
   if($cases.Count-ne4-or[string]::Join('|',[string[]]$cases.Name)-cne[string]::Join('|',$expectedNames)){throw 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_CASES_INVALID'}
-  $powershellExe=(Get-Command powershell.exe -CommandType Application -ErrorAction Stop).Source
+  $powershellExe=if($env:OS -eq 'Windows_NT'){(Get-Command powershell.exe -CommandType Application -ErrorAction Stop).Source}else{(Get-Command pwsh -CommandType Application -ErrorAction Stop).Source}
   $tempRoot=Join-Path ([IO.Path]::GetTempPath())("farmrx-cw2-artifact-git-ast-$([guid]::NewGuid().ToString('N'))")
   [void][IO.Directory]::CreateDirectory($tempRoot)
   $paths=[Collections.Generic.List[string]]::new();$primary=$null;$cleanupErrors=[Collections.Generic.List[Exception]]::new()
@@ -103,9 +103,9 @@ function Invoke-Cw2ForcedGitFailureControlFlowProof([string]$Source,[pscustomobj
     try{if([IO.Directory]::Exists($tempRoot)){[IO.Directory]::Delete($tempRoot,$false)};if([IO.Directory]::Exists($tempRoot)){throw "FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_TEMP_ROOT_REMAINS:$tempRoot"}}
     catch{$cleanupErrors.Add($_.Exception)}
   }
-  if($null-ne$primary-and$cleanupErrors.Count-gt0){throw[AggregateException]::new('FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_PRIMARY_AND_CLEANUP_FAILED',[Exception[]]@($primary)+[Exception[]]$cleanupErrors.ToArray())}
+  if($null-ne$primary-and$cleanupErrors.Count-gt0){throw [AggregateException]::new('FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_PRIMARY_AND_CLEANUP_FAILED',[Exception[]]@($primary)+[Exception[]]$cleanupErrors.ToArray())}
   if($null-ne$primary){throw$primary}
-  if($cleanupErrors.Count-gt0){throw[AggregateException]::new('FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_CLEANUP_FAILED',[Exception[]]$cleanupErrors.ToArray())}
+  if($cleanupErrors.Count-gt0){throw [AggregateException]::new('FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_CLEANUP_FAILED',[Exception[]]$cleanupErrors.ToArray())}
   Write-Output 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS'
 }
 
@@ -138,13 +138,13 @@ try{
   if($matchingStarts.Count-ne1-or$matchingExits.Count-ne1){throw 'FAKETIME_ARTIFACT_MANIFEST_GIT_TRACE_EXACT_INVOCATION_MISSING'}
 }catch{$tracePrimary=$_.Exception}
 finally{
-  try{if($traceEnvironmentWasPresent){$env:GIT_TRACE2_EVENT=$previousTraceEnvironment}else{[Environment]::SetEnvironmentVariable('GIT_TRACE2_EVENT',$null,'Process')}}catch{$traceCleanupErrors.Add($_.Exception)}
+  try{if($traceEnvironmentWasPresent){$env:GIT_TRACE2_EVENT=$previousTraceEnvironment}else{Remove-Item -LiteralPath Env:GIT_TRACE2_EVENT -ErrorAction SilentlyContinue}}catch{$traceCleanupErrors.Add($_.Exception)}
   try{if([IO.File]::Exists($forcedGitTracePath)){[IO.File]::Delete($forcedGitTracePath)};if([IO.File]::Exists($forcedGitTracePath)){throw "FAKETIME_ARTIFACT_MANIFEST_GIT_TRACE_REMAINS:$forcedGitTracePath"}}catch{$traceCleanupErrors.Add($_.Exception)}
   try{$traceEnvironmentIsPresent=Test-Path Env:GIT_TRACE2_EVENT;if($traceEnvironmentIsPresent-ne$traceEnvironmentWasPresent-or($traceEnvironmentWasPresent-and$env:GIT_TRACE2_EVENT-cne$previousTraceEnvironment)){throw 'FAKETIME_ARTIFACT_MANIFEST_GIT_TRACE_ENV_RESTORE_FAILED'}}catch{$traceCleanupErrors.Add($_.Exception)}
 }
-if($null-ne$tracePrimary-and$traceCleanupErrors.Count-gt0){throw[AggregateException]::new('FAKETIME_ARTIFACT_MANIFEST_GIT_TRACE_PRIMARY_AND_CLEANUP_FAILED',[Exception[]]@($tracePrimary)+[Exception[]]$traceCleanupErrors.ToArray())}
+if($null-ne$tracePrimary-and$traceCleanupErrors.Count-gt0){throw [AggregateException]::new('FAKETIME_ARTIFACT_MANIFEST_GIT_TRACE_PRIMARY_AND_CLEANUP_FAILED',[Exception[]]@($tracePrimary)+[Exception[]]$traceCleanupErrors.ToArray())}
 if($null-ne$tracePrimary){throw$tracePrimary}
-if($traceCleanupErrors.Count-gt0){throw[AggregateException]::new('FAKETIME_ARTIFACT_MANIFEST_GIT_TRACE_CLEANUP_FAILED',[Exception[]]$traceCleanupErrors.ToArray())}
+if($traceCleanupErrors.Count-gt0){throw [AggregateException]::new('FAKETIME_ARTIFACT_MANIFEST_GIT_TRACE_CLEANUP_FAILED',[Exception[]]$traceCleanupErrors.ToArray())}
 if($ErrorActionPreference-cne$expectedErrorActionPreference){throw 'FAKETIME_ARTIFACT_MANIFEST_GIT_FAILURE_EAP_RESTORE_FAILED'}
 $selfSource=[IO.File]::ReadAllText($PSCommandPath)
 $forcedGitAstContract=Get-Cw2ForcedGitFailureAstContract $selfSource
