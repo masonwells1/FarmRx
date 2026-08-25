@@ -7,7 +7,7 @@ import { queueTransaction } from './queueTransaction'
 import { QueuedSoilRxRepository } from './QueuedSoilRxRepository'
 import { beginSoilRxAttachmentCustody, readSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
 import { soilMeasurementKeys, type SoilReportMime, type SoilTest, type SoilTestDraft } from './soilRx'
-import { confirmSoilRxReportRemoval, maximumSoilReportBytes, validateSoilReportFile } from './soilRxStorage'
+import { confirmSoilRxReportAbsence, confirmSoilRxReportRemoval, maximumSoilReportBytes, validateSoilReportFile } from './soilRxStorage'
 import { createSoilRxQueueEntry, SoilRxWriteQueue, soilRxWriteQueueKey, type SoilRxQueueEntryPayloadV1, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
 import { getSyncStatus, setModuleSyncStatus } from './syncStatus'
 import type { SupabaseSoilRxRepository } from './SupabaseSoilRxRepository'
@@ -96,6 +96,8 @@ function harness(projectRef: string) {
 
 assert.throws(() => confirmSoilRxReportRemoval([cleanupPath], []), /could not confirm Soil Rx attachment cleanup/)
 assert.deepEqual(confirmSoilRxReportRemoval([cleanupPath], [{ name: cleanupPath }]), [cleanupPath])
+assert.throws(() => confirmSoilRxReportAbsence(cleanupPath, [{ name: cleanupPath.split('/')[3]! }]), /could not confirm Soil Rx attachment cleanup/)
+assert.doesNotThrow(() => confirmSoilRxReportAbsence(cleanupPath, []))
 
 // An upload followed by an ambiguous metadata failure must roll back both the
 // row and object. Retrying the same UI draft ID must produce exactly one row.
