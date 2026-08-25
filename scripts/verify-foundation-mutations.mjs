@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 151
+const expectedMutationCount = 152
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -110,6 +110,9 @@ try {
   reset()
   mutate('src/data/soilRxStorage.ts', (source) => source.replace('return confirmSoilRxReportRemoval(paths, data)', 'return paths'))
   detected('Soil Rx Storage zero-row delete receipt acceptance', 'soil-rx:storage-remove-receipt-required')
+  reset()
+  mutate('src/data/soilRxStorage.ts', (source) => source.replace('return confirmSoilRxReportRemoval(paths, data)', 'try { return confirmSoilRxReportRemoval(paths, data) } catch { return paths }'))
+  detected('Soil Rx Storage ambiguous delete recovery', 'soil-rx:storage-remove-ambiguous-recovery-refused')
   reset()
   mutate('src/data/SupabaseSoilRxRepository.ts', (source) => source.replace('deleted.length !== 1', 'deleted.length > 1'))
   detected('Soil Rx row-delete zero-row receipt acceptance', 'soil-rx:row-delete-exact-receipt')
