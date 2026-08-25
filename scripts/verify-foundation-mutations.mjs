@@ -11,7 +11,7 @@ const files = [
   'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1', 'scripts/verify-password-form-browser.ps1', 'scripts/verify-push-access-revocation-disposable.ps1', 'scripts/verify-push-access-concurrency-mutation.ps1',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
-  'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
+  'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql', 'supabase/migrations/20260825175933_serialize_push_revalidation_before_target_transition.sql',
   'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/queuedOperationGuard.ts',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
   'src/data/QueuedFieldsRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/QueuedHarvestRepository.ts',
@@ -75,6 +75,9 @@ try {
   reset()
   mutate('supabase/migrations/20260812135210_deny_revoked_push_delivery.sql', (source) => source.replace('from public.push_deliveries\n  where id = p_delivery_id\n  for update;', 'from public.push_deliveries\n  where id = p_delivery_id;'))
   detected('parent-delivery reconciliation lock removal', 'push:parent-delivery-reconciliation-lock')
+  reset()
+  mutate('supabase/migrations/20260825175933_serialize_push_revalidation_before_target_transition.sql', (source) => source.replace('from public.push_deliveries\n  where id = v_target.delivery_id\n  for update;', 'from public.push_deliveries\n  where id = v_target.delivery_id;'))
+  detected('early parent-delivery lock removal', 'push:parent-delivery-locked-before-target-transition')
   reset()
   mutate('scripts/verify-push-access-concurrency-mutation.ps1', (source) => source.replace("if ($_.Exception.Message -ne 'EXPECTED_PARENT_RECONCILIATION_MUTATION_DETECTED') { throw }", "if ($_.Exception.Message -notmatch 'failed') { throw }"))
   detected('concurrency mutation broad failure acceptance', 'push:concurrency-mutation-rejects-unrelated-failures')
