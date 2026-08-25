@@ -161,6 +161,9 @@ export function foundationStaticGuard(root = process.cwd()) {
   if (/set\s+user_id\s*=\s*excluded\.user_id/i.test(unscopedWriteFencing)) errors.push('rpc:push-endpoint-owner-transfer')
   const notificationsGateway = read(root, 'src/data/SupabaseNotificationsDataGateway.ts')
   if ((notificationsGateway.match(/p_farm_id: context\.farmId/g) ?? []).length !== 2) errors.push('rpc:push-farm-context-forwarding')
+  const queuedSoil = read(root, 'src/data/QueuedSoilRxRepository.ts')
+  const attachmentCleanup = queuedSoil.slice(queuedSoil.indexOf('private async cleanAttachmentResources'), queuedSoil.indexOf('private async forgetRolledBackTest'))
+  if (attachmentCleanup.indexOf('removeReports') < 0 || attachmentCleanup.indexOf('rollbackTestOperation') < 0 || attachmentCleanup.indexOf('removeReports') > attachmentCleanup.indexOf('rollbackTestOperation')) errors.push('soil-rx:attachment-cleanup-storage-before-row')
 
   const foundationOrchestrator = read(root, 'scripts/verify-foundation.ps1')
   const foundationOrchestratorLf = foundationOrchestrator.replace(/\r\n/g, '\n')
@@ -323,7 +326,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 148')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 149')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 34', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=34 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }

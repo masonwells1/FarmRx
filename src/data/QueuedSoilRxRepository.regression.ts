@@ -74,7 +74,14 @@ function harness(projectRef: string) {
     createId: () => uid(nextId++), clock: () => stamp, isOffline: () => offline,
     createReportPath: (farm, field, test) => `${farm}/${field}/${test}/${uid(nextId++)}.pdf`,
     uploadReport: async (path) => { objects.add(path); if (changeEpochAfterUpload) resetFarmGrantFromLive(storage, scope, 2, '2027-01-15T12:01:00.000Z') },
-    removeReports: async (paths) => { if (removeFailure) throw new Error('storage cleanup failed'); paths.forEach((path) => objects.delete(path)); return paths },
+    removeReports: async (paths) => {
+      if (removeFailure) throw new Error('storage cleanup failed')
+      for (const path of paths) {
+        const test = [...rows.values()].find((candidate) => candidate.id === path.split('/')[2])
+        if (!test) throw new Error('storage RLS denied cleanup after Soil test removal')
+      }
+      paths.forEach((path) => objects.delete(path)); return paths
+    },
   })
   return {
     storage, scope, rows, attachments, objects, savedIds, repository,
@@ -99,7 +106,9 @@ assert.deepEqual([...metadata.rows.keys()], [testId])
 assert.ok(metadata.savedIds.every((id) => id === testId), 'Every attempt must retain the stable draft ID.')
 
 // If access changes after the upload, cleanup must not run under stale
-// authority. Durable custody survives until a matching-context drain.
+// authority. Durable custody survives until a matching-context drain. A
+// failed Storage delete must retain the Soil row too: that row is the RLS
+// authorization for the later retry.
 const epoch = harness('soil-rx-epoch-change')
 epoch.setEpochChange(true)
 await assert.rejects(() => epoch.repository.saveTest(draft(), report), /Access to this farm changed/)
@@ -111,7 +120,7 @@ epoch.setEpochChange(false)
 epoch.setRemoveFailure(true)
 await assert.rejects(() => epoch.repository.getData(), /cleanup still needs attention/)
 assert.equal(getSyncStatus().kind, 'blocked')
-assert.equal(epoch.rows.size, 0)
+assert.equal(epoch.rows.size, 1)
 assert.equal(epoch.objects.size, 1)
 assert.ok(readSoilRxAttachmentCustody(epoch.storage, epochKey, userId, farmId, testId))
 epoch.setRemoveFailure(false)
@@ -351,6 +360,8 @@ const attachmentBranch = source.slice(source.indexOf('if (report) {'), source.in
 assert.ok(attachmentBranch.indexOf('beginSoilRxAttachmentCustody') < attachmentBranch.indexOf('saveTestOperation'))
 assert.ok(attachmentBranch.indexOf('cleanAttachmentResources(source, existing') < attachmentBranch.indexOf('replaceSoilRxAttachmentCustody'))
 assert.ok(attachmentBranch.lastIndexOf('await this.retain') < attachmentBranch.lastIndexOf('releaseSoilRxAttachmentCustody'))
+const cleanupMethod = source.slice(source.indexOf('private async cleanAttachmentResources'), source.indexOf('private async forgetRolledBackTest'))
+assert.ok(cleanupMethod.indexOf('removeReports') < cleanupMethod.indexOf('rollbackTestOperation'), 'Storage cleanup must precede deletion of its Soil RLS authorization row')
 const parkedBranch = source.slice(source.indexOf('private async parkedSave'), source.indexOf('\n}', source.indexOf('async dismissNeedsAttention')))
 function assertParkedGuards(candidate: string) {
   for (const required of [

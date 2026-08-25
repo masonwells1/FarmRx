@@ -63,12 +63,14 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
 
   private async cleanAttachmentResources(source: Source, custody: SoilRxAttachmentCustodyEntry, verify: () => void) {
     await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
-    const rollback = await this.live.rollbackTestOperation(custody.testId, source.operationContext)
-    verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
-    const paths = [...new Set([...custody.paths, ...rollback.storage_paths])]
+    // Storage RLS authorizes this delete through the still-existing Soil test.
+    // Delete the object first; only then may the cascading test-row delete run.
+    const paths = [...new Set(custody.paths)]
     const confirmed = await this.d.removeReports(paths, source.operationContext)
     verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
     if (paths.some((path) => !confirmed.includes(path))) throw new Error('Farm Rx could not confirm Soil Rx attachment cleanup. The cleanup remains safely queued.')
+    await this.live.rollbackTestOperation(custody.testId, source.operationContext)
+    verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
   }
   private async forgetRolledBackTest(source: Source, testId: string) {
     if (!this.workspace?.tests.some((test) => test.id === testId)) return

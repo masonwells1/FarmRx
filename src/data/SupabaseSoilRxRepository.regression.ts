@@ -41,7 +41,7 @@ gateway.attachmentSaved = { id: attachmentId, farm_id: farm, field_id: field, te
 const attached = await repository.saveAttachmentOperation(loaded.tests[0]!, { id: attachmentId, storagePath: path, originalFilename: 'soil.pdf', mimeType: 'application/pdf', sizeBytes: 1024 }, context)
 assert.equal(attached.attachment?.storage_path, path)
 gateway.attachments = [gateway.attachmentSaved]
-assert.deepEqual(await repository.rollbackTestOperation(testId, context), { id: testId, storage_paths: [path] })
+assert.deepEqual(await repository.rollbackTestOperation(testId, context), { id: testId })
 assert.equal(gateway.deletes, 1)
 
 const queueStorage = new MemoryStorage(); const queueKey = soilRxWriteQueueKey('test-project', user, farm); const queue = new SoilRxWriteQueue(queueStorage, queueKey)

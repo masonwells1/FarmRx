@@ -60,6 +60,26 @@ end $$;
 select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 do $$ begin if (select lab_name from public.soil_tests where id='00000000-0000-4000-8000-000000000013') <> 'Probe Lab' then raise exception 'stale soil test write persisted'; end if; end $$;
 
+-- A failed Storage removal must leave its still-authorizing Soil row intact.
+-- The matching-context retry removes the object first, then the cascading row.
+insert into public.soil_tests(id,farm_id,field_id,sample_date,lab_name,created_by)
+values ('00000000-0000-4000-8000-000000000016','00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000012','2027-01-11','Cleanup Retry Lab','00000000-0000-4000-8000-000000000001');
+insert into public.soil_test_attachments(id,farm_id,field_id,test_id,storage_path,original_filename,mime_type,size_bytes,created_by)
+values ('00000000-0000-4000-8000-000000000017','00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000012','00000000-0000-4000-8000-000000000016','00000000-0000-4000-8000-000000000010/00000000-0000-4000-8000-000000000012/00000000-0000-4000-8000-000000000016/retry.pdf','retry.pdf','application/pdf',1024,'00000000-0000-4000-8000-000000000001');
+insert into storage.objects(bucket_id,name) values ('soil-test-reports','00000000-0000-4000-8000-000000000010/00000000-0000-4000-8000-000000000012/00000000-0000-4000-8000-000000000016/retry.pdf');
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',2)::text)::text,false);
+do $$ begin
+  begin delete from storage.objects where bucket_id='soil-test-reports' and name='00000000-0000-4000-8000-000000000010/00000000-0000-4000-8000-000000000012/00000000-0000-4000-8000-000000000016/retry.pdf'; raise exception 'stale Storage cleanup was accepted'; exception when sqlstate 'P0001' then if sqlerrm <> 'FARM_ACCESS_EPOCH_CHANGED' then raise; end if; end;
+  if (select count(*) from public.soil_tests where id='00000000-0000-4000-8000-000000000016') <> 1 then raise exception 'failed Storage cleanup removed its authorization row'; end if;
+  if (select count(*) from storage.objects where bucket_id='soil-test-reports' and name='00000000-0000-4000-8000-000000000010/00000000-0000-4000-8000-000000000012/00000000-0000-4000-8000-000000000016/retry.pdf') <> 1 then raise exception 'failed Storage cleanup removed its retry object'; end if;
+end $$;
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000001','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
+do $$ declare affected integer; begin
+  delete from storage.objects where bucket_id='soil-test-reports' and name='00000000-0000-4000-8000-000000000010/00000000-0000-4000-8000-000000000012/00000000-0000-4000-8000-000000000016/retry.pdf'; get diagnostics affected = row_count; if affected <> 1 then raise exception 'Storage cleanup retry did not delete its object'; end if;
+  delete from public.soil_tests where id='00000000-0000-4000-8000-000000000016'; get diagnostics affected = row_count; if affected <> 1 then raise exception 'Storage cleanup retry did not delete its Soil row'; end if;
+  if exists (select 1 from public.soil_tests where id='00000000-0000-4000-8000-000000000016') or exists (select 1 from storage.objects where bucket_id='soil-test-reports' and name='00000000-0000-4000-8000-000000000010/00000000-0000-4000-8000-000000000012/00000000-0000-4000-8000-000000000016/retry.pdf') then raise exception 'Storage cleanup retry left custody residue'; end if;
+end $$;
+
 select set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-000000000002"}',false);
 select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000002','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000020',1)::text)::text,false);
 do $$ begin
