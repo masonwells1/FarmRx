@@ -1242,3 +1242,14 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 
 - **Date/time:** 2026-08-25 (America/Chicago). The full `npm run regression` chain was restarted from command one after CW-134 and completed successfully, including the corrected `pwsh` launchers, Faketime manifest regression, CW2 regression, all remaining fast regressions, and the package post-regression chain. This is local fast-regression evidence only; it grants no backend/disposable, browser, migration, deployment, or live credit.
 - **Current gate:** `git diff --check`, commit the exact compatibility packet, obtain a fresh independent exact-SHA read-only review, then update protected PR #28 and wait for authoritative Linux Foundation, Vercel, and review gates.
+
+## CW-136 — season-harness scope correction
+
+- **Date/time:** 2026-08-25 (America/Chicago). Fresh review correctly blocked the first CW-134 compatibility packet because changing `verify:season` to `pwsh` broke its separately closed package-contract pin; that governed season harness also intentionally retains nested Windows PowerShell invocations and is outside the Foundation repair scope.
+- **Smallest correction:** restore only `verify:season` to its original closed Windows command. `verify:foundation` and the fast regression chain remain `pwsh`-portable, which is the exact Linux CI failure surface. CW-134's broad “package scripts” wording is superseded by this entry; no product, migration, runtime/backend, browser, fixture, or live behavior changed or ran.
+- **Narrow proof and current gate:** run the season contract and its mutation regression, repeat `npm run regression` only if package parsing or the fast chain is affected, then freeze for a new exact-SHA review before updating PR #28.
+
+## CW-137 — CW-136 contract and fast-regression completion
+
+- **Date/time:** 2026-08-25 (America/Chicago). The restored closed season command passed the season contract and all fourteen isolation mutations. The full `npm run regression` chain also completed successfully again; its fast-regression command is unchanged from CW-135 and continues to use `pwsh` for the three Linux Foundation PowerShell regressions. This remains local test evidence only and grants no backend/disposable, browser, migration, deployment, or live credit.
+- **Current gate:** `git diff --check`, commit this successor packet, obtain a fresh independent exact-SHA read-only review, then update protected PR #28 and wait for authoritative Linux Foundation, Vercel, and review gates.
