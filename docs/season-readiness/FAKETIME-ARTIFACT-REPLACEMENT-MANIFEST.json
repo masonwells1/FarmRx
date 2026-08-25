@@ -23,7 +23,8 @@
       "stderr.log": "9f1400fc2b3dcf6a9454551e827bfcc58883e730772771583f2f466c92babc4e",
       "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
-    "combined_sha256": "aed05d2f6937223d8bbd53ea79a3043ce79a4436ce7e29d7569c04c66d77dbf2"
+    "combined_sha256": "aed05d2f6937223d8bbd53ea79a3043ce79a4436ce7e29d7569c04c66d77dbf2",
+    "custody": "historical-untracked-record-only; raw files are not an executable input. Current proof validates these tracked build-input pins and independently inspects the reusable artifact."
   },
   "build_inputs": {
     "dockerfile": {
