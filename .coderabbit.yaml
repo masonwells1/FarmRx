@@ -13,11 +13,81 @@ reviews:
   poem: false
   review_status: true
   collapse_walkthrough: false
+
+  # Report sections (sequence diagrams, related PRs/issues, linked-issue
+  # assessment, suggested labels/reviewers, changed-files summary) are left at
+  # their defaults - ON. Mason's call, 2026-08-20: he raised the CodeRabbit
+  # usage spending cap rather than trade any possible review context for a
+  # cheaper report. Deliberate: do not turn these off to save spend.
+
+  # Skip churn that cannot contain a bug. FarmRx shares one CodeRabbit org (and
+  # one review budget) with CRX Manager, so wasted attempts here throttle both.
+  #
+  # Lock files need a POSITIVE pattern: CodeRabbit's default ignore list
+  # already covers package-lock.json and deno.lock, and only an explicit
+  # include overrides a default exclusion. Without it a lockfile-only PR has
+  # zero reviewable files and is skipped, so nothing inspects version bumps or
+  # integrity hashes - and this repo has shipped deno.lock as its sole
+  # functional change before.
+  #
+  # The leading `**` is load-bearing, do not remove it. Listing the lockfiles
+  # alone (this PR, round 2) made CodeRabbit answer "No files to review": once
+  # ANY positive pattern exists, only files matching a positive pattern are
+  # reviewed, so every ordinary source file was dropped. `**` restores the
+  # default-include breadth; the lockfile patterns then act purely as overrides
+  # of CodeRabbit's built-in ignores.
+  #
+  # CRX Manager deliberately does NOT carry this include - it stays
+  # exclusion-only there until this form is proven on a review here.
+  #
+  # The `**` above opts OUT of CodeRabbit's curated default ignore list, so the
+  # categories it used to drop for free - dependencies, build output, binaries,
+  # media, source maps, generated code - have to be excluded by hand here.
+  # Leaving them in would inflate every review and re-create the budget problem
+  # this config exists to fix.
+  path_filters:
+    - "**"
+    - "**/package-lock.json"
+    - "deno.lock"
+    - "!docs/archive/**"
+    - "!docs/audits/**"
+    - "!docs/handoffs/**"
+    - "!test-results/**"
+    - "!dist/**"
+    - "!**/node_modules/**"
+    - "!**/build/**"
+    - "!**/generated/**"
+    - "!**/__generated__/**"
+    - "!**/*.min.js"
+    - "!**/*.map"
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.jpeg"
+    - "!**/*.gif"
+    - "!**/*.ico"
+    - "!**/*.webp"
+    - "!**/*.svg"
+    - "!**/*.woff"
+    - "!**/*.woff2"
+    - "!**/*.ttf"
+    - "!**/*.eot"
+
   auto_review:
     enabled: true
     drafts: false
     base_branches:
       - main
+    # Pause AUTOMATIC review after 2 reviewed commits on a PR (this applies to
+    # ordinary non-draft PRs, not just drafts). Later pushes are then not
+    # auto-reviewed. Two different commands restart things, and they are not
+    # interchangeable: `@coderabbitai resume` restarts AUTOMATIC review for the
+    # PR, while `@coderabbitai review` runs ONE incremental review of the
+    # current commit and stops again.
+    #
+    # This number is NOT the pre-merge gate and must never be treated as one:
+    # the gate is one fresh `@coderabbitai review` on the FINAL commit. See CRX
+    # Manager's docs/manual/DECISION_LOG.md (2026-08-20).
+    auto_pause_after_reviewed_commits: 2
 
   # Project-specific review guidance, mirroring the rules and gotchas in this
   # repo's CLAUDE.md so CodeRabbit flags Farm Rx's real risk areas.
@@ -53,6 +123,15 @@ reviews:
         Deno.env only and must never be logged or returned to the client. Flag
         any hardcoded secret value and any service-role client that is exposed
         to an unauthenticated caller.
+
+# Teach CodeRabbit this repo's own written rules so it reviews against the
+# actual house standard instead of only the path instructions above.
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "AGENTS.md"
+      - "CLAUDE.md"
 
 chat:
   auto_reply: true

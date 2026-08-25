@@ -9,6 +9,7 @@ const sends:string[]=[]
 let failB=true
 const database={
   async claimTargets(){const claimed=targets.filter((target)=>state.get(target.target_id)==='pending'||state.get(target.target_id)==='retry');for(const target of claimed)state.set(target.target_id,'sending');return claimed},
+  async revalidateTarget(){return true},
   async finishTarget(targetId:string,outcome:PushTargetOutcome){state.set(targetId,outcome)},
   async getHealth(){return{terminalFailed:0,retryable:[...state.values()].filter((value)=>value==='pending'||value==='sending'||value==='retry').length}},
 }
@@ -31,12 +32,24 @@ let acceptedSends=0
 const completionTarget:ClaimedPushTarget={...targets[0],target_id:'target-completion',notification_id:'notification-completion'}
 const completion=await deliverClaimedPushTargets({
   async claimTargets(){return[completionTarget]},
+  async revalidateTarget(){return true},
   async finishTarget(_targetId,outcome){if(outcome!=='sent')throw new Error('provider success was misclassified');completionAttempts+=1;if(completionAttempts===1)throw new Error('transient database completion failure')},
   async getHealth(){return{terminalFailed:0,retryable:0}},
 },{async send(){acceptedSends+=1}},null)
 if(acceptedSends!==1||completionAttempts!==2||completion.sent!==1)throw new Error(`provider success was resent after a completion failure: ${JSON.stringify({acceptedSends,completionAttempts,completion})}`)
 
-const terminal=await deliverClaimedPushTargets({async claimTargets(){return[]},async finishTarget(){throw new Error('unexpected finish')},async getHealth(){return{terminalFailed:1,retryable:0}}},{async send(){throw new Error('unexpected send')}},null)
+let revokeAfterClaim=false
+let revokeRaceProviderCalls=0
+const revokeRaceTarget:ClaimedPushTarget={...targets[0],target_id:'target-revoked-after-claim',notification_id:'notification-revoked-after-claim'}
+const revokeRace=await deliverClaimedPushTargets({
+  async claimTargets(){revokeAfterClaim=true;return[revokeRaceTarget]},
+  async revalidateTarget(targetId){if(targetId!==revokeRaceTarget.target_id)throw new Error('wrong target was revalidated');return !revokeAfterClaim},
+  async finishTarget(){throw new Error('revalidation-denied target must already be terminal')},
+  async getHealth(){return{terminalFailed:0,retryable:0}},
+},{async send(){revokeRaceProviderCalls+=1}},null)
+if(revokeRaceProviderCalls!==0||revokeRace.gone!==1||revokeRace.sent!==0)throw new Error(`revocation after batch claim reached the provider: ${JSON.stringify({revokeRaceProviderCalls,revokeRace})}`)
+
+const terminal=await deliverClaimedPushTargets({async claimTargets(){return[]},async revalidateTarget(){throw new Error('unexpected revalidation')},async finishTarget(){throw new Error('unexpected finish')},async getHealth(){return{terminalFailed:1,retryable:0}}},{async send(){throw new Error('unexpected send')}},null)
 if(terminal.terminalFailed!==1||terminal.claimed!==0)throw new Error('terminal push failure disappeared from a later empty sweep')
 
 const hangingTargets=Array.from({length:100},(_,index)=>({...targets[0],target_id:`hanging-${index}`,notification_id:'notification-hanging',endpoint:`hanging-device-${index}`}))
@@ -44,6 +57,7 @@ let active=0;let maxActive=0;let started=0;const retryOutcomes:string[]=[]
 const began=Date.now()
 const bounded=await deliverClaimedPushTargets({
   async claimTargets(){return hangingTargets},
+  async revalidateTarget(){return true},
   async finishTarget(targetId,outcome){if(outcome!=='retry')throw new Error('budget exhaustion was not retryable');retryOutcomes.push(targetId)},
   async getHealth(){return{terminalFailed:0,retryable:100}},
 },{async send(){started+=1;active+=1;maxActive=Math.max(maxActive,active);await new Promise<void>(()=>{})}},null,{limit:100,concurrency:4,budgetMs:100})
@@ -63,6 +77,7 @@ for (const hang of ['claim','finish','health'] as const) {
   const result=await Promise.race([
     deliverClaimedPushTargets({
       async claimTargets(_notificationId,_limit,signal){if(hang==='claim')return untilDatabaseAbort<ClaimedPushTarget[]>(signal,hang);return[{...targets[0],target_id:`${hang}-target`}]},
+      async revalidateTarget(){return true},
       async finishTarget(_targetId,_outcome,_error,signal){if(hang==='finish')return untilDatabaseAbort<void>(signal,hang)},
       async getHealth(_notificationId,signal){if(hang==='health')return untilDatabaseAbort<{terminalFailed:number;retryable:number}>(signal,hang);return{terminalFailed:0,retryable:1}},
     },{async send(){}},null,{limit:1,concurrency:1,budgetMs:100}).then((value)=>({kind:'result' as const,value})).catch(()=>({kind:'rejected' as const})),
@@ -78,8 +93,9 @@ let observedProviderAbort=false
 const providerBudgetStarted=Date.now()
 const providerBudget=await deliverClaimedPushTargets({
   async claimTargets(){return[{...targets[0],target_id:'provider-timeout-target'}]},
+  async revalidateTarget(){return true},
   async finishTarget(_targetId,outcome){if(outcome!=='retry')throw new Error('provider timeout was not left retryable')},
   async getHealth(){return{terminalFailed:0,retryable:1}},
 },{async send(_target,_payload,signal,timeoutMs){observedProviderTimeout=timeoutMs;return new Promise((_resolve,reject)=>{const fail=()=>{observedProviderAbort=true;const error=new Error('provider timeout');error.name='AbortError';reject(error)};if(signal.aborted)fail();else signal.addEventListener('abort',fail,{once:true})})}},null,{limit:1,concurrency:1,budgetMs:100})
 if(Date.now()-providerBudgetStarted>1_000||observedProviderTimeout<1||observedProviderTimeout>50||!observedProviderAbort||providerBudget.failed!==1||providerBudget.retryable!==1)throw new Error(`provider timeout was not bounded by the absolute delivery deadline: ${JSON.stringify({elapsed:Date.now()-providerBudgetStarted,observedProviderTimeout,observedProviderAbort,providerBudget})}`)
-console.log('Push per-device retry regression passed (partial retry, one absolute deadline with database/provider cancellation, completion retry without resend, gone target, terminal health).')
+console.log('Push per-device retry regression passed (partial retry, send-time access revalidation, one absolute deadline with database/provider cancellation, completion retry without resend, gone target, terminal health).')

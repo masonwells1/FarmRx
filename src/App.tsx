@@ -1077,7 +1077,7 @@ function LoginPage() {
           </h1>
           <p>Farm records made clear.</p>
         </div>
-        {forgotPassword ? <form className="login-card" onSubmit={handlePasswordReset}>
+        {forgotPassword ? <form key="password-reset" className="login-card" onSubmit={handlePasswordReset}>
           <h2>Reset your password</h2>
           <p>Enter your email and we’ll send a link to choose a new password.</p>
           <label htmlFor="reset-email">Email address</label>
@@ -1086,7 +1086,7 @@ function LoginPage() {
           {error && <p className="auth-error" role="alert">{error}</p>}
           <button className="primary-action" type="submit" disabled={submitting || Boolean(resetResponse)}>{submitting ? 'Sending…' : 'Send reset link'}</button>
           <button className="auth-link" type="button" onClick={() => { setForgotPassword(false); setError(null); setResetResponse(null) }} disabled={submitting}>Back to sign in</button>
-        </form> : <form className="login-card" onSubmit={handleSubmit}>
+        </form> : <form key="sign-in" className="login-card" onSubmit={handleSubmit}>
           <label htmlFor="email">Email address</label>
           <input
             id="email"
