@@ -7,7 +7,7 @@ import { queueTransaction } from './queueTransaction'
 import { QueuedSoilRxRepository } from './QueuedSoilRxRepository'
 import { beginSoilRxAttachmentCustody, readSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
 import { soilMeasurementKeys, type SoilReportMime, type SoilTest, type SoilTestDraft } from './soilRx'
-import { maximumSoilReportBytes, validateSoilReportFile } from './soilRxStorage'
+import { confirmSoilRxReportRemoval, maximumSoilReportBytes, validateSoilReportFile } from './soilRxStorage'
 import { createSoilRxQueueEntry, SoilRxWriteQueue, soilRxWriteQueueKey, type SoilRxQueueEntryPayloadV1, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
 import { getSyncStatus, setModuleSyncStatus } from './syncStatus'
 import type { SupabaseSoilRxRepository } from './SupabaseSoilRxRepository'
@@ -19,6 +19,7 @@ const stamp = '2027-01-15T12:00:00.000Z'
 const measurements = Object.fromEntries(soilMeasurementKeys.map((key) => [key, null])) as Pick<SoilTestDraft, typeof soilMeasurementKeys[number]>
 const draft = (id = testId): SoilTestDraft => ({ ...measurements, id, field_id: fieldId, sample_date: '2027-01-10', lab_name: 'Midwest Lab' })
 const report = new File(['soil-rx'], 'soil.pdf', { type: 'application/pdf' })
+const cleanupPath = `${farmId}/${fieldId}/${testId}/${uid(99)}.pdf`
 
 class MemoryStorage implements StorageLike {
   readonly values = new Map<string, string>()
@@ -41,6 +42,7 @@ function harness(projectRef: string) {
   let offline = false
   let changeEpochAfterUpload = false
   let removeFailure = false
+  let rollbackFailure = false
   let nextId = 100
   let contextReadsUntilHook = 0
   let contextReadHook: (() => void) | null = null
@@ -60,6 +62,7 @@ function harness(projectRef: string) {
       return rows.get(test.id)!
     },
     async rollbackTestOperation(id: string) {
+      if (rollbackFailure) throw new Error('row cleanup failed')
       const path = attachments.get(id)?.storage_path
       attachments.delete(id); rows.delete(id)
       return { id, storage_paths: path ? [path] : [] }
@@ -86,10 +89,13 @@ function harness(projectRef: string) {
   return {
     storage, scope, rows, attachments, objects, savedIds, repository,
     setMode: (next: Mode) => { mode = next }, setOffline: (next: boolean) => { offline = next },
-    setEpochChange: (next: boolean) => { changeEpochAfterUpload = next }, setRemoveFailure: (next: boolean) => { removeFailure = next },
+    setEpochChange: (next: boolean) => { changeEpochAfterUpload = next }, setRemoveFailure: (next: boolean) => { removeFailure = next }, setRollbackFailure: (next: boolean) => { rollbackFailure = next },
     setContextReadHook: (reads: number, hook: () => void) => { contextReadsUntilHook = reads; contextReadHook = hook },
   }
 }
+
+assert.throws(() => confirmSoilRxReportRemoval([cleanupPath], []), /could not confirm Soil Rx attachment cleanup/)
+assert.deepEqual(confirmSoilRxReportRemoval([cleanupPath], [{ name: cleanupPath }]), [cleanupPath])
 
 // An upload followed by an ambiguous metadata failure must roll back both the
 // row and object. Retrying the same UI draft ID must produce exactly one row.
@@ -104,6 +110,24 @@ metadata.setMode('success')
 assert.equal((await metadata.repository.saveTest(draft(), report)).id, testId)
 assert.deepEqual([...metadata.rows.keys()], [testId])
 assert.ok(metadata.savedIds.every((id) => id === testId), 'Every attempt must retain the stable draft ID.')
+
+// Once Storage has returned an exact delete receipt, its durable custody mark
+// survives a later row-delete failure so a retry never mistakes an absent
+// object for an RLS-filtered successful delete.
+const receipt = harness('soil-rx-removal-receipt')
+receipt.setMode('metadata_ambiguous')
+receipt.setRollbackFailure(true)
+await assert.rejects(() => receipt.repository.saveTest(draft(), report), /metadata response was lost/)
+const receiptKey = soilRxCleanupOutboxKey(receipt.scope.projectRef, userId)
+const receiptCustody = readSoilRxAttachmentCustody(receipt.storage, receiptKey, userId, farmId, testId)
+assert.equal(receipt.rows.size, 1)
+assert.equal(receipt.objects.size, 0)
+assert.deepEqual(receiptCustody?.removedPaths, receiptCustody?.paths)
+receipt.setRollbackFailure(false)
+receipt.setMode('success')
+await receipt.repository.getData()
+assert.equal(receipt.rows.size, 0)
+assert.equal(readSoilRxAttachmentCustody(receipt.storage, receiptKey, userId, farmId, testId), null)
 
 // If access changes after the upload, cleanup must not run under stale
 // authority. Durable custody survives until a matching-context drain. A
@@ -362,6 +386,7 @@ assert.ok(attachmentBranch.indexOf('cleanAttachmentResources(source, existing') 
 assert.ok(attachmentBranch.lastIndexOf('await this.retain') < attachmentBranch.lastIndexOf('releaseSoilRxAttachmentCustody'))
 const cleanupMethod = source.slice(source.indexOf('private async cleanAttachmentResources'), source.indexOf('private async forgetRolledBackTest'))
 assert.ok(cleanupMethod.indexOf('removeReports') < cleanupMethod.indexOf('rollbackTestOperation'), 'Storage cleanup must precede deletion of its Soil RLS authorization row')
+assert.ok(cleanupMethod.indexOf('confirmSoilRxAttachmentRemoval') < cleanupMethod.indexOf('rollbackTestOperation'), 'Storage receipt must be durable before deleting its Soil RLS authorization row')
 const parkedBranch = source.slice(source.indexOf('private async parkedSave'), source.indexOf('\n}', source.indexOf('async dismissNeedsAttention')))
 function assertParkedGuards(candidate: string) {
   for (const required of [

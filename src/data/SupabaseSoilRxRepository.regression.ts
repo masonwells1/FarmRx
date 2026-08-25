@@ -18,12 +18,12 @@ const context: FarmOperationContext = { projectRef: 'test-project', userId: user
 const row = (overrides: Record<string, unknown> = {}) => ({ id: testId, farm_id: farm, field_id: field, sample_date: '2027-01-10', lab_name: 'Midwest Lab', ...measurements, created_by: user, created_at: stamp, updated_at: stamp, ...overrides })
 class MemoryStorage implements StorageLike { private data = new Map<string, string>(); getItem(key: string) { return this.data.get(key) ?? null } setItem(key: string, value: string) { this.data.set(key, value) } removeItem(key: string) { this.data.delete(key) } }
 class Gateway implements SoilRxDataGateway {
-  tests: unknown[] = [row()]; attachments: unknown[] = []; saved: unknown = row(); attachmentSaved: unknown = null; deletes = 0
+  tests: unknown[] = [row()]; attachments: unknown[] = []; saved: unknown = row(); attachmentSaved: unknown = null; deleteResult: unknown[] = [{ id: testId }]; deletes = 0
   async loadTests() { return this.tests }
   async loadAttachments() { return this.attachments }
   async saveTest() { return this.saved }
   async saveAttachment() { return this.attachmentSaved }
-  async deleteTest() { this.deletes += 1; return [{ id: testId }] }
+  async deleteTest() { this.deletes += 1; return this.deleteResult }
 }
 const gateway = new Gateway()
 const repository = new SupabaseSoilRxRepository({ gateway, getFarmId: async () => farm, getOperationContext: async () => context, verifyOperationContext: async (expected) => assert.deepEqual(expected, context), createId: () => operation, createReportUrl: async () => 'https://signed.invalid/report' })
@@ -43,6 +43,8 @@ assert.equal(attached.attachment?.storage_path, path)
 gateway.attachments = [gateway.attachmentSaved]
 assert.deepEqual(await repository.rollbackTestOperation(testId, context), { id: testId })
 assert.equal(gateway.deletes, 1)
+gateway.deleteResult = []
+await assert.rejects(() => repository.rollbackTestOperation(testId, context), /invalid Soil Rx data/)
 
 const queueStorage = new MemoryStorage(); const queueKey = soilRxWriteQueueKey('test-project', user, farm); const queue = new SoilRxWriteQueue(queueStorage, queueKey)
 const entry = createSoilRxQueueEntry({ version: 1, module: 'soilRx', kind: 'saveTest', operationId: operation, userId: user, farmId: farm, enqueuedAt: stamp, operationContext: context, draft: draft as SoilTestDraft & { id: string } })

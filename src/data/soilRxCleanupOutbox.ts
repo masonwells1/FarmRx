@@ -2,7 +2,7 @@ import { isSoilReportPath, isSoilRxUuid } from './soilRx'
 import type { StorageLike } from './writeQueue'
 
 export interface SoilRxCleanupEntry { path: string; userId: string; farmId: string; recordedAt: string }
-export interface SoilRxAttachmentCustodyEntry { kind: 'attachment_save'; testId: string; paths: string[]; userId: string; farmId: string; recordedAt: string }
+export interface SoilRxAttachmentCustodyEntry { kind: 'attachment_save'; testId: string; paths: string[]; removedPaths?: string[]; userId: string; farmId: string; recordedAt: string }
 type StoredReportCleanup = SoilRxCleanupEntry & { kind: 'report_path' }
 export type SoilRxStoredCleanupEntry = StoredReportCleanup | SoilRxAttachmentCustodyEntry
 interface Envelope { version: 2; entries: SoilRxStoredCleanupEntry[] }
@@ -20,7 +20,9 @@ function validStored(value: unknown): value is SoilRxStoredCleanupEntry {
   const row = value as Record<string, unknown>
   if (!isSoilRxUuid(row.userId) || !isSoilRxUuid(row.farmId) || !validStamp(row.recordedAt)) return false
   if (row.kind === 'report_path') return Object.keys(row).length === 5 && validPath(row.path, row.farmId)
-  return row.kind === 'attachment_save' && Object.keys(row).length === 6 && isSoilRxUuid(row.testId) && Array.isArray(row.paths) && row.paths.length > 0 && new Set(row.paths).size === row.paths.length && row.paths.every((path) => validPath(path, row.farmId as string, row.testId as string))
+  const paths = row.paths
+  const removedPaths = row.removedPaths
+  return row.kind === 'attachment_save' && (Object.keys(row).length === 6 || Object.keys(row).length === 7) && isSoilRxUuid(row.testId) && Array.isArray(paths) && paths.length > 0 && new Set(paths).size === paths.length && paths.every((path) => validPath(path, row.farmId as string, row.testId as string)) && (removedPaths === undefined || (Array.isArray(removedPaths) && new Set(removedPaths).size === removedPaths.length && removedPaths.every((path) => typeof path === 'string' && paths.includes(path))))
 }
 function legacy(value: unknown): StoredReportCleanup | null {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 4) return null
@@ -66,25 +68,32 @@ export function readSoilRxAttachmentCustody(storage: StorageLike, key: string, u
   return readSoilRxCleanupOutbox(storage, key).find((entry): entry is SoilRxAttachmentCustodyEntry => entry.kind === 'attachment_save' && entry.userId === userId && entry.farmId === farmId && entry.testId === testId) ?? null
 }
 export function beginSoilRxAttachmentCustody(storage: StorageLike, key: string, entry: Omit<SoilRxAttachmentCustodyEntry, 'kind' | 'paths'> & { path: string }) {
-  const candidate: SoilRxAttachmentCustodyEntry = { kind: 'attachment_save', testId: entry.testId, paths: [entry.path], userId: entry.userId, farmId: entry.farmId, recordedAt: entry.recordedAt }
+  const candidate: SoilRxAttachmentCustodyEntry = { kind: 'attachment_save', testId: entry.testId, paths: [entry.path], removedPaths: [], userId: entry.userId, farmId: entry.farmId, recordedAt: entry.recordedAt }
   if (!validStored(candidate)) throw new Error('Farm Rx could not safely start Soil Rx attachment custody.')
   const current = readSoilRxCleanupOutbox(storage, key)
   if (!sameActor(current, entry.userId)) throw new Error('Farm Rx found Soil Rx cleanup work for another account.')
   const existing = current.find((row): row is SoilRxAttachmentCustodyEntry => row.kind === 'attachment_save' && row.testId === entry.testId)
   if (existing && (existing.userId !== entry.userId || existing.farmId !== entry.farmId)) throw new Error('Farm Rx found Soil Rx attachment work for another farm.')
   const next = existing
-    ? current.map((row) => row === existing ? { ...existing, paths: existing.paths.includes(entry.path) ? existing.paths : [...existing.paths, entry.path] } : row)
+    ? current.map((row) => row === existing ? { ...existing, paths: existing.paths.includes(entry.path) ? existing.paths : [...existing.paths, entry.path], removedPaths: existing.removedPaths ?? [] } : row)
     : [...current, candidate]
   write(storage, key, next)
 }
 export function replaceSoilRxAttachmentCustody(storage: StorageLike, key: string, entry: Omit<SoilRxAttachmentCustodyEntry, 'kind' | 'paths'> & { path: string }) {
-  const candidate: SoilRxAttachmentCustodyEntry = { kind: 'attachment_save', testId: entry.testId, paths: [entry.path], userId: entry.userId, farmId: entry.farmId, recordedAt: entry.recordedAt }
+  const candidate: SoilRxAttachmentCustodyEntry = { kind: 'attachment_save', testId: entry.testId, paths: [entry.path], removedPaths: [], userId: entry.userId, farmId: entry.farmId, recordedAt: entry.recordedAt }
   if (!validStored(candidate)) throw new Error('Farm Rx could not safely replace Soil Rx attachment custody.')
   const current = readSoilRxCleanupOutbox(storage, key)
   if (!sameActor(current, entry.userId)) throw new Error('Farm Rx found Soil Rx cleanup work for another account.')
   const existing = current.find((row): row is SoilRxAttachmentCustodyEntry => row.kind === 'attachment_save' && row.testId === entry.testId)
   if (!existing || existing.userId !== entry.userId || existing.farmId !== entry.farmId) throw new Error('Farm Rx lost the original Soil Rx attachment custody before retry.')
   write(storage, key, current.map((row) => row === existing ? candidate : row))
+}
+export function confirmSoilRxAttachmentRemoval(storage: StorageLike, key: string, userId: string, farmId: string, testId: string, paths: string[]) {
+  const current = readSoilRxCleanupOutbox(storage, key)
+  const target = current.find((row): row is SoilRxAttachmentCustodyEntry => row.kind === 'attachment_save' && row.testId === testId)
+  if (!target || target.userId !== userId || target.farmId !== farmId || paths.some((path) => !target.paths.includes(path))) throw new Error('Farm Rx lost Soil Rx attachment custody before confirming cleanup.')
+  const removedPaths = [...new Set([...(target.removedPaths ?? []), ...paths])]
+  write(storage, key, current.map((row) => row === target ? { ...target, removedPaths } : row))
 }
 export function releaseSoilRxAttachmentCustody(storage: StorageLike, key: string, userId: string, farmId: string, testId: string) {
   const current = readSoilRxCleanupOutbox(storage, key)

@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 149
+const expectedMutationCount = 151
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -20,7 +20,7 @@ const files = [
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
-  'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/queuedOperationGuard.ts',
+  'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/queuedOperationGuard.ts',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
   'src/data/QueuedFieldsRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/QueuedHarvestRepository.ts',
   'src/data/QueuedInventoryRepository.ts', 'src/data/QueuedNotificationsRepository.ts', 'src/data/QueuedProfitabilityRepository.ts',
@@ -107,6 +107,12 @@ try {
   reset()
   mutate('src/data/QueuedSoilRxRepository.ts', (source) => source.replace('this.d.removeReports(paths, source.operationContext)', 'this.live.rollbackTestOperation(custody.testId, source.operationContext)'))
   detected('Soil Rx attachment cleanup deletes its Storage authorization first', 'soil-rx:attachment-cleanup-storage-before-row')
+  reset()
+  mutate('src/data/soilRxStorage.ts', (source) => source.replace('return confirmSoilRxReportRemoval(paths, data)', 'return paths'))
+  detected('Soil Rx Storage zero-row delete receipt acceptance', 'soil-rx:storage-remove-receipt-required')
+  reset()
+  mutate('src/data/SupabaseSoilRxRepository.ts', (source) => source.replace('deleted.length !== 1', 'deleted.length > 1'))
+  detected('Soil Rx row-delete zero-row receipt acceptance', 'soil-rx:row-delete-exact-receipt')
   reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationNativeLane -Lane 'built-browser' -Executable $nativeNpm -Arguments @('run','test:e2e') -Failure 'Built-browser foundation suite failed.' | Out-Null", "Invoke-FoundationLane { & npm run test:e2e } 'Built-browser foundation suite failed.'"))
   detected('built-browser native-lane bypass', 'orchestrator:native-browser-lane')

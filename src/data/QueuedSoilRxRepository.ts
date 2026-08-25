@@ -2,7 +2,7 @@ import { isTransportFailure } from './QueuedFieldsRepository'
 import { appendNeedsAttention, dismissNeedsAttention, readNeedsAttention, type NeedsAttentionRecord } from './needsAttentionStore'
 import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 import { queueTransaction } from './queueTransaction'
-import { beginSoilRxAttachmentCustody, drainSoilRxCleanupOutbox, readSoilRxAttachmentCustody, readSoilRxCleanupOutbox, releaseSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey, type SoilRxAttachmentCustodyEntry } from './soilRxCleanupOutbox'
+import { beginSoilRxAttachmentCustody, confirmSoilRxAttachmentRemoval, drainSoilRxCleanupOutbox, readSoilRxAttachmentCustody, readSoilRxCleanupOutbox, releaseSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey, type SoilRxAttachmentCustodyEntry } from './soilRxCleanupOutbox'
 import { createSoilRxQueueEntry, SoilRxWriteQueue, parseSoilRxQueue, soilRxWriteQueueKey, type QueuedSoilTestDraft, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
 import { normalizeSoilTestDraft, sortSoilTestsNewestFirst, validateSoilTestDraft, type SoilReportMime, type SoilRxData, type SoilRxRepository, type SoilTest, type SoilTestDraft } from './soilRx'
 import { validateSoilReportFile } from './soilRxStorage'
@@ -65,10 +65,12 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
     // Storage RLS authorizes this delete through the still-existing Soil test.
     // Delete the object first; only then may the cascading test-row delete run.
-    const paths = [...new Set(custody.paths)]
+    const paths = custody.paths.filter((path) => !(custody.removedPaths ?? []).includes(path))
     const confirmed = await this.d.removeReports(paths, source.operationContext)
     verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
     if (paths.some((path) => !confirmed.includes(path))) throw new Error('Farm Rx could not confirm Soil Rx attachment cleanup. The cleanup remains safely queued.')
+    confirmSoilRxAttachmentRemoval(this.d.storage, this.cleanupKey(source.context.userId), custody.userId, custody.farmId, custody.testId, confirmed)
+    verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
     await this.live.rollbackTestOperation(custody.testId, source.operationContext)
     verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
   }
