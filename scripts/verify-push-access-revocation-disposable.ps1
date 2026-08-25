@@ -80,7 +80,10 @@ $$;
       if ($LASTEXITCODE -ne 0) { throw "Migration failed in disposable push-revocation proof: $($_.Name)" }
     }
 
-  $probeOutput = @'
+  $priorErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $probeOutput = @'
 insert into auth.users(id,email) values
   ('00000000-0000-4000-8000-000000000001','owner@example.test'),
   ('00000000-0000-4000-8000-000000000002','removed@example.test'),
@@ -456,7 +459,10 @@ begin
   end if;
 end $$;
 '@ | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable 2>&1
-  $probeExitCode = $LASTEXITCODE
+    $probeExitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $priorErrorActionPreference
+  }
   $probeOutput | Write-Output
   if ($probeExitCode -ne 0) {
     if ($MutateParentDeliveryLock -and (($probeOutput | Out-String) -match 'concurrent terminal targets left their parent non-terminal')) {
