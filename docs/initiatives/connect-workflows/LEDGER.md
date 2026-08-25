@@ -1219,3 +1219,9 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Date/time:** 2026-08-25 (America/Chicago). The first local CW-130 focused run failed closed before credit because the intentional launcher change altered the runner's independently pinned outer-self-test span. No runtime, backend, browser, migration, or live action ran.
 - **Smallest correction:** recompute and replace only that exact UTF-8 outer-self-test SHA-256 pin. The pin remains mandatory; it was not weakened or removed.
 - **Current gate:** restart focused/static proof, then run the CI-equivalent Foundation gate and obtain a fresh exact-SHA review before updating PR #28.
+
+## CW-132 — Linux multi-command Node resolution repair
+
+- **Date/time:** 2026-08-25 (America/Chicago). Foundation CI on the reviewed CW-131 commit correctly failed closed again: Linux `Get-Command node` returned two application entries, and interpolating the collection into the process launcher produced one invalid executable path containing both locations. No product, migration, database, browser, or live action ran before that refusal.
+- **Smallest repair:** retain cross-platform `node` discovery but select exactly its first application entry before reading `.Source`. This preserves the existing fail-closed behavior if no Node executable exists or the diagnostic child fails. The independent outer-self-test pin is unchanged because the correction is outside its pinned span.
+- **Narrow proof and current gate:** TypeScript, the focused CW-2 regression including its diagnostic child, and CW StaticOnly passed locally on the repaired bytes. Obtain a fresh exact-SHA review, then update PR #28 and wait for authoritative GitHub Foundation, Vercel, and review gates. No runtime/backend/disposable, migration, or live credit is claimed.

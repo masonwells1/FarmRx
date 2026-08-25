@@ -275,7 +275,7 @@ function Invoke-Cw2BaselineRecoveryEvidenceSelfTest {
 function Invoke-Cw2DiagnosticSelfTest {
   $log = New-Cw2DiagnosticLog 'selftest'
   $marker = 'CONNECT_WORKFLOWS_CW2_SELFTEST_SQL_PASS'
-  $nodeExe = (Get-Command node -CommandType Application -ErrorAction Stop).Source
+  $nodeExe = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
   function New-Cw2NodeArguments([string]$Script) { $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Script)); "-e `"eval(Buffer.from('$encoded','base64').toString('utf8'))`"" }
   $stdinBytes = [byte[]](0x61,0x6c,0x70,0x68,0x61,0x0d,0x0a,0xce,0xb2,0x65,0x74,0x61,0x0d,0x0a)
   $successScript = "const fs=require('fs');const input=fs.readFileSync(0);process.stdout.write(input);process.stdout.write(Buffer.from('$marker\n'));process.stderr.write('routine stderr');"
