@@ -74,6 +74,7 @@ try {
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0043-disposable.ps1') } 'Disposable 0043 proof failed.'
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-push-access-revocation-disposable.ps1') } 'Disposable push access revocation proof failed.'
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-push-access-concurrency-mutation.ps1') } 'Push access concurrency mutation proof failed.'
+  Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-soil-rx-disposable-capture.regression.ps1') } 'Disposable Soil Rx capture regression failed.'
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-soil-rx-disposable.ps1') } 'Disposable Soil Rx proof failed.'
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') } 'Disposable RLS role matrix failed.'
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-password-form-browser.ps1') } 'Password-form browser isolation proof failed.'

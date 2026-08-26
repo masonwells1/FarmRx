@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 152
+const expectedMutationCount = 158
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -14,7 +14,7 @@ const artifactMutationEnd = '// SOIL_' + 'ARTIFACT_MUTATION_MATRIX_END'
 const files = [
   'docs/password-recovery-support.md',
   'src/App.tsx', 'src/main.tsx', 'src/sw.ts', 'src/auth/AuthProvider.tsx', 'src/auth/passwordRecovery.ts', 'src/components/MarketQuote.tsx', 'src/data/workspaceCache.ts', 'public/market-quote-frame.html', 'vercel.json', 'vite.config.ts', 'playwright.config.ts', 'playwright.password-form.config.ts',
-  'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1', 'scripts/verify-season.ps1', 'scripts/season-shared-harness-repair.regression.ps1', 'scripts/foundation-native-lane.ps1', 'scripts/foundation-native-lane.regression.ps1', 'scripts/foundation-static-guards.mjs', 'scripts/verify-foundation-mutations.mjs', 'playwright.config.ts',
+  'scripts/provision-customer-lib.mjs', 'scripts/verify-foundation.ps1', 'scripts/verify-season.ps1', 'scripts/season-shared-harness-repair.regression.ps1', 'scripts/foundation-native-lane.ps1', 'scripts/foundation-native-lane.regression.ps1', 'scripts/verify-soil-rx-disposable-capture.ps1', 'scripts/verify-soil-rx-disposable-capture.regression.ps1', 'scripts/foundation-static-guards.mjs', 'scripts/verify-foundation-mutations.mjs', 'playwright.config.ts',
   'scripts/verify-password-form-browser.ps1', 'scripts/verify-push-access-revocation-disposable.ps1', 'scripts/verify-push-access-concurrency-mutation.ps1',
   'package.json', 'scripts/maple-july-db-clock-wiring.regression.ps1', 'scripts/harvest-ridge-db-clock.psm1', 'scripts/maple-season-db-clock-docker-adapter.psm1', 'scripts/maple-season-db-clock-docker-adapter.regression.ps1', 'scripts/maple-synthetic-docker-topology-plan.ps1', 'scripts/maple-synthetic-docker-topology-plan.regression.ps1', 'scripts/verify-maple-season-db-clock-spike.ps1', 'scripts/faketime-artifact-replacement-manifest.regression.ps1', 'docs/season-readiness/FAKETIME-ARTIFACT-EVIDENCE.md', 'docs/season-readiness/FROZEN-OFFLINE-BUILD-EVIDENCE.md', 'docs/season-readiness/FAKETIME-ARTIFACT-REPLACEMENT-MANIFEST.json', 'tests/season/frozen-postgres-clock-spike.Dockerfile',
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
@@ -104,6 +104,24 @@ try {
   reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-soil-rx-disposable.ps1') } 'Disposable Soil Rx proof failed.'", ''))
   detected('Soil Rx disposable Foundation lane removal', 'orchestrator:checked-soil-rx')
+  reset()
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-soil-rx-disposable-capture.regression.ps1') } 'Disposable Soil Rx capture regression failed.'", ''))
+  detected('Soil Rx capture regression Foundation lane removal', 'orchestrator:checked-soil-rx-capture-regression')
+  reset()
+  mutate('scripts/verify-soil-rx-disposable-capture.ps1', (source) => source.replace("Invoke-FoundationNativeLane -Lane 'soil-rx-disposable'", "Invoke-FoundationNativeLane -Lane 'soil-rx-disposable-bypassed'"))
+  detected('Soil Rx capture native-lane identity change', 'soil-rx:capture-native-lane')
+  reset()
+  mutate('scripts/verify-soil-rx-disposable-capture.ps1', (source) => source.replace("$_ -ceq 'SOIL_RX_DISPOSABLE_RLS_STORAGE_PASS'", "$_ -like 'SOIL_RX_DISPOSABLE_RLS_STORAGE_PASS*'"))
+  detected('Soil Rx capture PASS marker broadening', 'soil-rx:capture-pass-marker')
+  reset()
+  mutate('scripts/verify-soil-rx-disposable-capture.ps1', (source) => source.replace("$_ -ceq 'exitCode=0'", "$_ -like 'exitCode=*'"))
+  detected('Soil Rx capture zero exit broadening', 'soil-rx:capture-zero-exit')
+  reset()
+  mutate('scripts/verify-soil-rx-disposable-capture.ps1', (source) => source.replace("$_ -ceq 'cause=success'", "$_ -like 'cause=*'"))
+  detected('Soil Rx capture success cause broadening', 'soil-rx:capture-success-cause')
+  reset()
+  mutate('scripts/verify-soil-rx-disposable-capture.ps1', (source) => source.replace('[IO.File]::WriteAllLines($receiptPath, @(', '$null = $receiptPath'))
+  detected('Soil Rx capture durable receipt removal', 'soil-rx:capture-durable-receipt')
   reset()
   mutate('src/data/QueuedSoilRxRepository.ts', (source) => source.replace('this.d.removeReports(paths, source.operationContext)', 'this.live.rollbackTestOperation(custody.testId, source.operationContext)'))
   detected('Soil Rx attachment cleanup deletes its Storage authorization first', 'soil-rx:attachment-cleanup-storage-before-row')
