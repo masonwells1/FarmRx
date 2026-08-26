@@ -105,7 +105,7 @@ function Invoke-Cw2ForcedGitFailureControlFlowProof([string]$Source,[pscustomobj
     catch{$cleanupErrors.Add($_.Exception)}
   }
   if($null-ne$primary-and$cleanupErrors.Count-gt0){throw [AggregateException]::new('FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_PRIMARY_AND_CLEANUP_FAILED',[Exception[]]@($primary)+[Exception[]]$cleanupErrors.ToArray())}
-  if($null-ne$primary){throw$primary}
+  if($null-ne$primary){throw $primary}
   if($cleanupErrors.Count-gt0){throw [AggregateException]::new('FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_CLEANUP_FAILED',[Exception[]]$cleanupErrors.ToArray())}
   Write-Output 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS'
 }

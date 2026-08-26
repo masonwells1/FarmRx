@@ -1271,3 +1271,9 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Date/time:** 2026-08-25 (America/Chicago). Foundation passed all preceding fast regressions then correctly refused the Faketime clean-tree fallback because the GitHub checkout contained only one commit and `HEAD^` was unavailable. The proof itself remains fail-closed and must retain its exact previous-commit check.
 - **Smallest repair:** Foundation checkout now fetches depth two, supplying only the direct parent the proof requires while retaining no credentials. No product, migration, runtime/backend, browser, fixture, or live action changed or ran.
 - **Current gate:** validate workflow shape, commit, fresh exact-SHA review, update PR #28 only after acceptance, then require authoritative Foundation and review gates.
+
+## CW-141 — Faketime forced-error propagation repair
+
+- **Date/time:** 2026-08-25 (America/Chicago). Foundation passed every preceding fast regression, including the Faketime trace, environment-restore, and forced-failure observations, but its forced Git AST control path then exercised an unspaced `throw$primary` token. PowerShell treated that token as a command name rather than rethrowing the captured exception, so the regression failed before its intended pass marker. No product, migration, runtime/backend, browser, fixture, or live action ran.
+- **Smallest repair:** add the required command/value separator: `throw $primary`. The forced-error path remains mandatory and continues to fail closed on either the primary or cleanup failure.
+- **Narrow proof and current gate:** the complete Faketime manifest regression now reaches its forced Git AST child-proof and clean-fallback pass markers under local `pwsh`; TypeScript also passed. Commit these exact bytes, obtain a fresh exact-SHA review, update PR #28 only after acceptance, then require authoritative Foundation and review gates.
