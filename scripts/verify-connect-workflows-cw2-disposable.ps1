@@ -1670,7 +1670,7 @@ function Invoke-Cw2Proof005OuterSelfTest([string]$RunnerSource) {
     try{if([IO.Directory]::Exists($tempRoot)){[IO.Directory]::Delete($tempRoot,$false)};if([IO.Directory]::Exists($tempRoot)){throw "CONNECT_WORKFLOWS_CW2_PROOF_005_TEMP_ROOT_REMAINS:$tempRoot"}}catch{$cleanupErrors.Add($_.Exception)}
   }
   if($null-ne$primary-and$cleanupErrors.Count-gt0){throw [AggregateException]::new('CONNECT_WORKFLOWS_CW2_PROOF_005_PRIMARY_AND_CLEANUP_FAILED',[Exception[]]@($primary)+[Exception[]]$cleanupErrors.ToArray())}
-  if($null-ne$primary){throw$primary}
+  if($null-ne$primary){throw $primary}
   if($cleanupErrors.Count-gt0){throw [AggregateException]::new('CONNECT_WORKFLOWS_CW2_PROOF_005_CLEANUP_FAILED',[Exception[]]$cleanupErrors.ToArray())}
   Write-Output 'CONNECT_WORKFLOWS_CW2_PROOF_005_OUTER_SELFTEST_PASS'
 }
@@ -1680,7 +1680,7 @@ function Assert-Cw2Contract {
   $runnerSource = Get-Content -Raw -LiteralPath $runnerPath
   $artifactOuterSelfTestStart='# CW2_ARTIFACT_MANIFEST_'+'OUTER_SELFTEST_BEGIN';$artifactOuterSelfTestEnd='# CW2_ARTIFACT_MANIFEST_'+'OUTER_SELFTEST_END'
   $artifactOuterSelfTestSpan=Get-Cw2UniqueSourceSpan $runnerSource $artifactOuterSelfTestStart $artifactOuterSelfTestEnd
-  if((Get-Cw2Proof005TextSha256 $artifactOuterSelfTestSpan)-cne'37f4cae79cac0e17e7246e0cbe6c78854143317992826654a368b1f8210d6478'){throw 'CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_OUTER_SELFTEST_PIN_MISMATCH'}
+  if((Get-Cw2Proof005TextSha256 $artifactOuterSelfTestSpan)-cne'5c2aab06863c4669f87b88cf366675b59c3184f45d9c1631d66147cf7b246bdc'){throw 'CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_OUTER_SELFTEST_PIN_MISMATCH'}
   $required = @(
     $baseFixture,$cw2Fixture,$verify,$concurrencyFixtureVerify,$concurrencyVerify,$specPath,$configPath,$migrationPath,$fkIndexMigrationPath,
     (Join-Path $root 'src/ProgramsModule.tsx'),

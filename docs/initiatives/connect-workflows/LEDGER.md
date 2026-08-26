@@ -1283,3 +1283,9 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Date/time:** 2026-08-25 (America/Chicago). Fresh exact-SHA review of CW-141 accepted its line-108 rethrow correction but found the parallel trace-observation cleanup path still used the same unspaced PowerShell token form. It remained fail-closed, but would replace a captured trace failure with a command-not-found diagnostic.
 - **Smallest repair:** change only `throw$tracePrimary` to `throw $tracePrimary`; all trace observation, cleanup aggregation, and AST custody checks remain mandatory.
 - **Current gate:** rerun the complete Faketime manifest regression and TypeScript, commit only if green, require a new fresh exact-SHA review, then update PR #28 and wait for authoritative Foundation and review gates. No runtime/backend/disposable, migration, browser, deploy, or live action is claimed.
+
+## CW-143 — CW2 outer self-test error propagation repair
+
+- **Date/time:** 2026-08-25 (America/Chicago). A complete source scan following the CW-142 review found the same unspaced `throw$primary` form in the CW2 outer artifact-self-test cleanup path. That test is supposed to preserve its captured failure before issuing its pass marker; the token could instead obscure that failure as a command-not-found error.
+- **Smallest repair:** rethrow `$primary` with valid PowerShell syntax and recompute only the exact UTF-8 SHA-256 span pin that deliberately protects this self-test. The pin remains enforced; it was neither removed nor weakened.
+- **Current gate:** run CW2 StaticOnly including its outer self-test, the focused CW2 regression, the Faketime manifest regression, and TypeScript; commit only if green, then obtain a fresh exact-SHA review before any PR update. No runtime/backend/disposable, migration, browser, deploy, or live action is claimed.
