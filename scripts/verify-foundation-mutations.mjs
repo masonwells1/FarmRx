@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 158
+const expectedMutationCount = 160
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -122,6 +122,12 @@ try {
   reset()
   mutate('scripts/verify-soil-rx-disposable-capture.ps1', (source) => source.replace('[IO.File]::WriteAllLines($receiptPath, @(', '$null = $receiptPath'))
   detected('Soil Rx capture durable receipt removal', 'soil-rx:capture-durable-receipt')
+  reset()
+  mutate('scripts/verify-soil-rx-disposable-capture.ps1', (source) => source.replace('if (-not $Condition) { throw $Failure }', 'if ($false) { throw $Failure }'))
+  detected('Soil Rx capture assertion failure bypass', 'soil-rx:capture-assertion-fail-closed')
+  reset()
+  mutate('scripts/verify-soil-rx-disposable-capture.ps1', (source) => source.replace("$runDirectory = Join-Path $EvidenceRoot ([Guid]::NewGuid().ToString('N'))", "$runDirectory = Join-Path $EvidenceRoot 'shared'"))
+  detected('Soil Rx capture unique directory removal', 'soil-rx:capture-unique-directory')
   reset()
   mutate('src/data/QueuedSoilRxRepository.ts', (source) => source.replace('this.d.removeReports(paths, source.operationContext)', 'this.live.rollbackTestOperation(custody.testId, source.operationContext)'))
   detected('Soil Rx attachment cleanup deletes its Storage authorization first', 'soil-rx:attachment-cleanup-storage-before-row')

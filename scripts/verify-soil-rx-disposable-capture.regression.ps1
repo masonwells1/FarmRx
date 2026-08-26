@@ -7,6 +7,9 @@ function Assert-SoilRxCaptureRegression([bool]$Condition, [string]$Failure) {
 function Assert-SoilRxCaptureShape([string]$Source) {
   $orderedNeedles = @(
     ". (Join-Path `$PSScriptRoot 'foundation-native-lane.ps1')",
+    'function Assert-SoilRxCapture([bool]$Condition, [string]$Failure) {',
+    'if (-not $Condition) { throw $Failure }',
+    "`$runDirectory = Join-Path `$EvidenceRoot ([Guid]::NewGuid().ToString('N'))",
     "Invoke-FoundationNativeLane -Lane 'soil-rx-disposable'",
     '-LogRoot $runDirectory | Out-Null',
     'Assert-SoilRxCapture ($logs.Count -eq 1)',
@@ -27,6 +30,8 @@ function Assert-SoilRxCaptureShape([string]$Source) {
   }
   Assert-SoilRxCaptureRegression ([regex]::Matches($Source, [regex]::Escape("Invoke-FoundationNativeLane -Lane 'soil-rx-disposable'")).Count -eq 1) 'SOIL_RX_DISPOSABLE_CAPTURE_NATIVE_INVOCATION_COUNT'
   Assert-SoilRxCaptureRegression ([regex]::Matches($Source, [regex]::Escape("SOIL_RX_DISPOSABLE_RLS_STORAGE_PASS")).Count -eq 2) 'SOIL_RX_DISPOSABLE_CAPTURE_MARKER_CUSTODY_COUNT'
+  Assert-SoilRxCaptureRegression ([regex]::Matches($Source, [regex]::Escape('if (-not $Condition) { throw $Failure }')).Count -eq 1) 'SOIL_RX_DISPOSABLE_CAPTURE_ASSERTION_BODY_COUNT'
+  Assert-SoilRxCaptureRegression ([regex]::Matches($Source, [regex]::Escape("`$runDirectory = Join-Path `$EvidenceRoot ([Guid]::NewGuid().ToString('N'))")).Count -eq 1) 'SOIL_RX_DISPOSABLE_CAPTURE_UNIQUE_DIRECTORY_COUNT'
 }
 
 $capturePath = Join-Path $PSScriptRoot 'verify-soil-rx-disposable-capture.ps1'
@@ -38,7 +43,9 @@ $mutations = @(
   @{ Name = 'missing-pass-marker-acceptance'; Before = '($passMarkers.Count -eq 1)'; After = '($passMarkers.Count -ge 0)' },
   @{ Name = 'nonzero-exit-acceptance'; Before = "`$_ -ceq 'exitCode=0'"; After = "`$_ -like 'exitCode=*'" },
   @{ Name = 'failed-capture-acceptance'; Before = "`$_ -ceq 'cause=success'"; After = "`$_ -like 'cause=*'" },
-  @{ Name = 'durable-receipt-removal'; Before = '[IO.File]::WriteAllLines($receiptPath, @('; After = '$null = $receiptPath' }
+  @{ Name = 'durable-receipt-removal'; Before = '[IO.File]::WriteAllLines($receiptPath, @('; After = '$null = $receiptPath' },
+  @{ Name = 'assertion-failure-bypass'; Before = 'if (-not $Condition) { throw $Failure }'; After = 'if ($false) { throw $Failure }' },
+  @{ Name = 'unique-run-directory-removal'; Before = "`$runDirectory = Join-Path `$EvidenceRoot ([Guid]::NewGuid().ToString('N'))"; After = "`$runDirectory = Join-Path `$EvidenceRoot 'shared'" }
 )
 
 foreach ($mutation in $mutations) {

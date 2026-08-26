@@ -211,6 +211,8 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, soilDisposableCapture, "$causeMarkers = @($logLines | Where-Object { $_ -ceq 'cause=success' })", 'soil-rx:capture-success-cause')
   requireText(errors, soilDisposableCapture, 'Assert-SoilRxCapture ($causeMarkers.Count -eq 1)', 'soil-rx:capture-success-cause-exactly-once')
   requireText(errors, soilDisposableCapture, '[IO.File]::WriteAllLines($receiptPath, @(', 'soil-rx:capture-durable-receipt')
+  if ((soilDisposableCapture.match(/if \(-not \$Condition\) \{ throw \$Failure \}/g) ?? []).length !== 1) errors.push('soil-rx:capture-assertion-fail-closed')
+  if ((soilDisposableCapture.match(/\$runDirectory = Join-Path \$EvidenceRoot \(\[Guid\]::NewGuid\(\)\.ToString\('N'\)\)/g) ?? []).length !== 1) errors.push('soil-rx:capture-unique-directory')
   requireText(errors, soilDisposableCaptureRegression, 'SOIL_RX_DISPOSABLE_CAPTURE_REGRESSION_PASS', 'soil-rx:capture-regression-marker')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & deno check --no-config --lock=deno.lock --frozen --node-modules-dir=none supabase/functions/send-push/index.ts }", 'orchestrator:frozen-send-push-deno-check')
@@ -346,7 +348,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 158')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 160')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 34', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=34 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
