@@ -37,14 +37,15 @@ export class ProgramInventorySnapshotConsistencyError extends Error {
   readonly retryable = true
   constructor() { super(programInventorySnapshotConsistencyMessage); this.name = 'ProgramInventorySnapshotConsistencyError' }
 }
-type ProgramInventorySnapshot = { assignments: ProgramAssignment[]; inventoryMatches: ProgramInventoryMatch[]; canonical: string }
-export function canonicalProgramInventorySnapshot(context: FarmOperationContext, assignments: ProgramAssignment[], inventoryMatches: ProgramInventoryMatch[]) {
+type ProgramInventorySnapshot = { assignments: ProgramAssignment[]; inventoryProducts: ProgramInventoryProduct[]; inventoryMatches: ProgramInventoryMatch[]; canonical: string }
+export function canonicalProgramInventorySnapshot(context: FarmOperationContext, assignments: ProgramAssignment[], inventoryProducts: ProgramInventoryProduct[], inventoryMatches: ProgramInventoryMatch[]) {
   const canonicalAssignments = assignments.map((assignment) => ({
     ...assignment,
     passes: [...assignment.passes].sort((left, right) => left.id.localeCompare(right.id)).map((pass) => ({ ...pass, products: [...pass.products].sort((left, right) => left.id.localeCompare(right.id)) })),
   })).sort((left, right) => left.assignment_id.localeCompare(right.assignment_id))
+  const canonicalProducts = [...inventoryProducts].sort((left, right) => left.id.localeCompare(right.id))
   const canonicalMatches = [...inventoryMatches].sort((left, right) => left.assigned_product_id.localeCompare(right.assigned_product_id) || left.inventory_product_id.localeCompare(right.inventory_product_id) || left.operation_id.localeCompare(right.operation_id))
-  return JSON.stringify({ context: { projectRef: context.projectRef, userId: context.userId, farmId: context.farmId, generation: context.generation, token: context.token, serverEpoch: context.serverEpoch }, assignments: canonicalAssignments, inventoryMatches: canonicalMatches })
+  return JSON.stringify({ context: { projectRef: context.projectRef, userId: context.userId, farmId: context.farmId, generation: context.generation, token: context.token, serverEpoch: context.serverEpoch }, assignments: canonicalAssignments, inventoryProducts: canonicalProducts, inventoryMatches: canonicalMatches })
 }
 export class SupabaseProgramsRepository implements ProgramsRepository {
   constructor(private readonly d: { gateway: ProgramsDataGateway; getFarmId: () => Promise<string>; getUserId: () => Promise<string>; getOperationContext: () => Promise<FarmOperationContext>; verifyOperationContext: (expected: FarmOperationContext) => Promise<void>; createId: () => string }) {}
@@ -52,11 +53,14 @@ export class SupabaseProgramsRepository implements ProgramsRepository {
   private async readProgramInventorySnapshot(context: FarmOperationContext): Promise<ProgramInventorySnapshot> {
     const rawAssignments = await this.d.gateway.loadAssignments(context.farmId)
     await this.d.verifyOperationContext(context)
+    const rawInventoryProducts = await this.d.gateway.loadInventoryProducts(context.farmId)
+    await this.d.verifyOperationContext(context)
     const rawInventoryMatches = await this.d.gateway.loadInventoryMatches(context.farmId)
     await this.d.verifyOperationContext(context)
     const assignments = rawAssignments.map((row) => mapProgramAssignment(row, context.farmId))
+    const inventoryProducts = rawInventoryProducts.map((row) => mapProgramInventoryProduct(row, context.farmId))
     const inventoryMatches = rawInventoryMatches.map((row) => mapProgramInventoryMatch(row, context.farmId))
-    return { assignments, inventoryMatches, canonical: canonicalProgramInventorySnapshot(context, assignments, inventoryMatches) }
+    return { assignments, inventoryProducts, inventoryMatches, canonical: canonicalProgramInventorySnapshot(context, assignments, inventoryProducts, inventoryMatches) }
   }
   private async stableProgramInventorySnapshot(context: FarmOperationContext): Promise<ProgramInventorySnapshot> {
     let previous = await this.readProgramInventorySnapshot(context)
@@ -71,8 +75,8 @@ export class SupabaseProgramsRepository implements ProgramsRepository {
     const context = await this.d.getOperationContext()
     await this.d.verifyOperationContext(context)
     const farmId = context.farmId; const userId = context.userId
-    const [rawPrograms, rawViewer, rawCrops, rawApplications, rawAssignmentCosts, rawCropCosts, rawInventoryProducts, programInventorySnapshot] = await Promise.all([
-      this.d.gateway.loadPrograms(farmId, includeArchived), this.d.gateway.loadViewerRole(farmId, userId), this.d.gateway.loadCropAssignments(farmId), this.d.gateway.loadApplicationRecords(farmId), this.d.gateway.loadAssignmentCosts(farmId), this.d.gateway.loadCropCostRollups(farmId), this.d.gateway.loadInventoryProducts(farmId), this.stableProgramInventorySnapshot(context),
+    const [rawPrograms, rawViewer, rawCrops, rawApplications, rawAssignmentCosts, rawCropCosts, programInventorySnapshot] = await Promise.all([
+      this.d.gateway.loadPrograms(farmId, includeArchived), this.d.gateway.loadViewerRole(farmId, userId), this.d.gateway.loadCropAssignments(farmId), this.d.gateway.loadApplicationRecords(farmId), this.d.gateway.loadAssignmentCosts(farmId), this.d.gateway.loadCropCostRollups(farmId), this.stableProgramInventorySnapshot(context),
     ])
     await this.d.verifyOperationContext(context)
     const programs = rawPrograms.map((row) => mapProgram(row, { farmId }))
@@ -85,7 +89,7 @@ export class SupabaseProgramsRepository implements ProgramsRepository {
     const applicationRecords = rawApplications.map((row) => mapProgramApplicationRecord(row, farmId))
     const assignmentCosts = rawAssignmentCosts.map((row) => mapProgramAssignmentCost(row, farmId))
     const cropCostRollups = rawCropCosts.map((row) => mapProgramCropCostRollup(row, farmId))
-    const inventoryProducts = rawInventoryProducts.map((row) => mapProgramInventoryProduct(row, farmId))
+    const inventoryProducts = programInventorySnapshot.inventoryProducts
     const inventoryMatches = programInventorySnapshot.inventoryMatches
     if (new Set(inventoryProducts.map((product) => product.id)).size !== inventoryProducts.length || new Set(inventoryMatches.map((match) => match.assigned_product_id)).size !== inventoryMatches.length) fail()
     const cropsById = new Map(crops.map((crop) => [crop.id, crop])); const costsByAssignment = new Map(assignmentCosts.map((cost) => [cost.assignment_id, cost]))
