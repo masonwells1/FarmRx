@@ -27,7 +27,25 @@ function Get-Cw2ArtifactCanonicalManifest([switch]$ForceCleanFallback) {
   }
   $source='dirty-changed-untracked'
   if($paths.Count-eq0){
-    foreach($previousPath in (Invoke-Cw2ArtifactGitPathList @('diff-tree','--no-commit-id','--name-only','-r','-z','HEAD^','HEAD') 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_GIT_FAILED')){$previousNormalized=$previousPath.Replace('\','/');if(-not(Test-Path -LiteralPath (Join-Path $root $previousPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_PATH_MISSING:$previousPath"};if($seen.Add($previousNormalized)){[void]$paths.Add($previousNormalized)}}
+    $previousTokens=Invoke-Cw2ArtifactGitPathList @('diff-tree','--no-commit-id','--name-status','-r','-z','-M100%','HEAD^','HEAD') 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_GIT_FAILED'
+    for($previousTokenIndex=0;$previousTokenIndex-lt$previousTokens.Count;){
+      $status=$previousTokens[$previousTokenIndex];$previousTokenIndex+=1
+      if($status-ceq'R100'){
+        if($previousTokenIndex+1-ge$previousTokens.Count){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_RENAME_TRUNCATED'}
+        $renameSourcePath=$previousTokens[$previousTokenIndex];$previousPath=$previousTokens[$previousTokenIndex+1];$previousTokenIndex+=2
+        if(-not(Test-Path -LiteralPath (Join-Path $root $previousPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_RENAME_DESTINATION_MISSING:$previousPath"}
+      }elseif($status-ceq'A'-or$status-ceq'M'){
+        if($previousTokenIndex-ge$previousTokens.Count){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_STATUS_PATH_MISSING'}
+        $previousPath=$previousTokens[$previousTokenIndex];$previousTokenIndex+=1
+        if(-not(Test-Path -LiteralPath (Join-Path $root $previousPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_PATH_MISSING:$previousPath"}
+      }elseif($status-ceq'D'){
+        if($previousTokenIndex-ge$previousTokens.Count){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DELETION_PATH_MISSING'}
+        $deletedPath=$previousTokens[$previousTokenIndex];$previousTokenIndex+=1
+        throw "FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DELETION_REFUSED:$deletedPath"
+      }else{throw "FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_STATUS_REFUSED:$status"}
+      $previousNormalized=$previousPath.Replace('\','/')
+      if($seen.Add($previousNormalized)){[void]$paths.Add($previousNormalized)}
+    }
     if($paths.Count-eq0){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY'}
     $source='exact-previous-commit-diff'
   }
@@ -111,7 +129,7 @@ function Invoke-Cw2ForcedGitFailureControlFlowProof([string]$Source,[pscustomobj
 }
 
 $manifest=Get-Content -Raw -LiteralPath $manifestPath|ConvertFrom-Json
-if($manifest.combined_source_artifact_identity_recipe-notmatch'StringComparer\.Ordinal'-or$manifest.combined_source_artifact_identity_recipe-notmatch'LF final'-or$manifest.combined_source_artifact_identity_recipe-notmatch'NUL-delimited dirty tracked, staged, and untracked existing source'-or$manifest.combined_source_artifact_identity_recipe-notmatch'refusing missing/deleted paths'){throw 'FAKETIME_ARTIFACT_MANIFEST_RECIPE_TEXT_DRIFT'}
+if($manifest.combined_source_artifact_identity_recipe-notmatch'StringComparer\.Ordinal'-or$manifest.combined_source_artifact_identity_recipe-notmatch'LF final'-or$manifest.combined_source_artifact_identity_recipe-notmatch'NUL-delimited dirty tracked, staged, and untracked existing source'-or$manifest.combined_source_artifact_identity_recipe-notmatch'refusing missing/non-rename deleted paths'-or$manifest.combined_source_artifact_identity_recipe-notmatch'accepting only Git R100 renames by their existing destination path'){throw 'FAKETIME_ARTIFACT_MANIFEST_RECIPE_TEXT_DRIFT'}
 $ordering=[Collections.Generic.List[string]]::new([string[]]@('a','B'));$ordering.Sort([StringComparer]::Ordinal);if(($ordering-join'|')-cne'B|a'){throw 'FAKETIME_ARTIFACT_MANIFEST_ORDINAL_COMPARATOR_DRIFT'}
 $expectedErrorActionPreference=$ErrorActionPreference
 $canonical=Get-Cw2ArtifactCanonicalManifest
