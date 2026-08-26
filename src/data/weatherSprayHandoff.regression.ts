@@ -48,6 +48,7 @@ assert.match(weatherModule, /Start spray record with this weather/, 'Fresh Weath
 assert.match(weatherModule, /\{fresh && <div className="weather-spray-handoff">/, 'Both actions must remain unavailable for stale Weather.')
 assert.match(weatherModule, /const timer = window\.setTimeout\(\(\) => setNowMs\(Date\.now\(\)\), Math\.max\(0, expiresAt - Date\.now\(\) \+ 1\)\)/, 'Open Weather must re-render immediately after the actionability ceiling expires.')
 assert.match(weatherModule, /const startSpray = \(action: \(\) => void\) => \{ const clickedAt = Date\.now\(\); setNowMs\(clickedAt\); if \(!isActionablyFresh\(bundle, clickedAt\)\) return; action\(\) \}/, 'Each click must recheck freshness to close the expiry race.')
+assert.match(weatherModule, /useEffect\(\(\) => \{ setNowMs\(Date\.now\(\)\); const expiresAt = Date\.parse\(bundle\.fetched_at\) \+ sprayJudgmentMaxAgeMs;/, 'A refreshed bundle must reset the freshness clock before scheduling its expiry.')
 assert.match(inventoryModule, /parseWeatherSprayHandoff\(location\.state\)/, 'Inventory must fail closed before using route state.')
 assert.match(inventoryModule, /<SprayForm key=\{location\.key\}/, 'Each route entry must remount Spray at the router-aware Inventory boundary so a same-path state change cannot retain old values.')
 assert.match(inventoryModule, /props\.workspace\.fields\.fields\.some\(\(field\) => field\.id === requestedPrefill\.fieldId\)/, 'A prefilled field must exist in the loaded farm workspace.')
@@ -69,5 +70,6 @@ assert.match(cedarSpec, /await page\.evaluate\(\(\) => window\.__cedarArmInvento
 assert.match(cedarSpec, /await expect\(line\.getByLabel\('Product'\)\)\.toHaveValue\(''\)/, 'CW-1 browser proof must show Product starts blank.')
 assert.match(cedarSpec, /await line\.getByLabel\('Product'\)\.selectOption\(\{ label: 'Synthetic Cedar Herbicide 41' \}\)/, 'CW-1 browser proof must require the farmer to select the product explicitly.')
 assert.match(cedarSpec, /await page\.reload\(\)/, 'CW-1 browser proof must show consumed route state cannot repopulate after reload.')
+assert.match(cedarSpec, /test\('@connect-workflows-cw1 refreshed Weather stays actionable'/, 'CW-1 browser proof must keep spray actions available after a newer bundle replaces an already-rendered forecast.')
 
 console.log('Weather to spray prefill route regressions passed.')

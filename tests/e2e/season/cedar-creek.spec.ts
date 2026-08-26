@@ -100,6 +100,27 @@ test('@connect-workflows-cw1 weather prefill stays local until the farmer saves'
   expect(network.external).toEqual([])
 })
 
+test('@connect-workflows-cw1 refreshed Weather stays actionable', async ({ page }) => {
+  const network = await fence(page)
+  await signIn(page)
+  await page.goto('/weather')
+  const card = page.locator('.weather-card').filter({ hasText: 'Cedar West 40' })
+  await expect(card.getByRole('button', { name: 'Open blank spray record' })).toBeVisible()
+  await page.evaluate(next => {
+    const PriorDate = window.Date
+    window.Date = new Proxy(PriorDate, { construct(target, args) { const caller = new Error().stack ?? ''; const governed = caller.includes('/src/data/weatherService.ts') || caller.includes('/src/WeatherModule.tsx'); return Reflect.construct(target, governed ? [next] : args) as Date }, apply(target, self, args) { return Reflect.apply(target, self, args) } }) as DateConstructor
+    window.Date.now = () => next
+  }, fixed.getTime() + 60_000)
+  await card.getByRole('button', { name: 'Refresh' }).click()
+  await expect(card.getByRole('button', { name: 'Open blank spray record' })).toBeVisible()
+  await expect(card.getByRole('button', { name: 'Start spray record with this weather' })).toBeVisible()
+  expect(network.weatherRequests()).toBe(2)
+  expect(network.requests.observedTargetMutationRpcs).toEqual([])
+  expect(network.requests.unexpectedRpcs).toEqual([])
+  expect(network.requests.blockedNonReadRequests).toEqual([])
+  expect(network.external).toEqual([])
+})
+
 test('@connect-workflows-cw2 exact Program match changes Inventory only after explicit no-record confirmation', async ({ page }) => {
   const network = await fence(page, ['mark_program_pass_applied'])
   await signIn(page)
