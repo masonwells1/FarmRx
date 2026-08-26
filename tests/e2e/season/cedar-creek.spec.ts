@@ -110,7 +110,7 @@ test('@connect-workflows-cw1 refreshed Weather stays actionable', async ({ page 
     const PriorDate = window.Date
     window.Date = new Proxy(PriorDate, { construct(target, args) { const caller = new Error().stack ?? ''; const governed = caller.includes('/src/data/weatherService.ts') || caller.includes('/src/WeatherModule.tsx'); return Reflect.construct(target, governed ? [next] : args) as Date }, apply(target, self, args) { return Reflect.apply(target, self, args) } }) as DateConstructor
     window.Date.now = () => next
-  }, fixed.getTime() + 60_000)
+  }, fixed.getTime() + 31 * 60_000)
   await card.getByRole('button', { name: 'Refresh' }).click()
   await expect(card.getByRole('button', { name: 'Open blank spray record' })).toBeVisible()
   await expect(card.getByRole('button', { name: 'Start spray record with this weather' })).toBeVisible()
