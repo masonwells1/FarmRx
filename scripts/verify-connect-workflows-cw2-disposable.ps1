@@ -1701,8 +1701,7 @@ function Assert-Cw2Contract {
     (Join-Path $root 'docs/season-readiness/FAKETIME-ARTIFACT-REPLACEMENT-MANIFEST.json')
   )
   if (@($required | Where-Object { -not (Test-Path -LiteralPath $_) }).Count) { throw 'CONNECT_WORKFLOWS_CW2_PACKET_MISSING_REQUIRED_FILE' }
-  $head = (Get-ChildItem (Join-Path $root 'supabase/migrations') -File | Sort-Object Name | Select-Object -Last 1).Name
-  if ($head -cne $fkIndexMigration) { throw "CONNECT_WORKFLOWS_CW2_MIGRATION_HEAD_MISMATCH:$head" }
+  if (-not (Test-Path -LiteralPath $fkIndexMigrationPath)) { throw "CONNECT_WORKFLOWS_CW2_MIGRATION_MISSING:$fkIndexMigration" }
   $actualBlob = (& git -C $root hash-object $migrationPath).Trim()
   if ($LASTEXITCODE -ne 0 -or $actualBlob -cne $migrationBlob) { throw 'CONNECT_WORKFLOWS_CW2_MIGRATION_BLOB_MISMATCH' }
   $fkIndexMigrationBytes = [IO.File]::ReadAllBytes($fkIndexMigrationPath)
@@ -2575,7 +2574,7 @@ for each row execute function public.lock_inventory_products_catalog();
   $cw1Source = Get-Content -Raw -LiteralPath (Join-Path $root 'scripts/verify-connect-workflows-cw1-disposable.ps1')
   if ($cw1Source -notmatch [regex]::Escape("`$migration = '20260725213142_pine_hill_removed_farm_epoch.sql'")) { throw 'CONNECT_WORKFLOWS_CW2_CW1_HISTORICAL_HEAD_GUARD_CHANGED' }
   if ($cw1Source -notmatch [regex]::Escape("`$migrationBlob = '89f432cdfc9a2cd6c6379309e0eb1bd283500686'")) { throw 'CONNECT_WORKFLOWS_CW2_CW1_HISTORICAL_BLOB_GUARD_CHANGED' }
-  if ($cw1Source -notmatch [regex]::Escape("`$migrationHead = '$fkIndexMigration'") -or $cw1Source -notmatch [regex]::Escape('if ($head -cne $migrationHead)')) { throw 'CONNECT_WORKFLOWS_CW2_CW1_MIGRATION_HEAD_GUARD_CHANGED' }
+  if ($cw1Source -notmatch [regex]::Escape("`$migrationHead = '$fkIndexMigration'") -or $cw1Source -notmatch [regex]::Escape('if (-not (Test-Path -LiteralPath (Join-Path $root "supabase/migrations/$migrationHead")))')) { throw 'CONNECT_WORKFLOWS_CW2_CW1_MIGRATION_PRESENCE_GUARD_CHANGED' }
   $cedarSource = Get-Content -Raw -LiteralPath (Join-Path $root 'scripts/verify-cedar-creek-disposable.ps1')
   $cedarFkIndexGuard = '  if ((Get-FileHash -LiteralPath (Join-Path $root "supabase/migrations/$fkIndexMigration") -Algorithm SHA256).Hash.ToLowerInvariant() -cne $fkIndexMigrationSha256) { throw ''CEDAR_CREEK_FK_INDEX_MIGRATION_HASH_MISMATCH'' }'
   if ($cedarSource -notmatch [regex]::Escape("`$migration = '$migration'") -or

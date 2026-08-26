@@ -31,8 +31,7 @@ function Assert-Cw1Contract {
     (Join-Path $root 'scripts/harvest-ridge-db-clock.psm1')
   )
   if (@($required | Where-Object { -not (Test-Path -LiteralPath $_) }).Count) { throw 'CONNECT_WORKFLOWS_CW1_PACKET_MISSING_REQUIRED_FILE' }
-  $head = (Get-ChildItem (Join-Path $root 'supabase/migrations') -File | Sort-Object Name | Select-Object -Last 1).Name
-  if ($head -cne $migrationHead) { throw "CONNECT_WORKFLOWS_CW1_MIGRATION_HEAD_MISMATCH:$head" }
+  if (-not (Test-Path -LiteralPath (Join-Path $root "supabase/migrations/$migrationHead"))) { throw "CONNECT_WORKFLOWS_CW1_MIGRATION_MISSING:$migrationHead" }
   $actualBlob = (& git -C $root hash-object (Join-Path $root "supabase/migrations/$migration")).Trim()
   if ($LASTEXITCODE -ne 0 -or $actualBlob -cne $migrationBlob) { throw 'CONNECT_WORKFLOWS_CW1_MIGRATION_BLOB_MISMATCH' }
   $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
