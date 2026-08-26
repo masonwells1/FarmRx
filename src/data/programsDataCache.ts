@@ -113,8 +113,11 @@ function inventoryMatch(value: unknown, farmId: string): ProgramInventoryMatch {
   return result
 }
 function assignedProduct(value: unknown, farmId: string, passId: string): { product: AssignedProgramProduct; cachedMatch: ProgramInventoryMatch | null } {
-  const row = object(value, ['id', 'farm_id', 'assigned_pass_id', 'source_program_pass_product_id', 'sequence', 'product_name', 'rate_text', 'unit_text', 'estimated_cost_per_acre', 'notes', 'actual_product_name', 'actual_rate_text', 'actual_unit_text', 'actual_cost_per_acre', 'inventory_match'])
-  const cachedMatch = row.inventory_match === null ? null : inventoryMatch(row.inventory_match, farmId)
+  const legacyKeys = ['id', 'farm_id', 'assigned_pass_id', 'source_program_pass_product_id', 'sequence', 'product_name', 'rate_text', 'unit_text', 'estimated_cost_per_acre', 'notes', 'actual_product_name', 'actual_rate_text', 'actual_unit_text', 'actual_cost_per_acre']
+  const currentKeys = [...legacyKeys, 'inventory_match']
+  const shape = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : invalid()
+  const row = object(shape, Object.hasOwn(shape, 'inventory_match') ? currentKeys : legacyKeys)
+  const cachedMatch = Object.hasOwn(row, 'inventory_match') && row.inventory_match !== null ? inventoryMatch(row.inventory_match, farmId) : null
   const product: AssignedProgramProduct = { id: id(row.id), farm_id: id(row.farm_id), assigned_pass_id: id(row.assigned_pass_id), source_program_pass_product_id: nullableId(row.source_program_pass_product_id), sequence: integer(row.sequence, 1), product_name: string(row.product_name, 200, true), rate_text: string(row.rate_text, 80, true), unit_text: string(row.unit_text, 80, true), estimated_cost_per_acre: nullableNumber(row.estimated_cost_per_acre), notes: nullableString(row.notes, 1000), actual_product_name: nullableString(row.actual_product_name, 200), actual_rate_text: nullableString(row.actual_rate_text, 80), actual_unit_text: nullableString(row.actual_unit_text, 80), actual_cost_per_acre: nullableNumber(row.actual_cost_per_acre), inventory_match: null }
   if (product.farm_id !== farmId || product.assigned_pass_id !== passId || product.estimated_cost_per_acre !== null && product.estimated_cost_per_acre < 0 || product.actual_cost_per_acre !== null && product.actual_cost_per_acre < 0 || !!product.actual_product_name !== !!product.actual_rate_text || !!product.actual_product_name !== !!product.actual_unit_text || cachedMatch && cachedMatch.assigned_product_id !== product.id) invalid()
   return { product, cachedMatch }
@@ -148,7 +151,11 @@ function assignment(value: unknown, farmId: string, cachedMatches: Map<string, P
 
 export function decodeProgramsDataCache(value: unknown, context: { farmId: string; userId: string }): ProgramsData {
   if (!uuid.test(context.farmId) || !uuid.test(context.userId)) invalid()
-  const row = object(value, ['programs', 'assignments', 'cropAssignments', 'applicationRecords', 'assignmentCosts', 'cropCostRollups', 'inventoryProducts', 'inventoryMatches', 'viewer'])
+  const legacyKeys = ['programs', 'assignments', 'cropAssignments', 'applicationRecords', 'assignmentCosts', 'cropCostRollups', 'viewer']
+  const currentKeys = [...legacyKeys.slice(0, 6), 'inventoryProducts', 'inventoryMatches', 'viewer']
+  const shape = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : invalid()
+  const raw = object(shape, Object.hasOwn(shape, 'inventoryProducts') || Object.hasOwn(shape, 'inventoryMatches') ? currentKeys : legacyKeys)
+  const row = Object.hasOwn(raw, 'inventoryProducts') && Object.hasOwn(raw, 'inventoryMatches') ? raw : { ...raw, inventoryProducts: [], inventoryMatches: [] }
   const viewerRow = object(row.viewer, ['user_id', 'role']); const role = string(viewerRow.role, 20, true); const viewer = { user_id: id(viewerRow.user_id), role: roles.has(role as FarmViewerRole) ? role as FarmViewerRole : invalid() }
   if (viewer.user_id !== context.userId) invalid()
   const programs = array(row.programs).map((item) => program(item, context.farmId)); unique(programs, (item) => item.id)
@@ -168,7 +175,7 @@ export function decodeProgramsDataCache(value: unknown, context: { farmId: strin
   for (const item of assignments) {
     const cropRow = cropsById.get(item.id)
     const owningProgram = programsById.get(item.program_id)
-    if (!owningProgram || item.template_revision > item.current_template_revision || item.current_template_revision !== owningProgram.revision || !cropRow || cropRow.field_id !== item.field_id || cropRow.field_name !== item.field_name || cropRow.commodity_id !== item.commodity_id || cropRow.commodity_name !== item.commodity_name || cropRow.crop_year !== item.crop_year || cropRow.planting_sequence !== item.planting_sequence || cropRow.planting_date !== item.planting_date || cropRow.planted_acres !== item.planted_acres || cropRow.latitude !== item.latitude || cropRow.longitude !== item.longitude) invalid()
+    if (item.template_revision > item.current_template_revision || owningProgram && item.current_template_revision !== owningProgram.revision || !cropRow || cropRow.field_id !== item.field_id || cropRow.field_name !== item.field_name || cropRow.commodity_id !== item.commodity_id || cropRow.commodity_name !== item.commodity_name || cropRow.crop_year !== item.crop_year || cropRow.planting_sequence !== item.planting_sequence || cropRow.planting_date !== item.planting_date || cropRow.planted_acres !== item.planted_acres || cropRow.latitude !== item.latitude || cropRow.longitude !== item.longitude) invalid()
     for (const pass of item.passes) {
       if (assignedPassIds.has(pass.id)) invalid(); assignedPassIds.add(pass.id)
       if (pass.status === 'applied' && pass.applied_acres! > item.planted_acres) invalid()
