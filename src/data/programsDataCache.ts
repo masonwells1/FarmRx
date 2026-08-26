@@ -176,16 +176,17 @@ export function decodeProgramsDataCache(value: unknown, context: { farmId: strin
     const cropRow = cropsById.get(item.id)
     const owningProgram = programsById.get(item.program_id)
     const archivedTerminalHistory = item.assignment_status === 'archived' && item.passes.every((pass) => pass.status === 'applied' || pass.status === 'skipped' || pass.status === 'cancelled')
-    if (item.template_revision > item.current_template_revision || !owningProgram && !archivedTerminalHistory || owningProgram && item.current_template_revision !== owningProgram.revision || !cropRow || cropRow.field_id !== item.field_id || cropRow.field_name !== item.field_name || cropRow.commodity_id !== item.commodity_id || cropRow.commodity_name !== item.commodity_name || cropRow.crop_year !== item.crop_year || cropRow.planting_sequence !== item.planting_sequence || cropRow.planting_date !== item.planting_date || cropRow.planted_acres !== item.planted_acres || cropRow.latitude !== item.latitude || cropRow.longitude !== item.longitude) invalid()
+    const archivedProgramSnapshot = !owningProgram && (item.assignment_status === 'active' || archivedTerminalHistory)
+    if (item.template_revision > item.current_template_revision || !owningProgram && !archivedProgramSnapshot || owningProgram && item.current_template_revision !== owningProgram.revision || !cropRow || cropRow.field_id !== item.field_id || cropRow.field_name !== item.field_name || cropRow.commodity_id !== item.commodity_id || cropRow.commodity_name !== item.commodity_name || cropRow.crop_year !== item.crop_year || cropRow.planting_sequence !== item.planting_sequence || cropRow.planting_date !== item.planting_date || cropRow.planted_acres !== item.planted_acres || cropRow.latitude !== item.latitude || cropRow.longitude !== item.longitude) invalid()
     for (const pass of item.passes) {
       if (assignedPassIds.has(pass.id)) invalid(); assignedPassIds.add(pass.id)
       if (pass.status === 'applied' && pass.applied_acres! > item.planted_acres) invalid()
       const sourcePass = pass.source_program_pass_id === null ? null : sourcePasses.find((candidate) => candidate.id === pass.source_program_pass_id)
-      if (sourcePass && sourcePass.program_id !== item.program_id) invalid()
+      if (pass.source_program_pass_id !== null && (!sourcePass && !archivedProgramSnapshot || sourcePass && sourcePass.program_id !== item.program_id)) invalid()
       if (pass.application_record_id !== null) { const record = applicationsById.get(pass.application_record_id); if (!record || record.crop_assignment_id !== item.id || record.application_date !== pass.applied_on || record.applied_acres !== pass.applied_acres) invalid() }
       for (const product of pass.products) {
         const sourceProduct = product.source_program_pass_product_id === null ? null : sourceProducts.find((candidate) => candidate.id === product.source_program_pass_product_id)
-        if (sourceProduct && (!sourcePass || sourceProduct.program_pass_id !== sourcePass.id)) invalid()
+        if (product.source_program_pass_product_id !== null && (!sourceProduct && !archivedProgramSnapshot || sourceProduct && (!sourcePass || sourceProduct.program_pass_id !== sourcePass.id))) invalid()
         if (assigned.has(product.id)) invalid(); assigned.set(product.id, { product, pass, assignment: item })
       }
     }
