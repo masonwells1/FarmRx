@@ -1259,3 +1259,9 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Date/time:** 2026-08-25 (America/Chicago). Linux Foundation passed all preceding fast regressions then correctly failed the Maple Docker-adapter regression: its POSIX journal writer used the two-argument `File.Move`, which refuses to replace the existing journal destination while Windows uses `MoveFileEx` with replacement semantics.
 - **Smallest repair:** retain the existing Windows atomic path and use the POSIX `File.Move` overwrite overload. The journal still writes and flushes a unique temp file before replacement, and existing cleanup remains fail-closed. The focused Maple Docker-adapter regression passed under `pwsh`; no Docker/backend, migration, browser, product, or live action ran.
 - **Current gate:** commit this exact local repair, obtain fresh independent exact-SHA review, update PR #28 only after acceptance, then require authoritative Foundation and review gates.
+
+## CW-139 — portable Faketime Git discovery repair
+
+- **Date/time:** 2026-08-25 (America/Chicago). Foundation passed the repaired Maple adapter then correctly failed the Faketime manifest regression because it still resolved Windows-only `git.exe` on Linux.
+- **Smallest repair:** select `git.exe` only on Windows and `git` elsewhere, retaining absolute executable resolution and all existing failure/Trace2 custody checks. The focused Faketime manifest regression passed locally; no Docker/backend, migration, browser, product, or live action ran.
+- **Current gate:** commit, fresh exact-SHA review, then update PR #28 and require authoritative Foundation and review gates.

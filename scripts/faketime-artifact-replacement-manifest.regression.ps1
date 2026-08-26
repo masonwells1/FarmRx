@@ -3,7 +3,8 @@ $ErrorActionPreference=$InitialErrorActionPreference
 if(-not$ControlFlowChild-and-not[string]::IsNullOrWhiteSpace($RepositoryRoot)){throw 'FAKETIME_ARTIFACT_MANIFEST_REPOSITORY_ROOT_ONLY_ALLOWED_FOR_PROOF_CHILD'}
 $root=Split-Path -Parent $PSScriptRoot
 if($ControlFlowChild){if([string]::IsNullOrWhiteSpace($RepositoryRoot)-or-not[IO.Path]::IsPathRooted($RepositoryRoot)){throw 'FAKETIME_ARTIFACT_MANIFEST_PROOF_CHILD_REPOSITORY_ROOT_REQUIRED'};$root=[IO.Path]::GetFullPath($RepositoryRoot)}
-$gitCommands=@(Get-Command git.exe -CommandType Application -ErrorAction Stop)
+$gitCommand=if($env:OS -eq 'Windows_NT'){'git.exe'}else{'git'}
+$gitCommands=@(Get-Command $gitCommand -CommandType Application -ErrorAction Stop)
 if($gitCommands.Count-lt1){throw 'FAKETIME_ARTIFACT_MANIFEST_GIT_EXE_MISSING'}
 $gitExe=[IO.Path]::GetFullPath($gitCommands[0].Source)
 $manifestPath=Join-Path $root 'docs/season-readiness/FAKETIME-ARTIFACT-REPLACEMENT-MANIFEST.json'
