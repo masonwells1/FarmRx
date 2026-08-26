@@ -175,7 +175,8 @@ export function decodeProgramsDataCache(value: unknown, context: { farmId: strin
   for (const item of assignments) {
     const cropRow = cropsById.get(item.id)
     const owningProgram = programsById.get(item.program_id)
-    if (item.template_revision > item.current_template_revision || owningProgram && item.current_template_revision !== owningProgram.revision || !cropRow || cropRow.field_id !== item.field_id || cropRow.field_name !== item.field_name || cropRow.commodity_id !== item.commodity_id || cropRow.commodity_name !== item.commodity_name || cropRow.crop_year !== item.crop_year || cropRow.planting_sequence !== item.planting_sequence || cropRow.planting_date !== item.planting_date || cropRow.planted_acres !== item.planted_acres || cropRow.latitude !== item.latitude || cropRow.longitude !== item.longitude) invalid()
+    const archivedTerminalHistory = item.assignment_status === 'archived' && item.passes.every((pass) => pass.status === 'applied' || pass.status === 'skipped' || pass.status === 'cancelled')
+    if (item.template_revision > item.current_template_revision || !owningProgram && !archivedTerminalHistory || owningProgram && item.current_template_revision !== owningProgram.revision || !cropRow || cropRow.field_id !== item.field_id || cropRow.field_name !== item.field_name || cropRow.commodity_id !== item.commodity_id || cropRow.commodity_name !== item.commodity_name || cropRow.crop_year !== item.crop_year || cropRow.planting_sequence !== item.planting_sequence || cropRow.planting_date !== item.planting_date || cropRow.planted_acres !== item.planted_acres || cropRow.latitude !== item.latitude || cropRow.longitude !== item.longitude) invalid()
     for (const pass of item.passes) {
       if (assignedPassIds.has(pass.id)) invalid(); assignedPassIds.add(pass.id)
       if (pass.status === 'applied' && pass.applied_acres! > item.planted_acres) invalid()
