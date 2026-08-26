@@ -29,6 +29,7 @@ async function renderCase(kind: ApplicationSaveDisposition['kind'] | 'reject') {
   const repository = { async saveApplication(input: { id: string }) { saves.push(input); if (kind === 'reject') throw new Error('lost canonical response'); return kind === 'confirmed' ? { kind, applicationId: input.id } : { kind, applicationId: input.id, operationId: `operation-${saves.length}` } } } as unknown as InventoryRepository
   await act(async () => { root.render(createElement(SprayForm, { workspace, assignments: workspace.fields.crop_assignments, repository, done: (notice: string) => notices.push(notice), failed: (error: unknown) => failures.push(error) })); await Promise.resolve() })
   const form = container.querySelector('form')! as HTMLFormElement
+  assert(form.querySelector<HTMLSelectElement>('.spray-product-row select')!.value === 'product-cedar', 'The existing blank manual-spray path must preserve its first-product default.')
   await act(async () => { fill(form); await Promise.resolve(); form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await Promise.resolve() })
   return { container, root, saves, notices, failures }
 }

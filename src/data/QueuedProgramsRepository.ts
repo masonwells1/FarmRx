@@ -3,11 +3,12 @@ import { ProgramsWriteQueue, programsWriteQueueKey, type ProgramsQueueEntryV1 } 
 import { setModuleSyncStatus } from './syncStatus'
 import { normalizeProgramProductDraft, validAssignmentIdentityPlans, validateActualProgramProducts, validateProgramDraft, validateProgramPassDraft, validateProgramProductDraft, type ActualProgramProduct, type AssignedProgramPass, type AssignmentIdentityPlan, type Program, type ProgramAssignment, type ProgramDraft, type ProgramPass, type ProgramPassDraft, type ProgramProductDraft, type ProgramsData, type ProgramsRepository } from './programs'
 import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
-import type { SupabaseProgramsRepository } from './SupabaseProgramsRepository'
+import { ProgramInventorySnapshotConsistencyError, type SupabaseProgramsRepository } from './SupabaseProgramsRepository'
 import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, WorkspaceMemoryScope, type WorkspaceMemoryGuard, writeWorkspaceCache } from './workspaceCache'
 import { queueTransaction } from './queueTransaction'
 import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 import type { FarmOperationContext } from './farmOperationContext'
+import { decodeProgramsDataCache } from './programsDataCache'
 const blocked = 'Saved changes on this device need attention. Nothing was deleted.'
 const offlineMessage = 'Your saved programs are waiting on this device. Connect to load your programs.'
 type Context = { userId: string; farmId: string }
@@ -115,10 +116,10 @@ export class QueuedProgramsRepository implements ProgramsRepository {
     })
   }
   private async refreshWorkspace(memoryGuard: WorkspaceMemoryGuard, operationContext: FarmOperationContext) {
-    const workspace = await this.live.getData(true)
+    const stableWorkspace = await this.live.getData(true)
     await verifyQueuedReadContext(this.d, operationContext)
     this.memoryScope.verify(this.d.storage, memoryGuard)
-    this.workspace = workspace
+    this.workspace = stableWorkspace
     return this.workspace
   }
   async getData(includeArchived = false): Promise<ProgramsData> {
@@ -141,7 +142,7 @@ export class QueuedProgramsRepository implements ProgramsRepository {
         const cached = await readWorkspaceCache<ProgramsData>(cacheScope, operationalCacheMaxAgeMs)
         await verifyRead()
         this.memoryScope.verify(this.d.storage, memoryGuard)
-        if (cached) this.workspace = cached.data
+        if (cached) this.workspace = decodeProgramsDataCache(cached.data, context)
       }
       if (!this.workspace) throw new Error(offlineMessage)
       await verifyRead()
@@ -151,6 +152,7 @@ export class QueuedProgramsRepository implements ProgramsRepository {
       return result
     } catch (error) {
       await verifyRead()
+      if (error instanceof ProgramInventorySnapshotConsistencyError) throw error
       try {
         const entries = await this.locked(queue, () => Promise.resolve(queue.read().entries))
         await verifyRead()
@@ -158,7 +160,7 @@ export class QueuedProgramsRepository implements ProgramsRepository {
           const cached = await readWorkspaceCache<ProgramsData>(cacheScope, operationalCacheMaxAgeMs)
           await verifyRead()
           this.memoryScope.verify(this.d.storage, memoryGuard)
-          if (cached) this.workspace = cached.data
+          if (cached) this.workspace = decodeProgramsDataCache(cached.data, context)
         }
         if (this.workspace && isTransportFailure(error, this.d.isOffline())) {
           await verifyRead()
@@ -295,6 +297,7 @@ export class QueuedProgramsRepository implements ProgramsRepository {
                   actual_rate_text: null,
                   actual_unit_text: null,
                   actual_cost_per_acre: null,
+                  inventory_match: null,
                 }
               }),
             }
@@ -368,7 +371,9 @@ export class QueuedProgramsRepository implements ProgramsRepository {
         })
         pass.products = pass.products.map((product) => {
           const actual = entry.actualProducts.find((item) => item.id === product.id)
-          return actual ? { ...product, ...actual } : product
+          if (!actual) return product
+          const { inventory_match: _unconfirmedInventoryMatch, ...actualFields } = actual
+          return { ...product, ...actualFields }
         })
       }
     }
@@ -557,7 +562,7 @@ export class QueuedProgramsRepository implements ProgramsRepository {
     },
   ) {
     const validation = validateActualProgramProducts(actualProducts)
-    if (validation) throw new Error(validation)
+    if (validation || applicationLink.kind !== 'none' && actualProducts.some((product) => product.inventory_match)) throw new Error(validation ?? 'Choose “Do not add an application record” before confirming an Inventory draw-down.')
     const { context, operationContext } = await this.source()
     const entry = {
       ...this.base('mark_program_pass_applied', context),

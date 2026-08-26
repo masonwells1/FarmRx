@@ -4,7 +4,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $project = 'farmrx-farmer-simplicity-2027-local'; $db = "supabase_db_$project"; $gateway = "supabase_kong_$project"
 $manifestPath = Join-Path $root 'tests/season/season-2027.manifest.json'; $contractPath = Join-Path $root 'docs/season-readiness/WORKFLOWS-AND-SCENARIOS.md'
 $fixture = Join-Path $root 'tests/season/cedar-creek-2027-start.sql'; $verify = Join-Path $root 'tests/season/cedar-creek-2027.verify.sql'
-$migration = '20260725213142_pine_hill_removed_farm_epoch.sql'; $migrationBlob = '89f432cdfc9a2cd6c6379309e0eb1bd283500686'
+$migration = '20260813133808_connect_workflows_program_inventory.sql'; $migrationBlob = '6e37cfb47456ed28e9b259f7e5520f5a1697708e'
+$fkIndexMigration = '20260820135357_add_program_inventory_match_fk_indexes.sql'; $fkIndexMigrationSha256 = 'bf6fbc84c5389e1122ce7ccf63c37dacb2dfc21d881216bbbb5241b203fa5589'
 . (Join-Path $root 'scripts/maple-season-credential.ps1')
 Import-Module (Join-Path $root 'scripts/harvest-ridge-db-clock.psm1') -Force
 
@@ -12,9 +13,10 @@ function Assert-CedarContract {
   $required = @($manifestPath,$contractPath,$fixture,$verify,(Join-Path $root 'tests/e2e/season/cedar-creek.spec.ts'),(Join-Path $root 'playwright.cedar-creek.config.ts'))
   if (@($required | Where-Object { -not (Test-Path -LiteralPath $_) }).Count) { throw 'CEDAR_CREEK_PACKET_MISSING_REQUIRED_FILE' }
   $head = (Get-ChildItem (Join-Path $root 'supabase/migrations') -File | Sort-Object Name | Select-Object -Last 1).Name
-  if ($head -cne $migration) { throw "CEDAR_CREEK_MIGRATION_HEAD_MISMATCH:$head" }
+  if ($head -cne $fkIndexMigration) { throw "CEDAR_CREEK_MIGRATION_HEAD_MISMATCH:$head" }
   $actualBlob = (& git -C $root hash-object (Join-Path $root "supabase/migrations/$migration")).Trim()
   if ($actualBlob -cne $migrationBlob) { throw 'CEDAR_CREEK_MIGRATION_BLOB_MISMATCH' }
+  if ((Get-FileHash -LiteralPath (Join-Path $root "supabase/migrations/$fkIndexMigration") -Algorithm SHA256).Hash.ToLowerInvariant() -cne $fkIndexMigrationSha256) { throw 'CEDAR_CREEK_FK_INDEX_MIGRATION_HASH_MISMATCH' }
   $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
   $operation = @($manifest.fixtures | Where-Object { $_.label -ceq 'Cedar scouting save operation' -and $_.uuid -ceq '27094000-0000-4000-8000-000000000005' })
   if ($operation.Count -ne 1) { throw 'CEDAR_CREEK_MANIFEST_OPERATION_IDENTITY_MISMATCH' }
@@ -63,9 +65,16 @@ try {
     Reset-Cedar $supabase
     $env:VITE_LOCAL_SUPABASE_PROJECT_REF='farmrxlocalsimplicity2027'; $env:VITE_LOCAL_SUPABASE_URL=$boundary.ApiUrl; $env:VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY=$boundary.PublishableKey; $env:FARMRX_CC_VIEWPORT=$viewport; $env:FARMRX_CC_CLIENT_INSTANT='2027-07-07T13:20:00-05:00'
     $token = Get-CedarAccessToken $boundary.PublishableKey
+    $verifySql = Get-Content -Raw -Encoding UTF8 -LiteralPath $verify
     $action = {
-      $browserOutput = @(& npx playwright test --config playwright.cedar-creek.config.ts 2>&1)
-      $browserExit = $LASTEXITCODE
+      $priorErrorActionPreference = $ErrorActionPreference
+      try {
+        $ErrorActionPreference = 'Continue'
+        $browserOutput = @(& npx playwright test --config playwright.cedar-creek.config.ts 2>&1)
+        $browserExit = $LASTEXITCODE
+      } finally {
+        $ErrorActionPreference = $priorErrorActionPreference
+      }
       $browserOutput | Out-Host
       $browserText = [string]::Join("`n", [string[]]$browserOutput)
       if ($browserExit -ne 0 -or $browserText -match '(?m)^\s*\d+ failed\s*$') {
@@ -73,7 +82,8 @@ try {
         throw "CEDAR_CREEK_BROWSER_FAILED:$viewport:exit=$browserExit"
       }
       Write-Host "CEDAR_CREEK_PLAYWRIGHT_EXIT:${viewport}:$browserExit"
-      if (-not (Invoke-MapleSeasonSqlFile -Path $verify -ExpectedContainer $db)) { throw "CEDAR_CREEK_VERIFY_FAILED:$viewport" }
+      $verifyOutput = @($verifySql | docker exec -i $db psql -X -q -U postgres -d postgres -v ON_ERROR_STOP=1 -P pager=off 2>&1)
+      if ($LASTEXITCODE -ne 0 -or [string]::Join("`n", [string[]]$verifyOutput) -notmatch 'CEDAR_CREEK_2027_VERIFY_PASS') { throw "CEDAR_CREEK_VERIFY_FAILED:$viewport" }
       return $true
     }.GetNewClosure()
     $clockResult = @(Invoke-HarvestRidgeClockPhase -Root $root -Phase "cedar-$viewport" -FrozenInstant '2027-07-07 18:20:00+00:00' -ApiUrl $boundary.ApiUrl -PublishableKey $boundary.PublishableKey -AccessToken $token -ProofFarmId '27010000-0000-4000-8000-000000000005' -ProofFarmName 'Cedar Creek' -Action $action)

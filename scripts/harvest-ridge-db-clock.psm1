@@ -15,9 +15,9 @@ $script:HrClockNames = [ordered]@{
 }
 $script:HrBaseId='sha256:ba10e934f0a59990379f78ab9ed93926f1c291dd61a12fe4026f4202f1b89770'
 $script:HrBaseDigest='public.ecr.aws/supabase/postgres@sha256:ba10e934f0a59990379f78ab9ed93926f1c291dd61a12fe4026f4202f1b89770'
-$script:HrArtifactRef='maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7@sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746'
-$script:HrArtifactTag='maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7:synthetic'
-$script:HrArtifactId='sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746'
+$script:HrArtifactRef='maple-faketime-artifacts-b9ad08aeb66ed961e8426b2cce527365@sha256:7cbc0a183ba33c4318a9784dae376104e55282e8e0c716511336afaf924f3302'
+$script:HrArtifactTag='maple-faketime-artifacts-b9ad08aeb66ed961e8426b2cce527365:synthetic'
+$script:HrArtifactId='sha256:7cbc0a183ba33c4318a9784dae376104e55282e8e0c716511336afaf924f3302'
 $script:HrFarmId='27010000-0000-4000-8000-000000000004'
 $script:HrFarmName='Harvest Ridge'
 $script:MapleFarmId='27010000-0000-4000-8000-000000000001'
@@ -128,7 +128,7 @@ function Assert-HrClockAttestation {
   if($digests.Count-ne1-or$digests[0]-cne$script:HrBaseDigest){throw 'HARVEST_RIDGE_CLOCK_REFUSED: ordinary database repository digest is not exact.'}
   foreach($artifactName in @($script:HrArtifactRef,$script:HrArtifactTag)){
     $artifact=ConvertFrom-HrClockJson (Invoke-HrClockProcess $Root @('image','inspect','--format','{"Id":{{json .Id}},"Labels":{{json .Config.Labels}}}',$artifactName)) 'faketime artifact'
-    if($artifact.Id-cne$script:HrArtifactId-or$artifact.Labels.'farmrx.synthetic-bootstrap'-cne'225c197c34164c90b08a4c8b6b10e6c7'-or$artifact.Labels.'farmrx.synthetic-owner'-cne'maple-faketime-bootstrap'-or$artifact.Labels.'farmrx.synthetic-role'-cne'faketime-artifacts'-or$artifact.Labels.'farmrx.source-digest'-cne'debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818'-or$artifact.Labels.'farmrx.package-contract'-cne'libfaketime=0.9.10-2.1;gcc;libc6-dev'){throw 'HARVEST_RIDGE_CLOCK_REFUSED: reviewed faketime artifact identity changed.'}
+    if($artifact.Id-cne$script:HrArtifactId-or$artifact.Labels.'farmrx.synthetic-bootstrap'-cne'b9ad08aeb66ed961e8426b2cce527365'-or$artifact.Labels.'farmrx.synthetic-owner'-cne'maple-faketime-bootstrap'-or$artifact.Labels.'farmrx.synthetic-role'-cne'faketime-artifacts'-or$artifact.Labels.'farmrx.source-digest'-cne'debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818'-or$artifact.Labels.'farmrx.package-contract'-cne'libfaketime=0.9.10-2.1;gcc;libc6-dev'){throw 'HARVEST_RIDGE_CLOCK_REFUSED: reviewed faketime artifact identity changed.'}
   }
   $contractHash=Get-HrClockHash ([ordered]@{Phase=$Phase;FrozenInstant=$FrozenInstant;ProofFarmId=$ProofFarmId;ProofFarmName=$ProofFarmName;DbId=$ordinary.Id;DbImage=$ordinary.Image;RestId=$rest.Id;RestImage=$rest.Image;RestPid=[int]$rest.Pid;GatewayId=$gateway.Id;GatewayImage=$gateway.Image;NetworkId=$network.Id;Volume=$volume.Name;Project=$n.Project})
   [pscustomobject]@{Db=$ordinary;Rest=$rest;Gateway=$gateway;Network=$network;Volume=$volume;ContractHash=$contractHash}

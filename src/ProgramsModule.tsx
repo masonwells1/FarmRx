@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router";
 import {
   canEditPrograms,
+  canonicalProgramInventoryProduct,
+  confirmedProgramInventoryActuals,
   defaultProgramApplyRecordChoice,
+  formatProgramInventoryQuantity,
+  parseProgramInventoryQuantityInput,
+  PROGRAM_INVENTORY_QUANTITY_MAX,
   roundDecimalHalfUp,
   validateActualProgramProducts,
   validateProgramDraft,
@@ -18,6 +23,7 @@ import {
   type ProgramApplyRecordChoice,
   type ProgramAssignment,
   type ProgramCropCostRollup,
+  type ProgramInventoryProduct,
   type ProgramDraft,
   type ProgramPass,
   type ProgramPassDraft,
@@ -73,6 +79,7 @@ export function ProgramsPage({
   const [costRollups, setCostRollups] = useState<
     import("./data/programs").ProgramCropCostRollup[]
   >([]);
+  const [inventoryProducts, setInventoryProducts] = useState<ProgramInventoryProduct[]>([]);
   const [role, setRole] = useState("read_only");
   const [showArchived, setShowArchived] = useState(false);
   const [editing, setEditing] = useState<Program | null>(null);
@@ -91,6 +98,7 @@ export function ProgramsPage({
       setCrops(data.cropAssignments);
       setApplicationRecords(data.applicationRecords);
       setCostRollups(data.cropCostRollups);
+      setInventoryProducts(data.inventoryProducts);
       setRole(data.viewer.role);
       setError(null);
       setLoadFailed(false);
@@ -204,6 +212,7 @@ export function ProgramsPage({
           programs={programs}
           applicationRecords={applicationRecords}
           costRollups={costRollups}
+          inventoryProducts={inventoryProducts}
           canEdit={editable}
           repository={repository}
           onChanged={reload}
@@ -1259,6 +1268,7 @@ function SeasonTracker({
   programs,
   applicationRecords,
   costRollups,
+  inventoryProducts,
   canEdit,
   repository,
   onChanged,
@@ -1267,6 +1277,7 @@ function SeasonTracker({
   programs: Program[];
   applicationRecords: ProgramApplicationRecord[];
   costRollups: ProgramCropCostRollup[];
+  inventoryProducts: ProgramInventoryProduct[];
   canEdit: boolean;
   repository: ProgramsRepository;
   onChanged: () => Promise<void>;
@@ -1418,6 +1429,7 @@ function SeasonTracker({
                   pass={pass}
                   assignment={assignment}
                   applicationRecords={applicationRecords}
+                  inventoryProducts={inventoryProducts}
                   canEdit={
                     canEdit &&
                     assignment.assignment_status === "active" &&
@@ -1519,10 +1531,18 @@ function ReassignControl({
     </button>
   );
 }
+function ProgramInventoryMatchOffer({ product, candidate, quantityText, onChange, onQuantityTextChange }: { product: ActualProgramProduct; candidate: ProgramInventoryProduct | null; quantityText: string; onChange: (next: ActualProgramProduct) => void; onQuantityTextChange: (next: string) => void }) {
+  if (!candidate) return <p className="panel-note wide">No single active Inventory product exactly matches this product name. Inventory on hand will not change for this line.</p>
+  const match = product.inventory_match
+  const confirmedMatch = match && match.inventory_product_id === candidate.id && match.inventory_unit === candidate.inventory_unit ? match : null
+  return <fieldset className="wide"><legend>Inventory draw-down (optional)</legend><label className="check-label"><input type="checkbox" checked={confirmedMatch !== null} onChange={(event) => { onQuantityTextChange(''); onChange(event.target.checked ? { ...product, inventory_match: { inventory_product_id: candidate.id, quantity_in_inventory_unit: Number.NaN, inventory_unit: candidate.inventory_unit } } : { ...product, inventory_match: null }) }} />Confirm exact Inventory product: {candidate.name}</label>{confirmedMatch && <label>Quantity to remove ({candidate.inventory_unit})<input type="number" min="0.00000001" max={PROGRAM_INVENTORY_QUANTITY_MAX} step="0.00000001" required value={quantityText} onChange={(event) => { const raw = event.target.value; const quantity = parseProgramInventoryQuantityInput(raw); onQuantityTextChange(raw); onChange({ ...product, inventory_match: { inventory_product_id: candidate.id, quantity_in_inventory_unit: quantity ?? Number.NaN, inventory_unit: candidate.inventory_unit } }) }} /></label>}<p className="panel-note">Enter a plain decimal from 0.00000001 through {PROGRAM_INVENTORY_QUANTITY_MAX.toLocaleString('en-US')} {candidate.inventory_unit}, using no more than eight decimal places. Farm Rx will not convert the Program rate or unit.</p></fieldset>
+}
+
 function TrackerPass({
   pass,
   assignment,
   applicationRecords,
+  inventoryProducts,
   canEdit,
   repository,
   onChanged,
@@ -1531,6 +1551,7 @@ function TrackerPass({
   pass: AssignedProgramPass;
   assignment: ProgramAssignment;
   applicationRecords: ProgramApplicationRecord[];
+  inventoryProducts: ProgramInventoryProduct[];
   canEdit: boolean;
   repository: ProgramsRepository;
   onChanged: () => Promise<void>;
@@ -1567,6 +1588,24 @@ function TrackerPass({
         product.actual_cost_per_acre ?? product.estimated_cost_per_acre,
     })),
   );
+  const [inventoryQuantityInputs, setInventoryQuantityInputs] = useState<Record<string, string>>({});
+  const submittedActuals: ActualProgramProduct[] = actuals.map((product): ActualProgramProduct => {
+    if (!product.inventory_match) return product
+    if (recordChoice !== "none") { const { inventory_match: _applicationRecordMatch, ...unmatched } = product; return unmatched }
+    const candidate = canonicalProgramInventoryProduct(product.actual_product_name, assignment.farm_id, inventoryProducts)
+    if (candidate?.id === product.inventory_match.inventory_product_id && candidate.inventory_unit === product.inventory_match.inventory_unit) return product
+    const { inventory_match: _staleMatch, ...unmatched } = product
+    return unmatched
+  })
+  const confirmedInventoryActuals = confirmedProgramInventoryActuals(submittedActuals)
+  const confirmedInventoryMatches = confirmedInventoryActuals.length
+  const confirmedInventorySummary = confirmedInventoryActuals.flatMap((product) => {
+    const match = product.inventory_match
+    const inventory = inventoryProducts.find((candidate) => candidate.id === match.inventory_product_id && candidate.inventory_unit === match.inventory_unit)
+    return inventory ? [`${inventory.name} · ${formatProgramInventoryQuantity(match.quantity_in_inventory_unit)} ${match.inventory_unit}`] : []
+  }).join('; ')
+  const appliedInventoryMatches = pass.products.filter((product) => product.inventory_match)
+  const appliedUnmatchedCount = pass.products.length - appliedInventoryMatches.length
   const passLock = useRef(createSubmitLock());
   async function apply(event: FormEvent) {
     event.preventDefault();
@@ -1577,7 +1616,7 @@ function TrackerPass({
       numeric <= 0 ||
       numeric > assignment.planted_acres
         ? `Applied acres must be greater than 0 and no more than ${assignment.planted_acres}.`
-        : validateActualProgramProducts(actuals);
+        : validateActualProgramProducts(submittedActuals);
     if (validation) {
       onError(validation);
       return;
@@ -1607,7 +1646,7 @@ function TrackerPass({
         pass.id,
         date,
         numeric,
-        actuals,
+        submittedActuals,
         applicationLink,
       );
       setMode(null);
@@ -1703,18 +1742,17 @@ function TrackerPass({
       </header>
       {pass.pending && (
         <p className="pending-note" role="status">
-          Saved on this phone. It will sync when you have signal.
+          Saved on this phone. It will sync when you have signal. Inventory changes only after the server confirms sync.
         </p>
       )}
       {pass.activity_type === "spray" && pass.status === "planned" && (
         <SprayLight pass={pass} assignment={assignment} />
       )}
-      {pass.status === "applied" && (
-        <p className="pass-detail">
-          Applied {pass.applied_on} · {pass.applied_acres} acres
-          {pass.application_record_id ? " · Application record linked" : ""} ·
-          Products are free-typed; inventory on-hand was not changed.
-        </p>
+      {pass.status === "applied" && !pass.pending && (
+        <div className="pass-detail">
+          <p>Applied {pass.applied_on} · {pass.applied_acres} acres{pass.application_record_id ? " · Application record linked" : ""} · {appliedInventoryMatches.length ? `${appliedInventoryMatches.length} confirmed ${appliedInventoryMatches.length === 1 ? 'Inventory match reduced' : 'Inventory matches reduced'} on hand.${appliedUnmatchedCount ? ` ${appliedUnmatchedCount} unmatched ${appliedUnmatchedCount === 1 ? 'line did' : 'lines did'} not change Inventory.` : ''}` : "Products were left unmatched; Inventory on hand did not change."}</p>
+          {appliedInventoryMatches.length > 0 && <ul>{appliedInventoryMatches.map((product) => <li key={product.id}>{product.actual_product_name} · Inventory reduced by {formatProgramInventoryQuantity(product.inventory_match!.quantity_in_inventory_unit)} {product.inventory_match!.inventory_unit_snapshot}</li>)}</ul>}
+        </div>
       )}
       {pass.status === "skipped" && (
         <p className="pass-detail">
@@ -1750,7 +1788,11 @@ function TrackerPass({
             Application record (optional)
             <select
               value={recordChoice}
-              onChange={(e) => setRecordChoice(e.target.value as ProgramApplyRecordChoice)}
+              onChange={(e) => {
+                const next = e.target.value as ProgramApplyRecordChoice
+                setRecordChoice(next)
+                if (next !== "none") { setInventoryQuantityInputs({}); setActuals((all) => all.map((item) => { const { inventory_match: _applicationRecordMatch, ...unmatched } = item; return unmatched })) }
+              }}
             >
               <option value="none">Do not add an application record</option>
               {records.map((record) => (
@@ -1774,6 +1816,8 @@ function TrackerPass({
                 : recordChoice === "create"
                   ? "create"
                   : "link",
+              confirmedInventoryMatches,
+              confirmedInventorySummary,
             )}
           </p>
           {actuals.map((product, index) => (
@@ -1782,15 +1826,11 @@ function TrackerPass({
                 Product
                 <input
                   value={product.actual_product_name}
-                  onChange={(e) =>
-                    setActuals((all) =>
-                      all.map((item, i) =>
-                        i === index
-                          ? { ...item, actual_product_name: e.target.value }
-                          : item,
-                      ),
-                    )
-                  }
+                  onChange={(e) => {
+                    const nextName = e.target.value
+                    setInventoryQuantityInputs((current) => { const next = { ...current }; delete next[product.id]; return next })
+                    setActuals((all) => all.map((item, i) => { if (i !== index) return item; const { inventory_match: _clearedMatch, ...unmatched } = item; return { ...unmatched, actual_product_name: nextName } }))
+                  }}
                 />
               </label>
               <label>
@@ -1846,6 +1886,9 @@ function TrackerPass({
                   }
                 />
               </label>
+              {recordChoice !== "none"
+                ? <p className="panel-note wide">A created or linked application record keeps its own Inventory accounting. Choose “Do not add an application record” to confirm a Program-to-Inventory draw-down.</p>
+                : <ProgramInventoryMatchOffer product={product} candidate={canonicalProgramInventoryProduct(product.actual_product_name, assignment.farm_id, inventoryProducts)} quantityText={inventoryQuantityInputs[product.id] ?? ''} onQuantityTextChange={(next) => setInventoryQuantityInputs((current) => ({ ...current, [product.id]: next }))} onChange={(next) => setActuals((all) => all.map((item, i) => i === index ? next : item))} />}
             </div>
           ))}
           <div className="tracker-actions">

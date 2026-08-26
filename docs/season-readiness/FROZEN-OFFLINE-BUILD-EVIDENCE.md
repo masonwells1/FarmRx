@@ -13,3 +13,7 @@ The artifact was pre-inspected against its exact reviewed ID and five labels bef
 - Cleanup: exact image identity and owner were rechecked, then the synthetic proof tag was removed without force.
 
 This proves the frozen image can be built without network access from the pre-inspected local artifact tag. It does not accept runtime fixture lineage, database behavior, PostgREST routing, or the swap workflow.
+
+## Replacement relationship — 2026-08-13
+
+All entries above are retained historical proof for the retired `225c197c34164c90b08a4c8b6b10e6c7` artifact only. They do not prove the new replacement, which is separately recorded in `FAKETIME-ARTIFACT-EVIDENCE.md` as `maple-faketime-artifacts-b9ad08aeb66ed961e8426b2cce527365:synthetic` / `sha256:7cbc0a183ba33c4318a9784dae376104e55282e8e0c716511336afaf924f3302`. The old identity is deleted and unrecoverable locally; no continuity or new runtime credit is claimed here.
