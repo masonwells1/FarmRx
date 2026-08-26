@@ -4,7 +4,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $project = 'farmrx-farmer-simplicity-2027-local'; $db = "supabase_db_$project"; $gateway = "supabase_kong_$project"
 $manifestPath = Join-Path $root 'tests/season/season-2027.manifest.json'; $contractPath = Join-Path $root 'docs/season-readiness/WORKFLOWS-AND-SCENARIOS.md'
 $fixture = Join-Path $root 'tests/season/cedar-creek-2027-start.sql'; $verify = Join-Path $root 'tests/season/cedar-creek-2027.verify.sql'
-$migration = '20260811133808_connect_workflows_program_inventory.sql'; $migrationBlob = '6e37cfb47456ed28e9b259f7e5520f5a1697708e'
+$migration = '20260813133808_connect_workflows_program_inventory.sql'; $migrationBlob = '6e37cfb47456ed28e9b259f7e5520f5a1697708e'
 $fkIndexMigration = '20260820135357_add_program_inventory_match_fk_indexes.sql'; $fkIndexMigrationSha256 = 'bf6fbc84c5389e1122ce7ccf63c37dacb2dfc21d881216bbbb5241b203fa5589'
 . (Join-Path $root 'scripts/maple-season-credential.ps1')
 Import-Module (Join-Path $root 'scripts/harvest-ridge-db-clock.psm1') -Force

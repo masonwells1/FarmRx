@@ -189,7 +189,7 @@ async function run() {
   const crossPassOperation = structuredClone(matchedCache); const clonedPass = structuredClone(crossPassOperation.assignments[0].passes[0]); clonedPass.id = uid(47); clonedPass.sequence = 2; clonedPass.products = [structuredClone(clonedPass.products[0])]; clonedPass.products[0].id = uid(48); clonedPass.products[0].assigned_pass_id = clonedPass.id; const crossMatch = { ...structuredClone(crossPassOperation.inventoryMatches[0]), assigned_product_id: clonedPass.products[0].id }; clonedPass.products[0].inventory_match = structuredClone(crossMatch); crossPassOperation.assignments[0].passes.push(clonedPass); crossPassOperation.inventoryMatches.push(crossMatch)
   for (const corrupt of [conflictingConfirmer, conflictingStamp, crossPassOperation]) await rejects(() => Promise.resolve(decodeProgramsDataCache(corrupt, { farmId: farm, userId: actor })), 'An operation receipt group must have one owning pass, confirmer, and confirmation timestamp.')
 
-  const migration = readFileSync(new URL('../../supabase/migrations/20260811133808_connect_workflows_program_inventory.sql', import.meta.url), 'utf8')
+  const migration = readFileSync(new URL('../../supabase/migrations/20260813133808_connect_workflows_program_inventory.sql', import.meta.url), 'utf8')
   const fkIndexMigration = readFileSync(new URL('../../supabase/migrations/20260820135357_add_program_inventory_match_fk_indexes.sql', import.meta.url), 'utf8')
   const fkIndexMigrationSha256 = createHash('sha256').update(fkIndexMigration).digest('hex')
   const exactFkIndexMigration = (source: string) => {
