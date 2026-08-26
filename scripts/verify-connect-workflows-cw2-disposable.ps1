@@ -1649,7 +1649,7 @@ function Invoke-Cw2Proof005OuterSelfTest([string]$RunnerSource) {
   $expectedCaseNames=@('baseline','matrix-only deletion','credential-matrix-only deletion','credential-fixture-native deletion','fk-index-matrix-only deletion','fk-index-matrix-invocation deletion','fk-index-guard-only deletion','fk-index-guard-and-matrix deletion','artifact-focused-matrix-only deletion','artifact-focused-guard-only deletion','artifact-focused-guard-and-matrix deletion','guard-only deletion','guard-and-matrix deletion')
   if ($cases.Count -ne 13 -or [string]::Join('|',[string[]]$cases.Name) -cne [string]::Join('|',$expectedCaseNames)) { throw 'CONNECT_WORKFLOWS_CW2_PROOF_005_OUTER_CASES_INVALID' }
   $powerShellCommand = if($env:OS -eq 'Windows_NT'){'powershell.exe'}else{'pwsh'}
-  $powershellExe = (Get-Command $powerShellCommand -CommandType Application -ErrorAction Stop).Source
+  $powershellCommands = @(Get-Command $powerShellCommand -CommandType Application -ErrorAction Stop); $powershellExe = $powershellCommands[0].Source
   $tempRoot=Join-Path ([IO.Path]::GetTempPath())("farmrx-cw2-proof005-$([guid]::NewGuid().ToString('N'))")
   [void][IO.Directory]::CreateDirectory($tempRoot)
   $paths = [Collections.Generic.List[string]]::new();$primary=$null;$cleanupErrors=[Collections.Generic.List[Exception]]::new()
@@ -1680,7 +1680,7 @@ function Assert-Cw2Contract {
   $runnerSource = Get-Content -Raw -LiteralPath $runnerPath
   $artifactOuterSelfTestStart='# CW2_ARTIFACT_MANIFEST_'+'OUTER_SELFTEST_BEGIN';$artifactOuterSelfTestEnd='# CW2_ARTIFACT_MANIFEST_'+'OUTER_SELFTEST_END'
   $artifactOuterSelfTestSpan=Get-Cw2UniqueSourceSpan $runnerSource $artifactOuterSelfTestStart $artifactOuterSelfTestEnd
-  if((Get-Cw2Proof005TextSha256 $artifactOuterSelfTestSpan)-cne'5c2aab06863c4669f87b88cf366675b59c3184f45d9c1631d66147cf7b246bdc'){throw 'CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_OUTER_SELFTEST_PIN_MISMATCH'}
+  if((Get-Cw2Proof005TextSha256 $artifactOuterSelfTestSpan)-cne'a46271caac9dfafc0aa1606e57ad3d54cb456d9ac21e8ea40eec9aa0a29675fc'){throw 'CONNECT_WORKFLOWS_CW2_ARTIFACT_MANIFEST_OUTER_SELFTEST_PIN_MISMATCH'}
   $required = @(
     $baseFixture,$cw2Fixture,$verify,$concurrencyFixtureVerify,$concurrencyVerify,$specPath,$configPath,$migrationPath,$fkIndexMigrationPath,
     (Join-Path $root 'src/ProgramsModule.tsx'),

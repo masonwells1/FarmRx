@@ -78,7 +78,7 @@ function Invoke-Cw2ForcedGitFailureControlFlowProof([string]$Source,[pscustomobj
   )
   $expectedNames=@('baseline-stop','baseline-continue','dead-call-with-synthetic-result','synthetic-result-after-call')
   if($cases.Count-ne4-or[string]::Join('|',[string[]]$cases.Name)-cne[string]::Join('|',$expectedNames)){throw 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_CASES_INVALID'}
-  $powershellExe=if($env:OS -eq 'Windows_NT'){(Get-Command powershell.exe -CommandType Application -ErrorAction Stop).Source}else{(Get-Command pwsh -CommandType Application -ErrorAction Stop).Source}
+  $powershellCommand=if($env:OS -eq 'Windows_NT'){'powershell.exe'}else{'pwsh'};$powershellCommands=@(Get-Command $powershellCommand -CommandType Application -ErrorAction Stop);$powershellExe=$powershellCommands[0].Source
   $tempRoot=Join-Path ([IO.Path]::GetTempPath())("farmrx-cw2-artifact-git-ast-$([guid]::NewGuid().ToString('N'))")
   [void][IO.Directory]::CreateDirectory($tempRoot)
   $paths=[Collections.Generic.List[string]]::new();$primary=$null;$cleanupErrors=[Collections.Generic.List[Exception]]::new()
