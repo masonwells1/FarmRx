@@ -253,14 +253,35 @@ async function run() {
   assert(/v_requested_match_count > 0\s+and \(p_application_record_id is not null or p_create_application_record\)/.test(migration), 'Any application record create/link path must reject a confirmed Inventory draw-down.')
   assert(/from public\.program_inventory_matches match[\s\S]*where assigned_pass\.status = 'applied'\s+and assigned_pass\.application_record_id is null/.test(migration), 'Inventory accounting must ignore any contradictory linked-application Program match to prevent a double draw.')
   assert(/quantity_in_inventory_unit > 0[\s\S]*quantity_in_inventory_unit <= 10000000[\s\S]*quantity_in_inventory_unit = round\(quantity_in_inventory_unit, 8\)/.test(migration) && /v_quantity > 10000000[\s\S]*v_quantity <> round\(v_quantity, 8\)/.test(migration), 'The table and RPC must share the 10,000,000 and eight-decimal quantity boundary.')
-  const inventoryCatalogTrigger = 'create trigger inventory_products_catalog_lock'
+  const inventoryCatalogTriggerFunction = `create or replace function public.lock_inventory_products_catalog()
+returns trigger
+language plpgsql
+set search_path = pg_catalog
+as $$
+declare
+  v_farm_id uuid;
+begin
+  v_farm_id := case when tg_op = 'DELETE' then old.farm_id else new.farm_id end;
+  perform pg_advisory_xact_lock(
+    pg_catalog.hashtext(v_farm_id::text),
+    pg_catalog.hashtext('inventory-products-catalog')
+  );
+  if tg_op = 'DELETE' then return old; end if;
+  return new;
+end;
+$$;`
+  const inventoryCatalogTrigger = `create trigger inventory_products_catalog_lock
+before insert or update or delete on public.inventory_products
+for each row execute function public.lock_inventory_products_catalog();`
   const inventoryCatalogLock = "pg_catalog.hashtext('inventory-products-catalog')"
   const inventoryCatalogLockStatement = /\n    perform pg_advisory_xact_lock\(\n      pg_catalog\.hashtext\(p_farm_id::text\),\n      pg_catalog\.hashtext\('inventory-products-catalog'\)\n    \);/
   const candidateRowScan = 'perform inventory_product.id'
   const exactCandidateCount = 'select count(*) into v_exact_inventory_count'
-  const catalogLockPrecedesCandidateValidation = (source: string) => { const request = source.indexOf('if v_requested_match_count > 0 then'); const trigger = source.indexOf(inventoryCatalogTrigger); const lock = source.indexOf(inventoryCatalogLock, request); const scan = source.indexOf(candidateRowScan); const count = source.indexOf(exactCandidateCount); return trigger >= 0 && request >= 0 && lock > request && lock < scan && scan < count }
+  const catalogLockPrecedesCandidateValidation = (source: string) => { const request = source.indexOf('if v_requested_match_count > 0 then'); const triggerFunction = source.indexOf(inventoryCatalogTriggerFunction); const trigger = source.indexOf(inventoryCatalogTrigger); const lock = source.indexOf(inventoryCatalogLock, request); const scan = source.indexOf(candidateRowScan); const count = source.indexOf(exactCandidateCount); return triggerFunction >= 0 && trigger > triggerFunction && request >= 0 && lock > request && lock < scan && scan < count }
   assert(catalogLockPrecedesCandidateValidation(migration), 'A farm-scoped catalog trigger and advisory lock must block same-farm direct writes before both the candidate row scan and exact-name count.')
-  assert(!catalogLockPrecedesCandidateValidation(migration.replace(inventoryCatalogTrigger, 'create trigger inventory_products_catalog_unlocked')), 'Removing the catalog trigger identity must turn the catalog concurrency guard red.')
+  assert(!catalogLockPrecedesCandidateValidation(migration.replace('before insert or update or delete on public.inventory_products', 'before update on public.inventory_products')), 'Reducing the trigger to UPDATE must turn the catalog concurrency guard red.')
+  assert(!catalogLockPrecedesCandidateValidation(migration.replace('execute function public.lock_inventory_products_catalog();', 'execute function public.prevent_farm_id_change();')), 'Redirecting the trigger away from the catalog lock function must turn the catalog concurrency guard red.')
+  assert(!catalogLockPrecedesCandidateValidation(migration.replace('perform pg_advisory_xact_lock(', 'perform pg_try_advisory_xact_lock(')), 'Making the catalog lock non-blocking must turn the catalog concurrency guard red.')
   assert(!catalogLockPrecedesCandidateValidation(migration.replace(inventoryCatalogLockStatement, '')), 'Removing the confirmation-side farm catalog lock must turn the ordering guard red.')
   const normalizedSql = (source: string) => source.replace(/\s+/g, ' ')
   const exactCaseComparison = 'btrim(inventory_product.name) collate "C" = btrim(v_item ->> \'actual_product_name\') collate "C"'
@@ -1008,7 +1029,7 @@ async function run() {
       '              and held.database=waiting.database', '              and held.classid=waiting.classid', '              and held.objid=waiting.objid', '              and held.objsubid=waiting.objsubid', "              and held.mode=waiting.mode", '              and held.granted',
     ].join('\n')
     const initialWriterSpan = exactSpan(concurrencySql, writerTransactionBoundary, "select dblink_send_query('cw2_catalog_apply'")
-    const writerActionSpan = exactSpan(concurrencySql, "select dblink_send_query('cw2_catalog_writer',$remote$", "!~ '^ERROR:  canceling statement due to lock timeout'")
+    const writerActionSpan = exactSpan(concurrencySql, "select dblink_send_query('cw2_catalog_writer',$remote$", "or (select message from cw2_catalog_writer_result) !~ '^ERROR:  canceling statement due to lock timeout'")
     const releasedWriterSpan = exactSpan(concurrencySql, releasedWriterBoundary, "select dblink_disconnect('cw2_catalog_apply');")
     const exactWriterBoundary = (span: string) => [
       'set role authenticated;',
@@ -1102,14 +1123,16 @@ async function run() {
     && fixtureTransactionIndex >= 0 && fixtureTransactionIndex < fixtureBoundaryIndex && fixtureBoundaryIndex < fixturePassIndex && fixturePassIndex < fixtureProductIndex && fixtureProductIndex < fixtureCommitIndex && fixtureProbeIndex > fixtureCommitIndex
     && concurrencyFixtureSql.split(fixtureProbeTrigger).length - 1 === 1
     && requestLockIndex >= 0 && catalogTriggerIndex >= 0 && requestLockIndex < catalogLockIndex && catalogLockIndex < assignedProductUpdateIndex
+    && postCatalogStaticGuardSpan.includes('$cw2CatalogTriggerFunctionIndex -lt 0')
+    && postCatalogStaticGuardSpan.includes('$cw2CatalogTriggerIndex -le $cw2CatalogTriggerFunctionIndex')
     && postCatalogStaticGuardSpan.includes('$cw2AssignedProductUpdateIndex -le $cw2CatalogLockIndex')
     && !/\bset\s+(?:local\s+)?role\b|service_role|session_replication_role/i.test(concurrencyFixtureSql)
     && concurrencyMarkers.every((marker) => concurrencySql.includes(marker))
     && concurrencySql.split(writerTransactionBoundary).length - 1 === 1
     && concurrencySql.split(releasedWriterBoundary).length - 1 === 1
     && concurrencySql.split("select dblink_exec('cw2_catalog_writer','begin');").length - 1 === 2
-    && concurrencySql.split('set role authenticated;').length - 1 === 3
-    && concurrencySql.split("set local lock_timeout='500ms';").length - 1 === 3
+    && concurrencySql.split('set role authenticated;').length - 1 === 7
+    && concurrencySql.split("set local lock_timeout='500ms';").length - 1 === 7
     && concurrencySql.split("set local statement_timeout='10000ms';").length - 1 === 1
     && (concurrencySql.match(/dblink_get_result\('cw2_catalog_apply'(?:,false)?\)/g) ?? []).length === 4
     && concurrencySql.split("select dblink_send_query('cw2_catalog_writer'").length - 1 === 1
@@ -1139,6 +1162,38 @@ async function run() {
   assert(disposableSource.includes(`$concurrencyFixtureVerifySha256 = '${concurrencyFixtureProofSha256}'`), 'The runner must pin the exact local postgres concurrency fixture SHA-256 that this focused regression independently derives from file bytes.')
   assert(disposableSource.includes(`$concurrencyVerifySha256 = '${concurrencyProofSha256}'`), 'The runner must pin the exact concurrency proof SHA-256 that this focused regression independently derives from file bytes.')
   assert(completeCredentialHandoff(disposableSource, sqlProofSource, concurrencyFixtureProofSource, concurrencyProofSource, migration), 'The base and concurrency fixture SQL must retain their local postgres boundaries while only the separate local concurrency orchestrator uses supabase_admin and both workers prove authenticated execution.')
+  const catalogDmlProofStart = '-- Direct authenticated catalog writers must share the confirmation\'s exact'
+  const catalogDmlProofEnd = '\\echo CONNECT_WORKFLOWS_CW2_CATALOG_DELETE_RELEASE_PASS'
+  const catalogDmlProof = exactSpan(concurrencyProofSource, catalogDmlProofStart, catalogDmlProofEnd)
+  const catalogDmlFarmKey = "pg_catalog.hashtext('27010000-0000-4000-8000-000000000005'),\n  pg_catalog.hashtext('inventory-products-catalog')"
+  const catalogDmlAuthenticatedHeader = `set role authenticated;
+set "request.jwt.claims"='{"sub":"27000000-0000-4000-8000-000000000001","role":"authenticated"}';
+set "request.jwt.claim.sub"='27000000-0000-4000-8000-000000000001';
+set "request.headers"='{"x-farm-rx-expected-user-id":"27000000-0000-4000-8000-000000000001","x-farm-rx-access-epochs":"{\\"27010000-0000-4000-8000-000000000005\\":1}"}';
+set local lock_timeout='500ms';`
+  const completeCatalogDmlProof = (source: string) => source.length > 0
+    && source.split("select dblink_connect('cw2_catalog_insert_writer'").length - 1 === 1
+    && source.split(catalogDmlFarmKey).length - 1 === 4
+    && source.split(catalogDmlAuthenticatedHeader).length - 1 === 4
+    && source.split("select dblink_send_query('cw2_catalog_insert_writer'").length - 1 === 2
+    && source.split("select dblink_is_busy('cw2_catalog_insert_writer')=0 into v_done;").length - 1 === 2
+    && (source.match(/dblink_get_result\('cw2_catalog_insert_writer'(?:,false)?\)/g) ?? []).length === 4
+    && source.split("message=dblink_error_message('cw2_catalog_insert_writer')").length - 1 === 2
+    && source.split('cw2_catalog_insert_terminal_drain').length - 1 === 2
+    && source.split('cw2_catalog_delete_terminal_drain').length - 1 === 2
+    && source.split("select dblink_exec('cw2_catalog_insert_writer','rollback');").length - 1 === 2
+    && source.split("select dblink_exec('cw2_catalog_insert_writer','commit');").length - 1 === 2
+    && source.split("insert into public.inventory_products (id,farm_id,product_kind,name,inventory_unit,is_active)").length - 1 === 2
+    && source.split('delete from public.inventory_products').length - 1 === 2
+    && ['CONNECT_WORKFLOWS_CW2_CATALOG_INSERT_LOCK_TEST_BEGIN', 'CW2 catalog INSERT did not finish inside the exact asynchronous wait bound', 'CW2 catalog INSERT did not block on the exact farm lock', 'CONNECT_WORKFLOWS_CW2_CATALOG_INSERT_LOCK_TIMEOUT_PASS', 'CONNECT_WORKFLOWS_CW2_CATALOG_INSERT_RELEASE_PASS', 'CONNECT_WORKFLOWS_CW2_CATALOG_DELETE_LOCK_TEST_BEGIN', 'CW2 catalog DELETE did not finish inside the exact asynchronous wait bound', 'CW2 catalog DELETE did not block on the exact farm lock', 'CONNECT_WORKFLOWS_CW2_CATALOG_DELETE_LOCK_TIMEOUT_PASS', 'CONNECT_WORKFLOWS_CW2_CATALOG_DELETE_RELEASE_PASS', "select dblink_disconnect('cw2_catalog_insert_writer');", 'CW2 catalog DELETE release did not remove the disposable probe row'].every((marker) => source.split(marker).length - 1 === 1)
+    && !/(service_role|session_replication_role|dblink_connect_u|disable\s+trigger|set\s+role\s+supabase_admin)/i.test(source)
+  assert(completeCatalogDmlProof(catalogDmlProof), 'The local catalog DML proof must make authenticated INSERT and DELETE block on, then release from, the exact farm-scoped catalog lock.')
+  for (const marker of [catalogDmlProofStart, catalogDmlFarmKey, catalogDmlAuthenticatedHeader, "select dblink_send_query('cw2_catalog_insert_writer'", "select dblink_is_busy('cw2_catalog_insert_writer')=0 into v_done;", "message=dblink_error_message('cw2_catalog_insert_writer')", "insert into public.inventory_products (id,farm_id,product_kind,name,inventory_unit,is_active)", 'delete from public.inventory_products', 'CW2 catalog INSERT did not block on the exact farm lock', 'CW2 catalog DELETE did not block on the exact farm lock', catalogDmlProofEnd]) {
+    const mutated = concurrencyProofSource.replace(catalogDmlProof, catalogDmlProof.replace(marker, 'CW2_REMOVED_CATALOG_DML_PROOF_GUARD'))
+    const start = mutated.indexOf(catalogDmlProofStart); const end = mutated.indexOf(catalogDmlProofEnd, start)
+    const changed = start >= 0 && end > start ? mutated.slice(start, end + catalogDmlProofEnd.length) : ''
+    assert(!completeCatalogDmlProof(changed), `Removing catalog DML proof guard ${marker} must turn the proof-of-proof red.`)
+  }
   type CredentialMutation = { name: string; runner: string; sql: string; fixture?: string; concurrency: string; migration?: string }
   const credentialMutations: CredentialMutation[] = [
     { name: 'base elevated', runner: replaceInExactSpan(disposableSource, ...baseSpanMarkers, '-U postgres -d postgres -v ON_ERROR_STOP=1', '-U supabase_admin -d postgres -v ON_ERROR_STOP=1'), sql: sqlProofSource, concurrency: concurrencyProofSource },
@@ -1153,6 +1208,7 @@ async function run() {
     { name: 'fixture post-catalog probe key changed', runner: disposableSource, sql: sqlProofSource, fixture: concurrencyFixtureProofSource.replace('perform pg_catalog.pg_advisory_xact_lock(25000,2);', 'perform pg_catalog.pg_advisory_xact_lock(25000,3);'), concurrency: concurrencyProofSource },
     { name: 'fixture post-catalog trigger target changed', runner: disposableSource, sql: sqlProofSource, fixture: concurrencyFixtureProofSource.replace('create trigger cw2_catalog_probe_pause before update on public.assigned_program_pass_products', 'create trigger cw2_catalog_probe_pause before update on public.inventory_products'), concurrency: concurrencyProofSource },
     { name: 'post-catalog update moved before lock', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource, migration: migration.replace('if v_requested_match_count > 0 then\n    perform pg_advisory_xact_lock(', 'if v_requested_match_count > 0 then\n    update public.assigned_program_pass_products assigned_product\n    perform pg_advisory_xact_lock(') },
+    { name: 'post-catalog trigger static guard weakened', runner: replaceInExactSpan(disposableSource, '# CW2_POST_CATALOG_STATIC_GUARD_BEGIN', '# CW2_POST_CATALOG_STATIC_GUARD_END', '-or $cw2CatalogTriggerFunctionIndex -lt 0', '-or $false'), sql: sqlProofSource, concurrency: concurrencyProofSource },
     { name: 'post-catalog ordering static guard weakened', runner: replaceInExactSpan(disposableSource, '# CW2_POST_CATALOG_STATIC_GUARD_BEGIN', '# CW2_POST_CATALOG_STATIC_GUARD_END', '-or $cw2AssignedProductUpdateIndex -le $cw2CatalogLockIndex', '-or $false'), sql: sqlProofSource, concurrency: concurrencyProofSource },
     { name: 'boundary removed', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace('CONNECT_WORKFLOWS_CW2_LOCAL_SUPABASE_ADMIN_BOUNDARY_PASS', 'CW2_REMOVED_BOUNDARY') },
     { name: 'one authenticated downgrade removed', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace('set role authenticated;', 'select true;') },
@@ -1162,7 +1218,7 @@ async function run() {
     { name: 'writer setup moved before transaction boundary', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace("select dblink_exec('cw2_catalog_writer','begin');\nselect dblink_exec('cw2_catalog_writer',$remote$\nset role authenticated;", "select dblink_exec('cw2_catalog_writer',$remote$\nset role authenticated;\nbegin;") },
     { name: 'writer transaction-local timeout removed', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace("set local lock_timeout='500ms';", 'select true; -- removed transaction-local timeout') },
     { name: 'writer timeout attestation weakened', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace("or current_setting('lock_timeout',true) <> '500ms'", 'or false') },
-    { name: 'writer action-local timeout removed', runner: disposableSource, sql: sqlProofSource, concurrency: replaceInExactSpan(concurrencyProofSource, "select dblink_send_query('cw2_catalog_writer',$remote$", "!~ '^ERROR:  canceling statement due to lock timeout'", "set local lock_timeout='500ms';", 'select true; -- removed action-local timeout') },
+    { name: 'writer action-local timeout removed', runner: disposableSource, sql: sqlProofSource, concurrency: replaceInExactSpan(concurrencyProofSource, "select dblink_send_query('cw2_catalog_writer',$remote$", "or (select message from cw2_catalog_writer_result) !~ '^ERROR:  canceling statement due to lock timeout'", "set local lock_timeout='500ms';", 'select true; -- removed action-local timeout') },
     { name: 'writer action-local timeout attestation weakened', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace("if current_setting('lock_timeout',true) <> '500ms' then", 'if false then') },
     { name: 'writer synchronous action restored', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace("select dblink_send_query('cw2_catalog_writer',$remote$", "select dblink_exec('cw2_catalog_writer',$remote$") },
     { name: 'writer asynchronous busy poll removed', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace("select dblink_is_busy('cw2_catalog_writer')=0 into v_done;", 'select false into v_done;') },
@@ -1307,7 +1363,7 @@ async function run() {
     { name: 'writer primary error message read from wrong connection', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace("message=dblink_error_message('cw2_catalog_writer')", "message=dblink_error_message('cw2_catalog_apply')") },
     { name: 'writer primary message capture moved before primary result', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace("update cw2_catalog_writer_result set message=dblink_error_message('cw2_catalog_writer');", '').replace("select count(status) from dblink_get_result('cw2_catalog_writer',false) as failed_action(status text);", "update cw2_catalog_writer_result set message=dblink_error_message('cw2_catalog_writer');\nselect count(status) from dblink_get_result('cw2_catalog_writer',false) as failed_action(status text);") },
   ]
-  assert(credentialMutations.length === 165, 'The focused credential-handoff mutation matrix is incomplete.')
+  assert(credentialMutations.length === 166, 'The focused credential-handoff mutation matrix is incomplete.')
   for (const mutation of credentialMutations) assert(!completeCredentialHandoff(mutation.runner, mutation.sql, mutation.fixture ?? concurrencyFixtureProofSource, mutation.concurrency, mutation.migration ?? migration), `The ${mutation.name} credential-handoff mutation must turn the focused contract red.`)
   const browserProofSource = readFileSync(new URL('../../tests/e2e/season/cedar-creek.spec.ts', import.meta.url), 'utf8')
   const browserConfigSource = readFileSync(new URL('../../playwright.connect-workflows-cw2.config.ts', import.meta.url), 'utf8')

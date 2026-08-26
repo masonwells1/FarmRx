@@ -430,4 +430,141 @@ end
 $final$;
 -- CW2-CREDENTIAL-HANDOFF concurrency boundary end.
 
+-- Direct authenticated catalog writers must share the confirmation's exact
+-- farm-scoped advisory key for every DML operation, not UPDATE alone.
+\echo CONNECT_WORKFLOWS_CW2_CATALOG_INSERT_LOCK_TEST_BEGIN
+select dblink_connect('cw2_catalog_insert_writer','dbname=postgres user=supabase_admin options=''-csearch_path= -cstatement_timeout=15000 -clock_timeout=500'' application_name=cw2_catalog_insert_writer');
+select pg_catalog.pg_advisory_lock(
+  pg_catalog.hashtext('27010000-0000-4000-8000-000000000005'),
+  pg_catalog.hashtext('inventory-products-catalog')
+);
+select dblink_exec('cw2_catalog_insert_writer',$remote$
+begin;
+set role authenticated;
+set "request.jwt.claims"='{"sub":"27000000-0000-4000-8000-000000000001","role":"authenticated"}';
+set "request.jwt.claim.sub"='27000000-0000-4000-8000-000000000001';
+set "request.headers"='{"x-farm-rx-expected-user-id":"27000000-0000-4000-8000-000000000001","x-farm-rx-access-epochs":"{\"27010000-0000-4000-8000-000000000005\":1}"}';
+set local lock_timeout='500ms';
+$remote$);
+select dblink_send_query('cw2_catalog_insert_writer',$remote$
+insert into public.inventory_products (id,farm_id,product_kind,name,inventory_unit,is_active)
+values ('c2500000-0000-4000-8000-000000000010','27010000-0000-4000-8000-000000000005','chemical','CW2 catalog DML lock probe','gal',true)
+$remote$);
+do $insert_wait$
+declare v_done boolean:=false;
+begin
+  for i in 1..100 loop
+    select dblink_is_busy('cw2_catalog_insert_writer')=0 into v_done;
+    exit when v_done;
+    perform pg_sleep(0.05);
+  end loop;
+  if not v_done then raise exception 'CW2 catalog INSERT did not finish inside the exact asynchronous wait bound'; end if;
+end
+$insert_wait$;
+create temporary table cw2_catalog_insert_timeout(result_count integer check(result_count=0),message text);
+insert into cw2_catalog_insert_timeout(result_count)
+select count(status) from dblink_get_result('cw2_catalog_insert_writer',false) as failed_action(status text);
+update cw2_catalog_insert_timeout set message=dblink_error_message('cw2_catalog_insert_writer');
+create temporary table cw2_catalog_insert_terminal_drain(result_count integer check(result_count=0));
+insert into cw2_catalog_insert_terminal_drain(result_count)
+select count(*) from dblink_get_result('cw2_catalog_insert_writer') as terminal(status text);
+do $insert_timeout$
+begin
+  if (select result_count from cw2_catalog_insert_timeout) <> 0
+     or (select message from cw2_catalog_insert_timeout) !~ '^ERROR:  canceling statement due to lock timeout' then
+    raise exception 'CW2 catalog INSERT did not block on the exact farm lock';
+  end if;
+end
+$insert_timeout$;
+select dblink_exec('cw2_catalog_insert_writer','rollback');
+select pg_catalog.pg_advisory_unlock(
+  pg_catalog.hashtext('27010000-0000-4000-8000-000000000005'),
+  pg_catalog.hashtext('inventory-products-catalog')
+);
+select dblink_exec('cw2_catalog_insert_writer',$remote$
+begin;
+set role authenticated;
+set "request.jwt.claims"='{"sub":"27000000-0000-4000-8000-000000000001","role":"authenticated"}';
+set "request.jwt.claim.sub"='27000000-0000-4000-8000-000000000001';
+set "request.headers"='{"x-farm-rx-expected-user-id":"27000000-0000-4000-8000-000000000001","x-farm-rx-access-epochs":"{\"27010000-0000-4000-8000-000000000005\":1}"}';
+set local lock_timeout='500ms';
+insert into public.inventory_products (id,farm_id,product_kind,name,inventory_unit,is_active)
+values ('c2500000-0000-4000-8000-000000000010','27010000-0000-4000-8000-000000000005','chemical','CW2 catalog DML lock probe','gal',true)
+$remote$);
+select dblink_exec('cw2_catalog_insert_writer','commit');
+\echo CONNECT_WORKFLOWS_CW2_CATALOG_INSERT_LOCK_TIMEOUT_PASS
+\echo CONNECT_WORKFLOWS_CW2_CATALOG_INSERT_RELEASE_PASS
+
+\echo CONNECT_WORKFLOWS_CW2_CATALOG_DELETE_LOCK_TEST_BEGIN
+select pg_catalog.pg_advisory_lock(
+  pg_catalog.hashtext('27010000-0000-4000-8000-000000000005'),
+  pg_catalog.hashtext('inventory-products-catalog')
+);
+select dblink_exec('cw2_catalog_insert_writer',$remote$
+begin;
+set role authenticated;
+set "request.jwt.claims"='{"sub":"27000000-0000-4000-8000-000000000001","role":"authenticated"}';
+set "request.jwt.claim.sub"='27000000-0000-4000-8000-000000000001';
+set "request.headers"='{"x-farm-rx-expected-user-id":"27000000-0000-4000-8000-000000000001","x-farm-rx-access-epochs":"{\"27010000-0000-4000-8000-000000000005\":1}"}';
+set local lock_timeout='500ms';
+$remote$);
+select dblink_send_query('cw2_catalog_insert_writer',$remote$
+delete from public.inventory_products
+where id='c2500000-0000-4000-8000-000000000010'
+  and farm_id='27010000-0000-4000-8000-000000000005'
+$remote$);
+do $delete_wait$
+declare v_done boolean:=false;
+begin
+  for i in 1..100 loop
+    select dblink_is_busy('cw2_catalog_insert_writer')=0 into v_done;
+    exit when v_done;
+    perform pg_sleep(0.05);
+  end loop;
+  if not v_done then raise exception 'CW2 catalog DELETE did not finish inside the exact asynchronous wait bound'; end if;
+end
+$delete_wait$;
+create temporary table cw2_catalog_delete_timeout(result_count integer check(result_count=0),message text);
+insert into cw2_catalog_delete_timeout(result_count)
+select count(status) from dblink_get_result('cw2_catalog_insert_writer',false) as failed_action(status text);
+update cw2_catalog_delete_timeout set message=dblink_error_message('cw2_catalog_insert_writer');
+create temporary table cw2_catalog_delete_terminal_drain(result_count integer check(result_count=0));
+insert into cw2_catalog_delete_terminal_drain(result_count)
+select count(*) from dblink_get_result('cw2_catalog_insert_writer') as terminal(status text);
+do $delete_timeout$
+begin
+  if (select result_count from cw2_catalog_delete_timeout) <> 0
+     or (select message from cw2_catalog_delete_timeout) !~ '^ERROR:  canceling statement due to lock timeout' then
+    raise exception 'CW2 catalog DELETE did not block on the exact farm lock';
+  end if;
+end
+$delete_timeout$;
+select dblink_exec('cw2_catalog_insert_writer','rollback');
+select pg_catalog.pg_advisory_unlock(
+  pg_catalog.hashtext('27010000-0000-4000-8000-000000000005'),
+  pg_catalog.hashtext('inventory-products-catalog')
+);
+select dblink_exec('cw2_catalog_insert_writer',$remote$
+begin;
+set role authenticated;
+set "request.jwt.claims"='{"sub":"27000000-0000-4000-8000-000000000001","role":"authenticated"}';
+set "request.jwt.claim.sub"='27000000-0000-4000-8000-000000000001';
+set "request.headers"='{"x-farm-rx-expected-user-id":"27000000-0000-4000-8000-000000000001","x-farm-rx-access-epochs":"{\"27010000-0000-4000-8000-000000000005\":1}"}';
+set local lock_timeout='500ms';
+delete from public.inventory_products
+where id='c2500000-0000-4000-8000-000000000010'
+  and farm_id='27010000-0000-4000-8000-000000000005'
+$remote$);
+select dblink_exec('cw2_catalog_insert_writer','commit');
+select dblink_disconnect('cw2_catalog_insert_writer');
+do $catalog_dml_final$
+begin
+  if exists(select 1 from public.inventory_products where id='c2500000-0000-4000-8000-000000000010') then
+    raise exception 'CW2 catalog DELETE release did not remove the disposable probe row';
+  end if;
+end
+$catalog_dml_final$;
+\echo CONNECT_WORKFLOWS_CW2_CATALOG_DELETE_LOCK_TIMEOUT_PASS
+\echo CONNECT_WORKFLOWS_CW2_CATALOG_DELETE_RELEASE_PASS
+
 \echo CONNECT_WORKFLOWS_CW2_SQL_PASS

@@ -17,7 +17,7 @@ $verify = Join-Path $root 'tests/season/connect-workflows-cw2.verify.sql'
 $concurrencyFixtureVerify = Join-Path $root 'tests/season/connect-workflows-cw2.concurrency-fixture.sql'
 $concurrencyFixtureVerifySha256 = 'ee13b1fc317630cb5e79152adae210e2fa05ddecf7f246fa21adfd76b34953c2'
 $concurrencyVerify = Join-Path $root 'tests/season/connect-workflows-cw2.concurrency.sql'
-  $concurrencyVerifySha256 = 'b8469832b490bb06c77923d10c0914336f2a4345f1e89d8359033e7de15bac21'
+  $concurrencyVerifySha256 = '4244bfd9411be19feaa33999ab0ca927f66c180e927bfa1c5f5c45326c01d4f0'
 $specPath = Join-Path $root 'tests/e2e/season/cedar-creek.spec.ts'
 $configPath = Join-Path $root 'playwright.connect-workflows-cw2.config.ts'
 $migration = '20260811133808_connect_workflows_program_inventory.sql'
@@ -1254,7 +1254,7 @@ function Test-Cw2CredentialHandoffStaticContract([string]$RunnerSource,[string]$
   $postCatalogGuardBegin='# CW2_POST_CATALOG_STATIC_GUARD_'+'BEGIN'; $postCatalogGuardEnd='# CW2_POST_CATALOG_STATIC_GUARD_'+'END'
   $postCatalogGuardStart=$RunnerSource.LastIndexOf($postCatalogGuardBegin,[StringComparison]::Ordinal); $postCatalogGuardFinish=$RunnerSource.LastIndexOf($postCatalogGuardEnd,[StringComparison]::Ordinal)
   if($postCatalogGuardStart -lt 0 -or $postCatalogGuardFinish -le $postCatalogGuardStart){return $false}
-  $postCatalogOrderingGuard='if(' + '$cw2RequestLockIndex -lt 0' + ' -or ' + '$cw2CatalogTriggerIndex -lt 0' + ' -or ' + '$cw2CatalogLockIndex -le $cw2RequestLockIndex' + ' -or ' + '$cw2AssignedProductUpdateIndex -le $cw2CatalogLockIndex'
+  $postCatalogOrderingGuard='if(' + '$cw2RequestLockIndex -lt 0' + ' -or ' + '$cw2CatalogTriggerFunctionIndex -lt 0' + ' -or ' + '$cw2CatalogTriggerIndex -le $cw2CatalogTriggerFunctionIndex' + ' -or ' + '$cw2CatalogLockIndex -le $cw2RequestLockIndex' + ' -or ' + '$cw2AssignedProductUpdateIndex -le $cw2CatalogLockIndex'
   if($RunnerSource.Substring($postCatalogGuardStart,$postCatalogGuardFinish-$postCatalogGuardStart).IndexOf($postCatalogOrderingGuard,[StringComparison]::Ordinal) -lt 0){return $false}
   $clockPhaseCallMarker='$clockResult=@(Invoke-'+'HarvestRidgeClockPhase'
   $clockPhaseCallIndex=$RunnerSource.IndexOf($clockPhaseCallMarker,[StringComparison]::Ordinal)
@@ -1852,7 +1852,7 @@ function Assert-Cw2Contract {
   $runnerSource = Get-Content -Raw -LiteralPath $runnerPath
   $matrixStart = '# CW2_PROOF_005_' + 'EXECUTABLE_MATRIX_BEGIN'; $matrixEnd = '# CW2_PROOF_005_' + 'EXECUTABLE_MATRIX_END'
   $matrixSpan = Get-Cw2UniqueSourceSpan $runnerSource $matrixStart $matrixEnd
-  if ((Get-Cw2Proof005TextSha256 $matrixSpan) -cne '92937584f1b360f3b8962682a5f6764ef12730682e3c779a99fa1b8085ddbd38') { throw 'CONNECT_WORKFLOWS_CW2_PROOF_005_MATRIX_BYTES_CHANGED' }
+  if ((Get-Cw2Proof005TextSha256 $matrixSpan) -cne 'af2fc44e393cdb3d427f15ccd2383b4f99e42a924f1023defe44fd174ea9ae42') { throw 'CONNECT_WORKFLOWS_CW2_PROOF_005_MATRIX_BYTES_CHANGED' }
   Assert-Cw2Proof006LexerSelfTest
   if (-not (Test-Cw2CredentialHandoffStaticContract $runnerSource $concurrencyFixtureSql $concurrencySql)) { throw 'CONNECT_WORKFLOWS_CW2_CREDENTIAL_HANDOFF_STATIC_CONTRACT_MISSING' }
   if (-not (Test-Cw2Proof005StaticContract $sql)) { throw 'CONNECT_WORKFLOWS_CW2_PROOF_005_STATIC_CONTRACT_MISSING' }
@@ -2269,7 +2269,7 @@ function Assert-Cw2Contract {
     [pscustomobject]@{Name='native marker guard weakened';Target='runner-capture';Old='$Capture.StdoutText -cnotmatch $markerPattern';New='$false'},
     [pscustomobject]@{Name='apply disconnect removed';Target='sql';Old="select dblink_disconnect('cw2_catalog_apply');";New="select true; -- removed apply disconnect"},
     [pscustomobject]@{Name='writer disconnect removed';Target='sql';Old="select dblink_disconnect('cw2_catalog_writer');";New="select true; -- removed writer disconnect"},
-    [pscustomobject]@{Name='lock timeout cause weakened';Target='sql';Old="!~ '^ERROR:  canceling statement due to lock timeout'";New='is null'},
+    [pscustomobject]@{Name='lock timeout cause weakened';Target='sql';Old="or (select message from cw2_catalog_writer_result) !~ '^ERROR:  canceling statement due to lock timeout'";New='or false'},
     [pscustomobject]@{Name='released writer proof weakened';Target='sql';Old="(select status from cw2_catalog_writer_released) <> 'UPDATE 1'";New='false'},
     [pscustomobject]@{Name='final match write proof weakened';Target='sql';Old="or not exists(select 1 from public.program_inventory_matches where assigned_product_id='c2500000-0000-4000-8000-000000000002' and quantity_in_inventory_unit=0.001)";New='or false'},
     [pscustomobject]@{Name='final application nonwrite weakened';Target='sql';Old="or exists(select 1 from public.application_records where notes like 'Created from Programs pass c2500000%')";New='or false'},
@@ -2530,18 +2530,42 @@ function Assert-Cw2Contract {
   )) { if ($migrationSource -notmatch [regex]::Escape($needle)) { throw "CONNECT_WORKFLOWS_CW2_MIGRATION_CONTRACT_MISSING:$needle" } }
   # CW2_POST_CATALOG_STATIC_GUARD_BEGIN
   $cw2RequestSerializationLock='perform pg_advisory_xact_lock(hashtext(p_farm_id::text), hashtext(p_operation_id::text));'
-  $cw2CatalogTrigger='create trigger inventory_products_catalog_lock'
+  $cw2CatalogTriggerFunction=@'
+create or replace function public.lock_inventory_products_catalog()
+returns trigger
+language plpgsql
+set search_path = pg_catalog
+as $$
+declare
+  v_farm_id uuid;
+begin
+  v_farm_id := case when tg_op = 'DELETE' then old.farm_id else new.farm_id end;
+  perform pg_advisory_xact_lock(
+    pg_catalog.hashtext(v_farm_id::text),
+    pg_catalog.hashtext('inventory-products-catalog')
+  );
+  if tg_op = 'DELETE' then return old; end if;
+  return new;
+end;
+$$;
+'@
+  $cw2CatalogTrigger=@'
+create trigger inventory_products_catalog_lock
+before insert or update or delete on public.inventory_products
+for each row execute function public.lock_inventory_products_catalog();
+'@
   $cw2CatalogLock='pg_catalog.hashtext(''inventory-products-catalog'')'
   $cw2AssignedProductUpdate='update public.assigned_program_pass_products assigned_product'
   $cw2FixtureProbeLock='perform pg_catalog.pg_advisory_xact_lock(25000,2);'
   $cw2FixtureProbeTrigger='create trigger cw2_catalog_probe_pause before update on public.assigned_program_pass_products'
   $cw2RequestLockIndex=$migrationSource.IndexOf($cw2RequestSerializationLock,[StringComparison]::Ordinal)
+  $cw2CatalogTriggerFunctionIndex=$migrationSource.IndexOf($cw2CatalogTriggerFunction,[StringComparison]::Ordinal)
   $cw2CatalogTriggerIndex=$migrationSource.IndexOf($cw2CatalogTrigger,[StringComparison]::Ordinal)
   $cw2CatalogLockIndex=$migrationSource.IndexOf($cw2CatalogLock,$cw2RequestLockIndex,[StringComparison]::Ordinal)
   $cw2AssignedProductUpdateIndex=$migrationSource.IndexOf($cw2AssignedProductUpdate,[StringComparison]::Ordinal)
   $cw2FixtureProbeCount=[regex]::Matches($concurrencyFixtureSql,[regex]::Escape($cw2FixtureProbeLock)).Count
   $cw2FixtureProbeTriggerCount=[regex]::Matches($concurrencyFixtureSql,[regex]::Escape($cw2FixtureProbeTrigger)).Count
-  if($cw2RequestLockIndex -lt 0 -or $cw2CatalogTriggerIndex -lt 0 -or $cw2CatalogLockIndex -le $cw2RequestLockIndex -or $cw2AssignedProductUpdateIndex -le $cw2CatalogLockIndex -or $cw2FixtureProbeCount -ne 1 -or $cw2FixtureProbeTriggerCount -ne 1){throw 'CONNECT_WORKFLOWS_CW2_CONCURRENCY_POST_CATALOG_PROBE_CONTRACT_MISSING'}
+  if($cw2RequestLockIndex -lt 0 -or $cw2CatalogTriggerFunctionIndex -lt 0 -or $cw2CatalogTriggerIndex -le $cw2CatalogTriggerFunctionIndex -or $cw2CatalogLockIndex -le $cw2RequestLockIndex -or $cw2AssignedProductUpdateIndex -le $cw2CatalogLockIndex -or $cw2FixtureProbeCount -ne 1 -or $cw2FixtureProbeTriggerCount -ne 1){throw 'CONNECT_WORKFLOWS_CW2_CONCURRENCY_POST_CATALOG_PROBE_CONTRACT_MISSING'}
   # CW2_POST_CATALOG_STATIC_GUARD_END
 
   $cw1Source = Get-Content -Raw -LiteralPath (Join-Path $root 'scripts/verify-connect-workflows-cw1-disposable.ps1')
