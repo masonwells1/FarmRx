@@ -1,5 +1,6 @@
 -- Proof-only local postgres fixture setup for the isolated concurrency probe.
 -- Credited Program and Inventory actions remain in authenticated dblink workers.
+\set ON_ERROR_STOP on
 begin;
 select set_config('request.jwt.claims','{"sub":"27000000-0000-4000-8000-000000000001","role":"authenticated"}',true);
 select set_config('request.jwt.claim.sub','27000000-0000-4000-8000-000000000001',true);

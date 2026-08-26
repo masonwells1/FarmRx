@@ -197,6 +197,28 @@ revoke all on table public.inventory_on_hand, public.program_application_product
 grant select on table public.inventory_on_hand, public.program_application_products
   to authenticated;
 
+create or replace function public.lock_inventory_products_catalog()
+returns trigger
+language plpgsql
+set search_path = pg_catalog
+as $$
+declare
+  v_farm_id uuid;
+begin
+  v_farm_id := case when tg_op = 'DELETE' then old.farm_id else new.farm_id end;
+  perform pg_advisory_xact_lock(
+    pg_catalog.hashtext(v_farm_id::text),
+    pg_catalog.hashtext('inventory-products-catalog')
+  );
+  if tg_op = 'DELETE' then return old; end if;
+  return new;
+end;
+$$;
+
+create trigger inventory_products_catalog_lock
+before insert or update or delete on public.inventory_products
+for each row execute function public.lock_inventory_products_catalog();
+
 create or replace function public.mark_program_pass_applied(
   p_farm_id uuid,
   p_operation_id uuid,
@@ -389,10 +411,13 @@ begin
     raise exception 'actual products must contain every assigned product exactly once';
   end if;
 
-  -- Ordinary catalog reads may continue, but direct INSERT/UPDATE/DELETE must
-  -- not create a phantom or stale exact-name candidate during confirmation.
+  -- Ordinary catalog reads may continue, but direct catalog writes share this
+  -- farm-scoped lock through inventory_products_catalog_lock.
   if v_requested_match_count > 0 then
-    lock table public.inventory_products in share mode;
+    perform pg_advisory_xact_lock(
+      pg_catalog.hashtext(p_farm_id::text),
+      pg_catalog.hashtext('inventory-products-catalog')
+    );
   end if;
 
   -- Lock every referenced or exact-name candidate in stable ID order before

@@ -15,14 +15,14 @@ $baseFixture = Join-Path $root 'tests/season/cedar-creek-2027-start.sql'
 $cw2Fixture = Join-Path $root 'tests/season/connect-workflows-cw2.fixture.sql'
 $verify = Join-Path $root 'tests/season/connect-workflows-cw2.verify.sql'
 $concurrencyFixtureVerify = Join-Path $root 'tests/season/connect-workflows-cw2.concurrency-fixture.sql'
-$concurrencyFixtureVerifySha256 = '7ea2b40ef74afd510e1a2a24184b30fb2a8d4bb345d800b9e378c4e579d7f184'
+$concurrencyFixtureVerifySha256 = 'ee13b1fc317630cb5e79152adae210e2fa05ddecf7f246fa21adfd76b34953c2'
 $concurrencyVerify = Join-Path $root 'tests/season/connect-workflows-cw2.concurrency.sql'
-  $concurrencyVerifySha256 = '871acee6a34b2c413c606fab9b2a9699589a202a6af9690fefea64f4b5ce7d1d'
+  $concurrencyVerifySha256 = 'b8469832b490bb06c77923d10c0914336f2a4345f1e89d8359033e7de15bac21'
 $specPath = Join-Path $root 'tests/e2e/season/cedar-creek.spec.ts'
 $configPath = Join-Path $root 'playwright.connect-workflows-cw2.config.ts'
 $migration = '20260811133808_connect_workflows_program_inventory.sql'
 $migrationPath = Join-Path $root "supabase/migrations/$migration"
-$migrationBlob = '88b392f66de876b2b5dd53f0438bbe641cc434fa'
+$migrationBlob = '6e37cfb47456ed28e9b259f7e5520f5a1697708e'
 $fkIndexMigration = '20260820135357_add_program_inventory_match_fk_indexes.sql'
 $fkIndexMigrationPath = Join-Path $root "supabase/migrations/$fkIndexMigration"
 $fkIndexMigrationSha256 = 'bf6fbc84c5389e1122ce7ccf63c37dacb2dfc21d881216bbbb5241b203fa5589'
@@ -1254,7 +1254,7 @@ function Test-Cw2CredentialHandoffStaticContract([string]$RunnerSource,[string]$
   $postCatalogGuardBegin='# CW2_POST_CATALOG_STATIC_GUARD_'+'BEGIN'; $postCatalogGuardEnd='# CW2_POST_CATALOG_STATIC_GUARD_'+'END'
   $postCatalogGuardStart=$RunnerSource.LastIndexOf($postCatalogGuardBegin,[StringComparison]::Ordinal); $postCatalogGuardFinish=$RunnerSource.LastIndexOf($postCatalogGuardEnd,[StringComparison]::Ordinal)
   if($postCatalogGuardStart -lt 0 -or $postCatalogGuardFinish -le $postCatalogGuardStart){return $false}
-  $postCatalogOrderingGuard='if(' + '$cw2RequestLockIndex -lt 0' + ' -or ' + '$cw2CatalogShareLockIndex -le $cw2RequestLockIndex' + ' -or ' + '$cw2AssignedProductUpdateIndex -le $cw2CatalogShareLockIndex'
+  $postCatalogOrderingGuard='if(' + '$cw2RequestLockIndex -lt 0' + ' -or ' + '$cw2CatalogTriggerIndex -lt 0' + ' -or ' + '$cw2CatalogLockIndex -le $cw2RequestLockIndex' + ' -or ' + '$cw2AssignedProductUpdateIndex -le $cw2CatalogLockIndex'
   if($RunnerSource.Substring($postCatalogGuardStart,$postCatalogGuardFinish-$postCatalogGuardStart).IndexOf($postCatalogOrderingGuard,[StringComparison]::Ordinal) -lt 0){return $false}
   $clockPhaseCallMarker='$clockResult=@(Invoke-'+'HarvestRidgeClockPhase'
   $clockPhaseCallIndex=$RunnerSource.IndexOf($clockPhaseCallMarker,[StringComparison]::Ordinal)
@@ -1852,7 +1852,7 @@ function Assert-Cw2Contract {
   $runnerSource = Get-Content -Raw -LiteralPath $runnerPath
   $matrixStart = '# CW2_PROOF_005_' + 'EXECUTABLE_MATRIX_BEGIN'; $matrixEnd = '# CW2_PROOF_005_' + 'EXECUTABLE_MATRIX_END'
   $matrixSpan = Get-Cw2UniqueSourceSpan $runnerSource $matrixStart $matrixEnd
-  if ((Get-Cw2Proof005TextSha256 $matrixSpan) -cne 'ab394c801381a1d0fe4241dff7d47650a5b6b5e3589066aeebd622c86d1321e3') { throw 'CONNECT_WORKFLOWS_CW2_PROOF_005_MATRIX_BYTES_CHANGED' }
+  if ((Get-Cw2Proof005TextSha256 $matrixSpan) -cne '92937584f1b360f3b8962682a5f6764ef12730682e3c779a99fa1b8085ddbd38') { throw 'CONNECT_WORKFLOWS_CW2_PROOF_005_MATRIX_BYTES_CHANGED' }
   Assert-Cw2Proof006LexerSelfTest
   if (-not (Test-Cw2CredentialHandoffStaticContract $runnerSource $concurrencyFixtureSql $concurrencySql)) { throw 'CONNECT_WORKFLOWS_CW2_CREDENTIAL_HANDOFF_STATIC_CONTRACT_MISSING' }
   if (-not (Test-Cw2Proof005StaticContract $sql)) { throw 'CONNECT_WORKFLOWS_CW2_PROOF_005_STATIC_CONTRACT_MISSING' }
@@ -2163,7 +2163,7 @@ function Assert-Cw2Contract {
     [pscustomobject]@{Name='fixture boundary moved after insert';Target='fixture-sql';Old="$credentialFixtureBoundary`n`ninsert into public.assigned_program_passes (";New="insert into public.assigned_program_passes (`n$credentialFixtureBoundary"},
     [pscustomobject]@{Name='fixture post-catalog probe key changed';Target='fixture-sql';Old='perform pg_catalog.pg_advisory_xact_lock(25000,2);';New='perform pg_catalog.pg_advisory_xact_lock(25000,3);'},
     [pscustomobject]@{Name='fixture post-catalog trigger target changed';Target='fixture-sql';Old='create trigger cw2_catalog_probe_pause before update on public.assigned_program_pass_products';New='create trigger cw2_catalog_probe_pause before update on public.inventory_products'},
-    [pscustomobject]@{Name='post-catalog ordering static guard weakened';Target='runner-post-catalog';Old='-or $cw2AssignedProductUpdateIndex -le $cw2CatalogShareLockIndex';New='-or $false'},
+    [pscustomobject]@{Name='post-catalog ordering static guard weakened';Target='runner-post-catalog';Old='-or $cw2AssignedProductUpdateIndex -le $cw2CatalogLockIndex';New='-or $false'},
     [pscustomobject]@{Name='password added';Target='sql';Old=$credentialApplyConnect;New=$credentialApplyConnect.Replace(' application_name',' password=secret application_name')},
     [pscustomobject]@{Name='passfile added';Target='sql';Old=$credentialApplyConnect;New=$credentialApplyConnect.Replace(' application_name',' passfile=/tmp/pass application_name')},
     [pscustomobject]@{Name='host added';Target='sql';Old=$credentialApplyConnect;New=$credentialApplyConnect.Replace(' application_name',' host=remote.invalid application_name')},
@@ -2520,7 +2520,7 @@ function Assert-Cw2Contract {
   )) { if ($programsRegressionSource -notmatch [regex]::Escape($needle)) { throw "CONNECT_WORKFLOWS_CW2_EXHAUSTIVE_SIGNATURE_PROOF_MISSING:$needle" } }
   $migrationSource = Get-Content -Raw -LiteralPath $migrationPath
   foreach ($needle in @(
-    'create table public.program_inventory_matches','lock table public.inventory_products in share mode;',
+    'create table public.program_inventory_matches','create trigger inventory_products_catalog_lock',
     'and (p_application_record_id is not null or p_create_application_record)',
     'and assigned_pass.application_record_id is null',
     '''user_id'', v_caller','''access_epoch'', v_access_epoch',
@@ -2530,16 +2530,18 @@ function Assert-Cw2Contract {
   )) { if ($migrationSource -notmatch [regex]::Escape($needle)) { throw "CONNECT_WORKFLOWS_CW2_MIGRATION_CONTRACT_MISSING:$needle" } }
   # CW2_POST_CATALOG_STATIC_GUARD_BEGIN
   $cw2RequestSerializationLock='perform pg_advisory_xact_lock(hashtext(p_farm_id::text), hashtext(p_operation_id::text));'
-  $cw2CatalogShareLock='lock table public.inventory_products in share mode;'
+  $cw2CatalogTrigger='create trigger inventory_products_catalog_lock'
+  $cw2CatalogLock='pg_catalog.hashtext(''inventory-products-catalog'')'
   $cw2AssignedProductUpdate='update public.assigned_program_pass_products assigned_product'
   $cw2FixtureProbeLock='perform pg_catalog.pg_advisory_xact_lock(25000,2);'
   $cw2FixtureProbeTrigger='create trigger cw2_catalog_probe_pause before update on public.assigned_program_pass_products'
   $cw2RequestLockIndex=$migrationSource.IndexOf($cw2RequestSerializationLock,[StringComparison]::Ordinal)
-  $cw2CatalogShareLockIndex=$migrationSource.IndexOf($cw2CatalogShareLock,[StringComparison]::Ordinal)
+  $cw2CatalogTriggerIndex=$migrationSource.IndexOf($cw2CatalogTrigger,[StringComparison]::Ordinal)
+  $cw2CatalogLockIndex=$migrationSource.IndexOf($cw2CatalogLock,$cw2RequestLockIndex,[StringComparison]::Ordinal)
   $cw2AssignedProductUpdateIndex=$migrationSource.IndexOf($cw2AssignedProductUpdate,[StringComparison]::Ordinal)
   $cw2FixtureProbeCount=[regex]::Matches($concurrencyFixtureSql,[regex]::Escape($cw2FixtureProbeLock)).Count
   $cw2FixtureProbeTriggerCount=[regex]::Matches($concurrencyFixtureSql,[regex]::Escape($cw2FixtureProbeTrigger)).Count
-  if($cw2RequestLockIndex -lt 0 -or $cw2CatalogShareLockIndex -le $cw2RequestLockIndex -or $cw2AssignedProductUpdateIndex -le $cw2CatalogShareLockIndex -or $cw2FixtureProbeCount -ne 1 -or $cw2FixtureProbeTriggerCount -ne 1){throw 'CONNECT_WORKFLOWS_CW2_CONCURRENCY_POST_CATALOG_PROBE_CONTRACT_MISSING'}
+  if($cw2RequestLockIndex -lt 0 -or $cw2CatalogTriggerIndex -lt 0 -or $cw2CatalogLockIndex -le $cw2RequestLockIndex -or $cw2AssignedProductUpdateIndex -le $cw2CatalogLockIndex -or $cw2FixtureProbeCount -ne 1 -or $cw2FixtureProbeTriggerCount -ne 1){throw 'CONNECT_WORKFLOWS_CW2_CONCURRENCY_POST_CATALOG_PROBE_CONTRACT_MISSING'}
   # CW2_POST_CATALOG_STATIC_GUARD_END
 
   $cw1Source = Get-Content -Raw -LiteralPath (Join-Path $root 'scripts/verify-connect-workflows-cw1-disposable.ps1')

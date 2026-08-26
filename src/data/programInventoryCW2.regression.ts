@@ -253,13 +253,15 @@ async function run() {
   assert(/v_requested_match_count > 0\s+and \(p_application_record_id is not null or p_create_application_record\)/.test(migration), 'Any application record create/link path must reject a confirmed Inventory draw-down.')
   assert(/from public\.program_inventory_matches match[\s\S]*where assigned_pass\.status = 'applied'\s+and assigned_pass\.application_record_id is null/.test(migration), 'Inventory accounting must ignore any contradictory linked-application Program match to prevent a double draw.')
   assert(/quantity_in_inventory_unit > 0[\s\S]*quantity_in_inventory_unit <= 10000000[\s\S]*quantity_in_inventory_unit = round\(quantity_in_inventory_unit, 8\)/.test(migration) && /v_quantity > 10000000[\s\S]*v_quantity <> round\(v_quantity, 8\)/.test(migration), 'The table and RPC must share the 10,000,000 and eight-decimal quantity boundary.')
-  const inventoryCatalogLock = 'lock table public.inventory_products in share mode;'
+  const inventoryCatalogTrigger = 'create trigger inventory_products_catalog_lock'
+  const inventoryCatalogLock = "pg_catalog.hashtext('inventory-products-catalog')"
+  const inventoryCatalogLockStatement = /\n    perform pg_advisory_xact_lock\(\n      pg_catalog\.hashtext\(p_farm_id::text\),\n      pg_catalog\.hashtext\('inventory-products-catalog'\)\n    \);/
   const candidateRowScan = 'perform inventory_product.id'
   const exactCandidateCount = 'select count(*) into v_exact_inventory_count'
-  const catalogLockPrecedesCandidateValidation = (source: string) => { const lock = source.indexOf(inventoryCatalogLock); const scan = source.indexOf(candidateRowScan); const count = source.indexOf(exactCandidateCount); return lock >= 0 && lock < scan && scan < count }
-  assert(catalogLockPrecedesCandidateValidation(migration), 'A SHARE catalog lock must block concurrent Inventory writes before both the candidate row scan and exact-name count.')
-  assert(!catalogLockPrecedesCandidateValidation(migration.replace(inventoryCatalogLock, 'lock table public.inventory_products in row share mode;')), 'The lock-mode mutation must turn the catalog concurrency guard red.')
-  assert(!catalogLockPrecedesCandidateValidation(migration.replace(inventoryCatalogLock, '').replace(exactCandidateCount, `${inventoryCatalogLock}\n      ${exactCandidateCount}`)), 'Moving the catalog lock after the candidate row scan must turn the ordering guard red.')
+  const catalogLockPrecedesCandidateValidation = (source: string) => { const request = source.indexOf('if v_requested_match_count > 0 then'); const trigger = source.indexOf(inventoryCatalogTrigger); const lock = source.indexOf(inventoryCatalogLock, request); const scan = source.indexOf(candidateRowScan); const count = source.indexOf(exactCandidateCount); return trigger >= 0 && request >= 0 && lock > request && lock < scan && scan < count }
+  assert(catalogLockPrecedesCandidateValidation(migration), 'A farm-scoped catalog trigger and advisory lock must block same-farm direct writes before both the candidate row scan and exact-name count.')
+  assert(!catalogLockPrecedesCandidateValidation(migration.replace(inventoryCatalogTrigger, 'create trigger inventory_products_catalog_unlocked')), 'Removing the catalog trigger identity must turn the catalog concurrency guard red.')
+  assert(!catalogLockPrecedesCandidateValidation(migration.replace(inventoryCatalogLockStatement, '')), 'Removing the confirmation-side farm catalog lock must turn the ordering guard red.')
   const normalizedSql = (source: string) => source.replace(/\s+/g, ' ')
   const exactCaseComparison = 'btrim(inventory_product.name) collate "C" = btrim(v_item ->> \'actual_product_name\') collate "C"'
   const caseSensitiveServerMatch = (source: string) => normalizedSql(source).split(exactCaseComparison).length - 1 === 2
@@ -943,10 +945,12 @@ async function run() {
     const fixtureProbeIndex = concurrencyFixtureSql.indexOf(fixtureProbeKey)
     const fixtureProbeTrigger = 'create trigger cw2_catalog_probe_pause before update on public.assigned_program_pass_products'
     const requestSerializationLock = 'perform pg_advisory_xact_lock(hashtext(p_farm_id::text), hashtext(p_operation_id::text));'
-    const catalogShareLock = 'lock table public.inventory_products in share mode;'
+    const catalogTrigger = 'create trigger inventory_products_catalog_lock'
+    const catalogLock = "pg_catalog.hashtext('inventory-products-catalog')"
     const assignedProductUpdate = 'update public.assigned_program_pass_products assigned_product'
     const requestLockIndex = migrationProofSource.indexOf(requestSerializationLock)
-    const catalogShareLockIndex = migrationProofSource.indexOf(catalogShareLock)
+    const catalogTriggerIndex = migrationProofSource.indexOf(catalogTrigger)
+    const catalogLockIndex = migrationProofSource.indexOf(catalogLock, requestLockIndex)
     const assignedProductUpdateIndex = migrationProofSource.indexOf(assignedProductUpdate)
     const writerTransactionBoundary = "select dblink_exec('cw2_catalog_writer','begin');\nselect dblink_exec('cw2_catalog_writer',$remote$\nset role authenticated;"
     const releasedWriterBoundary = "select dblink_exec('cw2_catalog_writer','begin');\ncreate temporary table cw2_catalog_writer_released(status text);\ninsert into cw2_catalog_writer_released\nselect dblink_exec('cw2_catalog_writer',$remote$\nset role authenticated;"
@@ -1097,8 +1101,8 @@ async function run() {
     && ["select set_config('request.jwt.claim.sub','27000000-0000-4000-8000-000000000001',true);", '"x-farm-rx-access-epochs":"{\\"27010000-0000-4000-8000-000000000005\\":1}"', "if current_user <> 'postgres'", "or auth.uid() <> '27000000-0000-4000-8000-000000000001'", 'CONNECT_WORKFLOWS_CW2_CONCURRENCY_FIXTURE_BOUNDARY_PASS', 'insert into public.assigned_program_passes (', 'insert into public.assigned_program_pass_products (', 'create function public.cw2_catalog_probe_pause()', fixtureProbeKey, fixtureProbeTrigger, 'CONNECT_WORKFLOWS_CW2_CONCURRENCY_FIXTURE_PASS'].every((marker) => concurrencyFixtureSql.includes(marker))
     && fixtureTransactionIndex >= 0 && fixtureTransactionIndex < fixtureBoundaryIndex && fixtureBoundaryIndex < fixturePassIndex && fixturePassIndex < fixtureProductIndex && fixtureProductIndex < fixtureCommitIndex && fixtureProbeIndex > fixtureCommitIndex
     && concurrencyFixtureSql.split(fixtureProbeTrigger).length - 1 === 1
-    && requestLockIndex >= 0 && requestLockIndex < catalogShareLockIndex && catalogShareLockIndex < assignedProductUpdateIndex
-    && postCatalogStaticGuardSpan.includes('$cw2AssignedProductUpdateIndex -le $cw2CatalogShareLockIndex')
+    && requestLockIndex >= 0 && catalogTriggerIndex >= 0 && requestLockIndex < catalogLockIndex && catalogLockIndex < assignedProductUpdateIndex
+    && postCatalogStaticGuardSpan.includes('$cw2AssignedProductUpdateIndex -le $cw2CatalogLockIndex')
     && !/\bset\s+(?:local\s+)?role\b|service_role|session_replication_role/i.test(concurrencyFixtureSql)
     && concurrencyMarkers.every((marker) => concurrencySql.includes(marker))
     && concurrencySql.split(writerTransactionBoundary).length - 1 === 1
@@ -1148,8 +1152,8 @@ async function run() {
     { name: 'fixture boundary moved', runner: disposableSource, sql: sqlProofSource, fixture: concurrencyFixtureProofSource.replace('\\echo CONNECT_WORKFLOWS_CW2_CONCURRENCY_FIXTURE_BOUNDARY_PASS\n\ninsert into public.assigned_program_passes (', 'insert into public.assigned_program_passes (\n\\echo CONNECT_WORKFLOWS_CW2_CONCURRENCY_FIXTURE_BOUNDARY_PASS'), concurrency: concurrencyProofSource },
     { name: 'fixture post-catalog probe key changed', runner: disposableSource, sql: sqlProofSource, fixture: concurrencyFixtureProofSource.replace('perform pg_catalog.pg_advisory_xact_lock(25000,2);', 'perform pg_catalog.pg_advisory_xact_lock(25000,3);'), concurrency: concurrencyProofSource },
     { name: 'fixture post-catalog trigger target changed', runner: disposableSource, sql: sqlProofSource, fixture: concurrencyFixtureProofSource.replace('create trigger cw2_catalog_probe_pause before update on public.assigned_program_pass_products', 'create trigger cw2_catalog_probe_pause before update on public.inventory_products'), concurrency: concurrencyProofSource },
-    { name: 'post-catalog update moved before share lock', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource, migration: migration.replace('lock table public.inventory_products in share mode;', 'update public.assigned_program_pass_products assigned_product\nlock table public.inventory_products in share mode;') },
-    { name: 'post-catalog ordering static guard weakened', runner: replaceInExactSpan(disposableSource, '# CW2_POST_CATALOG_STATIC_GUARD_BEGIN', '# CW2_POST_CATALOG_STATIC_GUARD_END', '-or $cw2AssignedProductUpdateIndex -le $cw2CatalogShareLockIndex', '-or $false'), sql: sqlProofSource, concurrency: concurrencyProofSource },
+    { name: 'post-catalog update moved before lock', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource, migration: migration.replace('if v_requested_match_count > 0 then\n    perform pg_advisory_xact_lock(', 'if v_requested_match_count > 0 then\n    update public.assigned_program_pass_products assigned_product\n    perform pg_advisory_xact_lock(') },
+    { name: 'post-catalog ordering static guard weakened', runner: replaceInExactSpan(disposableSource, '# CW2_POST_CATALOG_STATIC_GUARD_BEGIN', '# CW2_POST_CATALOG_STATIC_GUARD_END', '-or $cw2AssignedProductUpdateIndex -le $cw2CatalogLockIndex', '-or $false'), sql: sqlProofSource, concurrency: concurrencyProofSource },
     { name: 'boundary removed', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace('CONNECT_WORKFLOWS_CW2_LOCAL_SUPABASE_ADMIN_BOUNDARY_PASS', 'CW2_REMOVED_BOUNDARY') },
     { name: 'one authenticated downgrade removed', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace('set role authenticated;', 'select true;') },
     { name: 'apply attestation removed', runner: disposableSource, sql: sqlProofSource, concurrency: concurrencyProofSource.replace("raise exception 'CW2 catalog apply session did not enter the exact authenticated local boundary'", 'raise exception \'removed\'') },

@@ -1,6 +1,7 @@
 -- This proof-only file is the sole supabase_admin psql payload. All fixture
 -- setup occurs in the separately captured local postgres fixture process, and
 -- all credited public DML executes in authenticated dblink workers.
+\set ON_ERROR_STOP on
 create extension if not exists dblink;
 
 -- CW2-CREDENTIAL-HANDOFF concurrency boundary begin.
