@@ -1265,3 +1265,9 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Date/time:** 2026-08-25 (America/Chicago). Foundation passed the repaired Maple adapter then correctly failed the Faketime manifest regression because it still resolved Windows-only `git.exe` on Linux.
 - **Smallest repair:** select `git.exe` only on Windows and `git` elsewhere, retaining absolute executable resolution and all existing failure/Trace2 custody checks. The focused Faketime manifest regression passed locally; no Docker/backend, migration, browser, product, or live action ran.
 - **Current gate:** commit, fresh exact-SHA review, then update PR #28 and require authoritative Foundation and review gates.
+
+## CW-140 — Foundation parent-history checkout repair
+
+- **Date/time:** 2026-08-25 (America/Chicago). Foundation passed all preceding fast regressions then correctly refused the Faketime clean-tree fallback because the GitHub checkout contained only one commit and `HEAD^` was unavailable. The proof itself remains fail-closed and must retain its exact previous-commit check.
+- **Smallest repair:** Foundation checkout now fetches depth two, supplying only the direct parent the proof requires while retaining no credentials. No product, migration, runtime/backend, browser, fixture, or live action changed or ran.
+- **Current gate:** validate workflow shape, commit, fresh exact-SHA review, update PR #28 only after acceptance, then require authoritative Foundation and review gates.
