@@ -144,7 +144,7 @@ finally{
   try{$traceEnvironmentIsPresent=Test-Path Env:GIT_TRACE2_EVENT;if($traceEnvironmentIsPresent-ne$traceEnvironmentWasPresent-or($traceEnvironmentWasPresent-and$env:GIT_TRACE2_EVENT-cne$previousTraceEnvironment)){throw 'FAKETIME_ARTIFACT_MANIFEST_GIT_TRACE_ENV_RESTORE_FAILED'}}catch{$traceCleanupErrors.Add($_.Exception)}
 }
 if($null-ne$tracePrimary-and$traceCleanupErrors.Count-gt0){throw [AggregateException]::new('FAKETIME_ARTIFACT_MANIFEST_GIT_TRACE_PRIMARY_AND_CLEANUP_FAILED',[Exception[]]@($tracePrimary)+[Exception[]]$traceCleanupErrors.ToArray())}
-if($null-ne$tracePrimary){throw$tracePrimary}
+if($null-ne$tracePrimary){throw $tracePrimary}
 if($traceCleanupErrors.Count-gt0){throw [AggregateException]::new('FAKETIME_ARTIFACT_MANIFEST_GIT_TRACE_CLEANUP_FAILED',[Exception[]]$traceCleanupErrors.ToArray())}
 if($ErrorActionPreference-cne$expectedErrorActionPreference){throw 'FAKETIME_ARTIFACT_MANIFEST_GIT_FAILURE_EAP_RESTORE_FAILED'}
 $selfSource=[IO.File]::ReadAllText($PSCommandPath)
