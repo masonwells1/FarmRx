@@ -2519,7 +2519,7 @@ function Assert-Cw2Contract {
   foreach ($needle in @(
     'const signatureFieldMutations = [','signatureFieldMutations.length === 74','expectedSignatureFieldPaths.size === 74',
     'for (const [index, path] of signatureFieldMutations.entries())',
-    'canonicalProgramInventorySnapshot(changedContext, changedAssignments, changedMatches) !== stableSignature',
+    'canonicalProgramInventorySnapshot(changedContext, changedAssignments, [mappedSignatureInventory], changedMatches) !== stableSignature',
     'executedSignatureCases === signatureFieldMutations.length','match.farm_id'
   )) { if ($programsRegressionSource -notmatch [regex]::Escape($needle)) { throw "CONNECT_WORKFLOWS_CW2_EXHAUSTIVE_SIGNATURE_PROOF_MISSING:$needle" } }
   $migrationSource = Get-Content -Raw -LiteralPath $migrationPath
