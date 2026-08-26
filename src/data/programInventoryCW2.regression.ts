@@ -347,7 +347,7 @@ for each row execute function public.lock_inventory_products_catalog();`
   for (const marker of liveOperationMarkers) assert(!completeLiveOperationGuard(programsRepositorySource.replace(marker, 'CW2_REMOVED_LIVE_OPERATION_GUARD')), `Removing live operation guard ${marker} must turn the mutation red.`)
   const stableSnapshotMarkers = [
     'const programInventorySnapshotReadLimit = 3',
-    'const rawAssignments = await this.d.gateway.loadAssignments(context.farmId)\n    await this.d.verifyOperationContext(context)\n    const rawInventoryMatches = await this.d.gateway.loadInventoryMatches(context.farmId)\n    await this.d.verifyOperationContext(context)',
+    'const rawAssignments = await this.d.gateway.loadAssignments(context.farmId)\n    await this.d.verifyOperationContext(context)\n    const rawInventoryProducts = await this.d.gateway.loadInventoryProducts(context.farmId)\n    await this.d.verifyOperationContext(context)\n    const rawInventoryMatches = await this.d.gateway.loadInventoryMatches(context.farmId)\n    await this.d.verifyOperationContext(context)',
     'let previous = await this.readProgramInventorySnapshot(context)',
     'const current = await this.readProgramInventorySnapshot(context)',
     'current.canonical === previous.canonical', 'previous = current', 'throw new ProgramInventorySnapshotConsistencyError()',
@@ -369,7 +369,7 @@ for each row execute function public.lock_inventory_products_catalog();`
   }
   assert(completeStableSnapshotGuard(programsRepositorySource, queuedProgramsSource), 'Programs live reads must stabilize two consecutive complete sequential Program/Inventory snapshots before coherence validation or cache publication.')
   const stableSnapshotMutations = [
-    { name: 'parallel coupled reads', repository: programsRepositorySource.replace(stableSnapshotMarkers[1], 'const [rawAssignments, rawInventoryMatches] = await Promise.all([this.d.gateway.loadAssignments(context.farmId), this.d.gateway.loadInventoryMatches(context.farmId)])'), queued: queuedProgramsSource },
+    { name: 'parallel coupled reads', repository: programsRepositorySource.replace(stableSnapshotMarkers[1], 'const [rawAssignments, rawInventoryProducts, rawInventoryMatches] = await Promise.all([this.d.gateway.loadAssignments(context.farmId), this.d.gateway.loadInventoryProducts(context.farmId), this.d.gateway.loadInventoryMatches(context.farmId)])'), queued: queuedProgramsSource },
     ...stableSnapshotMarkers.slice(2).map((marker) => ({ name: `remove snapshot guard ${marker}`, repository: programsRepositorySource.replace(marker, 'CW2_REMOVED_SNAPSHOT_STABILITY_GUARD'), queued: queuedProgramsSource })),
     ...stableCacheMarkers.map((marker) => ({ name: `remove stable cache guard ${marker}`, repository: programsRepositorySource, queued: queuedProgramsSource.replace(marker, 'CW2_REMOVED_STABLE_CACHE_GUARD') })),
   ]
@@ -389,11 +389,11 @@ for each row execute function public.lock_inventory_products_catalog();`
     const expected = source.slice(source.indexOf('const expectedSignatureFieldPaths = new Set(['), source.indexOf('] satisfies SignatureFieldPath[])'))
     return exhaustiveSignatureFieldPaths.length === 74
       && exhaustiveSignatureFieldPaths.every((path) => [table, alternates, expected].every((block) => block.split(`'${path}'`).length - 1 === 1))
-      && ['signatureFieldMutations.length === 74', 'expectedSignatureFieldPaths.size === 74', 'new Set([', 'for (const [index, path] of signatureFieldMutations.entries())', 'canonicalProgramInventorySnapshot(changedContext, changedAssignments, changedMatches) !== stableSignature', 'executedSignatureCases === signatureFieldMutations.length'].every((marker) => source.includes(marker))
+      && ['signatureFieldMutations.length === 74', 'expectedSignatureFieldPaths.size === 74', 'new Set([', 'for (const [index, path] of signatureFieldMutations.entries())', 'canonicalProgramInventorySnapshot(changedContext, changedAssignments, [mappedSignatureInventory], changedMatches) !== stableSignature', 'executedSignatureCases === signatureFieldMutations.length'].every((marker) => source.includes(marker))
   }
   assert(completeExhaustiveSignatureMutationProof(programsRepositoryRegressionSource), 'The Programs regression must enumerate, uniquely check, execute, and compare every canonical assignment/pass/product/match/context signature field.')
   for (const path of exhaustiveSignatureFieldPaths) assert(!completeExhaustiveSignatureMutationProof(programsRepositoryRegressionSource.replace(`'${path}'`, `'CW2_REMOVED_${path}'`)), `Removing exhaustive signature case ${path} must turn the proof-of-proof red.`)
-  for (const marker of ['signatureFieldMutations.length === 74', 'expectedSignatureFieldPaths.size === 74', 'for (const [index, path] of signatureFieldMutations.entries())', 'canonicalProgramInventorySnapshot(changedContext, changedAssignments, changedMatches) !== stableSignature', 'executedSignatureCases === signatureFieldMutations.length']) assert(!completeExhaustiveSignatureMutationProof(programsRepositoryRegressionSource.replace(marker, 'CW2_REMOVED_EXHAUSTIVE_SIGNATURE_GUARD')), `Removing exhaustive signature guard ${marker} must turn the proof-of-proof red.`)
+  for (const marker of ['signatureFieldMutations.length === 74', 'expectedSignatureFieldPaths.size === 74', 'for (const [index, path] of signatureFieldMutations.entries())', 'canonicalProgramInventorySnapshot(changedContext, changedAssignments, [mappedSignatureInventory], changedMatches) !== stableSignature', 'executedSignatureCases === signatureFieldMutations.length']) assert(!completeExhaustiveSignatureMutationProof(programsRepositoryRegressionSource.replace(marker, 'CW2_REMOVED_EXHAUSTIVE_SIGNATURE_GUARD')), `Removing exhaustive signature guard ${marker} must turn the proof-of-proof red.`)
   const packageSource = readFileSync(new URL('../../package.json', import.meta.url), 'utf8'); const inventoryRegressionLane = 'tsx src/data/SupabaseInventoryRepository.regression.ts'
   const packageIncludesInventoryRegression = (source: string) => source.includes(inventoryRegressionLane)
   assert(packageIncludesInventoryRegression(packageSource) && !packageIncludesInventoryRegression(packageSource.replace(inventoryRegressionLane, '')), 'The full regression command must include the Inventory reader that consumes confirmed Program match facts.')
