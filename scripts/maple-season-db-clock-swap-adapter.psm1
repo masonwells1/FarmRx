@@ -37,7 +37,7 @@ function Write-MapleSwapJournalAtomic {
     $stream=[IO.FileStream]::new($temp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough)
     try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
     if($env:OS -ceq 'Windows_NT'){$null=& icacls $temp /inheritance:r /grant:r "$env:USERNAME`:(F)";if($LASTEXITCODE-ne 0){throw 'MAPLE_DB_SWAP_REFUSED: journal ACL failed.'}}
-    if($env:OS-ceq'Windows_NT'){if(-not[MapleAtomicMove]::MoveFileEx($temp,$Path,9)){throw"MAPLE_DB_SWAP_REFUSED: atomic journal move failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())."}}else{[IO.File]::Move($temp,$Path)}
+    if($env:OS-ceq'Windows_NT'){if(-not[MapleAtomicMove]::MoveFileEx($temp,$Path,9)){throw"MAPLE_DB_SWAP_REFUSED: atomic journal move failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())."}}else{[IO.File]::Move($temp,$Path,$true)}
   } finally { if([IO.File]::Exists($temp)){[IO.File]::Delete($temp)} }
   return $true
 }

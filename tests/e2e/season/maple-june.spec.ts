@@ -116,7 +116,7 @@ test('@june-write records one exact manual Maple application after a read-only W
   await page.getByRole('button', { name: 'On-hand shelf' }).click(); await expect(page.getByText('90 gal', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Spray record' }).click()
   const records = page.locator('section.inventory-panel').filter({ hasText: 'Program records' }); await expect(records.getByText(/2027-05-20 · 160 acres · Draft/)).toBeVisible(); await records.getByRole('button', { name: 'Open record' }).click()
-  await expect(records.getByText('Free-Typed Program Herbicide · 10.00 gal total · $7/ac')).toBeVisible(); await expect(records.getByText('On-hand was not changed by these Program lines.')).toBeVisible()
+  await expect(records.getByText('Free-Typed Program Herbicide · 10.00 gal total · $7/ac · Not matched to Inventory')).toBeVisible(); await expect(records.getByText('On-hand was not changed by these application-linked Program lines.')).toBeVisible()
   expect(requests.observedTargetMutationRpcs).toEqual(['save_inventory_application_bundle'])
   expect(requests.unexpectedRpcs, 'unexpected RPC ran after password authentication').toEqual([])
   expect(requests.blockedNonReadRequests, 'unexpected non-read request ran after password authentication').toEqual([])

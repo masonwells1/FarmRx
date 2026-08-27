@@ -67,7 +67,7 @@ Assert-ExactReusableArtifact
 
 Push-Location $root
 try {
-  Invoke-Docker @('build','--pull=false','--label',$label,'--build-arg',"BASE_IMAGE=$baseImage",'--build-arg',"FAKETIME_ARTIFACTS_IMAGE=$artifactImage",'--build-arg',"FROZEN_INSTANT=$instant",'-f','tests/season/frozen-postgres-clock-spike.Dockerfile','-t',$derivedImage,'.') | Out-Null; $created.Image=$true
+  Invoke-Docker @('build','--pull=false','--label',$label,'--build-arg',"BASE_IMAGE=$baseImage",'--build-arg',"FAKETIME_ARTIFACTS_IMAGE=$artifactRef",'--build-arg',"FROZEN_INSTANT=$instant",'-f','tests/season/frozen-postgres-clock-spike.Dockerfile','-t',$derivedImage,'.') | Out-Null; $created.Image=$true
   Invoke-Docker @('volume','create','--label',$label,$volume) | Out-Null; $created.Volume=$true
   Invoke-Docker @('run','-d','--name',$initContainer,'--label',$label,'--network','none','-e','POSTGRES_PASSWORD=maple-clock-spike-synthetic-only','-v',"${volume}:/var/lib/postgresql/data",$baseImage) | Out-Null; $created.Init=$true
   Wait-Healthy $initContainer

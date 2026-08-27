@@ -59,7 +59,7 @@ const completeFaketimeArtifactReplacementContract = (sources) => {
     && adapter.includes(replacementArtifact.ref) && adapter.includes(replacementArtifact.id) && adapter.includes(replacementArtifact.tag) && adapter.includes(replacementArtifact.token)
     && adapterRegression.includes(replacementArtifact.ref) && adapterRegression.includes(replacementArtifact.id) && adapterRegression.includes(replacementArtifact.tag) && adapterRegression.includes(replacementArtifact.token)
     && topology.split(replacementArtifact.ref).length - 1 === 2 && topology.split(replacementArtifact.id).length - 1 === 4 && topology.includes('Observed=$true;LabelsVerified=$true') && topologyRegression.split(replacementArtifact.ref).length - 1 === 1
-    && canonicalManifestRegression.includes('$paths.Sort([StringComparer]::Ordinal)') && canonicalManifestRegression.includes('HashSet[string]') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CANONICAL_MANIFEST_PASS') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CLEAN_FALLBACK_PASS') && canonicalManifestRegression.includes("@('diff-tree','--no-commit-id','--name-only','-r','-z','HEAD^','HEAD')") && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY') && !canonicalManifestRegression.includes('Sort-Object')
+    && canonicalManifestRegression.includes('$paths.Sort([StringComparer]::Ordinal)') && canonicalManifestRegression.includes('HashSet[string]') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CANONICAL_MANIFEST_PASS') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CLEAN_FALLBACK_PASS') && canonicalManifestRegression.includes("@('diff-tree','--no-commit-id','--name-status','-r','-z','-M100%','HEAD^','HEAD')") && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY') && !canonicalManifestRegression.includes('Sort-Object')
     && spike.includes(replacementArtifact.tag) && spike.includes(replacementArtifact.ref) && spike.includes(replacementArtifact.id) && spike.split('Assert-ExactReusableArtifact').length === 3 && [
       "'farmrx.synthetic-bootstrap'='b9ad08aeb66ed961e8426b2cce527365'", "'farmrx.synthetic-owner'='maple-faketime-bootstrap'", "'farmrx.synthetic-role'='faketime-artifacts'", "'farmrx.source-digest'='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818'", "'farmrx.package-contract'='libfaketime=0.9.10-2.1;gcc;libc6-dev'",
     ].every((label) => spike.includes(label))
@@ -73,7 +73,7 @@ const completeFaketimeArtifactReplacementContract = (sources) => {
     && evidenceManifest.includes('clear-ld-preload.c') && evidenceManifest.includes('b6d9b439ccbfdf88f87b9c2f2d89b560d2370964074759373949c2bbb67cd66e')
     && evidenceManifest.includes('derived_image_proof') && evidenceManifest.includes('0ba1615005224ec79d44fcdb3998021d') && evidenceManifest.includes('sha256:ac2901f891cd4a96d70cde28c9dd9f1db6ca518f4d9e5db821518ecb518a0f74') && evidenceManifest.includes('eb43ca8c6035e8125e9ddbd7498f3bea8674a5a34c164c4e7ac4a1d1c9fc06d1')
     && evidenceManifest.includes('reusable_postcleanup_attestation') && evidenceManifest.includes('5469560cee6b3f5f863ea84aaab8376a38b3a909d2b2145e03671a32e5578eb5') && evidenceManifest.includes('efd709072eb35f838fcf5b81c22da204baadf3f54e016f5dfa64e4735d073163')
-    && evidenceManifest.includes('combined_source_artifact_identity_recipe') && evidenceManifest.includes('NUL-delimited dirty tracked, staged, and untracked existing source') && evidenceManifest.includes('refusing missing/deleted paths')
+    && evidenceManifest.includes('combined_source_artifact_identity_recipe') && evidenceManifest.includes('NUL-delimited dirty tracked, staged, and untracked existing source') && evidenceManifest.includes('refusing missing/non-rename deleted paths') && evidenceManifest.includes('accepting only Git R100 renames by their existing destination path')
     && dockerfile.includes('ARG FAKETIME_ARTIFACTS_IMAGE') && !dockerfile.includes('ARG FAKETIME_ARTIFACTS_IMAGE=') && !dockerfile.match(/apt-get|curl|wget|https?:\/\//)
 }
 
@@ -89,14 +89,14 @@ const exactForcedGitLiveSpanContract = (source) => {
   const forcedSpanHash = createHash('sha256').update(forcedSpan, 'utf8').digest('hex')
   return forcedSpanStartIndex >= 0 && normalizedSource.indexOf(forcedSpanStart, forcedSpanStartIndex + forcedSpanStart.length) < 0
     && forcedSpanEndIndex > forcedSpanStartIndex && normalizedSource.indexOf(forcedSpanEnd, forcedSpanEndIndex + forcedSpanEnd.length) < 0
-    && forcedSpanHash === '14651a7e62810c19660b6376aa9051031cfa90a54d5f11d6206272faeba1d1c1'
+    && forcedSpanHash === '654108f692edf3b073a1f5d2d651a21124ac33838024c40b9fb5d12e72ef4f36'
 }
 
 const canonicalManifestDiscoveryContract = (source) => {
   const dirty = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff','--name-only','-z') 'FAKETIME_ARTIFACT_MANIFEST_DIRTY_DIFF_GIT_FAILED'")
   const staged = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff','--cached','--name-only','-z') 'FAKETIME_ARTIFACT_MANIFEST_STAGED_DIFF_GIT_FAILED'")
   const untracked = source.indexOf("Invoke-Cw2ArtifactGitPathList @('ls-files','--others','--exclude-standard','-z') 'FAKETIME_ARTIFACT_MANIFEST_UNTRACKED_GIT_FAILED'")
-  const fallback = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff-tree','--no-commit-id','--name-only','-r','-z','HEAD^','HEAD') 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_GIT_FAILED'")
+  const fallback = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff-tree','--no-commit-id','--name-status','-r','-z','-M100%','HEAD^','HEAD') 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_GIT_FAILED'")
   const empty = source.indexOf("if($paths.Count-eq0){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY'}")
   const forced = source.indexOf('$cleanFallback=Get-Cw2ArtifactCanonicalManifest -ForceCleanFallback')
   const forcedRefusal = source.indexOf("if($cleanFallback.Source-cne'exact-previous-commit-diff'-or$cleanFallback.Lines.Count-eq0-or-not$cleanFallback.Canonical.EndsWith(\"`n\")){throw 'FAKETIME_ARTIFACT_MANIFEST_CLEAN_FALLBACK_PROOF_FAILED'}")
@@ -128,7 +128,7 @@ const canonicalManifestDiscoveryContract = (source) => {
     && source.includes('FAKETIME_ARTIFACT_REPLACEMENT_GIT_TRACE_OBSERVATION_PASS') && source.includes('farmrx-cw2-artifact-git-ast-')
     && source.includes('-RepositoryRoot $root -InitialErrorActionPreference $case.Preference') && source.includes('if([IO.File]::Exists($path)){[IO.File]::Delete($path)}') && source.includes('if([IO.Directory]::Exists($tempRoot)){[IO.Directory]::Delete($tempRoot,$false)}')
     && source.split('@($joined.Split([char[]]@([char]0),[StringSplitOptions]::RemoveEmptyEntries))').length - 1 === 1
-    && pathCustody.every((needle) => source.includes(needle)) && source.includes('if(-not$ForceCleanFallback){')
+    && pathCustody.every((needle) => source.includes(needle)) && source.includes("if($status-ceq'R100'){") && source.includes('FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_RENAME_DESTINATION_MISSING') && source.includes("}elseif($status-ceq'D'){") && source.includes('FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DELETION_REFUSED') && source.includes('if(-not$ForceCleanFallback){')
     && dirty >= 0 && staged > dirty && untracked > staged && fallback > untracked && empty > fallback && forced > empty && forcedRefusal > forced && forcedGitFailure > forcedRefusal && forcedGitRefusal > forcedGitFailure && forcedGitEapRefusal > forcedGitRefusal && forcedGitPass > forcedGitEapRefusal
 }
 
@@ -323,7 +323,7 @@ export function foundationStaticGuard(root = process.cwd()) {
 
   // SOIL_ARTIFACT_STATIC_GUARD_BEGIN
   const packageSource = read(root, 'package.json')
-  const artifactPackageLane = 'tsx src/data/programsChunk5.regression.ts && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/maple-season-db-clock-docker-adapter.regression.ps1 && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/maple-synthetic-docker-topology-plan.regression.ps1 && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/faketime-artifact-replacement-manifest.regression.ps1 && tsx src/data/programDueItems.regression.ts'
+  const artifactPackageLane = 'tsx src/data/programsChunk5.regression.ts && pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/maple-season-db-clock-docker-adapter.regression.ps1 && pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/maple-synthetic-docker-topology-plan.regression.ps1 && pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/faketime-artifact-replacement-manifest.regression.ps1 && tsx src/data/programDueItems.regression.ts'
   if ((packageSource.split(artifactPackageLane).length - 1) !== 1) errors.push('artifact:package-regression-wiring')
   const artifactSources = [
     read(root, 'scripts/harvest-ridge-db-clock.psm1'),
@@ -348,8 +348,8 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 160')) errors.push('artifact:soil-mutation-proof')
-  for (const marker of ['artifactDiscoveryMutations.length !== 34', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=34 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 162')) errors.push('artifact:soil-mutation-proof')
+  for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
   // SOIL_ARTIFACT_STATIC_GUARD_END

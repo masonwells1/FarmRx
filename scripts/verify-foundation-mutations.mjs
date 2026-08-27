@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 160
+const expectedMutationCount = 162
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -411,7 +411,7 @@ try {
   const artifactDiscoveryMutations = [
     { name: 'dirty manifest discovery bypassed before fallback', path: manifestRegressionPath, from: 'if(-not$ForceCleanFallback){', to: 'if($false){' },
     { name: 'staged manifest discovery omitted', path: manifestRegressionPath, from: "foreach($stagedPath in (Invoke-Cw2ArtifactGitPathList @('diff','--cached','--name-only','-z') 'FAKETIME_ARTIFACT_MANIFEST_STAGED_DIFF_GIT_FAILED'))", to: 'foreach($stagedPath in @())' },
-    { name: 'clean fallback replaced with working diff', path: manifestRegressionPath, from: "@('diff-tree','--no-commit-id','--name-only','-r','-z','HEAD^','HEAD')", to: "@('diff','--name-only','-z')" },
+    { name: 'clean fallback replaced with working diff', path: manifestRegressionPath, from: "@('diff-tree','--no-commit-id','--name-status','-r','-z','-M100%','HEAD^','HEAD')", to: "@('diff','--name-only','-z')" },
     { name: 'clean fallback empty refusal removed', path: manifestRegressionPath, from: "if($paths.Count-eq0){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY'}", to: "if($false){throw 'SOIL_REMOVED_PREVIOUS_COMMIT_EMPTY_REFUSAL'}" },
     { name: 'git failure capture bypassed', path: manifestRegressionPath, from: "try{$ErrorActionPreference='Continue';$output=@(& $gitExe -C $root @Arguments 2>&1);$exitCode=$LASTEXITCODE}finally{$ErrorActionPreference=$previousErrorActionPreference}", to: "try{$ErrorActionPreference='Continue';$output=@(& $gitExe -C $root @Arguments 2>&1);$exitCode=0}finally{$ErrorActionPreference=$previousErrorActionPreference}" },
     { name: 'forced clean fallback proof omitted', path: manifestRegressionPath, from: '$cleanFallback=Get-Cw2ArtifactCanonicalManifest -ForceCleanFallback', to: '$cleanFallback=$canonical' },
@@ -436,6 +436,8 @@ try {
     { name: 'staged missing path refusal removed', path: manifestRegressionPath, from: 'if(-not(Test-Path -LiteralPath (Join-Path $root $stagedPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_STAGED_PATH_MISSING:$stagedPath"}', to: 'if($false){throw "SOIL_REMOVED_STAGED_PATH_REFUSAL"}' },
     { name: 'untracked missing path refusal removed', path: manifestRegressionPath, from: 'if(-not(Test-Path -LiteralPath (Join-Path $root $untrackedPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_UNTRACKED_PATH_MISSING:$untrackedPath"}', to: 'if($false){throw "SOIL_REMOVED_UNTRACKED_PATH_REFUSAL"}' },
     { name: 'previous commit missing path refusal removed', path: manifestRegressionPath, from: 'if(-not(Test-Path -LiteralPath (Join-Path $root $previousPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_PATH_MISSING:$previousPath"}', to: 'if($false){throw "SOIL_REMOVED_PREVIOUS_PATH_REFUSAL"}' },
+    { name: 'previous commit exact rename recognition removed', path: manifestRegressionPath, from: "if($status-ceq'R100'){", to: 'if($false){' },
+    { name: 'previous commit deletion refusal removed', path: manifestRegressionPath, from: 'throw "FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DELETION_REFUSED:$deletedPath"', to: '$null=$deletedPath' },
     { name: 'path dedup comparator weakened', path: manifestRegressionPath, from: '$seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)', to: '$seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)' },
     { name: 'manifest path sort removed', path: manifestRegressionPath, from: '$paths.Sort([StringComparer]::Ordinal)', to: '$paths.Sort([StringComparer]::OrdinalIgnoreCase)' },
     { name: 'proof child repository-root refusal removed', path: manifestRegressionPath, from: "if($ControlFlowChild){if([string]::IsNullOrWhiteSpace($RepositoryRoot)-or-not[IO.Path]::IsPathRooted($RepositoryRoot)){throw 'FAKETIME_ARTIFACT_MANIFEST_PROOF_CHILD_REPOSITORY_ROOT_REQUIRED'}", to: 'if($ControlFlowChild){if($false){throw \'SOIL_REMOVED_CHILD_ROOT_REFUSAL\'}' },
@@ -444,7 +446,7 @@ try {
     { name: 'proof child file cleanup removed', path: manifestRegressionPath, from: 'if([IO.File]::Exists($path)){[IO.File]::Delete($path)}', to: 'if($false){[IO.File]::Delete($path)}' },
     { name: 'proof child directory cleanup removed', path: manifestRegressionPath, from: 'if([IO.Directory]::Exists($tempRoot)){[IO.Directory]::Delete($tempRoot,$false)}', to: 'if($false){[IO.Directory]::Delete($tempRoot,$false)}' },
   ]
-  if (artifactDiscoveryMutations.length !== 34) throw new Error('Soil artifact discovery mutation count drifted.')
+  if (artifactDiscoveryMutations.length !== 36) throw new Error('Soil artifact discovery mutation count drifted.')
   for (const mutation of artifactDiscoveryMutations) runArtifactMutation({ ...mutation, expected: 'artifact:manifest-discovery-contract' })
 
   const artifactReplacementMutations = [
@@ -483,7 +485,7 @@ try {
   ]
   if (artifactOmissionMutations.length !== 3) throw new Error('Soil artifact omission mutation count drifted.')
   for (const mutation of artifactOmissionMutations) { reset(); mutation.apply(); detected(`artifact ${mutation.name}`, mutation.expected) }
-  console.log('SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=34 artifact=19 omission=3')
+  console.log('SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3')
   // SOIL_ARTIFACT_MUTATION_MATRIX_END
   if (mutationCount !== expectedMutationCount) throw new Error(`Foundation mutation count drifted: expected ${expectedMutationCount}, observed ${mutationCount}.`)
   console.log(`Foundation mutation drill: PASS (${mutationCount}/${expectedMutationCount} controlled mutations turned the gate red)`)
