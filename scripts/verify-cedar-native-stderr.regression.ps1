@@ -58,8 +58,9 @@ function Invoke-NativeCaptureProbe([int]$ExitCode, [string]$Summary) {
   $priorErrorActionPreference = $ErrorActionPreference
   try {
     $ErrorActionPreference = 'Continue'
-    $nativeCommand = "echo routine-native-stderr 1>&2 & echo $Summary & exit /b $ExitCode"
-    $browserOutput = @(& $env:ComSpec /d /s /c $nativeCommand 2>&1)
+    $nativeCommand = "[Console]::Error.WriteLine('routine-native-stderr'); [Console]::Out.WriteLine('$Summary'); exit $ExitCode"
+    $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+    $browserOutput = @(& $pwsh -NoProfile -Command $nativeCommand 2>&1)
     $browserExit = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $priorErrorActionPreference
