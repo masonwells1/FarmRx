@@ -29,8 +29,11 @@ Farm Rx `main` is linked to the production Vercel project. A merge or push to `m
 CodeRabbit does not review PRs automatically. Finish implementation and the separate exact-commit
 Sol review first. Bring the branch current and green with auto-merge OFF, freeze the release
 candidate, record its head SHA, then post exactly `@coderabbitai review` on the PR and read the
-result. GitHub requires that formal approval and dismisses it when the candidate changes. Merge
-immediately with `--match-head-commit <reviewed-head-sha>` and never use `--auto`.
+result. Before merging, verify the active `main` protection still requires at least one approval
+and dismisses stale approvals, then compare the PR's final `headRefOid` with the `commit_id` of an
+`APPROVED` CodeRabbit review. GitHub requires that formal approval and dismisses it when the
+candidate changes. Merge immediately with `--match-head-commit <reviewed-head-sha>` and never use
+`--auto`.
 Fix real findings; if a finding or base update creates a new commit, restart checks and request one
 follow-up incremental review. Never use `@coderabbitai resume`, because it re-enables automatic
 reviews, and use `@coderabbitai full review` only when a complete reread is deliberately justified.
