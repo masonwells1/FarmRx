@@ -3,7 +3,7 @@ import type { PositionScope } from './grain'
 import type { BudgetCostLineWrite } from './ProfitabilityDataGateway'
 import { defaultMatrixValues } from './profitabilityCalculations'
 import { validateRevenueProtectionInputs } from './insuranceMath'
-import { SOURCED_COST_LINE_EDIT_MESSAGE, type BudgetCostLine, type BudgetFieldAllocation, type CropBudget, type InsuranceBudgetPatch, type ProfitabilityMatrixStep, type ProfitabilityRepository, type ProfitabilityWorkspace } from './profitability'
+import { SOURCED_COST_LINE_EDIT_MESSAGE, type BudgetCostLine, type BudgetFieldAllocation, type CropBudget, type EquipmentCostSnapshotRequest, type InsuranceBudgetPatch, type ProfitabilityMatrixStep, type ProfitabilityRepository, type ProfitabilityWorkspace } from './profitability'
 import { ProfitabilityWriteQueue, type ProfitabilityQueueEntryV1, profitabilityWriteQueueKey } from './profitabilityWriteQueue'
 import { isTransportFailure } from './QueuedFieldsRepository'
 import { manualCostLineWrite, type ProfitabilityOperationWriter } from './SupabaseProfitabilityRepository'
@@ -129,6 +129,28 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
     return disposition
   }
   async deleteCostLine(id: string) { const { context, memoryGuard } = await this.contextAndQueue(); return this.save({ ...this.queuedBase('deleteCostLine', context), kind: 'deleteCostLine', id }, memoryGuard.fence) }
+  private async equipmentSnapshotReady() {
+    if (this.dependencies.isOffline()) throw new Error('Connect before reviewing current equipment service costs.')
+    const { context, queue, memoryGuard } = await this.contextAndQueue()
+    await this.verifyDirect(context, memoryGuard.fence, memoryGuard)
+    const pending = await this.locked(queue, () => Promise.resolve(queue.read().entries.length))
+    if (pending) throw new Error('Let your pending Profitability saves sync before importing equipment service costs.')
+    return { context, memoryGuard }
+  }
+  async previewEquipmentCostSnapshot(request: EquipmentCostSnapshotRequest) {
+    const { context, memoryGuard } = await this.equipmentSnapshotReady()
+    const preview = await this.writer.previewEquipmentCostSnapshotOperation(request, memoryGuard.fence)
+    await this.verifyDirect(context, memoryGuard.fence, memoryGuard)
+    return preview
+  }
+  async saveEquipmentCostSnapshot(request: EquipmentCostSnapshotRequest, action: 'insert' | 'replace') {
+    const { context, memoryGuard } = await this.equipmentSnapshotReady(); setSaveReceipt(request.line_id, 'saving')
+    try {
+      await this.writer.saveEquipmentCostSnapshotOperation(request, action, memoryGuard.fence)
+      await this.verifyDirect(context, memoryGuard.fence, memoryGuard); setSaveReceipt(request.line_id, 'saved'); this.workspace = null; this.rawCostLineCache = []
+      return 'saved' as const
+    } catch (error) { setSaveReceipt(request.line_id, 'needs attention'); throw error }
+  }
   async replaceMatrixSteps(budgetId: string, steps: ProfitabilityMatrixStep[]) { const { context, memoryGuard } = await this.contextAndQueue(); const workspace = await this.currentWorkspace(); const expectedSteps = workspace.matrix_steps.filter((step) => step.budget_id === budgetId); return this.save({ ...this.queuedBase('replaceMatrixSteps', context), kind: 'replaceMatrixSteps', budgetId, steps: steps.map((step) => ({ ...step, budget_id: budgetId })), expectedSteps }, memoryGuard.fence) }
   async saveAllocation(value: BudgetFieldAllocation) { const { context, memoryGuard } = await this.contextAndQueue(); return this.save({ ...this.queuedBase('saveAllocation', context), kind: 'saveAllocation', row: value }, memoryGuard.fence) }
   async deleteAllocation(id: string) { const { context, memoryGuard } = await this.contextAndQueue(); return this.save({ ...this.queuedBase('deleteAllocation', context), kind: 'deleteAllocation', id }, memoryGuard.fence) }
@@ -136,7 +158,11 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
     const { context, memoryGuard } = await this.contextAndQueue()
     const workspace = await this.currentWorkspace()
     if (!workspace.budgets.some((item) => item.id === sourceBudgetId)) throw new Error('Choose a budget from this farm to copy.')
-    const costLines: BudgetCostLineWrite[] = workspace.cost_lines.filter((line) => line.budget_id === sourceBudgetId).map((line, index) => manualCostLineWrite({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id, sort_order: index }))
+    // A copied budget must not disguise a dated equipment snapshot as a manual cost.
+    // The farmer can import current service costs into the new budget explicitly.
+    const costLines: BudgetCostLineWrite[] = workspace.cost_lines
+      .filter((line) => line.budget_id === sourceBudgetId && line.source_kind !== 'equipment')
+      .map((line, index) => manualCostLineWrite({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id, sort_order: index }))
     const matrixSteps: ProfitabilityMatrixStep[] = workspace.matrix_steps.filter((step) => step.budget_id === sourceBudgetId).map((step) => ({ ...structuredClone(step), id: this.dependencies.createId(), budget_id: copy.id }))
     const normalizedCopy: CropBudget = { ...copy, farm_id: context.farmId, copied_from_budget_id: sourceBudgetId }
     this.validateInsurance(normalizedCopy)

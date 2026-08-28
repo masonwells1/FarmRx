@@ -151,14 +151,15 @@ assert(nullableBoundedDecimal(null, { precision: 14, scale: 4, label: 'x' }) ===
 {
   const fields = fieldsSeedForRegression(); const farm = fields.farm.id; const commodity = fields.commodities[0].id
   const budgetRow = { id: uid(30), farm_id: farm, crop_year: 2026, commodity_id: commodity, operating_entity_id: null, enterprise_label: null, name: 'Sweep budget', expected_yield_per_acre: '200', expected_price_per_bushel: '4.5', rp_coverage_pct: null, rp_aph_yield: null, rp_projected_price: null, rp_premium_per_acre: null, copied_from_budget_id: null, created_at: stamp, updated_at: stamp }
-  const inventoryRow = { id: uid(31), budget_id: uid(30), category: 'chemical', label: 'From shelf', amount_per_acre: '12.5', source_kind: 'inventory', source_record_id: uid(32), sort_order: 0, created_at: stamp, updated_at: stamp }
-  const manualRow = { id: uid(33), budget_id: uid(30), category: 'seed', label: 'Seed', amount_per_acre: '100', source_kind: 'manual', source_record_id: null, sort_order: 1, created_at: stamp, updated_at: stamp }
+  const noEquipmentSnapshot = { equipment_period_start: null, equipment_period_end: null, equipment_total_source_amount: null, equipment_allocation_acres: null, equipment_included_row_count: null, equipment_excluded_null_cost_count: null, equipment_captured_at: null }
+  const inventoryRow = { id: uid(31), budget_id: uid(30), category: 'chemical', label: 'From shelf', amount_per_acre: '12.5', source_kind: 'inventory', source_record_id: uid(32), sort_order: 0, ...noEquipmentSnapshot, created_at: stamp, updated_at: stamp }
+  const manualRow = { id: uid(33), budget_id: uid(30), category: 'seed', label: 'Seed', amount_per_acre: '100', source_kind: 'manual', source_record_id: null, sort_order: 1, ...noEquipmentSnapshot, created_at: stamp, updated_at: stamp }
   const upserts: BudgetCostLineWrite[] = []
   const unimplemented = () => { throw new Error('not used in this regression') }
   const gateway: ProfitabilityDataGateway = {
-    loadWorkspace: async () => ({ budgets: [budgetRow], cost_lines: [inventoryRow, manualRow], matrix_steps: [], allocations: [] }),
-    upsertCostLine: async (_farm, row) => { upserts.push(structuredClone(row)); return { id: row.id, budget_id: row.budget_id, category: row.category, label: row.name, amount_per_acre: row.amount_per_acre, source_kind: 'manual', source_record_id: null, sort_order: row.sort_order, created_at: stamp, updated_at: stamp } },
-    upsertBudget: unimplemented, patchBudgetInsurance: unimplemented, deleteCostLine: unimplemented, upsertAllocation: unimplemented, deleteAllocation: unimplemented, replaceMatrixSteps: unimplemented, createBudgetWithMatrix: unimplemented, copyBudget: unimplemented,
+    loadWorkspace: async () => ({ budgets: [budgetRow], cost_lines: [inventoryRow, manualRow], matrix_steps: [], allocations: [], equipment: [] }),
+    upsertCostLine: async (_farm, row) => { upserts.push(structuredClone(row)); return { id: row.id, budget_id: row.budget_id, category: row.category, label: row.name, amount_per_acre: row.amount_per_acre, source_kind: 'manual', source_record_id: null, sort_order: row.sort_order, ...noEquipmentSnapshot, created_at: stamp, updated_at: stamp } },
+    upsertBudget: unimplemented, patchBudgetInsurance: unimplemented, deleteCostLine: unimplemented, equipmentCostSnapshot: unimplemented, upsertAllocation: unimplemented, deleteAllocation: unimplemented, replaceMatrixSteps: unimplemented, createBudgetWithMatrix: unimplemented, copyBudget: unimplemented,
   }
   const fieldsRepository: FieldsRepository = { getData: async () => structuredClone(fields), saveField: async () => { throw new Error('not used') } }
   const repo = new SupabaseProfitabilityRepository({ gateway, fieldsRepository, getFarmId: async () => farm, getOperationContext: async () => ({ projectRef: 'test', userId: uid(1), farmId: farm, generation: 1, token: uid(999), serverEpoch: 1 }), verifyOperationContext: async () => undefined, createId: () => crypto.randomUUID(), clock: () => stamp })

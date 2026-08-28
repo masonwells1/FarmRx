@@ -9,7 +9,11 @@ import type {
   BudgetFieldAllocation,
   CostCategory,
   CropBudget,
+  EquipmentCostSnapshotPreview,
+  EquipmentCostSnapshotRequest,
+  ProfitabilityEquipment,
   ProfitabilityMatrixStep,
+  ProfitabilityRepository,
   ProfitabilityWorkspace,
 } from "./data/profitability";
 import { farmerError } from "./lib/farmerErrors";
@@ -832,6 +836,13 @@ export function ProfitabilityPage() {
                 Add cost
               </button>
             </div>
+            <EquipmentCostImporter
+              budget={budget}
+              equipment={workspace.equipment ?? []}
+              budgetAcres={selectedAcres}
+              onSaved={refresh}
+              onError={setError}
+            />
             <div className="total-bar">
               <span>Total cost / acre</span>
               <strong>{money.format(costsPerAcre)}</strong>
@@ -862,6 +873,195 @@ export function ProfitabilityPage() {
             }
           />
         </>
+      )}
+    </section>
+  );
+}
+
+export function EquipmentCostImporter({
+  budget,
+  equipment,
+  budgetAcres,
+  onSaved,
+  onError,
+  repository = profitabilityRepository,
+}: {
+  budget: CropBudget;
+  equipment: ProfitabilityEquipment[];
+  budgetAcres: number;
+  onSaved: () => Promise<void>;
+  onError: (message: string) => void;
+  repository?: Pick<ProfitabilityRepository, "previewEquipmentCostSnapshot" | "saveEquipmentCostSnapshot">;
+}) {
+  const defaultStart = `${budget.crop_year}-01-01`;
+  const defaultEnd = `${budget.crop_year}-12-31`;
+  const [open, setOpen] = useState(false);
+  const [equipmentId, setEquipmentId] = useState(equipment[0]?.id ?? "");
+  const [periodStart, setPeriodStart] = useState(defaultStart);
+  const [periodEnd, setPeriodEnd] = useState(defaultEnd);
+  const [allocationAcres, setAllocationAcres] = useState(
+    budgetAcres > 0 ? String(budgetAcres) : "",
+  );
+  const [lineId, setLineId] = useState(() => crypto.randomUUID());
+  const [reviewed, setReviewed] = useState<{ preview: EquipmentCostSnapshotPreview; request: EquipmentCostSnapshotRequest } | null>(null);
+  const [busy, setBusy] = useState<"review" | "save" | null>(null);
+  const reviewRevision = useRef(0);
+
+  useEffect(() => {
+    setEquipmentId(equipment[0]?.id ?? "");
+    setPeriodStart(defaultStart);
+    setPeriodEnd(defaultEnd);
+    setAllocationAcres(budgetAcres > 0 ? String(budgetAcres) : "");
+    setLineId(crypto.randomUUID());
+    reviewRevision.current += 1;
+    setReviewed(null);
+    setBusy((current) => current === "review" ? null : current);
+  }, [budget.id]);
+
+  const request = (): EquipmentCostSnapshotRequest => ({
+    budget_id: budget.id,
+    equipment_id: equipmentId,
+    period_start: periodStart,
+    period_end: periodEnd,
+    allocation_acres: Number(allocationAcres),
+    line_id: lineId,
+  });
+  const clearPreview = () => {
+    reviewRevision.current += 1;
+    setReviewed(null);
+    setBusy((current) => current === "review" ? null : current);
+  };
+  const review = async () => {
+    const next = request();
+    if (!next.equipment_id || !next.period_start || !next.period_end || next.period_start > next.period_end || !Number.isFinite(next.allocation_acres) || next.allocation_acres <= 0) {
+      onError("Choose one machine, valid dates, and allocation acres greater than zero.");
+      return;
+    }
+    const revision = reviewRevision.current + 1;
+    reviewRevision.current = revision;
+    setReviewed(null);
+    setBusy("review");
+    try {
+      onError("");
+      const preview = await repository.previewEquipmentCostSnapshot(next);
+      if (reviewRevision.current === revision) setReviewed({ preview, request: structuredClone(next) });
+    } catch (caught) {
+      if (reviewRevision.current === revision) onError(farmerError(caught, "review equipment service costs"));
+    } finally {
+      if (reviewRevision.current === revision) setBusy((current) => current === "review" ? null : current);
+    }
+  };
+  const confirm = async (action: "insert" | "replace") => {
+    if (!reviewed) return;
+    const { preview, request: reviewedRequest } = reviewed;
+    const saveId = action === "replace" ? preview.existing?.id : preview.candidate.line_id;
+    if (!saveId) return;
+    const next: EquipmentCostSnapshotRequest = {
+      ...structuredClone(reviewedRequest),
+      line_id: saveId,
+      expected: {
+        total_source_amount: preview.candidate.total_source_amount,
+        included_row_count: preview.candidate.included_row_count,
+        excluded_null_cost_count: preview.candidate.excluded_null_cost_count,
+      },
+    };
+    setBusy("save");
+    setSaveReceipt(saveId, "saving");
+    try {
+      onError("");
+      await repository.saveEquipmentCostSnapshot(next, action);
+      setSaveReceipt(saveId, "saved");
+      await onSaved();
+      setReviewed(null);
+      setLineId(crypto.randomUUID());
+    } catch (caught) {
+      setSaveReceipt(saveId, "needs attention");
+      onError(farmerError(caught, "save equipment service costs"));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!open)
+    return (
+      <button className="secondary-action" type="button" onClick={() => setOpen(true)}>
+        Import equipment service costs
+      </button>
+    );
+
+  return (
+    <section className="profitability-card" aria-labelledby="equipment-cost-import-title">
+      <div className="section-heading">
+        <div>
+          <span className="eyebrow">Equipment snapshot</span>
+          <h3 id="equipment-cost-import-title">Bring service costs into {budget.name}</h3>
+          <p>
+            Farm Rx sums the selected machine&apos;s dated service-log costs on the server. Purchase price is never included. Later service-log changes do not change a saved snapshot.
+          </p>
+        </div>
+        <button className="secondary-action" type="button" disabled={busy === "save"} onClick={() => { setOpen(false); clearPreview(); }}>
+          Close
+        </button>
+      </div>
+      {equipment.length === 0 ? (
+        <p>Add a machine and service costs on Equipment before importing them here.</p>
+      ) : (
+        <div className="cost-add-row">
+          <label>
+            Machine
+            <select value={equipmentId} disabled={busy === "save"} onChange={(event) => { setEquipmentId(event.target.value); clearPreview(); }}>
+              {equipment.map((machine) => (
+                <option key={machine.id} value={machine.id}>{machine.name}{machine.status === "active" ? "" : ` (${machine.status})`}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Period starts
+            <input type="date" value={periodStart} disabled={busy === "save"} onChange={(event) => { setPeriodStart(event.target.value); clearPreview(); }} />
+          </label>
+          <label>
+            Period ends
+            <input type="date" value={periodEnd} disabled={busy === "save"} onChange={(event) => { setPeriodEnd(event.target.value); clearPreview(); }} />
+          </label>
+          <label>
+            Acres to spread across
+            <input inputMode="decimal" value={allocationAcres} disabled={busy === "save"} onChange={(event) => { setAllocationAcres(event.target.value); clearPreview(); }} />
+          </label>
+          <button className="primary-action" type="button" disabled={busy !== null} onClick={() => void review()}>
+            {busy === "review" ? "Checking…" : "Review server total"}
+          </button>
+        </div>
+      )}
+      {budgetAcres > 0 && Number(allocationAcres) > budgetAcres && (
+        <p role="status" className="university-note">
+          Heads up: {decimal.format(Number(allocationAcres))} acres is more than this budget&apos;s {decimal.format(budgetAcres)} allocated acres. You can continue if that is intentional.
+        </p>
+      )}
+      {reviewed && (
+        <div className="profitability-card" role="status">
+          <h4>{reviewed.preview.existing ? "Old snapshot vs current server total" : "Review this snapshot"}</h4>
+          {reviewed.preview.existing?.equipment_snapshot && (
+            <p>
+              <strong>Saved snapshot:</strong> {money.format(reviewed.preview.existing.equipment_snapshot.total_source_amount)} total across {decimal.format(reviewed.preview.existing.equipment_snapshot.allocation_acres)} acres = {money.format(reviewed.preview.existing.amount_per_acre)}/ac, captured {new Date(reviewed.preview.existing.equipment_snapshot.captured_at).toLocaleString()}.
+            </p>
+          )}
+          <p>
+            <strong>Current server total:</strong> {money.format(Number(reviewed.preview.candidate.total_source_amount))} from {reviewed.preview.candidate.included_row_count} costed service {reviewed.preview.candidate.included_row_count === 1 ? "entry" : "entries"}; {reviewed.preview.candidate.excluded_null_cost_count} {reviewed.preview.candidate.excluded_null_cost_count === 1 ? "entry has" : "entries have"} no cost and {reviewed.preview.candidate.excluded_null_cost_count === 1 ? "is" : "are"} excluded.
+          </p>
+          <p>
+            Spread across {decimal.format(Number(reviewed.preview.candidate.allocation_acres))} acres: <strong>{money.format(Number(reviewed.preview.candidate.amount_per_acre))}/ac</strong>. The source total and acres stay recorded; the per-acre cost is stored to four decimals and dollars display rounded to cents.
+          </p>
+          <div className="cost-add-row">
+            {reviewed.preview.existing ? (
+              <>
+                <button className="primary-action" type="button" disabled={busy !== null} onClick={() => void confirm("replace")}>Replace old snapshot</button>
+                <button className="secondary-action" type="button" disabled={busy !== null} onClick={clearPreview}>Keep old</button>
+              </>
+            ) : (
+              <button className="primary-action" type="button" disabled={busy !== null} onClick={() => void confirm("insert")}>Add this snapshot</button>
+            )}
+          </div>
+        </div>
       )}
     </section>
   );
@@ -1831,6 +2031,11 @@ function CostLine({
           <span className="default-badge">
             From your {line.source_kind === "inventory" ? "Inventory" : "Equipment"} records
           </span>
+          {line.source_kind === "equipment" && line.equipment_snapshot && (
+            <small>
+              Snapshot {line.equipment_snapshot.period_start} to {line.equipment_snapshot.period_end}: {money.format(line.equipment_snapshot.total_source_amount)} across {decimal.format(line.equipment_snapshot.allocation_acres)} acres. {line.equipment_snapshot.included_row_count} costed service {line.equipment_snapshot.included_row_count === 1 ? "entry" : "entries"}; {line.equipment_snapshot.excluded_null_cost_count} without cost excluded. Saved {new Date(line.equipment_snapshot.captured_at).toLocaleString()}.
+            </small>
+          )}
         </td>
         <td>
           {categories.find((category) => category.value === line.category)

@@ -13,6 +13,7 @@ $configPath = Join-Path $root 'playwright.connect-workflows-cw1.config.ts'
 $migration = '20260725213142_pine_hill_removed_farm_epoch.sql'
 $migrationBlob = '89f432cdfc9a2cd6c6379309e0eb1bd283500686'
 $migrationHead = '20260820135357_add_program_inventory_match_fk_indexes.sql'
+$migrationHeadSha256 = 'bf6fbc84c5389e1122ce7ccf63c37dacb2dfc21d881216bbbb5241b203fa5589'
 . (Join-Path $root 'scripts/maple-season-credential.ps1')
 Import-Module (Join-Path $root 'scripts/harvest-ridge-db-clock.psm1') -Force
 
@@ -31,8 +32,8 @@ function Assert-Cw1Contract {
     (Join-Path $root 'scripts/harvest-ridge-db-clock.psm1')
   )
   if (@($required | Where-Object { -not (Test-Path -LiteralPath $_) }).Count) { throw 'CONNECT_WORKFLOWS_CW1_PACKET_MISSING_REQUIRED_FILE' }
-  $head = (Get-ChildItem (Join-Path $root 'supabase/migrations') -File | Sort-Object Name | Select-Object -Last 1).Name
-  if ($head -cne $migrationHead) { throw "CONNECT_WORKFLOWS_CW1_MIGRATION_HEAD_MISMATCH:$head" }
+  if (-not (Test-Path -LiteralPath (Join-Path $root "supabase/migrations/$migrationHead"))) { throw "CONNECT_WORKFLOWS_CW1_MIGRATION_MISSING:$migrationHead" }
+  if ((Get-FileHash -LiteralPath (Join-Path $root "supabase/migrations/$migrationHead") -Algorithm SHA256).Hash.ToLowerInvariant() -cne $migrationHeadSha256) { throw 'CONNECT_WORKFLOWS_CW1_MIGRATION_HASH_MISMATCH' }
   $actualBlob = (& git -C $root hash-object (Join-Path $root "supabase/migrations/$migration")).Trim()
   if ($LASTEXITCODE -ne 0 -or $actualBlob -cne $migrationBlob) { throw 'CONNECT_WORKFLOWS_CW1_MIGRATION_BLOB_MISMATCH' }
   $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json

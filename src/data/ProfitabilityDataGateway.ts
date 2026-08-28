@@ -1,4 +1,4 @@
-import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, InsuranceBudgetPatch, ProfitabilityMatrixStep } from './profitability'
+import type { BudgetCostLine, BudgetFieldAllocation, CropBudget, EquipmentCostSnapshotRequest, InsuranceBudgetPatch, ProfitabilityMatrixStep } from './profitability'
 import type { FarmOperationContext } from './farmOperationContext'
 
 /** DB has `sort_order`; the public `BudgetCostLine` interface deliberately omits it. */
@@ -10,6 +10,7 @@ export interface ProfitabilityRowBundle {
   cost_lines: unknown[]
   matrix_steps: unknown[]
   allocations: unknown[]
+  equipment: unknown[]
 }
 
 export interface ReplaceMatrixStepsInput { farmId: string; budgetId: string; steps: ProfitabilityMatrixStep[]; expectedSteps?: ProfitabilityMatrixStep[] | null; context: FarmOperationContext }
@@ -23,6 +24,7 @@ export interface ProfitabilityDataGateway {
   patchBudgetInsurance(farmId: string, budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt: string | null | undefined, context: FarmOperationContext): Promise<unknown>
   upsertCostLine(farmId: string, row: BudgetCostLineWrite, context: FarmOperationContext): Promise<unknown>
   deleteCostLine(farmId: string, id: string, context: FarmOperationContext): Promise<unknown>
+  equipmentCostSnapshot(farmId: string, request: EquipmentCostSnapshotRequest, action: 'preview' | 'insert' | 'replace', context: FarmOperationContext): Promise<unknown>
   upsertAllocation(farmId: string, row: BudgetFieldAllocation, context: FarmOperationContext): Promise<unknown>
   deleteAllocation(farmId: string, id: string, context: FarmOperationContext): Promise<unknown>
   replaceMatrixSteps(input: ReplaceMatrixStepsInput): Promise<unknown[]>

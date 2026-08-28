@@ -6,7 +6,7 @@ import { defaultMatrixValues } from './profitabilityCalculations'
 import { validateRevenueProtectionInputs } from './insuranceMath'
 import { insuranceColumns } from './SupabaseProfitabilityDataGateway'
 import { SOURCED_COST_LINE_EDIT_MESSAGE } from './profitability'
-import type { BudgetCostLine, BudgetFieldAllocation, CostLineSourceKind, CropBudget, InsuranceBudgetPatch, MatrixAxis, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityWorkspace } from './profitability'
+import type { BudgetCostLine, BudgetFieldAllocation, CostLineSourceKind, CropBudget, EquipmentCostSnapshotCandidate, EquipmentCostSnapshotPreview, EquipmentCostSnapshotProvenance, EquipmentCostSnapshotRequest, InsuranceBudgetPatch, MatrixAxis, ProfitabilityEquipment, ProfitabilityMatrixStep, ProfitabilityRepository, ProfitabilityWorkspace } from './profitability'
 import type { FarmOperationContext } from './farmOperationContext'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -22,6 +22,7 @@ const number = (value: unknown): number => { const parsed = typeof value === 'nu
 const integer = (value: unknown, min = 1900, max = 2200): number => { const parsed = number(value); if (!Number.isInteger(parsed) || parsed < min || parsed > max) fail(); return parsed }
 /** Accepts PostgREST's microsecond-plus-offset shape, e.g. 2026-07-11T23:35:28.807722+00:00 */
 const stamp = (value: unknown): string => { const result = text(value, 64); if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(result) || Number.isNaN(Date.parse(result))) fail(); return result }
+const date = (value: unknown): string => { const result = text(value, 10); if (!/^\d{4}-\d{2}-\d{2}$/.test(result) || Number.isNaN(Date.parse(`${result}T00:00:00Z`))) fail(); return result }
 
 function scope(row: Record<string, unknown>) { const operating_entity_id = required(row, 'operating_entity_id'); return { farm_id: id(required(row, 'farm_id')), crop_year: integer(required(row, 'crop_year')), commodity_id: text(required(row, 'commodity_id'), 160), operating_entity_id: operating_entity_id === null ? null : id(operating_entity_id), enterprise_label: nullableText(required(row, 'enterprise_label'), 160) } }
 function mapBudget(value: unknown): CropBudget {
@@ -42,9 +43,46 @@ function mapCostLine(value: unknown): BudgetCostLineWrite {
   const source_kind = text(required(row, 'source_kind')) as CostLineSourceKind
   const source_record_id = required(row, 'source_record_id')
   if (!costLineSourceKinds.has(source_kind) || (source_kind === 'manual') !== (source_record_id === null)) fail('Farm Rx found a cost line with an unknown source.')
-  const result: BudgetCostLineWrite = { id: id(required(row, 'id')), budget_id: id(required(row, 'budget_id')), category: category as BudgetCostLine['category'], name: text(required(row, 'label'), 160), amount_per_acre: number(required(row, 'amount_per_acre')), source_kind, sort_order: integer(required(row, 'sort_order'), 0, 32_767), created_at: stamp(required(row, 'created_at')), updated_at: stamp(required(row, 'updated_at')) }
+  const equipmentFields = ['equipment_period_start', 'equipment_period_end', 'equipment_total_source_amount', 'equipment_allocation_acres', 'equipment_included_row_count', 'equipment_excluded_null_cost_count', 'equipment_captured_at'] as const
+  const equipmentValues = equipmentFields.map((key) => required(row, key))
+  let equipment_snapshot: EquipmentCostSnapshotProvenance | null = null
+  if (source_kind === 'equipment') {
+    if (equipmentValues.some((item) => item === null)) fail('Farm Rx found an incomplete equipment cost snapshot.')
+    equipment_snapshot = {
+      period_start: date(equipmentValues[0]),
+      period_end: date(equipmentValues[1]),
+      total_source_amount: number(equipmentValues[2]),
+      allocation_acres: number(equipmentValues[3]),
+      included_row_count: integer(equipmentValues[4], 1, 2_147_483_647),
+      excluded_null_cost_count: integer(equipmentValues[5], 0, 2_147_483_647),
+      captured_at: stamp(equipmentValues[6]),
+    }
+  } else if (equipmentValues.some((item) => item !== null)) fail('Farm Rx found equipment snapshot details on a different cost source.')
+  const result: BudgetCostLineWrite = { id: id(required(row, 'id')), budget_id: id(required(row, 'budget_id')), category: category as BudgetCostLine['category'], name: text(required(row, 'label'), 160), amount_per_acre: number(required(row, 'amount_per_acre')), source_kind, source_record_id: source_record_id === null ? null : id(source_record_id), equipment_snapshot, sort_order: integer(required(row, 'sort_order'), 0, 32_767), created_at: stamp(required(row, 'created_at')), updated_at: stamp(required(row, 'updated_at')) }
   if (!result.name.trim() || result.amount_per_acre < 0) fail('Farm Rx found an invalid cost line.')
   return result
+}
+function mapEquipment(value: unknown): ProfitabilityEquipment {
+  const row = object(value); const status = text(required(row, 'status'))
+  if (status !== 'active' && status !== 'sold' && status !== 'retired') fail('Farm Rx found equipment with an unknown status.')
+  const result: ProfitabilityEquipment = { id: id(required(row, 'id')), farm_id: id(required(row, 'farm_id')), name: text(required(row, 'name'), 160), status: status as ProfitabilityEquipment['status'] }
+  if (!result.name.trim()) fail('Farm Rx found equipment without a name.')
+  return result
+}
+function mapSnapshotCandidate(value: unknown): EquipmentCostSnapshotCandidate {
+  const row = object(value); const category = text(required(row, 'category'))
+  if (category !== 'repairs') fail('Farm Rx found an equipment snapshot with an invalid category.')
+  const amount_per_acre = text(required(row, 'amount_per_acre'), 200); const total_source_amount = text(required(row, 'total_source_amount'), 200); const allocation_acres = text(required(row, 'allocation_acres'), 200)
+  if (![amount_per_acre, total_source_amount, allocation_acres].every((item) => item.trim() !== '' && Number.isFinite(Number(item))) || Number(total_source_amount) <= 0 || Number(allocation_acres) <= 0) fail('Farm Rx found invalid equipment snapshot amounts.')
+  return { line_id: id(required(row, 'line_id')), budget_id: id(required(row, 'budget_id')), equipment_id: id(required(row, 'equipment_id')), equipment_name: text(required(row, 'equipment_name'), 160), category: category as 'repairs', label: text(required(row, 'label'), 160), amount_per_acre, period_start: date(required(row, 'period_start')), period_end: date(required(row, 'period_end')), total_source_amount, allocation_acres, included_row_count: integer(required(row, 'included_row_count'), 1, 2_147_483_647), excluded_null_cost_count: integer(required(row, 'excluded_null_cost_count'), 0, 2_147_483_647), captured_at: stamp(required(row, 'captured_at')) }
+}
+function mapSnapshotPreview(value: unknown): EquipmentCostSnapshotPreview {
+  const row = object(value); const action = text(required(row, 'action')); const existing = required(row, 'existing')
+  if (action !== 'preview') fail('Farm Rx could not confirm the equipment cost preview.')
+  const mappedExisting = existing === null ? null : mapCostLine(existing)
+  if (mappedExisting && mappedExisting.source_kind !== 'equipment') fail('Farm Rx found a conflicting cost line source.')
+  const { sort_order: _sortOrder, ...publicExisting } = mappedExisting ?? ({ sort_order: 0 } as BudgetCostLineWrite)
+  return { candidate: mapSnapshotCandidate(required(row, 'candidate')), existing: mappedExisting ? publicExisting : null }
 }
 function mapMatrixStep(value: unknown): ProfitabilityMatrixStep {
   const row = object(value)
@@ -119,6 +157,8 @@ export interface ProfitabilityOperationWriter {
   saveBudgetInsuranceOperation(budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt: string | null | undefined, context: FarmOperationContext): Promise<CropBudget>
   saveCostLineOperation(value: BudgetCostLineWrite, context: FarmOperationContext): Promise<BudgetCostLine>
   deleteCostLineOperation(id: string, context: FarmOperationContext): Promise<string>
+  previewEquipmentCostSnapshotOperation(request: EquipmentCostSnapshotRequest, context: FarmOperationContext): Promise<EquipmentCostSnapshotPreview>
+  saveEquipmentCostSnapshotOperation(request: EquipmentCostSnapshotRequest, action: 'insert' | 'replace', context: FarmOperationContext): Promise<BudgetCostLine>
   replaceMatrixStepsOperation(budgetId: string, steps: ProfitabilityMatrixStep[], expectedSteps: ProfitabilityMatrixStep[] | null | undefined, context: FarmOperationContext): Promise<ProfitabilityMatrixStep[]>
   saveAllocationOperation(value: BudgetFieldAllocation, context: FarmOperationContext): Promise<BudgetFieldAllocation>
   deleteAllocationOperation(id: string, context: FarmOperationContext): Promise<string>
@@ -145,7 +185,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     let bundle: ProfitabilityRowBundle
     try { bundle = await this.dependencies.gateway.loadWorkspace(farmId) }
     catch (error) { if (error instanceof Error && error.message === 'PROFITABILITY_PRIVATE_ACCESS_DENIED') fail(PRIVACY_DENIED); throw error }
-    return { budgets: bundle.budgets.map(mapBudget), cost_lines: bundle.cost_lines.map(mapCostLine), matrix_steps: bundle.matrix_steps.map(mapMatrixStep), allocations: bundle.allocations.map(mapAllocation) }
+    return { budgets: bundle.budgets.map(mapBudget), cost_lines: bundle.cost_lines.map(mapCostLine), matrix_steps: bundle.matrix_steps.map(mapMatrixStep), allocations: bundle.allocations.map(mapAllocation), equipment: bundle.equipment.map(mapEquipment) }
   }
   private validateBudget(value: CropBudget, farmId: string, fields: FieldsData) {
     if (value.farm_id !== farmId) fail('Farm Rx could not verify the farm for this budget.')
@@ -198,11 +238,14 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
       if (allocationKeys.has(key)) fail('Farm Rx found a duplicated field allocation.')
       allocationKeys.add(key)
     }
+    const equipmentIds = new Set<string>()
+    for (const item of raw.equipment) { if (equipmentIds.has(item.id)) fail('Farm Rx found duplicated equipment.'); equipmentIds.add(item.id); if (item.farm_id !== farmId) fail('Farm Rx found equipment for another farm.') }
     const budgets = [...raw.budgets].sort((left, right) => left.crop_year - right.crop_year || left.commodity_id.localeCompare(right.commodity_id) || (left.operating_entity_id ?? '').localeCompare(right.operating_entity_id ?? '') || (left.enterprise_label ?? '').localeCompare(right.enterprise_label ?? '') || left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
     const cost_lines = [...raw.cost_lines].sort((left, right) => left.budget_id.localeCompare(right.budget_id) || left.sort_order - right.sort_order || left.id.localeCompare(right.id)).map(({ sort_order: _sortOrder, ...rest }) => rest)
     const matrix_steps = [...raw.matrix_steps].sort((left, right) => left.budget_id.localeCompare(right.budget_id) || left.axis.localeCompare(right.axis) || left.sort_order - right.sort_order)
     const allocations = [...raw.allocations].sort((left, right) => left.budget_id.localeCompare(right.budget_id) || left.crop_assignment_id.localeCompare(right.crop_assignment_id))
-    return { budgets, cost_lines, matrix_steps, allocations, fields }
+    const equipment = [...raw.equipment].sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
+    return { budgets, cost_lines, matrix_steps, allocations, fields, equipment }
   }
 
   async createBudget(value: CropBudget) {
@@ -287,6 +330,32 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     return deletedId as string
   }
 
+  private validateEquipmentSnapshotRequest(request: EquipmentCostSnapshotRequest) {
+    if (!uuid.test(request.budget_id) || !uuid.test(request.equipment_id) || !uuid.test(request.line_id) || date(request.period_start) > date(request.period_end) || !Number.isFinite(request.allocation_acres) || request.allocation_acres <= 0) fail('Choose one budget, one machine, valid dates, and allocation acres greater than zero.')
+  }
+  async previewEquipmentCostSnapshot(request: EquipmentCostSnapshotRequest) { return this.previewEquipmentCostSnapshotOperation(request, await this.dependencies.getOperationContext()) }
+  async previewEquipmentCostSnapshotOperation(request: EquipmentCostSnapshotRequest, context: FarmOperationContext): Promise<EquipmentCostSnapshotPreview> {
+    this.validateEquipmentSnapshotRequest(request)
+    const farmId = await this.operationFarmId(context); const raw = await this.loadRaw(farmId)
+    if (!raw.budgets.some((item) => item.id === request.budget_id) || !raw.equipment.some((item) => item.id === request.equipment_id && item.farm_id === farmId)) fail('Choose a crop budget and machine from this farm.')
+    const preview = mapSnapshotPreview(await this.dependencies.gateway.equipmentCostSnapshot(farmId, request, 'preview', context))
+    if (preview.candidate.budget_id !== request.budget_id || preview.candidate.equipment_id !== request.equipment_id || preview.candidate.period_start !== request.period_start || preview.candidate.period_end !== request.period_end || Number(preview.candidate.allocation_acres) !== request.allocation_acres) fail('Farm Rx could not confirm the equipment cost preview.')
+    return preview
+  }
+  async saveEquipmentCostSnapshot(request: EquipmentCostSnapshotRequest, action: 'insert' | 'replace') { await this.saveEquipmentCostSnapshotOperation(request, action, await this.dependencies.getOperationContext()) }
+  async saveEquipmentCostSnapshotOperation(request: EquipmentCostSnapshotRequest, action: 'insert' | 'replace', context: FarmOperationContext): Promise<BudgetCostLine> {
+    this.validateEquipmentSnapshotRequest(request)
+    const expected = request.expected ?? fail('Review the current server service costs before saving this snapshot.')
+    if (!Number.isFinite(Number(expected.total_source_amount)) || Number(expected.total_source_amount) <= 0 || !Number.isInteger(expected.included_row_count) || expected.included_row_count <= 0 || !Number.isInteger(expected.excluded_null_cost_count) || expected.excluded_null_cost_count < 0) fail('Review the current server service costs before saving this snapshot.')
+    const farmId = await this.operationFarmId(context)
+    const result = object(await this.dependencies.gateway.equipmentCostSnapshot(farmId, request, action, context)); const returnedAction = text(required(result, 'action'))
+    if (!['insert', 'replace', 'kept'].includes(returnedAction)) fail('Farm Rx could not confirm the equipment cost snapshot.')
+    const saved = mapCostLine(required(result, 'line'))
+    if (saved.budget_id !== request.budget_id || saved.source_kind !== 'equipment' || saved.source_record_id !== request.equipment_id || saved.equipment_snapshot?.period_start !== request.period_start || saved.equipment_snapshot.period_end !== request.period_end || saved.equipment_snapshot.allocation_acres !== request.allocation_acres || saved.equipment_snapshot.total_source_amount !== Number(expected.total_source_amount) || saved.equipment_snapshot.included_row_count !== expected.included_row_count || saved.equipment_snapshot.excluded_null_cost_count !== expected.excluded_null_cost_count) fail('Farm Rx could not confirm the equipment cost snapshot.')
+    const { sort_order: _sortOrder, ...publicLine } = saved
+    return publicLine
+  }
+
   async replaceMatrixSteps(budgetId: string, steps: ProfitabilityMatrixStep[]) { const context = await this.dependencies.getOperationContext(); const raw = await this.loadRaw(await this.operationFarmId(context)); await this.replaceMatrixStepsOperation(budgetId, steps, raw.matrix_steps.filter((step) => step.budget_id === budgetId), context) }
   async replaceMatrixStepsOperation(budgetId: string, steps: ProfitabilityMatrixStep[], expectedSteps: ProfitabilityMatrixStep[] | null | undefined, context: FarmOperationContext): Promise<ProfitabilityMatrixStep[]> {
     const farmId = await this.operationFarmId(context)
@@ -334,7 +403,12 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     const raw = await this.loadRaw(farmId)
     const source = raw.budgets.find((item) => item.id === sourceBudgetId)
     if (!source || copy.farm_id !== farmId) fail('Choose a budget from this farm to copy.')
-    const costLines: BudgetCostLineWrite[] = raw.cost_lines.filter((line) => line.budget_id === sourceBudgetId).map((line) => manualCostLineWrite({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id }))
+    // Equipment snapshots are tied to one machine and date range. Copying their
+    // dollar amount as a manual line would erase that provenance and make stale
+    // service costs look hand-entered. The copied budget can import a fresh snapshot.
+    const costLines: BudgetCostLineWrite[] = raw.cost_lines
+      .filter((line) => line.budget_id === sourceBudgetId && line.source_kind !== 'equipment')
+      .map((line, index) => manualCostLineWrite({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id, sort_order: index }))
     const matrixSteps: ProfitabilityMatrixStep[] = raw.matrix_steps.filter((step) => step.budget_id === sourceBudgetId).map((step) => ({ ...structuredClone(step), id: this.dependencies.createId(), budget_id: copy.id }))
     await this.copyBudgetOperation(sourceBudgetId, { ...copy, copied_from_budget_id: sourceBudgetId }, costLines, matrixSteps, context)
   }

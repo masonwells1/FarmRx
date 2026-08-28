@@ -31,8 +31,64 @@ export interface BudgetCostLine {
   amount_per_acre: number
   /** Missing means 'manual' (every line the app itself writes today). */
   source_kind?: CostLineSourceKind
+  source_record_id?: string | null
+  equipment_snapshot?: EquipmentCostSnapshotProvenance | null
   created_at: string
   updated_at: string
+}
+
+export interface EquipmentCostSnapshotProvenance {
+  period_start: string
+  period_end: string
+  total_source_amount: number
+  allocation_acres: number
+  included_row_count: number
+  excluded_null_cost_count: number
+  captured_at: string
+}
+
+export interface ProfitabilityEquipment {
+  id: string
+  farm_id: string
+  name: string
+  status: 'active' | 'sold' | 'retired'
+}
+
+export interface EquipmentCostSnapshotRequest {
+  budget_id: string
+  equipment_id: string
+  period_start: string
+  period_end: string
+  allocation_acres: number
+  line_id: string
+  expected?: {
+    total_source_amount: string
+    included_row_count: number
+    excluded_null_cost_count: number
+  }
+}
+
+export interface EquipmentCostSnapshotCandidate {
+  line_id: string
+  budget_id: string
+  equipment_id: string
+  equipment_name: string
+  category: 'repairs'
+  label: string
+  /** Exact server numeric text; convert only for display formatting. */
+  amount_per_acre: string
+  period_start: string
+  period_end: string
+  total_source_amount: string
+  allocation_acres: string
+  included_row_count: number
+  excluded_null_cost_count: number
+  captured_at: string
+}
+
+export interface EquipmentCostSnapshotPreview {
+  candidate: EquipmentCostSnapshotCandidate
+  existing: BudgetCostLine | null
 }
 
 export interface ProfitabilityMatrixStep {
@@ -61,7 +117,7 @@ export interface ProfitabilityData {
   allocations: BudgetFieldAllocation[]
 }
 
-export interface ProfitabilityWorkspace extends ProfitabilityData { fields: FieldsData }
+export interface ProfitabilityWorkspace extends ProfitabilityData { fields: FieldsData; equipment: ProfitabilityEquipment[] }
 export type InsuranceBudgetPatch = Pick<CropBudget, 'rp_coverage_pct' | 'rp_aph_yield' | 'rp_projected_price' | 'rp_premium_per_acre'>
 export type ProfitabilitySaveDisposition = 'saved' | 'queued offline'
 
@@ -77,6 +133,8 @@ export interface ProfitabilityRepository {
   saveBudgetInsurance(budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt?: string | null): Promise<void | ProfitabilitySaveDisposition>
   saveCostLine(line: BudgetCostLine): Promise<void | ProfitabilitySaveDisposition>
   deleteCostLine(id: string): Promise<void | ProfitabilitySaveDisposition>
+  previewEquipmentCostSnapshot(request: EquipmentCostSnapshotRequest): Promise<EquipmentCostSnapshotPreview>
+  saveEquipmentCostSnapshot(request: EquipmentCostSnapshotRequest, action: 'insert' | 'replace'): Promise<void | ProfitabilitySaveDisposition>
   replaceMatrixSteps(budgetId: string, steps: ProfitabilityMatrixStep[]): Promise<void | ProfitabilitySaveDisposition>
   saveAllocation(allocation: BudgetFieldAllocation): Promise<void | ProfitabilitySaveDisposition>
   deleteAllocation(id: string): Promise<void | ProfitabilitySaveDisposition>

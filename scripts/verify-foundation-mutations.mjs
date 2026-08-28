@@ -82,6 +82,9 @@ try {
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1') }", "& (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1')"))
   detected('intermediate foundation exit check removal', 'orchestrator:all-lanes-checked')
   reset()
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("  Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-equipment-cost-snapshots-disposable.ps1') } 'Disposable equipment-cost snapshot proof failed.'\n", ''))
+  detected('equipment-cost disposable Foundation lane removal', 'orchestrator:checked-equipment-cost-snapshots')
+  reset()
   mutate('scripts/verify-password-form-browser.ps1', (source) => source.replace('  & npx playwright test --config=playwright.password-form.config.ts', '  & node --version # & npx playwright test --config=playwright.password-form.config.ts'))
   detected('password browser runner replaced behind a comment decoy', 'auth:password-form-real-playwright-command')
   reset()
@@ -150,7 +153,7 @@ try {
   reset()
   mutate('src/App.tsx', (source) => source.replace('{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}\n          {error && <p className="auth-error" role="alert">{error}</p>}', '{resetResponse && <p className="reset-confirmation" role="status">{resetResponse}</p>}'))
   detected('reset storage failure loses visible error', 'auth:reset-storage-error-rendered')
-  console.log('Foundation mutation drill: PASS (34/34 controlled mutations turned the gate red; parenthesized auth-form regression accepted)')
+  console.log('Foundation mutation drill: PASS (35/35 controlled mutations turned the gate red; parenthesized auth-form regression accepted)')
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }
