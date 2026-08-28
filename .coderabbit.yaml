@@ -73,21 +73,14 @@ reviews:
     - "!**/*.eot"
 
   auto_review:
-    enabled: true
+    # Do not spend a review on PR creation or on work-in-progress pushes.
+    # Post `@coderabbitai review` once the release-candidate commit is frozen,
+    # required checks are green, and the separate Sol review is clean.
+    enabled: false
+    auto_incremental_review: false
     drafts: false
-    base_branches:
-      - main
-    # Pause AUTOMATIC review after 2 reviewed commits on a PR (this applies to
-    # ordinary non-draft PRs, not just drafts). Later pushes are then not
-    # auto-reviewed. Two different commands restart things, and they are not
-    # interchangeable: `@coderabbitai resume` restarts AUTOMATIC review for the
-    # PR, while `@coderabbitai review` runs ONE incremental review of the
-    # current commit and stops again.
-    #
-    # This number is NOT the pre-merge gate and must never be treated as one:
-    # the gate is one fresh `@coderabbitai review` on the FINAL commit. See CRX
-    # Manager's docs/manual/DECISION_LOG.md (2026-08-20).
-    auto_pause_after_reviewed_commits: 2
+    # Keep opt-in sources empty so only the explicit PR comment starts a review.
+    description_keyword: ""
 
   # Project-specific review guidance, mirroring the rules and gotchas in this
   # repo's CLAUDE.md so CodeRabbit flags Farm Rx's real risk areas.

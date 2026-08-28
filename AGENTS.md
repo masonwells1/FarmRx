@@ -26,4 +26,11 @@ Build on the completed Farmer Simplicity layer and existing modules. Do not add 
 
 Farm Rx `main` is linked to the production Vercel project. A merge or push to `main` is production-coupled.
 
+CodeRabbit does not review PRs automatically. Finish implementation and the separate exact-commit
+Sol review first. Once the release candidate is frozen and required checks are green, post exactly
+`@coderabbitai review` on the PR and read the result. Fix real findings; if that creates a new commit,
+request one follow-up incremental review. Never use `@coderabbitai resume`, because it re-enables
+automatic reviews, and use `@coderabbitai full review` only when a complete reread is deliberately
+justified.
+
 Get Mason's explicit approval before push, pull-request mutation, main/production push, merge, deploy, live migration, live data change, secrets/auth/permissions change, customer account action, customer communication, or destructive action. Approval for local edits, tests, or a commit does not authorize any later gate.
