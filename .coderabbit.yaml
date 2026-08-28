@@ -8,7 +8,9 @@ language: en-US
 # non-coder owner; signal matters more than volume.
 reviews:
   profile: chill
-  request_changes_workflow: false
+  # A manual final review must produce a formal APPROVED/CHANGES_REQUESTED
+  # review so GitHub can enforce the exact-candidate approval gate.
+  request_changes_workflow: true
   high_level_summary: true
   poem: false
   review_status: true
