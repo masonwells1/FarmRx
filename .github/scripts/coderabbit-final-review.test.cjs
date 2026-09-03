@@ -147,7 +147,10 @@ function makeHarness({
     },
     paginate: async (method, params, map) => {
       const response = await method(params);
-      return map ? map(response) : response.data;
+      const normalizedResponse = method === github.rest.checks.listForRef
+        ? { data: response.data.check_runs }
+        : response;
+      return map ? map(normalizedResponse) : normalizedResponse.data;
     },
   };
   const context = {
@@ -186,7 +189,7 @@ async function execute(harness) {
   });
 }
 
-test('green frozen candidate posts exactly one review command and records the request', async () => {
+test('green frozen candidate with normalized paginated check runs posts exactly one review command', async () => {
   const harness = makeHarness();
   const result = await execute(harness);
 
@@ -415,6 +418,18 @@ test('check evaluation accepts neutral/skipped results and ignores CodeRabbit pe
   });
 
   assert.deepEqual(blockers, []);
+});
+
+test('malformed check and status entries fail closed without dereferencing', () => {
+  const blockers = evaluateChecks({
+    checkRuns: [completedCheck('foundation'), undefined],
+    statuses: [commitStatus('Vercel'), undefined],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+
+  assert.match(blockers.join('\n'), /check runs response is malformed/);
+  assert.match(blockers.join('\n'), /commit statuses response is malformed/);
 });
 
 test('neutral or skipped required Foundation and Vercel checks block despite a same-name success status', (t) => {

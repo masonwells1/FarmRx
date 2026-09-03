@@ -18,10 +18,18 @@ function pullRequestLabelNames(pullRequest) {
 
 function newestByName(items, nameKey, dateKeys) {
   const newest = new Map();
+  let malformed = !Array.isArray(items);
 
-  for (const item of items) {
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item !== 'object') {
+      malformed = true;
+      continue;
+    }
     const name = normalize(item[nameKey]);
-    if (!name) continue;
+    if (!name) {
+      malformed = true;
+      continue;
+    }
 
     const timestamp = dateKeys
       .map((key) => item[key])
@@ -32,21 +40,27 @@ function newestByName(items, nameKey, dateKeys) {
     }
   }
 
-  return new Map([...newest].map(([name, entry]) => [name, entry.item]));
+  return {
+    items: new Map([...newest].map(([name, entry]) => [name, entry.item])),
+    malformed,
+  };
 }
 
 function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [] }) {
   const ignored = new Set(ignoredChecks.map(normalize));
-  const checksByName = newestByName(checkRuns, 'name', [
+  const { items: checksByName, malformed: malformedCheckRuns } = newestByName(checkRuns, 'name', [
     'completed_at',
     'started_at',
     'created_at',
   ]);
-  const statusesByName = newestByName(statuses, 'context', [
+  const { items: statusesByName, malformed: malformedStatuses } = newestByName(statuses, 'context', [
     'updated_at',
     'created_at',
   ]);
   const blockers = [];
+
+  if (malformedCheckRuns) blockers.push('check runs response is malformed');
+  if (malformedStatuses) blockers.push('commit statuses response is malformed');
 
   for (const [name, check] of checksByName) {
     if (ignored.has(name)) continue;
@@ -156,7 +170,6 @@ async function collectCheckBlockers({ github, owner, repo, headSha, config }) {
     github.paginate(
       github.rest.checks.listForRef,
       { owner, repo, ref: headSha, filter: 'latest', per_page: 100 },
-      (response) => response.data.check_runs,
     ),
     github.paginate(
       github.rest.repos.listCommitStatusesForRef,
