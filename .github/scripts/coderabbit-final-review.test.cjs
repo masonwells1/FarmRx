@@ -432,10 +432,10 @@ test('malformed check and status entries fail closed without dereferencing', () 
   assert.match(blockers.join('\n'), /commit statuses response is malformed/);
 });
 
-test('neutral or skipped required Foundation and Vercel checks block despite a same-name success status', (t) => {
+test('neutral or skipped required Foundation and Vercel checks block despite a same-name success status', async (t) => {
   for (const requiredCheck of REQUIRED_CHECKS) {
     for (const conclusion of ['neutral', 'skipped']) {
-      t.test(`${requiredCheck} ${conclusion}`, () => {
+      await t.test(`${requiredCheck} ${conclusion}`, () => {
         const otherRequiredCheck = REQUIRED_CHECKS.find((name) => name !== requiredCheck);
         const blockers = evaluateChecks({
           checkRuns: [
