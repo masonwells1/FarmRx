@@ -85,5 +85,16 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
 }
 
 function SoilTestCard({ test, expanded, onToggle, onOpen }: { test: SoilTest; expanded: boolean; onToggle: () => void; onOpen: () => void }) {
-  return <article className="soil-test-card"><button type="button" className="soil-test-summary" aria-expanded={expanded} onClick={onToggle}><span><strong>{displayDate(test.sample_date)}</strong><small>{test.lab_name}{test.pending ? ' · Saved offline' : ''}</small></span><span>{expanded ? 'Hide details' : 'Show details'}</span></button>{expanded && <div className="soil-test-details"><dl>{soilMeasurementKeys.map((key) => <div key={key}><dt>{labels[key]}</dt><dd>{test[key] ?? 'Not reported'}</dd></div>)}</dl>{test.attachment && <button type="button" className="secondary-action" onClick={onOpen}>Open lab report</button>}</div>}</article>
+  return <article className="soil-test-card"><button type="button" className="soil-test-summary" aria-expanded={expanded} onClick={onToggle}><span><strong>{displayDate(test.sample_date)}</strong><small>{test.lab_name}{test.pending ? ' · Saved offline' : ''}</small></span><span>{expanded ? 'Hide details' : 'Show details'}</span></button>{expanded && <div className="soil-test-details"><dl>{soilMeasurementKeys.map((key) => <div key={key}><dt>{labels[key]}</dt><dd>{test[key] ?? 'Not reported'}</dd></div>)}</dl><SoilReportGuide test={test} />{test.attachment && <button type="button" className="secondary-action" onClick={onOpen}>Open lab report</button>}</div>}</article>
+}
+
+function SoilReportGuide({ test }: { test: SoilTest }) {
+  const values = [
+    ['pH', 'pH describes how acidic or alkaline the lab found this sample.', test.ph],
+    ['Organic matter', 'Organic matter is the portion of the sample made from decomposed plant and animal material.', test.organic_matter_pct],
+    ['CEC', 'CEC describes the sample’s measured capacity to hold positively charged nutrients.', test.cec_meq_100g],
+    ['Base saturation', 'Base saturation shows the lab-reported share of CEC occupied by each listed nutrient.', null],
+  ] as const
+  const baseSaturation = [['Calcium', test.base_saturation_calcium_pct], ['Magnesium', test.base_saturation_magnesium_pct], ['Potassium', test.base_saturation_potassium_pct], ['Sodium', test.base_saturation_sodium_pct], ['Hydrogen', test.base_saturation_hydrogen_pct]] as const
+  return <section className="soil-rx-guide" aria-label="Understand this report"><h3>Understand this report</h3><p>These are descriptions of the values reported by your lab, not agronomic advice, target ranges, or a fertilizer recommendation.</p><dl>{values.map(([label, explanation, value]) => <div key={label}><dt>{label}</dt><dd>{explanation} {label === 'Base saturation' ? baseSaturation.map(([name, amount]) => `${name}: ${amount ?? 'Not reported'}`).join(' · ') : `Lab result: ${value ?? 'Not reported'}`}</dd></div>)}</dl></section>
 }
