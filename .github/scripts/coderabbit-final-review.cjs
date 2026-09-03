@@ -8,6 +8,7 @@ const RESET_ACTIONS = new Set(['synchronize', 'reopened', 'converted_to_draft'])
 const ALLOWED_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
 const ACCEPTABLE_CHECK_CONCLUSIONS = new Set(['success', 'neutral', 'skipped']);
 const CODERABBIT_LEGACY_STATUS_CREATOR_ID = '136622811';
+const CODERABBIT_CHECK_APP_ID = '347564';
 
 function normalize(value) {
   return String(value || '').trim().toLowerCase();
@@ -94,7 +95,11 @@ function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [
 
   for (const checks of checksByName.values()) {
     for (const check of checks) {
-      if (check.status !== 'completed' || !ACCEPTABLE_CHECK_CONCLUSIONS.has(check.conclusion)) {
+      const ignoredCodeRabbitCheck = ignored.has(normalize(check.name))
+        && normalize(check.name) === 'coderabbit'
+        && String(check.app.id) === CODERABBIT_CHECK_APP_ID;
+      if (!ignoredCodeRabbitCheck
+        && (check.status !== 'completed' || !ACCEPTABLE_CHECK_CONCLUSIONS.has(check.conclusion))) {
         blockers.push(`${check.name}: ${check.status}/${check.conclusion || 'no conclusion'}`);
       }
     }

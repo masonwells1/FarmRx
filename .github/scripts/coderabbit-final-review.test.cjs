@@ -735,6 +735,62 @@ test('check evaluation accepts neutral/skipped results and ignores CodeRabbit pe
   assert.deepEqual(blockers, []);
 });
 
+test('only the exact CodeRabbit Checks-API app run is ignored', () => {
+  for (const conclusion of [null, 'success']) {
+    const blockers = evaluateChecks({
+      checkRuns: [
+        completedCheck('foundation'),
+        completedCheck('Vercel'),
+        {
+          ...completedCheck('CodeRabbit', conclusion || 'success', { appId: 347564, suiteId: 9 }),
+          status: conclusion ? 'completed' : 'queued',
+          conclusion,
+        },
+      ],
+      statuses: [],
+      requiredChecks: REQUIRED_CHECKS,
+      ignoredChecks: ['CodeRabbit'],
+    });
+    assert.deepEqual(blockers, []);
+  }
+
+  const sameNameOtherApp = evaluateChecks({
+    checkRuns: [
+      completedCheck('foundation'),
+      completedCheck('Vercel'),
+      { ...completedCheck('CodeRabbit', 'success', { appId: 99, suiteId: 9 }), status: 'queued', conclusion: null },
+    ],
+    statuses: [],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+  assert.match(sameNameOtherApp.join('\n'), /CodeRabbit: queued\/no conclusion/);
+
+  const otherNameSameApp = evaluateChecks({
+    checkRuns: [
+      completedCheck('foundation'),
+      completedCheck('Vercel'),
+      { ...completedCheck('Security', 'success', { appId: 347564, suiteId: 9 }), status: 'queued', conclusion: null },
+    ],
+    statuses: [],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+  assert.match(otherNameSameApp.join('\n'), /Security: queued\/no conclusion/);
+
+  const missingApp = evaluateChecks({
+    checkRuns: [
+      completedCheck('foundation'),
+      completedCheck('Vercel'),
+      { name: 'CodeRabbit', status: 'queued', conclusion: null, completed_at: '2026-08-30T12:00:00Z', check_suite: { id: 9 } },
+    ],
+    statuses: [],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+  assert.match(missingApp.join('\n'), /check runs response is malformed/);
+});
+
 test('source-distinct required checks and statuses cannot mask one another', () => {
   const checkBlockers = evaluateChecks({
     checkRuns: [
