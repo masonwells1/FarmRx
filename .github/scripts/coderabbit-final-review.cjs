@@ -209,11 +209,25 @@ async function run({ github, context, core, config }) {
     return { status: 'ignored', reason: `pull_request_target.${action}` };
   }
 
-  const permissionResponse = await github.rest.repos.getCollaboratorPermissionLevel({
-    owner,
-    repo,
-    username: context.actor,
-  });
+  let permissionResponse;
+  try {
+    permissionResponse = await github.rest.repos.getCollaboratorPermissionLevel({
+      owner,
+      repo,
+      username: context.actor,
+    });
+  } catch (permissionError) {
+    await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+    const detail = permissionError instanceof Error ? permissionError.message : String(permissionError);
+    return blockCandidate({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      reason: `could not determine ${context.actor} repository permission: ${detail}`,
+    });
+  }
   const permission = normalize(permissionResponse.data.permission);
   if (!ALLOWED_PERMISSIONS.has(permission)) {
     return blockCandidate({

@@ -46,6 +46,7 @@ function makeHarness({
   action = 'labeled',
   eventLabel = READY_LABEL,
   permission = 'write',
+  permissionFailure = null,
   pulls = [pullRequest(), pullRequest(), pullRequest()],
   checkRuns = [completedCheck('foundation')],
   statuses = [commitStatus('Vercel'), commitStatus('CodeRabbit', 'pending')],
@@ -140,7 +141,10 @@ function makeHarness({
         get: async () => ({ data: currentPull() }),
       },
       repos: {
-        getCollaboratorPermissionLevel: async () => ({ data: { permission } }),
+        getCollaboratorPermissionLevel: async () => {
+          if (permissionFailure) throw new Error(permissionFailure);
+          return { data: { permission } };
+        },
         listCommitStatusesForRef: async () => {
           if (statusesFailure) throw new Error(statusesFailure);
           const sequence = statusesSequence || [statuses];
@@ -284,6 +288,21 @@ test('check or status collection failures clear labels and post no review comman
       assert.match(harness.failures[0], /endpoint unavailable/);
     });
   }
+});
+
+test('a permission lookup failure clears workflow labels and posts no review command', async () => {
+  const harness = makeHarness({
+    permissionFailure: 'collaborator permission endpoint unavailable',
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.failures[0], /could not determine masonwells1 repository permission/);
+  assert.match(harness.failures[0], /collaborator permission endpoint unavailable/);
 });
 
 test('a check rerun that starts during the quiet confirmation blocks the request', async () => {
