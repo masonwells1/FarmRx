@@ -117,10 +117,29 @@ async function resetLabels({ github, owner, repo, pullNumber, core, reason }) {
   return { status: 'reset', reason };
 }
 
-async function blockCandidate({ github, owner, repo, pullNumber, core, reason }) {
-  await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
-  core.setFailed(`CodeRabbit final review was not requested: ${reason}`);
-  return { status: 'blocked', reason };
+async function blockCandidate({
+  github,
+  owner,
+  repo,
+  pullNumber,
+  core,
+  reason,
+  labelsToRemove = [READY_LABEL],
+}) {
+  const cleanupFailures = [];
+  for (const label of labelsToRemove) {
+    try {
+      await removeLabelIfPresent(github, owner, repo, pullNumber, label);
+    } catch (cleanupError) {
+      const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      cleanupFailures.push(`could not remove ${label}: ${detail}`);
+    }
+  }
+  const finalReason = cleanupFailures.length > 0
+    ? `${reason}; ${cleanupFailures.join('; ')}`
+    : reason;
+  core.setFailed(`CodeRabbit final review was not requested: ${finalReason}`);
+  return { status: 'blocked', reason: finalReason };
 }
 
 function validatePullRequest(pullRequest, defaultBranch, expectedHeadSha) {
@@ -217,7 +236,6 @@ async function run({ github, context, core, config }) {
       username: context.actor,
     });
   } catch (permissionError) {
-    await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
     const detail = permissionError instanceof Error ? permissionError.message : String(permissionError);
     return blockCandidate({
       github,
@@ -226,6 +244,7 @@ async function run({ github, context, core, config }) {
       pullNumber,
       core,
       reason: `could not determine ${context.actor} repository permission: ${detail}`,
+      labelsToRemove: [REQUESTED_LABEL, READY_LABEL],
     });
   }
   const permission = normalize(permissionResponse.data.permission);

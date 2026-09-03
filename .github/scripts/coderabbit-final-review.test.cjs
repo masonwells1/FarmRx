@@ -47,6 +47,7 @@ function makeHarness({
   eventLabel = READY_LABEL,
   permission = 'write',
   permissionFailure = null,
+  labelRemovalFailure = null,
   pulls = [pullRequest(), pullRequest(), pullRequest()],
   checkRuns = [completedCheck('foundation')],
   statuses = [commitStatus('Vercel'), commitStatus('CodeRabbit', 'pending')],
@@ -62,6 +63,7 @@ function makeHarness({
   const timeline = [];
   const failures = [];
   const notices = [];
+  const labelRemovalAttempts = [];
   let pullIndex = 0;
   let checkRunsIndex = 0;
   let statusesIndex = 0;
@@ -130,6 +132,8 @@ function makeHarness({
         listComments: async () => ({ data: comments }),
         listEventsForTimeline: async () => ({ data: timeline }),
         removeLabel: async ({ name }) => {
+          labelRemovalAttempts.push(name);
+          if (labelRemovalFailure === name) throw new Error(`could not remove ${name}`);
           if (!liveLabels.delete(name)) {
             const error = new Error('label missing');
             error.status = 404;
@@ -184,6 +188,7 @@ function makeHarness({
     failures,
     github,
     liveLabels,
+    labelRemovalAttempts,
     notices,
   };
 }
@@ -303,6 +308,24 @@ test('a permission lookup failure clears workflow labels and posts no review com
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
   assert.match(harness.failures[0], /could not determine masonwells1 repository permission/);
   assert.match(harness.failures[0], /collaborator permission endpoint unavailable/);
+});
+
+test('a permission lookup failure still removes ready when requested-label cleanup fails', async () => {
+  const harness = makeHarness({
+    permissionFailure: 'collaborator permission endpoint unavailable',
+    labelRemovalFailure: REQUESTED_LABEL,
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.deepEqual(harness.labelRemovalAttempts, [REQUESTED_LABEL, READY_LABEL]);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /could not determine masonwells1 repository permission/);
+  assert.match(harness.failures[0], /collaborator permission endpoint unavailable/);
+  assert.match(harness.failures[0], /could not remove coderabbit-review-requested/);
 });
 
 test('a check rerun that starts during the quiet confirmation blocks the request', async () => {
