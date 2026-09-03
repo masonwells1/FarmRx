@@ -90,11 +90,11 @@ function SoilTestCard({ test, expanded, onToggle, onOpen }: { test: SoilTest; ex
 
 function SoilReportGuide({ test }: { test: SoilTest }) {
   const values = [
-    ['pH', 'pH describes how acidic or alkaline the lab found this sample.', test.ph],
-    ['Organic matter', 'Organic matter is the portion of the sample made from decomposed plant and animal material.', test.organic_matter_pct],
-    ['CEC', 'CEC describes the sample’s measured capacity to hold positively charged nutrients.', test.cec_meq_100g],
+    ['pH', 'pH describes how acidic or alkaline the lab found this sample.', test.ph, ''],
+    ['Organic matter', 'Organic matter is the portion of the sample made from decomposed plant and animal material.', test.organic_matter_pct, '%'],
+    ['CEC', 'CEC describes the sample’s measured capacity to hold positively charged nutrients.', test.cec_meq_100g, 'meq/100g'],
     ['Base saturation', 'Base saturation shows the lab-reported share of CEC occupied by each listed nutrient.', null],
   ] as const
   const baseSaturation = [['Calcium', test.base_saturation_calcium_pct], ['Magnesium', test.base_saturation_magnesium_pct], ['Potassium', test.base_saturation_potassium_pct], ['Sodium', test.base_saturation_sodium_pct], ['Hydrogen', test.base_saturation_hydrogen_pct]] as const
-  return <section className="soil-rx-guide" aria-label="Understand this report"><h3>Understand this report</h3><p>These are descriptions of the values reported by your lab, not agronomic advice, target ranges, or a fertilizer recommendation.</p><dl>{values.map(([label, explanation, value]) => <div key={label}><dt>{label}</dt><dd>{explanation} {label === 'Base saturation' ? baseSaturation.map(([name, amount]) => `${name}: ${amount ?? 'Not reported'}`).join(' · ') : `Lab result: ${value ?? 'Not reported'}`}</dd></div>)}</dl></section>
+  return <section className="soil-rx-guide" aria-label="Understand this report"><h3>Understand this report</h3><p>These are descriptions of the values reported by your lab, not agronomic advice, target ranges, or a fertilizer recommendation.</p><dl>{values.map(([label, explanation, value, unit]) => <div key={label}><dt>{label}</dt><dd>{explanation} {label === 'Base saturation' ? baseSaturation.map(([name, amount]) => `${name}: ${amount === null ? 'Not reported' : `${amount}%`}`).join(' · ') : `Lab result: ${value === null ? 'Not reported' : `${value}${unit ? ` ${unit}` : ''}`}`}</dd></div>)}</dl></section>
 }
