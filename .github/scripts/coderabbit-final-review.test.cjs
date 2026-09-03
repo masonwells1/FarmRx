@@ -696,6 +696,66 @@ test('newest rerun from the same check or status source supersedes only that sou
   assert.deepEqual(blockers, []);
 });
 
+test('source freshness uses parsed instants rather than timestamp text', () => {
+  const checkBlockers = evaluateChecks({
+    checkRuns: [
+      completedCheck('foundation', 'success', {
+        appId: 1,
+        suiteId: 1,
+        completedAt: '2026-08-30T16:30:00Z',
+      }),
+      completedCheck('foundation', 'failure', {
+        appId: 1,
+        suiteId: 1,
+        completedAt: '2026-08-30T12:00:00-05:00',
+      }),
+      completedCheck('Vercel'),
+    ],
+    statuses: [],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+  assert.match(checkBlockers.join('\n'), /foundation: completed\/failure/);
+
+  const statusBlockers = evaluateChecks({
+    checkRuns: [completedCheck('foundation')],
+    statuses: [
+      { ...commitStatus('Vercel', 'success'), updated_at: '2026-08-30T16:30:00Z' },
+      { ...commitStatus('Vercel', 'failure'), updated_at: '2026-08-30T12:00:00-05:00' },
+    ],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+  assert.match(statusBlockers.join('\n'), /Vercel: failure/);
+});
+
+test('equal-time conflicting results fail closed regardless of list order', () => {
+  for (const [first, second] of [['success', 'failure'], ['failure', 'success']]) {
+    const checkBlockers = evaluateChecks({
+      checkRuns: [
+        completedCheck('foundation', first, { appId: 1, suiteId: 1 }),
+        completedCheck('foundation', second, { appId: 1, suiteId: 1 }),
+        completedCheck('Vercel'),
+      ],
+      statuses: [],
+      requiredChecks: REQUIRED_CHECKS,
+      ignoredChecks: ['CodeRabbit'],
+    });
+    assert.match(checkBlockers.join('\n'), /foundation: completed\/failure/);
+
+    const statusBlockers = evaluateChecks({
+      checkRuns: [completedCheck('foundation')],
+      statuses: [
+        commitStatus('Vercel', first),
+        commitStatus('Vercel', second),
+      ],
+      requiredChecks: REQUIRED_CHECKS,
+      ignoredChecks: ['CodeRabbit'],
+    });
+    assert.match(statusBlockers.join('\n'), /Vercel: failure/);
+  }
+});
+
 test('only the explicit legacy CodeRabbit status creator is ignored', () => {
   const accepted = evaluateChecks({
     checkRuns: [completedCheck('foundation'), completedCheck('Vercel')],

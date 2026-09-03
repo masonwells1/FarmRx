@@ -38,8 +38,9 @@ function newestBySource(items, nameKey, identityPaths, dateKeys) {
 
     const identity = identityPaths.map((path) => nestedValue(item, path));
     const timestamp = dateKeys.map((key) => item[key]).find(Boolean);
+    const epoch = typeof timestamp === 'string' ? Date.parse(timestamp) : Number.NaN;
     if (identity.some((value) => value === undefined || value === null || value === '')
-      || typeof timestamp !== 'string' || Number.isNaN(Date.parse(timestamp))) {
+      || Number.isNaN(epoch)) {
       malformed = true;
       continue;
     }
@@ -48,15 +49,19 @@ function newestBySource(items, nameKey, identityPaths, dateKeys) {
     if (!sourcesByName.has(name)) sourcesByName.set(name, new Map());
     const sources = sourcesByName.get(name);
     const existing = sources.get(source);
-    if (!existing || timestamp > existing.timestamp) {
-      sources.set(source, { item, timestamp });
+    if (!existing || epoch > existing.epoch) {
+      sources.set(source, { items: [item], epoch });
+    } else if (epoch === existing.epoch) {
+      // GitHub can return conflicting payloads for one source at the same
+      // instant. Keep every tied result so a non-success cannot be hidden.
+      existing.items.push(item);
     }
   }
 
   return {
     itemsByName: new Map([...sourcesByName].map(([name, sources]) => [
       name,
-      [...sources.values()].map((entry) => entry.item),
+      [...sources.values()].flatMap((entry) => entry.items),
     ])),
     malformed,
   };
