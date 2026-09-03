@@ -18,12 +18,12 @@ function displayDate(value: string) { return new Date(`${value}T12:00:00`).toLoc
 export const nutrientRemovalSources = {
   phosphorusPotassium: { label: 'Illinois Extension, Soil Phosphorus: crop removal table', url: 'https://extension.illinois.edu/crops/soil-phosphorus' },
   cornNitrogen: { label: 'Illinois Agronomy Handbook, Nitrogen Management for Corn', url: 'https://extension.illinois.edu/sites/default/files/iah_-_nitrogen_management_for_corn_v4.pdf' },
+  soybeanWheatNitrogen: { label: 'University of Delaware Cooperative Extension, Nitrogen Removal by Delaware Crops', url: 'https://www.udel.edu/academics/colleges/canr/cooperative-extension/fact-sheets/nitrogen-removal-delaware-crops/' },
 } as const
 export const nutrientRemovalCoefficients = {
   corn: { nitrogen: 0.60, phosphorus: 0.37, potassium: 0.24 },
-  // Illinois Soybean Management documents crop N uptake, not an exact 3.00 lb/bu grain-removal coefficient.
-  // Do not turn an uptake figure into a removal estimate.
-  soybeans: { phosphorus: 0.75, potassium: 1.17 },
+  soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 },
+  wheat: { nitrogen: 1.05, phosphorus: 0.47, potassium: 0.30 },
 } as const
 type SupportedRemovalCrop = keyof typeof nutrientRemovalCoefficients
 export function removalEstimate(crop: CropAssignment, commodity: Commodity | undefined) {
@@ -38,17 +38,16 @@ export function removalEstimate(crop: CropAssignment, commodity: Commodity | und
     bushels: crop.harvested_bushels,
     acres: crop.planted_acres,
     nutrients: [
-      ...(family === 'corn' ? [{ label: 'N', amount: crop.harvested_bushels * nutrientRemovalCoefficients.corn.nitrogen, source: 'cornNitrogen' as const }] : []),
-      { label: 'P₂O₅', amount: crop.harvested_bushels * coefficients.phosphorus, source: 'phosphorusPotassium' as const },
-      { label: 'K₂O', amount: crop.harvested_bushels * coefficients.potassium, source: 'phosphorusPotassium' as const },
+      { label: 'N', amount: crop.harvested_bushels * coefficients.nitrogen },
+      { label: 'P₂O₅', amount: crop.harvested_bushels * coefficients.phosphorus },
+      { label: 'K₂O', amount: crop.harvested_bushels * coefficients.potassium },
     ],
-    nitrogenUnavailable: family === 'soybeans',
   }
 }
 
 export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilRxRepository; fieldsRepository: FieldsRepository }) {
   const { profile } = useFarmAccess()
-  const [fields, setFields] = useState<Array<{ id: string; name: string }>>([])
+  const [fields, setFields] = useState<Array<{ id: string; name: string; isActive: boolean }>>([])
   const [tests, setTests] = useState<SoilTest[]>([])
   const [harvestAssignments, setHarvestAssignments] = useState<CropAssignment[]>([])
   const [commodities, setCommodities] = useState<Commodity[]>([])
@@ -63,20 +62,22 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
   const [attentionQueueKey, setAttentionQueueKey] = useState<string | null>(null)
   const lock = useRef(createSubmitLock())
   const offline = typeof navigator !== 'undefined' && navigator.onLine === false
-  const selectedField = selectedFieldId || fields[0]?.id || ''
+  const selectedField = fields.find((field) => field.id === selectedFieldId) ?? fields[0]
+  const activeFields = fields.filter((field) => field.isActive)
   const canEdit = canEditFarmModule(profile, 'soil_rx')
 
   const refresh = async () => {
     const [fieldData, soilData, queueKey] = await Promise.all([fieldsRepository.getData(), repository.getData(), repository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)])
-    const nextFields = fieldData.fields.filter((field) => field.is_active).map(({ id, name }) => ({ id, name }))
+    const nextFields = fieldData.fields.map(({ id, name, is_active }) => ({ id, name, isActive: is_active }))
+    const nextActiveFields = nextFields.filter((field) => field.isActive)
     const nextTests = sortSoilTestsNewestFirst(soilData.tests); setFields(nextFields); setTests(nextTests); setHarvestAssignments(fieldData.crop_assignments); setCommodities(fieldData.commodities)
-    const nextSelected = selectedFieldId && nextFields.some((field) => field.id === selectedFieldId) ? selectedFieldId : nextFields[0]?.id ?? ''
-    setSelectedFieldId(nextSelected); setForm((current) => ({ ...current, fieldId: nextSelected })); setOpenTests(new Set(nextTests.filter((test) => test.field_id === nextSelected).slice(0, 1).map((test) => test.id))); setAttentionQueueKey(queueKey)
+    const nextSelected = selectedFieldId && nextFields.some((field) => field.id === selectedFieldId) ? selectedFieldId : nextActiveFields[0]?.id ?? nextFields.find((field) => nextTests.some((test) => test.field_id === field.id))?.id ?? nextFields[0]?.id ?? ''
+    setSelectedFieldId(nextSelected); setForm((current) => ({ ...current, fieldId: nextActiveFields.some((field) => field.id === current.fieldId) ? current.fieldId : nextActiveFields[0]?.id ?? '' })); setOpenTests(new Set(nextTests.filter((test) => test.field_id === nextSelected).slice(0, 1).map((test) => test.id))); setAttentionQueueKey(queueKey)
   }
   useEffect(() => { void refresh().catch((caught) => setError(farmerError(caught, 'load Soil Rx'))).finally(() => setLoading(false)) }, [])
-  const fieldTests = useMemo(() => sortSoilTestsNewestFirst(tests.filter((test) => test.field_id === selectedField)), [tests, selectedField])
-  const harvestRemoval = useMemo(() => harvestAssignments.filter((crop) => crop.field_id === selectedField).map((crop) => removalEstimate(crop, commodities.find((commodity) => commodity.id === crop.commodity_id))).filter((estimate): estimate is NonNullable<typeof estimate> => estimate !== null), [harvestAssignments, commodities, selectedField])
-  const hasUnsupportedHarvest = harvestAssignments.some((crop) => crop.field_id === selectedField && crop.harvested_bushels !== null && !['corn', 'soybeans'].includes(commodities.find((commodity) => commodity.id === crop.commodity_id)?.crop_family ?? ''))
+  const fieldTests = useMemo(() => sortSoilTestsNewestFirst(tests.filter((test) => test.field_id === selectedField?.id)), [tests, selectedField?.id])
+  const harvestRemoval = useMemo(() => harvestAssignments.filter((crop) => crop.field_id === selectedField?.id).map((crop) => removalEstimate(crop, commodities.find((commodity) => commodity.id === crop.commodity_id))).filter((estimate): estimate is NonNullable<typeof estimate> => estimate !== null), [harvestAssignments, commodities, selectedField?.id])
+  const hasUnsupportedHarvest = harvestAssignments.some((crop) => crop.field_id === selectedField?.id && crop.harvested_bushels !== null && !Object.hasOwn(nutrientRemovalCoefficients, commodities.find((commodity) => commodity.id === crop.commodity_id)?.crop_family ?? ''))
 
   async function save(event: FormEvent) {
     event.preventDefault(); if (!lock.current.acquire()) return
@@ -92,7 +93,7 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
     } catch (caught) { setError(farmerError(caught, 'save this soil test')) }
     finally { setSaving(false); lock.current.release() }
   }
-  function chooseField(fieldId: string) { setSelectedFieldId(fieldId); setForm((current) => ({ ...current, fieldId })); setOpenTests(new Set(sortSoilTestsNewestFirst(tests.filter((test) => test.field_id === fieldId)).slice(0, 1).map((test) => test.id))) }
+  function chooseField(fieldId: string) { setSelectedFieldId(fieldId); if (activeFields.some((field) => field.id === fieldId)) setForm((current) => ({ ...current, fieldId })); setOpenTests(new Set(sortSoilTestsNewestFirst(tests.filter((test) => test.field_id === fieldId)).slice(0, 1).map((test) => test.id))) }
   function selectReport(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0] ?? null; const problem = file ? validateSoilReportFile(file) : null; if (problem) event.target.value = ''; setReport(problem ? null : file); setError(problem) }
   async function openReport(test: SoilTest) { if (!test.attachment) return; const popup = window.open('about:blank', '_blank'); if (!popup) { setError('Your browser blocked the lab report window. Allow pop-ups for Farm Rx and try again.'); return }; popup.opener = null; setError(null); try { const url = await repository.getReportUrl(test.attachment.storage_path); if (popup.closed) throw new Error('The lab report window was closed.'); popup.location.replace(url) } catch (caught) { popup.close(); setError(farmerError(caught, 'open this report')) } }
 
@@ -104,14 +105,14 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
     {loading ? <p className="loading-state">Loading Soil Rx…</p> : <>
       {!fields.length ? <p className="soil-rx-empty">Add a field before saving a soil test.</p> : <>
         <div className="soil-rx-layout">
-          <aside className="soil-rx-fields" aria-label="Fields"><h2>Your fields</h2>{fields.map((field) => <button key={field.id} type="button" className={field.id === selectedField ? 'active' : ''} onClick={() => chooseField(field.id)}>{field.name}<small>{tests.filter((test) => test.field_id === field.id).length} tests</small></button>)}</aside>
-          <div className="soil-rx-history"><h2>{fields.find((field) => field.id === selectedField)?.name ?? 'Field'} history</h2><HarvestRemoval estimates={harvestRemoval} hasUnsupportedHarvest={hasUnsupportedHarvest} />{fieldTests.length ? fieldTests.map((test) => <SoilTestCard key={test.id} test={test} expanded={openTests.has(test.id)} onToggle={() => setOpenTests((current) => { const next = new Set(current); next.has(test.id) ? next.delete(test.id) : next.add(test.id); return next })} onOpen={() => void openReport(test)} />) : <p className="soil-rx-empty">No soil tests saved for this field yet.</p>}</div>
+          <aside className="soil-rx-fields" aria-label="Fields"><h2>Your fields</h2>{fields.map((field) => <button key={field.id} type="button" className={field.id === selectedField?.id ? 'active' : ''} onClick={() => chooseField(field.id)}>{field.name}{!field.isActive && ' (Archived)'}<small>{tests.filter((test) => test.field_id === field.id).length} tests</small></button>)}</aside>
+          <div className="soil-rx-history"><h2>{selectedField?.name ?? 'Field'} history</h2>{selectedField && !selectedField.isActive && <p className="card-empty">This field is archived. Its Soil Rx history remains available, but new tests can only be added to active fields.</p>}<HarvestRemoval estimates={harvestRemoval} hasUnsupportedHarvest={hasUnsupportedHarvest} />{fieldTests.length ? fieldTests.map((test) => <SoilTestCard key={test.id} test={test} expanded={openTests.has(test.id)} onToggle={() => setOpenTests((current) => { const next = new Set(current); next.has(test.id) ? next.delete(test.id) : next.add(test.id); return next })} onOpen={() => void openReport(test)} />) : <p className="soil-rx-empty">No soil tests saved for this field yet.</p>}</div>
         </div>
-        {canEdit && <form className="soil-rx-form" onSubmit={save}><header><h2>Add a soil test</h2><p>Lab name and sample date are required. Leave a measurement blank when it was not reported.</p></header>
-          <div className="soil-rx-form-grid"><label>Field<select value={form.fieldId} onChange={(event) => chooseField(event.target.value)} required>{fields.map((field) => <option key={field.id} value={field.id}>{field.name}</option>)}</select></label><label>Lab name<input value={form.labName} onChange={(event) => setForm((current) => ({ ...current, labName: event.target.value }))} maxLength={160} required /></label><label>Sample date<input type="date" value={form.sampleDate} onChange={(event) => setForm((current) => ({ ...current, sampleDate: event.target.value }))} required /></label></div>
+        {canEdit && selectedField?.isActive && <form className="soil-rx-form" onSubmit={save}><header><h2>Add a soil test</h2><p>Lab name and sample date are required. Leave a measurement blank when it was not reported.</p></header>
+          <div className="soil-rx-form-grid"><label>Field<select value={form.fieldId} onChange={(event) => chooseField(event.target.value)} required>{activeFields.map((field) => <option key={field.id} value={field.id}>{field.name}</option>)}</select></label><label>Lab name<input value={form.labName} onChange={(event) => setForm((current) => ({ ...current, labName: event.target.value }))} maxLength={160} required /></label><label>Sample date<input type="date" value={form.sampleDate} onChange={(event) => setForm((current) => ({ ...current, sampleDate: event.target.value }))} required /></label></div>
           <details className="soil-rx-measurements"><summary>Add lab measurements (optional)</summary><div>{soilMeasurementKeys.map((key) => <label key={key}>{labels[key]}<input type="number" step="0.001" value={form.measurements[key]} onChange={(event) => setForm((current) => ({ ...current, measurements: { ...current.measurements, [key]: event.target.value } }))} /></label>)}</div></details>
           <label className="soil-rx-report">Lab report (optional, PDF or image, up to 20 MB)<input type="file" accept="application/pdf,image/jpeg,image/png,image/heic,image/heif" onChange={selectReport} />{report && <small>{report.name}</small>}{offline && <small>Attachments need a connection. Text-only tests can still save now.</small>}</label>
-          <button className="primary-action" type="submit" disabled={saving || !fields.length}>{saving ? 'Saving soil test…' : 'Save soil test'}</button>
+          <button className="primary-action" type="submit" disabled={saving}>{saving ? 'Saving soil test…' : 'Save soil test'}</button>
         </form>}
       </>}
     </>}
@@ -120,7 +121,7 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
 
 function HarvestRemoval({ estimates, hasUnsupportedHarvest }: { estimates: Array<NonNullable<ReturnType<typeof removalEstimate>>>; hasUnsupportedHarvest: boolean }) {
   const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 })
-  return <section className="soil-rx-removal" aria-label="Harvest nutrient removal estimate"><h3>Harvest nutrient removal estimate</h3><p>Each line is one recorded crop assignment. Farm Rx does not combine years or planting sequences. This read-only estimate from recorded harvested bushels is not a fertilizer recommendation. Ask your Crop RX agronomist for recommendations specific to your farm.</p>{estimates.map((estimate) => <section key={estimate.id} aria-label={`${estimate.crop} ${estimate.cropYear} planting ${estimate.plantingSequence} removal estimate`}><h4>{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence} · {number.format(estimate.bushels)} bu on {number.format(estimate.acres)} ac</h4><dl>{estimate.nutrients.map((nutrient) => <div key={nutrient.label}><dt>{nutrient.label}</dt><dd>{number.format(nutrient.amount)} lb total · {number.format(nutrient.amount / estimate.acres)} lb/ac</dd></div>)}</dl>{estimate.nitrogenUnavailable && <p className="card-empty">Nitrogen is not shown for soybeans because Farm Rx does not have a cited soybean grain-removal coefficient.</p>}</section>)}{!estimates.length && <p className="card-empty">No harvested corn or soybeans with planted acres are recorded for this field yet.</p>}{hasUnsupportedHarvest && <p className="card-empty">Harvest-removal estimates are available for corn and soybeans only.</p>}<p><a href={nutrientRemovalSources.cornNitrogen.url} target="_blank" rel="noreferrer">Source for corn N (0.60 lb/bu): {nutrientRemovalSources.cornNitrogen.label}</a>.</p><p><a href={nutrientRemovalSources.phosphorusPotassium.url} target="_blank" rel="noreferrer">Source for P₂O₅ and K₂O: {nutrientRemovalSources.phosphorusPotassium.label}</a>. P₂O₅ and K₂O are reported in fertilizer-equivalent units.</p></section>
+  return <section className="soil-rx-removal" aria-label="Harvest nutrient removal estimate"><h3>Harvest nutrient removal estimate</h3><p>Each line is one recorded crop assignment. Farm Rx does not combine years or planting sequences. This read-only estimate from recorded harvested bushels is not a fertilizer recommendation. Ask your Crop RX agronomist for recommendations specific to your farm.</p>{estimates.map((estimate) => <section key={estimate.id} aria-label={`${estimate.crop} ${estimate.cropYear} planting ${estimate.plantingSequence} removal estimate`}><h4>{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence} · {number.format(estimate.bushels)} bu on {number.format(estimate.acres)} ac</h4><dl>{estimate.nutrients.map((nutrient) => <div key={nutrient.label}><dt>{nutrient.label}</dt><dd>{number.format(nutrient.amount)} lb total · {number.format(nutrient.amount / estimate.acres)} lb/ac</dd></div>)}</dl></section>)}{!estimates.length && <p className="card-empty">No harvested corn, soybeans, or wheat with planted acres are recorded for this field yet.</p>}{hasUnsupportedHarvest && <p className="card-empty">Harvest-removal estimates are available for corn, soybeans, and wheat only.</p>}<p><a href={nutrientRemovalSources.cornNitrogen.url} target="_blank" rel="noreferrer">Source for corn N (0.60 lb/bu): {nutrientRemovalSources.cornNitrogen.label}</a>.</p><p><a href={nutrientRemovalSources.soybeanWheatNitrogen.url} target="_blank" rel="noreferrer">Source for soybean N (3.44 lb/bu) and wheat N (1.05 lb/bu): {nutrientRemovalSources.soybeanWheatNitrogen.label}</a>.</p><p><a href={nutrientRemovalSources.phosphorusPotassium.url} target="_blank" rel="noreferrer">Source for corn, soybean, and wheat P₂O₅ and K₂O: {nutrientRemovalSources.phosphorusPotassium.label}</a>. Farm Rx uses the source page’s stated 0.47 lb/bu actual wheat P₂O₅ removal, not its separately adjusted 0.90 lb/bu maintenance rate. P₂O₅ and K₂O are reported in fertilizer-equivalent units.</p></section>
 }
 
 function SoilTestCard({ test, expanded, onToggle, onOpen }: { test: SoilTest; expanded: boolean; onToggle: () => void; onOpen: () => void }) {

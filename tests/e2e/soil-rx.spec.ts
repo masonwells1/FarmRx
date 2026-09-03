@@ -1,13 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { expect, test, type Page, type Route } from '@playwright/test'
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test'
 
 const project = 'agvsozfbstpekuqxpqjr'; const user = '00000000-0000-4000-8000-000000000001'; const farm = '00000000-0000-4000-8000-000000000010'; const entity = '00000000-0000-4000-8000-000000000011'; const field = '00000000-0000-4000-8000-000000000012'; const secondField = '00000000-0000-4000-8000-000000000013'; const testId = '00000000-0000-4000-8000-000000000021'; const attachmentId = '00000000-0000-4000-8000-000000000022'; const reportPath = `${farm}/${field}/${testId}/lab-report.pdf`; const now = '2027-01-15T12:00:00.000Z'
 const protectedTables = ['farms', 'farm_memberships', 'farm_rep_access', 'entities', 'fields', 'arrangements', 'crop_assignments', 'commodities', 'notifications'] as const
 type ProtectedTable = typeof protectedTables[number]
 const allowedSoilRestWrites = new Set(['POST soil_tests', 'DELETE soil_tests', 'POST soil_test_attachments'])
-type WriteState = { tests: Array<Record<string, unknown>>; attachments: Array<Record<string, unknown>>; cropAssignments: Array<Record<string, unknown>>; commodities: Array<Record<string, unknown>>; writes: string[]; uploaded: Set<string>; failHarvestRead: boolean; failSoilSaves: number; failAttachmentMetadata: number; failStorageRemovals: number; loseStorageRemoveResponses: number; loseSoilDeleteResponses: number; changeEpochAfterUpload: boolean; accessEpoch: number; protectedWriteAttempts: string[]; protectedState: Record<ProtectedTable, string[]> }
-function writeState(): WriteState { return { tests: [], attachments: [], cropAssignments: [{ id: '00000000-0000-4000-8000-000000000031', farm_id: farm, field_id: field, crop_year: 2026, commodity_id: 'corn', planting_sequence: 1, planted_acres: 40, variety: null, planting_date: null, harvest_date: '2026-10-20', harvested_bushels: 8000, expected_yield_per_acre: null, expected_price_per_bu: null, actual_price_per_bu: null, notes: null, created_at: now, updated_at: now }], commodities: [{ id: 'corn', name: 'Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: now, updated_at: now }], writes: [], uploaded: new Set(), failHarvestRead: false, failSoilSaves: 0, failAttachmentMetadata: 0, failStorageRemovals: 0, loseStorageRemoveResponses: 0, loseSoilDeleteResponses: 0, changeEpochAfterUpload: false, accessEpoch: 1, protectedWriteAttempts: [], protectedState: { farms: ['protected-farm-byte'], farm_memberships: ['protected-membership-byte'], farm_rep_access: ['protected-rep-access-byte'], entities: ['protected-entity-byte'], fields: ['protected-field-byte'], arrangements: ['protected-arrangement-byte'], crop_assignments: ['protected-crop-byte'], commodities: ['protected-commodity-byte'], notifications: ['protected-notification-byte'] } } }
+type WriteState = { tests: Array<Record<string, unknown>>; attachments: Array<Record<string, unknown>>; fieldRows: Array<Record<string, unknown>>; cropAssignments: Array<Record<string, unknown>>; commodities: Array<Record<string, unknown>>; writes: string[]; uploaded: Set<string>; failHarvestRead: boolean; failSoilSaves: number; failAttachmentMetadata: number; failStorageRemovals: number; loseStorageRemoveResponses: number; loseSoilDeleteResponses: number; changeEpochAfterUpload: boolean; accessEpoch: number; protectedWriteAttempts: string[]; protectedState: Record<ProtectedTable, string[]> }
+function fieldRow(id: string, name: string, isActive = true) { return { id, farm_id: farm, operating_entity_id: entity, name, legal_description: null, county: null, state: 'IL', total_acres: 40, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: null, longitude: null, location_source: null, is_active: isActive, created_at: now, updated_at: now } }
+function writeState(): WriteState { return { tests: [], attachments: [], fieldRows: [fieldRow(field, 'North Forty'), fieldRow(secondField, 'South Forty')], cropAssignments: [{ id: '00000000-0000-4000-8000-000000000031', farm_id: farm, field_id: field, crop_year: 2026, commodity_id: 'corn', planting_sequence: 1, planted_acres: 40, variety: null, planting_date: null, harvest_date: '2026-10-20', harvested_bushels: 8000, expected_yield_per_acre: null, expected_price_per_bu: null, actual_price_per_bu: null, notes: null, created_at: now, updated_at: now }], commodities: [{ id: 'corn', name: 'Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: now, updated_at: now }], writes: [], uploaded: new Set(), failHarvestRead: false, failSoilSaves: 0, failAttachmentMetadata: 0, failStorageRemovals: 0, loseStorageRemoveResponses: 0, loseSoilDeleteResponses: 0, changeEpochAfterUpload: false, accessEpoch: 1, protectedWriteAttempts: [], protectedState: { farms: ['protected-farm-byte'], farm_memberships: ['protected-membership-byte'], farm_rep_access: ['protected-rep-access-byte'], entities: ['protected-entity-byte'], fields: ['protected-field-byte'], arrangements: ['protected-arrangement-byte'], crop_assignments: ['protected-crop-byte'], commodities: ['protected-commodity-byte'], notifications: ['protected-notification-byte'] } } }
 function protectedSnapshot(state: WriteState) { return JSON.stringify(state.protectedState) }
 function expectProtectedNonwrite(state: WriteState, before: string) { expect(state.protectedWriteAttempts).toEqual([]); expect(protectedSnapshot(state)).toBe(before) }
 function soilRow(id: string, labName: string, sampleDate: string, fieldId = field) { return { id, farm_id: farm, field_id: fieldId, sample_date: sampleDate, lab_name: labName, ph: null, organic_matter_pct: null, cec_meq_100g: null, phosphorus_ppm: null, potassium_ppm: null, calcium_ppm: null, magnesium_ppm: null, sulfur_ppm: null, base_saturation_calcium_pct: null, base_saturation_magnesium_pct: null, base_saturation_potassium_pct: null, base_saturation_sodium_pct: null, base_saturation_hydrogen_pct: null, boron_ppm: null, chloride_ppm: null, copper_ppm: null, iron_ppm: null, manganese_ppm: null, molybdenum_ppm: null, zinc_ppm: null, created_by: user, created_at: now, updated_at: now } }
@@ -40,10 +41,7 @@ async function mock(page: Page, readOnly = false, state?: WriteState, denied = f
     if (table === 'farm_memberships') return json({ farm_id: farm, user_id: user, role: readOnly ? 'read_only' : 'owner', status: 'active', can_view_financials: !readOnly })
     if (table === 'farm_rep_access') return json(null)
     if (table === 'entities') return json([{ id: entity, farm_id: farm, name: 'Prairie View LLC', entity_type: 'llc', is_active: true, created_at: now, updated_at: now }])
-    if (table === 'fields') return json([
-      { id: field, farm_id: farm, operating_entity_id: entity, name: 'North Forty', legal_description: null, county: null, state: 'IL', total_acres: 40, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: null, longitude: null, location_source: null, is_active: true, created_at: now, updated_at: now },
-      { id: secondField, farm_id: farm, operating_entity_id: entity, name: 'South Forty', legal_description: null, county: null, state: 'IL', total_acres: 40, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: null, longitude: null, location_source: null, is_active: true, created_at: now, updated_at: now },
-    ])
+    if (table === 'fields') return json(state?.fieldRows ?? [fieldRow(field, 'North Forty'), fieldRow(secondField, 'South Forty')])
     if (table === 'crop_assignments' && state?.failHarvestRead) return route.fulfill({ status: 503, contentType: 'application/json', headers: cors, body: JSON.stringify({ message: 'harvest query failed' }) })
     if (table === 'crop_assignments') return json(state?.cropAssignments ?? [])
     if (table === 'commodities') return json(state?.commodities ?? [])
@@ -98,12 +96,26 @@ function assertNutrientRemovalContract(source: string) {
   expect(source).toContain("{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence}")
   expect(source).toContain("Farm Rx does not combine years or planting sequences.")
   expect(source).toContain("cornNitrogen: { label: 'Illinois Agronomy Handbook, Nitrogen Management for Corn'")
+  expect(source).toContain("soybeanWheatNitrogen: { label: 'University of Delaware Cooperative Extension, Nitrogen Removal by Delaware Crops'")
   expect(source).toContain("nitrogen: 0.60, phosphorus: 0.37, potassium: 0.24")
-  expect(source).toContain("soybeans: { phosphorus: 0.75, potassium: 1.17 }")
-  expect(source).not.toContain("soybeans: { nitrogen: 3.00")
-  expect(source).toContain("Nitrogen is not shown for soybeans because Farm Rx does not have a cited soybean grain-removal coefficient.")
+  expect(source).toContain("soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 }")
+  expect(source).toContain("wheat: { nitrogen: 1.05, phosphorus: 0.47, potassium: 0.30 }")
+  expect(source).toContain("{ label: 'N', amount: crop.harvested_bushels * coefficients.nitrogen }")
+  expect(source).not.toContain('nitrogenUnavailable')
   expect(source).toContain("Source for corn N (0.60 lb/bu)")
-  expect(source).toContain("Source for P₂O₅ and K₂O")
+  expect(source).toContain("Source for soybean N (3.44 lb/bu) and wheat N (1.05 lb/bu)")
+  expect(source).toContain("stated 0.47 lb/bu actual wheat P₂O₅ removal, not its separately adjusted 0.90 lb/bu maintenance rate")
+  expect(source).toContain("available for corn, soybeans, and wheat only")
+}
+function assertArchivedFieldHistoryContract(source: string) {
+  expect(source).toContain("fieldData.fields.map(({ id, name, is_active }) => ({ id, name, isActive: is_active }))")
+  expect(source).toContain("const activeFields = fields.filter((field) => field.isActive)")
+  expect(source).toContain("!fields.length ? <p className=\"soil-rx-empty\">Add a field before saving a soil test.</p>")
+  expect(source).toContain("{field.name}{!field.isActive && ' (Archived)'}")
+  expect(source).toContain("? selectedFieldId : nextActiveFields[0]?.id ?? nextFields.find((field) => nextTests.some((test) => test.field_id === field.id))?.id")
+  expect(source).toContain("canEdit && selectedField?.isActive")
+  expect(source).toContain("{activeFields.map((field) => <option")
+  expect(source).toContain('Its Soil Rx history remains available, but new tests can only be added to active fields.')
 }
 
 test.use({ serviceWorkers: 'block' })
@@ -142,12 +154,59 @@ test('Soil Rx nutrient-removal source and assignment-identity guard rejects cont
     ['display key replaces immutable assignment id', source.replace('key={estimate.id}', 'key={`${estimate.crop}-${estimate.bushels}-${estimate.acres}`}')],
     ['remove crop year', source.replace('{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence}', '{estimate.crop} · planting {estimate.plantingSequence}')],
     ['remove planting sequence', source.replace('{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence}', '{estimate.crop} · {estimate.cropYear}')],
-    ['restore unsupported soybean nitrogen', source.replace('soybeans: { phosphorus: 0.75, potassium: 1.17 }', 'soybeans: { nitrogen: 3.00, phosphorus: 0.75, potassium: 1.17 }')],
+    ['omit soybean nitrogen', source.replace('soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 }', 'soybeans: { phosphorus: 0.75, potassium: 1.17 }')],
+    ['swap soybean nitrogen and phosphorus', source.replace('soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 }', 'soybeans: { nitrogen: 0.75, phosphorus: 3.44, potassium: 1.17 }')],
+    ['omit wheat support', source.replace("  wheat: { nitrogen: 1.05, phosphorus: 0.47, potassium: 0.30 },\n", '')],
+    ['swap wheat phosphorus and potassium', source.replace('wheat: { nitrogen: 1.05, phosphorus: 0.47, potassium: 0.30 }', 'wheat: { nitrogen: 1.05, phosphorus: 0.30, potassium: 0.47 }')],
     ['replace corn nitrogen coefficient', source.replace('nitrogen: 0.60, phosphorus: 0.37, potassium: 0.24', 'nitrogen: 0.61, phosphorus: 0.37, potassium: 0.24')],
     ['remove corn nitrogen source', source.replace("cornNitrogen: { label: 'Illinois Agronomy Handbook, Nitrogen Management for Corn'", "cornNitrogen: { label: 'Uncited corn nitrogen'" )],
+    ['remove soybean and wheat nitrogen source', source.replace("soybeanWheatNitrogen: { label: 'University of Delaware Cooperative Extension, Nitrogen Removal by Delaware Crops'", "soybeanWheatNitrogen: { label: 'Uncited nitrogen'" )],
+    ['drop generic nitrogen estimate', source.replace("      { label: 'N', amount: crop.harvested_bushels * coefficients.nitrogen },\n", '')],
+  ]
+  expect(mutations).toHaveLength(11)
+  for (const [name, mutation] of mutations) { expect(mutation, `${name} mutation did not alter source`).not.toBe(source); expect(() => assertNutrientRemovalContract(mutation), `${name} mutation survived nutrient-removal proof`).toThrow() }
+})
+
+test('Soil Rx archived-history guard rejects active-only history and inactive-create mutations', () => {
+  const source = readFileSync(soilRxModulePath, 'utf8')
+  assertArchivedFieldHistoryContract(source)
+  const mutations: Array<[string, string]> = [
+    ['filter archived fields from history', source.replace('fieldData.fields.map(({ id, name, is_active })', 'fieldData.fields.filter((field) => field.is_active).map(({ id, name, is_active })')],
+    ['show add-field empty state for all-inactive farms', source.replace('!fields.length ? <p className="soil-rx-empty">Add a field before saving a soil test.</p>', '!activeFields.length ? <p className="soil-rx-empty">Add a field before saving a soil test.</p>')],
+    ['offer archived fields in create selector', source.replace('{activeFields.map((field) => <option', '{fields.map((field) => <option')],
+    ['allow create form for archived selection', source.replace('canEdit && selectedField?.isActive', 'canEdit')],
+    ['remove archived field semantics', source.replace("{field.name}{!field.isActive && ' (Archived)'}", '{field.name}')],
+    ['prefer archived history over an available active field', source.replace('nextActiveFields[0]?.id ?? nextFields.find((field) => nextTests.some((test) => test.field_id === field.id))?.id', 'nextFields.find((field) => nextTests.some((test) => test.field_id === field.id))?.id ?? nextActiveFields[0]?.id')],
   ]
   expect(mutations).toHaveLength(6)
-  for (const [name, mutation] of mutations) expect(() => assertNutrientRemovalContract(mutation), `${name} mutation survived nutrient-removal proof`).toThrow()
+  for (const [name, mutation] of mutations) { expect(mutation, `${name} mutation did not alter source`).not.toBe(source); expect(() => assertArchivedFieldHistoryContract(mutation), `${name} mutation survived archived-history proof`).toThrow() }
+})
+
+test('Soil Rx preserves archived history while creation remains active-field only', async ({ page }) => {
+  const state = historyState(); state.fieldRows = [fieldRow(field, 'North Forty', false), fieldRow(secondField, 'South Forty')]
+  const protectedBefore = protectedSnapshot(state); const unexpected = await open(page, false, state)
+  await expect(page.getByRole('heading', { name: 'South Forty history' })).toBeVisible()
+  const createField = page.locator('.soil-rx-form select')
+  await expect(createField).toHaveValue(secondField)
+  await expect(createField.locator('option')).toHaveCount(1)
+  await expect(createField.locator('option')).toHaveText(['South Forty'])
+  await page.getByRole('button', { name: /North Forty \(Archived\)/ }).click()
+  await expect(page.getByRole('heading', { name: 'North Forty history' })).toBeVisible()
+  await expect(page.getByText('Old Lab')).toBeVisible()
+  await expect(page.getByText('This field is archived. Its Soil Rx history remains available, but new tests can only be added to active fields.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Add a soil test' })).toHaveCount(0)
+  await expect(page.getByText('Add a field before saving a soil test.', { exact: true })).toHaveCount(0)
+
+  state.fieldRows = [fieldRow(field, 'North Forty', false), fieldRow(secondField, 'South Forty', false)]
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'North Forty history' })).toBeVisible()
+  await expect(page.getByText('Old Lab')).toBeVisible()
+  await expect(page.getByRole('button', { name: /North Forty \(Archived\)/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /South Forty \(Archived\)/ })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Add a soil test' })).toHaveCount(0)
+  await expect(page.getByText('Add a field before saving a soil test.', { exact: true })).toHaveCount(0)
+  expect(state.writes).toEqual([])
+  expectProtectedNonwrite(state, protectedBefore); expect(unexpected).toEqual([])
 })
 
 test('Soil Rx records and rejects POST PATCH DELETE to the early fields stub without changing protected state', async ({ page }) => {
@@ -196,8 +255,8 @@ test('Soil Rx report guide binds populated, missing, and zero lab values to thei
 test('Soil Rx keeps recorded harvest assignments separate across years and plantings', async ({ page }) => {
   const state = writeState()
   const assignment = (id: string, cropYear: number, plantingSequence: number, commodityId: string, bushels: number | null, acres = 40) => ({ id, farm_id: farm, field_id: field, crop_year: cropYear, commodity_id: commodityId, planting_sequence: plantingSequence, planted_acres: acres, variety: null, planting_date: null, harvest_date: bushels === null ? null : '2026-10-20', harvested_bushels: bushels, expected_yield_per_acre: null, expected_price_per_bu: null, actual_price_per_bu: null, notes: null, created_at: now, updated_at: now })
-  state.cropAssignments = [assignment('00000000-0000-4000-8000-000000000031', 2026, 1, 'corn', 8000), assignment('00000000-0000-4000-8000-000000000032', 2025, 1, 'corn', 8000), assignment('00000000-0000-4000-8000-000000000033', 2026, 2, 'corn', 8000), assignment('00000000-0000-4000-8000-000000000034', 2026, 1, 'soybeans', 1000, 25), assignment('00000000-0000-4000-8000-000000000035', 2027, 1, 'corn', 0), assignment('00000000-0000-4000-8000-000000000036', 2027, 2, 'corn', null)]
-  state.commodities = [{ id: 'corn', name: 'Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: now, updated_at: now }, { id: 'soybeans', name: 'Soybeans', crop_family: 'soybeans', traits: {}, is_active: true, created_at: now, updated_at: now }]
+  state.cropAssignments = [assignment('00000000-0000-4000-8000-000000000031', 2026, 1, 'corn', 8000), assignment('00000000-0000-4000-8000-000000000032', 2025, 1, 'corn', 8000), assignment('00000000-0000-4000-8000-000000000033', 2026, 2, 'corn', 8000), assignment('00000000-0000-4000-8000-000000000034', 2026, 1, 'soybeans', 1000, 25), assignment('00000000-0000-4000-8000-000000000035', 2027, 1, 'corn', 0), assignment('00000000-0000-4000-8000-000000000036', 2027, 2, 'corn', null), assignment('00000000-0000-4000-8000-000000000037', 2026, 1, 'wheat', 1000, 20)]
+  state.commodities = [{ id: 'corn', name: 'Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: now, updated_at: now }, { id: 'soybeans', name: 'Soybeans', crop_family: 'soybeans', traits: {}, is_active: true, created_at: now, updated_at: now }, { id: 'wheat', name: 'Wheat', crop_family: 'wheat', traits: {}, is_active: true, created_at: now, updated_at: now }]
   const protectedBefore = protectedSnapshot(state)
   const unexpected = await open(page, false, state)
   const removal = page.getByRole('region', { name: 'Harvest nutrient removal estimate' })
@@ -205,11 +264,20 @@ test('Soil Rx keeps recorded harvest assignments separate across years and plant
   await expect(removal.getByRole('heading', { name: 'Corn · 2026 · planting 1 · 8,000 bu on 40 ac' })).toBeVisible()
   await expect(removal.getByRole('heading', { name: 'Corn · 2026 · planting 2 · 8,000 bu on 40 ac' })).toBeVisible()
   await expect(removal.getByRole('heading', { name: 'Soybeans · 2026 · planting 1 · 1,000 bu on 25 ac' })).toBeVisible()
+  await expect(removal.getByRole('heading', { name: 'Wheat · 2026 · planting 1 · 1,000 bu on 20 ac' })).toBeVisible()
   await expect(removal.getByRole('heading', { name: 'Corn · 2027 · planting 1 · 0 bu on 40 ac' })).toBeVisible()
-  await expect(removal.getByText('Nitrogen is not shown for soybeans because Farm Rx does not have a cited soybean grain-removal coefficient.', { exact: true })).toBeVisible()
   await expect(removal).toContainText('1,920 lb total · 48 lb/ac')
-  await expect(removal).toContainText('750 lb total · 30 lb/ac')
-  await expect(removal).toContainText('1,170 lb total · 46.8 lb/ac')
+  const soybean = removal.getByRole('region', { name: 'Soybeans 2026 planting 1 removal estimate' })
+  const wheat = removal.getByRole('region', { name: 'Wheat 2026 planting 1 removal estimate' })
+  const nutrientValue = (estimate: Locator, label: string) => estimate.locator('dt', { hasText: new RegExp(`^${label}$`) }).locator('xpath=..').locator('dd')
+  await expect(nutrientValue(soybean, 'N')).toHaveText('3,440 lb total · 137.6 lb/ac')
+  await expect(nutrientValue(soybean, 'P₂O₅')).toHaveText('750 lb total · 30 lb/ac')
+  await expect(nutrientValue(soybean, 'K₂O')).toHaveText('1,170 lb total · 46.8 lb/ac')
+  await expect(nutrientValue(wheat, 'N')).toHaveText('1,050 lb total · 52.5 lb/ac')
+  await expect(nutrientValue(wheat, 'P₂O₅')).toHaveText('470 lb total · 23.5 lb/ac')
+  await expect(nutrientValue(wheat, 'K₂O')).toHaveText('300 lb total · 15 lb/ac')
+  await expect(soybean.locator('dt')).toHaveText(['N', 'P₂O₅', 'K₂O'])
+  await expect(wheat.locator('dt')).toHaveText(['N', 'P₂O₅', 'K₂O'])
   await expect(removal).not.toContainText('24,000 bu')
   expect(state.writes).toEqual([])
   expectProtectedNonwrite(state, protectedBefore)
