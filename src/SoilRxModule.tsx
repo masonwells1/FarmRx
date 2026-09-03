@@ -15,15 +15,35 @@ const labels: Record<SoilMeasurementKey, string> = {
 const emptyMeasurements = () => Object.fromEntries(soilMeasurementKeys.map((key) => [key, ''])) as Record<SoilMeasurementKey, string>
 const initialForm = (fieldId = '', sampleDate = '') => ({ id: crypto.randomUUID(), fieldId, sampleDate, labName: '', measurements: emptyMeasurements() })
 function displayDate(value: string) { return new Date(`${value}T12:00:00`).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) }
-const nutrientRemovalSource = 'Illinois Extension, Soil Phosphorus: crop removal table'
-const nutrientRemovalSourceUrl = 'https://extension.illinois.edu/crops/soil-phosphorus'
-const nutrientRemovalCoefficients = { corn: { nitrogen: 0.60, phosphorus: 0.37, potassium: 0.24 }, soybeans: { nitrogen: 3.00, phosphorus: 0.75, potassium: 1.17 } } as const
+export const nutrientRemovalSources = {
+  phosphorusPotassium: { label: 'Illinois Extension, Soil Phosphorus: crop removal table', url: 'https://extension.illinois.edu/crops/soil-phosphorus' },
+  cornNitrogen: { label: 'Illinois Agronomy Handbook, Nitrogen Management for Corn', url: 'https://extension.illinois.edu/sites/default/files/iah_-_nitrogen_management_for_corn_v4.pdf' },
+} as const
+export const nutrientRemovalCoefficients = {
+  corn: { nitrogen: 0.60, phosphorus: 0.37, potassium: 0.24 },
+  // Illinois Soybean Management documents crop N uptake, not an exact 3.00 lb/bu grain-removal coefficient.
+  // Do not turn an uptake figure into a removal estimate.
+  soybeans: { phosphorus: 0.75, potassium: 1.17 },
+} as const
 type SupportedRemovalCrop = keyof typeof nutrientRemovalCoefficients
-function removalEstimate(crop: CropAssignment, commodity: Commodity | undefined) {
+export function removalEstimate(crop: CropAssignment, commodity: Commodity | undefined) {
   const family = commodity?.crop_family as SupportedRemovalCrop | undefined
   if (!commodity || !family || !(family in nutrientRemovalCoefficients) || crop.harvested_bushels === null || crop.harvested_bushels < 0 || crop.planted_acres <= 0) return null
   const coefficients = nutrientRemovalCoefficients[family]
-  return { crop: commodity.name, bushels: crop.harvested_bushels, acres: crop.planted_acres, nitrogen: crop.harvested_bushels * coefficients.nitrogen, phosphorus: crop.harvested_bushels * coefficients.phosphorus, potassium: crop.harvested_bushels * coefficients.potassium }
+  return {
+    id: crop.id,
+    crop: commodity.name,
+    cropYear: crop.crop_year,
+    plantingSequence: crop.planting_sequence,
+    bushels: crop.harvested_bushels,
+    acres: crop.planted_acres,
+    nutrients: [
+      ...(family === 'corn' ? [{ label: 'N', amount: crop.harvested_bushels * nutrientRemovalCoefficients.corn.nitrogen, source: 'cornNitrogen' as const }] : []),
+      { label: 'P₂O₅', amount: crop.harvested_bushels * coefficients.phosphorus, source: 'phosphorusPotassium' as const },
+      { label: 'K₂O', amount: crop.harvested_bushels * coefficients.potassium, source: 'phosphorusPotassium' as const },
+    ],
+    nitrogenUnavailable: family === 'soybeans',
+  }
 }
 
 export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilRxRepository; fieldsRepository: FieldsRepository }) {
@@ -100,7 +120,7 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
 
 function HarvestRemoval({ estimates, hasUnsupportedHarvest }: { estimates: Array<NonNullable<ReturnType<typeof removalEstimate>>>; hasUnsupportedHarvest: boolean }) {
   const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 })
-  return <section className="soil-rx-removal" aria-label="Harvest nutrient removal estimate"><h3>Harvest nutrient removal estimate</h3><p>Read-only estimate from recorded harvested bushels. It is not a fertilizer recommendation. Ask your Crop RX agronomist for recommendations specific to your farm.</p>{estimates.map((estimate) => <section key={`${estimate.crop}-${estimate.bushels}-${estimate.acres}`} aria-label={`${estimate.crop} removal estimate`}><h4>{estimate.crop} · {number.format(estimate.bushels)} bu on {number.format(estimate.acres)} ac</h4><dl>{[['N', estimate.nitrogen], ['P₂O₅', estimate.phosphorus], ['K₂O', estimate.potassium]].map(([label, total]) => <div key={String(label)}><dt>{label}</dt><dd>{number.format(Number(total))} lb total · {number.format(Number(total) / estimate.acres)} lb/ac</dd></div>)}</dl></section>)}{!estimates.length && <p className="card-empty">No harvested corn or soybeans with planted acres are recorded for this field yet.</p>}{hasUnsupportedHarvest && <p className="card-empty">Harvest-removal estimates are available for corn and soybeans only.</p>}<p><a href={nutrientRemovalSourceUrl} target="_blank" rel="noreferrer">Source: {nutrientRemovalSource}</a>. P₂O₅ and K₂O are reported in fertilizer-equivalent units.</p></section>
+  return <section className="soil-rx-removal" aria-label="Harvest nutrient removal estimate"><h3>Harvest nutrient removal estimate</h3><p>Each line is one recorded crop assignment. Farm Rx does not combine years or planting sequences. This read-only estimate from recorded harvested bushels is not a fertilizer recommendation. Ask your Crop RX agronomist for recommendations specific to your farm.</p>{estimates.map((estimate) => <section key={estimate.id} aria-label={`${estimate.crop} ${estimate.cropYear} planting ${estimate.plantingSequence} removal estimate`}><h4>{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence} · {number.format(estimate.bushels)} bu on {number.format(estimate.acres)} ac</h4><dl>{estimate.nutrients.map((nutrient) => <div key={nutrient.label}><dt>{nutrient.label}</dt><dd>{number.format(nutrient.amount)} lb total · {number.format(nutrient.amount / estimate.acres)} lb/ac</dd></div>)}</dl>{estimate.nitrogenUnavailable && <p className="card-empty">Nitrogen is not shown for soybeans because Farm Rx does not have a cited soybean grain-removal coefficient.</p>}</section>)}{!estimates.length && <p className="card-empty">No harvested corn or soybeans with planted acres are recorded for this field yet.</p>}{hasUnsupportedHarvest && <p className="card-empty">Harvest-removal estimates are available for corn and soybeans only.</p>}<p><a href={nutrientRemovalSources.cornNitrogen.url} target="_blank" rel="noreferrer">Source for corn N (0.60 lb/bu): {nutrientRemovalSources.cornNitrogen.label}</a>.</p><p><a href={nutrientRemovalSources.phosphorusPotassium.url} target="_blank" rel="noreferrer">Source for P₂O₅ and K₂O: {nutrientRemovalSources.phosphorusPotassium.label}</a>. P₂O₅ and K₂O are reported in fertilizer-equivalent units.</p></section>
 }
 
 function SoilTestCard({ test, expanded, onToggle, onOpen }: { test: SoilTest; expanded: boolean; onToggle: () => void; onOpen: () => void }) {

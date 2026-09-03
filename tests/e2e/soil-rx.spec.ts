@@ -6,8 +6,8 @@ const project = 'agvsozfbstpekuqxpqjr'; const user = '00000000-0000-4000-8000-00
 const protectedTables = ['farms', 'farm_memberships', 'farm_rep_access', 'entities', 'fields', 'arrangements', 'crop_assignments', 'commodities', 'notifications'] as const
 type ProtectedTable = typeof protectedTables[number]
 const allowedSoilRestWrites = new Set(['POST soil_tests', 'DELETE soil_tests', 'POST soil_test_attachments'])
-type WriteState = { tests: Array<Record<string, unknown>>; attachments: Array<Record<string, unknown>>; cropAssignments: Array<Record<string, unknown>>; commodities: Array<Record<string, unknown>>; writes: string[]; uploaded: Set<string>; failSoilSaves: number; failAttachmentMetadata: number; failStorageRemovals: number; changeEpochAfterUpload: boolean; accessEpoch: number; protectedWriteAttempts: string[]; protectedState: Record<ProtectedTable, string[]> }
-function writeState(): WriteState { return { tests: [], attachments: [], cropAssignments: [{ id: '00000000-0000-4000-8000-000000000031', farm_id: farm, field_id: field, crop_year: 2026, commodity_id: 'corn', planting_sequence: 1, planted_acres: 40, variety: null, planting_date: null, harvest_date: '2026-10-20', harvested_bushels: 8000, expected_yield_per_acre: null, expected_price_per_bu: null, actual_price_per_bu: null, notes: null, created_at: now, updated_at: now }], commodities: [{ id: 'corn', name: 'Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: now, updated_at: now }], writes: [], uploaded: new Set(), failSoilSaves: 0, failAttachmentMetadata: 0, failStorageRemovals: 0, changeEpochAfterUpload: false, accessEpoch: 1, protectedWriteAttempts: [], protectedState: { farms: ['protected-farm-byte'], farm_memberships: ['protected-membership-byte'], farm_rep_access: ['protected-rep-access-byte'], entities: ['protected-entity-byte'], fields: ['protected-field-byte'], arrangements: ['protected-arrangement-byte'], crop_assignments: ['protected-crop-byte'], commodities: ['protected-commodity-byte'], notifications: ['protected-notification-byte'] } } }
+type WriteState = { tests: Array<Record<string, unknown>>; attachments: Array<Record<string, unknown>>; cropAssignments: Array<Record<string, unknown>>; commodities: Array<Record<string, unknown>>; writes: string[]; uploaded: Set<string>; failHarvestRead: boolean; failSoilSaves: number; failAttachmentMetadata: number; failStorageRemovals: number; changeEpochAfterUpload: boolean; accessEpoch: number; protectedWriteAttempts: string[]; protectedState: Record<ProtectedTable, string[]> }
+function writeState(): WriteState { return { tests: [], attachments: [], cropAssignments: [{ id: '00000000-0000-4000-8000-000000000031', farm_id: farm, field_id: field, crop_year: 2026, commodity_id: 'corn', planting_sequence: 1, planted_acres: 40, variety: null, planting_date: null, harvest_date: '2026-10-20', harvested_bushels: 8000, expected_yield_per_acre: null, expected_price_per_bu: null, actual_price_per_bu: null, notes: null, created_at: now, updated_at: now }], commodities: [{ id: 'corn', name: 'Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: now, updated_at: now }], writes: [], uploaded: new Set(), failHarvestRead: false, failSoilSaves: 0, failAttachmentMetadata: 0, failStorageRemovals: 0, changeEpochAfterUpload: false, accessEpoch: 1, protectedWriteAttempts: [], protectedState: { farms: ['protected-farm-byte'], farm_memberships: ['protected-membership-byte'], farm_rep_access: ['protected-rep-access-byte'], entities: ['protected-entity-byte'], fields: ['protected-field-byte'], arrangements: ['protected-arrangement-byte'], crop_assignments: ['protected-crop-byte'], commodities: ['protected-commodity-byte'], notifications: ['protected-notification-byte'] } } }
 function protectedSnapshot(state: WriteState) { return JSON.stringify(state.protectedState) }
 function expectProtectedNonwrite(state: WriteState, before: string) { expect(state.protectedWriteAttempts).toEqual([]); expect(protectedSnapshot(state)).toBe(before) }
 function soilRow(id: string, labName: string, sampleDate: string, fieldId = field) { return { id, farm_id: farm, field_id: fieldId, sample_date: sampleDate, lab_name: labName, ph: null, organic_matter_pct: null, cec_meq_100g: null, phosphorus_ppm: null, potassium_ppm: null, calcium_ppm: null, magnesium_ppm: null, sulfur_ppm: null, base_saturation_calcium_pct: null, base_saturation_magnesium_pct: null, base_saturation_potassium_pct: null, base_saturation_sodium_pct: null, base_saturation_hydrogen_pct: null, boron_ppm: null, chloride_ppm: null, copper_ppm: null, iron_ppm: null, manganese_ppm: null, molybdenum_ppm: null, zinc_ppm: null, created_by: user, created_at: now, updated_at: now } }
@@ -42,6 +42,7 @@ async function mock(page: Page, readOnly = false, state?: WriteState, denied = f
       { id: field, farm_id: farm, operating_entity_id: entity, name: 'North Forty', legal_description: null, county: null, state: 'IL', total_acres: 40, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: null, longitude: null, location_source: null, is_active: true, created_at: now, updated_at: now },
       { id: secondField, farm_id: farm, operating_entity_id: entity, name: 'South Forty', legal_description: null, county: null, state: 'IL', total_acres: 40, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: null, longitude: null, location_source: null, is_active: true, created_at: now, updated_at: now },
     ])
+    if (table === 'crop_assignments' && state?.failHarvestRead) return route.fulfill({ status: 503, contentType: 'application/json', headers: cors, body: JSON.stringify({ message: 'harvest query failed' }) })
     if (table === 'crop_assignments') return json(state?.cropAssignments ?? [])
     if (table === 'commodities') return json(state?.commodities ?? [])
     if (protectedTables.includes((table ?? '') as ProtectedTable)) return json([])
@@ -89,6 +90,18 @@ function assertSoilReportGuideContract(source: string) {
   for (const [label, fieldName] of [['Calcium', 'base_saturation_calcium_pct'], ['Magnesium', 'base_saturation_magnesium_pct'], ['Potassium', 'base_saturation_potassium_pct'], ['Sodium', 'base_saturation_sodium_pct'], ['Hydrogen', 'base_saturation_hydrogen_pct']]) expect(source).toContain(`['${label}', test.${fieldName}]`)
   expect(source).toContain("amount === null ? 'Not reported' : `${amount}%`")
 }
+function assertNutrientRemovalContract(source: string) {
+  expect(source).toContain("key={estimate.id}")
+  expect(source).toContain("{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence}")
+  expect(source).toContain("Farm Rx does not combine years or planting sequences.")
+  expect(source).toContain("cornNitrogen: { label: 'Illinois Agronomy Handbook, Nitrogen Management for Corn'")
+  expect(source).toContain("nitrogen: 0.60, phosphorus: 0.37, potassium: 0.24")
+  expect(source).toContain("soybeans: { phosphorus: 0.75, potassium: 1.17 }")
+  expect(source).not.toContain("soybeans: { nitrogen: 3.00")
+  expect(source).toContain("Nitrogen is not shown for soybeans because Farm Rx does not have a cited soybean grain-removal coefficient.")
+  expect(source).toContain("Source for corn N (0.60 lb/bu)")
+  expect(source).toContain("Source for P₂O₅ and K₂O")
+}
 
 test.use({ serviceWorkers: 'block' })
 
@@ -119,6 +132,21 @@ test('Soil Rx report guide rejects referral, field-binding, and unit mutations',
   for (const [name, mutation] of mutations) expect(() => assertSoilReportGuideContract(mutation), `${name} mutation survived guide proof`).toThrow()
 })
 
+test('Soil Rx nutrient-removal source and assignment-identity guard rejects controlled mutations', () => {
+  const source = readFileSync(soilRxModulePath, 'utf8')
+  assertNutrientRemovalContract(source)
+  const mutations: Array<[string, string]> = [
+    ['display key replaces immutable assignment id', source.replace('key={estimate.id}', 'key={`${estimate.crop}-${estimate.bushels}-${estimate.acres}`}')],
+    ['remove crop year', source.replace('{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence}', '{estimate.crop} · planting {estimate.plantingSequence}')],
+    ['remove planting sequence', source.replace('{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence}', '{estimate.crop} · {estimate.cropYear}')],
+    ['restore unsupported soybean nitrogen', source.replace('soybeans: { phosphorus: 0.75, potassium: 1.17 }', 'soybeans: { nitrogen: 3.00, phosphorus: 0.75, potassium: 1.17 }')],
+    ['replace corn nitrogen coefficient', source.replace('nitrogen: 0.60, phosphorus: 0.37, potassium: 0.24', 'nitrogen: 0.61, phosphorus: 0.37, potassium: 0.24')],
+    ['remove corn nitrogen source', source.replace("cornNitrogen: { label: 'Illinois Agronomy Handbook, Nitrogen Management for Corn'", "cornNitrogen: { label: 'Uncited corn nitrogen'" )],
+  ]
+  expect(mutations).toHaveLength(6)
+  for (const [name, mutation] of mutations) expect(() => assertNutrientRemovalContract(mutation), `${name} mutation survived nutrient-removal proof`).toThrow()
+})
+
 test('Soil Rx records and rejects POST PATCH DELETE to the early fields stub without changing protected state', async ({ page }) => {
   const state = historyState(); const protectedBefore = protectedSnapshot(state); const writesBefore = JSON.stringify(state.writes); const unexpected = await open(page, false, state)
   const responses = await page.evaluate(async ({ projectRef, fieldId }) => Promise.all(['POST', 'PATCH', 'DELETE'].map(async (method) => {
@@ -133,7 +161,42 @@ test('Soil Rx records and rejects POST PATCH DELETE to the early fields stub wit
 })
 
 test('Soil Rx report guide binds populated, missing, and zero lab values to their labels', async ({ page }) => {
-  const populatedState = historyState(); populatedState.tests[0]!.ph = 6.4; populatedState.tests[0]!.organic_matter_pct = 3.1; populatedState.tests[0]!.cec_meq_100g = 14.2; populatedState.tests[0]!.base_saturation_calcium_pct = 61.1; populatedState.tests[0]!.base_saturation_magnesium_pct = 17.2; populatedState.tests[0]!.base_saturation_potassium_pct = 3.3; populatedState.tests[0]!.base_saturation_sodium_pct = 0.4; populatedState.tests[0]!.base_saturation_hydrogen_pct = 18.5; const populatedUnexpected = await open(page, false, populatedState); const removal = page.getByRole('region', { name: 'Harvest nutrient removal estimate' }); await expect(removal).toContainText('Corn · 8,000 bu on 40 ac'); await expect(removal).toContainText('4,800 lb total · 120 lb/ac'); await expect(removal).toContainText('2,960 lb total · 74 lb/ac'); await expect(removal).toContainText('1,920 lb total · 48 lb/ac'); await expect(removal).toContainText('not a fertilizer recommendation'); const guide = page.getByRole('region', { name: 'Understand this report' }); const guideValue = (label: string) => guide.locator('dt', { hasText: new RegExp(`^${label}$`) }).locator('xpath=..').locator('dd'); const baseSaturation = page.getByRole('region', { name: 'Base saturation lab values' }); const baseSaturationValue = (label: string) => baseSaturation.locator('dt', { hasText: new RegExp(`^${label}$`) }).locator('xpath=..').locator('dd'); await expect(guide.getByText('These are descriptions of the values reported by your lab, not agronomic advice, target ranges, or a fertilizer recommendation.', { exact: true })).toBeVisible(); await expect(guide.getByText('Ask your Crop RX agronomist for recommendations specific to your farm.', { exact: true })).toBeVisible(); await expect(guideValue('pH')).toHaveText('pH describes how acidic or alkaline the lab found this sample. Lab result: 6.4'); await expect(guideValue('pH')).not.toContainText('%'); await expect(guideValue('Organic matter')).toHaveText('Organic matter is the portion of the sample made from decomposed plant and animal material. Lab result: 3.1 %'); await expect(guideValue('CEC')).toHaveText('CEC describes the sample’s measured capacity to hold positively charged nutrients. Lab result: 14.2 meq/100g'); await expect(baseSaturationValue('Calcium')).toHaveText('61.1%'); await expect(baseSaturationValue('Magnesium')).toHaveText('17.2%'); await expect(baseSaturationValue('Potassium')).toHaveText('3.3%'); await expect(baseSaturationValue('Sodium')).toHaveText('0.4%'); await expect(baseSaturationValue('Hydrogen')).toHaveText('18.5%'); expect(populatedUnexpected).toEqual([])
+  const populatedState = historyState(); populatedState.tests[0]!.ph = 6.4; populatedState.tests[0]!.organic_matter_pct = 3.1; populatedState.tests[0]!.cec_meq_100g = 14.2; populatedState.tests[0]!.base_saturation_calcium_pct = 61.1; populatedState.tests[0]!.base_saturation_magnesium_pct = 17.2; populatedState.tests[0]!.base_saturation_potassium_pct = 3.3; populatedState.tests[0]!.base_saturation_sodium_pct = 0.4; populatedState.tests[0]!.base_saturation_hydrogen_pct = 18.5; const populatedUnexpected = await open(page, false, populatedState); const removal = page.getByRole('region', { name: 'Harvest nutrient removal estimate' }); await expect(removal).toContainText('Corn · 2026 · planting 1 · 8,000 bu on 40 ac'); await expect(removal).toContainText('4,800 lb total · 120 lb/ac'); await expect(removal).toContainText('2,960 lb total · 74 lb/ac'); await expect(removal).toContainText('1,920 lb total · 48 lb/ac'); await expect(removal).toContainText('not a fertilizer recommendation'); const guide = page.getByRole('region', { name: 'Understand this report' }); const guideValue = (label: string) => guide.locator('dt', { hasText: new RegExp(`^${label}$`) }).locator('xpath=..').locator('dd'); const baseSaturation = page.getByRole('region', { name: 'Base saturation lab values' }); const baseSaturationValue = (label: string) => baseSaturation.locator('dt', { hasText: new RegExp(`^${label}$`) }).locator('xpath=..').locator('dd'); await expect(guide.getByText('These are descriptions of the values reported by your lab, not agronomic advice, target ranges, or a fertilizer recommendation.', { exact: true })).toBeVisible(); await expect(guide.getByText('Ask your Crop RX agronomist for recommendations specific to your farm.', { exact: true })).toBeVisible(); await expect(guideValue('pH')).toHaveText('pH describes how acidic or alkaline the lab found this sample. Lab result: 6.4'); await expect(guideValue('pH')).not.toContainText('%'); await expect(guideValue('Organic matter')).toHaveText('Organic matter is the portion of the sample made from decomposed plant and animal material. Lab result: 3.1 %'); await expect(guideValue('CEC')).toHaveText('CEC describes the sample’s measured capacity to hold positively charged nutrients. Lab result: 14.2 meq/100g'); await expect(baseSaturationValue('Calcium')).toHaveText('61.1%'); await expect(baseSaturationValue('Magnesium')).toHaveText('17.2%'); await expect(baseSaturationValue('Potassium')).toHaveText('3.3%'); await expect(baseSaturationValue('Sodium')).toHaveText('0.4%'); await expect(baseSaturationValue('Hydrogen')).toHaveText('18.5%'); expect(populatedUnexpected).toEqual([])
+})
+
+test('Soil Rx keeps recorded harvest assignments separate across years and plantings', async ({ page }) => {
+  const state = writeState()
+  const assignment = (id: string, cropYear: number, plantingSequence: number, commodityId: string, bushels: number | null, acres = 40) => ({ id, farm_id: farm, field_id: field, crop_year: cropYear, commodity_id: commodityId, planting_sequence: plantingSequence, planted_acres: acres, variety: null, planting_date: null, harvest_date: bushels === null ? null : '2026-10-20', harvested_bushels: bushels, expected_yield_per_acre: null, expected_price_per_bu: null, actual_price_per_bu: null, notes: null, created_at: now, updated_at: now })
+  state.cropAssignments = [assignment('00000000-0000-4000-8000-000000000031', 2026, 1, 'corn', 8000), assignment('00000000-0000-4000-8000-000000000032', 2025, 1, 'corn', 8000), assignment('00000000-0000-4000-8000-000000000033', 2026, 2, 'corn', 8000), assignment('00000000-0000-4000-8000-000000000034', 2026, 1, 'soybeans', 1000, 25), assignment('00000000-0000-4000-8000-000000000035', 2027, 1, 'corn', 0), assignment('00000000-0000-4000-8000-000000000036', 2027, 2, 'corn', null)]
+  state.commodities = [{ id: 'corn', name: 'Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: now, updated_at: now }, { id: 'soybeans', name: 'Soybeans', crop_family: 'soybeans', traits: {}, is_active: true, created_at: now, updated_at: now }]
+  const protectedBefore = protectedSnapshot(state)
+  const unexpected = await open(page, false, state)
+  const removal = page.getByRole('region', { name: 'Harvest nutrient removal estimate' })
+  await expect(removal.getByRole('heading', { name: 'Corn · 2025 · planting 1 · 8,000 bu on 40 ac' })).toBeVisible()
+  await expect(removal.getByRole('heading', { name: 'Corn · 2026 · planting 1 · 8,000 bu on 40 ac' })).toBeVisible()
+  await expect(removal.getByRole('heading', { name: 'Corn · 2026 · planting 2 · 8,000 bu on 40 ac' })).toBeVisible()
+  await expect(removal.getByRole('heading', { name: 'Soybeans · 2026 · planting 1 · 1,000 bu on 25 ac' })).toBeVisible()
+  await expect(removal.getByRole('heading', { name: 'Corn · 2027 · planting 1 · 0 bu on 40 ac' })).toBeVisible()
+  await expect(removal.getByText('Nitrogen is not shown for soybeans because Farm Rx does not have a cited soybean grain-removal coefficient.', { exact: true })).toBeVisible()
+  await expect(removal).toContainText('1,920 lb total · 48 lb/ac')
+  await expect(removal).toContainText('750 lb total · 30 lb/ac')
+  await expect(removal).toContainText('1,170 lb total · 46.8 lb/ac')
+  await expect(removal).not.toContainText('24,000 bu')
+  expect(state.writes).toEqual([])
+  expectProtectedNonwrite(state, protectedBefore)
+  expect(unexpected).toEqual([])
+})
+
+test('Soil Rx harvest query failure fails closed without writes', async ({ page }) => {
+  const state = writeState(); state.failHarvestRead = true
+  const protectedBefore = protectedSnapshot(state)
+  await page.addInitScript(({ key, value, intentKey }) => { localStorage.setItem(key, JSON.stringify(value)); localStorage.setItem(intentKey, JSON.stringify({ version: 1, nonce: 'soil-rx-query-failure', phase: 'accepted', userId: value.user.id, sessionLineage: 'soil-rx-e2e', startedAtMs: Date.now() })) }, { key: `farm-rx-auth:${project}`, intentKey: `farm-rx-auth-intent:v1:${project}`, value: session() })
+  const unexpected = await mock(page, false, state); await page.goto('/soil-rx')
+  await expect(page.getByText('Farm Rx could not open your farm right now. Please try again.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Harvest nutrient removal estimate' })).toHaveCount(0)
+  expect(state.writes).toEqual([])
+  expectProtectedNonwrite(state, protectedBefore)
+  expect(unexpected).toEqual([])
 })
 
 test('Soil Rx is phone-safe and shows newest history, partial measurements, privacy, and read-only locks', async ({ page }, testInfo) => {
