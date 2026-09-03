@@ -205,7 +205,7 @@ async function blockCandidate({
   return { status: 'blocked', reason: finalReason };
 }
 
-function validatePullRequest(pullRequest, defaultBranch, expectedHeadSha) {
+function validatePullRequest(pullRequest, defaultBranch, expectedHeadSha, { requireReady = true } = {}) {
   const reasons = [];
 
   if (pullRequest.state !== 'open') reasons.push('pull request is not open');
@@ -225,6 +225,9 @@ function validatePullRequest(pullRequest, defaultBranch, expectedHeadSha) {
   }
   if (pullRequest.head.sha !== expectedHeadSha) {
     reasons.push('pull request head changed after the ready label was applied');
+  }
+  if (requireReady && !pullRequestLabelNames(pullRequest).has(READY_LABEL)) {
+    reasons.push(`${READY_LABEL} was removed; correct the candidate and relabel it to retry`);
   }
 
   return reasons;
@@ -578,6 +581,7 @@ async function run({ github, context, core, config }) {
     postCommentResponse.data,
     context.payload.repository.default_branch,
     expectedHeadSha,
+    { requireReady: false },
   );
   postCommentReasons.push(...postCommentCheckBlockers);
   if (postCommentReasons.length > 0) {

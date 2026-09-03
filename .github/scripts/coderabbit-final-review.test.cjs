@@ -58,6 +58,7 @@ function makeHarness({
   markerFailure = null,
   deleteCommentFailure = null,
   pullGetFailures = null,
+  labelStatesByPullGet = null,
   commentLookupFailures = null,
   pulls = [pullRequest(), pullRequest(), pullRequest()],
   checkRuns = [completedCheck('foundation')],
@@ -169,8 +170,15 @@ function makeHarness({
       },
       pulls: {
         get: async () => {
+          const pullGetCall = pullGetIndex++;
+          const labelState = labelStatesByPullGet
+            && labelStatesByPullGet[Math.min(pullGetCall, labelStatesByPullGet.length - 1)];
+          if (labelState) {
+            liveLabels.clear();
+            labelState.forEach((label) => liveLabels.add(label));
+          }
           const failure = pullGetFailures
-            && pullGetFailures[Math.min(pullGetIndex++, pullGetFailures.length - 1)];
+            && pullGetFailures[Math.min(pullGetCall, pullGetFailures.length - 1)];
           if (failure) throw new Error(failure);
           return { data: currentPull() };
         },
@@ -481,6 +489,25 @@ test('pre-marker pull failures clear ready and preserve an existing requested ma
   }
 });
 
+test('ready label is required through every pre-command pull request snapshot', async (t) => {
+  const cases = [
+    ['initial retry', [[]], false],
+    ['quiet confirmation', [[READY_LABEL], []], false],
+    ['post-marker revalidation', [[READY_LABEL], [READY_LABEL], []], false],
+  ];
+  for (const [name, labelStates, requestedRemains] of cases) {
+    await t.test(name, async () => {
+      const harness = makeHarness({ labelStatesByPullGet: labelStates });
+      const result = await execute(harness);
+      assert.equal(result.status, 'blocked');
+      assert.deepEqual(harness.comments, []);
+      assert.equal(harness.liveLabels.has(READY_LABEL), false);
+      assert.equal(harness.liveLabels.has(REQUESTED_LABEL), requestedRemains);
+      assert.match(harness.failures[0], /ready-for-coderabbit was removed/);
+    });
+  }
+});
+
 test('ambiguous requested-marker write clears both labels without posting', async () => {
   const harness = makeHarness({ markerFailure: 'marker write unavailable' });
   const result = await execute(harness);
@@ -517,6 +544,17 @@ test('post-command pull failure preserves requested and clears ready without a s
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.match(harness.failures[0], /post-command pull unavailable/);
+});
+
+test('ready removal after a successful command preserves the one-shot marker and command', async () => {
+  const harness = makeHarness({
+    labelStatesByPullGet: [[READY_LABEL], [READY_LABEL], [READY_LABEL], [REQUESTED_LABEL]],
+  });
+  const result = await execute(harness);
+  assert.equal(result.status, 'requested');
+  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
 });
 
 test('raced-command delete failure preserves requested marker and reports the cleanup failure', async () => {
