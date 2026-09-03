@@ -649,6 +649,45 @@ test('a head change while the command is posted deletes the raced comment and cl
   assert.match(harness.failures[0], /changed while the review command was being posted/);
 });
 
+test('same-head post-command check instability preserves one command and dedupes after recovery', async () => {
+  const successfulChecks = [completedCheck('foundation')];
+  const harness = makeHarness({
+    checkRunsSequence: [
+      successfulChecks,
+      successfulChecks,
+      successfulChecks,
+      [{ ...completedCheck('foundation'), status: 'in_progress', conclusion: null }],
+    ],
+  });
+  const first = await execute(harness);
+
+  assert.equal(first.status, 'blocked');
+  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /post-command revalidation failed on the frozen head/);
+
+  harness.liveLabels.add(READY_LABEL);
+  const retry = await execute(harness);
+  assert.equal(retry.status, 'duplicate');
+  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+});
+
+test('a new head after reset can receive its own single review command', async () => {
+  const harness = makeHarness({
+    pulls: [pullRequest({ head: NEXT_HEAD })],
+  });
+  harness.context.payload.pull_request.head.sha = NEXT_HEAD;
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'requested');
+  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(NEXT_HEAD)]);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+});
+
 test('a definite comment failure clears both labels so the pull request cannot be stranded', async () => {
   const harness = makeHarness({ commentFailure: 'definite' });
   const result = await execute(harness);

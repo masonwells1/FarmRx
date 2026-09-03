@@ -581,6 +581,16 @@ async function run({ github, context, core, config }) {
   );
   postCommentReasons.push(...postCommentCheckBlockers);
   if (postCommentReasons.length > 0) {
+    if (postCommentResponse.data.head.sha === expectedHeadSha) {
+      return blockCandidate({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        reason: `post-command revalidation failed on the frozen head; preserving the requested marker and review command: ${postCommentReasons.join('; ')}`,
+      });
+    }
     const cleanupFailures = [];
     let deletedComment = false;
     try {
