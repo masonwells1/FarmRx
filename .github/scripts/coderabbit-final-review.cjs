@@ -7,6 +7,7 @@ const ACTIONS_BOT_LOGIN = 'github-actions[bot]';
 const RESET_ACTIONS = new Set(['synchronize', 'reopened', 'converted_to_draft']);
 const ALLOWED_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
 const ACCEPTABLE_CHECK_CONCLUSIONS = new Set(['success', 'neutral', 'skipped']);
+const CODERABBIT_LEGACY_STATUS_CREATOR_ID = '136622811';
 
 function normalize(value) {
   return String(value || '').trim().toLowerCase();
@@ -16,8 +17,12 @@ function pullRequestLabelNames(pullRequest) {
   return new Set((pullRequest.labels || []).map((label) => normalize(label.name)));
 }
 
-function newestByName(items, nameKey, dateKeys) {
-  const newest = new Map();
+function nestedValue(item, path) {
+  return path.reduce((value, key) => value && value[key], item);
+}
+
+function newestBySource(items, nameKey, identityPaths, dateKeys) {
+  const sourcesByName = new Map();
   let malformed = !Array.isArray(items);
 
   for (const item of Array.isArray(items) ? items : []) {
@@ -31,29 +36,45 @@ function newestByName(items, nameKey, dateKeys) {
       continue;
     }
 
-    const timestamp = dateKeys
-      .map((key) => item[key])
-      .find(Boolean) || '';
-    const existing = newest.get(name);
+    const identity = identityPaths.map((path) => nestedValue(item, path));
+    const timestamp = dateKeys.map((key) => item[key]).find(Boolean);
+    if (identity.some((value) => value === undefined || value === null || value === '')
+      || typeof timestamp !== 'string' || Number.isNaN(Date.parse(timestamp))) {
+      malformed = true;
+      continue;
+    }
+
+    const source = identity.map(String).join('\u0000');
+    if (!sourcesByName.has(name)) sourcesByName.set(name, new Map());
+    const sources = sourcesByName.get(name);
+    const existing = sources.get(source);
     if (!existing || timestamp > existing.timestamp) {
-      newest.set(name, { item, timestamp });
+      sources.set(source, { item, timestamp });
     }
   }
 
   return {
-    items: new Map([...newest].map(([name, entry]) => [name, entry.item])),
+    itemsByName: new Map([...sourcesByName].map(([name, sources]) => [
+      name,
+      [...sources.values()].map((entry) => entry.item),
+    ])),
     malformed,
   };
 }
 
 function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [] }) {
   const ignored = new Set(ignoredChecks.map(normalize));
-  const { items: checksByName, malformed: malformedCheckRuns } = newestByName(checkRuns, 'name', [
+  const { itemsByName: checksByName, malformed: malformedCheckRuns } = newestBySource(checkRuns, 'name', [
+    ['app', 'id'],
+    ['check_suite', 'id'],
+  ], [
     'completed_at',
     'started_at',
     'created_at',
   ]);
-  const { items: statusesByName, malformed: malformedStatuses } = newestByName(statuses, 'context', [
+  const { itemsByName: statusesByName, malformed: malformedStatuses } = newestBySource(statuses, 'context', [
+    ['creator', 'id'],
+  ], [
     'updated_at',
     'created_at',
   ]);
@@ -62,33 +83,40 @@ function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [
   if (malformedCheckRuns) blockers.push('check runs response is malformed');
   if (malformedStatuses) blockers.push('commit statuses response is malformed');
 
-  for (const [name, check] of checksByName) {
-    if (ignored.has(name)) continue;
-    if (check.status !== 'completed' || !ACCEPTABLE_CHECK_CONCLUSIONS.has(check.conclusion)) {
-      blockers.push(`${check.name}: ${check.status}/${check.conclusion || 'no conclusion'}`);
+  for (const checks of checksByName.values()) {
+    for (const check of checks) {
+      if (check.status !== 'completed' || !ACCEPTABLE_CHECK_CONCLUSIONS.has(check.conclusion)) {
+        blockers.push(`${check.name}: ${check.status}/${check.conclusion || 'no conclusion'}`);
+      }
     }
   }
 
-  for (const [name, status] of statusesByName) {
-    if (ignored.has(name)) continue;
-    if (status.state !== 'success') {
-      blockers.push(`${status.context}: ${status.state}`);
+  for (const [name, statusesForName] of statusesByName) {
+    for (const status of statusesForName) {
+      const ignoredLegacyCodeRabbit = ignored.has(name)
+        && name === 'coderabbit'
+        && String(status.creator.id) === CODERABBIT_LEGACY_STATUS_CREATOR_ID;
+      if (!ignoredLegacyCodeRabbit && status.state !== 'success') {
+        blockers.push(`${status.context}: ${status.state}`);
+      }
     }
   }
 
   for (const requiredName of requiredChecks) {
     const name = normalize(requiredName);
-    const check = checksByName.get(name);
-    const status = statusesByName.get(name);
+    const checks = checksByName.get(name) || [];
+    const matchingStatuses = statusesByName.get(name) || [];
     // Required GitHub check runs are stricter than optional runs: neutral and
     // skipped cannot clear a Foundation or deployment gate. If a check run
     // exists, its result is authoritative over a same-name legacy status.
-    const checkPassed = check
-      && check.status === 'completed'
-      && check.conclusion === 'success';
-    const statusPassed = status && status.state === 'success';
+    const checksPassed = checks.length > 0 && checks.every((check) => (
+      check.status === 'completed' && check.conclusion === 'success'
+    ));
+    const statusesPassed = matchingStatuses.length > 0 && matchingStatuses.every((status) => (
+      status.state === 'success'
+    ));
 
-    if (check ? !checkPassed : !statusPassed) {
+    if (checks.length > 0 ? !checksPassed : !statusesPassed) {
       blockers.push(`${requiredName}: required check is missing or not successful`);
     }
   }
@@ -110,9 +138,32 @@ async function removeLabelIfPresent(github, owner, repo, issueNumber, label) {
   }
 }
 
+async function removeLabelsIndependently({ github, owner, repo, pullNumber, labels }) {
+  const cleanupFailures = [];
+  for (const label of labels) {
+    try {
+      await removeLabelIfPresent(github, owner, repo, pullNumber, label);
+    } catch (cleanupError) {
+      const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      cleanupFailures.push(`could not remove ${label}: ${detail}`);
+    }
+  }
+  return cleanupFailures;
+}
+
 async function resetLabels({ github, owner, repo, pullNumber, core, reason }) {
-  await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
-  await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+  const cleanupFailures = await removeLabelsIndependently({
+    github,
+    owner,
+    repo,
+    pullNumber,
+    labels: [REQUESTED_LABEL, READY_LABEL],
+  });
+  if (cleanupFailures.length > 0) {
+    const failureReason = `${reason}; ${cleanupFailures.join('; ')}`;
+    core.setFailed(`CodeRabbit final-review state reset failed: ${failureReason}`);
+    return { status: 'blocked', reason: failureReason };
+  }
   core.notice(`CodeRabbit final-review state reset: ${reason}`);
   return { status: 'reset', reason };
 }
@@ -126,15 +177,13 @@ async function blockCandidate({
   reason,
   labelsToRemove = [READY_LABEL],
 }) {
-  const cleanupFailures = [];
-  for (const label of labelsToRemove) {
-    try {
-      await removeLabelIfPresent(github, owner, repo, pullNumber, label);
-    } catch (cleanupError) {
-      const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-      cleanupFailures.push(`could not remove ${label}: ${detail}`);
-    }
-  }
+  const cleanupFailures = await removeLabelsIndependently({
+    github,
+    owner,
+    repo,
+    pullNumber,
+    labels: labelsToRemove,
+  });
   const finalReason = cleanupFailures.length > 0
     ? `${reason}; ${cleanupFailures.join('; ')}`
     : reason;
@@ -295,14 +344,13 @@ async function run({ github, context, core, config }) {
       await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
       core.warning('Cleared a requested marker that had no matching GitHub Actions review command; retrying the gate.');
     } catch (verificationError) {
-      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
       return blockCandidate({
         github,
         owner,
         repo,
         pullNumber,
         core,
-        reason: `could not verify the requested marker (${verificationError.message}); the marker was cleared for a deliberate retry`,
+        reason: `could not verify the requested marker (${verificationError.message}); preserving the requested marker to prevent a duplicate review command`,
       });
     }
   }
@@ -379,16 +427,31 @@ async function run({ github, context, core, config }) {
     labels: [REQUESTED_LABEL],
   });
 
-  const [finalResponse, finalCheckBlockers] = await Promise.all([
-    github.rest.pulls.get({ owner, repo, pull_number: pullNumber }),
-    collectCheckBlockers({
+  let finalResponse;
+  let finalCheckBlockers;
+  try {
+    [finalResponse, finalCheckBlockers] = await Promise.all([
+      github.rest.pulls.get({ owner, repo, pull_number: pullNumber }),
+      collectCheckBlockers({
+        github,
+        owner,
+        repo,
+        headSha: expectedHeadSha,
+        config,
+      }),
+    ]);
+  } catch (revalidationError) {
+    const detail = revalidationError instanceof Error ? revalidationError.message : String(revalidationError);
+    return blockCandidate({
       github,
       owner,
       repo,
-      headSha: expectedHeadSha,
-      config,
-    }),
-  ]);
+      pullNumber,
+      core,
+      reason: `could not revalidate the pull request after marking the review request: ${detail}`,
+      labelsToRemove: [REQUESTED_LABEL, READY_LABEL],
+    });
+  }
   const finalReasons = validatePullRequest(
     finalResponse.data,
     context.payload.repository.default_branch,
@@ -396,7 +459,6 @@ async function run({ github, context, core, config }) {
   );
   finalReasons.push(...finalCheckBlockers);
   if (finalReasons.length > 0) {
-    await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
     return blockCandidate({
       github,
       owner,
@@ -404,6 +466,7 @@ async function run({ github, context, core, config }) {
       pullNumber,
       core,
       reason: finalReasons.join('; '),
+      labelsToRemove: [REQUESTED_LABEL, READY_LABEL],
     });
   }
 
@@ -437,7 +500,6 @@ async function run({ github, context, core, config }) {
       return { status: 'requested', headSha: expectedHeadSha, recovered: true };
     }
 
-    await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
     return blockCandidate({
       github,
       owner,
@@ -445,6 +507,7 @@ async function run({ github, context, core, config }) {
       pullNumber,
       core,
       reason: `GitHub did not confirm the review comment (${commentError.message}); the requested marker was cleared for a deliberate retry`,
+      labelsToRemove: [REQUESTED_LABEL, READY_LABEL],
     });
   }
 

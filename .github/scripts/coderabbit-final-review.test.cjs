@@ -15,17 +15,24 @@ const HEAD = '1111111111111111111111111111111111111111';
 const NEXT_HEAD = '2222222222222222222222222222222222222222';
 const REQUIRED_CHECKS = ['foundation', 'Vercel'];
 
-function completedCheck(name, conclusion = 'success') {
+function completedCheck(name, conclusion = 'success', { appId = 1, suiteId = 1, completedAt = '2026-08-30T12:00:00Z' } = {}) {
   return {
     name,
     status: 'completed',
     conclusion,
-    completed_at: '2026-08-30T12:00:00Z',
+    completed_at: completedAt,
+    app: { id: appId },
+    check_suite: { id: suiteId },
   };
 }
 
-function commitStatus(context, state = 'success') {
-  return { context, state, updated_at: '2026-08-30T12:00:00Z' };
+function commitStatus(context, state = 'success', { creatorId = context === 'CodeRabbit' ? 136622811 : 1 } = {}) {
+  return {
+    context,
+    state,
+    updated_at: '2026-08-30T12:00:00Z',
+    creator: { id: creatorId },
+  };
 }
 
 function pullRequest({ head = HEAD, labels = [READY_LABEL], draft = false, autoMerge = null } = {}) {
@@ -48,6 +55,8 @@ function makeHarness({
   permission = 'write',
   permissionFailure = null,
   labelRemovalFailure = null,
+  pullGetFailures = null,
+  commentLookupFailures = null,
   pulls = [pullRequest(), pullRequest(), pullRequest()],
   checkRuns = [completedCheck('foundation')],
   statuses = [commitStatus('Vercel'), commitStatus('CodeRabbit', 'pending')],
@@ -67,6 +76,8 @@ function makeHarness({
   let pullIndex = 0;
   let checkRunsIndex = 0;
   let statusesIndex = 0;
+  let pullGetIndex = 0;
+  let commentLookupIndex = 0;
 
   function currentPull() {
     const source = pulls[Math.min(pullIndex++, pulls.length - 1)];
@@ -129,11 +140,16 @@ function makeHarness({
           const index = comments.findIndex((comment) => comment.id === commentId);
           if (index >= 0) comments.splice(index, 1);
         },
-        listComments: async () => ({ data: comments }),
+        listComments: async () => {
+          const failure = commentLookupFailures && commentLookupFailures[commentLookupIndex++];
+          if (failure) throw new Error(failure);
+          return { data: comments };
+        },
         listEventsForTimeline: async () => ({ data: timeline }),
         removeLabel: async ({ name }) => {
           labelRemovalAttempts.push(name);
-          if (labelRemovalFailure === name) throw new Error(`could not remove ${name}`);
+          if ((Array.isArray(labelRemovalFailure) && labelRemovalFailure.includes(name))
+            || labelRemovalFailure === name) throw new Error(`could not remove ${name}`);
           if (!liveLabels.delete(name)) {
             const error = new Error('label missing');
             error.status = 404;
@@ -142,7 +158,12 @@ function makeHarness({
         },
       },
       pulls: {
-        get: async () => ({ data: currentPull() }),
+        get: async () => {
+          const failure = pullGetFailures
+            && pullGetFailures[Math.min(pullGetIndex++, pullGetFailures.length - 1)];
+          if (failure) throw new Error(failure);
+          return { data: currentPull() };
+        },
       },
       repos: {
         getCollaboratorPermissionLevel: async () => {
@@ -239,6 +260,70 @@ test('a stranded requested marker without a matching Actions comment self-heals 
   assert.match(harness.notices.join('\n'), /no matching GitHub Actions review command/);
 });
 
+test('an inconclusive requested-marker lookup preserves dedupe state until a retry proves the command exists', async () => {
+  const harness = makeHarness({
+    commentLookupFailures: ['comment lookup unavailable'],
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      created_at: new Date().toISOString(),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+
+  const first = await execute(harness);
+  assert.equal(first.status, 'blocked');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.match(harness.failures[0], /preserving the requested marker/);
+
+  harness.liveLabels.add(READY_LABEL);
+  const retry = await execute(harness);
+  assert.equal(retry.status, 'duplicate');
+  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+});
+
+test('an inconclusive requested-marker lookup retries exactly once after a later no-command result', async () => {
+  const harness = makeHarness({
+    commentLookupFailures: ['comment lookup unavailable'],
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+  });
+
+  const first = await execute(harness);
+  assert.equal(first.status, 'blocked');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.deepEqual(harness.comments, []);
+
+  harness.liveLabels.add(READY_LABEL);
+  const retry = await execute(harness);
+  assert.equal(retry.status, 'requested');
+  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+});
+
+test('requested-marker lookup failure records ready-label cleanup failure without posting', async () => {
+  const harness = makeHarness({
+    commentLookupFailures: ['comment lookup unavailable'],
+    labelRemovalFailure: READY_LABEL,
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.deepEqual(harness.labelRemovalAttempts, [READY_LABEL]);
+  assert.equal(harness.liveLabels.has(READY_LABEL), true);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /comment lookup unavailable/);
+  assert.match(harness.failures[0], /could not remove ready-for-coderabbit/);
+});
+
 test('a new commit resets both workflow labels', async () => {
   const harness = makeHarness({
     action: 'synchronize',
@@ -250,6 +335,44 @@ test('a new commit resets both workflow labels', async () => {
   assert.equal(result.status, 'reset');
   assert.equal(harness.liveLabels.size, 0);
   assert.deepEqual(harness.comments, []);
+});
+
+test('reset cleanup attempts both labels and reports each failure', async (t) => {
+  await t.test('requested-label cleanup failure still removes ready', async () => {
+    const harness = makeHarness({
+      action: 'synchronize',
+      eventLabel: null,
+      labelRemovalFailure: REQUESTED_LABEL,
+      pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+    });
+    const result = await execute(harness);
+
+    assert.equal(result.status, 'blocked');
+    assert.deepEqual(harness.comments, []);
+    assert.deepEqual(harness.labelRemovalAttempts, [REQUESTED_LABEL, READY_LABEL]);
+    assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+    assert.equal(harness.liveLabels.has(READY_LABEL), false);
+    assert.match(harness.failures[0], /reset failed/);
+    assert.match(harness.failures[0], /could not remove coderabbit-review-requested/);
+  });
+
+  await t.test('both cleanup failures are aggregated', async () => {
+    const harness = makeHarness({
+      action: 'synchronize',
+      eventLabel: null,
+      labelRemovalFailure: [REQUESTED_LABEL, READY_LABEL],
+      pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+    });
+    const result = await execute(harness);
+
+    assert.equal(result.status, 'blocked');
+    assert.deepEqual(harness.comments, []);
+    assert.deepEqual(harness.labelRemovalAttempts, [REQUESTED_LABEL, READY_LABEL]);
+    assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+    assert.equal(harness.liveLabels.has(READY_LABEL), true);
+    assert.match(harness.failures[0], /could not remove coderabbit-review-requested/);
+    assert.match(harness.failures[0], /could not remove ready-for-coderabbit/);
+  });
 });
 
 test('missing, pending, or failed checks block the paid review request', async () => {
@@ -391,6 +514,37 @@ test('a head change during the gate removes the request marker and posts no comm
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
 });
 
+test('post-marker pull request revalidation failures clear both labels without posting', async () => {
+  const harness = makeHarness({
+    pullGetFailures: [null, null, 'final pull request lookup unavailable'],
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.failures[0], /could not revalidate the pull request after marking the review request/);
+  assert.match(harness.failures[0], /final pull request lookup unavailable/);
+});
+
+test('post-marker revalidation cleanup still removes ready when requested cleanup fails', async () => {
+  const harness = makeHarness({
+    labelRemovalFailure: REQUESTED_LABEL,
+    pulls: [pullRequest(), pullRequest(), pullRequest({ head: NEXT_HEAD })],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.deepEqual(harness.labelRemovalAttempts, [REQUESTED_LABEL, READY_LABEL]);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /head changed after the ready label was applied/);
+  assert.match(harness.failures[0], /could not remove coderabbit-review-requested/);
+});
+
 test('a head change while the command is posted deletes the raced comment and clears the marker', async () => {
   const harness = makeHarness({
     pulls: [pullRequest(), pullRequest(), pullRequest(), pullRequest({ head: NEXT_HEAD })],
@@ -488,6 +642,103 @@ test('check evaluation accepts neutral/skipped results and ignores CodeRabbit pe
   });
 
   assert.deepEqual(blockers, []);
+});
+
+test('source-distinct required checks and statuses cannot mask one another', () => {
+  const checkBlockers = evaluateChecks({
+    checkRuns: [
+      completedCheck('foundation', 'failure', { appId: 1, suiteId: 1 }),
+      completedCheck('foundation', 'success', { appId: 2, suiteId: 2 }),
+      completedCheck('Vercel'),
+    ],
+    statuses: [],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+  assert.match(checkBlockers.join('\n'), /foundation: completed\/failure/);
+  assert.match(checkBlockers.join('\n'), /foundation: required check is missing or not successful/);
+
+  const statusBlockers = evaluateChecks({
+    checkRuns: [completedCheck('foundation')],
+    statuses: [
+      commitStatus('Vercel', 'failure', { creatorId: 1 }),
+      commitStatus('Vercel', 'success', { creatorId: 2 }),
+    ],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+  assert.match(statusBlockers.join('\n'), /Vercel: failure/);
+  assert.match(statusBlockers.join('\n'), /Vercel: required check is missing or not successful/);
+});
+
+test('newest rerun from the same check or status source supersedes only that source', () => {
+  const blockers = evaluateChecks({
+    checkRuns: [
+      completedCheck('foundation', 'failure', {
+        appId: 1,
+        suiteId: 1,
+        completedAt: '2026-08-30T11:00:00Z',
+      }),
+      completedCheck('foundation', 'success', {
+        appId: 1,
+        suiteId: 1,
+        completedAt: '2026-08-30T12:00:00Z',
+      }),
+    ],
+    statuses: [
+      { ...commitStatus('Vercel', 'failure', { creatorId: 1 }), updated_at: '2026-08-30T11:00:00Z' },
+      { ...commitStatus('Vercel', 'success', { creatorId: 1 }), updated_at: '2026-08-30T12:00:00Z' },
+    ],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+
+  assert.deepEqual(blockers, []);
+});
+
+test('only the explicit legacy CodeRabbit status creator is ignored', () => {
+  const accepted = evaluateChecks({
+    checkRuns: [completedCheck('foundation'), completedCheck('Vercel')],
+    statuses: [commitStatus('CodeRabbit', 'pending', { creatorId: 136622811 })],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+  assert.deepEqual(accepted, []);
+
+  const collision = evaluateChecks({
+    checkRuns: [completedCheck('foundation'), completedCheck('Vercel')],
+    statuses: [
+      commitStatus('CodeRabbit', 'pending', { creatorId: 136622811 }),
+      commitStatus('CodeRabbit', 'failure', { creatorId: 999 }),
+    ],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+  assert.match(collision.join('\n'), /CodeRabbit: failure/);
+});
+
+test('malformed required source identity or timestamp fails closed', () => {
+  const missingIdentity = evaluateChecks({
+    checkRuns: [
+      { name: 'foundation', status: 'completed', conclusion: 'success', completed_at: '2026-08-30T12:00:00Z' },
+      completedCheck('Vercel'),
+    ],
+    statuses: [commitStatus('foundation'), commitStatus('Vercel')],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+  assert.match(missingIdentity.join('\n'), /check runs response is malformed/);
+
+  const invalidTimestamp = evaluateChecks({
+    checkRuns: [completedCheck('foundation'), completedCheck('Vercel')],
+    statuses: [
+      { ...commitStatus('foundation'), updated_at: 'not-a-date' },
+      commitStatus('Vercel'),
+    ],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+  assert.match(invalidTimestamp.join('\n'), /commit statuses response is malformed/);
 });
 
 test('malformed check and status entries fail closed without dereferencing', () => {
