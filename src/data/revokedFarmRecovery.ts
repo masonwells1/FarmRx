@@ -12,7 +12,7 @@ import { parseEquipmentTasksQueue } from './equipmentTasksWriteQueue'
 import { parseNotificationsQueue } from './notificationsWriteQueue'
 import { parseProgramsQueue } from './programsWriteQueue'
 import { parseSoilRxQueue } from './soilRxWriteQueue'
-import { readSoilRxCleanupOutbox, soilRxCleanupOutboxKey, type SoilRxStoredCleanupEntry } from './soilRxCleanupOutbox'
+import { isSoilRxStoredCleanupEntry, readSoilRxCleanupOutbox, soilRxCleanupOutboxKey, type SoilRxStoredCleanupEntry } from './soilRxCleanupOutbox'
 import type { FarmOperationContext } from './farmOperationContext'
 
 export type RevokedWorkKind = 'queue' | 'needs_attention' | 'scouting_cleanup' | 'soil_rx_cleanup'
@@ -106,15 +106,7 @@ function validScoutingCleanup(value: unknown, farmId: string, userId: string): v
 function validSoilRxCleanup(value: unknown, farmId: string, userId: string): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const entry = value as Record<string, unknown>
-  if (entry.userId !== userId || !uuid.test(String(entry.userId)) || entry.farmId !== farmId || !uuid.test(String(entry.farmId)) || typeof entry.recordedAt !== 'string' || Number.isNaN(Date.parse(entry.recordedAt))) return false
-  const validPath = (valueToCheck: unknown, expectedTestId?: string) => {
-    if (typeof valueToCheck !== 'string') return false
-    const [pathFarm, fieldId, testId, file, ...extra] = valueToCheck.split('/')
-    return extra.length === 0 && pathFarm === farmId && uuid.test(fieldId ?? '') && uuid.test(testId ?? '') && (!expectedTestId || testId === expectedTestId) && !!file && file !== '.' && file !== '..'
-  }
-  if (!Object.hasOwn(entry, 'kind')) return Object.keys(entry).length === 4 && validPath(entry.path)
-  if (entry.kind === 'report_path') return Object.keys(entry).length === 5 && validPath(entry.path)
-  return entry.kind === 'attachment_save' && Object.keys(entry).length === 6 && typeof entry.testId === 'string' && uuid.test(entry.testId) && Array.isArray(entry.paths) && entry.paths.length > 0 && new Set(entry.paths).size === entry.paths.length && entry.paths.every((path) => validPath(path, entry.testId as string))
+  return isSoilRxStoredCleanupEntry(value) && entry.userId === userId && entry.farmId === farmId
 }
 function parse(raw: string | null): Envelope {
   if (raw === null) return { version: 1, records: [] }

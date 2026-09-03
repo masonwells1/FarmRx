@@ -15,7 +15,7 @@ function validPath(path: unknown, farmId: string, testId?: string) {
   return parts.length === 4 && isSoilRxUuid(parts[1]) && isSoilRxUuid(parts[2]) && (!testId || parts[2] === testId) && isSoilReportPath(path, { farmId, fieldId: parts[1], testId: parts[2] })
 }
 function validStamp(value: unknown) { return typeof value === 'string' && !Number.isNaN(Date.parse(value)) }
-function validStored(value: unknown): value is SoilRxStoredCleanupEntry {
+export function isSoilRxStoredCleanupEntry(value: unknown): value is SoilRxStoredCleanupEntry {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as Record<string, unknown>
   if (!isSoilRxUuid(row.userId) || !isSoilRxUuid(row.farmId) || !validStamp(row.recordedAt)) return false
@@ -37,7 +37,7 @@ function parse(raw: string | null): Envelope {
     if (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 2 && Array.isArray((value as { entries?: unknown }).entries)) {
       const version = (value as { version?: unknown }).version
       const entries = (value as { entries: unknown[] }).entries
-      if (version === 2 && entries.every(validStored)) return value as Envelope
+      if (version === 2 && entries.every(isSoilRxStoredCleanupEntry)) return value as Envelope
       if (version === 1) {
         const converted = entries.map(legacy)
         if (converted.every((entry): entry is StoredReportCleanup => entry !== null)) return { version: 2, entries: converted }
@@ -56,7 +56,7 @@ function sameActor(entries: SoilRxStoredCleanupEntry[], userId: string) { return
 export function readSoilRxCleanupOutbox(storage: StorageLike, key: string) { return parse(storage.getItem(key)).entries }
 export function recordSoilRxCleanup(storage: StorageLike, key: string, entry: SoilRxCleanupEntry) {
   const stored: StoredReportCleanup = { kind: 'report_path', ...entry }
-  if (!validStored(stored)) return false
+  if (!isSoilRxStoredCleanupEntry(stored)) return false
   try {
     const current = readSoilRxCleanupOutbox(storage, key)
     if (!sameActor(current, entry.userId)) return false
@@ -69,7 +69,7 @@ export function readSoilRxAttachmentCustody(storage: StorageLike, key: string, u
 }
 export function beginSoilRxAttachmentCustody(storage: StorageLike, key: string, entry: Omit<SoilRxAttachmentCustodyEntry, 'kind' | 'paths'> & { path: string }) {
   const candidate: SoilRxAttachmentCustodyEntry = { kind: 'attachment_save', testId: entry.testId, paths: [entry.path], removedPaths: [], userId: entry.userId, farmId: entry.farmId, recordedAt: entry.recordedAt }
-  if (!validStored(candidate)) throw new Error('Farm Rx could not safely start Soil Rx attachment custody.')
+  if (!isSoilRxStoredCleanupEntry(candidate)) throw new Error('Farm Rx could not safely start Soil Rx attachment custody.')
   const current = readSoilRxCleanupOutbox(storage, key)
   if (!sameActor(current, entry.userId)) throw new Error('Farm Rx found Soil Rx cleanup work for another account.')
   const existing = current.find((row): row is SoilRxAttachmentCustodyEntry => row.kind === 'attachment_save' && row.testId === entry.testId)
@@ -81,7 +81,7 @@ export function beginSoilRxAttachmentCustody(storage: StorageLike, key: string, 
 }
 export function replaceSoilRxAttachmentCustody(storage: StorageLike, key: string, entry: Omit<SoilRxAttachmentCustodyEntry, 'kind' | 'paths'> & { path: string }) {
   const candidate: SoilRxAttachmentCustodyEntry = { kind: 'attachment_save', testId: entry.testId, paths: [entry.path], removedPaths: [], userId: entry.userId, farmId: entry.farmId, recordedAt: entry.recordedAt }
-  if (!validStored(candidate)) throw new Error('Farm Rx could not safely replace Soil Rx attachment custody.')
+  if (!isSoilRxStoredCleanupEntry(candidate)) throw new Error('Farm Rx could not safely replace Soil Rx attachment custody.')
   const current = readSoilRxCleanupOutbox(storage, key)
   if (!sameActor(current, entry.userId)) throw new Error('Farm Rx found Soil Rx cleanup work for another account.')
   const existing = current.find((row): row is SoilRxAttachmentCustodyEntry => row.kind === 'attachment_save' && row.testId === entry.testId)

@@ -3,7 +3,7 @@ import { dismissRevokedFarmRecovery, quarantineRevokedFarmWork, readRevokedFarmR
 import { legacyScoutingCleanupOutboxKey, scoutingCleanupOutboxKey, unownedScoutingCleanupRecoveryKey } from './scoutingCleanupOutbox'
 import { captureFarmRevocationFence, resetFarmGrantFromLive, resetFarmRevokedFromLive } from './farmRevocationFence'
 import { farmerError } from '../lib/farmerErrors'
-import { soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
+import { beginSoilRxAttachmentCustody, confirmSoilRxAttachmentRemoval, soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
 import { soilMeasurementKeys } from './soilRx'
 import { createSoilRxQueueEntry } from './soilRxWriteQueue'
 
@@ -45,6 +45,10 @@ const soilEntry = createSoilRxQueueEntry({ version: 1, module: 'soilRx', kind: '
 // Pre-repair v1 path cleanup is upgraded during revocation capture rather than
 // becoming unreadable or escaping the recovery vault.
 { const storage = new MemoryStorage(); const cleanupKey = soilRxCleanupOutboxKey(project, user); storage.setItem(cleanupKey, JSON.stringify({ version: 1, entries: [{ path: `${farm}/${field}/${note}/legacy-report.pdf`, userId: user, farmId: farm, recordedAt: stamp }] })); assert.equal(quarantineRevokedFarmWork(storage, { projectRef: project, userId: user, farmId: farm }, stamp), 1); assert.deepEqual((readRevokedFarmRecovery(storage, project, user)[0]?.payload as Array<{ kind: string }>).map((entry) => entry.kind), ['report_path']); assert.equal(JSON.parse(storage.getItem(cleanupKey)!).version, 2) }
+
+// Current attachment custody is produced through the real writer. Revocation
+// must preserve an already-confirmed Storage removal in the recovery vault.
+{ const storage = new MemoryStorage(); const cleanupKey = soilRxCleanupOutboxKey(project, user); const path = `${farm}/${field}/${note}/confirmed-removal.pdf`; beginSoilRxAttachmentCustody(storage, cleanupKey, { testId: note, path, userId: user, farmId: farm, recordedAt: stamp }); confirmSoilRxAttachmentRemoval(storage, cleanupKey, user, farm, note, [path]); assert.equal(quarantineRevokedFarmWork(storage, { projectRef: project, userId: user, farmId: farm }, stamp), 1); const saved = readRevokedFarmRecovery(storage, project, user); assert.equal(saved.length, 1); assert.deepEqual(saved[0]?.payload, [{ kind: 'attachment_save', testId: note, paths: [path], removedPaths: [path], userId: user, farmId: farm, recordedAt: stamp }]); assert.deepEqual(JSON.parse(storage.getItem(cleanupKey)!).entries, []) }
 
 // A failed durable write is fail-closed: active work stays in place and no new access snapshot may be published by the caller.
 { const storage = new MemoryStorage(); const active = key('farm-rx-notifications-write-queue'); const work = JSON.stringify({ version: 1, entries: [notificationEntry()] }); storage.setItem(active, work); storage.failWrites = true; assert.throws(() => quarantineRevokedFarmWork(storage, { projectRef: project, userId: user, farmId: farm }, stamp)); assert.equal(storage.getItem(active), work) }

@@ -172,6 +172,8 @@ export function foundationStaticGuard(root = process.cwd()) {
   if ((soilStorageRemove.match(/return confirmSoilRxReportRemoval\(paths, data\)/g) ?? []).length !== 1 || /\bcatch\b|\.list\(/.test(soilStorageRemove)) errors.push('soil-rx:storage-remove-ambiguous-recovery-refused')
   const supabaseSoil = read(root, 'src/data/SupabaseSoilRxRepository.ts')
   requireText(errors, supabaseSoil, 'deleted.length !== 1', 'soil-rx:row-delete-exact-receipt')
+  const revokedFarmRecovery = read(root, 'src/data/revokedFarmRecovery.ts')
+  requireText(errors, revokedFarmRecovery, 'return isSoilRxStoredCleanupEntry(value) && entry.userId === userId && entry.farmId === farmId', 'soil-rx:revoked-custody-canonical-schema')
 
   const foundationOrchestrator = read(root, 'scripts/verify-foundation.ps1')
   const foundationOrchestratorLf = foundationOrchestrator.replace(/\r\n/g, '\n')
@@ -349,7 +351,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 163')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 164')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
