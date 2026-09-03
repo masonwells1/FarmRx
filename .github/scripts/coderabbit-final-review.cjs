@@ -166,22 +166,27 @@ async function requestedMarkerHasCommand({ github, owner, repo, pullNumber, head
 }
 
 async function collectCheckBlockers({ github, owner, repo, headSha, config }) {
-  const [checkRuns, statuses] = await Promise.all([
-    github.paginate(
-      github.rest.checks.listForRef,
-      { owner, repo, ref: headSha, filter: 'latest', per_page: 100 },
-    ),
-    github.paginate(
-      github.rest.repos.listCommitStatusesForRef,
-      { owner, repo, ref: headSha, per_page: 100 },
-    ),
-  ]);
-  return evaluateChecks({
-    checkRuns,
-    statuses,
-    requiredChecks: config.requiredChecks,
-    ignoredChecks: config.ignoredChecks,
-  });
+  try {
+    const [checkRuns, statuses] = await Promise.all([
+      github.paginate(
+        github.rest.checks.listForRef,
+        { owner, repo, ref: headSha, filter: 'latest', per_page: 100 },
+      ),
+      github.paginate(
+        github.rest.repos.listCommitStatusesForRef,
+        { owner, repo, ref: headSha, per_page: 100 },
+      ),
+    ]);
+    return evaluateChecks({
+      checkRuns,
+      statuses,
+      requiredChecks: config.requiredChecks,
+      ignoredChecks: config.ignoredChecks,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return [`could not collect required checks and statuses: ${detail}`];
+  }
 }
 
 async function run({ github, context, core, config }) {

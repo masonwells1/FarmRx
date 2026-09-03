@@ -53,6 +53,8 @@ function makeHarness({
   existingComments = [],
   checkRunsSequence = null,
   statusesSequence = null,
+  checkRunsFailure = null,
+  statusesFailure = null,
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -75,6 +77,7 @@ function makeHarness({
     rest: {
       checks: {
         listForRef: async () => {
+          if (checkRunsFailure) throw new Error(checkRunsFailure);
           const sequence = checkRunsSequence || [checkRuns];
           const current = sequence[Math.min(checkRunsIndex++, sequence.length - 1)];
           return { data: { check_runs: current } };
@@ -139,6 +142,7 @@ function makeHarness({
       repos: {
         getCollaboratorPermissionLevel: async () => ({ data: { permission } }),
         listCommitStatusesForRef: async () => {
+          if (statusesFailure) throw new Error(statusesFailure);
           const sequence = statusesSequence || [statuses];
           const current = sequence[Math.min(statusesIndex++, sequence.length - 1)];
           return { data: current };
@@ -256,6 +260,30 @@ test('missing, pending, or failed checks block the paid review request', async (
   assert.match(harness.failures[0], /security-scan/);
   assert.match(harness.failures[0], /Vercel/);
   assert.doesNotMatch(harness.failures[0], /CodeRabbit: pending/);
+});
+
+test('check or status collection failures clear labels and post no review command', async (t) => {
+  const cases = [
+    ['check runs', { checkRunsFailure: 'checks endpoint unavailable' }],
+    ['commit statuses', { statusesFailure: 'statuses endpoint unavailable' }],
+  ];
+
+  for (const [name, failure] of cases) {
+    await t.test(name, async () => {
+      const harness = makeHarness({
+        ...failure,
+        pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+      });
+      const result = await execute(harness);
+
+      assert.equal(result.status, 'blocked');
+      assert.deepEqual(harness.comments, []);
+      assert.equal(harness.liveLabels.has(READY_LABEL), false);
+      assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+      assert.match(harness.failures[0], /could not collect required checks and statuses/);
+      assert.match(harness.failures[0], /endpoint unavailable/);
+    });
+  }
 });
 
 test('a check rerun that starts during the quiet confirmation blocks the request', async () => {
