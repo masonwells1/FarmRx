@@ -12,6 +12,8 @@ Import-Module (Join-Path $root 'scripts/harvest-ridge-db-clock.psm1') -Force
 function Assert-CedarContract {
   $required = @($manifestPath,$contractPath,$fixture,$verify,(Join-Path $root 'tests/e2e/season/cedar-creek.spec.ts'),(Join-Path $root 'playwright.cedar-creek.config.ts'))
   if (@($required | Where-Object { -not (Test-Path -LiteralPath $_) }).Count) { throw 'CEDAR_CREEK_PACKET_MISSING_REQUIRED_FILE' }
+  $migrationPath = Join-Path $root "supabase/migrations/$migration"
+  if (-not (Test-Path -LiteralPath $migrationPath)) { throw "CEDAR_CREEK_REQUIRED_MIGRATION_MISSING:$migration" }
   $head = (Get-ChildItem (Join-Path $root 'supabase/migrations') -File | Sort-Object Name | Select-Object -Last 1).Name
   if ($head -cne $fkIndexMigration) { throw "CEDAR_CREEK_MIGRATION_HEAD_MISMATCH:$head" }
   $actualBlob = (& git -C $root hash-object (Join-Path $root "supabase/migrations/$migration")).Trim()

@@ -1,0 +1,13 @@
+import { supabase } from '../lib/supabaseClient'
+import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
+import type { SoilRxDataGateway } from './SoilRxDataGateway'
+import type { SoilReportMime, SoilTestDraft } from './soilRx'
+const rows = (data: unknown, error: { message: string } | null) => { if (error) throw error; if (!Array.isArray(data)) throw new Error('Farm Rx could not load Soil Rx records.'); return data }
+const row = (data: unknown, error: { message: string } | null) => { if (error) throw error; if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Farm Rx could not confirm the Soil Rx change.'); return data }
+export class SupabaseSoilRxDataGateway implements SoilRxDataGateway {
+  async loadTests(farmId: string, fieldId?: string) { let query = supabase.from('soil_tests').select('*').eq('farm_id', farmId).order('sample_date', { ascending: false }).order('created_at', { ascending: false }).order('id'); if (fieldId) query = query.eq('field_id', fieldId); const result = await query; return rows(result.data, result.error) }
+  async loadAttachments(farmId: string, testId?: string) { let query = supabase.from('soil_test_attachments').select('*').eq('farm_id', farmId).order('created_at').order('id'); if (testId) query = query.eq('test_id', testId); const result = await query; return rows(result.data, result.error) }
+  async saveTest(input: { farmId: string; userId: string; draft: SoilTestDraft }, context: FarmOperationContext) { const result = await bindFarmOperationRequest(supabase.from('soil_tests').upsert({ ...input.draft, farm_id: input.farmId }, { onConflict: 'id' }).select('*').single(), context); return row(result.data, result.error) }
+  async saveAttachment(input: { id: string; farmId: string; fieldId: string; testId: string; storagePath: string; originalFilename: string; mimeType: SoilReportMime; sizeBytes: number; userId: string }, context: FarmOperationContext) { const result = await bindFarmOperationRequest(supabase.from('soil_test_attachments').insert({ id: input.id, farm_id: input.farmId, field_id: input.fieldId, test_id: input.testId, storage_path: input.storagePath, original_filename: input.originalFilename, mime_type: input.mimeType, size_bytes: input.sizeBytes }).select('*').single(), context); return row(result.data, result.error) }
+  async deleteTest(input: { farmId: string; testId: string }, context: FarmOperationContext) { const result = await bindFarmOperationRequest(supabase.from('soil_tests').delete().eq('farm_id', input.farmId).eq('id', input.testId).select('id'), context); return rows(result.data, result.error) }
+}

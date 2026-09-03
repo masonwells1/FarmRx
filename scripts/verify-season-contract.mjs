@@ -15,7 +15,9 @@ const EXPECTED_YEAR = 2027;
 const EXPECTED_TIMEZONE = "America/Chicago";
 const EXPECTED_FIXTURE_COUNT = 101;
 const EXPECTED_PACKAGE_COMMAND = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-season.ps1";
-const EXPECTED_POWERSHELL_SHA256 = "419a68327bb080e63ea58ec48c06926c24ea9ebbb69a8022dea5e8723322a359";
+const EXPECTED_POWERSHELL_SHA256 = "c60b8a74434742c005d5a49a45e12180775745c65102c1606b252fe356bb4e02";
+const EXPECTED_SOIL_SHARED_HARNESS_BRIDGE =
+  "  Invoke-SeasonLane { & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/season-shared-harness-repair.regression.ps1 } 'Season shared harness repair regression failed.' | Out-Null";
 
 const EXPECTED_SCENARIOS = new Map([
   [
@@ -734,10 +736,25 @@ export async function validateHarnessIsolation(root = REPOSITORY_ROOT) {
   );
 
   const powershellContent = await readFile(resolve(root, "scripts/verify-season.ps1"), "utf8");
-  const powershellHash = createHash("sha256").update(powershellContent.replace(/\r\n/g, "\n")).digest("hex");
+  const normalizedPowershellContent = powershellContent.replace(/\r\n/g, "\n");
+  const powershellHash = createHash("sha256").update(normalizedPowershellContent).digest("hex");
   assert(
     powershellHash === EXPECTED_POWERSHELL_SHA256,
     "scripts/verify-season.ps1 does not match the pinned SHA-256.",
+  );
+  const contractRegression =
+    "  Invoke-SeasonLane { & node scripts/verify-season-contract.regression.mjs } 'Season fixture contract regression failed.'";
+  const contractOnlyPass =
+    "  Write-Output 'Farm Rx season contract gate: PASS (contract/isolation only; disposable-backend and browser workflow proof not yet run)'";
+  const contractRegressionIndex = normalizedPowershellContent.indexOf(contractRegression);
+  const sharedHarnessBridgeIndex = normalizedPowershellContent.indexOf(EXPECTED_SOIL_SHARED_HARNESS_BRIDGE);
+  const contractOnlyPassIndex = normalizedPowershellContent.indexOf(contractOnlyPass);
+  assert(
+    normalizedPowershellContent.split(EXPECTED_SOIL_SHARED_HARNESS_BRIDGE).length - 1 === 1 &&
+      contractRegressionIndex >= 0 &&
+      sharedHarnessBridgeIndex > contractRegressionIndex &&
+      contractOnlyPassIndex > sharedHarnessBridgeIndex,
+    "scripts/verify-season.ps1 does not contain exactly one guarded Soil shared-harness bridge before the contract-only PASS.",
   );
 
   for (const file of ["scripts/verify-season-contract.mjs", "scripts/verify-season-contract.regression.mjs"]) {
