@@ -13,6 +13,10 @@ function normalize(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function errorDetail(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function pullRequestLabelNames(pullRequest) {
   return new Set((pullRequest.labels || []).map((label) => normalize(label.name)));
 }
@@ -149,7 +153,7 @@ async function removeLabelsIndependently({ github, owner, repo, pullNumber, labe
     try {
       await removeLabelIfPresent(github, owner, repo, pullNumber, label);
     } catch (cleanupError) {
-      const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      const detail = errorDetail(cleanupError);
       cleanupFailures.push(`could not remove ${label}: ${detail}`);
     }
   }
@@ -257,7 +261,7 @@ async function collectCheckBlockers({ github, owner, repo, headSha, config }) {
       ignoredChecks: config.ignoredChecks,
     });
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = errorDetail(error);
     return [`could not collect required checks and statuses: ${detail}`];
   }
 }
@@ -290,7 +294,7 @@ async function run({ github, context, core, config }) {
       username: context.actor,
     });
   } catch (permissionError) {
-    const detail = permissionError instanceof Error ? permissionError.message : String(permissionError);
+    const detail = errorDetail(permissionError);
     return blockCandidate({
       github,
       owner,
@@ -314,7 +318,15 @@ async function run({ github, context, core, config }) {
   }
 
   const expectedHeadSha = context.payload.pull_request.head.sha;
-  const initialResponse = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
+  let initialResponse;
+  try {
+    initialResponse = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
+  } catch (initialError) {
+    return blockCandidate({
+      github, owner, repo, pullNumber, core,
+      reason: `could not read the initial pull request state: ${errorDetail(initialError)}`,
+    });
+  }
   const initialPullRequest = initialResponse.data;
   const initialReasons = validatePullRequest(
     initialPullRequest,
@@ -381,16 +393,19 @@ async function run({ github, context, core, config }) {
   if (config.quietPeriodMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, config.quietPeriodMs));
   }
-  const [confirmationResponse, confirmationCheckBlockers] = await Promise.all([
-    github.rest.pulls.get({ owner, repo, pull_number: pullNumber }),
-    collectCheckBlockers({
-      github,
-      owner,
-      repo,
-      headSha: expectedHeadSha,
-      config,
-    }),
-  ]);
+  let confirmationResponse;
+  let confirmationCheckBlockers;
+  try {
+    [confirmationResponse, confirmationCheckBlockers] = await Promise.all([
+      github.rest.pulls.get({ owner, repo, pull_number: pullNumber }),
+      collectCheckBlockers({ github, owner, repo, headSha: expectedHeadSha, config }),
+    ]);
+  } catch (confirmationError) {
+    return blockCandidate({
+      github, owner, repo, pullNumber, core,
+      reason: `could not confirm the pull request after the quiet period: ${errorDetail(confirmationError)}`,
+    });
+  }
   const confirmationReasons = validatePullRequest(
     confirmationResponse.data,
     context.payload.repository.default_branch,
@@ -425,12 +440,20 @@ async function run({ github, context, core, config }) {
     });
   }
   const preexistingCommentIds = new Set(commentsBeforeAttempt.map((comment) => comment.id));
-  await github.rest.issues.addLabels({
-    owner,
-    repo,
-    issue_number: pullNumber,
-    labels: [REQUESTED_LABEL],
-  });
+  try {
+    await github.rest.issues.addLabels({
+      owner,
+      repo,
+      issue_number: pullNumber,
+      labels: [REQUESTED_LABEL],
+    });
+  } catch (markerError) {
+    return blockCandidate({
+      github, owner, repo, pullNumber, core,
+      reason: `could not mark the review request before posting a command: ${errorDetail(markerError)}`,
+      labelsToRemove: [REQUESTED_LABEL, READY_LABEL],
+    });
+  }
 
   let finalResponse;
   let finalCheckBlockers;
@@ -446,7 +469,7 @@ async function run({ github, context, core, config }) {
       }),
     ]);
   } catch (revalidationError) {
-    const detail = revalidationError instanceof Error ? revalidationError.message : String(revalidationError);
+    const detail = errorDetail(revalidationError);
     return blockCandidate({
       github,
       owner,
@@ -486,6 +509,7 @@ async function run({ github, context, core, config }) {
     createdComment = commentResponse.data;
   } catch (commentError) {
     let commandCommentExists = false;
+    let verificationFailure = null;
     try {
       const comments = await github.paginate(
         github.rest.issues.listComments,
@@ -496,13 +520,29 @@ async function run({ github, context, core, config }) {
         && isActionsReviewComment(comment, expectedHeadSha)
       ));
     } catch (verificationError) {
-      core.warning(`Could not verify the failed comment request: ${verificationError.message}`);
+      verificationFailure = errorDetail(verificationError);
     }
 
     if (commandCommentExists) {
-      await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+      const cleanupFailures = await removeLabelsIndependently({
+        github, owner, repo, pullNumber, labels: [READY_LABEL],
+      });
+      if (cleanupFailures.length > 0) {
+        return blockCandidate({
+          github, owner, repo, pullNumber, core,
+          reason: `GitHub reported a comment error but the exact command exists; ${cleanupFailures.join('; ')}`,
+          labelsToRemove: [],
+        });
+      }
       core.warning('GitHub reported a comment error, but the exact command comment exists; preserving the requested marker.');
       return { status: 'requested', headSha: expectedHeadSha, recovered: true };
+    }
+
+    if (verificationFailure) {
+      return blockCandidate({
+        github, owner, repo, pullNumber, core,
+        reason: `GitHub did not confirm the review comment (${errorDetail(commentError)}); could not verify whether it landed (${verificationFailure}); preserving the requested marker to prevent a duplicate review command`,
+      });
     }
 
     return blockCandidate({
@@ -516,16 +556,19 @@ async function run({ github, context, core, config }) {
     });
   }
 
-  const [postCommentResponse, postCommentCheckBlockers] = await Promise.all([
-    github.rest.pulls.get({ owner, repo, pull_number: pullNumber }),
-    collectCheckBlockers({
-      github,
-      owner,
-      repo,
-      headSha: expectedHeadSha,
-      config,
-    }),
-  ]);
+  let postCommentResponse;
+  let postCommentCheckBlockers;
+  try {
+    [postCommentResponse, postCommentCheckBlockers] = await Promise.all([
+      github.rest.pulls.get({ owner, repo, pull_number: pullNumber }),
+      collectCheckBlockers({ github, owner, repo, headSha: expectedHeadSha, config }),
+    ]);
+  } catch (postCommentError) {
+    return blockCandidate({
+      github, owner, repo, pullNumber, core,
+      reason: `could not revalidate the pull request after posting the review command: ${errorDetail(postCommentError)}`,
+    });
+  }
   const postCommentReasons = validatePullRequest(
     postCommentResponse.data,
     context.payload.repository.default_branch,
@@ -533,15 +576,24 @@ async function run({ github, context, core, config }) {
   );
   postCommentReasons.push(...postCommentCheckBlockers);
   if (postCommentReasons.length > 0) {
+    const cleanupFailures = [];
+    let deletedComment = false;
     try {
       await github.rest.issues.deleteComment({
         owner,
         repo,
         comment_id: createdComment.id,
       });
-      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+      deletedComment = true;
     } catch (cleanupError) {
-      core.warning(`Could not remove the raced review command; preserving dedupe state: ${cleanupError.message}`);
+      cleanupFailures.push(`could not remove the raced review command: ${errorDetail(cleanupError)}`);
+    }
+    if (deletedComment) {
+      try {
+      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+      } catch (cleanupError) {
+        cleanupFailures.push(`could not remove ${REQUESTED_LABEL}: ${errorDetail(cleanupError)}`);
+      }
     }
     return blockCandidate({
       github,
@@ -549,10 +601,17 @@ async function run({ github, context, core, config }) {
       repo,
       pullNumber,
       core,
-      reason: `pull request changed while the review command was being posted; ${postCommentReasons.join('; ')}`,
+      reason: `pull request changed while the review command was being posted; ${postCommentReasons.join('; ')}${cleanupFailures.length ? `; ${cleanupFailures.join('; ')}` : ''}`,
     });
   }
-  await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+  try {
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+  } catch (readyCleanupError) {
+    return blockCandidate({
+      github, owner, repo, pullNumber, core,
+      reason: `review command was posted but could not clear ${READY_LABEL}: ${errorDetail(readyCleanupError)}`,
+    });
+  }
   core.notice(`Requested one CodeRabbit review for frozen head ${expectedHeadSha}.`);
   return { status: 'requested', headSha: expectedHeadSha };
 }

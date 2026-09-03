@@ -55,6 +55,8 @@ function makeHarness({
   permission = 'write',
   permissionFailure = null,
   labelRemovalFailure = null,
+  markerFailure = null,
+  deleteCommentFailure = null,
   pullGetFailures = null,
   commentLookupFailures = null,
   pulls = [pullRequest(), pullRequest(), pullRequest()],
@@ -78,6 +80,7 @@ function makeHarness({
   let statusesIndex = 0;
   let pullGetIndex = 0;
   let commentLookupIndex = 0;
+  let commentCreateIndex = 0;
 
   function currentPull() {
     const source = pulls[Math.min(pullIndex++, pulls.length - 1)];
@@ -98,7 +101,8 @@ function makeHarness({
         },
       },
       issues: {
-        addLabels: async ({ labels }) => labels.forEach((label) => {
+        addLabels: async ({ labels }) => {
+          labels.forEach((label) => {
           liveLabels.add(label);
           timeline.push({
             event: 'labeled',
@@ -106,9 +110,14 @@ function makeHarness({
             actor: { login: 'github-actions[bot]' },
             created_at: new Date().toISOString(),
           });
-        }),
+          });
+          if (markerFailure) throw new Error(markerFailure);
+        },
         createComment: async ({ body }) => {
-          if (commentFailure === 'ambiguous') {
+          const createFailure = Array.isArray(commentFailure)
+            ? commentFailure[commentCreateIndex++]
+            : commentFailure;
+          if (createFailure === 'ambiguous') {
             comments.push({
               id: comments.length + 1,
               body,
@@ -117,7 +126,7 @@ function makeHarness({
             });
             throw new Error('connection closed after write');
           }
-          if (commentFailure === 'ambiguous-untrusted') {
+          if (createFailure === 'ambiguous-untrusted') {
             comments.push({
               id: comments.length + 1,
               body,
@@ -126,7 +135,7 @@ function makeHarness({
             });
             throw new Error('connection closed before write');
           }
-          if (commentFailure === 'definite') throw new Error('comment rejected');
+          if (createFailure === 'definite') throw new Error('comment rejected');
           const comment = {
             id: comments.length + 1,
             body,
@@ -137,6 +146,7 @@ function makeHarness({
           return { data: comment };
         },
         deleteComment: async ({ comment_id: commentId }) => {
+          if (deleteCommentFailure) throw new Error(deleteCommentFailure);
           const index = comments.findIndex((comment) => comment.id === commentId);
           if (index >= 0) comments.splice(index, 1);
         },
@@ -449,6 +459,87 @@ test('a permission lookup failure still removes ready when requested-label clean
   assert.match(harness.failures[0], /could not determine masonwells1 repository permission/);
   assert.match(harness.failures[0], /collaborator permission endpoint unavailable/);
   assert.match(harness.failures[0], /could not remove coderabbit-review-requested/);
+});
+
+test('pre-marker pull failures clear ready and preserve an existing requested marker', async (t) => {
+  for (const [name, failures] of [
+    ['initial', ['initial pull unavailable']],
+    ['quiet confirmation', [null, 'quiet pull unavailable']],
+  ]) {
+    await t.test(name, async () => {
+      const harness = makeHarness({
+        pullGetFailures: failures,
+        pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+      });
+      const result = await execute(harness);
+      assert.equal(result.status, 'blocked');
+      assert.deepEqual(harness.comments, []);
+      assert.equal(harness.liveLabels.has(READY_LABEL), false);
+      assert.equal(harness.liveLabels.has(REQUESTED_LABEL), name === 'initial');
+      assert.match(harness.failures[0], /pull unavailable/);
+    });
+  }
+});
+
+test('ambiguous requested-marker write clears both labels without posting', async () => {
+  const harness = makeHarness({ markerFailure: 'marker write unavailable' });
+  const result = await execute(harness);
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.failures[0], /marker write unavailable/);
+});
+
+test('ambiguous comment with failed verification preserves dedupe marker and later self-heals once', async () => {
+  const harness = makeHarness({
+    commentFailure: ['definite', null],
+    commentLookupFailures: [null, 'verification unavailable'],
+  });
+  const first = await execute(harness);
+  assert.equal(first.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /verification unavailable/);
+
+  harness.liveLabels.add(READY_LABEL);
+  const retry = await execute(harness);
+  assert.equal(retry.status, 'requested');
+  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+});
+
+test('post-command pull failure preserves requested and clears ready without a second command', async () => {
+  const harness = makeHarness({ pullGetFailures: [null, null, null, 'post-command pull unavailable'] });
+  const result = await execute(harness);
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /post-command pull unavailable/);
+});
+
+test('raced-command delete failure preserves requested marker and reports the cleanup failure', async () => {
+  const harness = makeHarness({
+    deleteCommentFailure: 'delete unavailable',
+    pulls: [pullRequest(), pullRequest(), pullRequest(), pullRequest({ head: NEXT_HEAD })],
+  });
+  const result = await execute(harness);
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /delete unavailable/);
+});
+
+test('confirmed-command ready cleanup failure preserves requested and fails closed', async () => {
+  const harness = makeHarness({ labelRemovalFailure: READY_LABEL });
+  const result = await execute(harness);
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.equal(harness.liveLabels.has(READY_LABEL), true);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /could not clear ready-for-coderabbit/);
 });
 
 test('a check rerun that starts during the quiet confirmation blocks the request', async () => {
