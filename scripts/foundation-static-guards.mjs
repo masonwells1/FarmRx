@@ -205,6 +205,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const foundationNativeRegressionLf = foundationNativeRegression.replace(/\r\n/g, '\n')
   const soilDisposableCapture = read(root, 'scripts/verify-soil-rx-disposable-capture.ps1')
   const soilDisposableCaptureRegression = read(root, 'scripts/verify-soil-rx-disposable-capture.regression.ps1')
+  const soilDisposable = read(root, 'scripts/verify-soil-rx-disposable.ps1')
   requireText(errors, foundationOrchestrator, 'if ($LASTEXITCODE -ne 0) { throw $Failure }', 'orchestrator:native-exit-check')
   requireText(errors, foundationOrchestrator, 'Assert-IntermediateLaneFailureIsFatal', 'orchestrator:controlled-failure-probe')
   requireText(errors, foundationOrchestrator, 'Assert-FoundationBrowserPortIsFree', 'orchestrator:browser-port-preflight')
@@ -239,6 +240,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   if ((soilDisposableCapture.match(/if \(-not \$Condition\) \{ throw \$Failure \}/g) ?? []).length !== 1) errors.push('soil-rx:capture-assertion-fail-closed')
   if ((soilDisposableCapture.match(/\$runDirectory = Join-Path \$EvidenceRoot \(\[Guid\]::NewGuid\(\)\.ToString\('N'\)\)/g) ?? []).length !== 1) errors.push('soil-rx:capture-unique-directory')
   requireText(errors, soilDisposableCaptureRegression, 'SOIL_RX_DISPOSABLE_CAPTURE_REGRESSION_PASS', 'soil-rx:capture-regression-marker')
+  for (const required of ["raise exception using errcode = 'ZX001', message = 'SOIL_RX_CROSS_FARM_ROW_GUARD_BYPASSED'", "raise exception using errcode = 'ZX002', message = 'SOIL_RX_CROSS_FARM_STORAGE_GUARD_BYPASSED'", "if sqlstate <> 'P0001' or sqlerrm <> 'FARM_ACCESS_EPOCH_CHANGED' then raise", "foreach ($mode in @('row', 'storage'))", 'Invoke-ExpectedCrossFarmGuardMutation $mode $expected', 'if ($exitCode -eq 0 -or $text -notmatch [regex]::Escape($expected))']) requireText(errors, soilDisposable, required, 'soil-rx:cross-farm-runtime-mutations')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & deno check --no-config --lock=deno.lock --frozen --node-modules-dir=none supabase/functions/send-push/index.ts }", 'orchestrator:frozen-send-push-deno-check')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-push-access-concurrency-mutation.ps1') }", 'orchestrator:checked-push-concurrency-mutation')
@@ -373,7 +375,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 175')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 176')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }

@@ -1,3 +1,5 @@
+param([ValidateSet('', 'row', 'storage')][string]$MutateCrossFarmGuard = '')
+
 $ErrorActionPreference = 'Stop'
 $name = "farmrx-soil-rx-$PID"
 $root = Split-Path -Parent $PSScriptRoot
@@ -8,6 +10,26 @@ function Invoke-Probe([string]$sql, [string]$failure) {
   if ($LASTEXITCODE -ne 0) { throw $failure }
 }
 
+function Remove-CrossFarmGuard([string]$sql, [string]$mode) {
+  $denial = if ($mode -eq 'row') { 'soil test absence verification requires current farm edit access' } else { 'soil report absence verification requires current farm edit access' }
+  $pattern = "  perform public\.assert_current_farm_access_epoch\(p_farm_id\);\r?\n  if auth\.uid\(\) is null or not public\.can_edit_farm\(p_farm_id\) then\r?\n    raise exception using errcode = '42501', message = '$([regex]::Escape($denial))';\r?\n  end if;\r?\n"
+  $matches = [regex]::Matches($sql, $pattern)
+  if ($matches.Count -ne 1) { throw "Disposable Soil Rx $mode cross-farm mutation target drifted." }
+  return [regex]::Replace($sql, $pattern, '', 1)
+}
+
+function Invoke-ExpectedCrossFarmGuardMutation([string]$mode, [string]$expected) {
+  $shell = (Get-Command pwsh -ErrorAction Stop).Source
+  $priorPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $output = @(& $shell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -MutateCrossFarmGuard $mode 2>&1)
+    $exitCode = $LASTEXITCODE
+  } finally { $ErrorActionPreference = $priorPreference }
+  $text = [string]::Join("`n", [string[]]$output)
+  if ($exitCode -eq 0 -or $text -notmatch [regex]::Escape($expected)) { throw "Disposable Soil Rx $mode cross-farm mutation was not detected." }
+}
+
 try {
   docker run --rm -d --name $name -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=farmrx_disposable postgres:17 | Out-Null
   $ready = $false
@@ -15,7 +37,11 @@ try {
   if (!$ready) { throw 'Disposable Soil Rx postgres:17 did not become ready.' }
   Start-Sleep -Milliseconds 500
   Invoke-Probe "create role anon nologin; create role authenticated nologin; create role service_role nologin; create schema auth; create table auth.users (id uuid primary key, email text); create function auth.uid() returns uuid language sql stable as `$`$ select coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub', nullif(current_setting('request.jwt.claim.sub', true), ''))::uuid `$`$; grant usage on schema auth to anon, authenticated, service_role; grant execute on function auth.uid() to anon, authenticated, service_role; create schema storage; create table storage.buckets (id text primary key, name text not null, public boolean not null default false, file_size_limit bigint, allowed_mime_types text[]); create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text not null, name text not null, owner uuid); alter table storage.objects enable row level security;" 'Disposable Soil Rx bootstrap failed.'
-  Get-ChildItem (Join-Path $root 'supabase/migrations') -Filter '*.sql' | Sort-Object Name | ForEach-Object { Invoke-Probe (Get-Content -Raw $_.FullName) "Migration failed: $($_.Name)" }
+  Get-ChildItem (Join-Path $root 'supabase/migrations') -Filter '*.sql' | Sort-Object Name | ForEach-Object {
+    $migrationSql = Get-Content -Raw $_.FullName
+    if ($MutateCrossFarmGuard -and $_.Name -eq '20260810223508_soil_rx_storage.sql') { $migrationSql = Remove-CrossFarmGuard $migrationSql $MutateCrossFarmGuard }
+    Invoke-Probe $migrationSql "Migration failed: $($_.Name)"
+  }
   Invoke-Probe @'
 grant usage on schema storage to authenticated;
 grant select, insert, update, delete on storage.objects to authenticated;
@@ -90,8 +116,8 @@ select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-
 do $$ begin
   if (select count(*) from public.soil_tests where id='00000000-0000-4000-8000-000000000013') <> 0 then raise exception 'other farm read soil test'; end if;
   if (select count(*) from storage.objects where bucket_id='soil-test-reports') <> 0 then raise exception 'other farm read soil report'; end if;
-  begin perform public.verify_soil_test_absent('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000013'); raise exception 'other farm verified a hidden Soil test as absent'; exception when others then if sqlstate not in ('42501','P0001') then raise; end if; end;
-  begin perform public.verify_soil_report_objects_absent('00000000-0000-4000-8000-000000000010',array['00000000-0000-4000-8000-000000000010/00000000-0000-4000-8000-000000000012/00000000-0000-4000-8000-000000000013/report.pdf']); raise exception 'other farm verified a hidden report as absent'; exception when others then if sqlstate not in ('42501','P0001') then raise; end if; end;
+  begin perform public.verify_soil_test_absent('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000013'); raise exception using errcode = 'ZX001', message = 'SOIL_RX_CROSS_FARM_ROW_GUARD_BYPASSED'; exception when others then if sqlstate <> 'P0001' or sqlerrm <> 'FARM_ACCESS_EPOCH_CHANGED' then raise; end if; end;
+  begin perform public.verify_soil_report_objects_absent('00000000-0000-4000-8000-000000000010',array['00000000-0000-4000-8000-000000000010/00000000-0000-4000-8000-000000000012/00000000-0000-4000-8000-000000000013/report.pdf']); raise exception using errcode = 'ZX002', message = 'SOIL_RX_CROSS_FARM_STORAGE_GUARD_BYPASSED'; exception when others then if sqlstate <> 'P0001' or sqlerrm <> 'FARM_ACCESS_EPOCH_CHANGED' then raise; end if; end;
   begin insert into public.soil_tests(id,farm_id,field_id,sample_date,lab_name,created_by) values ('00000000-0000-4000-8000-000000000023','00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000012','2027-01-11','Cross-farm attack','00000000-0000-4000-8000-000000000002'); raise exception 'other farm wrote soil test'; exception when others then if sqlstate <> '42501' and not (sqlstate = 'P0001' and sqlerrm = 'FARM_ACCESS_EPOCH_CHANGED') then raise; end if; end;
   begin insert into storage.objects(bucket_id,name) values ('soil-test-reports','00000000-0000-4000-8000-000000000010/00000000-0000-4000-8000-000000000012/00000000-0000-4000-8000-000000000013/cross-farm.pdf'); raise exception 'other farm wrote soil report'; exception when others then if sqlstate <> '42501' and not (sqlstate = 'P0001' and sqlerrm = 'FARM_ACCESS_EPOCH_CHANGED') then raise; end if; end;
 end $$;
@@ -128,6 +154,13 @@ do $$ begin
   if not exists (select 1 from storage.buckets where id='soil-test-reports' and public=false and file_size_limit=20971520 and allowed_mime_types @> array['application/pdf','image/jpeg','image/png','image/heic','image/heif']) then raise exception 'soil report bucket contract mismatch'; end if;
 end $$;
 '@ 'Focused Soil Rx RLS/storage proof failed.'
+  if (-not $MutateCrossFarmGuard) {
+    foreach ($mode in @('row', 'storage')) {
+      $expected = if ($mode -eq 'row') { 'SOIL_RX_CROSS_FARM_ROW_GUARD_BYPASSED' } else { 'SOIL_RX_CROSS_FARM_STORAGE_GUARD_BYPASSED' }
+      Invoke-ExpectedCrossFarmGuardMutation $mode $expected
+    }
+    Write-Output 'SOIL_RX_CROSS_FARM_GUARD_MUTATIONS_PASS row=detected storage=detected'
+  }
   $passed = $true
 } finally { docker rm -f $name 2>$null | Out-Null }
 if ($passed) { Write-Output 'SOIL_RX_DISPOSABLE_RLS_STORAGE_PASS' }
