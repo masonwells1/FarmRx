@@ -7,7 +7,7 @@ import { queueTransaction } from './queueTransaction'
 import { QueuedSoilRxRepository } from './QueuedSoilRxRepository'
 import { beginSoilRxAttachmentCustody, readSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
 import { soilMeasurementKeys, type SoilReportMime, type SoilTest, type SoilTestDraft } from './soilRx'
-import { confirmSoilRxReportRemoval, maximumSoilReportBytes, validateSoilReportFile } from './soilRxStorage'
+import { confirmSoilRxReportRemoval, maximumSoilReportBytes, removeSoilRxReportsWithGateway, validateSoilReportFile } from './soilRxStorage'
 import { createSoilRxQueueEntry, SoilRxWriteQueue, soilRxWriteQueueKey, type SoilRxQueueEntryPayloadV1, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
 import { getSyncStatus, setModuleSyncStatus } from './syncStatus'
 import type { SupabaseSoilRxRepository } from './SupabaseSoilRxRepository'
@@ -96,6 +96,31 @@ function harness(projectRef: string) {
 
 assert.throws(() => confirmSoilRxReportRemoval([cleanupPath], []), /could not confirm Soil Rx attachment cleanup/)
 assert.deepEqual(confirmSoilRxReportRemoval([cleanupPath], [{ name: cleanupPath }]), [cleanupPath])
+
+// Exercise the production removal core across a committed remove whose first
+// response is lost. The retry accepts only the exact authoritative absence set.
+const removalContext = { projectRef: 'soil-rx-storage-retry', userId, farmId, generation: 1, token: uid(98), serverEpoch: 1 }
+const removalObjects = new Set([cleanupPath]); let loseRemovalResponse = true; let absenceChecks = 0
+const removalGateway = {
+  remove: async (paths: string[]) => { const removed = paths.filter((path) => removalObjects.delete(path)).map((name) => ({ name })); if (loseRemovalResponse) { loseRemovalResponse = false; throw new Error('Storage remove response was lost') }; return removed },
+  verifyAbsent: async (paths: string[]) => { absenceChecks += 1; return paths.filter((path) => !removalObjects.has(path)).map((name) => ({ name })) },
+}
+await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removalContext, removalGateway), /response was lost/)
+assert.deepEqual(await removeSoilRxReportsWithGateway([cleanupPath], removalContext, removalGateway), [cleanupPath])
+assert.equal(absenceChecks, 1)
+
+const otherPath = `${farmId}/${fieldId}/${testId}/${uid(97)}.pdf`
+await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removalContext, { remove: async () => [], verifyAbsent: async () => { throw new Error('unauthorized absence verification') } }), /unauthorized/)
+await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removalContext, { remove: async () => [], verifyAbsent: async () => { throw new Error('absence verification failed') } }), /verification failed/)
+await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath, otherPath], removalContext, { remove: async () => [], verifyAbsent: async () => [{ name: cleanupPath }] }), /could not confirm Soil Rx attachment cleanup/)
+let malformedReceiptChecks = 0
+await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removalContext, { remove: async () => [{ name: otherPath }], verifyAbsent: async () => { malformedReceiptChecks += 1; return [{ name: cleanupPath }] } }), /could not confirm Soil Rx attachment cleanup/)
+assert.equal(malformedReceiptChecks, 0)
+let invalidRemovalCalls = 0
+const invalidRemovalGateway = { remove: async () => { invalidRemovalCalls += 1; return [] }, verifyAbsent: async () => { invalidRemovalCalls += 1; return [] } }
+await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath, cleanupPath], removalContext, invalidRemovalGateway), /path changed/)
+await assert.rejects(() => removeSoilRxReportsWithGateway([`${uid(500)}/${fieldId}/${testId}/${uid(96)}.pdf`], removalContext, invalidRemovalGateway), /path changed/)
+assert.equal(invalidRemovalCalls, 0)
 
 // An upload followed by an ambiguous metadata failure must roll back both the
 // row and object. Retrying the same UI draft ID must produce exactly one row.

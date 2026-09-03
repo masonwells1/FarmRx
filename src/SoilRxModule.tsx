@@ -94,7 +94,7 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
   }
   function chooseField(fieldId: string) { setSelectedFieldId(fieldId); setForm((current) => ({ ...current, fieldId })); setOpenTests(new Set(sortSoilTestsNewestFirst(tests.filter((test) => test.field_id === fieldId)).slice(0, 1).map((test) => test.id))) }
   function selectReport(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0] ?? null; const problem = file ? validateSoilReportFile(file) : null; if (problem) event.target.value = ''; setReport(problem ? null : file); setError(problem) }
-  async function openReport(test: SoilTest) { if (!test.attachment) return; setError(null); try { window.open(await repository.getReportUrl(test.attachment.storage_path), '_blank', 'noopener,noreferrer') } catch (caught) { setError(farmerError(caught, 'open this report')) } }
+  async function openReport(test: SoilTest) { if (!test.attachment) return; const popup = window.open('about:blank', '_blank'); if (!popup) { setError('Your browser blocked the lab report window. Allow pop-ups for Farm Rx and try again.'); return }; popup.opener = null; setError(null); try { const url = await repository.getReportUrl(test.attachment.storage_path); if (popup.closed) throw new Error('The lab report window was closed.'); popup.location.replace(url) } catch (caught) { popup.close(); setError(farmerError(caught, 'open this report')) } }
 
   return <section className="page soil-rx-page" aria-labelledby="soil-rx-title">
     <header className="page-header"><div><p className="eyebrow">Field fertility records</p><h1 id="soil-rx-title">Soil Rx</h1><p>Keep your lab results together by field. Crop RX only sees them if you share farm data in Privacy.</p></div></header>

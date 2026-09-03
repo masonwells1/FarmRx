@@ -18,12 +18,13 @@ const context: FarmOperationContext = { projectRef: 'test-project', userId: user
 const row = (overrides: Record<string, unknown> = {}) => ({ id: testId, farm_id: farm, field_id: field, sample_date: '2027-01-10', lab_name: 'Midwest Lab', ...measurements, created_by: user, created_at: stamp, updated_at: stamp, ...overrides })
 class MemoryStorage implements StorageLike { private data = new Map<string, string>(); getItem(key: string) { return this.data.get(key) ?? null } setItem(key: string, value: string) { this.data.set(key, value) } removeItem(key: string) { this.data.delete(key) } }
 class Gateway implements SoilRxDataGateway {
-  tests: unknown[] = [row()]; attachments: unknown[] = []; saved: unknown = row(); attachmentSaved: unknown = null; deleteResult: unknown[] = [{ id: testId }]; deletes = 0
+  tests: unknown[] = [row()]; attachments: unknown[] = []; saved: unknown = row(); attachmentSaved: unknown = null; deleteResult: unknown[] = [{ id: testId }]; deletes = 0; deleteResponseLosses = 0; canEdit = true; absenceError = false; absenceChecks: Array<{ farmId: string; testId: string; context: FarmOperationContext }> = []
   async loadTests() { return this.tests }
   async loadAttachments() { return this.attachments }
   async saveTest() { return this.saved }
   async saveAttachment() { return this.attachmentSaved }
-  async deleteTest() { this.deletes += 1; return this.deleteResult }
+  async deleteTest(input: { farmId: string; testId: string }) { this.deletes += 1; if (this.deleteResponseLosses > 0) { this.deleteResponseLosses -= 1; this.tests = this.tests.filter((value) => { const candidate = value as { id?: unknown; farm_id?: unknown }; return candidate.id !== input.testId || candidate.farm_id !== input.farmId }); this.attachments = this.attachments.filter((value) => (value as { test_id?: unknown }).test_id !== input.testId); throw new Error('delete response was lost') }; return this.deleteResult }
+  async verifyTestAbsent(input: { farmId: string; testId: string }, operationContext: FarmOperationContext) { this.absenceChecks.push({ ...input, context: operationContext }); if (this.absenceError) throw new Error('absence verification failed'); if (!this.canEdit) throw new Error('unauthorized absence verification'); return !this.tests.some((value) => { const candidate = value as { id?: unknown; farm_id?: unknown }; return candidate.id === input.testId && candidate.farm_id === input.farmId }) }
 }
 const gateway = new Gateway()
 const repository = new SupabaseSoilRxRepository({ gateway, getFarmId: async () => farm, getOperationContext: async () => context, verifyOperationContext: async (expected) => assert.deepEqual(expected, context), createId: () => operation, createReportUrl: async () => 'https://signed.invalid/report' })
@@ -44,6 +45,23 @@ gateway.attachments = [gateway.attachmentSaved]
 assert.deepEqual(await repository.rollbackTestOperation(testId, context), { id: testId })
 assert.equal(gateway.deletes, 1)
 gateway.deleteResult = []
+gateway.tests = [row()]
+await assert.rejects(() => repository.rollbackTestOperation(testId, context), /invalid Soil Rx data/)
+
+// A committed DELETE with a lost response is recoverable only through the
+// authenticated physical postcondition check for this exact farm and test.
+gateway.tests = [row()]; gateway.attachments = []; gateway.deleteResponseLosses = 1
+await assert.rejects(() => repository.rollbackTestOperation(testId, context), /delete response was lost/)
+assert.deepEqual(await repository.rollbackTestOperation(testId, context), { id: testId })
+assert.deepEqual(gateway.absenceChecks.at(-1), { farmId: farm, testId, context })
+
+// Empty RLS-filtered results, stale authority, and verification failures are
+// never accepted as absence.
+gateway.tests = []; gateway.canEdit = false
+await assert.rejects(() => repository.rollbackTestOperation(testId, context), /unauthorized absence verification/)
+gateway.canEdit = true; gateway.absenceError = true
+await assert.rejects(() => repository.rollbackTestOperation(testId, context), /absence verification failed/)
+gateway.absenceError = false; gateway.tests = [row()]
 await assert.rejects(() => repository.rollbackTestOperation(testId, context), /invalid Soil Rx data/)
 
 const queueStorage = new MemoryStorage(); const queueKey = soilRxWriteQueueKey('test-project', user, farm); const queue = new SoilRxWriteQueue(queueStorage, queueKey)

@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 167
+const expectedMutationCount = 175
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -20,7 +20,7 @@ const files = [
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
-  'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts',
+  'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
   'src/data/QueuedFieldsRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/QueuedHarvestRepository.ts',
   'src/data/QueuedInventoryRepository.ts', 'src/data/QueuedNotificationsRepository.ts', 'src/data/QueuedProfitabilityRepository.ts',
@@ -135,14 +135,38 @@ try {
   mutate('src/data/QueuedSoilRxRepository.ts', (source) => source.replace('this.d.removeReports(paths, source.operationContext)', 'this.live.rollbackTestOperation(custody.testId, source.operationContext)'))
   detected('Soil Rx attachment cleanup deletes its Storage authorization first', 'soil-rx:attachment-cleanup-storage-before-row')
   reset()
-  mutate('src/data/soilRxStorage.ts', (source) => source.replace('return confirmSoilRxReportRemoval(paths, data)', 'return paths'))
+  mutate('src/data/soilRxStorage.ts', (source) => source.replace('if (exactRemovalReceipt(paths, removed)) return confirmSoilRxReportRemoval(paths, removed)', 'if (exactRemovalReceipt(paths, removed)) return paths'))
   detected('Soil Rx Storage zero-row delete receipt acceptance', 'soil-rx:storage-remove-receipt-required')
   reset()
-  mutate('src/data/soilRxStorage.ts', (source) => source.replace('return confirmSoilRxReportRemoval(paths, data)', 'try { return confirmSoilRxReportRemoval(paths, data) } catch { return paths }'))
-  detected('Soil Rx Storage ambiguous delete recovery', 'soil-rx:storage-remove-ambiguous-recovery-refused')
+  mutate('src/data/soilRxStorage.ts', (source) => source.replace('if (removed.length !== 0) return confirmSoilRxReportRemoval(paths, removed)', 'if (removed.length !== 0) return paths'))
+  detected('Soil Rx Storage malformed nonempty receipt acceptance', 'soil-rx:storage-malformed-nonempty-receipt-refused')
   reset()
-  mutate('src/data/SupabaseSoilRxRepository.ts', (source) => source.replace('deleted.length !== 1', 'deleted.length > 1'))
+  mutate('src/data/soilRxStorage.ts', (source) => source.replace('const absent = await gateway.verifyAbsent(paths, context)', 'const absent = paths.map((name) => ({ name }))'))
+  detected('Soil Rx Storage physical absence verification bypass', 'soil-rx:storage-physical-absence-required')
+  reset()
+  mutate('src/data/SupabaseSoilRxRepository.ts', (source) => source.replace('deleted.length === 1 && deleted.every', 'deleted.length >= 0 && deleted.every'))
   detected('Soil Rx row-delete zero-row receipt acceptance', 'soil-rx:row-delete-exact-receipt')
+  reset()
+  mutate('src/data/SupabaseSoilRxRepository.ts', (source) => source.replace("await this.d.gateway.verifyTestAbsent({ farmId: context.farmId, testId: idValue }, context) !== true", 'false'))
+  detected('Soil Rx row-delete physical absence verification bypass', 'soil-rx:row-delete-physical-absence-required')
+  reset()
+  mutate('src/SoilRxModule.tsx', (source) => source.replace("const popup = window.open('about:blank', '_blank')", "const urlBeforePopup = await repository.getReportUrl(test.attachment!.storage_path); const popup = window.open(urlBeforePopup, '_blank')"))
+  detected('Soil Rx report popup moved after signed URL wait', 'soil-rx:report-popup-synchronous-order')
+  reset()
+  mutate('src/SoilRxModule.tsx', (source) => source.replace("if (!popup) { setError('Your browser blocked the lab report window. Allow pop-ups for Farm Rx and try again.'); return }", "if (!popup) { setError('Your browser blocked the lab report window.') }"))
+  detected('Soil Rx blocked popup still requests signed URL', 'soil-rx:report-popup-blocked-before-url')
+  reset()
+  mutate('src/SoilRxModule.tsx', (source) => source.replace('popup.opener = null', 'popup.opener = window'))
+  detected('Soil Rx report popup opener isolation removed', 'soil-rx:report-popup-opener-cleared')
+  reset()
+  mutate('src/SoilRxModule.tsx', (source) => source.replace('popup.close()', 'void popup.closed'))
+  detected('Soil Rx report popup failure cleanup removed', 'soil-rx:report-popup-failure-cleanup')
+  reset()
+  mutate('supabase/migrations/20260810223508_soil_rx_storage.sql', (source) => source.replaceAll('not public.can_edit_farm(p_farm_id)', 'false'))
+  detected('Soil Rx absence RPC edit authorization removed', 'soil-rx:absence-rpc-edit-access')
+  reset()
+  mutate('supabase/migrations/20260810223508_soil_rx_storage.sql', (source) => source.replace("object.bucket_id = 'soil-test-reports' and object.name = requested.path", 'false'))
+  detected('Soil Rx Storage physical-object postcondition removed', 'soil-rx:absence-rpc-physical-object')
   reset()
   mutate('src/data/revokedFarmRecovery.ts', (source) => source.replace('isSoilRxStoredCleanupEntry(value)', 'Object.keys(entry).length === 6'))
   detected('revoked Soil Rx custody reverts to obsolete six-key schema', 'soil-rx:revoked-custody-canonical-schema')

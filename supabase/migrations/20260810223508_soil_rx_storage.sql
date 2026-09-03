@@ -266,3 +266,79 @@ using (
       and public.can_edit_farm(t.farm_id)
   )
 );
+
+-- A retry after a committed delete can receive no delete receipt if the first
+-- response was lost. These narrow postcondition checks distinguish that case
+-- from an RLS-hidden row/object without broadening delete authority.
+create function public.verify_soil_test_absent(p_farm_id uuid, p_test_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  perform public.assert_current_farm_access_epoch(p_farm_id);
+  if auth.uid() is null or not public.can_edit_farm(p_farm_id) then
+    raise exception using errcode = '42501', message = 'soil test absence verification requires current farm edit access';
+  end if;
+  return not exists (
+    select 1 from public.soil_tests test
+    where test.farm_id = p_farm_id and test.id = p_test_id
+  );
+end;
+$$;
+
+create function public.verify_soil_report_objects_absent(p_farm_id uuid, p_paths text[])
+returns table(name text)
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  perform public.assert_current_farm_access_epoch(p_farm_id);
+  if auth.uid() is null or not public.can_edit_farm(p_farm_id) then
+    raise exception using errcode = '42501', message = 'soil report absence verification requires current farm edit access';
+  end if;
+  if p_paths is null or cardinality(p_paths) < 1 or cardinality(p_paths) > 100
+    or (select count(distinct requested.path) from unnest(p_paths) requested(path)) <> cardinality(p_paths)
+    or exists (
+      select 1 from unnest(p_paths) requested(path)
+      where requested.path is null
+        or split_part(requested.path, '/', 1) <> p_farm_id::text
+        or split_part(requested.path, '/', 4) in ('', '.', '..')
+        or split_part(requested.path, '/', 5) <> ''
+    )
+  then
+    raise exception using errcode = '22023', message = 'invalid Soil report absence verification request';
+  end if;
+  if exists (
+    select 1 from unnest(p_paths) requested(path)
+    where not exists (
+      select 1 from public.soil_tests test
+      where test.farm_id = p_farm_id
+        and test.field_id::text = split_part(requested.path, '/', 2)
+        and test.id::text = split_part(requested.path, '/', 3)
+    )
+  )
+  then
+    raise exception using errcode = '42501', message = 'soil report path is not owned by the current farm test';
+  end if;
+  return query
+  select requested.path
+  from unnest(p_paths) requested(path)
+  where not exists (
+    select 1 from storage.objects object
+    where object.bucket_id = 'soil-test-reports' and object.name = requested.path
+  )
+  order by requested.path;
+end;
+$$;
+
+revoke all on function public.verify_soil_test_absent(uuid, uuid),
+  public.verify_soil_report_objects_absent(uuid, text[])
+from public, anon, authenticated, service_role;
+grant execute on function public.verify_soil_test_absent(uuid, uuid),
+  public.verify_soil_report_objects_absent(uuid, text[])
+to authenticated;

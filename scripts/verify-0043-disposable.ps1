@@ -212,7 +212,9 @@ begin
       ('service_due_generation_status','p_farm_id uuid'),
       ('set_field_location','p_farm_id uuid, p_field_id uuid, p_latitude numeric, p_longitude numeric, p_source text'),
       ('skip_program_pass','p_farm_id uuid, p_operation_id uuid, p_assigned_pass_id uuid, p_skipped_on date, p_reason text'),
-      ('unassign_program','p_farm_id uuid, p_operation_id uuid, p_assignment_id uuid, p_reason text')
+      ('unassign_program','p_farm_id uuid, p_operation_id uuid, p_assignment_id uuid, p_reason text'),
+      ('verify_soil_report_objects_absent','p_farm_id uuid, p_paths text[]'),
+      ('verify_soil_test_absent','p_farm_id uuid, p_test_id uuid')
   )
   select count(*) into v_allowed_definers
   from expected e
@@ -232,8 +234,8 @@ begin
     and p.prosecdef
     and has_function_privilege('authenticated', p.oid, 'execute');
 
-  if v_allowed_definers <> 53 or v_actual_definers <> 53 then
-    raise exception 'authenticated SECURITY DEFINER ACL allowlist drift: expected 53, matched %, actual %',
+  if v_allowed_definers <> 55 or v_actual_definers <> 55 then
+    raise exception 'authenticated SECURITY DEFINER ACL allowlist drift: expected 55, matched %, actual %',
       v_allowed_definers, v_actual_definers;
   end if;
 
