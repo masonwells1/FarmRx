@@ -6,6 +6,8 @@ This is the executable product contract for the 2027 season-readiness goal. It d
 
 Read [`../GOAL.md`](../GOAL.md) first. Its owner directive, scope, current capability truth, and status definitions control this document.
 
+This contract is intentionally frozen to the accepted six-scenario packet. Its manual Weather-to-Spray and unmatched Program-product steps preserve what that packet proved before Connect Workflows shipped; they are not a current feature inventory and do not revoke the later explicit-save prefill or confirmed Inventory matching recorded in [`../initiatives/connect-workflows/LEDGER.md`](../initiatives/connect-workflows/LEDGER.md).
+
 ## Proof rules shared by every scenario
 
 - Interpret every instant in `America/Chicago`; the explicit UTC offset below is part of the fixture.
