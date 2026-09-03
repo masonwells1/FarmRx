@@ -1,13 +1,15 @@
 # FARM RX — BUILD HANDOFF
 ### A customer-facing farm management platform, by Crop RX Solutions
 
-**Hand this document to a fresh build session. It is self-contained.**
+**This document preserves the enduring product and design intent. It is not a current backlog or release-status report.**
+
+For current work, read [`README.md`](README.md) and [`GOAL.md`](GOAL.md) first. The 2026-07-18 owner directive prohibits real farmer use until 2027 and supersedes the original immediate-customer build order below. The 2026-08-10 owner amendment also authorized Connect Workflows and Soil Rx; those initiatives supersede older “not now” statements in this document without erasing the original design history.
 
 - **Product name:** Farm Rx
 - **Parent brand:** Crop RX Solutions (Robinson, IL)
 - **Audience:** Corn / soybean / wheat growers in southeastern Illinois & western Indiana
 - **Owner:** Mason Wells
-- **Status:** Production PWA deployed at **https://farm-rx.vercel.app**. Fields, Grain, and the broader farm workflow exist; current release work is customer-zero trust, onboarding recovery, device proof, and field feedback.
+- **Status:** Production PWA deployed at **https://farm-rx.vercel.app**. The governed season-readiness status is **RELEASE CANDIDATE READY**, not **COMPLETE**; current capability and remaining-gate truth lives in [`GOAL.md`](GOAL.md). Reverify GitHub, Vercel, and Supabase before treating any deployment or migration statement as current.
 - **Provisioning guard:** the owner-provisioning CLI takes no customer-email command argument.
   Use the documented create flow or resend mode and enter the email only at its prompt; never put a
   customer email in terminal history or a copied command.
@@ -393,7 +395,7 @@ The stat boxes, `DEEP_GREEN` section headers, zebra-striped tables, `WARN_RED` a
 
 ---
 
-## PART 6 — BUILD ORDER
+## PART 6 — ORIGINAL BUILD ORDER (HISTORICAL)
 
 1. **Preliminary:** Point Claude Code at the CRX Manager repo. Extract and document the reusable **Fields** (acres, billing splits) and **Inventory** (products, spray records, EPA compliance) engines.
 2. **Module 1 — Fields.** Nothing works without acres.
@@ -403,7 +405,7 @@ The stat boxes, `DEEP_GREEN` section headers, zebra-striped tables, `WARN_RED` a
 6. **Modules 5 & 6 — Equipment & Tasks.**
 7. **Module 7 — Machine data import.** Phase A (file upload) can land earlier if it unblocks actual-bushel entry.
 
-**Ship Fields + a usable Grain page in front of a handful of real Crop RX customers before building the rest.** Their reaction will reorder everything below it. This is the most important sentence in this document.
+**Superseded by the 2026-07-18 owner directive:** do not place Farm Rx in front of real farmers before 2027. Keep this original sequence only as product-history context; use [`GOAL.md`](GOAL.md) and active initiative ledgers for current work.
 
 ---
 
@@ -416,8 +418,8 @@ Considered and cut. Do not build:
 - App store distribution (PWA instead)
 - Scraping elevator websites
 
-**Roadmap — not now, but do not design in a way that blocks:**
-- Soil test storage per field *(Mason has an existing Kinsey-Albrecht interpreter to plug in)*
+**Roadmap and later amendments:**
+- Soil Rx is now an authorized three-tranche initiative. Follow the exact SRX scope in [`GOAL.md`](GOAL.md); do not infer current implementation status from this older roadmap.
 - CRX Manager → Farm Rx delivery sync
 - Barchart cash-bid feed
 - Leaf live machine-data sync
