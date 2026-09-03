@@ -3,7 +3,7 @@ import { dismissRevokedFarmRecovery, quarantineRevokedFarmWork, readRevokedFarmR
 import { legacyScoutingCleanupOutboxKey, scoutingCleanupOutboxKey, unownedScoutingCleanupRecoveryKey } from './scoutingCleanupOutbox'
 import { captureFarmRevocationFence, resetFarmGrantFromLive, resetFarmRevokedFromLive } from './farmRevocationFence'
 import { farmerError } from '../lib/farmerErrors'
-import { beginSoilRxAttachmentCustody, confirmSoilRxAttachmentRemoval, soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
+import { beginSoilRxAttachmentCustody, confirmSoilRxAttachmentRemoval, isSoilRxStoredCleanupEntry, readSoilRxCleanupOutbox, soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
 import { soilMeasurementKeys } from './soilRx'
 import { createSoilRxQueueEntry } from './soilRxWriteQueue'
 
@@ -21,6 +21,19 @@ const queuePrefixes = ['farm-rx-write-queue', 'farm-rx-field-location-queue', 'f
 const envelope = () => JSON.stringify({ version: 1, entries: [] })
 const notificationEntry = (targetFarm = farm) => ({ version: 1, module: 'notifications', kind: 'markRead', operationId: operation, userId: user, farmId: targetFarm, enqueuedAt: stamp, ids: ['00000000-0000-4000-8000-000000000014'] })
 const soilEntry = createSoilRxQueueEntry({ version: 1, module: 'soilRx', kind: 'saveTest', operationId: operation, userId: user, farmId: farm, enqueuedAt: stamp, operationContext: { projectRef: project, userId: user, farmId: farm, generation: 1, token: 'soil-rx-recovery-token-0001', serverEpoch: 1 }, draft: { id: note, field_id: field, sample_date: '2026-07-15', lab_name: 'Saved Lab', ...Object.fromEntries(soilMeasurementKeys.map((measurement) => [measurement, null])) } as never })
+
+// Persisted pre-receipt custody has exactly the original six own keys; current
+// custody adds only an own removedPaths array. Unknown, inherited, or malformed
+// seventh properties must never be mistaken for either shape.
+{ const path = `${farm}/${field}/${note}/shape.pdf`; const legacy = { kind: 'attachment_save' as const, testId: note, paths: [path], userId: user, farmId: farm, recordedAt: stamp }; const current = { ...legacy, removedPaths: [path] }
+  assert.equal(isSoilRxStoredCleanupEntry(legacy), true); assert.equal(isSoilRxStoredCleanupEntry(current), true)
+  assert.equal(isSoilRxStoredCleanupEntry({ ...legacy, unexpected: [] }), false)
+  assert.equal(isSoilRxStoredCleanupEntry({ ...legacy, removedPathz: [] }), false)
+  assert.equal(isSoilRxStoredCleanupEntry({ ...current, unexpected: [] }), false)
+  assert.equal(isSoilRxStoredCleanupEntry({ ...legacy, removedPaths: 'not-an-array' }), false)
+  const inherited = Object.create({ removedPaths: [path] }) as Record<string, unknown>; Object.assign(inherited, legacy); assert.equal(isSoilRxStoredCleanupEntry(inherited), false)
+  const storage = new MemoryStorage(); const cleanupKey = soilRxCleanupOutboxKey(project, user); storage.setItem(cleanupKey, JSON.stringify({ version: 2, entries: [legacy] })); assert.deepEqual(readSoilRxCleanupOutbox(storage, cleanupKey), [legacy])
+}
 
 // Empty revocations are harmless, and a later re-grant has no active queue to replay.
 { const storage = new MemoryStorage(); assert.equal(quarantineRevokedFarmWork(storage, { projectRef: project, userId: user, farmId: farm }, stamp), 0); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }

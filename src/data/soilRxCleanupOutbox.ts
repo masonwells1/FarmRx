@@ -15,14 +15,20 @@ function validPath(path: unknown, farmId: string, testId?: string) {
   return parts.length === 4 && isSoilRxUuid(parts[1]) && isSoilRxUuid(parts[2]) && (!testId || parts[2] === testId) && isSoilReportPath(path, { farmId, fieldId: parts[1], testId: parts[2] })
 }
 function validStamp(value: unknown) { return typeof value === 'string' && !Number.isNaN(Date.parse(value)) }
+const soilRxAttachmentLegacyKeys = ['kind', 'testId', 'paths', 'userId', 'farmId', 'recordedAt'] as const
+const soilRxAttachmentCurrentKeys = [...soilRxAttachmentLegacyKeys, 'removedPaths'] as const
+function hasExactOwnKeys(row: Record<string, unknown>, keys: readonly string[]) { return Object.keys(row).length === keys.length && keys.every((key) => Object.hasOwn(row, key)) }
 export function isSoilRxStoredCleanupEntry(value: unknown): value is SoilRxStoredCleanupEntry {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as Record<string, unknown>
   if (!isSoilRxUuid(row.userId) || !isSoilRxUuid(row.farmId) || !validStamp(row.recordedAt)) return false
   if (row.kind === 'report_path') return Object.keys(row).length === 5 && validPath(row.path, row.farmId)
   const paths = row.paths
+  if (row.kind !== 'attachment_save' || !isSoilRxUuid(row.testId) || !Array.isArray(paths) || paths.length === 0 || new Set(paths).size !== paths.length || !paths.every((path) => validPath(path, row.farmId as string, row.testId as string))) return false
+  if ('removedPaths' in row && !Object.hasOwn(row, 'removedPaths')) return false
+  if (hasExactOwnKeys(row, soilRxAttachmentLegacyKeys)) return true
   const removedPaths = row.removedPaths
-  return row.kind === 'attachment_save' && (Object.keys(row).length === 6 || Object.keys(row).length === 7) && isSoilRxUuid(row.testId) && Array.isArray(paths) && paths.length > 0 && new Set(paths).size === paths.length && paths.every((path) => validPath(path, row.farmId as string, row.testId as string)) && (removedPaths === undefined || (Array.isArray(removedPaths) && new Set(removedPaths).size === removedPaths.length && removedPaths.every((path) => typeof path === 'string' && paths.includes(path))))
+  return hasExactOwnKeys(row, soilRxAttachmentCurrentKeys) && Array.isArray(removedPaths) && new Set(removedPaths).size === removedPaths.length && removedPaths.every((path) => typeof path === 'string' && paths.includes(path))
 }
 function legacy(value: unknown): StoredReportCleanup | null {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 4) return null

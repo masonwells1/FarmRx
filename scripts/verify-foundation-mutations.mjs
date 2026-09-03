@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 164
+const expectedMutationCount = 167
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -20,7 +20,7 @@ const files = [
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
-  'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts',
+  'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
   'src/data/QueuedFieldsRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/QueuedHarvestRepository.ts',
   'src/data/QueuedInventoryRepository.ts', 'src/data/QueuedNotificationsRepository.ts', 'src/data/QueuedProfitabilityRepository.ts',
@@ -146,6 +146,15 @@ try {
   reset()
   mutate('src/data/revokedFarmRecovery.ts', (source) => source.replace('isSoilRxStoredCleanupEntry(value)', 'Object.keys(entry).length === 6'))
   detected('revoked Soil Rx custody reverts to obsolete six-key schema', 'soil-rx:revoked-custody-canonical-schema')
+  reset()
+  mutate('src/data/soilRxCleanupOutbox.ts', (source) => source.replace('Object.hasOwn(row, key)', 'true'))
+  detected('Soil Rx cleanup accepts inherited keys', 'soil-rx:cleanup-exact-own-membership')
+  reset()
+  mutate('src/data/soilRxCleanupOutbox.ts', (source) => source.replace("if ('removedPaths' in row && !Object.hasOwn(row, 'removedPaths')) return false", ''))
+  detected('Soil Rx cleanup accepts inherited removed paths', 'soil-rx:cleanup-inherited-removed-paths-refused')
+  reset()
+  mutate('src/data/soilRxCleanupOutbox.ts', (source) => source.replace('hasExactOwnKeys(row, soilRxAttachmentCurrentKeys)', 'Object.keys(row).length === 7'))
+  detected('Soil Rx cleanup accepts substituted current keys', 'soil-rx:cleanup-current-shape-required')
   reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationNativeLane -Lane 'built-browser' -Executable $nativeNpm -Arguments @('run','test:e2e') -Failure 'Built-browser foundation suite failed.' | Out-Null", "Invoke-FoundationLane { & npm run test:e2e } 'Built-browser foundation suite failed.'"))
   detected('built-browser native-lane bypass', 'orchestrator:native-browser-lane')
