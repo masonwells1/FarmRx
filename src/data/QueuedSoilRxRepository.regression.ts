@@ -109,6 +109,16 @@ await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removal
 assert.deepEqual(await removeSoilRxReportsWithGateway([cleanupPath], removalContext, removalGateway), [cleanupPath])
 assert.equal(absenceChecks, 1)
 
+// A database request can fail before its provisional Soil test exists. The
+// durable custody entry was intentionally written first, so its later retry
+// must be able to prove this never-uploaded path absent without requiring a
+// row that was never committed. The database function remains read-only; it
+// does not grant delete authority for this terminal proof.
+assert.deepEqual(await removeSoilRxReportsWithGateway([cleanupPath], removalContext, {
+  remove: async () => [],
+  verifyAbsent: async (paths) => paths.map((name) => ({ name })),
+}), [cleanupPath])
+
 const otherPath = `${farmId}/${fieldId}/${testId}/${uid(97)}.pdf`
 await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removalContext, { remove: async () => [], verifyAbsent: async () => { throw new Error('unauthorized absence verification') } }), /unauthorized/)
 await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removalContext, { remove: async () => [], verifyAbsent: async () => { throw new Error('absence verification failed') } }), /verification failed/)

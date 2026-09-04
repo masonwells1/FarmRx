@@ -313,18 +313,10 @@ begin
   then
     raise exception using errcode = '22023', message = 'invalid Soil report absence verification request';
   end if;
-  if exists (
-    select 1 from unnest(p_paths) requested(path)
-    where not exists (
-      select 1 from public.soil_tests test
-      where test.farm_id = p_farm_id
-        and test.field_id::text = split_part(requested.path, '/', 2)
-        and test.id::text = split_part(requested.path, '/', 3)
-    )
-  )
-  then
-    raise exception using errcode = '42501', message = 'soil report path is not owned by the current farm test';
-  end if;
+  -- This function never deletes an object.  A matching Soil test is required
+  -- by Storage RLS for deletion, but a failed first save has no test yet.  In
+  -- that narrow case an editor may still prove that the structurally farm-bound
+  -- path is absent and release its durable local cleanup record.
   return query
   select requested.path
   from unnest(p_paths) requested(path)
