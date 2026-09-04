@@ -75,9 +75,11 @@ reviews:
     - "!**/*.eot"
 
   auto_review:
-    # Do not spend a review on PR creation or on work-in-progress pushes.
-    # Post `@coderabbitai review` once the release-candidate commit is frozen,
-    # required checks are green, and the separate Sol review is clean.
+    # Do not spend a review on PR creation or on work-in-progress pushes. Once
+    # the release-candidate commit is frozen, required checks are green, and
+    # the separate Sol review is clean, apply `ready-for-coderabbit`. The
+    # trusted GitHub workflow validates that exact head and posts
+    # `@coderabbitai review` once.
     enabled: false
     auto_incremental_review: false
     drafts: false
