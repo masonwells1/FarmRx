@@ -5,7 +5,7 @@ import { resetFarmGrantFromLive } from './farmRevocationFence'
 import { needsAttentionKey, readNeedsAttention } from './needsAttentionStore'
 import { queueTransaction } from './queueTransaction'
 import { QueuedSoilRxRepository } from './QueuedSoilRxRepository'
-import { beginSoilRxAttachmentCustody, readSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
+import { beginSoilRxAttachmentCustody, readSoilRxAttachmentCustody, readSoilRxCleanupOutbox, recordSoilRxCleanup, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
 import { soilMeasurementKeys, type SoilReportMime, type SoilTest, type SoilTestDraft } from './soilRx'
 import { confirmSoilRxReportRemoval, maximumSoilReportBytes, removeSoilRxReportsWithGateway, validateSoilReportFile } from './soilRxStorage'
 import { createSoilRxQueueEntry, SoilRxWriteQueue, soilRxWriteQueueKey, type SoilRxQueueEntryPayloadV1, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
@@ -30,9 +30,8 @@ class MemoryStorage implements StorageLike {
 }
 
 type Mode = 'success' | 'metadata_ambiguous' | 'permanent_save_failure'
-function harness(projectRef: string) {
-  const storage = new MemoryStorage()
-  const scope = { projectRef, userId, farmId }
+function harness(projectRef: string, selectedFarmId = farmId, storage = new MemoryStorage()) {
+  const scope = { projectRef, userId, farmId: selectedFarmId }
   resetFarmGrantFromLive(storage, scope, 1, stamp)
   const rows = new Map<string, SoilTest>()
   const attachments = new Map<string, NonNullable<SoilTest['attachment']>>()
@@ -48,7 +47,8 @@ function harness(projectRef: string) {
   let nextId = 100
   let contextReadsUntilHook = 0
   let contextReadHook: (() => void) | null = null
-  const toTest = (input: SoilTestDraft): SoilTest => ({ ...input, id: input.id!, farm_id: farmId, created_by: userId, created_at: stamp, updated_at: stamp, attachment: attachments.get(input.id!) ?? null })
+  let removeHook: (() => Promise<void>) | null = null
+  const toTest = (input: SoilTestDraft): SoilTest => ({ ...input, id: input.id!, farm_id: selectedFarmId, created_by: userId, created_at: stamp, updated_at: stamp, attachment: attachments.get(input.id!) ?? null })
   const live = {
     async getData(field?: string) { return { tests: [...rows.values()].filter((test) => !field || test.field_id === field) } },
     async saveTestOperation(input: SoilTestDraft) {
@@ -57,7 +57,7 @@ function harness(projectRef: string) {
       const saved = toTest(input); rows.set(saved.id, saved); return saved
     },
     async saveAttachmentOperation(test: SoilTest, input: { id: string; storagePath: string; originalFilename: string; mimeType: SoilReportMime; sizeBytes: number }) {
-      const attachment = { id: input.id, farm_id: farmId, field_id: test.field_id, test_id: test.id, storage_path: input.storagePath, original_filename: input.originalFilename, mime_type: input.mimeType, size_bytes: input.sizeBytes, created_by: userId, created_at: stamp }
+      const attachment = { id: input.id, farm_id: selectedFarmId, field_id: test.field_id, test_id: test.id, storage_path: input.storagePath, original_filename: input.originalFilename, mime_type: input.mimeType, size_bytes: input.sizeBytes, created_by: userId, created_at: stamp }
       attachments.set(test.id, attachment)
       rows.set(test.id, { ...test, attachment })
       if (mode === 'metadata_ambiguous') throw new Error('metadata response was lost')
@@ -74,12 +74,13 @@ function harness(projectRef: string) {
   const repository = new QueuedSoilRxRepository(live, {
     getContext: async () => {
       if (contextReadsUntilHook > 0 && --contextReadsUntilHook === 0) { const hook = contextReadHook; contextReadHook = null; hook?.() }
-      return { userId, farmId }
+      return { userId, farmId: selectedFarmId }
     }, projectRef, storage,
     createId: () => uid(nextId++), clock: () => stamp, isOffline: () => offline,
     createReportPath: (farm, field, test) => `${farm}/${field}/${test}/${uid(nextId++)}.pdf`,
     uploadReport: async (path) => { objects.add(path); if (changeEpochAfterUpload) resetFarmGrantFromLive(storage, scope, 2, '2027-01-15T12:01:00.000Z') },
     removeReports: async (paths) => {
+      await removeHook?.()
       if (removeFailure) throw new Error('storage cleanup failed')
       for (const path of paths) {
         const test = [...rows.values()].find((candidate) => candidate.id === path.split('/')[2])
@@ -96,6 +97,7 @@ function harness(projectRef: string) {
     storage, scope, rows, attachments, objects, savedIds, repository,
     setMode: (next: Mode) => { mode = next }, setOffline: (next: boolean) => { offline = next },
     setEpochChange: (next: boolean) => { changeEpochAfterUpload = next }, setRemoveFailure: (next: boolean) => { removeFailure = next }, setTerminalAbsenceFailure: (next: boolean) => { terminalAbsenceFailure = next }, getTerminalAbsenceChecks: () => terminalAbsenceChecks, setRollbackFailure: (next: boolean) => { rollbackFailure = next },
+    setRemoveHook: (next: (() => Promise<void>) | null) => { removeHook = next },
     setContextReadHook: (reads: number, hook: () => void) => { contextReadsUntilHook = reads; contextReadHook = hook },
   }
 }
@@ -144,6 +146,37 @@ const invalidRemovalGateway = { remove: async () => { invalidRemovalCalls += 1; 
 await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath, cleanupPath], removalContext, invalidRemovalGateway), /path changed/)
 await assert.rejects(() => removeSoilRxReportsWithGateway([`${uid(500)}/${fieldId}/${testId}/${uid(96)}.pdf`], removalContext, invalidRemovalGateway), /path changed/)
 assert.equal(invalidRemovalCalls, 0)
+
+// Two farms for one account share one Soil Rx cleanup envelope. Farm A pauses
+// after reading its legacy cleanup while Farm B attempts an attachment save.
+// The user-scoped cleanup transaction must keep Farm B out until Farm A has
+// persisted its removal, so neither farm can overwrite the other's custody.
+{
+  const sharedStorage = new MemoryStorage()
+  const projectRef = 'soil-rx-cross-farm-cleanup-lock'
+  const otherFarmId = uid(12), otherFieldId = uid(13), otherTestId = uid(14)
+  const first = harness(projectRef, farmId, sharedStorage)
+  const second = harness(projectRef, otherFarmId, sharedStorage)
+  const key = soilRxCleanupOutboxKey(projectRef, userId)
+  const firstPath = `${farmId}/${fieldId}/${testId}/legacy.pdf`
+  assert.equal(recordSoilRxCleanup(sharedStorage, key, { path: firstPath, userId, farmId, recordedAt: stamp }), true)
+  let announceRemoval!: () => void, releaseRemoval!: () => void
+  const removalEntered = new Promise<void>((resolve) => { announceRemoval = resolve })
+  const removalRelease = new Promise<void>((resolve) => { releaseRemoval = resolve })
+  first.setRemoveHook(async () => { announceRemoval(); await removalRelease })
+  const firstDrain = first.repository.getData()
+  await removalEntered
+  const secondSave = second.repository.saveTest({ ...draft(otherTestId), field_id: otherFieldId }, report)
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  assert.equal(second.rows.size, 0, 'Another farm entered the shared cleanup mutation while the first farm held its transaction.')
+  assert.deepEqual(readSoilRxCleanupOutbox(sharedStorage, key).map((entry) => entry.farmId), [farmId], 'The waiting farm changed the shared cleanup envelope before the holder committed.')
+  releaseRemoval()
+  await firstDrain
+  assert.equal((await secondSave).id, otherTestId)
+  assert.deepEqual([...second.rows.keys()], [otherTestId])
+  assert.equal(second.objects.size, 1)
+  assert.deepEqual(readSoilRxCleanupOutbox(sharedStorage, key), [])
+}
 
 // The custody record is written before the provisional Soil row. A permanent
 // save failure can therefore leave neither row nor object. A failed terminal

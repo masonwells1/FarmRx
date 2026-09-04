@@ -2,7 +2,7 @@ import { isTransportFailure } from './QueuedFieldsRepository'
 import { appendNeedsAttention, dismissNeedsAttention, readNeedsAttention, type NeedsAttentionRecord } from './needsAttentionStore'
 import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 import { queueTransaction } from './queueTransaction'
-import { beginSoilRxAttachmentCustody, confirmSoilRxAttachmentRemoval, drainSoilRxCleanupOutbox, readSoilRxAttachmentCustody, readSoilRxCleanupOutbox, releaseSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey, type SoilRxAttachmentCustodyEntry } from './soilRxCleanupOutbox'
+import { beginSoilRxAttachmentCustody, confirmSoilRxAttachmentRemoval, drainSoilRxCleanupOutbox, readSoilRxAttachmentCustody, readSoilRxCleanupOutbox, releaseSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey, soilRxCleanupOutboxTransaction, type SoilRxAttachmentCustodyEntry } from './soilRxCleanupOutbox'
 import { createSoilRxQueueEntry, SoilRxWriteQueue, parseSoilRxQueue, soilRxWriteQueueKey, type QueuedSoilTestDraft, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
 import { normalizeSoilTestDraft, sortSoilTestsNewestFirst, validateSoilTestDraft, type SoilReportMime, type SoilRxData, type SoilRxRepository, type SoilTest, type SoilTestDraft } from './soilRx'
 import { validateSoilReportFile } from './soilRxStorage'
@@ -51,6 +51,15 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
   }
   private async retain(source: Source, data: SoilRxData) { this.workspace = data; await writeWorkspaceCache(this.cacheScope(source.context), data, captureWorkspaceCacheFence(this.cacheScope(source.context))); await verifyQueuedReadContext(this.d, source.operationContext) }
   private cleanupKey(userId: string) { return soilRxCleanupOutboxKey(this.d.projectRef, userId) }
+  private cleanupLocked<T>(source: Source, verifyQueue: () => void, task: (verify: () => void) => Promise<T>) {
+    return soilRxCleanupOutboxTransaction(this.d.storage, this.d.projectRef, source.context.userId, this.d.createId, async (verifyCleanup) => {
+      const verify = () => { verifyQueue(); verifyCleanup() }
+      verify()
+      const result = await task(verify)
+      verify()
+      return result
+    })
+  }
   private refreshSync(source: Source) {
     const queued = source.queue.read().entries.length
     const parked = readNeedsAttention(this.d.storage, source.queue.key).length
@@ -105,7 +114,9 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
 
   async getData(fieldId?: string) {
     const source = await this.source()
-    await queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => { await this.drainCleanup(source, verify) })
+    await queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
+      await this.cleanupLocked(source, verify, async (verifyCleanup) => { await this.drainCleanup(source, verifyCleanup) })
+    })
     const entries = source.queue.read().entries; this.refreshSync(source)
     try {
       const data = await this.live.getData(fieldId); await verifyQueuedReadContext(this.d, source.operationContext)
@@ -129,7 +140,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     if (report) {
       const fileError = validateSoilReportFile(report); if (fileError) throw new Error(fileError)
       if (this.d.isOffline()) throw new Error('Connect to the internet to attach a lab report. Text-only Soil Rx records can still save offline.')
-      return queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
+      return queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verifyQueue) => this.cleanupLocked(source, verifyQueue, async (verify) => {
         const custodyKey = this.cleanupKey(source.context.userId)
         const path = this.d.createReportPath(source.context.farmId, normalized.field_id, normalized.id, report)
         const nextCustody = { testId: normalized.id, path, ...source.context, recordedAt: this.d.clock() }
@@ -158,7 +169,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
           }
           throw error
         }
-      })
+      }))
     }
     const entry = createSoilRxQueueEntry({ version: 1, module: 'soilRx', kind: 'saveTest', operationId: this.d.createId(), userId: source.context.userId, farmId: source.context.farmId, enqueuedAt: this.d.clock(), operationContext: source.operationContext, draft: normalized })
     return queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
@@ -174,7 +185,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     const source = await this.source()
     try {
       await queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
-        await this.drainCleanup(source, verify)
+        await this.cleanupLocked(source, verify, async (verifyCleanup) => { await this.drainCleanup(source, verifyCleanup) })
         let envelope = source.queue.read()
         if (!envelope.entries.length) { this.refreshSync(source); return }
         if (this.d.isOffline()) { setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); return }

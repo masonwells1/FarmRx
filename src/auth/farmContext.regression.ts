@@ -20,13 +20,14 @@ Object.defineProperty(globalThis, 'window', { configurable: true, value: { local
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { onLine: true } })
 
 const { supabase } = await import('../lib/supabaseClient')
-const { beginFarmReplayAuthorization, canAccessFarmModule, canEditFarmModule, canReplayFarmModule, captureFarmReplayContextGuard, clearFarmAccess, clearFarmReadyAuthorization, createFarmAccessValidationGate, currentFarmContext, currentUserId, deriveFarmAccessProfile, FarmAccessStorageUnsafeError, isDefiniteTransportFailure, isFarmReplayAuthoritativelyOffline, loadFarmAccess, loadFarmAccessProfile, publishFarmReadyAuthorization, restoreOfflineFarmUserId, selectFarm } = await import('./farmContext')
+const { beginFarmReplayAuthorization, canAccessFarmModule, canEditFarmModule, canReplayFarmModule, captureFarmReplayContextGuard, clearFarmAccess, clearFarmReadyAuthorization, createFarmAccessValidationGate, currentFarmContext, currentUserId, deriveFarmAccessProfile, FarmAccessStorageUnsafeError, hasPendingFarmWork, isDefiniteTransportFailure, isFarmReplayAuthoritativelyOffline, loadFarmAccess, loadFarmAccessProfile, publishFarmReadyAuthorization, restoreOfflineFarmUserId, selectFarm } = await import('./farmContext')
 const { captureFarmRevocationFence, farmRevocationFenceKey, farmRevocationGenerationKey, inspectFarmRevocationState, markFarmRevoked, prepareFarmRevocationRecoveryFence, readFarmRevocationRecoveryFence, resetFarmGrantFromLive, resetFarmRevokedFromLive, verifyFarmRevocationFence } = await import('../data/farmRevocationFence')
 const { quarantineRevokedFarmWork, readRevokedFarmRecovery } = await import('../data/revokedFarmRecovery')
 const { FieldLogWriteQueue } = await import('../data/fieldLogWriteQueue')
 const { deviceClockHighWaterKey } = await import('../data/deviceClockFence')
 const { farmActiveContextKey, writeFarmAccessEpochs } = await import('./farmAccessEpoch')
 const { supabaseConfig } = await import('../lib/supabaseConfig')
+const { beginSoilRxAttachmentCustody, soilRxCleanupOutboxKey } = await import('../data/soilRxCleanupOutbox')
 
 const userA = '00000000-0000-4000-8000-000000000001'
 const userB = '00000000-0000-4000-8000-000000000002'
@@ -34,6 +35,22 @@ const farmA = '00000000-0000-4000-8000-000000000011'
 const farmB = '00000000-0000-4000-8000-000000000022'
 const now = '2026-07-15T12:00:00.000Z'
 const farm = (id: string, userId: string, name: string, shareWithRep = false) => ({ id, name, share_with_rep: shareWithRep, created_by: userId, created_at: now, updated_at: now })
+
+// Soil Rx cleanup is user-scoped so farm switching must inspect the entries,
+// not search for the farm ID in the storage key. Other-farm cleanup is a
+// negative control; unreadable shared custody warns fail closed.
+;{
+  const pendingStorage = new MemoryStorage()
+  const cleanupKey = soilRxCleanupOutboxKey(supabaseConfig.projectRef, userA)
+  beginSoilRxAttachmentCustody(pendingStorage, cleanupKey, { testId: userB, path: `${farmA}/${farmB}/${userB}/farm-a.pdf`, userId: userA, farmId: farmA, recordedAt: now })
+  Object.defineProperty(window, 'localStorage', { configurable: true, value: pendingStorage })
+  assert.equal(hasPendingFarmWork(userA, farmA), true, 'Farm switching hid pending Soil Rx cleanup stored under the shared user key.')
+  assert.equal(hasPendingFarmWork(userA, farmB), false, 'Another farm\'s Soil Rx cleanup incorrectly blocked a clean farm switch.')
+  assert.equal(hasPendingFarmWork(userB, farmA), false, 'Another account\'s Soil Rx cleanup incorrectly blocked a farm switch.')
+  pendingStorage.setItem(cleanupKey, '{unreadable')
+  assert.equal(hasPendingFarmWork(userA, farmB), true, 'Unreadable shared Soil Rx cleanup did not warn fail closed.')
+  Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
+}
 
 let currentUser = userA
 let currentToken = 'session-user-a'

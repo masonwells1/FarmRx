@@ -1,4 +1,5 @@
 import { isSoilReportPath, isSoilRxUuid } from './soilRx'
+import { coordinatedDeviceTransaction } from './queueTransaction'
 import type { StorageLike } from './writeQueue'
 
 export interface SoilRxCleanupEntry { path: string; userId: string; farmId: string; recordedAt: string }
@@ -8,6 +9,9 @@ export type SoilRxStoredCleanupEntry = StoredReportCleanup | SoilRxAttachmentCus
 interface Envelope { version: 2; entries: SoilRxStoredCleanupEntry[] }
 
 export function soilRxCleanupOutboxKey(projectRef: string, userId: string) { return `farm-rx-soil-rx-cleanup:v1:${projectRef}:${userId}` }
+export function soilRxCleanupOutboxTransaction<T>(storage: StorageLike, projectRef: string, userId: string, createId: () => string, task: (verify: () => void) => Promise<T>) {
+  return coordinatedDeviceTransaction(soilRxCleanupOutboxKey(projectRef, userId), storage, createId, task)
+}
 
 function validPath(path: unknown, farmId: string, testId?: string) {
   if (typeof path !== 'string') return false
