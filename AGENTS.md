@@ -28,14 +28,21 @@ Farm Rx `main` is linked to the production Vercel project. A merge or push to `m
 
 CodeRabbit does not review PRs automatically. Finish implementation and the separate exact-commit
 Sol review first. Bring the branch current and green with auto-merge OFF, freeze the release
-candidate, record its head SHA, then post exactly `@coderabbitai review` on the PR and read the
-result. Before merging, verify the active `main` protection still requires at least one approval
-and dismisses stale approvals, then compare the PR's final `headRefOid` with the `commit_id` of an
-`APPROVED` CodeRabbit review. GitHub requires that formal approval and dismisses it when the
-candidate changes. Merge immediately with `--match-head-commit <reviewed-head-sha>` and never use
-`--auto`.
-Fix real findings; if a finding or base update creates a new commit, restart checks and request one
-follow-up incremental review. Never use `@coderabbitai resume`, because it re-enables automatic
-reviews, and use `@coderabbitai full review` only when a complete reread is deliberately justified.
+candidate, record its head SHA, then apply `ready-for-coderabbit`. The trusted default-branch
+workflow rechecks the live head, draft/conflict/auto-merge state, actor permission, required checks,
+and every reported non-CodeRabbit check. It records `coderabbit-review-requested`, removes the ready
+label, and posts exactly `@coderabbitai review` once. A new commit, reopened PR, or draft conversion
+clears both labels; duplicate events do not post duplicate reviews. If the gate fails, it removes
+the ready label and posts nothing — correct the named blocker and relabel. A failed comment post is
+checked against the live PR: dedupe state is kept if the command landed, otherwise both labels
+clear for a deliberate retry. Read the result. Before
+merging, verify the active `main` protection still requires at least one approval and dismisses
+stale approvals, then compare the PR's final `headRefOid` with the `commit_id` of an `APPROVED`
+CodeRabbit review. GitHub requires that formal approval and dismisses it when the candidate changes.
+Merge immediately with `--match-head-commit <reviewed-head-sha>` and never use `--auto`.
+Fix real findings; if a finding or base update creates a new commit, restart checks and apply the
+ready label again for one follow-up incremental review. Never use `@coderabbitai resume`, because
+it re-enables automatic reviews, and use `@coderabbitai full review` only when a complete reread is
+deliberately justified.
 
 Get Mason's explicit approval before push, pull-request mutation, main/production push, merge, deploy, live migration, live data change, secrets/auth/permissions change, customer account action, customer communication, or destructive action. Approval for local edits, tests, or a commit does not authorize any later gate.
