@@ -97,16 +97,18 @@ function assertNutrientRemovalContract(source: string) {
   expect(source).toContain("{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence}")
   expect(source).toContain("Farm Rx does not combine years or planting sequences.")
   expect(source).toContain("cornNitrogen: { label: 'Illinois Agronomy Handbook, Nitrogen Management for Corn'")
-  expect(source).toContain("soybeanWheatNitrogen: { label: 'University of Delaware Cooperative Extension, Nitrogen Removal by Delaware Crops'")
+  expect(source).toContain("soybeanNitrogen: { label: 'University of Delaware Cooperative Extension, Nitrogen Removal by Delaware Crops'")
+  expect(source).not.toContain('soybeanWheatNitrogen')
   expect(source).toContain("nitrogen: 0.60, phosphorus: 0.37, potassium: 0.24")
   expect(source).toContain("soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 }")
-  expect(source).toContain("wheat: { nitrogen: 1.05, phosphorus: 0.47, potassium: 0.30 }")
+  expect(source).not.toMatch(/\bwheat\s*:\s*\{\s*nitrogen/)
+  expect(source).toContain('!Object.hasOwn(nutrientRemovalCoefficients, family)')
   expect(source).toContain("{ label: 'N', amount: crop.harvested_bushels * coefficients.nitrogen }")
   expect(source).not.toContain('nitrogenUnavailable')
   expect(source).toContain("Source for corn N (0.60 lb/bu)")
-  expect(source).toContain("Source for soybean N (3.44 lb/bu) and wheat N (1.05 lb/bu)")
-  expect(source).toContain("stated 0.47 lb/bu actual wheat P₂O₅ removal, not its separately adjusted 0.90 lb/bu maintenance rate")
-  expect(source).toContain("available for corn, soybeans, and wheat only")
+  expect(source).toContain("Source for soybean N (3.44 lb/bu)")
+  expect(source).toContain("Source for corn and soybean P₂O₅ and K₂O")
+  expect(source).toContain("available for corn and soybeans only")
 }
 function assertArchivedFieldHistoryContract(source: string) {
   expect(source).toContain("fieldData.fields.map(({ id, name, is_active }) => ({ id, name, isActive: is_active }))")
@@ -157,14 +159,15 @@ test('Soil Rx nutrient-removal source and assignment-identity guard rejects cont
     ['remove planting sequence', source.replace('{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence}', '{estimate.crop} · {estimate.cropYear}')],
     ['omit soybean nitrogen', source.replace('soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 }', 'soybeans: { phosphorus: 0.75, potassium: 1.17 }')],
     ['swap soybean nitrogen and phosphorus', source.replace('soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 }', 'soybeans: { nitrogen: 0.75, phosphorus: 3.44, potassium: 1.17 }')],
-    ['omit wheat support', source.replace("  wheat: { nitrogen: 1.05, phosphorus: 0.47, potassium: 0.30 },\n", '')],
-    ['swap wheat phosphorus and potassium', source.replace('wheat: { nitrogen: 1.05, phosphorus: 0.47, potassium: 0.30 }', 'wheat: { nitrogen: 1.05, phosphorus: 0.30, potassium: 0.47 }')],
+    ['add wheat support', source.replace("  soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 },\n", "  soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 },\n  wheat: { nitrogen: 1.05, phosphorus: 0.47, potassium: 0.30 },\n")],
+    ['claim wheat availability', source.replace('available for corn and soybeans only', 'available for corn, soybeans, and wheat only')],
+    ['accept inherited crop-family names', source.replace('!Object.hasOwn(nutrientRemovalCoefficients, family)', '!(family in nutrientRemovalCoefficients)')],
     ['replace corn nitrogen coefficient', source.replace('nitrogen: 0.60, phosphorus: 0.37, potassium: 0.24', 'nitrogen: 0.61, phosphorus: 0.37, potassium: 0.24')],
     ['remove corn nitrogen source', source.replace("cornNitrogen: { label: 'Illinois Agronomy Handbook, Nitrogen Management for Corn'", "cornNitrogen: { label: 'Uncited corn nitrogen'" )],
-    ['remove soybean and wheat nitrogen source', source.replace("soybeanWheatNitrogen: { label: 'University of Delaware Cooperative Extension, Nitrogen Removal by Delaware Crops'", "soybeanWheatNitrogen: { label: 'Uncited nitrogen'" )],
+    ['remove soybean nitrogen source', source.replace("soybeanNitrogen: { label: 'University of Delaware Cooperative Extension, Nitrogen Removal by Delaware Crops'", "soybeanNitrogen: { label: 'Uncited nitrogen'" )],
     ['drop generic nitrogen estimate', source.replace("      { label: 'N', amount: crop.harvested_bushels * coefficients.nitrogen },\n", '')],
   ]
-  expect(mutations).toHaveLength(11)
+  expect(mutations).toHaveLength(12)
   for (const [name, mutation] of mutations) { expect(mutation, `${name} mutation did not alter source`).not.toBe(source); expect(() => assertNutrientRemovalContract(mutation), `${name} mutation survived nutrient-removal proof`).toThrow() }
 })
 
@@ -265,20 +268,17 @@ test('Soil Rx keeps recorded harvest assignments separate across years and plant
   await expect(removal.getByRole('heading', { name: 'Corn · 2026 · planting 1 · 8,000 bu on 40 ac' })).toBeVisible()
   await expect(removal.getByRole('heading', { name: 'Corn · 2026 · planting 2 · 8,000 bu on 40 ac' })).toBeVisible()
   await expect(removal.getByRole('heading', { name: 'Soybeans · 2026 · planting 1 · 1,000 bu on 25 ac' })).toBeVisible()
-  await expect(removal.getByRole('heading', { name: 'Wheat · 2026 · planting 1 · 1,000 bu on 20 ac' })).toBeVisible()
+  await expect(removal.getByRole('heading', { name: 'Wheat · 2026 · planting 1 · 1,000 bu on 20 ac' })).toHaveCount(0)
   await expect(removal.getByRole('heading', { name: 'Corn · 2027 · planting 1 · 0 bu on 40 ac' })).toBeVisible()
   await expect(removal).toContainText('1,920 lb total · 48 lb/ac')
   const soybean = removal.getByRole('region', { name: 'Soybeans 2026 planting 1 removal estimate' })
-  const wheat = removal.getByRole('region', { name: 'Wheat 2026 planting 1 removal estimate' })
+  await expect(removal.getByRole('region', { name: 'Wheat 2026 planting 1 removal estimate' })).toHaveCount(0)
   const nutrientValue = (estimate: Locator, label: string) => estimate.locator('dt', { hasText: new RegExp(`^${label}$`) }).locator('xpath=..').locator('dd')
   await expect(nutrientValue(soybean, 'N')).toHaveText('3,440 lb total · 137.6 lb/ac')
   await expect(nutrientValue(soybean, 'P₂O₅')).toHaveText('750 lb total · 30 lb/ac')
   await expect(nutrientValue(soybean, 'K₂O')).toHaveText('1,170 lb total · 46.8 lb/ac')
-  await expect(nutrientValue(wheat, 'N')).toHaveText('1,050 lb total · 52.5 lb/ac')
-  await expect(nutrientValue(wheat, 'P₂O₅')).toHaveText('470 lb total · 23.5 lb/ac')
-  await expect(nutrientValue(wheat, 'K₂O')).toHaveText('300 lb total · 15 lb/ac')
   await expect(soybean.locator('dt')).toHaveText(['N', 'P₂O₅', 'K₂O'])
-  await expect(wheat.locator('dt')).toHaveText(['N', 'P₂O₅', 'K₂O'])
+  await expect(removal.getByText('Harvest-removal estimates are available for corn and soybeans only.', { exact: true })).toBeVisible()
   await expect(removal).not.toContainText('24,000 bu')
   expect(state.writes).toEqual([])
   expectProtectedNonwrite(state, protectedBefore)

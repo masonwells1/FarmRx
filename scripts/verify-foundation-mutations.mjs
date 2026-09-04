@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 182
+const expectedMutationCount = 184
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -176,6 +176,12 @@ try {
   reset()
   mutate('src/SoilRxModule.tsx', (source) => source.replace('popup.close()', 'void popup.closed'))
   detected('Soil Rx report popup failure cleanup removed', 'soil-rx:report-popup-failure-cleanup')
+  reset()
+  mutate('src/SoilRxModule.tsx', (source) => source.replace("  soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 },\n", "  soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 },\n  wheat: { nitrogen: 1.05, phosphorus: 0.47, potassium: 0.30 },\n"))
+  detected('Soil Rx wheat nutrient-removal scope expansion', 'soil-rx:nutrient-removal-corn-soy-only')
+  reset()
+  mutate('src/SoilRxModule.tsx', (source) => source.replace('!Object.hasOwn(nutrientRemovalCoefficients, family)', '!(family in nutrientRemovalCoefficients)'))
+  detected('Soil Rx inherited crop-family acceptance', 'soil-rx:nutrient-removal-own-family')
   reset()
   mutate('supabase/migrations/20260810223508_soil_rx_storage.sql', (source) => source.replaceAll('not public.can_edit_farm(p_farm_id)', 'false'))
   detected('Soil Rx absence RPC edit authorization removed', 'soil-rx:absence-rpc-edit-access')

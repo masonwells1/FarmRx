@@ -193,6 +193,11 @@ export function foundationStaticGuard(root = process.cwd()) {
   for (const [required, label] of [["returns table(name text)\nlanguage plpgsql\nstable\nsecurity definer\nset search_path = public, pg_temp", 'shape'], ['perform public.assert_current_farm_access_epoch(p_farm_id);', 'epoch'], ['not public.can_edit_farm(p_farm_id)', 'edit-access'], ["where test.farm_id = p_farm_id and test.id = p_test_id", 'farm-scoped-row'], ["object.bucket_id = 'soil-test-reports'\n      and object.name = any (p_paths)", 'physical-object'], ["return query select requested.path from unnest(p_paths) requested(path) order by requested.path", 'exact-receipt']]) requireText(errors, terminalAbsence, required, `soil-rx:terminal-absence-rpc-${label}`)
   requireText(errors, soilMigration, 'public.verify_soil_report_cleanup_terminal_absence(uuid, uuid, uuid, text[])\nto authenticated;', 'soil-rx:terminal-absence-rpc-authenticated-grant')
   const soilModule = read(root, 'src/SoilRxModule.tsx')
+  requireText(errors, soilModule, "soybeanNitrogen: { label: 'University of Delaware Cooperative Extension, Nitrogen Removal by Delaware Crops'", 'soil-rx:nutrient-removal-soybean-source')
+  requireText(errors, soilModule, "corn: { nitrogen: 0.60, phosphorus: 0.37, potassium: 0.24 },\n  soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 },\n} as const", 'soil-rx:nutrient-removal-corn-soy-only')
+  requireText(errors, soilModule, '!Object.hasOwn(nutrientRemovalCoefficients, family)', 'soil-rx:nutrient-removal-own-family')
+  requireText(errors, soilModule, 'Harvest-removal estimates are available for corn and soybeans only.', 'soil-rx:nutrient-removal-unsupported-copy')
+  if (/\bwheat\s*:\s*\{\s*nitrogen/.test(soilModule) || soilModule.includes('soybeanWheatNitrogen')) errors.push('soil-rx:nutrient-removal-corn-soy-only')
   const openReport = soilModule.slice(soilModule.indexOf('async function openReport'), soilModule.indexOf('\n\n  return <section', soilModule.indexOf('async function openReport')))
   const popupOpen = openReport.indexOf("const popup = window.open('about:blank', '_blank')")
   const signedUrl = openReport.indexOf('await repository.getReportUrl')
@@ -395,7 +400,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 182')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 184')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
