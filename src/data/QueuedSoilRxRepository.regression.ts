@@ -42,6 +42,8 @@ function harness(projectRef: string) {
   let offline = false
   let changeEpochAfterUpload = false
   let removeFailure = false
+  let terminalAbsenceFailure = false
+  let terminalAbsenceChecks = 0
   let rollbackFailure = false
   let nextId = 100
   let contextReadsUntilHook = 0
@@ -81,7 +83,11 @@ function harness(projectRef: string) {
       if (removeFailure) throw new Error('storage cleanup failed')
       for (const path of paths) {
         const test = [...rows.values()].find((candidate) => candidate.id === path.split('/')[2])
-        if (!test) throw new Error('storage RLS denied cleanup after Soil test removal')
+        if (!test && objects.has(path)) throw new Error('storage RLS denied cleanup while an orphan object remains')
+        if (!test) {
+          terminalAbsenceChecks += 1
+          if (terminalAbsenceFailure) throw new Error('terminal absence verification failed')
+        }
       }
       paths.forEach((path) => objects.delete(path)); return paths
     },
@@ -89,7 +95,7 @@ function harness(projectRef: string) {
   return {
     storage, scope, rows, attachments, objects, savedIds, repository,
     setMode: (next: Mode) => { mode = next }, setOffline: (next: boolean) => { offline = next },
-    setEpochChange: (next: boolean) => { changeEpochAfterUpload = next }, setRemoveFailure: (next: boolean) => { removeFailure = next }, setRollbackFailure: (next: boolean) => { rollbackFailure = next },
+    setEpochChange: (next: boolean) => { changeEpochAfterUpload = next }, setRemoveFailure: (next: boolean) => { removeFailure = next }, setTerminalAbsenceFailure: (next: boolean) => { terminalAbsenceFailure = next }, getTerminalAbsenceChecks: () => terminalAbsenceChecks, setRollbackFailure: (next: boolean) => { rollbackFailure = next },
     setContextReadHook: (reads: number, hook: () => void) => { contextReadsUntilHook = reads; contextReadHook = hook },
   }
 }
@@ -109,19 +115,26 @@ await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removal
 assert.deepEqual(await removeSoilRxReportsWithGateway([cleanupPath], removalContext, removalGateway), [cleanupPath])
 assert.equal(absenceChecks, 1)
 
-// A database request can fail before its provisional Soil test exists. The
-// durable custody entry was intentionally written first, so its later retry
-// must be able to prove this never-uploaded path absent without requiring a
-// row that was never committed. The database function remains read-only; it
-// does not grant delete authority for this terminal proof.
+// Only the exact missing-row ownership denial may use the purpose-specific
+// terminal verifier. That verifier still has to return the exact receipt.
+let terminalChecks = 0
+const missingRowOwnership = Object.assign(new Error('soil report path is not owned by the current farm test'), { code: '42501' })
 assert.deepEqual(await removeSoilRxReportsWithGateway([cleanupPath], removalContext, {
   remove: async () => [],
-  verifyAbsent: async (paths) => paths.map((name) => ({ name })),
+  verifyAbsent: async () => { throw missingRowOwnership },
+  verifyTerminalAbsence: async (paths, _context, scope) => { terminalChecks += 1; assert.deepEqual(scope, { fieldId, testId }); return paths.map((name) => ({ name })) },
 }), [cleanupPath])
+assert.equal(terminalChecks, 1)
 
 const otherPath = `${farmId}/${fieldId}/${testId}/${uid(97)}.pdf`
 await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removalContext, { remove: async () => [], verifyAbsent: async () => { throw new Error('unauthorized absence verification') } }), /unauthorized/)
 await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removalContext, { remove: async () => [], verifyAbsent: async () => { throw new Error('absence verification failed') } }), /verification failed/)
+let unauthorizedTerminalChecks = 0
+await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removalContext, { remove: async () => [], verifyAbsent: async () => { throw Object.assign(new Error('soil report absence verification requires current farm edit access'), { code: '42501' }) }, verifyTerminalAbsence: async () => { unauthorizedTerminalChecks += 1; return [{ name: cleanupPath }] } }), /edit access/)
+assert.equal(unauthorizedTerminalChecks, 0)
+await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath, otherPath], removalContext, { remove: async () => [], verifyAbsent: async () => { throw missingRowOwnership }, verifyTerminalAbsence: async () => [{ name: cleanupPath }] }), /could not confirm Soil Rx attachment cleanup/)
+await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removalContext, { remove: async () => [], verifyAbsent: async () => { throw missingRowOwnership }, verifyTerminalAbsence: async () => [] }), /could not confirm Soil Rx attachment cleanup/)
+await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removalContext, { remove: async () => [], verifyAbsent: async () => { throw missingRowOwnership }, verifyTerminalAbsence: async () => { throw new Error('terminal verification failed') } }), /terminal verification failed/)
 await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath, otherPath], removalContext, { remove: async () => [], verifyAbsent: async () => [{ name: cleanupPath }] }), /could not confirm Soil Rx attachment cleanup/)
 let malformedReceiptChecks = 0
 await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath], removalContext, { remove: async () => [{ name: otherPath }], verifyAbsent: async () => { malformedReceiptChecks += 1; return [{ name: cleanupPath }] } }), /could not confirm Soil Rx attachment cleanup/)
@@ -131,6 +144,25 @@ const invalidRemovalGateway = { remove: async () => { invalidRemovalCalls += 1; 
 await assert.rejects(() => removeSoilRxReportsWithGateway([cleanupPath, cleanupPath], removalContext, invalidRemovalGateway), /path changed/)
 await assert.rejects(() => removeSoilRxReportsWithGateway([`${uid(500)}/${fieldId}/${testId}/${uid(96)}.pdf`], removalContext, invalidRemovalGateway), /path changed/)
 assert.equal(invalidRemovalCalls, 0)
+
+// The custody record is written before the provisional Soil row. A permanent
+// save failure can therefore leave neither row nor object. A failed terminal
+// check must retain custody; the next load drains it only after exact absence
+// is authoritatively confirmed.
+const preRow = harness('soil-rx-pre-row-save-failure')
+preRow.setMode('permanent_save_failure')
+preRow.setTerminalAbsenceFailure(true)
+await assert.rejects(() => preRow.repository.saveTest(draft(), report), /validation failed/)
+const preRowKey = soilRxCleanupOutboxKey(preRow.scope.projectRef, userId)
+assert.equal(preRow.rows.size, 0)
+assert.equal(preRow.objects.size, 0)
+assert.ok(readSoilRxAttachmentCustody(preRow.storage, preRowKey, userId, farmId, testId))
+assert.equal(preRow.getTerminalAbsenceChecks(), 1)
+preRow.setTerminalAbsenceFailure(false)
+preRow.setMode('success')
+assert.deepEqual(await preRow.repository.getData(), { tests: [] })
+assert.equal(preRow.getTerminalAbsenceChecks(), 2)
+assert.equal(readSoilRxAttachmentCustody(preRow.storage, preRowKey, userId, farmId, testId), null)
 
 // An upload followed by an ambiguous metadata failure must roll back both the
 // row and object. Retrying the same UI draft ID must produce exactly one row.

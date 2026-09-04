@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 176
+const expectedMutationCount = 180
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -132,8 +132,20 @@ try {
   mutate('scripts/verify-soil-rx-disposable-capture.ps1', (source) => source.replace("$runDirectory = Join-Path $EvidenceRoot ([Guid]::NewGuid().ToString('N'))", "$runDirectory = Join-Path $EvidenceRoot 'shared'"))
   detected('Soil Rx capture unique directory removal', 'soil-rx:capture-unique-directory')
   reset()
-  mutate('scripts/verify-soil-rx-disposable.ps1', (source) => source.replace("foreach ($mode in @('row', 'storage'))", 'foreach ($mode in @())'))
+  mutate('scripts/verify-soil-rx-disposable.ps1', (source) => source.replace('foreach ($entry in $mutations.GetEnumerator()) { Invoke-ExpectedGuardMutation $entry.Key $entry.Value }', 'foreach ($entry in @()) { Invoke-ExpectedGuardMutation $entry.Key $entry.Value }'))
   detected('Soil Rx cross-farm runtime mutation matrix omission', 'soil-rx:cross-farm-runtime-mutations')
+  reset()
+  mutate('src/data/soilRxStorage.ts', (source) => source.replace("(error as { code?: unknown }).code === '42501' && (error as { message?: unknown }).message === 'soil report path is not owned by the current farm test'", 'true'))
+  detected('Soil Rx terminal fallback accepts an unrelated verifier error', 'soil-rx:storage-terminal-fallback-exact-error')
+  reset()
+  mutate('src/data/soilRxStorage.ts', (source) => source.replace("supabase.rpc('verify_soil_report_cleanup_terminal_absence', { p_farm_id: expected.farmId, p_field_id: scope.fieldId, p_test_id: scope.testId, p_paths: requested })", "supabase.rpc('verify_soil_report_objects_absent', { p_farm_id: expected.farmId, p_paths: requested })"))
+  detected('Soil Rx terminal fallback calls the normal verifier', 'soil-rx:storage-terminal-scoped-rpc')
+  reset()
+  mutate('supabase/migrations/20260810223508_soil_rx_storage.sql', (source) => source.replace('    from public.soil_tests test\n    where test.farm_id = p_farm_id and test.id = p_test_id', '    from public.soil_tests test\n    where test.id = p_test_id'))
+  detected('Soil Rx terminal row check becomes a cross-farm existence oracle', 'soil-rx:terminal-absence-rpc-farm-scoped-row')
+  reset()
+  mutate('supabase/migrations/20260810223508_soil_rx_storage.sql', (source) => source.replace("object.bucket_id = 'soil-test-reports'\n      and object.name = any (p_paths)", 'false'))
+  detected('Soil Rx terminal physical-object postcondition removed', 'soil-rx:terminal-absence-rpc-physical-object')
   reset()
   mutate('src/data/QueuedSoilRxRepository.ts', (source) => source.replace('this.d.removeReports(paths, source.operationContext)', 'this.live.rollbackTestOperation(custody.testId, source.operationContext)'))
   detected('Soil Rx attachment cleanup deletes its Storage authorization first', 'soil-rx:attachment-cleanup-storage-before-row')
