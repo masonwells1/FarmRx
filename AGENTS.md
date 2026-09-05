@@ -47,7 +47,7 @@ Current source, executable tests, migrations, and live read-only evidence outran
 
 ## Hard outward gates
 
-Agents may push branches and open, update, label, and comment on pull requests without asking (Mason, 2026-09-05). The pre-push hook still refuses any push that targets `main`.
+Agents may push branches and open, update, label, and comment on pull requests without asking (Mason, 2026-09-05). Only Mason personally posts the manual CodeRabbit review command described in the delivery guide. The pre-push hook still refuses any push that targets `main`.
 
 Get Mason's explicit approval in the current conversation before merge; deploy; live migration or live data change; secrets, authentication, or permissions change; customer account action; customer communication; destructive action; purchase; or binding commitment. Local edits, tests, verification, commits, branch pushes, and pull-request work do not authorize a later hard-gated action.
 

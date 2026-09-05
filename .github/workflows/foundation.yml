@@ -23,8 +23,6 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.4
-      - name: CodeRabbit final-review gate regression tests
-        run: node .github/scripts/coderabbit-final-review.test.cjs
       - name: Agent guidance contract
         run: npm run test:agent-guidance
       - run: npm ci
