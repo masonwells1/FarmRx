@@ -1,6 +1,6 @@
 # Farm Rx — Farmer Value Strategy (2026-09-05)
 
-**Prepared for:** Mason Wells · **Basis:** read-only audit of `main` at `a8e11a9` (every module, every migration, every governing doc) · **Status:** proposal, not authority. Nothing here changes `GOAL.md` until Mason says so.
+**Prepared for:** Mason Wells · **Basis:** read-only audit of `main` at `a8e11a9` (every module, every migration, every governing doc) · **Status:** Mason answered all eight decisions on 2026-09-05; the resulting owner amendment is in `GOAL.md` ("Owner scope amendment — 2026-09-05"). Where this document and the amendment differ, the amendment governs.
 
 This document answers one question: *why would a farmer open Farm Rx on a Tuesday in February, and what has to change so they do?* It covers the five areas Mason named — profitability, planning, grain inventory, product inventory, and grain marketing — plus the cross-cutting problems that sit underneath all five.
 
@@ -76,7 +76,7 @@ Effort sizes are rough, for focused Claude-driven build sessions under the exist
 
 1. **Build the USDA MARS basis feed** (S–M). Free, public domain, no license risk. The design already exists (`docs/grain-live-design.md` §MARS, `docs/futures-feed-research.md`), the app already has the defenses (`isMarsBid`, staleness copy). What is missing is the small scheduled server program ("edge function") that pulls the daily report and writes rows. Result: local cash bids and basis appear every afternoon and basis history builds itself, which is the "is basis strong or weak right now?" answer the handoff asked for.
 2. **Move alerts to the server** (M). Extend the existing `scheduled-alert-sweep` (currently weather-only) to evaluate marketing rules once a day after MARS lands, and deliver via the existing `send-push` and `deliver-grain-alert` functions. The disclaimer changes from "check-on-open" to "checked daily at 5 PM." This is the feature the handoff calls "what advisors charge thousands a year for."
-3. **Decide Barchart** (Mason decision + M build). About $650/yr buys a licensed board price the app can *compute with*. Then "47,500 bu open with Dec at $4.68" becomes real, planned revenue is valued at market, and price alerts fire on the board, not just typed bids. Hard gate from the handoff still applies: written license confirmation from Barchart first. Until then, keep the widgets, but fix the hardcoded contract months.
+3. **Barchart — declined by Mason (2026-09-05) as too expensive.** Board prices stay as display-only widgets and no computed number may depend on them. The USDA feed in step 1 is the price source for bids, basis history, and alerts. Fix the hardcoded contract months so the widgets stop going stale.
 4. **Fix the dead ends** (S). Free-text Buyer with suggestions instead of a dropdown that can be empty; remove the "Cargill - Olney" default; add a commodity/crop-year picker to the Contracts tab; add a totals row; allow edit and delete of a contract that has no deliveries (with confirmation and a reason); add "Add another crop" after the first production estimate; seed the USDA report dates.
 5. **Simplify the position card** (M). One hero line ("62% sold at $4.71 · breakeven $4.28 · 47,500 bu open"), three tiles, and everything else behind *More details*. Persist the sale limit and the cost-of-carry grid (they currently disappear when the tab closes).
 
@@ -118,7 +118,7 @@ Add **Quick Record** as the same tranche: *Log rain · Record spray · Enter a l
 
 1. **Derive committed vs free from contracts** (S–M). Committed bushels per commodity = undelivered contract bushels. Free = on hand − committed. Stop displaying a column nothing can write.
 2. **Optional, explicit delivery-from-bin link** (M). When recording a contract delivery, offer "this came from bin X" as a farmer-confirmed checkbox. Keeps the no-silent-mutation rule; removes the double entry.
-3. **Scale tickets / loads** (L, Mason decision — handoff open question #1). A load = date, truck, from bin (or field at harvest), to buyer/contract or to bin, gross/tare/net, moisture. It feeds deliveries, bin movements, and actual production in one entry. For a 22-semi operation this is the natural harvest source of truth and does not need a yield monitor. Recommendation: **in**, targeted for August 2027.
+3. **Scale tickets / loads** (L — **Mason: top priority, 2026-09-05**). A load = date, truck, from bin (or field at harvest), to buyer/contract or to bin, gross/tare/net, moisture. It feeds deliveries, bin movements, and actual production in one entry, each effect visible and confirmed by the farmer on save. For a 22-semi operation this is the natural harvest source of truth and does not need a yield monitor. Moved from August 2027 into the first winter build window as Initiative LD.
 4. **Scope bins to a crop year** (M) so bins can reconcile to a position; persist sale limits; shrink/moisture adjustment.
 
 ---
@@ -143,15 +143,17 @@ Farm Rx should arrive at each decision moment with the tool that moment needs.
 
 | Window | Farm moment | Ship |
 |---|---|---|
-| **Sept–Oct 2026** | Rent negotiation (Aug–Oct); harvest in progress | Friction sweep · Grain dead ends · Today screen · MARS feed · server-side alerts · land-arrangement comparison |
-| **Nov 2026–Jan 2027** | Banker / loan renewal (Nov–Feb); input buying (Oct–Feb) | Inventory → budget cost flow · planned vs actual · Excel + branded PDF · Barchart (if approved) · Programs ↔ catalog link · chemical-needed planner · shed management |
+| **Sept–Oct 2026** | Rent negotiation (Aug–Oct); harvest in progress | Friction sweep (FS) · Today screen (FD) · MARS feed + server-side alerts + Grain dead ends (GL) |
+| **Nov 2026–Jan 2027** | Banker / loan renewal (Nov–Feb); input buying (Oct–Feb) | Loads / scale tickets + committed vs free (LD, top priority) · inventory → budget cost flow, planned vs actual, land-arrangement comparison, CSV + branded PDF (CM) · Programs ↔ catalog link and chemical-needed planner (IP-1, IP-2) |
 | **Feb–Mar 2027** | Pre-plant; the pilot | 3–5 friendly Crop RX customers; Mason or a rep enters their fields and shed with them ("we set up your numbers"); the two physical-phone journeys still owed in `GOAL.md` |
 | **Apr–Jul 2027** | Planting, spraying | REI/PHI safety, applicator roster, "Mark applied" carries products, compliance PDF |
-| **Aug 2027** | Harvest | Scale tickets/loads, committed vs free, delivery-from-bin link, crop-year bins |
+| **Aug 2027** | Harvest | Loads already live from LD; crop-year bin scoping and shrink/moisture if not yet done |
 
 ---
 
 ## 7. Decisions only Mason can make
+
+**Answered 2026-09-05.** 1 yes · 2 no (Barchart too expensive) · 3 yes (free to active Crop RX customers, paid otherwise) · 4 yes, top priority · 5 defer until CRX Manager is done · 6 yes, free for pilot · 7 yes, names to follow · 8 yes, loosen for screen work. The original questions and recommendations are kept below for the record.
 
 1. **Authorize the Today screen.** Reverses `GOAL.md` line 50. Recommended: yes, as the front door for everything else.
 2. **Barchart OnDemand, ~$650/yr.** Recommended: yes, after written license confirmation. Ten paying farms cover it; without it Grain math is forever manual.

@@ -47,7 +47,74 @@ Mason authorizes two new bounded build initiatives beyond the season-readiness p
 
 - Each initiative runs on its own branch and worktree cut from current `main`, follows the discipline of [`season-readiness/ORCHESTRATOR-RUNBOOK.md`](season-readiness/ORCHESTRATOR-RUNBOOK.md) — one bounded tranche, one immutable commit, fresh-context read-only Sol review of each exact commit, repairs as new commits — and keeps its own append-only ledger at `docs/initiatives/<initiative>/LEDGER.md`.
 - All runbook approval gates remain: no push, pull-request mutation, merge, deploy, live migration, live data, secret/auth/permission, customer, or destructive action without Mason's named approval.
-- **Recorded backlog, not authorized:** a Today/home "needs attention" view summarizing all modules. Do not build it under this amendment.
+- **Recorded backlog, not authorized:** a Today/home "needs attention" view summarizing all modules. Do not build it under this amendment. *(Superseded on 2026-09-05: the owner amendment below authorizes the Today home screen as Initiative FD.)*
+
+## Owner scope amendment — 2026-09-05
+
+**Owner:** Mason Wells · **Directed:** 2026-09-05 (`America/Chicago`) · **Basis:** [`docs/strategy/2026-09-05-farmer-value-strategy.md`](strategy/2026-09-05-farmer-value-strategy.md) and Mason's numbered answers to its eight decisions.
+
+Mason authorizes the bounded build initiatives below. For these initiatives only, this amendment supersedes the "no standalone modules … or speculative features" line of the Product boundary and the 2026-08-10 "Recorded backlog, not authorized" line about a Today/home view. Every other boundary line remains in force: no vendors, no broad redesigns, no proof-only `run_id` product column, no invented pending integrations, no live machine-data or licensed market-data feeds. The 2027 no-real-farmer directive, the privacy model, Row Level Security, and every outward-action approval gate are unchanged.
+
+### Recorded owner decisions
+
+1. **Today home screen: authorized** (Initiative FD below).
+2. **Barchart OnDemand: declined** as too expensive. Board quotes remain the display-only TradingView widgets. No number Farm Rx computes may depend on a board price. The USDA AMS My Market News (MARS) feed is public-domain government data, not a vendor, and is authorized under Initiative GL.
+3. **Pricing model: free to active Crop RX customers; paid for anyone else.** This is a business decision, not a build item; no billing code is authorized by this amendment.
+4. **Scale tickets / loads: authorized as a top-priority build** (Initiative LD below), sequenced immediately after FD and GL.
+5. **Prepay balance tracking: deferred** until the CRX Manager → Farm Rx delivery pipeline exists. Mason is completing CRX Manager first. Not authorized here.
+6. **"We set up your numbers" service: free for pilot farms;** pricing decided afterward. No build item.
+7. **Pilot farms: agreed in principle, names to follow.** No real farmer account may be provisioned and no customer communication may be sent until Mason names the farms, the two physical-phone journeys in "Unresolved customer-zero gates" are recorded, and email delivery from the ship checklist is proven.
+8. **Process: loosened for screen work** (see "Verification tiers" below). Approval gates on push, pull-request mutation, merge, deploy, live migration, live data, secrets/auth/permissions, customer accounts, and destructive actions are unchanged.
+
+### Build order
+
+FS → FD → GL → LD → CM → IP. One writer session per initiative; an initiative may start when the prior one's final tranche has a committed, reviewed tip, even if its pull request is still open.
+
+### Initiative FS — Friction Sweep (one tranche, may be split by module)
+
+Small, visible repairs to existing screens. No schema change. Replace browser `prompt`/`confirm` dialogs with in-app dialogs in the Crop RX design system; persist the Grain sale limit, the cost-of-carry grid, and the U of I default badges to the database instead of one browser's local storage; seed `usda_report_dates` by migration; derive the TradingView contract months from the crop year instead of the hardcoded 2026/2027 symbols; give the matrix, cost table, cost-of-carry, and plan-comparison tables phone layouts; plain-English relabel pass; one sentence and one button on every empty state.
+
+### Initiative FD — Front Door (two sequenced tranches)
+
+- **FD-1 Today screen.** A new `/today` route becomes the default route after sign-in and the first item in phone and desktop navigation. The visual target is Mason's selected July 2026 direction, archived at [`archive/audits/2026-07-16-farmer-simplicity-loop/SELECTED-VISUAL-OPTION-2.png`](archive/audits/2026-07-16-farmer-simplicity-loop/SELECTED-VISUAL-OPTION-2.png) (SHA-256 `d62cf7297313c1d4aa622ceb19c543b9acfa92e1d493127fa49fde109ea10d38`): a **"What are you recording?"** grid of Rain · Scouting note · Spray record · Task · Harvest · Grain delivery, each opening the existing module form (no new write paths); the existing Weather spray-window card; and a **Next up** list built only from records existing modules already produce (overdue service, low inventory, tasks and program passes due, fired grain alerts). Today is read-only: it must not replay queues, write caches, or generate due items during an ordinary read, consistent with the July Farmer Simplicity snapshot rule. Role-shaped: a member without financial access never sees a grain line.
+- **FD-2 Grain line and phone navigation.** For members with financial access, one plain-English grain line on Today (percent sold vs plan, latest local bid and its change) reading the same values the Grain Overview shows. Phone bottom bar becomes Today · Grain · Fields · Record · More; Inventory and Programs leave the More menu where role allows.
+
+### Initiative GL — Grain Live (three sequenced tranches)
+
+- **GL-1 USDA MARS basis feed.** A scheduled Supabase edge function pulls the daily USDA AMS cash-grain-bid report for the farm's region and writes rows to `cash_bids` with the existing `[USDA MARS 2850]` provenance marker, once per market day, cached server-side. Feed rows remain display-and-history only: the existing `isMarsBid` fences stay, no feed row may trigger a write, and staleness is shown in plain words. Basis history grows from the feed without farmer typing.
+- **GL-2 Server-side alerts.** Extend the existing `scheduled-alert-sweep` to evaluate marketing alert rules once per market day after GL-1 lands, delivering through the existing `send-push` and `deliver-grain-alert` functions with the same owner-only, farm-fenced, revocation-denying semantics. Price rules may evaluate against MARS rows as well as farmer-typed bids. The on-page disclaimer changes from "check-on-open" to the true schedule. Barchart and any board-price computation remain absent per decision 2.
+- **GL-3 Dead ends and position card.** Type-ahead buyer entry (free text with suggestions) replacing the empty dropdown; remove the hardcoded "Cargill - Olney" default; crop and crop-year picker on the Contracts tab; totals row; edit and delete for a contract with no deliveries, with confirmation and a reason; "Add another crop" after the first production estimate; position card reduced to one hero line, three tiles, and a *More details* disclosure. No change to contract math or to the one-shot price-leg finalization rule.
+
+### Initiative LD — Loads (three sequenced tranches; top priority per decision 4)
+
+- **LD-1 Load record.** A new farm-scoped `grain_loads` table and screen: date, truck (free text or existing Equipment asset), origin (a bin or a field crop assignment), destination (a buyer/elevator, a contract, or a bin), gross, tare, net bushels, moisture, ticket number, optional photo, notes. Private financial data under the existing `can_read_private_financials` fence. Append-only with void-and-reason, matching the bin ledger.
+- **LD-2 Load effects, explicit.** On the load form the farmer sees exactly what saving will do and can uncheck any of: record a delivery against the chosen contract; append a bin-out movement from the origin bin; append a bin-in movement to a destination bin; add net bushels to the field crop's harvest actual. Each effect is a separate visible write that the farmer confirmed on that save. Nothing happens silently. Capability truth item 4 below is amended: a load may perform both a bin movement and a contract delivery **only** as farmer-confirmed effects of one saved load record.
+- **LD-3 Committed vs free.** Derive committed bushels per commodity from undelivered contract bushels and show free = on hand − committed on Bins and on the position card, replacing the unwritable `bin_inventory.committed_bushels` display. Read-only derivation; no new write.
+- **Fence:** LD may change Grain, Harvest, and bin/contract/delivery code because the Harvest→Grain / Bin-out→Delivery work referenced in the 2026-08-10 CW fence is merged; that fence is retired for LD. LD must not change Inventory or Programs tables.
+
+### Initiative CM — Connect the Money (four sequenced tranches)
+
+- **CM-1 Inventory costs into budgets.** An importer, modeled on the existing equipment-cost snapshot importer, that reads the existing `application_cost_lines` view and writes `source_kind = 'inventory'` budget cost lines with provenance on explicit farmer confirmation.
+- **CM-2 Planned vs actual.** Show Programs' planned $/ac and applications' actual $/ac beside the budget on the Profitability crop card. Read-only.
+- **CM-3 Land-arrangement comparison.** A Profitability section calling the existing tested `planProfitUnderArrangement` to show owned / cash rent / flex / crop share side by side for an allocated field, with 2/3–1/3, 60/40, and 50/50 presets. Adds an `other` budget cost category by migration so the landlord "other inputs %" can apply.
+- **CM-4 Export.** CSV download on every Profitability and Grain table; a generated, Crop RX-branded PDF for the banker report and landlord settlement replacing print-to-PDF; Simple/Advanced cost toggle; regional U of I defaults.
+
+### Initiative IP — Inventory Planner (four sequenced tranches)
+
+- **IP-1 Catalog link.** Program product lines may reference an Inventory product through the reserved `catalog_product_id`, with a picker and inline "Add new"; numeric rate + unit replaces free text for linked lines; free-typed lines remain valid.
+- **IP-2 Planned vs on hand vs remaining.** Planned need = rate × assigned acres per linked product; a per-product view of planned, on hand, applied, remaining, and a *Short list*. Read-only derivation; no order is placed and nothing leaves the farm without an explicit, separate farmer action outside this initiative's scope.
+- **IP-3 Mark applied carries products.** Prefill product, rate, and computed total from the pass into the created application record; allow one pass to both create the record and draw down inventory on confirmation, replacing today's either/or.
+- **IP-4 Shed management and safety.** Add/edit product screens; multi-line receipts using the existing RPC; per-product reorder point; write the existing lot, expiration, and invoice columns; storage location; show cost per unit; applicator roster; REI re-entry and PHI harvest-safe dates per field; void/correct a spray record with a reason; compliance PDF.
+
+### Verification tiers (decision 8)
+
+- **Full runbook discipline** ([`season-readiness/ORCHESTRATOR-RUNBOOK.md`](season-readiness/ORCHESTRATOR-RUNBOOK.md): one tranche, one immutable commit, fresh-context read-only Sol review of the exact commit, repairs as new commits, disposable-backend database assertions) applies to any tranche that adds or changes a migration, Row Level Security, a permission or capability check, grain or financial privacy, money math, an edge function, or anything that writes to bins, contracts, deliveries, or on-hand quantities. In this amendment: FS persistence and seed migrations, GL-1, GL-2, all of LD, CM-1, CM-3's migration, IP-1's schema use, IP-2, IP-3, IP-4's write paths.
+- **Screen tier** applies to tranches that only change presentation, navigation, labels, layout, or read-only display of existing data: forced TypeScript (`npx tsc -b --force`), `npm run regression`, `npm run build`, browser proof at one desktop and one phone size, and one fresh-context read-only review. In this amendment: FS dialog/label/layout work, FD-1, FD-2, GL-3's presentation changes, CM-2, CM-4's export UI.
+- Every initiative keeps its own append-only ledger at `docs/initiatives/<initiative>/LEDGER.md`.
+
+### Shared rules
+
+Each initiative runs on its own branch cut from current `main`. Season proof, when a tranche requires it, uses synthetic fixtures and a disposable local backend. All approval gates in this document remain: no push, pull-request mutation, merge, deploy, live migration, live data, secret/auth/permission, customer, or destructive action without Mason's named approval.
 
 ## Current capability truth
 
@@ -56,7 +123,7 @@ These statements are the baseline. A test must not claim more coupling than the 
 1. Marking a Program pass applied may create a new **draft** application record or link an existing application record. Separately, an exact existing Inventory product may be matched and drawn down only when the farmer explicitly confirms the match and quantity. Free-typed, unmatched, ambiguous, or unconfirmed Program products do not change Inventory on-hand.
 2. Weather guidance and spray records both exist. A fresh field forecast may open the existing spray form with the field, forecast-local date, temperature, wind speed, and compass direction prefilled. The farmer can review or change every value and must explicitly save; stale Weather offers no prefill, the blank manual path remains available, and no navigation, provenance, provider, or background write is created.
 3. Harvest writes update the crop assignment's harvest actuals. Grain reads the harvest total, but the user must explicitly choose **Use harvest total as Grain actual** before Grain actual production changes. That action does not change bins.
-4. A manual bin-out movement and a contract delivery are separate user actions and separate writes. Neither silently creates or performs the other.
+4. A manual bin-out movement and a contract delivery are separate user actions and separate writes. Neither silently creates or performs the other. Under Initiative LD (2026-09-05 amendment), one saved load record may perform both only as effects the farmer saw and confirmed on that save; no load effect is silent.
 
 ## Required scenario contract
 
