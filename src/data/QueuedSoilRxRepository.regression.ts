@@ -56,6 +56,7 @@ function harness(projectRef: string, selectedFarmId = farmId, storage = new Memo
   let nextId = 100
   let contextReadsUntilHook = 0
   let contextReadHook: (() => void) | null = null
+  let saveHook: (() => Promise<void>) | null = null
   let removeHook: (() => Promise<void>) | null = null
   let getDataHook: (() => Promise<void>) | null = null
   let getDataFailure: Error | null = null
@@ -65,7 +66,7 @@ function harness(projectRef: string, selectedFarmId = farmId, storage = new Memo
     async saveTestOperation(input: SoilTestDraft) {
       if (mode === 'permanent_save_failure') throw new Error('validation failed')
       savedIds.push(input.id!)
-      const saved = toTest(input); rows.set(saved.id, saved); return saved
+      const saved = toTest(input); rows.set(saved.id, saved); await saveHook?.(); return saved
     },
     async saveAttachmentOperation(test: SoilTest, input: { id: string; storagePath: string; originalFilename: string; mimeType: SoilReportMime; sizeBytes: number }) {
       const attachment = { id: input.id, farm_id: selectedFarmId, field_id: test.field_id, test_id: test.id, storage_path: input.storagePath, original_filename: input.originalFilename, mime_type: input.mimeType, size_bytes: input.sizeBytes, created_by: userId, created_at: stamp }
@@ -110,6 +111,7 @@ function harness(projectRef: string, selectedFarmId = farmId, storage = new Memo
     setEpochChange: (next: boolean) => { changeEpochAfterUpload = next }, setRemoveFailure: (next: boolean) => { removeFailure = next }, setTerminalAbsenceFailure: (next: boolean) => { terminalAbsenceFailure = next }, getTerminalAbsenceChecks: () => terminalAbsenceChecks, setRollbackFailure: (next: boolean) => { rollbackFailure = next },
     setRemoveHook: (next: (() => Promise<void>) | null) => { removeHook = next },
     setContextReadHook: (reads: number, hook: () => void) => { contextReadsUntilHook = reads; contextReadHook = hook },
+    setSaveHook: (next: (() => Promise<void>) | null) => { saveHook = next },
     setGetDataHook: (next: (() => Promise<void>) | null) => { getDataHook = next },
     setGetDataFailure: (next: Error | null) => { getDataFailure = next },
   }
@@ -432,6 +434,50 @@ try {
   reopened.setOffline(true)
   assert.deepEqual((await reopened.repository.getData()).tests.map((test) => test.id).sort(), [...historicalIds, pending.id].sort(), 'A fresh offline reopen lost historical Soil Rx records after a queued text save.')
 } finally { freshOfflineDatabase.restore() }
+
+// A malformed module custody marker must not reject the whole farm startup.
+// Soil Rx reports its own blocked state and leaves both its cache and a
+// sibling farm's cache untouched rather than risking a cross-tab cache race.
+const malformedCustody = harness('soil-rx-malformed-cache-custody')
+const malformedCustodyScope = cacheKey(malformedCustody.scope.projectRef, userId, farmId)
+const malformedCustodySibling = cacheKey(malformedCustody.scope.projectRef, userId, uid(730))
+const malformedCustodyFence = captureFarmRevocationFence(malformedCustody.storage, malformedCustody.scope)
+const malformedCustodySnapshots = new Map<string, unknown>([
+  [malformedCustodyScope, { version: 2, key: malformedCustodyScope, ...malformedCustody.scope, module: 'soilRx', generation: malformedCustodyFence.generation, fenceToken: malformedCustodyFence.token, serverEpoch: malformedCustodyFence.serverEpoch, cachedAt: stamp, data: { tests: [cachedTest(uid(731))] } }],
+  [malformedCustodySibling, { private: 'other-farm' }],
+])
+const malformedCustodyDatabase = scopedCacheDatabase(malformedCustody.storage, malformedCustodySnapshots)
+try {
+  malformedCustody.storage.setItem(custodyStorageKey(malformedCustodyScope), 'not-a-custody-number')
+  await malformedCustody.repository.inspectAndReplay()
+  assert.equal(getSyncStatus().kind, 'blocked', 'Malformed Soil Rx custody escaped startup instead of becoming module-level blocked state.')
+  assert.equal(malformedCustody.storage.getItem(custodyStorageKey(malformedCustodyScope)), 'not-a-custody-number', 'Malformed Soil Rx custody was rewritten during containment.')
+  assert.ok(malformedCustodySnapshots.has(malformedCustodyScope), 'Malformed Soil Rx containment deleted its cache during startup.')
+  assert.ok(malformedCustodySnapshots.has(malformedCustodySibling), 'Malformed Soil Rx containment touched another farm cache.')
+} finally { malformedCustodyDatabase.restore() }
+
+// A second tab can advance cache custody after the server upsert. The save is
+// still confirmed; only local cache reconciliation is skipped, so neither a
+// stale cache nor another farm's cache is republished.
+const postCommitCustody = harness('soil-rx-post-commit-cache-custody')
+const postCommitScope = cacheKey(postCommitCustody.scope.projectRef, userId, farmId)
+const postCommitSibling = cacheKey(postCommitCustody.scope.projectRef, userId, uid(740))
+const postCommitFence = captureFarmRevocationFence(postCommitCustody.storage, postCommitCustody.scope)
+const postCommitSnapshots = new Map<string, unknown>([
+  [postCommitScope, { version: 3, key: postCommitScope, ...postCommitCustody.scope, module: 'soilRx', generation: postCommitFence.generation, fenceToken: postCommitFence.token, serverEpoch: postCommitFence.serverEpoch, cacheCustody: 0, cachedAt: stamp, data: { tests: [cachedTest(uid(741))] } }],
+  [postCommitSibling, { private: 'other-farm' }],
+])
+const postCommitDatabase = scopedCacheDatabase(postCommitCustody.storage, postCommitSnapshots)
+try {
+  postCommitCustody.setSaveHook(async () => { beginWorkspaceCacheInvalidation(postCommitCustody.storage, { ...postCommitCustody.scope, module: 'soilRx' }) })
+  const saved = await postCommitCustody.repository.saveTest(draft(uid(742)))
+  assert.equal(saved.id, uid(742), 'A confirmed server upsert was reported as failed after cache custody advanced.')
+  assert.equal(postCommitCustody.rows.has(saved.id), true, 'The post-commit custody race did not leave the confirmed server row.')
+  assert.equal(postCommitCustody.storage.getItem(custodyStorageKey(postCommitScope)), '1', 'The concurrent cache invalidation did not advance custody.')
+  assert.ok(postCommitSnapshots.has(postCommitSibling), 'Post-commit cache reconciliation touched another farm cache.')
+  postCommitCustody.setOffline(true)
+  await assert.rejects(() => postCommitCustody.repository.getData(), (error: unknown) => error instanceof SoilRxHistoryUnavailableOfflineError, 'Post-commit cache reconciliation published stale history after custody advanced.')
+} finally { postCommitDatabase.restore() }
 
 async function assertReplayDoesNotResurrect(name: string, settle: (value: ReturnType<typeof harness>, key: string) => Promise<void>) {
   const value = harness(`soil-rx-cache-${name}`)
@@ -851,7 +897,20 @@ function assertReplayCacheGuards(candidate: string) {
   assert.ok(releaseMethod.indexOf('await verifyQueuedOperationContext(this.d, source.operationContext, source.context)') < releaseMethod.indexOf(retainedWrite), 'Confirmed replay retention must verify the original operation context before writing.')
   assert.ok(releaseMethod.includes(retainedWrite), 'Confirmed replay retention must use the original operation fence, not a newly captured fence.')
 }
+function assertNewReviewGuards(candidate: string) {
+  const replayMethod = candidate.slice(candidate.indexOf('async inspectAndReplay()'), candidate.indexOf('async getReportUrl'))
+  assert.ok(replayMethod.indexOf('try {') < replayMethod.indexOf('const source = await this.source()'), 'Soil Rx startup must acquire its source inside replay containment.')
+  assert.ok(replayMethod.indexOf('const source = await this.source()') < replayMethod.indexOf('await queueTransaction(source.queue.key'), 'Soil Rx replay must not use a source before it is contained.')
+  const onlineSave = candidate.slice(candidate.indexOf("if (this.d.isOffline() || source.queue.read().entries.length)"), candidate.indexOf('\n    })\n  }\n\n  async inspectAndReplay'))
+  const serverSave = 'const saved = await this.live.saveTestOperation(normalized, source.operationContext)'
+  const retainCustodyCatch = 'if (!(error instanceof SoilRxCacheCustodyChangedError)) throw error'
+  assert.ok(onlineSave.includes(serverSave), 'Online text save must retain the confirmed server result.')
+  assert.ok(onlineSave.includes(retainCustodyCatch), 'Only a post-commit cache-custody conflict may be contained.')
+  assert.ok(onlineSave.indexOf(serverSave) < onlineSave.indexOf(retainCustodyCatch), 'Cache-custody containment must occur only after the server save commits.')
+  assert.ok(onlineSave.slice(onlineSave.indexOf(retainCustodyCatch)).includes('verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)'), 'A contained cache-custody conflict must recheck queue and farm authority.')
+}
 assertReplayCacheGuards(source)
+assertNewReviewGuards(source)
 for (const [name, mutation] of [
   ['replay-cache-invalidation', source.replace(confirmedReplayRelease, 'await Promise.resolve()')],
   ['replay-malformed-reread', source.replace("pending: 1, message: attention", "pending: source.queue.read().entries.length, message: attention")],
@@ -863,9 +922,11 @@ for (const [name, mutation] of [
   ['confirmed-retention-leak', source.replace('this.confirmedInMemory.delete(entry.operationId)', 'void entry.operationId')],
   ['shared-custody-bypass', source.replaceAll('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)', 'true')],
   ['filtered-cache-adoption', source.replace('if (cached) await this.adoptWorkspace(source, cached)', 'if (cached && !fieldId) await this.adoptWorkspace(source, cached)')],
+  ['malformed-custody-startup-escape', source.replace('    try {\n      const source = await this.source()', '    const source = await this.source()\n    try {')],
+  ['post-commit-custody-bypass', source.replace('if (!(error instanceof SoilRxCacheCustodyChangedError)) throw error', 'if (false) throw error')],
 ] as const) {
   assert.notEqual(mutation, source, `${name} mutation was not applied`)
-  assert.throws(() => assertReplayCacheGuards(mutation), `${name} mutation must turn the replay proof red`)
+  assert.throws(() => { assertReplayCacheGuards(mutation); assertNewReviewGuards(mutation) }, `${name} mutation must turn the replay proof red`)
 }
 const attachmentBranch = source.slice(source.indexOf('if (report) {'), source.indexOf('const entry = createSoilRxQueueEntry'))
 assert.ok(attachmentBranch.indexOf('beginSoilRxAttachmentCustody') < attachmentBranch.indexOf('saveTestOperation'))

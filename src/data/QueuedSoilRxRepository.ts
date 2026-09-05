@@ -30,6 +30,10 @@ const parkedBlocked = 'This saved Soil Rx change no longer matches the signed-in
 const sameOperationContext = (left: FarmOperationContext, right: FarmOperationContext) => left.projectRef === right.projectRef && left.userId === right.userId && left.farmId === right.farmId && left.generation === right.generation && left.token === right.token && left.serverEpoch === right.serverEpoch
 const sameEntry = (left: SoilRxQueueEntryV1, right: SoilRxQueueEntryV1) => left.payloadBytes === right.payloadBytes
 
+class SoilRxCacheCustodyChangedError extends Error {
+  constructor() { super('Soil Rx cache custody changed while data was loading.') }
+}
+
 export class QueuedSoilRxRepository implements SoilRxRepository {
   private workspace: { data: SoilRxData; cacheCustody: number } | null = null
   private scopeKey: string | null = null
@@ -53,7 +57,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     await this.cacheTransaction(async () => {
       await verifyQueuedReadContext(this.d, source.operationContext)
       if (source.cacheEpoch !== this.cacheEpoch) throw new Error('Soil Rx cache custody changed while data was loading.')
-      if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
+      if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new SoilRxCacheCustodyChangedError()
       await verifyQueuedReadContext(this.d, source.operationContext)
       this.workspace = { data, cacheCustody: source.cacheCustody }
     })
@@ -62,9 +66,9 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
   private async retain(source: Source, data: SoilRxData) {
     await this.cacheTransaction(async () => {
       if (source.cacheEpoch !== this.cacheEpoch) throw new Error('Soil Rx cache custody changed while data was loading.')
-      if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
+      if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new SoilRxCacheCustodyChangedError()
       await writeWorkspaceCache(this.cacheScope(source.context), data, captureWorkspaceCacheFence(this.cacheScope(source.context)), undefined, source.cacheCustody)
-      if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
+      if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new SoilRxCacheCustodyChangedError()
       this.workspace = { data, cacheCustody: source.cacheCustody }
     })
     await verifyQueuedReadContext(this.d, source.operationContext)
@@ -232,14 +236,24 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       await verifyQueuedOperationContext(this.d, source.operationContext, source.context); verify()
       const enqueue = async () => { const envelope = source.queue.append(entry); setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); const pending = this.pending(entry); await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.data.tests ?? []).filter((test) => test.id !== pending.id), pending]) }); return pending }
       if (this.d.isOffline() || source.queue.read().entries.length) { const result = await enqueue(); launchReplayInBackground(() => this.inspectAndReplay()); return result }
-      try { const saved = await this.live.saveTestOperation(normalized, source.operationContext); verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context); await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.data.tests ?? []).filter((test) => test.id !== saved.id), saved]) }); this.refreshSync(source); return saved }
+      try {
+        const saved = await this.live.saveTestOperation(normalized, source.operationContext)
+        verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+        try { await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.data.tests ?? []).filter((test) => test.id !== saved.id), saved]) }) }
+        catch (error) {
+          if (!(error instanceof SoilRxCacheCustodyChangedError)) throw error
+          verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+        }
+        this.refreshSync(source)
+        return saved
+      }
       catch (error) { await verifyQueuedOperationContext(this.d, source.operationContext, source.context); if (!isTransportFailure(error, this.d.isOffline())) throw error; return enqueue() }
     })
   }
 
   async inspectAndReplay() {
-    const source = await this.source()
     try {
+      const source = await this.source()
       await queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
         await this.cleanupLocked(source, verify, async (verifyCleanup) => { await this.drainCleanup(source, verifyCleanup) })
         let envelope = source.queue.read()
