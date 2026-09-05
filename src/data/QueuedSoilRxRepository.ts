@@ -261,6 +261,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
           // cleanup. The invalidation tombstone still makes a failed deletion
           // fail closed, without reclassifying or replaying the confirmed write.
           await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) }); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
+          this.confirmedInMemory.delete(entry.operationId)
         }
         this.refreshSync(source)
       })

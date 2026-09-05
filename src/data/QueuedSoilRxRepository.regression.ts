@@ -739,6 +739,7 @@ function assertReplayCacheGuards(candidate: string) {
   const replayMethod = candidate.slice(candidate.indexOf('async inspectAndReplay()'), candidate.indexOf('async getReportUrl'))
   assert.equal(replayMethod.split(replayRelease).length - 1, 2, 'Both replay custody exits must use the fenced queue-release path.')
   assert.ok(replayMethod.includes('let confirmed = this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes'), 'Replay may skip a current-process confirmation only when operation and payload bytes both match.')
+  assert.ok(replayMethod.lastIndexOf('await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) })') < replayMethod.lastIndexOf('this.confirmedInMemory.delete(entry.operationId)'), 'Completed confirmed replay custody must be released before its in-memory duplicate guard is removed.')
   assert.ok(replayMethod.includes('const current = await this.live.getData()'), 'Durable confirmed custody must prove the exact server row after restart.')
   assert.ok(candidate.includes('cacheCustody: captureWorkspaceCacheCustody(this.d.storage, cacheScope)'), 'A live read must capture shared cache custody with its source.')
   assert.ok(candidate.includes('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)'), 'A live read must compare shared cache custody before and after publication.')
@@ -758,6 +759,7 @@ for (const [name, mutation] of [
   ['tombstone-after-release', source.replace('const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      releaseQueue()', 'releaseQueue()\n      const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))')],
   ['confirmed-custody-bypass', source.replace('this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes', 'true')],
   ['confirmed-payload-unbound', source.replace('this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes', 'this.confirmedInMemory.has(entry.operationId)')],
+  ['confirmed-retention-leak', source.replace('this.confirmedInMemory.delete(entry.operationId)', 'void entry.operationId')],
   ['shared-custody-bypass', source.replaceAll('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)', 'true')],
 ] as const) {
   assert.notEqual(mutation, source, `${name} mutation was not applied`)
