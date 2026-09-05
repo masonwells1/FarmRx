@@ -1,6 +1,6 @@
 # Farm Rx protected delivery guide
 
-Read this before any push, pull-request mutation, review request, merge, deploy, live data action, or customer-facing action. Those actions require Mason's explicit approval in the current conversation; local permission never rolls forward into an outward gate.
+Read this before any push, pull-request mutation, review request, merge, deploy, live data action, or customer-facing action. Agents may push a feature branch and manage its pull request without asking (Mason, 2026-09-05). The later hard gates still require Mason's explicit approval in the current conversation; branch or pull-request authority never rolls forward into merge or production authority.
 
 Farm Rx `main` is connected to the production Vercel project. A merge to `main` is a production deployment.
 
@@ -12,11 +12,9 @@ Farm Rx `main` is connected to the production Vercel project. A merge to `main` 
 4. Create a clear local commit. For business-critical data, privacy, auth, money, inventory, migrations, or offline mutation behavior, require a fresh independent exact-commit adversarial review before asking to push.
 5. State the exact commit, proof observed, remaining risk, rollback path, and requested outward action in plain English.
 
-If Mason has not explicitly approved the next outward action, stop at `READY FOR APPROVAL` and provide the exact short reply needed. Do not push merely to make a pull request visible.
+After local proof is green, the agent may push the feature branch, create and maintain its pull request, and complete review without asking. Stop at `READY FOR APPROVAL` before merge or another hard-gated action and provide the exact short reply needed.
 
 ## Protected pull-request path
-
-After Mason approves the named push and pull-request actions:
 
 1. Push a feature branch; never push directly to `main` and never force-push.
 2. Open or update the pull request with auto-merge off.
@@ -50,6 +48,6 @@ Merge only with the exact reviewed SHA (`--match-head-commit <sha>`). Never use 
 
 ## Other hard gates
 
-Fresh exact approval is also required before a live database migration or data mutation; edge-function or manual production deployment; secrets, authentication, permissions, billing, domain, or account-ownership change; customer account action or communication; destructive data action; purchase; or binding commitment.
+Fresh exact approval is required before merge; a live database migration or data mutation; edge-function or manual production deployment; secrets, authentication, permissions, billing, domain, or account-ownership change; customer account action or communication; destructive data action; purchase; or binding commitment.
 
 Before a destructive action, resolve the exact target, recheck current state, preserve unrelated work, and prefer a backup or recoverable operation. Never expose secrets or real environment-file contents.

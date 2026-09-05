@@ -26,7 +26,7 @@ export function validateGuidanceText({ agents, claude, development, delivery }) 
   requireText(failures, 'AGENTS.md', agents, 'ran and was observed', 'must require behavioral proof')
   requireText(failures, 'AGENTS.md', agents, 'docs/agent-development-guide.md', 'must route implementation detail')
   requireText(failures, 'AGENTS.md', agents, 'docs/agent-delivery.md', 'must route protected delivery detail')
-  requireText(failures, 'AGENTS.md', agents, 'pull-request creation, edits, labels, comments, or other mutation', 'must protect every pull-request mutation')
+  requireText(failures, 'AGENTS.md', agents, 'Agents may push branches and open, update, label, and comment on pull requests without asking', 'must preserve standing branch and pull-request authority')
   requireText(failures, 'AGENTS.md', agents, 'live migration or live data change', 'must protect live data')
   requireText(failures, 'AGENTS.md', agents, 'customer communication', 'must protect customer contact')
 
@@ -38,7 +38,7 @@ export function validateGuidanceText({ agents, claude, development, delivery }) 
   for (const phrase of ['fewest moving parts', '18px base', 'Row Level Security', 'expected_bushels', 'npx tsc -b --force']) {
     requireText(failures, 'docs/agent-development-guide.md', development, phrase, `missing development invariant: ${phrase}`)
   }
-  for (const phrase of ['READY FOR APPROVAL', 'ready-for-coderabbit', 'Foundation and Vercel', '--match-head-commit <sha>', 'formal CodeRabbit review is `APPROVED`']) {
+  for (const phrase of ['may push a feature branch and manage its pull request without asking', 'READY FOR APPROVAL', 'ready-for-coderabbit', 'Foundation and Vercel', '--match-head-commit <sha>', 'formal CodeRabbit review is `APPROVED`']) {
     requireText(failures, 'docs/agent-delivery.md', delivery, phrase, `missing delivery gate: ${phrase}`)
   }
 

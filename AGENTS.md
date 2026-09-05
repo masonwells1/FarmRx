@@ -47,9 +47,11 @@ Current source, executable tests, migrations, and live read-only evidence outran
 
 ## Hard outward gates
 
-Get Mason's explicit approval in the current conversation before push; pull-request creation, edits, labels, comments, or other mutation; merge; deploy; live migration or live data change; secrets, authentication, or permissions change; customer account action; customer communication; destructive action; purchase; or binding commitment. Local edits, tests, verification, and a local commit do not authorize a later outward action.
+Agents may push branches and open, update, label, and comment on pull requests without asking (Mason, 2026-09-05). The pre-push hook still refuses any push that targets `main`.
 
-Never expose secrets, bypass hooks or required checks, force-push, push directly to `main`, use destructive recovery, or infer approval from silence. Before any approved outward action, follow `docs/agent-delivery.md` and recheck the current state.
+Get Mason's explicit approval in the current conversation before merge; deploy; live migration or live data change; secrets, authentication, or permissions change; customer account action; customer communication; destructive action; purchase; or binding commitment. Local edits, tests, verification, commits, branch pushes, and pull-request work do not authorize a later hard-gated action.
+
+Never expose secrets, bypass hooks or required checks, force-push, push directly to `main`, use destructive recovery, or infer approval from silence. Before protected delivery or another outward action, follow `docs/agent-delivery.md` and recheck the current state.
 
 ## Keep this file lean
 

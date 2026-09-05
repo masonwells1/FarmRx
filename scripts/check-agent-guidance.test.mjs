@@ -45,6 +45,11 @@ mustFail('live-data gate removal', (files) => ({
   agents: files.agents.replace('live migration or live data change', 'database work'),
 }), 'protect live data')
 
+mustFail('branch and pull-request authority removal', (files) => ({
+  ...files,
+  agents: files.agents.replace('Agents may push branches and open, update, label, and comment on pull requests without asking', 'Agents must ask before publishing work'),
+}), 'standing branch and pull-request authority')
+
 mustFail('bloated shared contract', (files) => ({
   ...files,
   agents: `${files.agents}${'\nextra'.repeat(101)}`,
