@@ -409,6 +409,30 @@ try {
   assert.equal(await readWorkspaceCachePure<{ legacy: boolean }>(heldScope, heldFence, 9e9, heldCacheStorage, Date.parse(legacyCachedAt)), null, 'A legacy v2 cache remained pure-readable after custody changed.')
   await finishLegacy()
 } finally { heldDatabase.restore() }
+
+// A fresh repository has no in-memory workspace. Its first offline cache read
+// must adopt the complete validated cache before an enqueue updates it; a
+// field-filtered caller must still retain the full canonical projection.
+const freshOfflineCache = harness('soil-rx-fresh-offline-cache')
+const freshOfflineScope = cacheKey(freshOfflineCache.scope.projectRef, userId, farmId)
+const freshOfflineFence = captureFarmRevocationFence(freshOfflineCache.storage, freshOfflineCache.scope)
+const otherHistoryField = uid(720)
+const historicalIds = [uid(721), uid(722)]
+const cachedTest = (id: string, field = fieldId): SoilTest => ({ ...draft(id), id, field_id: field, farm_id: farmId, created_by: userId, created_at: stamp, updated_at: stamp, attachment: null })
+const freshOfflineSnapshots = new Map<string, unknown>([[freshOfflineScope, { version: 3, key: freshOfflineScope, ...freshOfflineCache.scope, module: 'soilRx', generation: freshOfflineFence.generation, fenceToken: freshOfflineFence.token, serverEpoch: freshOfflineFence.serverEpoch, cacheCustody: 0, cachedAt: new Date().toISOString(), data: { tests: [cachedTest(historicalIds[0]!), cachedTest(historicalIds[1]!, otherHistoryField)] } }]])
+const freshOfflineDatabase = scopedCacheDatabase(freshOfflineCache.storage, freshOfflineSnapshots)
+try {
+  freshOfflineCache.setOffline(true)
+  assert.deepEqual((await freshOfflineCache.repository.getData(fieldId)).tests.map((test) => test.id), [historicalIds[0]], 'A field-filtered offline read did not return its local history projection.')
+  const pending = await freshOfflineCache.repository.saveTest(draft(uid(723)))
+  assert.equal(pending.pending, true, 'The text-only offline save was not queued.')
+  const retained = freshOfflineSnapshots.get(freshOfflineScope) as { data?: { tests?: SoilTest[] } }
+  assert.deepEqual(retained.data?.tests?.map((test) => test.id).sort(), [...historicalIds, pending.id].sort(), 'An offline enqueue overwrote cached multi-year history with only its pending record.')
+  const reopened = harness(freshOfflineCache.scope.projectRef, farmId, freshOfflineCache.storage, false)
+  reopened.setOffline(true)
+  assert.deepEqual((await reopened.repository.getData()).tests.map((test) => test.id).sort(), [...historicalIds, pending.id].sort(), 'A fresh offline reopen lost historical Soil Rx records after a queued text save.')
+} finally { freshOfflineDatabase.restore() }
+
 async function assertReplayDoesNotResurrect(name: string, settle: (value: ReturnType<typeof harness>, key: string) => Promise<void>) {
   const value = harness(`soil-rx-cache-${name}`)
   const key = soilRxWriteQueueKey(value.scope.projectRef, userId, farmId)
@@ -813,6 +837,9 @@ function assertReplayCacheGuards(candidate: string) {
   assert.ok(replayMethod.includes('current = await this.live.getData()'), 'Durable confirmed custody must prove the exact server row after restart.')
   assert.ok(candidate.includes('cacheCustody: captureWorkspaceCacheCustody(this.d.storage, cacheScope)'), 'A live read must capture shared cache custody with its source.')
   assert.ok(candidate.includes('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)'), 'A live read must compare shared cache custody before and after publication.')
+  const getDataMethod = candidate.slice(candidate.indexOf('async getData(fieldId?: string)'), candidate.indexOf('async saveTest'))
+  assert.ok(getDataMethod.includes('if (cached) await this.adoptWorkspace(source, cached)'), 'An offline cache read must adopt the complete canonical projection before an enqueue can retain it.')
+  assert.ok(candidate.includes('private async adoptWorkspace(source: Source, data: SoilRxData)'), 'Cached canonical history must be adopted without rewriting it on read.')
   assert.ok(replayMethod.indexOf('source.queue.markConfirmedHead(entry.operationId)') < replayMethod.lastIndexOf(confirmedReplayRelease), 'Replay must durably mark confirmation before successful cache-and-queue release.')
   const replayCatch = replayMethod.slice(replayMethod.lastIndexOf('    } catch (error) {'))
   assert.ok(!replayCatch.includes('source.queue.read()'), 'Blocked replay reporting must not re-read malformed queue bytes.')
@@ -835,6 +862,7 @@ for (const [name, mutation] of [
   ['confirmed-payload-unbound', source.replace('inMemoryConfirmation?.payloadBytes === entry.payloadBytes', 'this.confirmedInMemory.has(entry.operationId)')],
   ['confirmed-retention-leak', source.replace('this.confirmedInMemory.delete(entry.operationId)', 'void entry.operationId')],
   ['shared-custody-bypass', source.replaceAll('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)', 'true')],
+  ['filtered-cache-adoption', source.replace('if (cached) await this.adoptWorkspace(source, cached)', 'if (cached && !fieldId) await this.adoptWorkspace(source, cached)')],
 ] as const) {
   assert.notEqual(mutation, source, `${name} mutation was not applied`)
   assert.throws(() => assertReplayCacheGuards(mutation), `${name} mutation must turn the replay proof red`)

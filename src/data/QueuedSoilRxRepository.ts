@@ -48,6 +48,17 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
   }
   private cacheScope(context: Context) { return { projectRef: this.d.projectRef, ...context, module: 'soilRx' } }
   private async cacheTransaction<T>(task: () => Promise<T>) { let release!: () => void; const previous = this.cacheTail; this.cacheTail = new Promise<void>((resolve) => { release = resolve }); await previous; try { return await task() } finally { release() } }
+  private async adoptWorkspace(source: Source, data: SoilRxData) {
+    await verifyQueuedReadContext(this.d, source.operationContext)
+    await this.cacheTransaction(async () => {
+      await verifyQueuedReadContext(this.d, source.operationContext)
+      if (source.cacheEpoch !== this.cacheEpoch) throw new Error('Soil Rx cache custody changed while data was loading.')
+      if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
+      await verifyQueuedReadContext(this.d, source.operationContext)
+      this.workspace = { data, cacheCustody: source.cacheCustody }
+    })
+    await verifyQueuedReadContext(this.d, source.operationContext)
+  }
   private async retain(source: Source, data: SoilRxData) {
     await this.cacheTransaction(async () => {
       if (source.cacheEpoch !== this.cacheEpoch) throw new Error('Soil Rx cache custody changed while data was loading.')
@@ -169,6 +180,10 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
       await verifyQueuedReadContext(this.d, source.operationContext)
       if (!cached && !entries.length) throw new SoilRxHistoryUnavailableOfflineError()
+      // A cache read is the complete canonical projection. Keep that full
+      // projection for a later offline enqueue, even when this caller asked
+      // for one field, so retain() cannot overwrite history with a subset.
+      if (cached) await this.adoptWorkspace(source, cached)
       const data = cached ?? { tests: [] }
       return this.overlay({ tests: fieldId ? data.tests.filter((test) => test.field_id === fieldId) : data.tests }, entries.filter((entry) => !fieldId || entry.draft.field_id === fieldId))
     }
