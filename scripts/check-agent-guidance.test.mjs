@@ -72,6 +72,14 @@ assert.deepEqual(validateManualCodeRabbit(manualCodeRabbit), [], 'The checked-in
 assert(
   validateManualCodeRabbit({
     ...manualCodeRabbit,
+    codeRabbit: manualCodeRabbit.codeRabbit.replace('  review_status: false', '  review_status: true'),
+  }).some((failure) => failure.includes('status messages must stay disabled')),
+  'Enabling automatic skipped-review status messages must fail validation.',
+)
+
+assert(
+  validateManualCodeRabbit({
+    ...manualCodeRabbit,
     codeRabbit: manualCodeRabbit.codeRabbit.replace('    enabled: false', '    enabled: true'),
   }).some((failure) => failure.includes('automatic reviews must stay disabled')),
   'Enabling automatic reviews must fail validation.',

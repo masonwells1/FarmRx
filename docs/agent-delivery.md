@@ -25,7 +25,7 @@ After local proof is green, the agent may push the feature branch, create and ma
 7. Read the delivered review. Fix every real finding. A new commit, base update, reopen, or draft conversion invalidates the candidate; rerun checks, freeze the new head, and ask Mason to post the exact comment again.
 8. Never use `@coderabbitai resume`. Use `@coderabbitai full review` only when a deliberately justified complete reread is needed.
 
-CodeRabbit automatic and incremental reviews stay disabled in `.coderabbit.yaml`. Pull-request creation, pushes, descriptions, labels, and GitHub workflows must not request a review. A skipped-review notice or status may appear when a pull request opens, but it is not a review and requires no action until the candidate is frozen and Mason chooses to post the command.
+CodeRabbit automatic and incremental reviews stay disabled in `.coderabbit.yaml`. Its automatic skipped-review status is also disabled. Pull-request creation, pushes, descriptions, labels, and GitHub workflows must remain silent; the candidate is reviewed only when Mason chooses to post the command.
 
 Reference: [CodeRabbit automatic-review controls](https://docs.coderabbit.ai/configuration/auto-review).
 

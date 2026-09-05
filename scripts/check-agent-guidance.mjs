@@ -49,6 +49,7 @@ export function validateManualCodeRabbit({ codeRabbit, automationSources }) {
   const failures = []
   const autoReview = codeRabbit.match(/^  auto_review:\s*\r?\n((?:^    .*\r?\n?)*)/m)?.[0] ?? ''
 
+  requireText(failures, '.coderabbit.yaml', codeRabbit, 'review_status: false', 'automatic skipped-review status messages must stay disabled')
   requireText(failures, '.coderabbit.yaml', autoReview, 'enabled: false', 'automatic reviews must stay disabled')
   requireText(failures, '.coderabbit.yaml', autoReview, 'auto_incremental_review: false', 'automatic incremental reviews must stay disabled')
   requireText(failures, '.coderabbit.yaml', autoReview, 'labels: []', 'label-triggered reviews must stay disabled')

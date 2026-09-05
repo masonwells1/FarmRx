@@ -13,7 +13,8 @@ reviews:
   request_changes_workflow: true
   high_level_summary: true
   poem: false
-  review_status: true
+  # Stay silent when a pull request opens; Mason will request a review manually.
+  review_status: false
   collapse_walkthrough: false
 
   # Report sections (sequence diagrams, related PRs/issues, linked-issue
