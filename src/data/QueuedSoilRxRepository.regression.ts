@@ -393,13 +393,14 @@ try {
 const heldRead = harness('soil-rx-held-live-read')
 const heldReadQueueKey = soilRxWriteQueueKey(heldRead.scope.projectRef, userId, farmId)
 heldRead.setOffline(true); await heldRead.repository.saveTest(draft(uid(660)))
+await new Promise((resolve) => setTimeout(resolve, 25))
 const heldReadScope = cacheKey(heldRead.scope.projectRef, userId, farmId)
 const heldReadSnapshots = new Map<string, unknown>([[heldReadScope, { stale: 'pending' }]])
 const heldReadCache = scopedCacheDatabase(heldRead.storage, heldReadSnapshots)
 let releaseHeldRead!: () => void; let sawHeldRead!: () => void
 const heldReadStarted = new Promise<void>((resolve) => { sawHeldRead = resolve })
 const heldReadRelease = new Promise<void>((resolve) => { releaseHeldRead = resolve })
-heldRead.setGetDataHook(async () => { sawHeldRead(); await heldReadRelease })
+heldRead.setGetDataHook(async () => { heldRead.setGetDataHook(null); sawHeldRead(); await heldReadRelease })
 try {
   heldRead.setOffline(false)
   const staleGetData = heldRead.repository.getData()
@@ -432,6 +433,32 @@ try {
   assert.equal(new SoilRxWriteQueue(ordering.storage, orderingQueueKey).read().entries.length, 0, 'The ordering proof did not release confirmed queue custody.')
   assert.equal(ordering.storage.getItem(`farm-rx-workspace-cache-invalid:v1:${orderingScope}`), '1', 'The ordering proof lost its tombstone after the forced IndexedDB failure.')
 } finally { ordering.storage.onSet = null; orderingCache.restore() }
+
+// If the tombstone write itself fails after the remote upsert, the durable
+// confirmed queue state blocks offline rendering and later recovery must skip
+// the server call while it finishes cache cleanup.
+const tombstoneWriteFailure = harness('soil-rx-tombstone-write-failure')
+const tombstoneWriteFailureQueueKey = soilRxWriteQueueKey(tombstoneWriteFailure.scope.projectRef, userId, farmId)
+tombstoneWriteFailure.setOffline(true); await tombstoneWriteFailure.repository.saveTest(draft(uid(680)))
+await new Promise((resolve) => setTimeout(resolve, 25))
+const tombstoneWriteFailureScope = cacheKey(tombstoneWriteFailure.scope.projectRef, userId, farmId)
+const tombstoneWriteFailureSnapshots = new Map<string, unknown>([[tombstoneWriteFailureScope, { stale: 'pending' }], [cacheKey(tombstoneWriteFailure.scope.projectRef, uid(681), farmId), {}]])
+const tombstoneWriteFailureCache = scopedCacheDatabase(tombstoneWriteFailure.storage, tombstoneWriteFailureSnapshots)
+try {
+  tombstoneWriteFailure.storage.failNextKey = `farm-rx-workspace-cache-invalid:v1:${tombstoneWriteFailureScope}`
+  tombstoneWriteFailure.setOffline(false); await tombstoneWriteFailure.repository.inspectAndReplay()
+  const confirmedHead = new SoilRxWriteQueue(tombstoneWriteFailure.storage, tombstoneWriteFailureQueueKey).read().entries[0]
+  assert.equal(tombstoneWriteFailure.savedIds.filter((id) => id === uid(680)).length, 1, 'A tombstone-write failure repeated the confirmed server save.')
+  assert.equal(confirmedHead?.confirmed, true, 'A tombstone-write failure did not preserve durable confirmed replay custody.')
+  assert.equal(readNeedsAttention(tombstoneWriteFailure.storage, tombstoneWriteFailureQueueKey).length, 0, 'A tombstone-write failure misclassified a confirmed save as Needs Attention.')
+  tombstoneWriteFailure.setOffline(true)
+  await assert.rejects(() => tombstoneWriteFailure.repository.getData(), /finishing device cleanup/, 'A tombstone-write failure allowed stale pending data to render offline.')
+  tombstoneWriteFailure.setOffline(false); await tombstoneWriteFailure.repository.inspectAndReplay()
+  assert.equal(tombstoneWriteFailure.savedIds.filter((id) => id === uid(680)).length, 1, 'Recovery after tombstone storage recovered repeated the confirmed server save.')
+  assert.equal(new SoilRxWriteQueue(tombstoneWriteFailure.storage, tombstoneWriteFailureQueueKey).read().entries.length, 0, 'Recovery did not release durable confirmed queue custody.')
+  assert.equal(tombstoneWriteFailureSnapshots.has(tombstoneWriteFailureScope), false, 'Recovered cleanup did not remove the exact stale cache.')
+  assert.ok(tombstoneWriteFailureSnapshots.has(cacheKey(tombstoneWriteFailure.scope.projectRef, uid(681), farmId)), 'Recovered cleanup deleted another user cache.')
+} finally { tombstoneWriteFailureCache.restore() }
 
 const dismiss = await parkedHarness('soil-rx-dismiss', uid(301))
 await dismiss.queued.repository.dismissNeedsAttention(dismiss.queueKey, dismiss.record.id)
@@ -606,6 +633,8 @@ const replayRelease = 'await this.releaseCacheCustody(source, () => { envelope =
 function assertReplayCacheGuards(candidate: string) {
   const replayMethod = candidate.slice(candidate.indexOf('async inspectAndReplay()'), candidate.indexOf('async getReportUrl'))
   assert.equal(replayMethod.split(replayRelease).length - 1, 2, 'Both replay custody exits must use the fenced queue-release path.')
+  assert.ok(replayMethod.includes('let confirmed = entry.confirmed === true || this.confirmedInMemory.has(entry.operationId)'), 'Replay must honor durable or in-memory confirmed custody before a server call.')
+  assert.ok(replayMethod.indexOf('source.queue.markConfirmedHead(entry.operationId)') < replayMethod.lastIndexOf(replayRelease), 'Replay must durably mark confirmation before successful cache-and-queue release.')
   const replayCatch = replayMethod.slice(replayMethod.lastIndexOf('    } catch (error) {'))
   assert.ok(!replayCatch.includes('source.queue.read()'), 'Blocked replay reporting must not re-read malformed queue bytes.')
   const dismissMethod = candidate.slice(candidate.indexOf('async dismissNeedsAttention'), candidate.lastIndexOf('\n}'))
@@ -619,6 +648,7 @@ for (const [name, mutation] of [
   ['replay-malformed-reread', source.replace("pending: 1, message: attention", "pending: source.queue.read().entries.length, message: attention")],
   ['dismiss-cache-invalidation', source.replace('await this.releaseCacheCustody(source, () => dismissNeedsAttention(this.d.storage, queueKey, operationId)); verify()', 'await Promise.resolve()')],
   ['tombstone-after-release', source.replace('const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      releaseQueue()', 'releaseQueue()\n      const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))')],
+  ['confirmed-custody-bypass', source.replace('entry.confirmed === true || this.confirmedInMemory.has(entry.operationId)', 'false')],
 ] as const) {
   assert.notEqual(mutation, source, `${name} mutation was not applied`)
   assert.throws(() => assertReplayCacheGuards(mutation), `${name} mutation must turn the replay proof red`)

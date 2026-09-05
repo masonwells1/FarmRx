@@ -4,7 +4,7 @@ import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueu
 import { queueTransaction } from './queueTransaction'
 import { beginSoilRxAttachmentCustody, confirmSoilRxAttachmentRemoval, drainSoilRxCleanupOutbox, readSoilRxAttachmentCustody, readSoilRxCleanupOutbox, releaseSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey, soilRxCleanupOutboxTransaction, type SoilRxAttachmentCustodyEntry } from './soilRxCleanupOutbox'
 import { createSoilRxQueueEntry, SoilRxWriteQueue, parseSoilRxQueue, soilRxWriteQueueKey, type QueuedSoilTestDraft, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
-import { normalizeSoilTestDraft, sortSoilTestsNewestFirst, validateSoilTestDraft, type SoilReportMime, type SoilRxData, type SoilRxRepository, type SoilTest, type SoilTestDraft } from './soilRx'
+import { normalizeSoilTestDraft, soilMeasurementKeys, sortSoilTestsNewestFirst, validateSoilTestDraft, type SoilReportMime, type SoilRxData, type SoilRxRepository, type SoilTest, type SoilTestDraft } from './soilRx'
 import { validateSoilReportFile } from './soilRxStorage'
 import { setModuleSyncStatus } from './syncStatus'
 import type { SupabaseSoilRxRepository } from './SupabaseSoilRxRepository'
@@ -28,13 +28,14 @@ type Dependencies = {
 const attention = 'A saved Soil Rx change needs attention. Nothing was deleted.'
 const parkedBlocked = 'This saved Soil Rx change no longer matches the signed-in account, farm, or original save. Nothing was changed.'
 const sameOperationContext = (left: FarmOperationContext, right: FarmOperationContext) => left.projectRef === right.projectRef && left.userId === right.userId && left.farmId === right.farmId && left.generation === right.generation && left.token === right.token && left.serverEpoch === right.serverEpoch
-const sameEntry = (left: SoilRxQueueEntryV1, right: SoilRxQueueEntryV1) => left.payloadBytes === right.payloadBytes && JSON.stringify(left) === JSON.stringify(right)
+const sameEntry = (left: SoilRxQueueEntryV1, right: SoilRxQueueEntryV1) => left.payloadBytes === right.payloadBytes
 
 export class QueuedSoilRxRepository implements SoilRxRepository {
   private workspace: SoilRxData | null = null
   private scopeKey: string | null = null
   private cacheEpoch = 0
   private cacheTail: Promise<void> = Promise.resolve()
+  private confirmedInMemory = new Set<string>()
   constructor(private readonly live: SupabaseSoilRxRepository, private readonly d: Dependencies) {}
 
   private async source(): Promise<Source> {
@@ -66,6 +67,9 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     })
   }
   private pending(entry: SoilRxQueueEntryV1): SoilTest { return { ...entry.draft, farm_id: entry.farmId, created_by: entry.userId, created_at: entry.enqueuedAt, updated_at: entry.enqueuedAt, attachment: null, pending: true } }
+  private confirmedTest(entry: SoilRxQueueEntryV1, value: SoilTest | undefined) {
+    return value !== undefined && value.id === entry.draft.id && value.farm_id === entry.farmId && value.field_id === entry.draft.field_id && value.sample_date === entry.draft.sample_date && value.lab_name === entry.draft.lab_name && value.created_by === entry.userId && soilMeasurementKeys.every((key) => value[key] === entry.draft[key])
+  }
   private overlay(data: SoilRxData, entries: SoilRxQueueEntryV1[]) {
     const tests = [...data.tests]
     for (const entry of entries) { const pending = this.pending(entry); const index = tests.findIndex((test) => test.id === pending.id); if (index < 0) tests.push(pending); else tests[index] = pending }
@@ -146,6 +150,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     } catch (error) {
       await verifyQueuedReadContext(this.d, source.operationContext)
       if (!isTransportFailure(error, this.d.isOffline())) throw error
+      if (entries.some((entry) => entry.confirmed)) throw new Error('A confirmed Soil Rx save is finishing device cleanup. Connect to finish safely.')
       const cached = this.workspace ?? (await readWorkspaceCache<SoilRxData>(this.cacheScope(source.context), operationalCacheMaxAgeMs))?.data ?? null
       await verifyQueuedReadContext(this.d, source.operationContext)
       if (!cached && !entries.length) throw new Error('Connect to the internet once to load Soil Rx history on this device.')
@@ -214,14 +219,30 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
           const entry = envelope.entries[0]!
           await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
           setModuleSyncStatus('soilRx', { kind: 'syncing', pending: envelope.entries.length })
-          try {
-            await this.live.saveTestOperation(entry.draft, source.operationContext)
-          } catch (error) {
-            await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
-            if (isTransportFailure(error, this.d.isOffline())) { setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); return }
-            verify(); appendNeedsAttention(this.d.storage, source.queue.key, { id: entry.operationId, module: 'soilRx', createdAt: entry.enqueuedAt, message: attention, entry })
-            await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) }); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
-            continue
+          let confirmed = entry.confirmed === true || this.confirmedInMemory.has(entry.operationId)
+          if (!confirmed) {
+            try {
+              // A durable mark may have been interrupted after the upsert. Probe
+              // the ID-bound row first so restart recovery never repeats it.
+              const current = await this.live.getData()
+              await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
+              confirmed = this.confirmedTest(entry, current.tests.find((test) => test.id === entry.draft.id))
+              if (!confirmed) await this.live.saveTestOperation(entry.draft, source.operationContext)
+            } catch (error) {
+              await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
+              if (isTransportFailure(error, this.d.isOffline())) { setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); return }
+              verify(); appendNeedsAttention(this.d.storage, source.queue.key, { id: entry.operationId, module: 'soilRx', createdAt: entry.enqueuedAt, message: attention, entry })
+              await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) }); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
+              continue
+            }
+            this.confirmedInMemory.add(entry.operationId)
+            try { envelope = source.queue.markConfirmedHead(entry.operationId) }
+            catch (error) {
+              // Storage cannot prove confirmed custody yet. Keep this process
+              // blocked; the ID-bound probe above protects a later restart.
+              this.refreshSync(source)
+              throw error
+            }
           }
           verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
           // A completed upsert must leave the queue before best-effort IndexedDB

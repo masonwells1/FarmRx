@@ -14,7 +14,9 @@ export interface SoilRxQueueEntryPayloadV1 {
   operationContext: FarmOperationContext
   draft: QueuedSoilTestDraft
 }
-export interface SoilRxQueueEntryV1 extends SoilRxQueueEntryPayloadV1 { payloadBytes: string }
+/** `confirmed` is mutable local custody, deliberately excluded from the signed
+ * payload bytes so a server-confirmed operation can survive cache cleanup. */
+export interface SoilRxQueueEntryV1 extends SoilRxQueueEntryPayloadV1 { payloadBytes: string; confirmed?: true }
 export interface SoilRxQueueEnvelopeV1 { version: 1; entries: SoilRxQueueEntryV1[] }
 
 const blocked = 'Saved Soil Rx changes on this device need attention. Nothing was deleted.'
@@ -65,10 +67,10 @@ export function createSoilRxQueueEntry(value: SoilRxQueueEntryPayloadV1): SoilRx
 function isEntry(value: unknown): value is SoilRxQueueEntryV1 {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as Record<string, unknown>
-  if (!exact(row, [...entryPayloadKeys, 'payloadBytes']) || row.version !== 1 || row.module !== 'soilRx' || row.kind !== 'saveTest'
+  if (!(exact(row, [...entryPayloadKeys, 'payloadBytes']) || exact(row, [...entryPayloadKeys, 'payloadBytes', 'confirmed'])) || row.version !== 1 || row.module !== 'soilRx' || row.kind !== 'saveTest'
     || !isSoilRxUuid(row.operationId) || !isSoilRxUuid(row.userId) || !isSoilRxUuid(row.farmId)
     || typeof row.enqueuedAt !== 'string' || Number.isNaN(Date.parse(row.enqueuedAt))
-    || !isOperationContext(row.operationContext, row.userId, row.farmId) || !isDraft(row.draft) || typeof row.payloadBytes !== 'string') return false
+    || !isOperationContext(row.operationContext, row.userId, row.farmId) || !isDraft(row.draft) || typeof row.payloadBytes !== 'string' || (Object.hasOwn(row, 'confirmed') && row.confirmed !== true)) return false
   const payload = canonicalPayload(row as unknown as SoilRxQueueEntryPayloadV1)
   return row.payloadBytes === JSON.stringify(payload)
 }
@@ -83,6 +85,7 @@ export class SoilRxWriteQueue {
   read() { const raw = this.storage.getItem(this.key); return raw === null ? { version: 1 as const, entries: [] } : parseSoilRxQueue(raw) }
   private persist(value: SoilRxQueueEnvelopeV1) { const bytes = JSON.stringify(value); parseSoilRxQueue(bytes); this.storage.setItem(this.key, bytes); if (this.storage.getItem(this.key) !== bytes) throw new Error('This Soil Rx entry could not be saved on this device. Keep this screen open and try again.'); parseSoilRxQueue(bytes) }
   append(entry: SoilRxQueueEntryV1) { parseSoilRxQueue(JSON.stringify({ version: 1, entries: [entry] })); const next = { version: 1 as const, entries: [...this.read().entries, entry] }; this.persist(next); return next }
+  markConfirmedHead(operationId: string) { const current = this.read(); const head = current.entries[0]; if (!head || head.operationId !== operationId) throw new Error(blocked); if (head.confirmed) return current; const next = { version: 1 as const, entries: [{ ...head, confirmed: true as const }, ...current.entries.slice(1)] }; this.persist(next); return next }
   removeConfirmedHead(operationId: string) { const current = this.read(); if (current.entries[0]?.operationId !== operationId) throw new Error(blocked); const next = { version: 1 as const, entries: current.entries.slice(1) }; this.persist(next); return next }
 }
 export function soilRxWriteQueueKey(projectRef: string, userId: string, farmId: string) { return `farm-rx-soil-rx-write-queue:v1:${projectRef}:${userId}:${farmId}` }
