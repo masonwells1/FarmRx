@@ -4,7 +4,7 @@ import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueu
 import { queueTransaction } from './queueTransaction'
 import { beginSoilRxAttachmentCustody, confirmSoilRxAttachmentRemoval, drainSoilRxCleanupOutbox, readSoilRxAttachmentCustody, readSoilRxCleanupOutbox, releaseSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey, soilRxCleanupOutboxTransaction, type SoilRxAttachmentCustodyEntry } from './soilRxCleanupOutbox'
 import { createSoilRxQueueEntry, SoilRxWriteQueue, parseSoilRxQueue, soilRxWriteQueueKey, type QueuedSoilTestDraft, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
-import { normalizeSoilTestDraft, soilMeasurementKeys, sortSoilTestsNewestFirst, validateSoilTestDraft, type SoilReportMime, type SoilRxData, type SoilRxRepository, type SoilTest, type SoilTestDraft } from './soilRx'
+import { normalizeSoilTestDraft, soilMeasurementKeys, SoilRxHistoryUnavailableOfflineError, sortSoilTestsNewestFirst, validateSoilTestDraft, type SoilReportMime, type SoilRxData, type SoilRxRepository, type SoilTest, type SoilTestDraft } from './soilRx'
 import { validateSoilReportFile } from './soilRxStorage'
 import { setModuleSyncStatus } from './syncStatus'
 import type { SupabaseSoilRxRepository } from './SupabaseSoilRxRepository'
@@ -159,13 +159,16 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       return this.overlay(data, entries.filter((entry) => !fieldId || entry.draft.field_id === fieldId))
     } catch (error) {
       await verifyQueuedReadContext(this.d, source.operationContext)
-      if (!isTransportFailure(error, this.d.isOffline())) throw error
+      // Offline status alone is not enough to make an error safe to mask with
+      // a local projection: authorization and malformed-response failures
+      // must stay fail-closed even if the browser is currently offline.
+      if (!isTransportFailure(error, false)) throw error
       if (entries.some((entry) => entry.confirmed)) throw new Error('A confirmed Soil Rx save is finishing device cleanup. Connect to finish safely.')
       const memory = verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody) && this.workspace?.cacheCustody === source.cacheCustody ? this.workspace.data : null
       const cached = memory ?? (await readWorkspaceCache<SoilRxData>(this.cacheScope(source.context), operationalCacheMaxAgeMs))?.data ?? null
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
       await verifyQueuedReadContext(this.d, source.operationContext)
-      if (!cached && !entries.length) throw new Error('Connect to the internet once to load Soil Rx history on this device.')
+      if (!cached && !entries.length) throw new SoilRxHistoryUnavailableOfflineError()
       const data = cached ?? { tests: [] }
       return this.overlay({ tests: fieldId ? data.tests.filter((test) => test.field_id === fieldId) : data.tests }, entries.filter((entry) => !fieldId || entry.draft.field_id === fieldId))
     }

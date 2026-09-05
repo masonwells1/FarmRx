@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import type { CropAssignment, FieldsRepository, Commodity } from './data/fields'
-import { soilMeasurementKeys, sortSoilTestsNewestFirst, type SoilMeasurementKey, type SoilRxRepository, type SoilTest, type SoilTestDraft } from './data/soilRx'
+import { soilMeasurementKeys, SoilRxHistoryUnavailableOfflineError, sortSoilTestsNewestFirst, type SoilMeasurementKey, type SoilRxRepository, type SoilTest, type SoilTestDraft } from './data/soilRx'
 import { createSubmitLock } from './lib/submitLock'
 import { farmerError } from './lib/farmerErrors'
 import { useFarmAccess } from './auth/FarmAccessContext'
@@ -56,6 +56,7 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [historyUnavailableOffline, setHistoryUnavailableOffline] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [openTests, setOpenTests] = useState<Set<string>>(new Set())
   const [attentionQueueKey, setAttentionQueueKey] = useState<string | null>(null)
@@ -66,10 +67,14 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
   const canEdit = canEditFarmModule(profile, 'soil_rx')
 
   const refresh = async () => {
-    const [fieldData, soilData, queueKey] = await Promise.all([fieldsRepository.getData(), repository.getData(), repository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)])
+    const history = repository.getData().catch((caught: unknown) => {
+      if (caught instanceof SoilRxHistoryUnavailableOfflineError) return null
+      throw caught
+    })
+    const [fieldData, soilData, queueKey] = await Promise.all([fieldsRepository.getData(), history, repository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)])
     const nextFields = fieldData.fields.map(({ id, name, is_active }) => ({ id, name, isActive: is_active }))
     const nextActiveFields = nextFields.filter((field) => field.isActive)
-    const nextTests = sortSoilTestsNewestFirst(soilData.tests); setFields(nextFields); setTests(nextTests); setHarvestAssignments(fieldData.crop_assignments); setCommodities(fieldData.commodities)
+    const nextTests = sortSoilTestsNewestFirst(soilData?.tests ?? []); setFields(nextFields); setTests(nextTests); setHarvestAssignments(fieldData.crop_assignments); setCommodities(fieldData.commodities); setHistoryUnavailableOffline(soilData === null)
     const nextSelected = selectedFieldId && nextFields.some((field) => field.id === selectedFieldId) ? selectedFieldId : nextActiveFields[0]?.id ?? nextFields.find((field) => nextTests.some((test) => test.field_id === field.id))?.id ?? nextFields[0]?.id ?? ''
     setSelectedFieldId(nextSelected); setForm((current) => ({ ...current, fieldId: nextActiveFields.some((field) => field.id === current.fieldId) ? current.fieldId : nextActiveFields[0]?.id ?? '' })); setOpenTests(new Set(nextTests.filter((test) => test.field_id === nextSelected).slice(0, 1).map((test) => test.id))); setAttentionQueueKey(queueKey)
   }
@@ -99,6 +104,7 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
   return <section className="page soil-rx-page" aria-labelledby="soil-rx-title">
     <header className="page-header"><div><p className="eyebrow">Field fertility records</p><h1 id="soil-rx-title">Soil Rx</h1><p>Keep your lab results together by field. Crop RX only sees them if you share farm data in Privacy.</p></div></header>
     {error && <p className="auth-error" role="alert">{error}</p>}
+    {historyUnavailableOffline && <p className="auth-error" role="alert">Soil Rx history is not available on this device yet. Connect once to load it. You can still save a text-only test for an active field.</p>}
     {message && <p className="save-success" role="status">{message}</p>}
     <NeedsAttentionList module="soilRx" queueKey={attentionQueueKey} onRetry={(row) => repository.retryNeedsAttention?.(row.queueKey, row.id)} onDismiss={(row) => repository.dismissNeedsAttention?.(row.queueKey, row.id)} onChanged={refresh} />
     {loading ? <p className="loading-state">Loading Soil Rx…</p> : <>
@@ -110,7 +116,7 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
         {canEdit && selectedField?.isActive && <form className="soil-rx-form" onSubmit={save}><header><h2>Add a soil test</h2><p>Lab name and sample date are required. Leave a measurement blank when it was not reported.</p></header>
           <div className="soil-rx-form-grid"><label>Field<select value={form.fieldId} onChange={(event) => chooseField(event.target.value)} required>{activeFields.map((field) => <option key={field.id} value={field.id}>{field.name}</option>)}</select></label><label>Lab name<input value={form.labName} onChange={(event) => setForm((current) => ({ ...current, labName: event.target.value }))} maxLength={160} required /></label><label>Sample date<input type="date" value={form.sampleDate} onChange={(event) => setForm((current) => ({ ...current, sampleDate: event.target.value }))} required /></label></div>
           <details className="soil-rx-measurements"><summary>Add lab measurements (optional)</summary><div>{soilMeasurementKeys.map((key) => <label key={key}>{labels[key]}<input type="number" step="0.001" value={form.measurements[key]} onChange={(event) => setForm((current) => ({ ...current, measurements: { ...current.measurements, [key]: event.target.value } }))} /></label>)}</div></details>
-          <label className="soil-rx-report">Lab report (optional, PDF or image, up to 20 MB)<input type="file" accept="application/pdf,image/jpeg,image/png,image/heic,image/heif" onChange={selectReport} />{report && <small>{report.name}</small>}{offline && <small>Attachments need a connection. Text-only tests can still save now.</small>}</label>
+          <label className="soil-rx-report">Lab report (optional, PDF or image, up to 20 MB)<input type="file" accept="application/pdf,image/jpeg,image/png,image/heic,image/heif" onChange={selectReport} disabled={offline} />{report && <small>{report.name}</small>}{offline && <small>Attachments need a connection. Text-only tests can still save now.</small>}</label>
           <button className="primary-action" type="submit" disabled={saving}>{saving ? 'Saving soil test…' : 'Save soil test'}</button>
         </form>}
       </>}

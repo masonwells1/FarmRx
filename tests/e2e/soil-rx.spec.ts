@@ -405,6 +405,37 @@ test('Soil Rx offline replay surfaces guarded Retry and Dismiss', async ({ page,
   expectProtectedNonwrite(state, protectedBefore); expect(unexpected).toEqual([])
 })
 
+test('Soil Rx keeps cached Fields available for a text-only first offline save without history', async ({ page }, testInfo) => {
+  const state = writeState(); const protectedBefore = protectedSnapshot(state)
+  await page.addInitScript(({ key, value, intentKey }) => { localStorage.setItem(key, JSON.stringify(value)); localStorage.setItem(intentKey, JSON.stringify({ version: 1, nonce: 'soil-rx-first-offline-history', phase: 'accepted', userId: value.user.id, sessionLineage: 'soil-rx-e2e', startedAtMs: Date.now() })) }, { key: `farm-rx-auth:${project}`, intentKey: `farm-rx-auth-intent:v1:${project}`, value: session() })
+  const unexpected = await mock(page, false, state)
+  await page.goto('/fields')
+  await expect(page.getByRole('heading', { name: 'Fields' })).toBeVisible()
+
+  await page.evaluate(() => {
+    Object.defineProperty(Navigator.prototype, 'onLine', { configurable: true, get: () => false })
+    window.dispatchEvent(new Event('offline'))
+  })
+  await page.route('**/rest/v1/soil_tests**', (route) => route.abort('failed'))
+  await page.route('**/rest/v1/soil_test_attachments**', (route) => route.abort('failed'))
+  if (testInfo.project.name === 'chromium-phone') { await page.getByRole('button', { name: 'More' }).click(); await page.getByRole('region', { name: 'More Farm Rx destinations' }).getByRole('link', { name: 'Soil Rx' }).click() }
+  else await page.getByRole('link', { name: 'Soil Rx' }).click()
+  await expect(page.getByRole('heading', { name: 'Soil Rx' })).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveText('Soil Rx history is not available on this device yet. Connect once to load it. You can still save a text-only test for an active field.')
+  await expect(page.getByRole('heading', { name: 'Add a soil test' })).toBeVisible()
+  const reportInput = page.getByLabel(/Lab report/)
+  await expect(reportInput).toBeDisabled()
+  await expect(page.getByText('Attachments need a connection. Text-only tests can still save now.', { exact: true })).toBeVisible()
+
+  await page.getByLabel('Lab name').fill('Offline First Load Lab')
+  await page.getByLabel('Sample date').fill('2027-01-15')
+  await page.getByRole('button', { name: 'Save soil test' }).click()
+  await expect(page.locator('.save-success')).toContainText('Saved on this device')
+  await expect(page.locator('.soil-test-summary').filter({ hasText: 'Offline First Load Lab' })).toContainText('Saved offline')
+  expect(state.writes.filter((entry) => entry.startsWith('soil_tests:upsert:') || entry.startsWith('soil_test_attachments:') || entry.startsWith('storage:upload:'))).toEqual([])
+  expectProtectedNonwrite(state, protectedBefore); expect(unexpected).toEqual([])
+})
+
 test('Soil Rx visibly retains failed attachment cleanup until matching-context recovery', async ({ page }) => {
   const state = writeState(); state.failAttachmentMetadata = 1; state.failStorageRemovals = 1
   const protectedBefore = protectedSnapshot(state); const unexpected = await open(page, false, state)

@@ -6,7 +6,7 @@ import { needsAttentionKey, readNeedsAttention } from './needsAttentionStore'
 import { queueTransaction } from './queueTransaction'
 import { QueuedSoilRxRepository } from './QueuedSoilRxRepository'
 import { beginSoilRxAttachmentCustody, readSoilRxAttachmentCustody, readSoilRxCleanupOutbox, recordSoilRxCleanup, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
-import { soilMeasurementKeys, type SoilReportMime, type SoilTest, type SoilTestDraft } from './soilRx'
+import { soilMeasurementKeys, SoilRxHistoryUnavailableOfflineError, type SoilReportMime, type SoilTest, type SoilTestDraft } from './soilRx'
 import { confirmSoilRxReportRemoval, maximumSoilReportBytes, removeSoilRxReportsWithGateway, validateSoilReportFile } from './soilRxStorage'
 import { createSoilRxQueueEntry, SoilRxWriteQueue, soilRxWriteQueueKey, type SoilRxQueueEntryPayloadV1, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
 import { getSyncStatus, setModuleSyncStatus } from './syncStatus'
@@ -117,6 +117,17 @@ function harness(projectRef: string, selectedFarmId = farmId, storage = new Memo
 
 assert.throws(() => confirmSoilRxReportRemoval([cleanupPath], []), /could not confirm Soil Rx attachment cleanup/)
 assert.deepEqual(confirmSoilRxReportRemoval([cleanupPath], [{ name: cleanupPath }]), [cleanupPath])
+
+// A first offline Soil Rx visit has no history projection to show, but this is
+// distinguishable from permission and malformed-response failures. The page
+// may recover its separately scoped Fields projection only for this sentinel.
+const firstOfflineHistory = harness('soil-rx-first-offline-history')
+firstOfflineHistory.setOffline(true)
+await assert.rejects(() => firstOfflineHistory.repository.getData(), (error: unknown) => error instanceof SoilRxHistoryUnavailableOfflineError)
+const offlinePermissionFailure = harness('soil-rx-offline-permission-failure')
+offlinePermissionFailure.setOffline(true)
+offlinePermissionFailure.setGetDataFailure(new Error('permission denied'))
+await assert.rejects(() => offlinePermissionFailure.repository.getData(), (error: unknown) => error instanceof Error && error.message === 'permission denied')
 
 // Exercise the production removal core across a committed remove whose first
 // response is lost. The retry accepts only the exact authoritative absence set.

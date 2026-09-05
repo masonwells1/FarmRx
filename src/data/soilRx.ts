@@ -13,6 +13,16 @@ export interface SoilTestDraft extends SoilMeasurements { id?: string; field_id:
 export interface SoilTestAttachment { id: string; farm_id: string; field_id: string; test_id: string; storage_path: string; original_filename: string; mime_type: SoilReportMime; size_bytes: number; created_by: string; created_at: string }
 export interface SoilTest extends SoilMeasurements { id: string; farm_id: string; field_id: string; sample_date: string; lab_name: string; created_by: string; created_at: string; updated_at: string; attachment: SoilTestAttachment | null; pending?: boolean }
 export interface SoilRxData { tests: SoilTest[] }
+/**
+ * The device has no verified Soil Rx history yet, but a separate cached
+ * Fields projection can still support a text-only offline save.
+ */
+export class SoilRxHistoryUnavailableOfflineError extends Error {
+  constructor() {
+    super('Connect to the internet once to load Soil Rx history on this device.')
+    this.name = 'SoilRxHistoryUnavailableOfflineError'
+  }
+}
 export type SoilReportMime = 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/heic' | 'image/heif'
 export interface SoilRxRepository {
   getData(fieldId?: string): Promise<SoilRxData>
