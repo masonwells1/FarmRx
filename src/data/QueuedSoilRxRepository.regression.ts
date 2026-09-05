@@ -382,6 +382,14 @@ const heldDatabase = heldCacheDatabase(heldCacheStorage, heldValues)
 try {
   heldDatabase.holdNextGet(); const normalRead = readWorkspaceCache<{ stale: boolean }>(heldScope, 9e9); await new Promise<void>(queueMicrotask); await new Promise<void>(queueMicrotask); beginWorkspaceCacheInvalidation(heldCacheStorage, heldScope); heldDatabase.releaseGet(); assert.equal(await normalRead, null, 'Held normal cache read returned after custody advanced.'); assert.equal(getWorkspaceCacheNotices().some((notice) => notice.module === 'soilRx' && notice.cachedAt === stamp), false, 'Held normal cache read published a stale notice.')
   heldCacheStorage.removeItem(custodyStorageKey(heldKey)); heldDatabase.holdNextGet(); const pureRead = readWorkspaceCachePure<{ stale: boolean }>(heldScope, heldFence, 9e9, heldCacheStorage); await new Promise<void>(queueMicrotask); await new Promise<void>(queueMicrotask); beginWorkspaceCacheInvalidation(heldCacheStorage, heldScope); heldDatabase.releaseGet(); assert.equal(await pureRead, null, 'Held pure cache read returned after custody advanced.')
+  // Read-write IndexedDB transactions serialize. Model the legal ordering in
+  // which a fresh current-custody writer commits before an older finisher gets
+  // its conditional read; that finisher must preserve the fresh envelope.
+  heldCacheStorage.removeItem(custodyStorageKey(heldKey)); const finish = beginWorkspaceCacheInvalidation(heldCacheStorage, heldScope)
+  heldValues.set(heldKey, { version: 3, key: heldKey, ...heldScope, generation: heldFence.generation, fenceToken: heldFence.token, serverEpoch: heldFence.serverEpoch, cacheCustody: 1, cachedAt: new Date().toISOString(), data: { fresh: true } })
+  await finish()
+  const preservedFresh = await readWorkspaceCache<{ fresh: boolean }>(heldScope, 9e9)
+  assert.deepEqual(preservedFresh?.data, { fresh: true }, 'An older invalidation finisher deleted a fresh current-custody cache envelope.')
 } finally { heldDatabase.restore() }
 async function assertReplayDoesNotResurrect(name: string, settle: (value: ReturnType<typeof harness>, key: string) => Promise<void>) {
   const value = harness(`soil-rx-cache-${name}`)
