@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import ts from 'typescript'
-import { resetFarmGrantFromLive } from './farmRevocationFence'
+import { captureFarmRevocationFence, resetFarmGrantFromLive } from './farmRevocationFence'
 import { needsAttentionKey, readNeedsAttention } from './needsAttentionStore'
 import { queueTransaction } from './queueTransaction'
 import { QueuedSoilRxRepository } from './QueuedSoilRxRepository'
@@ -12,7 +12,7 @@ import { createSoilRxQueueEntry, SoilRxWriteQueue, soilRxWriteQueueKey, type Soi
 import { getSyncStatus, setModuleSyncStatus } from './syncStatus'
 import type { SupabaseSoilRxRepository } from './SupabaseSoilRxRepository'
 import type { StorageLike } from './writeQueue'
-import { shouldDeleteInvalidatedWorkspaceCache } from './workspaceCache'
+import { beginWorkspaceCacheInvalidation, getWorkspaceCacheNotices, readWorkspaceCache, readWorkspaceCachePure, shouldDeleteInvalidatedWorkspaceCache } from './workspaceCache'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const userId = uid(1), farmId = uid(2), fieldId = uid(3), testId = uid(4)
@@ -358,6 +358,31 @@ function scopedCacheDatabase(storage: MemoryStorage, values: Map<string, unknown
 }
 const cacheKey = (projectRef: string, user: string, farm: string, module = 'soilRx') => `${projectRef}:${user}:${farm}:${module}`
 const custodyStorageKey = (scope: string) => `farm-rx-workspace-cache-custody:v1:${scope}`
+function heldCacheDatabase(storage: MemoryStorage, values: Map<string, any>) {
+  const priorIndexedDb = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB'); const priorLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  let holdNext = false; let held: (() => void) | null = null
+  const database = { objectStoreNames: { contains: (name: string) => name === 'workspaces' }, transaction: () => {
+    const tx: any = { objectStore: () => ({
+      get: (key: string) => { const request: any = {}; const finish = () => { request.result = values.get(key); request.onsuccess?.(); queueMicrotask(() => tx.oncomplete?.()) }; if (holdNext) { holdNext = false; held = finish } else queueMicrotask(finish); return request },
+      put: (value: any) => queueMicrotask(() => { values.set(value.key, value); tx.oncomplete?.() }),
+      delete: (key: string) => queueMicrotask(() => { values.delete(key); tx.oncomplete?.() }),
+    }) }; return tx }, close: () => undefined }
+  const factory: any = { databases: async () => [{ name: `farm-rx-offline-v1-held-cache` }], open: () => { const request: any = {}; queueMicrotask(() => { request.result = database; request.onsuccess?.() }); return request } }
+  Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: factory }); Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage })
+  return { holdNextGet: () => { holdNext = true }, releaseGet: () => { const next = held; held = null; next?.() }, restore: () => { if (priorIndexedDb) Object.defineProperty(globalThis, 'indexedDB', priorIndexedDb); else Reflect.deleteProperty(globalThis, 'indexedDB'); if (priorLocalStorage) Object.defineProperty(globalThis, 'localStorage', priorLocalStorage); else Reflect.deleteProperty(globalThis, 'localStorage') } }
+}
+// Hold actual IndexedDB reads after custody capture, advance custody in another
+// actor, and ensure neither cache reader returns or publishes stale data.
+const heldCacheStorage = new MemoryStorage(); const heldScope = { projectRef: 'held-cache', userId, farmId, module: 'soilRx' }
+resetFarmGrantFromLive(heldCacheStorage, heldScope, 1, stamp)
+const heldFence = captureFarmRevocationFence(heldCacheStorage, heldScope)
+const heldKey = `${heldScope.projectRef}:${heldScope.userId}:${heldScope.farmId}:${heldScope.module}`
+const heldValues = new Map<string, any>([[heldKey, { version: 3, key: heldKey, ...heldScope, generation: heldFence.generation, fenceToken: heldFence.token, serverEpoch: heldFence.serverEpoch, cacheCustody: 0, cachedAt: stamp, data: { stale: true } }]])
+const heldDatabase = heldCacheDatabase(heldCacheStorage, heldValues)
+try {
+  heldDatabase.holdNextGet(); const normalRead = readWorkspaceCache<{ stale: boolean }>(heldScope, 9e9); await new Promise<void>(queueMicrotask); await new Promise<void>(queueMicrotask); beginWorkspaceCacheInvalidation(heldCacheStorage, heldScope); heldDatabase.releaseGet(); assert.equal(await normalRead, null, 'Held normal cache read returned after custody advanced.'); assert.equal(getWorkspaceCacheNotices().some((notice) => notice.module === 'soilRx' && notice.cachedAt === stamp), false, 'Held normal cache read published a stale notice.')
+  heldCacheStorage.removeItem(custodyStorageKey(heldKey)); heldDatabase.holdNextGet(); const pureRead = readWorkspaceCachePure<{ stale: boolean }>(heldScope, heldFence, 9e9, heldCacheStorage); await new Promise<void>(queueMicrotask); await new Promise<void>(queueMicrotask); beginWorkspaceCacheInvalidation(heldCacheStorage, heldScope); heldDatabase.releaseGet(); assert.equal(await pureRead, null, 'Held pure cache read returned after custody advanced.')
+} finally { heldDatabase.restore() }
 async function assertReplayDoesNotResurrect(name: string, settle: (value: ReturnType<typeof harness>, key: string) => Promise<void>) {
   const value = harness(`soil-rx-cache-${name}`)
   const key = soilRxWriteQueueKey(value.scope.projectRef, userId, farmId)
