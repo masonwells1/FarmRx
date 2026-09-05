@@ -31,7 +31,7 @@ const sameOperationContext = (left: FarmOperationContext, right: FarmOperationCo
 const sameEntry = (left: SoilRxQueueEntryV1, right: SoilRxQueueEntryV1) => left.payloadBytes === right.payloadBytes
 
 export class QueuedSoilRxRepository implements SoilRxRepository {
-  private workspace: SoilRxData | null = null
+  private workspace: { data: SoilRxData; cacheCustody: number } | null = null
   private scopeKey: string | null = null
   private cacheEpoch = 0
   private cacheTail: Promise<void> = Promise.resolve()
@@ -54,7 +54,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
       await writeWorkspaceCache(this.cacheScope(source.context), data, captureWorkspaceCacheFence(this.cacheScope(source.context)), undefined, source.cacheCustody)
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
-      this.workspace = data
+      this.workspace = { data, cacheCustody: source.cacheCustody }
     })
     await verifyQueuedReadContext(this.d, source.operationContext)
   }
@@ -112,8 +112,8 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
   }
   private async forgetRolledBackTest(source: Source, testId: string) {
-    if (!this.workspace?.tests.some((test) => test.id === testId)) return
-    await this.retain(source, { tests: this.workspace.tests.filter((test) => test.id !== testId) })
+    if (!this.workspace?.data.tests.some((test) => test.id === testId)) return
+    await this.retain(source, { tests: this.workspace.data.tests.filter((test) => test.id !== testId) })
   }
   private async drainCleanup(source: Source, verify: () => void) {
     if (this.d.isOffline()) return
@@ -154,7 +154,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       await verifyQueuedReadContext(this.d, source.operationContext)
       if (!isTransportFailure(error, this.d.isOffline())) throw error
       if (entries.some((entry) => entry.confirmed)) throw new Error('A confirmed Soil Rx save is finishing device cleanup. Connect to finish safely.')
-      const memory = verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody) ? this.workspace : null
+      const memory = verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody) && this.workspace?.cacheCustody === source.cacheCustody ? this.workspace.data : null
       const cached = memory ?? (await readWorkspaceCache<SoilRxData>(this.cacheScope(source.context), operationalCacheMaxAgeMs))?.data ?? null
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
       await verifyQueuedReadContext(this.d, source.operationContext)
@@ -188,7 +188,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
           verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
           const complete = await this.live.saveAttachmentOperation(saved, { id: this.d.createId(), storagePath: path, originalFilename: report.name.trim(), mimeType: report.type.toLowerCase() as SoilReportMime, sizeBytes: report.size }, source.operationContext)
           verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
-          await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.tests ?? []).filter((test) => test.id !== complete.id), complete]) })
+          await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.data.tests ?? []).filter((test) => test.id !== complete.id), complete]) })
           verify(); releaseSoilRxAttachmentCustody(this.d.storage, custodyKey, source.context.userId, source.context.farmId, normalized.id)
           this.refreshSync(source)
           return complete
@@ -205,9 +205,9 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     const entry = createSoilRxQueueEntry({ version: 1, module: 'soilRx', kind: 'saveTest', operationId: this.d.createId(), userId: source.context.userId, farmId: source.context.farmId, enqueuedAt: this.d.clock(), operationContext: source.operationContext, draft: normalized })
     return queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
       await verifyQueuedOperationContext(this.d, source.operationContext, source.context); verify()
-      const enqueue = async () => { const envelope = source.queue.append(entry); setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); const pending = this.pending(entry); await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.tests ?? []).filter((test) => test.id !== pending.id), pending]) }); return pending }
+      const enqueue = async () => { const envelope = source.queue.append(entry); setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); const pending = this.pending(entry); await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.data.tests ?? []).filter((test) => test.id !== pending.id), pending]) }); return pending }
       if (this.d.isOffline() || source.queue.read().entries.length) { const result = await enqueue(); launchReplayInBackground(() => this.inspectAndReplay()); return result }
-      try { const saved = await this.live.saveTestOperation(normalized, source.operationContext); verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context); await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.tests ?? []).filter((test) => test.id !== saved.id), saved]) }); this.refreshSync(source); return saved }
+      try { const saved = await this.live.saveTestOperation(normalized, source.operationContext); verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context); await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.data.tests ?? []).filter((test) => test.id !== saved.id), saved]) }); this.refreshSync(source); return saved }
       catch (error) { await verifyQueuedOperationContext(this.d, source.operationContext, source.context); if (!isTransportFailure(error, this.d.isOffline())) throw error; return enqueue() }
     })
   }
