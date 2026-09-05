@@ -21,6 +21,8 @@ function cacheKey(scope: WorkspaceCacheScope) { return `${scope.projectRef}:${sc
 function custodyKey(scope: WorkspaceCacheScope) { return `farm-rx-workspace-cache-custody:v1:${cacheKey(scope)}` }
 export function captureWorkspaceCacheCustody(storage: StorageLike, scope: WorkspaceCacheScope): number { const raw = storage.getItem(custodyKey(scope)); if (raw === null) return 0; const value = Number(raw); if (!Number.isSafeInteger(value) || value < 0 || String(value) !== raw) throw new Error('Farm Rx could not verify offline cache custody.') ; return value }
 export function verifyWorkspaceCacheCustody(storage: StorageLike, scope: WorkspaceCacheScope, expected: number): boolean { try { return captureWorkspaceCacheCustody(storage, scope) === expected } catch { return false } }
+/** Older or malformed snapshots may be deleted; same/newer custody belongs to a later writer. */
+export function shouldDeleteInvalidatedWorkspaceCache(cacheCustody: unknown, invalidationCustody: number): boolean { return !Number.isSafeInteger(cacheCustody) || Number(cacheCustody) < invalidationCustody }
 function databaseName(projectRef: string) { return `farm-rx-offline-v1-${projectRef}` }
 function available() { return typeof indexedDB !== 'undefined' }
 function open(projectRef: string): Promise<IDBDatabase> {
@@ -128,7 +130,7 @@ export function beginWorkspaceCacheInvalidation(storage: StorageLike, scope: Wor
       const request = store.get(cacheKey(scope))
       request.onsuccess = () => {
         const value = request.result as Partial<WorkspaceEnvelope<unknown>> | undefined
-        if (value === undefined || !Number.isSafeInteger(value.cacheCustody) || Number(value.cacheCustody) < nextCustody) store.delete(cacheKey(scope))
+        if (value === undefined || shouldDeleteInvalidatedWorkspaceCache(value.cacheCustody, nextCustody)) store.delete(cacheKey(scope))
       }
       await complete(transaction)
     } finally { database.close() }

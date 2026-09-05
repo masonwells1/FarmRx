@@ -12,10 +12,17 @@ import { createSoilRxQueueEntry, SoilRxWriteQueue, soilRxWriteQueueKey, type Soi
 import { getSyncStatus, setModuleSyncStatus } from './syncStatus'
 import type { SupabaseSoilRxRepository } from './SupabaseSoilRxRepository'
 import type { StorageLike } from './writeQueue'
+import { shouldDeleteInvalidatedWorkspaceCache } from './workspaceCache'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const userId = uid(1), farmId = uid(2), fieldId = uid(3), testId = uid(4)
 const stamp = '2027-01-15T12:00:00.000Z'
+assert.equal(shouldDeleteInvalidatedWorkspaceCache(0, 1), true)
+assert.equal(shouldDeleteInvalidatedWorkspaceCache(1, 1), false)
+assert.equal(shouldDeleteInvalidatedWorkspaceCache(2, 1), false)
+assert.equal(shouldDeleteInvalidatedWorkspaceCache('bad', 1), true)
+const mutatedDeleteDecision = (cacheCustody: unknown, invalidationCustody: number) => !Number.isSafeInteger(cacheCustody) || Number(cacheCustody) !== invalidationCustody
+assert.notEqual(mutatedDeleteDecision(2, 1), shouldDeleteInvalidatedWorkspaceCache(2, 1), 'Conditional delete mutation must change the newer-cache runtime outcome.')
 const measurements = Object.fromEntries(soilMeasurementKeys.map((key) => [key, null])) as Pick<SoilTestDraft, typeof soilMeasurementKeys[number]>
 const draft = (id = testId): SoilTestDraft => ({ ...measurements, id, field_id: fieldId, sample_date: '2027-01-10', lab_name: 'Midwest Lab' })
 const report = new File(['soil-rx'], 'soil.pdf', { type: 'application/pdf' })
@@ -694,7 +701,6 @@ assert.match(validateSoilReportFile({ name: `${'x'.repeat(252)}.pdf`, type: 'app
 // stranding window. Custody begins before the first remote write, retained UI
 // state precedes release, and retry replacement follows completed cleanup.
 const source = readFileSync(new URL('./QueuedSoilRxRepository.ts', import.meta.url), 'utf8')
-const workspaceCacheSource = readFileSync(new URL('./workspaceCache.ts', import.meta.url), 'utf8')
 const replayRelease = 'await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) })'
 function assertReplayCacheGuards(candidate: string) {
   const replayMethod = candidate.slice(candidate.indexOf('async inspectAndReplay()'), candidate.indexOf('async getReportUrl'))
@@ -703,7 +709,6 @@ function assertReplayCacheGuards(candidate: string) {
   assert.ok(replayMethod.includes('const current = await this.live.getData()'), 'Durable confirmed custody must prove the exact server row after restart.')
   assert.ok(candidate.includes('cacheCustody: captureWorkspaceCacheCustody(this.d.storage, cacheScope)'), 'A live read must capture shared cache custody with its source.')
   assert.ok(candidate.includes('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)'), 'A live read must compare shared cache custody before and after publication.')
-  assert.ok(workspaceCacheSource.includes('if (value === undefined || !Number.isSafeInteger(value.cacheCustody) || Number(value.cacheCustody) < nextCustody) store.delete(cacheKey(scope))'), 'Invalidation must delete only an invalid or older custody cache.')
   assert.ok(replayMethod.indexOf('source.queue.markConfirmedHead(entry.operationId)') < replayMethod.lastIndexOf(replayRelease), 'Replay must durably mark confirmation before successful cache-and-queue release.')
   const replayCatch = replayMethod.slice(replayMethod.lastIndexOf('    } catch (error) {'))
   assert.ok(!replayCatch.includes('source.queue.read()'), 'Blocked replay reporting must not re-read malformed queue bytes.')
@@ -713,10 +718,6 @@ function assertReplayCacheGuards(candidate: string) {
   assert.ok(releaseMethod.indexOf('beginWorkspaceCacheInvalidation') < releaseMethod.indexOf('releaseQueue()') && releaseMethod.indexOf('releaseQueue()') < releaseMethod.indexOf('await finishInvalidation()'), 'The tombstone must precede queue release, and IndexedDB deletion must follow it.')
 }
 assertReplayCacheGuards(source)
-assert.throws(() => {
-  const mutated = workspaceCacheSource.replace('if (value === undefined || !Number.isSafeInteger(value.cacheCustody) || Number(value.cacheCustody) < nextCustody) store.delete(cacheKey(scope))', 'store.delete(cacheKey(scope))')
-  assert.ok(mutated.includes('if (value === undefined || !Number.isSafeInteger(value.cacheCustody) || Number(value.cacheCustody) < nextCustody) store.delete(cacheKey(scope))'), 'Conditional cache-delete mutation must turn the proof red')
-})
 for (const [name, mutation] of [
   ['replay-cache-invalidation', source.replace(replayRelease, 'await Promise.resolve()')],
   ['replay-malformed-reread', source.replace("pending: 1, message: attention", "pending: source.queue.read().entries.length, message: attention")],
