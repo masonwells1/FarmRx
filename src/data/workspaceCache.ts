@@ -18,9 +18,7 @@ const notices = new Map<string, WorkspaceCacheNotice>()
 let noticeSnapshot: WorkspaceCacheNotice[] = []
 
 function cacheKey(scope: WorkspaceCacheScope) { return `${scope.projectRef}:${scope.userId}:${scope.farmId}:${scope.module}` }
-function invalidationKey(scope: WorkspaceCacheScope) { return `farm-rx-workspace-cache-invalid:v1:${cacheKey(scope)}` }
 function custodyKey(scope: WorkspaceCacheScope) { return `farm-rx-workspace-cache-custody:v1:${cacheKey(scope)}` }
-function invalidated(storage: StorageLike, scope: WorkspaceCacheScope) { try { return storage.getItem(invalidationKey(scope)) !== null } catch { return true } }
 export function captureWorkspaceCacheCustody(storage: StorageLike, scope: WorkspaceCacheScope): number { const raw = storage.getItem(custodyKey(scope)); if (raw === null) return 0; const value = Number(raw); if (!Number.isSafeInteger(value) || value < 0 || String(value) !== raw) throw new Error('Farm Rx could not verify offline cache custody.') ; return value }
 export function verifyWorkspaceCacheCustody(storage: StorageLike, scope: WorkspaceCacheScope, expected: number): boolean { try { return captureWorkspaceCacheCustody(storage, scope) === expected } catch { return false } }
 function databaseName(projectRef: string) { return `farm-rx-offline-v1-${projectRef}` }
@@ -111,7 +109,6 @@ export async function writeWorkspaceCache<T>(scope: WorkspaceCacheScope, data: T
     await complete(transaction)
     verifyFarmRevocationFence(localStorage, fence)
     if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return false
-    try { localStorage.removeItem(invalidationKey(scope)) } catch { /* a stale tombstone fails closed until the next live refresh */ }
     return true
   } catch { return false }
   finally { database?.close() }
@@ -122,22 +119,24 @@ export async function writeWorkspaceCache<T>(scope: WorkspaceCacheScope, data: T
 export function beginWorkspaceCacheInvalidation(storage: StorageLike, scope: WorkspaceCacheScope): () => Promise<void> {
   const nextCustody = captureWorkspaceCacheCustody(storage, scope) + 1
   storage.setItem(custodyKey(scope), String(nextCustody))
-  storage.setItem(invalidationKey(scope), '1')
   return async () => {
-    if (!available()) { storage.removeItem(invalidationKey(scope)); return }
+    if (!available()) return
     const database = await open(scope.projectRef)
     try {
       const transaction = database.transaction(storeName, 'readwrite')
-      transaction.objectStore(storeName).delete(cacheKey(scope))
+      const store = transaction.objectStore(storeName)
+      const request = store.get(cacheKey(scope))
+      request.onsuccess = () => {
+        const value = request.result as Partial<WorkspaceEnvelope<unknown>> | undefined
+        if (value === undefined || value.cacheCustody !== nextCustody) store.delete(cacheKey(scope))
+      }
       await complete(transaction)
-      storage.removeItem(invalidationKey(scope))
     } finally { database.close() }
   }
 }
 
 export async function readWorkspaceCache<T>(scope: WorkspaceCacheScope, maximumAgeMs: number): Promise<{ data: T; cachedAt: string } | null> {
   if (!available()) return null
-  if (invalidated(localStorage, scope)) return null
   let fence
   let cacheCustody
   try { fence = captureFarmRevocationFence(localStorage, scope); cacheCustody = captureWorkspaceCacheCustody(localStorage, scope) } catch { return null }
@@ -158,7 +157,6 @@ export async function readWorkspaceCache<T>(scope: WorkspaceCacheScope, maximumA
 /** Read-only projection cache access. It never creates/upgrades IndexedDB and never publishes UI notices. */
 export async function readWorkspaceCachePure<T>(scope: WorkspaceCacheScope, fence: FarmRevocationSnapshot, maximumAgeMs: number, storage: StorageLike, nowMs = Date.now()): Promise<ReadOnlySnapshot<T> | null> {
   if (!Number.isFinite(nowMs) || fence.projectRef !== scope.projectRef || fence.userId !== scope.userId || fence.farmId !== scope.farmId) return null
-  if (invalidated(storage, scope)) return null
   let cacheCustody: number
   try { cacheCustody = captureWorkspaceCacheCustody(storage, scope) } catch { return null }
   try { verifyFarmRevocationFence(storage, fence) } catch { return null }

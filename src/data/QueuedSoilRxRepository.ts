@@ -52,9 +52,9 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     await this.cacheTransaction(async () => {
       if (source.cacheEpoch !== this.cacheEpoch) throw new Error('Soil Rx cache custody changed while data was loading.')
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
-      this.workspace = data
       await writeWorkspaceCache(this.cacheScope(source.context), data, captureWorkspaceCacheFence(this.cacheScope(source.context)), undefined, source.cacheCustody)
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
+      this.workspace = data
     })
     await verifyQueuedReadContext(this.d, source.operationContext)
   }
@@ -154,7 +154,8 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       await verifyQueuedReadContext(this.d, source.operationContext)
       if (!isTransportFailure(error, this.d.isOffline())) throw error
       if (entries.some((entry) => entry.confirmed)) throw new Error('A confirmed Soil Rx save is finishing device cleanup. Connect to finish safely.')
-      const cached = this.workspace ?? (await readWorkspaceCache<SoilRxData>(this.cacheScope(source.context), operationalCacheMaxAgeMs))?.data ?? null
+      const memory = verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody) ? this.workspace : null
+      const cached = memory ?? (await readWorkspaceCache<SoilRxData>(this.cacheScope(source.context), operationalCacheMaxAgeMs))?.data ?? null
       await verifyQueuedReadContext(this.d, source.operationContext)
       if (!cached && !entries.length) throw new Error('Connect to the internet once to load Soil Rx history on this device.')
       const data = cached ?? { tests: [] }

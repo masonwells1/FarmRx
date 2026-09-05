@@ -336,7 +336,7 @@ function scopedCacheDatabase(storage: MemoryStorage, values: Map<string, unknown
       const transaction: { oncomplete?: () => void; onerror?: () => void; onabort?: () => void; error?: Error; objectStore: () => { delete: (key: string) => void; get: (key: string) => unknown; put: (value: { key: string }) => void } } = {
         objectStore: () => ({
           delete: (key: string) => queueMicrotask(() => { if (failDelete) { transaction.error = new Error('indexeddb delete failed'); transaction.onerror?.() } else { values.delete(key); transaction.oncomplete?.() } }),
-          get: (key: string) => { const request: { result?: unknown; onsuccess?: () => void } = {}; queueMicrotask(() => { request.result = values.get(key); request.onsuccess?.() }); return request },
+          get: (key: string) => { const request: { result?: unknown; onsuccess?: () => void } = {}; queueMicrotask(() => { request.result = values.get(key); request.onsuccess?.(); queueMicrotask(() => transaction.oncomplete?.()) }); return request },
           put: (value: { key: string }) => queueMicrotask(() => { values.set(value.key, value); transaction.oncomplete?.() }),
         }),
       }
@@ -350,6 +350,7 @@ function scopedCacheDatabase(storage: MemoryStorage, values: Map<string, unknown
   return { restore: () => { if (priorIndexedDb) Object.defineProperty(globalThis, 'indexedDB', priorIndexedDb); else Reflect.deleteProperty(globalThis, 'indexedDB'); if (priorLocalStorage) Object.defineProperty(globalThis, 'localStorage', priorLocalStorage); else Reflect.deleteProperty(globalThis, 'localStorage') } }
 }
 const cacheKey = (projectRef: string, user: string, farm: string, module = 'soilRx') => `${projectRef}:${user}:${farm}:${module}`
+const custodyStorageKey = (scope: string) => `farm-rx-workspace-cache-custody:v1:${scope}`
 async function assertReplayDoesNotResurrect(name: string, settle: (value: ReturnType<typeof harness>, key: string) => Promise<void>) {
   const value = harness(`soil-rx-cache-${name}`)
   const key = soilRxWriteQueueKey(value.scope.projectRef, userId, farmId)
@@ -384,7 +385,7 @@ try {
   assert.equal(failedInvalidation.savedIds.filter((id) => id === uid(650)).length, 1, 'A failed cache deletion reissued the server-confirmed save.')
   assert.equal(new SoilRxWriteQueue(failedInvalidation.storage, failedInvalidationKey).read().entries.length, 0, 'A failed cache deletion retained confirmed write custody for replay.')
   assert.equal(readNeedsAttention(failedInvalidation.storage, failedInvalidationKey).length, 0, 'A failed cache deletion misclassified the confirmed save as a parked failure.')
-  assert.equal(failedInvalidation.storage.getItem(`farm-rx-workspace-cache-invalid:v1:${failedCacheScope}`), '1', 'A failed cache deletion did not retain its fail-closed offline tombstone.')
+  assert.equal(failedInvalidation.storage.getItem(custodyStorageKey(failedCacheScope)), '1', 'A failed cache deletion did not retain its fail-closed custody revision.')
   await failedInvalidation.repository.inspectAndReplay()
   assert.equal(failedInvalidation.savedIds.filter((id) => id === uid(650)).length, 1, 'A later sync reissued a save already confirmed before cache cleanup failed.')
   failedInvalidation.setOffline(true)
@@ -413,7 +414,7 @@ try {
   releaseHeldRead()
   await assert.rejects(() => staleGetData, /cache custody changed/, 'A held pre-replay live response published after replay cache custody changed.')
   assert.equal(heldReadSnapshots.has(heldReadScope), false, 'A held pre-replay live response recreated the released offline cache.')
-  assert.equal(heldRead.storage.getItem(`farm-rx-workspace-cache-invalid:v1:${heldReadScope}`), null, 'A successful exact cache deletion left an unnecessary tombstone.')
+  assert.equal(heldRead.storage.getItem(custodyStorageKey(heldReadScope)), '1', 'A successful exact cache deletion did not retain its shared custody revision.')
   heldRead.setOffline(true)
   await assert.rejects(() => heldRead.repository.getData(), /Connect to the internet once/, 'A held pre-replay live response resurrected a same-session pending record.')
 } finally { heldReadCache.restore() }
@@ -462,13 +463,13 @@ const orderingScope = cacheKey(ordering.scope.projectRef, userId, farmId)
 const orderingCache = scopedCacheDatabase(ordering.storage, new Map([[orderingScope, { stale: 'pending' }]]), true)
 let tombstoneSawQueuedEntry = false
 ordering.storage.onSet = (key) => {
-  if (key === `farm-rx-workspace-cache-invalid:v1:${orderingScope}`) tombstoneSawQueuedEntry = new SoilRxWriteQueue(ordering.storage, orderingQueueKey).read().entries.length === 1
+  if (key === custodyStorageKey(orderingScope)) tombstoneSawQueuedEntry = new SoilRxWriteQueue(ordering.storage, orderingQueueKey).read().entries.length === 1
 }
 try {
   ordering.setOffline(false); await ordering.repository.inspectAndReplay()
   assert.ok(tombstoneSawQueuedEntry, 'The confirmed queue entry was removed before its durable cache tombstone was written.')
   assert.equal(new SoilRxWriteQueue(ordering.storage, orderingQueueKey).read().entries.length, 0, 'The ordering proof did not release confirmed queue custody.')
-  assert.equal(ordering.storage.getItem(`farm-rx-workspace-cache-invalid:v1:${orderingScope}`), '1', 'The ordering proof lost its tombstone after the forced IndexedDB failure.')
+  assert.equal(ordering.storage.getItem(custodyStorageKey(orderingScope)), '1', 'The ordering proof lost its custody revision after the forced IndexedDB failure.')
 } finally { ordering.storage.onSet = null; orderingCache.restore() }
 
 // If the tombstone write itself fails after the remote upsert, the durable
@@ -482,7 +483,7 @@ const tombstoneWriteFailureScope = cacheKey(tombstoneWriteFailure.scope.projectR
 const tombstoneWriteFailureSnapshots = new Map<string, unknown>([[tombstoneWriteFailureScope, { stale: 'pending' }], [cacheKey(tombstoneWriteFailure.scope.projectRef, uid(681), farmId), {}]])
 const tombstoneWriteFailureCache = scopedCacheDatabase(tombstoneWriteFailure.storage, tombstoneWriteFailureSnapshots)
 try {
-  tombstoneWriteFailure.storage.failNextKey = `farm-rx-workspace-cache-invalid:v1:${tombstoneWriteFailureScope}`
+  tombstoneWriteFailure.storage.failNextKey = custodyStorageKey(tombstoneWriteFailureScope)
   tombstoneWriteFailure.setOffline(false); await tombstoneWriteFailure.repository.inspectAndReplay()
   const confirmedHead = new SoilRxWriteQueue(tombstoneWriteFailure.storage, tombstoneWriteFailureQueueKey).read().entries[0]
   assert.equal(tombstoneWriteFailure.savedIds.filter((id) => id === uid(680)).length, 1, 'A tombstone-write failure repeated the confirmed server save.')
@@ -690,6 +691,7 @@ assert.match(validateSoilReportFile({ name: `${'x'.repeat(252)}.pdf`, type: 'app
 // stranding window. Custody begins before the first remote write, retained UI
 // state precedes release, and retry replacement follows completed cleanup.
 const source = readFileSync(new URL('./QueuedSoilRxRepository.ts', import.meta.url), 'utf8')
+const workspaceCacheSource = readFileSync(new URL('./workspaceCache.ts', import.meta.url), 'utf8')
 const replayRelease = 'await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) })'
 function assertReplayCacheGuards(candidate: string) {
   const replayMethod = candidate.slice(candidate.indexOf('async inspectAndReplay()'), candidate.indexOf('async getReportUrl'))
@@ -698,6 +700,7 @@ function assertReplayCacheGuards(candidate: string) {
   assert.ok(replayMethod.includes('const current = await this.live.getData()'), 'Durable confirmed custody must prove the exact server row after restart.')
   assert.ok(candidate.includes('cacheCustody: captureWorkspaceCacheCustody(this.d.storage, cacheScope)'), 'A live read must capture shared cache custody with its source.')
   assert.ok(candidate.includes('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)'), 'A live read must compare shared cache custody before and after publication.')
+  assert.ok(workspaceCacheSource.includes('if (value === undefined || value.cacheCustody !== nextCustody) store.delete(cacheKey(scope))'), 'Invalidation must delete only an older/different custody cache.')
   assert.ok(replayMethod.indexOf('source.queue.markConfirmedHead(entry.operationId)') < replayMethod.lastIndexOf(replayRelease), 'Replay must durably mark confirmation before successful cache-and-queue release.')
   const replayCatch = replayMethod.slice(replayMethod.lastIndexOf('    } catch (error) {'))
   assert.ok(!replayCatch.includes('source.queue.read()'), 'Blocked replay reporting must not re-read malformed queue bytes.')
@@ -707,6 +710,10 @@ function assertReplayCacheGuards(candidate: string) {
   assert.ok(releaseMethod.indexOf('beginWorkspaceCacheInvalidation') < releaseMethod.indexOf('releaseQueue()') && releaseMethod.indexOf('releaseQueue()') < releaseMethod.indexOf('await finishInvalidation()'), 'The tombstone must precede queue release, and IndexedDB deletion must follow it.')
 }
 assertReplayCacheGuards(source)
+assert.throws(() => {
+  const mutated = workspaceCacheSource.replace('if (value === undefined || value.cacheCustody !== nextCustody) store.delete(cacheKey(scope))', 'store.delete(cacheKey(scope))')
+  assert.ok(mutated.includes('if (value === undefined || value.cacheCustody !== nextCustody) store.delete(cacheKey(scope))'), 'Conditional cache-delete mutation must turn the proof red')
+})
 for (const [name, mutation] of [
   ['replay-cache-invalidation', source.replace(replayRelease, 'await Promise.resolve()')],
   ['replay-malformed-reread', source.replace("pending: 1, message: attention", "pending: source.queue.read().entries.length, message: attention")],
