@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
@@ -31,15 +31,34 @@ export function validateGuidanceText({ agents, claude, development, delivery }) 
   requireText(failures, 'AGENTS.md', agents, 'customer communication', 'must protect customer contact')
 
   requireText(failures, 'CLAUDE.md', claude, '`AGENTS.md` is the canonical shared contract', 'must identify the shared canonical contract')
-  for (const duplicatedDetail of ['ready-for-coderabbit', 'expected_bushels', 'explicit approval before push']) {
+  for (const duplicatedDetail of ['expected_bushels', 'explicit approval before push']) {
     if (claude.includes(duplicatedDetail)) failures.push(`CLAUDE.md: duplicates shared or task-specific detail (${duplicatedDetail})`)
   }
 
   for (const phrase of ['fewest moving parts', '18px base', 'Row Level Security', 'expected_bushels', 'npx tsc -b --force']) {
     requireText(failures, 'docs/agent-development-guide.md', development, phrase, `missing development invariant: ${phrase}`)
   }
-  for (const phrase of ['may push a feature branch and manage its pull request without asking', 'READY FOR APPROVAL', 'ready-for-coderabbit', 'Foundation and Vercel', '--match-head-commit <sha>', 'formal CodeRabbit review is `APPROVED`']) {
+  for (const phrase of ['may push a feature branch and manage its pull request without asking', 'READY FOR APPROVAL', 'Mason personally posts exactly `@coderabbitai review`', 'An agent must not post that command', 'Foundation and Vercel', '--match-head-commit <sha>', 'formal CodeRabbit review is `APPROVED`']) {
     requireText(failures, 'docs/agent-delivery.md', delivery, phrase, `missing delivery gate: ${phrase}`)
+  }
+
+  return failures
+}
+
+export function validateManualCodeRabbit({ codeRabbit, automationSources }) {
+  const failures = []
+  const autoReview = codeRabbit.match(/^  auto_review:\s*\r?\n((?:^    .*\r?\n?)*)/m)?.[0] ?? ''
+
+  requireText(failures, '.coderabbit.yaml', codeRabbit, 'review_status: false', 'automatic skipped-review status messages must stay disabled')
+  requireText(failures, '.coderabbit.yaml', autoReview, 'enabled: false', 'automatic reviews must stay disabled')
+  requireText(failures, '.coderabbit.yaml', autoReview, 'auto_incremental_review: false', 'automatic incremental reviews must stay disabled')
+  requireText(failures, '.coderabbit.yaml', autoReview, 'labels: []', 'label-triggered reviews must stay disabled')
+  requireText(failures, '.coderabbit.yaml', autoReview, 'description_keyword: ""', 'description-triggered reviews must stay disabled')
+
+  for (const [file, source] of Object.entries(automationSources)) {
+    for (const trigger of ['@coderabbitai review', 'ready-for-coderabbit', 'coderabbit-review-requested']) {
+      if (source.includes(trigger)) failures.push(`${file}: GitHub workflows must not automate CodeRabbit review requests (${trigger})`)
+    }
   }
 
   return failures
@@ -92,6 +111,18 @@ export function validateRepository(root = defaultRoot) {
     requireText(failures, 'docs/README.md', docsMap, path, `must link ${path}`)
     requireText(failures, '.coderabbit.yaml', codeRabbit, `docs/${path}`, `must load ${path} as review guidance`)
   }
+
+  const workflowsRoot = resolve(root, '.github/workflows')
+  const automationSources = Object.fromEntries(
+    readdirSync(workflowsRoot)
+      .filter((file) => /\.ya?ml$/i.test(file))
+      .map((file) => [`.github/workflows/${file}`, readFileSync(resolve(workflowsRoot, file), 'utf8')]),
+  )
+  const githubScriptsRoot = resolve(root, '.github/scripts')
+  for (const file of readdirSync(githubScriptsRoot).filter((name) => /\.[cm]?js$/i.test(name))) {
+    automationSources[`.github/scripts/${file}`] = readFileSync(resolve(githubScriptsRoot, file), 'utf8')
+  }
+  failures.push(...validateManualCodeRabbit({ codeRabbit, automationSources }))
   return failures
 }
 
