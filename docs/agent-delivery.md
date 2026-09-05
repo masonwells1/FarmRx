@@ -21,11 +21,11 @@ After local proof is green, the agent may push the feature branch, create and ma
 3. Bring the branch current with `main` and require all reported checks, including Foundation and Vercel, to be green.
 4. Finish implementation and the separate exact-commit review before spending the CodeRabbit review.
 5. Freeze the candidate and record its exact head SHA.
-6. Apply `ready-for-coderabbit`. The trusted default-branch workflow validates the live candidate, records `coderabbit-review-requested`, removes the ready label, and posts exactly `@coderabbitai review`.
-7. Read the delivered review. Fix every real finding. A new commit, base update, reopen, or draft conversion invalidates the candidate; rerun checks and request one fresh review for the new frozen head.
+6. Stop at `NEEDS MASON - ACTION REQUIRED`. In the GitHub pull request comment box, Mason personally posts exactly `@coderabbitai review`. An agent must not post that command, apply a trigger label, or use a workflow to request the review.
+7. Read the delivered review. Fix every real finding. A new commit, base update, reopen, or draft conversion invalidates the candidate; rerun checks, freeze the new head, and ask Mason to post the exact comment again.
 8. Never use `@coderabbitai resume`. Use `@coderabbitai full review` only when a deliberately justified complete reread is needed.
 
-The request workflow is deliberately fail-closed. If its gate fails, correct the named blocker and relabel. If posting the review command is uncertain, preserve dedupe state until the live pull request proves whether it landed; never buy a duplicate review by assuming it failed.
+CodeRabbit automatic and incremental reviews stay disabled in `.coderabbit.yaml`. Pull-request creation, pushes, descriptions, labels, and GitHub workflows must not request a review. A skipped-review notice or status may appear when a pull request opens, but it is not a review and requires no action until the candidate is frozen and Mason chooses to post the command.
 
 ## Merge gate
 

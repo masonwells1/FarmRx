@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { missingRoutedGuidanceFiles, validateGuidanceText } from './check-agent-guidance.mjs'
+import { missingRoutedGuidanceFiles, validateGuidanceText, validateManualCodeRabbit } from './check-agent-guidance.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const baseline = {
@@ -57,7 +57,40 @@ mustFail('bloated shared contract', (files) => ({
 
 mustFail('Claude detail duplication', (files) => ({
   ...files,
-  claude: `${files.claude}\nready-for-coderabbit`,
+  claude: `${files.claude}\nexpected_bushels`,
 }), 'duplicates shared')
+
+const manualCodeRabbit = {
+  codeRabbit: readFileSync(resolve(root, '.coderabbit.yaml'), 'utf8'),
+  workflowSources: {
+    '.github/workflows/foundation.yml': readFileSync(resolve(root, '.github/workflows/foundation.yml'), 'utf8'),
+  },
+}
+
+assert.deepEqual(validateManualCodeRabbit(manualCodeRabbit), [], 'The checked-in CodeRabbit configuration must be manual-only.')
+
+assert(
+  validateManualCodeRabbit({
+    ...manualCodeRabbit,
+    codeRabbit: manualCodeRabbit.codeRabbit.replace('    enabled: false', '    enabled: true'),
+  }).some((failure) => failure.includes('automatic reviews must stay disabled')),
+  'Enabling automatic reviews must fail validation.',
+)
+
+assert(
+  validateManualCodeRabbit({
+    ...manualCodeRabbit,
+    codeRabbit: manualCodeRabbit.codeRabbit.replace('    labels: []', '    labels: ["review-ready"]'),
+  }).some((failure) => failure.includes('label-triggered reviews must stay disabled')),
+  'Adding a label-triggered review must fail validation.',
+)
+
+assert(
+  validateManualCodeRabbit({
+    ...manualCodeRabbit,
+    workflowSources: { '.github/workflows/automation.yml': 'run: gh pr comment --body "@coderabbitai review"' },
+  }).some((failure) => failure.includes('must not automate CodeRabbit review requests')),
+  'A workflow-posted review command must fail validation.',
+)
 
 console.log('Agent guidance mutation tests passed.')
