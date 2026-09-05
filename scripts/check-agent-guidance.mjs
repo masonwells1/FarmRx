@@ -45,7 +45,7 @@ export function validateGuidanceText({ agents, claude, development, delivery }) 
   return failures
 }
 
-export function validateManualCodeRabbit({ codeRabbit, workflowSources }) {
+export function validateManualCodeRabbit({ codeRabbit, automationSources }) {
   const failures = []
   const autoReview = codeRabbit.match(/^  auto_review:\s*\r?\n((?:^    .*\r?\n?)*)/m)?.[0] ?? ''
 
@@ -54,7 +54,7 @@ export function validateManualCodeRabbit({ codeRabbit, workflowSources }) {
   requireText(failures, '.coderabbit.yaml', autoReview, 'labels: []', 'label-triggered reviews must stay disabled')
   requireText(failures, '.coderabbit.yaml', autoReview, 'description_keyword: ""', 'description-triggered reviews must stay disabled')
 
-  for (const [file, source] of Object.entries(workflowSources)) {
+  for (const [file, source] of Object.entries(automationSources)) {
     for (const trigger of ['@coderabbitai review', 'ready-for-coderabbit', 'coderabbit-review-requested']) {
       if (source.includes(trigger)) failures.push(`${file}: GitHub workflows must not automate CodeRabbit review requests (${trigger})`)
     }
@@ -112,19 +112,16 @@ export function validateRepository(root = defaultRoot) {
   }
 
   const workflowsRoot = resolve(root, '.github/workflows')
-  const workflowSources = Object.fromEntries(
+  const automationSources = Object.fromEntries(
     readdirSync(workflowsRoot)
       .filter((file) => /\.ya?ml$/i.test(file))
       .map((file) => [`.github/workflows/${file}`, readFileSync(resolve(workflowsRoot, file), 'utf8')]),
   )
-  failures.push(...validateManualCodeRabbit({ codeRabbit, workflowSources }))
-  for (const retiredFile of [
-    '.github/workflows/coderabbit-final-review.yml',
-    '.github/scripts/coderabbit-final-review.cjs',
-    '.github/scripts/coderabbit-final-review.test.cjs',
-  ]) {
-    if (existsSync(resolve(root, retiredFile))) failures.push(`${retiredFile}: retired automatic CodeRabbit request machinery must stay removed`)
+  const githubScriptsRoot = resolve(root, '.github/scripts')
+  for (const file of readdirSync(githubScriptsRoot).filter((name) => /\.[cm]?js$/i.test(name))) {
+    automationSources[`.github/scripts/${file}`] = readFileSync(resolve(githubScriptsRoot, file), 'utf8')
   }
+  failures.push(...validateManualCodeRabbit({ codeRabbit, automationSources }))
   return failures
 }
 

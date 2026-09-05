@@ -62,7 +62,7 @@ mustFail('Claude detail duplication', (files) => ({
 
 const manualCodeRabbit = {
   codeRabbit: readFileSync(resolve(root, '.coderabbit.yaml'), 'utf8'),
-  workflowSources: {
+  automationSources: {
     '.github/workflows/foundation.yml': readFileSync(resolve(root, '.github/workflows/foundation.yml'), 'utf8'),
   },
 }
@@ -88,7 +88,7 @@ assert(
 assert(
   validateManualCodeRabbit({
     ...manualCodeRabbit,
-    workflowSources: { '.github/workflows/automation.yml': 'run: gh pr comment --body "@coderabbitai review"' },
+    automationSources: { '.github/workflows/automation.yml': 'run: gh pr comment --body "@coderabbitai review"' },
   }).some((failure) => failure.includes('must not automate CodeRabbit review requests')),
   'A workflow-posted review command must fail validation.',
 )
