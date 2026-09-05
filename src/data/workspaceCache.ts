@@ -110,18 +110,20 @@ export async function writeWorkspaceCache<T>(scope: WorkspaceCacheScope, data: T
   finally { database?.close() }
 }
 
-/** Fences one module's stale snapshot before deleting it. If IndexedDB fails,
- * the durable tombstone prevents an offline reopen from resurrecting it. */
-export async function invalidateWorkspaceCache(storage: StorageLike, scope: WorkspaceCacheScope): Promise<void> {
+/** Records a synchronous fence before a queue can release its matching
+ * projection. Call the returned finisher after that durable release. */
+export function beginWorkspaceCacheInvalidation(storage: StorageLike, scope: WorkspaceCacheScope): () => Promise<void> {
   storage.setItem(invalidationKey(scope), '1')
-  if (!available()) { storage.removeItem(invalidationKey(scope)); return }
-  const database = await open(scope.projectRef)
-  try {
-    const transaction = database.transaction(storeName, 'readwrite')
-    transaction.objectStore(storeName).delete(cacheKey(scope))
-    await complete(transaction)
-    storage.removeItem(invalidationKey(scope))
-  } finally { database.close() }
+  return async () => {
+    if (!available()) { storage.removeItem(invalidationKey(scope)); return }
+    const database = await open(scope.projectRef)
+    try {
+      const transaction = database.transaction(storeName, 'readwrite')
+      transaction.objectStore(storeName).delete(cacheKey(scope))
+      await complete(transaction)
+      storage.removeItem(invalidationKey(scope))
+    } finally { database.close() }
+  }
 }
 
 export async function readWorkspaceCache<T>(scope: WorkspaceCacheScope, maximumAgeMs: number): Promise<{ data: T; cachedAt: string } | null> {

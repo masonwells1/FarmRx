@@ -9,11 +9,11 @@ import { validateSoilReportFile } from './soilRxStorage'
 import { setModuleSyncStatus } from './syncStatus'
 import type { SupabaseSoilRxRepository } from './SupabaseSoilRxRepository'
 import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
-import { captureWorkspaceCacheFence, invalidateWorkspaceCache, operationalCacheMaxAgeMs, readWorkspaceCache, writeWorkspaceCache } from './workspaceCache'
+import { beginWorkspaceCacheInvalidation, captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, writeWorkspaceCache } from './workspaceCache'
 import type { FarmOperationContext } from './farmOperationContext'
 
 type Context = { userId: string; farmId: string }
-type Source = { context: Context; operationContext: FarmOperationContext; queue: SoilRxWriteQueue }
+type Source = { context: Context; operationContext: FarmOperationContext; queue: SoilRxWriteQueue; cacheEpoch: number }
 type Dependencies = {
   getContext: () => Promise<Context>
   projectRef: string
@@ -33,24 +33,44 @@ const sameEntry = (left: SoilRxQueueEntryV1, right: SoilRxQueueEntryV1) => left.
 export class QueuedSoilRxRepository implements SoilRxRepository {
   private workspace: SoilRxData | null = null
   private scopeKey: string | null = null
+  private cacheEpoch = 0
+  private cacheTail: Promise<void> = Promise.resolve()
   constructor(private readonly live: SupabaseSoilRxRepository, private readonly d: Dependencies) {}
 
   private async source(): Promise<Source> {
     const operationContext = await captureQueuedOperationContext(this.d)
     const context = { userId: operationContext.userId, farmId: operationContext.farmId }
     const scopeKey = `${context.userId}:${context.farmId}:${operationContext.generation}:${operationContext.token}:${operationContext.serverEpoch}`
-    if (this.scopeKey !== scopeKey) { this.workspace = null; this.scopeKey = scopeKey }
-    return { context, operationContext, queue: new SoilRxWriteQueue(this.d.storage, soilRxWriteQueueKey(this.d.projectRef, context.userId, context.farmId)) }
+    if (this.scopeKey !== scopeKey) { this.workspace = null; this.scopeKey = scopeKey; this.cacheEpoch += 1 }
+    return { context, operationContext, queue: new SoilRxWriteQueue(this.d.storage, soilRxWriteQueueKey(this.d.projectRef, context.userId, context.farmId)), cacheEpoch: this.cacheEpoch }
   }
   private cacheScope(context: Context) { return { projectRef: this.d.projectRef, ...context, module: 'soilRx' } }
-  private async invalidateCache(source: Source) { this.workspace = null; await invalidateWorkspaceCache(this.d.storage, this.cacheScope(source.context)) }
+  private async cacheTransaction<T>(task: () => Promise<T>) { let release!: () => void; const previous = this.cacheTail; this.cacheTail = new Promise<void>((resolve) => { release = resolve }); await previous; try { return await task() } finally { release() } }
+  private async retain(source: Source, data: SoilRxData) {
+    await this.cacheTransaction(async () => {
+      if (source.cacheEpoch !== this.cacheEpoch) throw new Error('Soil Rx cache custody changed while data was loading.')
+      this.workspace = data
+      await writeWorkspaceCache(this.cacheScope(source.context), data, captureWorkspaceCacheFence(this.cacheScope(source.context)))
+    })
+    await verifyQueuedReadContext(this.d, source.operationContext)
+  }
+  private async releaseCacheCustody(source: Source, releaseQueue: () => void) {
+    await this.cacheTransaction(async () => {
+      this.cacheEpoch += 1
+      this.workspace = null
+      // This synchronous fence closes the interruption window between a
+      // confirmed queue release and IndexedDB deletion.
+      const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))
+      releaseQueue()
+      await finishInvalidation()
+    })
+  }
   private pending(entry: SoilRxQueueEntryV1): SoilTest { return { ...entry.draft, farm_id: entry.farmId, created_by: entry.userId, created_at: entry.enqueuedAt, updated_at: entry.enqueuedAt, attachment: null, pending: true } }
   private overlay(data: SoilRxData, entries: SoilRxQueueEntryV1[]) {
     const tests = [...data.tests]
     for (const entry of entries) { const pending = this.pending(entry); const index = tests.findIndex((test) => test.id === pending.id); if (index < 0) tests.push(pending); else tests[index] = pending }
     return { tests: sortSoilTestsNewestFirst(tests) }
   }
-  private async retain(source: Source, data: SoilRxData) { this.workspace = data; await writeWorkspaceCache(this.cacheScope(source.context), data, captureWorkspaceCacheFence(this.cacheScope(source.context))); await verifyQueuedReadContext(this.d, source.operationContext) }
   private cleanupKey(userId: string) { return soilRxCleanupOutboxKey(this.d.projectRef, userId) }
   private cleanupLocked<T>(source: Source, verifyQueue: () => void, task: (verify: () => void) => Promise<T>) {
     return soilRxCleanupOutboxTransaction(this.d.storage, this.d.projectRef, source.context.userId, this.d.createId, async (verifyCleanup) => {
@@ -200,16 +220,14 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
             await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
             if (isTransportFailure(error, this.d.isOffline())) { setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); return }
             verify(); appendNeedsAttention(this.d.storage, source.queue.key, { id: entry.operationId, module: 'soilRx', createdAt: entry.enqueuedAt, message: attention, entry })
-            envelope = source.queue.removeConfirmedHead(entry.operationId)
-            await this.invalidateCache(source); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
+            await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) }); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
             continue
           }
           verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
           // A completed upsert must leave the queue before best-effort IndexedDB
           // cleanup. The invalidation tombstone still makes a failed deletion
           // fail closed, without reclassifying or replaying the confirmed write.
-          envelope = source.queue.removeConfirmedHead(entry.operationId)
-          await this.invalidateCache(source); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
+          await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) }); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
         }
         this.refreshSync(source)
       })
@@ -263,8 +281,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       if (active.length) throw new Error(parkedBlocked)
       if (source.queue.read().entries.some((candidate) => candidate.operationId === operationId)) throw new Error(parkedBlocked)
       await this.parkedSave(source, queueKey, operationId, parked.recordBytes); verify()
-      await this.invalidateCache(source); verify()
-      dismissNeedsAttention(this.d.storage, queueKey, operationId)
+      await this.releaseCacheCustody(source, () => dismissNeedsAttention(this.d.storage, queueKey, operationId)); verify()
     })
     this.refreshSync(source)
   }

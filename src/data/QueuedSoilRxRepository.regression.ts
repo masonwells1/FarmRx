@@ -25,8 +25,9 @@ class MemoryStorage implements StorageLike {
   readonly values = new Map<string, string>()
   readonly reads = new Map<string, number>()
   failNextKey: string | null = null
+  onSet: ((key: string, value: string) => void) | null = null
   getItem(key: string) { this.reads.set(key, (this.reads.get(key) ?? 0) + 1); return this.values.get(key) ?? null }
-  setItem(key: string, value: string) { if (this.failNextKey === key) { this.failNextKey = null; throw new Error('simulated process interruption') }; this.values.set(key, value) }
+  setItem(key: string, value: string) { if (this.failNextKey === key) { this.failNextKey = null; throw new Error('simulated process interruption') }; this.values.set(key, value); this.onSet?.(key, value) }
   removeItem(key: string) { this.values.delete(key) }
 }
 
@@ -49,9 +50,10 @@ function harness(projectRef: string, selectedFarmId = farmId, storage = new Memo
   let contextReadsUntilHook = 0
   let contextReadHook: (() => void) | null = null
   let removeHook: (() => Promise<void>) | null = null
+  let getDataHook: (() => Promise<void>) | null = null
   const toTest = (input: SoilTestDraft): SoilTest => ({ ...input, id: input.id!, farm_id: selectedFarmId, created_by: userId, created_at: stamp, updated_at: stamp, attachment: attachments.get(input.id!) ?? null })
   const live = {
-    async getData(field?: string) { if (offline) throw new Error('network unavailable'); return { tests: [...rows.values()].filter((test) => !field || test.field_id === field) } },
+    async getData(field?: string) { const snapshot = [...rows.values()].filter((test) => !field || test.field_id === field); await getDataHook?.(); if (offline) throw new Error('network unavailable'); return { tests: snapshot } },
     async saveTestOperation(input: SoilTestDraft) {
       if (mode === 'permanent_save_failure') throw new Error('validation failed')
       savedIds.push(input.id!)
@@ -100,6 +102,7 @@ function harness(projectRef: string, selectedFarmId = farmId, storage = new Memo
     setEpochChange: (next: boolean) => { changeEpochAfterUpload = next }, setRemoveFailure: (next: boolean) => { removeFailure = next }, setTerminalAbsenceFailure: (next: boolean) => { terminalAbsenceFailure = next }, getTerminalAbsenceChecks: () => terminalAbsenceChecks, setRollbackFailure: (next: boolean) => { rollbackFailure = next },
     setRemoveHook: (next: (() => Promise<void>) | null) => { removeHook = next },
     setContextReadHook: (reads: number, hook: () => void) => { contextReadsUntilHook = reads; contextReadHook = hook },
+    setGetDataHook: (next: (() => Promise<void>) | null) => { getDataHook = next },
   }
 }
 
@@ -385,6 +388,51 @@ try {
   await assert.rejects(() => failedInvalidation.repository.getData(), /Connect to the internet once/, 'A failed cache deletion resurrected stale pending state despite its tombstone.')
 } finally { failedCache.restore() }
 
+// A live read can start before replay, then resolve after the replay's queue
+// release. Its old overlay must not republish after the newer cache custody.
+const heldRead = harness('soil-rx-held-live-read')
+const heldReadQueueKey = soilRxWriteQueueKey(heldRead.scope.projectRef, userId, farmId)
+heldRead.setOffline(true); await heldRead.repository.saveTest(draft(uid(660)))
+const heldReadScope = cacheKey(heldRead.scope.projectRef, userId, farmId)
+const heldReadSnapshots = new Map<string, unknown>([[heldReadScope, { stale: 'pending' }]])
+const heldReadCache = scopedCacheDatabase(heldRead.storage, heldReadSnapshots)
+let releaseHeldRead!: () => void; let sawHeldRead!: () => void
+const heldReadStarted = new Promise<void>((resolve) => { sawHeldRead = resolve })
+const heldReadRelease = new Promise<void>((resolve) => { releaseHeldRead = resolve })
+heldRead.setGetDataHook(async () => { sawHeldRead(); await heldReadRelease })
+try {
+  heldRead.setOffline(false)
+  const staleGetData = heldRead.repository.getData()
+  await heldReadStarted
+  await heldRead.repository.inspectAndReplay()
+  assert.equal(new SoilRxWriteQueue(heldRead.storage, heldReadQueueKey).read().entries.length, 0, 'Held-read replay did not release confirmed queue custody.')
+  releaseHeldRead()
+  await assert.rejects(() => staleGetData, /cache custody changed/, 'A held pre-replay live response published after replay cache custody changed.')
+  assert.equal(heldReadSnapshots.has(heldReadScope), false, 'A held pre-replay live response recreated the released offline cache.')
+  assert.equal(heldRead.storage.getItem(`farm-rx-workspace-cache-invalid:v1:${heldReadScope}`), null, 'A successful exact cache deletion left an unnecessary tombstone.')
+  heldRead.setOffline(true)
+  await assert.rejects(() => heldRead.repository.getData(), /Connect to the internet once/, 'A held pre-replay live response resurrected a same-session pending record.')
+} finally { heldReadCache.restore() }
+
+// The tombstone is written synchronously before a confirmed queue entry can be
+// removed. A process interruption after the removal therefore still has a
+// durable no-resurrection fence.
+const ordering = harness('soil-rx-tombstone-ordering')
+const orderingQueueKey = soilRxWriteQueueKey(ordering.scope.projectRef, userId, farmId)
+ordering.setOffline(true); await ordering.repository.saveTest(draft(uid(670)))
+const orderingScope = cacheKey(ordering.scope.projectRef, userId, farmId)
+const orderingCache = scopedCacheDatabase(ordering.storage, new Map([[orderingScope, { stale: 'pending' }]]), true)
+let tombstoneSawQueuedEntry = false
+ordering.storage.onSet = (key) => {
+  if (key === `farm-rx-workspace-cache-invalid:v1:${orderingScope}`) tombstoneSawQueuedEntry = new SoilRxWriteQueue(ordering.storage, orderingQueueKey).read().entries.length === 1
+}
+try {
+  ordering.setOffline(false); await ordering.repository.inspectAndReplay()
+  assert.ok(tombstoneSawQueuedEntry, 'The confirmed queue entry was removed before its durable cache tombstone was written.')
+  assert.equal(new SoilRxWriteQueue(ordering.storage, orderingQueueKey).read().entries.length, 0, 'The ordering proof did not release confirmed queue custody.')
+  assert.equal(ordering.storage.getItem(`farm-rx-workspace-cache-invalid:v1:${orderingScope}`), '1', 'The ordering proof lost its tombstone after the forced IndexedDB failure.')
+} finally { ordering.storage.onSet = null; orderingCache.restore() }
+
 const dismiss = await parkedHarness('soil-rx-dismiss', uid(301))
 await dismiss.queued.repository.dismissNeedsAttention(dismiss.queueKey, dismiss.record.id)
 assert.equal(readNeedsAttention(dismiss.queued.storage, dismiss.queueKey).length, 0)
@@ -554,30 +602,23 @@ assert.match(validateSoilReportFile({ name: `${'x'.repeat(252)}.pdf`, type: 'app
 // stranding window. Custody begins before the first remote write, retained UI
 // state precedes release, and retry replacement follows completed cleanup.
 const source = readFileSync(new URL('./QueuedSoilRxRepository.ts', import.meta.url), 'utf8')
-const replayRemoval = 'envelope = source.queue.removeConfirmedHead(entry.operationId)'
-const replayInvalidation = 'await this.invalidateCache(source); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)'
+const replayRelease = 'await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) })'
 function assertReplayCacheGuards(candidate: string) {
   const replayMethod = candidate.slice(candidate.indexOf('async inspectAndReplay()'), candidate.indexOf('async getReportUrl'))
-  assert.equal(replayMethod.split(replayInvalidation).length - 1, 2, 'Both replay custody exits must invalidate the scoped offline projection.')
-  assert.ok(replayMethod.indexOf(replayRemoval) < replayMethod.indexOf(replayInvalidation), 'Successful replay must release confirmed queue custody before cache cleanup can fail.')
-  assert.ok(replayMethod.lastIndexOf(replayRemoval) < replayMethod.lastIndexOf(replayInvalidation), 'Parked replay must release queue custody before cache cleanup.')
+  assert.equal(replayMethod.split(replayRelease).length - 1, 2, 'Both replay custody exits must use the fenced queue-release path.')
   const replayCatch = replayMethod.slice(replayMethod.lastIndexOf('    } catch (error) {'))
   assert.ok(!replayCatch.includes('source.queue.read()'), 'Blocked replay reporting must not re-read malformed queue bytes.')
   const dismissMethod = candidate.slice(candidate.indexOf('async dismissNeedsAttention'), candidate.lastIndexOf('\n}'))
-  const dismissInvalidation = dismissMethod.indexOf('await this.invalidateCache(source); verify()')
-  const dismissRemoval = dismissMethod.indexOf('dismissNeedsAttention(this.d.storage, queueKey, operationId)')
-  assert.ok(dismissInvalidation >= 0 && dismissRemoval >= 0 && dismissInvalidation < dismissRemoval, 'Dismiss must invalidate the scoped offline projection before removing parked custody.')
+  assert.ok(dismissMethod.includes('await this.releaseCacheCustody(source, () => dismissNeedsAttention(this.d.storage, queueKey, operationId)); verify()'), 'Dismiss must use the fenced cache-and-custody release path.')
+  const releaseMethod = candidate.slice(candidate.indexOf('private async releaseCacheCustody'), candidate.indexOf('private pending'))
+  assert.ok(releaseMethod.indexOf('beginWorkspaceCacheInvalidation') < releaseMethod.indexOf('releaseQueue()') && releaseMethod.indexOf('releaseQueue()') < releaseMethod.indexOf('await finishInvalidation()'), 'The tombstone must precede queue release, and IndexedDB deletion must follow it.')
 }
 assertReplayCacheGuards(source)
-const replaceLast = (value: string, find: string, replacement: string) => {
-  const index = value.lastIndexOf(find)
-  assert.ok(index >= 0, `Missing mutation target: ${find}`)
-  return value.slice(0, index) + replacement + value.slice(index + find.length)
-}
 for (const [name, mutation] of [
-  ['replay-cache-invalidation', source.replace(replayInvalidation, 'await Promise.resolve()')],
+  ['replay-cache-invalidation', source.replace(replayRelease, 'await Promise.resolve()')],
   ['replay-malformed-reread', source.replace("pending: 1, message: attention", "pending: source.queue.read().entries.length, message: attention")],
-  ['dismiss-cache-invalidation', replaceLast(source, 'await this.invalidateCache(source); verify()', 'await Promise.resolve()')],
+  ['dismiss-cache-invalidation', source.replace('await this.releaseCacheCustody(source, () => dismissNeedsAttention(this.d.storage, queueKey, operationId)); verify()', 'await Promise.resolve()')],
+  ['tombstone-after-release', source.replace('const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      releaseQueue()', 'releaseQueue()\n      const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))')],
 ] as const) {
   assert.notEqual(mutation, source, `${name} mutation was not applied`)
   assert.throws(() => assertReplayCacheGuards(mutation), `${name} mutation must turn the replay proof red`)
