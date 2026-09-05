@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const { resolve } = require('node:path');
 const test = require('node:test');
 const {
   READY_LABEL,
@@ -15,6 +17,12 @@ const HEAD = '1111111111111111111111111111111111111111';
 const NEXT_HEAD = '2222222222222222222222222222222222222222';
 const REQUIRED_CHECKS = ['foundation', 'Vercel'];
 
+test('trusted workflow can maintain labels without blocking on itself', () => {
+  const workflow = readFileSync(resolve(__dirname, '../workflows/coderabbit-final-review.yml'), 'utf8');
+  assert.match(workflow, /pull-requests:\s+write/, 'The gate needs pull-request write permission to maintain workflow labels.');
+  assert.match(workflow, /ignoredChecks: \['CodeRabbit', 'final-review-gate'\]/, 'The gate must ignore its own in-progress check.');
+});
+
 function completedCheck(name, conclusion = 'success', { appId = 1, suiteId = 1, completedAt = '2026-08-30T12:00:00Z' } = {}) {
   return {
     name,
@@ -25,6 +33,24 @@ function completedCheck(name, conclusion = 'success', { appId = 1, suiteId = 1, 
     check_suite: { id: suiteId },
   };
 }
+
+test('configured self-check is ignored while the same unignored check blocks', () => {
+  const selfCheck = {
+    ...completedCheck('final-review-gate'),
+    status: 'in_progress',
+    conclusion: null,
+    completed_at: null,
+    started_at: '2026-08-30T12:00:00Z',
+  };
+  const input = {
+    checkRuns: [completedCheck('foundation'), completedCheck('Vercel'), selfCheck],
+    statuses: [],
+    requiredChecks: REQUIRED_CHECKS,
+  };
+
+  assert.deepEqual(evaluateChecks({ ...input, ignoredChecks: ['CodeRabbit', 'final-review-gate'] }), []);
+  assert.match(evaluateChecks({ ...input, ignoredChecks: ['CodeRabbit'] }).join('\n'), /final-review-gate: in_progress/);
+});
 
 function commitStatus(context, state = 'success', { creatorId = context === 'CodeRabbit' ? 136622811 : 1 } = {}) {
   return {

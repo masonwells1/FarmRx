@@ -41,6 +41,7 @@ jobs:
               config: {
                 quietPeriodMs: 30_000,
                 requiredChecks: ['foundation', 'Vercel'],
-                ignoredChecks: ['CodeRabbit'],
+                # Ignore this workflow's own in-progress check or it blocks itself.
+                ignoredChecks: ['CodeRabbit', 'final-review-gate'],
               },
             });

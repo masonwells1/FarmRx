@@ -86,8 +86,8 @@ reviews:
     # Keep opt-in sources empty so only the explicit PR comment starts a review.
     description_keyword: ""
 
-  # Project-specific review guidance, mirroring the rules and gotchas in this
-  # repo's CLAUDE.md so CodeRabbit flags Farm Rx's real risk areas.
+  # Project-specific review guidance so CodeRabbit flags Farm Rx's real risk
+  # areas. The durable source detail lives in the agent development guide.
   path_instructions:
     - path: "supabase/migrations/**"
       instructions: >-
@@ -129,6 +129,8 @@ knowledge_base:
     filePatterns:
       - "AGENTS.md"
       - "CLAUDE.md"
+      - "docs/agent-development-guide.md"
+      - "docs/agent-delivery.md"
 
 chat:
   auto_reply: true
