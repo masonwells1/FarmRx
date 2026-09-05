@@ -9,11 +9,11 @@ import { validateSoilReportFile } from './soilRxStorage'
 import { setModuleSyncStatus } from './syncStatus'
 import type { SupabaseSoilRxRepository } from './SupabaseSoilRxRepository'
 import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
-import { beginWorkspaceCacheInvalidation, captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, writeWorkspaceCache } from './workspaceCache'
+import { beginWorkspaceCacheInvalidation, captureWorkspaceCacheCustody, captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, verifyWorkspaceCacheCustody, writeWorkspaceCache } from './workspaceCache'
 import type { FarmOperationContext } from './farmOperationContext'
 
 type Context = { userId: string; farmId: string }
-type Source = { context: Context; operationContext: FarmOperationContext; queue: SoilRxWriteQueue; cacheEpoch: number }
+type Source = { context: Context; operationContext: FarmOperationContext; queue: SoilRxWriteQueue; cacheEpoch: number; cacheCustody: number }
 type Dependencies = {
   getContext: () => Promise<Context>
   projectRef: string
@@ -43,15 +43,18 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     const context = { userId: operationContext.userId, farmId: operationContext.farmId }
     const scopeKey = `${context.userId}:${context.farmId}:${operationContext.generation}:${operationContext.token}:${operationContext.serverEpoch}`
     if (this.scopeKey !== scopeKey) { this.workspace = null; this.scopeKey = scopeKey; this.cacheEpoch += 1 }
-    return { context, operationContext, queue: new SoilRxWriteQueue(this.d.storage, soilRxWriteQueueKey(this.d.projectRef, context.userId, context.farmId)), cacheEpoch: this.cacheEpoch }
+    const cacheScope = this.cacheScope(context)
+    return { context, operationContext, queue: new SoilRxWriteQueue(this.d.storage, soilRxWriteQueueKey(this.d.projectRef, context.userId, context.farmId)), cacheEpoch: this.cacheEpoch, cacheCustody: captureWorkspaceCacheCustody(this.d.storage, cacheScope) }
   }
   private cacheScope(context: Context) { return { projectRef: this.d.projectRef, ...context, module: 'soilRx' } }
   private async cacheTransaction<T>(task: () => Promise<T>) { let release!: () => void; const previous = this.cacheTail; this.cacheTail = new Promise<void>((resolve) => { release = resolve }); await previous; try { return await task() } finally { release() } }
   private async retain(source: Source, data: SoilRxData) {
     await this.cacheTransaction(async () => {
       if (source.cacheEpoch !== this.cacheEpoch) throw new Error('Soil Rx cache custody changed while data was loading.')
+      if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
       this.workspace = data
-      await writeWorkspaceCache(this.cacheScope(source.context), data, captureWorkspaceCacheFence(this.cacheScope(source.context)))
+      await writeWorkspaceCache(this.cacheScope(source.context), data, captureWorkspaceCacheFence(this.cacheScope(source.context)), undefined, source.cacheCustody)
+      if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
     })
     await verifyQueuedReadContext(this.d, source.operationContext)
   }

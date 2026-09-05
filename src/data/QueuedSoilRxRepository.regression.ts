@@ -333,10 +333,11 @@ function scopedCacheDatabase(storage: MemoryStorage, values: Map<string, unknown
   const database = {
     objectStoreNames: { contains: (name: string) => name === 'workspaces' },
     transaction: () => {
-      const transaction: { oncomplete?: () => void; onerror?: () => void; onabort?: () => void; error?: Error; objectStore: () => { delete: (key: string) => void; get: (key: string) => unknown } } = {
+      const transaction: { oncomplete?: () => void; onerror?: () => void; onabort?: () => void; error?: Error; objectStore: () => { delete: (key: string) => void; get: (key: string) => unknown; put: (value: { key: string }) => void } } = {
         objectStore: () => ({
           delete: (key: string) => queueMicrotask(() => { if (failDelete) { transaction.error = new Error('indexeddb delete failed'); transaction.onerror?.() } else { values.delete(key); transaction.oncomplete?.() } }),
           get: (key: string) => { const request: { result?: unknown; onsuccess?: () => void } = {}; queueMicrotask(() => { request.result = values.get(key); request.onsuccess?.() }); return request },
+          put: (value: { key: string }) => queueMicrotask(() => { values.set(value.key, value); transaction.oncomplete?.() }),
         }),
       }
       return transaction
@@ -416,6 +417,40 @@ try {
   heldRead.setOffline(true)
   await assert.rejects(() => heldRead.repository.getData(), /Connect to the internet once/, 'A held pre-replay live response resurrected a same-session pending record.')
 } finally { heldReadCache.restore() }
+
+// Cache custody is shared across repository instances/tabs. A read held in A
+// must not republish after B confirms and releases the same scoped queue.
+const sharedTabsStorage = new MemoryStorage()
+const sharedTabsA = harness('soil-rx-shared-tabs', farmId, sharedTabsStorage)
+const sharedTabsB = harness('soil-rx-shared-tabs', farmId, sharedTabsStorage)
+const sharedTabsQueueKey = soilRxWriteQueueKey(sharedTabsA.scope.projectRef, userId, farmId)
+sharedTabsA.setOffline(true); await sharedTabsA.repository.saveTest(draft(uid(665)))
+await new Promise((resolve) => setTimeout(resolve, 25))
+const sharedTabsScope = cacheKey(sharedTabsA.scope.projectRef, userId, farmId)
+const sharedTabsSibling = cacheKey(sharedTabsA.scope.projectRef, uid(666), farmId)
+const sharedTabsSnapshots = new Map<string, unknown>([[sharedTabsScope, { stale: 'pending' }], [sharedTabsSibling, {}]])
+const sharedTabsCache = scopedCacheDatabase(sharedTabsStorage, sharedTabsSnapshots)
+let releaseSharedTabsRead!: () => void; let sawSharedTabsRead!: () => void
+const sharedTabsReadStarted = new Promise<void>((resolve) => { sawSharedTabsRead = resolve })
+const sharedTabsReadRelease = new Promise<void>((resolve) => { releaseSharedTabsRead = resolve })
+sharedTabsA.setGetDataHook(async () => { sharedTabsA.setGetDataHook(null); sawSharedTabsRead(); await sharedTabsReadRelease })
+try {
+  sharedTabsA.setOffline(false); sharedTabsB.setOffline(false)
+  const staleTabRead = sharedTabsA.repository.getData()
+  await sharedTabsReadStarted
+  await sharedTabsB.repository.inspectAndReplay()
+  assert.equal(new SoilRxWriteQueue(sharedTabsStorage, sharedTabsQueueKey).read().entries.length, 0, 'Second-tab replay did not release confirmed custody.')
+  releaseSharedTabsRead()
+  await assert.rejects(() => staleTabRead, /cache custody changed/, 'A stale first-tab read republished after second-tab cache release.')
+  assert.equal(sharedTabsSnapshots.has(sharedTabsScope), false, 'A stale first-tab read rewrote the released shared cache.')
+  assert.ok(sharedTabsSnapshots.has(sharedTabsSibling), 'A shared-tab release crossed user cache scope.')
+  const freshTabRead = await sharedTabsB.repository.getData()
+  assert.equal(freshTabRead.tests[0]?.id, uid(665), 'A fresh post-release read did not publish the confirmed server row.')
+  assert.ok(sharedTabsSnapshots.has(sharedTabsScope), 'A fresh post-release read could not repopulate the exact cache.')
+  sharedTabsB.setOffline(true)
+  const offlineFresh = await sharedTabsB.repository.getData()
+  assert.equal(offlineFresh.tests[0]?.pending, undefined, 'Cross-tab offline reopen resurrected a released pending record.')
+} finally { sharedTabsCache.restore() }
 
 // The tombstone is written synchronously before a confirmed queue entry can be
 // removed. A process interruption after the removal therefore still has a
@@ -661,6 +696,8 @@ function assertReplayCacheGuards(candidate: string) {
   assert.equal(replayMethod.split(replayRelease).length - 1, 2, 'Both replay custody exits must use the fenced queue-release path.')
   assert.ok(replayMethod.includes('let confirmed = this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes'), 'Replay may skip a current-process confirmation only when operation and payload bytes both match.')
   assert.ok(replayMethod.includes('const current = await this.live.getData()'), 'Durable confirmed custody must prove the exact server row after restart.')
+  assert.ok(candidate.includes('cacheCustody: captureWorkspaceCacheCustody(this.d.storage, cacheScope)'), 'A live read must capture shared cache custody with its source.')
+  assert.ok(candidate.includes('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)'), 'A live read must compare shared cache custody before and after publication.')
   assert.ok(replayMethod.indexOf('source.queue.markConfirmedHead(entry.operationId)') < replayMethod.lastIndexOf(replayRelease), 'Replay must durably mark confirmation before successful cache-and-queue release.')
   const replayCatch = replayMethod.slice(replayMethod.lastIndexOf('    } catch (error) {'))
   assert.ok(!replayCatch.includes('source.queue.read()'), 'Blocked replay reporting must not re-read malformed queue bytes.')
@@ -677,6 +714,7 @@ for (const [name, mutation] of [
   ['tombstone-after-release', source.replace('const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      releaseQueue()', 'releaseQueue()\n      const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))')],
   ['confirmed-custody-bypass', source.replace('this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes', 'true')],
   ['confirmed-payload-unbound', source.replace('this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes', 'this.confirmedInMemory.has(entry.operationId)')],
+  ['shared-custody-bypass', source.replace('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)', 'true')],
 ] as const) {
   assert.notEqual(mutation, source, `${name} mutation was not applied`)
   assert.throws(() => assertReplayCacheGuards(mutation), `${name} mutation must turn the replay proof red`)
