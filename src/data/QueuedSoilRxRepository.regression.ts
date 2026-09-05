@@ -51,9 +51,10 @@ function harness(projectRef: string, selectedFarmId = farmId, storage = new Memo
   let contextReadHook: (() => void) | null = null
   let removeHook: (() => Promise<void>) | null = null
   let getDataHook: (() => Promise<void>) | null = null
+  let getDataFailure: Error | null = null
   const toTest = (input: SoilTestDraft): SoilTest => ({ ...input, id: input.id!, farm_id: selectedFarmId, created_by: userId, created_at: stamp, updated_at: stamp, attachment: attachments.get(input.id!) ?? null })
   const live = {
-    async getData(field?: string) { const snapshot = [...rows.values()].filter((test) => !field || test.field_id === field); await getDataHook?.(); if (offline) throw new Error('network unavailable'); return { tests: snapshot } },
+    async getData(field?: string) { const snapshot = [...rows.values()].filter((test) => !field || test.field_id === field); await getDataHook?.(); if (getDataFailure) throw getDataFailure; if (offline) throw new Error('network unavailable'); return { tests: snapshot } },
     async saveTestOperation(input: SoilTestDraft) {
       if (mode === 'permanent_save_failure') throw new Error('validation failed')
       savedIds.push(input.id!)
@@ -103,6 +104,7 @@ function harness(projectRef: string, selectedFarmId = farmId, storage = new Memo
     setRemoveHook: (next: (() => Promise<void>) | null) => { removeHook = next },
     setContextReadHook: (reads: number, hook: () => void) => { contextReadsUntilHook = reads; contextReadHook = hook },
     setGetDataHook: (next: (() => Promise<void>) | null) => { getDataHook = next },
+    setGetDataFailure: (next: Error | null) => { getDataFailure = next },
   }
 }
 
@@ -460,6 +462,30 @@ try {
   assert.ok(tombstoneWriteFailureSnapshots.has(cacheKey(tombstoneWriteFailure.scope.projectRef, uid(681), farmId)), 'Recovered cleanup deleted another user cache.')
 } finally { tombstoneWriteFailureCache.restore() }
 
+// A forged durable confirmation is only a recovery hint. With no matching
+// server row, replay must still save exactly once instead of dropping custody.
+const forgedConfirmed = harness('soil-rx-forged-confirmed')
+const forgedConfirmedQueueKey = soilRxWriteQueueKey(forgedConfirmed.scope.projectRef, userId, farmId)
+forgedConfirmed.setOffline(true); await forgedConfirmed.repository.saveTest(draft(uid(690)))
+await new Promise((resolve) => setTimeout(resolve, 25))
+new SoilRxWriteQueue(forgedConfirmed.storage, forgedConfirmedQueueKey).markConfirmedHead(new SoilRxWriteQueue(forgedConfirmed.storage, forgedConfirmedQueueKey).read().entries[0]!.operationId)
+forgedConfirmed.setOffline(false); await forgedConfirmed.repository.inspectAndReplay()
+assert.equal(forgedConfirmed.savedIds.filter((id) => id === uid(690)).length, 1, 'A forged durable confirmed flag silently skipped its missing server save.')
+assert.equal(new SoilRxWriteQueue(forgedConfirmed.storage, forgedConfirmedQueueKey).read().entries.length, 0, 'A forged durable confirmed flag left recoverable queue custody behind.')
+
+// Probe errors are not save failures. They retain active custody and surface a
+// blocked retry state without parking or releasing a write that was never sent.
+const probeFailure = harness('soil-rx-probe-failure')
+const probeFailureQueueKey = soilRxWriteQueueKey(probeFailure.scope.projectRef, userId, farmId)
+probeFailure.setOffline(true); await probeFailure.repository.saveTest(draft(uid(691)))
+await new Promise((resolve) => setTimeout(resolve, 25))
+probeFailure.setGetDataFailure(new Error('probe refused'))
+probeFailure.setOffline(false); await probeFailure.repository.inspectAndReplay()
+assert.equal(probeFailure.savedIds.filter((id) => id === uid(691)).length, 0, 'A non-transport probe failure called the server save path.')
+assert.equal(new SoilRxWriteQueue(probeFailure.storage, probeFailureQueueKey).read().entries.length, 1, 'A non-transport probe failure released active queue custody.')
+assert.equal(readNeedsAttention(probeFailure.storage, probeFailureQueueKey).length, 0, 'A non-transport probe failure was misclassified as a permanent save failure.')
+assert.equal(getSyncStatus().kind, 'blocked', 'A non-transport probe failure did not surface blocked retry state.')
+
 const dismiss = await parkedHarness('soil-rx-dismiss', uid(301))
 await dismiss.queued.repository.dismissNeedsAttention(dismiss.queueKey, dismiss.record.id)
 assert.equal(readNeedsAttention(dismiss.queued.storage, dismiss.queueKey).length, 0)
@@ -633,7 +659,8 @@ const replayRelease = 'await this.releaseCacheCustody(source, () => { envelope =
 function assertReplayCacheGuards(candidate: string) {
   const replayMethod = candidate.slice(candidate.indexOf('async inspectAndReplay()'), candidate.indexOf('async getReportUrl'))
   assert.equal(replayMethod.split(replayRelease).length - 1, 2, 'Both replay custody exits must use the fenced queue-release path.')
-  assert.ok(replayMethod.includes('let confirmed = entry.confirmed === true || this.confirmedInMemory.has(entry.operationId)'), 'Replay must honor durable or in-memory confirmed custody before a server call.')
+  assert.ok(replayMethod.includes('let confirmed = this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes'), 'Replay may skip a current-process confirmation only when operation and payload bytes both match.')
+  assert.ok(replayMethod.includes('const current = await this.live.getData()'), 'Durable confirmed custody must prove the exact server row after restart.')
   assert.ok(replayMethod.indexOf('source.queue.markConfirmedHead(entry.operationId)') < replayMethod.lastIndexOf(replayRelease), 'Replay must durably mark confirmation before successful cache-and-queue release.')
   const replayCatch = replayMethod.slice(replayMethod.lastIndexOf('    } catch (error) {'))
   assert.ok(!replayCatch.includes('source.queue.read()'), 'Blocked replay reporting must not re-read malformed queue bytes.')
@@ -648,7 +675,8 @@ for (const [name, mutation] of [
   ['replay-malformed-reread', source.replace("pending: 1, message: attention", "pending: source.queue.read().entries.length, message: attention")],
   ['dismiss-cache-invalidation', source.replace('await this.releaseCacheCustody(source, () => dismissNeedsAttention(this.d.storage, queueKey, operationId)); verify()', 'await Promise.resolve()')],
   ['tombstone-after-release', source.replace('const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      releaseQueue()', 'releaseQueue()\n      const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))')],
-  ['confirmed-custody-bypass', source.replace('entry.confirmed === true || this.confirmedInMemory.has(entry.operationId)', 'false')],
+  ['confirmed-custody-bypass', source.replace('this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes', 'true')],
+  ['confirmed-payload-unbound', source.replace('this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes', 'this.confirmedInMemory.has(entry.operationId)')],
 ] as const) {
   assert.notEqual(mutation, source, `${name} mutation was not applied`)
   assert.throws(() => assertReplayCacheGuards(mutation), `${name} mutation must turn the replay proof red`)
