@@ -18,6 +18,8 @@ const notices = new Map<string, WorkspaceCacheNotice>()
 let noticeSnapshot: WorkspaceCacheNotice[] = []
 
 function cacheKey(scope: WorkspaceCacheScope) { return `${scope.projectRef}:${scope.userId}:${scope.farmId}:${scope.module}` }
+function invalidationKey(scope: WorkspaceCacheScope) { return `farm-rx-workspace-cache-invalid:v1:${cacheKey(scope)}` }
+function invalidated(storage: StorageLike, scope: WorkspaceCacheScope) { try { return storage.getItem(invalidationKey(scope)) !== null } catch { return true } }
 function databaseName(projectRef: string) { return `farm-rx-offline-v1-${projectRef}` }
 function available() { return typeof indexedDB !== 'undefined' }
 function open(projectRef: string): Promise<IDBDatabase> {
@@ -102,26 +104,29 @@ export async function writeWorkspaceCache<T>(scope: WorkspaceCacheScope, data: T
     transaction.objectStore(storeName).put({ version: 2, key: cacheKey(scope), ...scope, generation: fence.generation, fenceToken: fence.token, serverEpoch: fence.serverEpoch, cachedAt, data: structuredClone(data) } satisfies WorkspaceEnvelope<T>)
     await complete(transaction)
     verifyFarmRevocationFence(localStorage, fence)
+    try { localStorage.removeItem(invalidationKey(scope)) } catch { /* a stale tombstone fails closed until the next live refresh */ }
     return true
   } catch { return false }
   finally { database?.close() }
 }
 
-/** Removes one module's offline snapshot after durable queue custody changes.
- * Keeping the scope exact prevents a Soil Rx replay from discarding another
- * module's cache for the same farmer and farm. */
-export async function deleteWorkspaceCache(scope: WorkspaceCacheScope): Promise<void> {
-  if (!available()) return
+/** Fences one module's stale snapshot before deleting it. If IndexedDB fails,
+ * the durable tombstone prevents an offline reopen from resurrecting it. */
+export async function invalidateWorkspaceCache(storage: StorageLike, scope: WorkspaceCacheScope): Promise<void> {
+  storage.setItem(invalidationKey(scope), '1')
+  if (!available()) { storage.removeItem(invalidationKey(scope)); return }
   const database = await open(scope.projectRef)
   try {
     const transaction = database.transaction(storeName, 'readwrite')
     transaction.objectStore(storeName).delete(cacheKey(scope))
     await complete(transaction)
+    storage.removeItem(invalidationKey(scope))
   } finally { database.close() }
 }
 
 export async function readWorkspaceCache<T>(scope: WorkspaceCacheScope, maximumAgeMs: number): Promise<{ data: T; cachedAt: string } | null> {
   if (!available()) return null
+  if (invalidated(localStorage, scope)) return null
   let fence
   try { fence = captureFarmRevocationFence(localStorage, scope) } catch { return null }
   const database = await open(scope.projectRef)
@@ -141,6 +146,7 @@ export async function readWorkspaceCache<T>(scope: WorkspaceCacheScope, maximumA
 /** Read-only projection cache access. It never creates/upgrades IndexedDB and never publishes UI notices. */
 export async function readWorkspaceCachePure<T>(scope: WorkspaceCacheScope, fence: FarmRevocationSnapshot, maximumAgeMs: number, storage: StorageLike, nowMs = Date.now()): Promise<ReadOnlySnapshot<T> | null> {
   if (!Number.isFinite(nowMs) || fence.projectRef !== scope.projectRef || fence.userId !== scope.userId || fence.farmId !== scope.farmId) return null
+  if (invalidated(storage, scope)) return null
   try { verifyFarmRevocationFence(storage, fence) } catch { return null }
   const database = await openExisting(scope.projectRef)
   if (!database) return null

@@ -9,7 +9,7 @@ import { validateSoilReportFile } from './soilRxStorage'
 import { setModuleSyncStatus } from './syncStatus'
 import type { SupabaseSoilRxRepository } from './SupabaseSoilRxRepository'
 import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
-import { captureWorkspaceCacheFence, deleteWorkspaceCache, operationalCacheMaxAgeMs, readWorkspaceCache, writeWorkspaceCache } from './workspaceCache'
+import { captureWorkspaceCacheFence, invalidateWorkspaceCache, operationalCacheMaxAgeMs, readWorkspaceCache, writeWorkspaceCache } from './workspaceCache'
 import type { FarmOperationContext } from './farmOperationContext'
 
 type Context = { userId: string; farmId: string }
@@ -43,7 +43,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     return { context, operationContext, queue: new SoilRxWriteQueue(this.d.storage, soilRxWriteQueueKey(this.d.projectRef, context.userId, context.farmId)) }
   }
   private cacheScope(context: Context) { return { projectRef: this.d.projectRef, ...context, module: 'soilRx' } }
-  private async invalidateCache(source: Source) { await deleteWorkspaceCache(this.cacheScope(source.context)) }
+  private async invalidateCache(source: Source) { this.workspace = null; await invalidateWorkspaceCache(this.d.storage, this.cacheScope(source.context)) }
   private pending(entry: SoilRxQueueEntryV1): SoilTest { return { ...entry.draft, farm_id: entry.farmId, created_by: entry.userId, created_at: entry.enqueuedAt, updated_at: entry.enqueuedAt, attachment: null, pending: true } }
   private overlay(data: SoilRxData, entries: SoilRxQueueEntryV1[]) {
     const tests = [...data.tests]
@@ -195,21 +195,21 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
           await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
           setModuleSyncStatus('soilRx', { kind: 'syncing', pending: envelope.entries.length })
           try {
-            const saved = await this.live.saveTestOperation(entry.draft, source.operationContext)
-            verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
-            // Remove the offline projection before releasing durable queue custody.
-            // Otherwise an app restart can overlay the old pending snapshot after a
-            // server-confirmed replay no longer has a queue entry to correct it.
-            await this.invalidateCache(source); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
-            envelope = source.queue.removeConfirmedHead(entry.operationId)
-            if (this.workspace) this.workspace = { tests: sortSoilTestsNewestFirst([...this.workspace.tests.filter((test) => test.id !== saved.id), saved]) }
+            await this.live.saveTestOperation(entry.draft, source.operationContext)
           } catch (error) {
             await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
             if (isTransportFailure(error, this.d.isOffline())) { setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); return }
             verify(); appendNeedsAttention(this.d.storage, source.queue.key, { id: entry.operationId, module: 'soilRx', createdAt: entry.enqueuedAt, message: attention, entry })
-            await this.invalidateCache(source); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
             envelope = source.queue.removeConfirmedHead(entry.operationId)
+            await this.invalidateCache(source); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
+            continue
           }
+          verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
+          // A completed upsert must leave the queue before best-effort IndexedDB
+          // cleanup. The invalidation tombstone still makes a failed deletion
+          // fail closed, without reclassifying or replaying the confirmed write.
+          envelope = source.queue.removeConfirmedHead(entry.operationId)
+          await this.invalidateCache(source); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
         }
         this.refreshSync(source)
       })

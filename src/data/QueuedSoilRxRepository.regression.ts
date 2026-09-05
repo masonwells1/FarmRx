@@ -51,7 +51,7 @@ function harness(projectRef: string, selectedFarmId = farmId, storage = new Memo
   let removeHook: (() => Promise<void>) | null = null
   const toTest = (input: SoilTestDraft): SoilTest => ({ ...input, id: input.id!, farm_id: selectedFarmId, created_by: userId, created_at: stamp, updated_at: stamp, attachment: attachments.get(input.id!) ?? null })
   const live = {
-    async getData(field?: string) { return { tests: [...rows.values()].filter((test) => !field || test.field_id === field) } },
+    async getData(field?: string) { if (offline) throw new Error('network unavailable'); return { tests: [...rows.values()].filter((test) => !field || test.field_id === field) } },
     async saveTestOperation(input: SoilTestDraft) {
       if (mode === 'permanent_save_failure') throw new Error('validation failed')
       savedIds.push(input.id!)
@@ -322,6 +322,69 @@ await malformed.repository.inspectAndReplay()
 assert.equal(getSyncStatus().kind, 'blocked')
 assert.equal(malformed.storage.reads.get(malformedQueueKey), 1, 'Malformed Soil Rx queue bytes were re-read while reporting blocked sync.')
 
+function scopedCacheDatabase(storage: MemoryStorage, values: Map<string, unknown>, failDelete = false) {
+  const priorIndexedDb = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB')
+  const priorLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  const database = {
+    objectStoreNames: { contains: (name: string) => name === 'workspaces' },
+    transaction: () => {
+      const transaction: { oncomplete?: () => void; onerror?: () => void; onabort?: () => void; error?: Error; objectStore: () => { delete: (key: string) => void; get: (key: string) => unknown } } = {
+        objectStore: () => ({
+          delete: (key: string) => queueMicrotask(() => { if (failDelete) { transaction.error = new Error('indexeddb delete failed'); transaction.onerror?.() } else { values.delete(key); transaction.oncomplete?.() } }),
+          get: (key: string) => { const request: { result?: unknown; onsuccess?: () => void } = {}; queueMicrotask(() => { request.result = values.get(key); request.onsuccess?.() }); return request },
+        }),
+      }
+      return transaction
+    },
+    close: () => undefined,
+  }
+  const factory = { open: () => { const request: { result?: typeof database; onsuccess?: () => void } = {}; queueMicrotask(() => { request.result = database; request.onsuccess?.() }); return request } }
+  Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: factory })
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage })
+  return { restore: () => { if (priorIndexedDb) Object.defineProperty(globalThis, 'indexedDB', priorIndexedDb); else Reflect.deleteProperty(globalThis, 'indexedDB'); if (priorLocalStorage) Object.defineProperty(globalThis, 'localStorage', priorLocalStorage); else Reflect.deleteProperty(globalThis, 'localStorage') } }
+}
+const cacheKey = (projectRef: string, user: string, farm: string, module = 'soilRx') => `${projectRef}:${user}:${farm}:${module}`
+async function assertReplayDoesNotResurrect(name: string, settle: (value: ReturnType<typeof harness>, key: string) => Promise<void>) {
+  const value = harness(`soil-rx-cache-${name}`)
+  const key = soilRxWriteQueueKey(value.scope.projectRef, userId, farmId)
+  value.setOffline(true); await value.repository.saveTest(draft(uid(600 + name.length)))
+  const scoped = cacheKey(value.scope.projectRef, userId, farmId)
+  const siblingUser = cacheKey(value.scope.projectRef, uid(601), farmId)
+  const siblingFarm = cacheKey(value.scope.projectRef, userId, uid(602))
+  const siblingModule = cacheKey(value.scope.projectRef, userId, farmId, 'grain')
+  const snapshots = new Map<string, unknown>([[scoped, { stale: 'pending' }], [siblingUser, {}], [siblingFarm, {}], [siblingModule, {}]])
+  const database = scopedCacheDatabase(value.storage, snapshots)
+  try {
+    value.setOffline(false); await settle(value, key)
+    assert.equal(snapshots.has(scoped), false, `${name} did not delete the exact Soil Rx offline cache.`)
+    assert.ok(snapshots.has(siblingUser) && snapshots.has(siblingFarm) && snapshots.has(siblingModule), `${name} deleted another user, farm, or module cache.`)
+    value.setOffline(true)
+    await assert.rejects(() => value.repository.getData(), /Connect to the internet once/, `${name} let same-session offline data resurrect a released pending record.`)
+  } finally { database.restore() }
+}
+await assertReplayDoesNotResurrect('success', async (value) => { await value.repository.inspectAndReplay(); assert.equal(new SoilRxWriteQueue(value.storage, soilRxWriteQueueKey(value.scope.projectRef, userId, farmId)).read().entries.length, 0) })
+await assertReplayDoesNotResurrect('parked', async (value) => { value.setMode('permanent_save_failure'); await value.repository.inspectAndReplay(); assert.equal(readNeedsAttention(value.storage, soilRxWriteQueueKey(value.scope.projectRef, userId, farmId)).length, 1) })
+await assertReplayDoesNotResurrect('dismissed', async (value, key) => { value.setMode('permanent_save_failure'); await value.repository.inspectAndReplay(); const record = readNeedsAttention(value.storage, key)[0]!; await value.repository.dismissNeedsAttention(key, record.id) })
+
+// Once the server upsert returns, a cache deletion failure must not convert that
+// confirmed save into a parked failure or issue it again on a later sync.
+const failedInvalidation = harness('soil-rx-cache-delete-failure')
+const failedInvalidationKey = soilRxWriteQueueKey(failedInvalidation.scope.projectRef, userId, farmId)
+failedInvalidation.setOffline(true); await failedInvalidation.repository.saveTest(draft(uid(650)))
+const failedCacheScope = cacheKey(failedInvalidation.scope.projectRef, userId, farmId)
+const failedCache = scopedCacheDatabase(failedInvalidation.storage, new Map([[failedCacheScope, { stale: 'pending' }]]), true)
+try {
+  failedInvalidation.setOffline(false); await failedInvalidation.repository.inspectAndReplay()
+  assert.equal(failedInvalidation.savedIds.filter((id) => id === uid(650)).length, 1, 'A failed cache deletion reissued the server-confirmed save.')
+  assert.equal(new SoilRxWriteQueue(failedInvalidation.storage, failedInvalidationKey).read().entries.length, 0, 'A failed cache deletion retained confirmed write custody for replay.')
+  assert.equal(readNeedsAttention(failedInvalidation.storage, failedInvalidationKey).length, 0, 'A failed cache deletion misclassified the confirmed save as a parked failure.')
+  assert.equal(failedInvalidation.storage.getItem(`farm-rx-workspace-cache-invalid:v1:${failedCacheScope}`), '1', 'A failed cache deletion did not retain its fail-closed offline tombstone.')
+  await failedInvalidation.repository.inspectAndReplay()
+  assert.equal(failedInvalidation.savedIds.filter((id) => id === uid(650)).length, 1, 'A later sync reissued a save already confirmed before cache cleanup failed.')
+  failedInvalidation.setOffline(true)
+  await assert.rejects(() => failedInvalidation.repository.getData(), /Connect to the internet once/, 'A failed cache deletion resurrected stale pending state despite its tombstone.')
+} finally { failedCache.restore() }
+
 const dismiss = await parkedHarness('soil-rx-dismiss', uid(301))
 await dismiss.queued.repository.dismissNeedsAttention(dismiss.queueKey, dismiss.record.id)
 assert.equal(readNeedsAttention(dismiss.queued.storage, dismiss.queueKey).length, 0)
@@ -496,8 +559,8 @@ const replayInvalidation = 'await this.invalidateCache(source); verify(); await 
 function assertReplayCacheGuards(candidate: string) {
   const replayMethod = candidate.slice(candidate.indexOf('async inspectAndReplay()'), candidate.indexOf('async getReportUrl'))
   assert.equal(replayMethod.split(replayInvalidation).length - 1, 2, 'Both replay custody exits must invalidate the scoped offline projection.')
-  assert.ok(replayMethod.indexOf(replayInvalidation) < replayMethod.indexOf(replayRemoval), 'Successful replay must invalidate its cache before releasing queue custody.')
-  assert.ok(replayMethod.lastIndexOf(replayInvalidation) < replayMethod.lastIndexOf(replayRemoval), 'Parked replay must invalidate its cache before releasing queue custody.')
+  assert.ok(replayMethod.indexOf(replayRemoval) < replayMethod.indexOf(replayInvalidation), 'Successful replay must release confirmed queue custody before cache cleanup can fail.')
+  assert.ok(replayMethod.lastIndexOf(replayRemoval) < replayMethod.lastIndexOf(replayInvalidation), 'Parked replay must release queue custody before cache cleanup.')
   const replayCatch = replayMethod.slice(replayMethod.lastIndexOf('    } catch (error) {'))
   assert.ok(!replayCatch.includes('source.queue.read()'), 'Blocked replay reporting must not re-read malformed queue bytes.')
   const dismissMethod = candidate.slice(candidate.indexOf('async dismissNeedsAttention'), candidate.lastIndexOf('\n}'))
