@@ -128,7 +128,7 @@ export function beginWorkspaceCacheInvalidation(storage: StorageLike, scope: Wor
       const request = store.get(cacheKey(scope))
       request.onsuccess = () => {
         const value = request.result as Partial<WorkspaceEnvelope<unknown>> | undefined
-        if (value === undefined || value.cacheCustody !== nextCustody) store.delete(cacheKey(scope))
+        if (value === undefined || !Number.isSafeInteger(value.cacheCustody) || Number(value.cacheCustody) < nextCustody) store.delete(cacheKey(scope))
       }
       await complete(transaction)
     } finally { database.close() }
@@ -145,10 +145,12 @@ export async function readWorkspaceCache<T>(scope: WorkspaceCacheScope, maximumA
     const transaction = database.transaction(storeName, 'readonly')
     const value = await requestResult(transaction.objectStore(storeName).get(cacheKey(scope)))
     if (value === undefined) return null
+    if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return null
     if (!validEnvelope<T>(value, scope, fence, cacheCustody)) return null
     const ageMs = Date.now() - Date.parse(value.cachedAt)
     if (ageMs < -maximumClockSkewMs || ageMs > maximumAgeMs) throw new WorkspaceCacheExpiredError()
     try { verifyFarmRevocationFence(localStorage, fence) } catch { return null }
+    if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return null
     publish({ module: scope.module.split(':')[0], cachedAt: value.cachedAt })
     return { data: structuredClone(value.data), cachedAt: value.cachedAt }
   } finally { database.close() }
@@ -166,9 +168,11 @@ export async function readWorkspaceCachePure<T>(scope: WorkspaceCacheScope, fenc
     const transaction = database.transaction(storeName, 'readonly')
     const value = await requestResult(transaction.objectStore(storeName).get(cacheKey(scope)))
     if (value === undefined || !validEnvelope<T>(value, scope, fence, cacheCustody)) return null
+    if (!verifyWorkspaceCacheCustody(storage, scope, cacheCustody)) return null
     const ageMs = nowMs - Date.parse(value.cachedAt)
     if (ageMs < -maximumClockSkewMs || ageMs > maximumAgeMs) throw new WorkspaceCacheExpiredError()
     try { verifyFarmRevocationFence(storage, fence) } catch { return null }
+    if (!verifyWorkspaceCacheCustody(storage, scope, cacheCustody)) return null
     return { data: structuredClone(value.data), source: 'offline', capturedAt: value.cachedAt }
   } finally { database.close() }
 }

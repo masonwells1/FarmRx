@@ -700,7 +700,7 @@ function assertReplayCacheGuards(candidate: string) {
   assert.ok(replayMethod.includes('const current = await this.live.getData()'), 'Durable confirmed custody must prove the exact server row after restart.')
   assert.ok(candidate.includes('cacheCustody: captureWorkspaceCacheCustody(this.d.storage, cacheScope)'), 'A live read must capture shared cache custody with its source.')
   assert.ok(candidate.includes('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)'), 'A live read must compare shared cache custody before and after publication.')
-  assert.ok(workspaceCacheSource.includes('if (value === undefined || value.cacheCustody !== nextCustody) store.delete(cacheKey(scope))'), 'Invalidation must delete only an older/different custody cache.')
+  assert.ok(workspaceCacheSource.includes('if (value === undefined || !Number.isSafeInteger(value.cacheCustody) || Number(value.cacheCustody) < nextCustody) store.delete(cacheKey(scope))'), 'Invalidation must delete only an invalid or older custody cache.')
   assert.ok(replayMethod.indexOf('source.queue.markConfirmedHead(entry.operationId)') < replayMethod.lastIndexOf(replayRelease), 'Replay must durably mark confirmation before successful cache-and-queue release.')
   const replayCatch = replayMethod.slice(replayMethod.lastIndexOf('    } catch (error) {'))
   assert.ok(!replayCatch.includes('source.queue.read()'), 'Blocked replay reporting must not re-read malformed queue bytes.')
@@ -711,8 +711,8 @@ function assertReplayCacheGuards(candidate: string) {
 }
 assertReplayCacheGuards(source)
 assert.throws(() => {
-  const mutated = workspaceCacheSource.replace('if (value === undefined || value.cacheCustody !== nextCustody) store.delete(cacheKey(scope))', 'store.delete(cacheKey(scope))')
-  assert.ok(mutated.includes('if (value === undefined || value.cacheCustody !== nextCustody) store.delete(cacheKey(scope))'), 'Conditional cache-delete mutation must turn the proof red')
+  const mutated = workspaceCacheSource.replace('if (value === undefined || !Number.isSafeInteger(value.cacheCustody) || Number(value.cacheCustody) < nextCustody) store.delete(cacheKey(scope))', 'store.delete(cacheKey(scope))')
+  assert.ok(mutated.includes('if (value === undefined || !Number.isSafeInteger(value.cacheCustody) || Number(value.cacheCustody) < nextCustody) store.delete(cacheKey(scope))'), 'Conditional cache-delete mutation must turn the proof red')
 })
 for (const [name, mutation] of [
   ['replay-cache-invalidation', source.replace(replayRelease, 'await Promise.resolve()')],

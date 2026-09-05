@@ -156,6 +156,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       if (entries.some((entry) => entry.confirmed)) throw new Error('A confirmed Soil Rx save is finishing device cleanup. Connect to finish safely.')
       const memory = verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody) ? this.workspace : null
       const cached = memory ?? (await readWorkspaceCache<SoilRxData>(this.cacheScope(source.context), operationalCacheMaxAgeMs))?.data ?? null
+      if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
       await verifyQueuedReadContext(this.d, source.operationContext)
       if (!cached && !entries.length) throw new Error('Connect to the internet once to load Soil Rx history on this device.')
       const data = cached ?? { tests: [] }
