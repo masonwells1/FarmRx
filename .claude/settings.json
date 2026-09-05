@@ -52,8 +52,6 @@
       "Bash(gh run list:*)",
       "Bash(gh run view:*)",
       "Bash(gh label:*)",
-      "Bash(pwsh:*)",
-      "Bash(powershell:*)",
       "Agent",
       "Task"
     ],
