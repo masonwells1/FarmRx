@@ -34,6 +34,24 @@ function completedCheck(name, conclusion = 'success', { appId = 1, suiteId = 1, 
   };
 }
 
+test('configured self-check is ignored while the same unignored check blocks', () => {
+  const selfCheck = {
+    ...completedCheck('final-review-gate'),
+    status: 'in_progress',
+    conclusion: null,
+    completed_at: null,
+    started_at: '2026-08-30T12:00:00Z',
+  };
+  const input = {
+    checkRuns: [completedCheck('foundation'), completedCheck('Vercel'), selfCheck],
+    statuses: [],
+    requiredChecks: REQUIRED_CHECKS,
+  };
+
+  assert.deepEqual(evaluateChecks({ ...input, ignoredChecks: ['CodeRabbit', 'final-review-gate'] }), []);
+  assert.match(evaluateChecks({ ...input, ignoredChecks: ['CodeRabbit'] }).join('\n'), /final-review-gate: in_progress/);
+});
+
 function commitStatus(context, state = 'success', { creatorId = context === 'CodeRabbit' ? 136622811 : 1 } = {}) {
   return {
     context,

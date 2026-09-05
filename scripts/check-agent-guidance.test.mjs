@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { validateGuidanceText } from './check-agent-guidance.mjs'
+import { missingRoutedGuidanceFiles, validateGuidanceText } from './check-agent-guidance.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const baseline = {
@@ -13,6 +13,11 @@ const baseline = {
 }
 
 assert.deepEqual(validateGuidanceText(baseline), [], 'The checked-in guidance must satisfy its contract.')
+assert.deepEqual(
+  missingRoutedGuidanceFiles(baseline, (file) => file !== 'docs/branch-inventory-2026-09-03.md'),
+  ['docs/branch-inventory-2026-09-03.md'],
+  'A missing document routed from AGENTS.md must fail validation.',
+)
 
 function mustFail(name, mutate, expected) {
   const changed = mutate({ ...baseline })

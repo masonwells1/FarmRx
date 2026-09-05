@@ -45,6 +45,18 @@ export function validateGuidanceText({ agents, claude, development, delivery }) 
   return failures
 }
 
+export function routedGuidanceFiles({ agents, claude, development, delivery }) {
+  const routes = new Set()
+  for (const text of [agents, claude, development, delivery]) {
+    for (const match of text.matchAll(/`(docs\/[^`]+\.md)`/g)) routes.add(match[1])
+  }
+  return [...routes].sort()
+}
+
+export function missingRoutedGuidanceFiles(texts, pathExists) {
+  return routedGuidanceFiles(texts).filter((file) => !pathExists(file))
+}
+
 export function validateRepository(root = defaultRoot) {
   const required = [
     'AGENTS.md',
@@ -63,12 +75,16 @@ export function validateRepository(root = defaultRoot) {
   const failures = missing.map((file) => `${file}: routed guidance file does not exist`)
   if (missing.length) return failures
 
-  failures.push(...validateGuidanceText({
+  const texts = {
     agents: readFileSync(resolve(root, 'AGENTS.md'), 'utf8'),
     claude: readFileSync(resolve(root, 'CLAUDE.md'), 'utf8'),
     development: readFileSync(resolve(root, 'docs/agent-development-guide.md'), 'utf8'),
     delivery: readFileSync(resolve(root, 'docs/agent-delivery.md'), 'utf8'),
-  }))
+  }
+  failures.push(...validateGuidanceText(texts))
+  for (const file of missingRoutedGuidanceFiles(texts, (path) => existsSync(resolve(root, path)))) {
+    failures.push(`${file}: routed guidance file does not exist`)
+  }
 
   const docsMap = readFileSync(resolve(root, 'docs/README.md'), 'utf8')
   const codeRabbit = readFileSync(resolve(root, '.coderabbit.yaml'), 'utf8')
