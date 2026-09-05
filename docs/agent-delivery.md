@@ -27,6 +27,8 @@ After local proof is green, the agent may push the feature branch, create and ma
 
 CodeRabbit automatic and incremental reviews stay disabled in `.coderabbit.yaml`. Pull-request creation, pushes, descriptions, labels, and GitHub workflows must not request a review. A skipped-review notice or status may appear when a pull request opens, but it is not a review and requires no action until the candidate is frozen and Mason chooses to post the command.
 
+Reference: [CodeRabbit automatic-review controls](https://docs.coderabbit.ai/configuration/auto-review).
+
 ## Merge gate
 
 A green status row alone is not approval. Immediately before asking Mason to approve a merge or performing an already approved merge, verify live that:
