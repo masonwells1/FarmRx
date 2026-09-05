@@ -1,50 +1,58 @@
-# Farm Rx agent router
+# Farm Rx Agent Contract
 
-## Read first
+This is the small shared contract every coding agent loads. Detailed procedures live in the linked guides; do not copy them back here.
 
-- Enduring product/source-of-truth: `docs/farm-rx-handoff.md`.
-- Current owner goal and status definitions: `docs/GOAL.md`.
-- 2027 scenario contract: `docs/season-readiness/WORKFLOWS-AND-SCENARIOS.md`.
-- Execution/approval loop: `docs/season-readiness/ORCHESTRATOR-RUNBOOK.md`.
-- Append-only history: `docs/season-readiness/LEDGER.md`.
+## Owner and communication
 
-The 2026-07-18 owner directive says no real farmer use until 2027. It supersedes earlier rollout timing, not the factual history of prior commits, merges, deployment, migrations, or live verification.
+- Mason Wells owns Farm Rx and has no formal coding background. He cannot safely review code or diffs, so the agent owns the technical process and explains the outcome, business impact, risk, and proof in plain English.
+- Be short and direct. Define jargon once when it matters and give one recommended next step.
+- Mason should not have to nudge the agent to continue or ask whether it silently stopped. Keep working through every safe, authorized step until the result is complete or a genuine Mason-only gate is reached.
+- If a command, tool, check, or approach fails, promptly say what failed, what it means, and what is being tried next. Exhaust safe alternatives without waiting for a nudge.
+- If work truly cannot continue, begin with `NEEDS MASON - ACTION REQUIRED` or `NEEDS MASON - DECISION REQUIRED`, then give the blocker, recommendation, consequence of doing nothing, and exact app-native action.
 
-## Product boundary
+## Read only what the task needs
 
-Build on the completed Farmer Simplicity layer and existing modules. Do not add standalone modules, vendors, broad redesigns, speculative features, or a proof-only `run_id` column. Treat missing integrations as negative assertions/out of scope unless a required scenario exposes a defect in existing behavior.
+- Current goal, scope, and status: `docs/GOAL.md` and `docs/README.md`.
+- Enduring product, privacy, domain, and architecture rules: `docs/farm-rx-handoff.md`.
+- Development, data, UI, and verification rules: `docs/agent-development-guide.md` and, for UI work, `docs/design/README.md`.
+- Season-readiness scenarios: `docs/season-readiness/WORKFLOWS-AND-SCENARIOS.md` and `docs/season-readiness/ORCHESTRATOR-RUNBOOK.md`.
+- Protected delivery, CodeRabbit, and outward-action gates: `docs/agent-delivery.md`.
+- Customer go-live: `docs/ship-checklist.md`.
+- Dated branch evidence: `docs/branch-inventory-2026-09-03.md`; reverify before relying on it.
 
-## Work safely
+Current source, executable tests, migrations, and live read-only evidence outrank prose, memory, summaries, handoffs, and old reviews.
 
-- Sol orchestrates one bounded tranche and one immutable commit at a time.
-- Workers are bounded, do not recursively delegate, and do not infer approval from silence.
-- Every exact commit receives fresh-context, read-only Sol review; repairs are new commits and new reviews.
-- Use synthetic fixtures, a simulated `America/Chicago` 2027 clock, and a disposable local backend for season proof. Never use live customer data.
-- Preserve unrelated work and never modify `C:\CRX_Manager` from this repo.
+## Authority and momentum
 
-## Production boundary
+- `Answer`, `explain`, `review`, `diagnose`, `inspect`, `audit`, `status`, or `plan` authorizes relevant read-only work only.
+- `Build`, `change`, `fix`, `finish`, `handle`, or `implement` authorizes the normal reversible local lifecycle: inspect, decide routine details, edit, test, verify, and create a local commit.
+- Treat natural requests such as “can you,” “help me,” and “I want” as requests to do the work when the outcome is actionable. Do not stop after a plan or ask “Should I continue?” while safe in-scope work remains.
+- Treat `read-only`, `do not write`, `do not push`, `do not merge`, and similar restrictions literally.
+- Make routine technical choices from current source and established patterns. Ask only when a missing choice would materially change the business outcome or an exact hard-gated action was not requested.
 
-Farm Rx `main` is linked to the production Vercel project. A merge or push to `main` is production-coupled.
+## Product and code standard
 
-CodeRabbit does not review PRs automatically. Finish implementation and the separate exact-commit
-Sol review first. Bring the branch current and green with auto-merge OFF, freeze the release
-candidate, record its head SHA, then apply `ready-for-coderabbit`. The trusted default-branch
-workflow rechecks the live head, draft/conflict/auto-merge state, actor permission, required checks,
-and every reported non-CodeRabbit check. It records `coderabbit-review-requested`, removes the ready
-label, and posts exactly `@coderabbitai review` once. A new commit, reopened PR, or draft conversion
-clears both labels; duplicate events do not post duplicate reviews. If the gate fails, it removes
-the ready label and posts nothing — correct the named blocker and relabel. A failed comment post is
-checked against the live PR: dedupe state is kept if the command landed, otherwise both labels
-clear for a deliberate retry. Read the result. Before
-merging, verify the active `main` protection still requires at least one approval and dismisses
-stale approvals, then compare the PR's final `headRefOid` with the `commit_id` of an `APPROVED`
-CodeRabbit review. GitHub requires that formal approval and dismisses it when the candidate changes.
-Merge immediately with `--match-head-commit <reviewed-head-sha>` and never use `--auto`.
-Fix real findings; if a finding or base update creates a new commit, restart checks and apply the
-ready label again for one follow-up incremental review. Never use `@coderabbitai resume`, because
-it re-enables automatic reviews, and use `@coderabbitai full review` only when a complete reread is
-deliberately justified.
+- Build on the existing Farmer Simplicity layer and modules. Do not add a second product architecture, standalone modules, vendors, broad redesigns, speculative features, or proof-only product fields unless Mason explicitly changes the outcome.
+- Choose the simplest complete implementation. Prefer readable, direct, focused code and existing patterns over clever compression, speculative abstractions, unnecessary dependencies, or unrelated cleanup.
+- Preserve dirty or occupied worktrees and unrelated user changes. Use an isolated current-base worktree for multi-file or risky work.
+- Farm Rx has its own Supabase project. Treat `C:\CRX_Manager` as read-only reference material and never modify it from Farm Rx work.
+- The 2026-07-18 owner directive says no real farmer use until 2027. Use synthetic fixtures and disposable local services for season proof; never use live customer data.
+
+## Proof and completion
+
+- Done means the changed behavior ran and was observed, not merely that code was written or tests passed.
+- Match proof to risk. Use `npx tsc -b --force` for TypeScript verification; follow the development guide for broader checks.
+- For substantial work, start with a compact `GOAL`, `DONE WHEN`, `PLAN`, `TOUCHING`, meaningful `RISK`, and normally `NEEDS MASON: Nothing - continuing automatically`.
+- Close substantial work with `VERDICT: COMPLETE`, `READY FOR APPROVAL`, `BLOCKED`, or `PARTIAL`. State what changed, proof observed, who owns anything remaining, and one recommended next step.
+
+## Hard outward gates
 
 Agents may push branches and open, update, label, and comment on pull requests without asking (Mason, 2026-09-05). The pre-push hook still refuses any push that targets `main`.
 
-Get Mason's explicit approval before merge, deploy, live migration, live data change, secrets/auth/permissions change, customer account action, customer communication, or destructive action. Approval for local edits, tests, a commit, or a branch push does not authorize any later gate.
+Get Mason's explicit approval in the current conversation before merge; deploy; live migration or live data change; secrets, authentication, or permissions change; customer account action; customer communication; destructive action; purchase; or binding commitment. Local edits, tests, verification, commits, branch pushes, and pull-request work do not authorize a later hard-gated action.
+
+Never expose secrets, bypass hooks or required checks, force-push, push directly to `main`, use destructive recovery, or infer approval from silence. Before protected delivery or another outward action, follow `docs/agent-delivery.md` and recheck the current state.
+
+## Keep this file lean
+
+Put task procedures in `docs/`, repeatable workflows in scripts, and hard guarantees in tests or hooks. If removing a line would not change every agent's behavior, move or remove it.

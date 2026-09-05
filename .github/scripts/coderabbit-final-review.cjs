@@ -95,10 +95,13 @@ function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [
 
   for (const checks of checksByName.values()) {
     for (const check of checks) {
-      const ignoredCodeRabbitCheck = ignored.has(normalize(check.name))
-        && normalize(check.name) === 'coderabbit'
+      const name = normalize(check.name);
+      const ignoredConfiguredCheck = ignored.has(name) && name !== 'coderabbit';
+      const ignoredCodeRabbitCheck = ignored.has(name)
+        && name === 'coderabbit'
         && String(check.app.id) === CODERABBIT_CHECK_APP_ID;
-      if (!ignoredCodeRabbitCheck
+      if (!ignoredConfiguredCheck
+        && !ignoredCodeRabbitCheck
         && (check.status !== 'completed' || !ACCEPTABLE_CHECK_CONCLUSIONS.has(check.conclusion))) {
         blockers.push(`${check.name}: ${check.status}/${check.conclusion || 'no conclusion'}`);
       }
@@ -107,10 +110,11 @@ function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [
 
   for (const [name, statusesForName] of statusesByName) {
     for (const status of statusesForName) {
+      const ignoredConfiguredStatus = ignored.has(name) && name !== 'coderabbit';
       const ignoredLegacyCodeRabbit = ignored.has(name)
         && name === 'coderabbit'
         && String(status.creator.id) === CODERABBIT_LEGACY_STATUS_CREATOR_ID;
-      if (!ignoredLegacyCodeRabbit && status.state !== 'success') {
+      if (!ignoredConfiguredStatus && !ignoredLegacyCodeRabbit && status.state !== 'success') {
         blockers.push(`${status.context}: ${status.state}`);
       }
     }

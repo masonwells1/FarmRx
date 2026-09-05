@@ -10,6 +10,13 @@ Start here when deciding what Farm Rx does now, what remains open, or whether an
 4. [`season-readiness/ORCHESTRATOR-RUNBOOK.md`](season-readiness/ORCHESTRATOR-RUNBOOK.md) — execution, proof, review, and approval rules.
 5. [`season-readiness/LEDGER.md`](season-readiness/LEDGER.md) — append-only season-readiness history. Later entries correct earlier entries without rewriting them.
 
+## Agent operation
+
+- [`../AGENTS.md`](../AGENTS.md) — small shared behavior, authority, and safety contract loaded by every coding agent.
+- [`agent-development-guide.md`](agent-development-guide.md) — implementation, data, UI, simplicity, and verification rules; read when changing or reviewing code.
+- [`agent-delivery.md`](agent-delivery.md) — protected pull-request, CodeRabbit, approval, merge, deployment, and outward-action procedure; read only when work is ready to leave the local checkout.
+- [`../CLAUDE.md`](../CLAUDE.md) — Claude-only router; shared policy remains in `AGENTS.md`.
+
 ## Initiative records
 
 - [`initiatives/connect-workflows/LEDGER.md`](initiatives/connect-workflows/LEDGER.md) records Weather-to-Spray prefill and confirmed Program-to-Inventory matching. Its final entries record source publication, the two production migrations, and the explicit limit that no production user path was exercised.
