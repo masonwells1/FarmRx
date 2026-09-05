@@ -9,7 +9,7 @@ import { validateSoilReportFile } from './soilRxStorage'
 import { setModuleSyncStatus } from './syncStatus'
 import type { SupabaseSoilRxRepository } from './SupabaseSoilRxRepository'
 import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
-import { beginWorkspaceCacheInvalidation, captureWorkspaceCacheCustody, captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, verifyWorkspaceCacheCustody, writeWorkspaceCache } from './workspaceCache'
+import { beginWorkspaceCacheInvalidation, captureWorkspaceCacheCustody, captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, verifyWorkspaceCacheCustody, WorkspaceCacheCustodyError, writeWorkspaceCache } from './workspaceCache'
 import type { FarmOperationContext } from './farmOperationContext'
 
 type Context = { userId: string; farmId: string }
@@ -34,6 +34,10 @@ class SoilRxCacheCustodyChangedError extends Error {
   constructor() { super('Soil Rx cache custody changed while data was loading.') }
 }
 
+class SoilRxMalformedCacheCustodyError extends Error {
+  constructor() { super('Farm Rx could not verify offline cache custody.') }
+}
+
 export class QueuedSoilRxRepository implements SoilRxRepository {
   private workspace: { data: SoilRxData; cacheCustody: number } | null = null
   private scopeKey: string | null = null
@@ -48,7 +52,13 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     const scopeKey = `${context.userId}:${context.farmId}:${operationContext.generation}:${operationContext.token}:${operationContext.serverEpoch}`
     if (this.scopeKey !== scopeKey) { this.workspace = null; this.scopeKey = scopeKey; this.cacheEpoch += 1 }
     const cacheScope = this.cacheScope(context)
-    return { context, operationContext, queue: new SoilRxWriteQueue(this.d.storage, soilRxWriteQueueKey(this.d.projectRef, context.userId, context.farmId)), cacheEpoch: this.cacheEpoch, cacheCustody: captureWorkspaceCacheCustody(this.d.storage, cacheScope) }
+    let cacheCustody: number
+    try { cacheCustody = captureWorkspaceCacheCustody(this.d.storage, cacheScope) }
+    catch (error) {
+      if (!(error instanceof WorkspaceCacheCustodyError)) throw error
+      throw new SoilRxMalformedCacheCustodyError()
+    }
+    return { context, operationContext, queue: new SoilRxWriteQueue(this.d.storage, soilRxWriteQueueKey(this.d.projectRef, context.userId, context.farmId)), cacheEpoch: this.cacheEpoch, cacheCustody }
   }
   private cacheScope(context: Context) { return { projectRef: this.d.projectRef, ...context, module: 'soilRx' } }
   private async cacheTransaction<T>(task: () => Promise<T>) { let release!: () => void; const previous = this.cacheTail; this.cacheTail = new Promise<void>((resolve) => { release = resolve }); await previous; try { return await task() } finally { release() } }
@@ -252,8 +262,17 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
   }
 
   async inspectAndReplay() {
+    let source: Source
     try {
-      const source = await this.source()
+      source = await this.source()
+    } catch (error) {
+      if (error instanceof SoilRxMalformedCacheCustodyError) {
+        setModuleSyncStatus('soilRx', { kind: 'blocked', pending: 1, message: attention })
+        return
+      }
+      throw error
+    }
+    try {
       await queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
         await this.cleanupLocked(source, verify, async (verifyCleanup) => { await this.drainCleanup(source, verifyCleanup) })
         let envelope = source.queue.read()

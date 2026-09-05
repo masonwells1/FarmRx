@@ -14,6 +14,10 @@ type WorkspaceEnvelopeV3<T> = WorkspaceCacheScope & { version: 3; key: string; g
 type WorkspaceEnvelope<T> = WorkspaceEnvelopeV2<T> | WorkspaceEnvelopeV3<T>
 export type WorkspaceCacheNotice = { module: string; cachedAt: string }
 
+export class WorkspaceCacheCustodyError extends Error {
+  constructor() { super('Farm Rx could not verify offline cache custody.') }
+}
+
 const storeName = 'workspaces'
 const listeners = new Set<() => void>()
 const notices = new Map<string, WorkspaceCacheNotice>()
@@ -21,7 +25,7 @@ let noticeSnapshot: WorkspaceCacheNotice[] = []
 
 function cacheKey(scope: WorkspaceCacheScope) { return `${scope.projectRef}:${scope.userId}:${scope.farmId}:${scope.module}` }
 function custodyKey(scope: WorkspaceCacheScope) { return `farm-rx-workspace-cache-custody:v1:${cacheKey(scope)}` }
-export function captureWorkspaceCacheCustody(storage: StorageLike, scope: WorkspaceCacheScope): number { const raw = storage.getItem(custodyKey(scope)); if (raw === null) return 0; const value = Number(raw); if (!Number.isSafeInteger(value) || value < 0 || String(value) !== raw) throw new Error('Farm Rx could not verify offline cache custody.') ; return value }
+export function captureWorkspaceCacheCustody(storage: StorageLike, scope: WorkspaceCacheScope): number { const raw = storage.getItem(custodyKey(scope)); if (raw === null) return 0; const value = Number(raw); if (!Number.isSafeInteger(value) || value < 0 || String(value) !== raw) throw new WorkspaceCacheCustodyError() ; return value }
 export function verifyWorkspaceCacheCustody(storage: StorageLike, scope: WorkspaceCacheScope, expected: number): boolean { try { return captureWorkspaceCacheCustody(storage, scope) === expected } catch { return false } }
 /** Older or malformed snapshots may be deleted; same/newer custody belongs to a later writer. */
 export function shouldDeleteInvalidatedWorkspaceCache(cacheCustody: unknown, invalidationCustody: number): boolean { return !Number.isSafeInteger(cacheCustody) || Number(cacheCustody) < invalidationCustody }
