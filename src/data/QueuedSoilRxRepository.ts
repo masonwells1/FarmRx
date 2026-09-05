@@ -69,8 +69,10 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       releaseQueue()
       await finishInvalidation()
       if (confirmedData && verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), cacheCustody)) {
-        await writeWorkspaceCache(this.cacheScope(source.context), confirmedData, captureWorkspaceCacheFence(this.cacheScope(source.context)), undefined, cacheCustody)
-        if (verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), cacheCustody)) this.workspace = { data: confirmedData, cacheCustody }
+        await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+        const retained = await writeWorkspaceCache(this.cacheScope(source.context), confirmedData, source.operationContext, undefined, cacheCustody)
+        await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
+        if (retained && verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), cacheCustody)) this.workspace = { data: confirmedData, cacheCustody }
       }
     })
   }

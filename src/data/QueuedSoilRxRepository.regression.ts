@@ -435,6 +435,34 @@ await assertReplayDoesNotResurrect('success', async (value) => { await value.rep
 await assertReplayDoesNotResurrect('parked', async (value) => { value.setMode('permanent_save_failure'); await value.repository.inspectAndReplay(); assert.equal(readNeedsAttention(value.storage, soilRxWriteQueueKey(value.scope.projectRef, userId, farmId)).length, 1) })
 await assertReplayDoesNotResurrect('dismissed', async (value, key) => { value.setMode('permanent_save_failure'); await value.repository.inspectAndReplay(); const record = readNeedsAttention(value.storage, key)[0]!; await value.repository.dismissNeedsAttention(key, record.id) })
 
+// A same-ID farm regrant during the awaited cache release must not stamp the
+// old canonical replay snapshot with the new access fence.
+const releaseRegrant = harness('soil-rx-release-regrant')
+const releaseRegrantQueueKey = soilRxWriteQueueKey(releaseRegrant.scope.projectRef, userId, farmId)
+releaseRegrant.setOffline(true); await releaseRegrant.repository.saveTest(draft(uid(610)))
+await new Promise((resolve) => setTimeout(resolve, 25))
+const releaseRegrantScope = cacheKey(releaseRegrant.scope.projectRef, userId, farmId)
+const releaseRegrantSnapshots = new Map<string, unknown>([[releaseRegrantScope, { stale: 'pending' }]])
+const releaseRegrantCache = scopedCacheDatabase(releaseRegrant.storage, releaseRegrantSnapshots)
+let regrantedDuringRelease = false
+releaseRegrant.storage.onSet = (key) => {
+  if (!regrantedDuringRelease && key === custodyStorageKey(releaseRegrantScope)) {
+    regrantedDuringRelease = true
+    resetFarmGrantFromLive(releaseRegrant.storage, releaseRegrant.scope, 2, '2027-01-15T12:04:00.000Z')
+  }
+}
+try {
+  releaseRegrant.setOffline(false)
+  await assert.rejects(() => releaseRegrant.repository.inspectAndReplay(), /signed-in account or selected farm changed/)
+  assert.ok(regrantedDuringRelease, 'The release-regrant proof did not mutate farm access during cache cleanup.')
+  assert.equal(releaseRegrant.savedIds.filter((id) => id === uid(610)).length, 1, 'A release-time regrant repeated an already confirmed server save.')
+  assert.equal(new SoilRxWriteQueue(releaseRegrant.storage, releaseRegrantQueueKey).read().entries.length, 0, 'A release-time regrant did not safely release confirmed queue custody.')
+  assert.equal(releaseRegrant.storage.getItem(custodyStorageKey(releaseRegrantScope)), '1', 'A release-time regrant lost the cache custody tombstone.')
+  assert.equal(releaseRegrantSnapshots.has(releaseRegrantScope), false, 'A release-time regrant retained the old snapshot under the new fence.')
+  const reopenedAfterRegrant = harness(releaseRegrant.scope.projectRef, farmId, releaseRegrant.storage, false); reopenedAfterRegrant.setOffline(true)
+  await assert.rejects(() => reopenedAfterRegrant.repository.getData(), /Connect to the internet once/, 'A release-time regrant made the old snapshot readable under the new fence.')
+} finally { releaseRegrant.storage.onSet = null; releaseRegrantCache.restore() }
+
 // Once the server upsert returns, a cache deletion failure must not convert that
 // confirmed save into a parked failure or issue it again on a later sync.
 const failedInvalidation = harness('soil-rx-cache-delete-failure')
@@ -778,6 +806,9 @@ function assertReplayCacheGuards(candidate: string) {
   assert.ok(dismissMethod.includes('await this.releaseCacheCustody(source, () => dismissNeedsAttention(this.d.storage, queueKey, operationId)); verify()'), 'Dismiss must use the fenced cache-and-custody release path.')
   const releaseMethod = candidate.slice(candidate.indexOf('private async releaseCacheCustody'), candidate.indexOf('private pending'))
   assert.ok(releaseMethod.indexOf('beginWorkspaceCacheInvalidation') < releaseMethod.indexOf('releaseQueue()') && releaseMethod.indexOf('releaseQueue()') < releaseMethod.indexOf('await finishInvalidation()'), 'The tombstone must precede queue release, and IndexedDB deletion must follow it.')
+  const retainedWrite = 'writeWorkspaceCache(this.cacheScope(source.context), confirmedData, source.operationContext, undefined, cacheCustody)'
+  assert.ok(releaseMethod.indexOf('await verifyQueuedOperationContext(this.d, source.operationContext, source.context)') < releaseMethod.indexOf(retainedWrite), 'Confirmed replay retention must verify the original operation context before writing.')
+  assert.ok(releaseMethod.includes(retainedWrite), 'Confirmed replay retention must use the original operation fence, not a newly captured fence.')
 }
 assertReplayCacheGuards(source)
 for (const [name, mutation] of [
@@ -785,6 +816,7 @@ for (const [name, mutation] of [
   ['replay-malformed-reread', source.replace("pending: 1, message: attention", "pending: source.queue.read().entries.length, message: attention")],
   ['dismiss-cache-invalidation', source.replace('await this.releaseCacheCustody(source, () => dismissNeedsAttention(this.d.storage, queueKey, operationId)); verify()', 'await Promise.resolve()')],
   ['tombstone-after-release', source.replace('const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      const cacheCustody = captureWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context))\n      releaseQueue()', 'releaseQueue()\n      const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      const cacheCustody = captureWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context))')],
+  ['replay-new-fence-retention', source.replace('writeWorkspaceCache(this.cacheScope(source.context), confirmedData, source.operationContext, undefined, cacheCustody)', 'writeWorkspaceCache(this.cacheScope(source.context), confirmedData, captureWorkspaceCacheFence(this.cacheScope(source.context)), undefined, cacheCustody)')],
   ['confirmed-custody-bypass', source.replace('inMemoryConfirmation?.payloadBytes === entry.payloadBytes', 'true')],
   ['confirmed-payload-unbound', source.replace('inMemoryConfirmation?.payloadBytes === entry.payloadBytes', 'this.confirmedInMemory.has(entry.operationId)')],
   ['confirmed-retention-leak', source.replace('this.confirmedInMemory.delete(entry.operationId)', 'void entry.operationId')],
