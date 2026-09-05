@@ -13,7 +13,8 @@ reviews:
   request_changes_workflow: true
   high_level_summary: true
   poem: false
-  review_status: true
+  # Stay silent when a pull request opens; Mason will request a review manually.
+  review_status: false
   collapse_walkthrough: false
 
   # Report sections (sequence diagrams, related PRs/issues, linked-issue
@@ -75,15 +76,15 @@ reviews:
     - "!**/*.eot"
 
   auto_review:
-    # Do not spend a review on PR creation or on work-in-progress pushes. Once
-    # the release-candidate commit is frozen, required checks are green, and
-    # the separate Sol review is clean, apply `ready-for-coderabbit`. The
-    # trusted GitHub workflow validates that exact head and posts
-    # `@coderabbitai review` once.
+    # Mason alone starts a review by personally posting `@coderabbitai review`
+    # on the frozen pull request. PR creation, pushes, labels, descriptions,
+    # and GitHub workflows must never start a review automatically.
     enabled: false
     auto_incremental_review: false
     drafts: false
-    # Keep opt-in sources empty so only the explicit PR comment starts a review.
+    # An empty list prevents any label from opting a pull request into review.
+    labels: []
+    # Keep description opt-in disabled; the owner's PR comment is the only trigger.
     description_keyword: ""
 
   # Project-specific review guidance so CodeRabbit flags Farm Rx's real risk
