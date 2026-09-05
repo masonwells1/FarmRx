@@ -23,8 +23,9 @@ const cleanupPath = `${farmId}/${fieldId}/${testId}/${uid(99)}.pdf`
 
 class MemoryStorage implements StorageLike {
   readonly values = new Map<string, string>()
+  readonly reads = new Map<string, number>()
   failNextKey: string | null = null
-  getItem(key: string) { return this.values.get(key) ?? null }
+  getItem(key: string) { this.reads.set(key, (this.reads.get(key) ?? 0) + 1); return this.values.get(key) ?? null }
   setItem(key: string, value: string) { if (this.failNextKey === key) { this.failNextKey = null; throw new Error('simulated process interruption') }; this.values.set(key, value) }
   removeItem(key: string) { this.values.delete(key) }
 }
@@ -311,6 +312,16 @@ assert.equal(readNeedsAttention(queued.queued.storage, queued.queueKey).length, 
 assert.deepEqual([...queued.queued.rows.keys()], [uid(300)])
 assert.equal(getSyncStatus().kind, 'synced')
 
+// Corrupt queue bytes must transition to a blocked sync state without a second
+// read in the catch path. A second read can throw during app startup and hide
+// the recoverable "needs attention" state.
+const malformed = harness('soil-rx-malformed-queue')
+const malformedQueueKey = soilRxWriteQueueKey(malformed.scope.projectRef, userId, farmId)
+malformed.storage.setItem(malformedQueueKey, '{not-json')
+await malformed.repository.inspectAndReplay()
+assert.equal(getSyncStatus().kind, 'blocked')
+assert.equal(malformed.storage.reads.get(malformedQueueKey), 1, 'Malformed Soil Rx queue bytes were re-read while reporting blocked sync.')
+
 const dismiss = await parkedHarness('soil-rx-dismiss', uid(301))
 await dismiss.queued.repository.dismissNeedsAttention(dismiss.queueKey, dismiss.record.id)
 assert.equal(readNeedsAttention(dismiss.queued.storage, dismiss.queueKey).length, 0)
@@ -480,6 +491,34 @@ assert.match(validateSoilReportFile({ name: `${'x'.repeat(252)}.pdf`, type: 'app
 // stranding window. Custody begins before the first remote write, retained UI
 // state precedes release, and retry replacement follows completed cleanup.
 const source = readFileSync(new URL('./QueuedSoilRxRepository.ts', import.meta.url), 'utf8')
+const replayRemoval = 'envelope = source.queue.removeConfirmedHead(entry.operationId)'
+const replayInvalidation = 'await this.invalidateCache(source); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)'
+function assertReplayCacheGuards(candidate: string) {
+  const replayMethod = candidate.slice(candidate.indexOf('async inspectAndReplay()'), candidate.indexOf('async getReportUrl'))
+  assert.equal(replayMethod.split(replayInvalidation).length - 1, 2, 'Both replay custody exits must invalidate the scoped offline projection.')
+  assert.ok(replayMethod.indexOf(replayInvalidation) < replayMethod.indexOf(replayRemoval), 'Successful replay must invalidate its cache before releasing queue custody.')
+  assert.ok(replayMethod.lastIndexOf(replayInvalidation) < replayMethod.lastIndexOf(replayRemoval), 'Parked replay must invalidate its cache before releasing queue custody.')
+  const replayCatch = replayMethod.slice(replayMethod.lastIndexOf('    } catch (error) {'))
+  assert.ok(!replayCatch.includes('source.queue.read()'), 'Blocked replay reporting must not re-read malformed queue bytes.')
+  const dismissMethod = candidate.slice(candidate.indexOf('async dismissNeedsAttention'), candidate.lastIndexOf('\n}'))
+  const dismissInvalidation = dismissMethod.indexOf('await this.invalidateCache(source); verify()')
+  const dismissRemoval = dismissMethod.indexOf('dismissNeedsAttention(this.d.storage, queueKey, operationId)')
+  assert.ok(dismissInvalidation >= 0 && dismissRemoval >= 0 && dismissInvalidation < dismissRemoval, 'Dismiss must invalidate the scoped offline projection before removing parked custody.')
+}
+assertReplayCacheGuards(source)
+const replaceLast = (value: string, find: string, replacement: string) => {
+  const index = value.lastIndexOf(find)
+  assert.ok(index >= 0, `Missing mutation target: ${find}`)
+  return value.slice(0, index) + replacement + value.slice(index + find.length)
+}
+for (const [name, mutation] of [
+  ['replay-cache-invalidation', source.replace(replayInvalidation, 'await Promise.resolve()')],
+  ['replay-malformed-reread', source.replace("pending: 1, message: attention", "pending: source.queue.read().entries.length, message: attention")],
+  ['dismiss-cache-invalidation', replaceLast(source, 'await this.invalidateCache(source); verify()', 'await Promise.resolve()')],
+] as const) {
+  assert.notEqual(mutation, source, `${name} mutation was not applied`)
+  assert.throws(() => assertReplayCacheGuards(mutation), `${name} mutation must turn the replay proof red`)
+}
 const attachmentBranch = source.slice(source.indexOf('if (report) {'), source.indexOf('const entry = createSoilRxQueueEntry'))
 assert.ok(attachmentBranch.indexOf('beginSoilRxAttachmentCustody') < attachmentBranch.indexOf('saveTestOperation'))
 assert.ok(attachmentBranch.indexOf('cleanAttachmentResources(source, existing') < attachmentBranch.indexOf('replaceSoilRxAttachmentCustody'))

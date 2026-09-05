@@ -107,6 +107,19 @@ export async function writeWorkspaceCache<T>(scope: WorkspaceCacheScope, data: T
   finally { database?.close() }
 }
 
+/** Removes one module's offline snapshot after durable queue custody changes.
+ * Keeping the scope exact prevents a Soil Rx replay from discarding another
+ * module's cache for the same farmer and farm. */
+export async function deleteWorkspaceCache(scope: WorkspaceCacheScope): Promise<void> {
+  if (!available()) return
+  const database = await open(scope.projectRef)
+  try {
+    const transaction = database.transaction(storeName, 'readwrite')
+    transaction.objectStore(storeName).delete(cacheKey(scope))
+    await complete(transaction)
+  } finally { database.close() }
+}
+
 export async function readWorkspaceCache<T>(scope: WorkspaceCacheScope, maximumAgeMs: number): Promise<{ data: T; cachedAt: string } | null> {
   if (!available()) return null
   let fence
