@@ -45,4 +45,6 @@ ready label again for one follow-up incremental review. Never use `@coderabbitai
 it re-enables automatic reviews, and use `@coderabbitai full review` only when a complete reread is
 deliberately justified.
 
-Get Mason's explicit approval before push, pull-request mutation, main/production push, merge, deploy, live migration, live data change, secrets/auth/permissions change, customer account action, customer communication, or destructive action. Approval for local edits, tests, or a commit does not authorize any later gate.
+Agents may push branches and open, update, label, and comment on pull requests without asking (Mason, 2026-09-05). The pre-push hook still refuses any push that targets `main`.
+
+Get Mason's explicit approval before merge, deploy, live migration, live data change, secrets/auth/permissions change, customer account action, customer communication, or destructive action. Approval for local edits, tests, a commit, or a branch push does not authorize any later gate.

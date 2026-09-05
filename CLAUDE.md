@@ -22,7 +22,7 @@ Mason directed on 2026-07-18 that no real farmer will use Farm Rx until 2027. Th
 
 Farm Rx production is `https://farm-rx.vercel.app`. GitHub `main` is linked to Vercel, so a merge or push to `main` is production-coupled.
 
-Never infer approval from silence or label work “pre-approved.” Get Mason's explicit approval before push, pull-request mutation, main/production push, merge, deploy, live migration/data, secrets/auth/permissions, customer accounts, customer communication, or destructive actions. Local build/test/commit approval does not authorize an outward action.
+Never infer approval from silence or label work “pre-approved.” Pushing a branch and opening or updating a pull request need no approval (Mason, 2026-09-05); the pre-push hook still blocks any push to `main`. Get Mason's explicit approval before merge, deploy, live migration/data, secrets/auth/permissions, customer accounts, customer communication, or destructive actions. Local build/test/commit/branch-push approval does not authorize an outward action.
 
 ## Local verification
 
