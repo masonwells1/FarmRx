@@ -35,7 +35,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
   private scopeKey: string | null = null
   private cacheEpoch = 0
   private cacheTail: Promise<void> = Promise.resolve()
-  private confirmedInMemory = new Map<string, string>()
+  private confirmedInMemory = new Map<string, { payloadBytes: string; test: SoilTest }>()
   constructor(private readonly live: SupabaseSoilRxRepository, private readonly d: Dependencies) {}
 
   private async source(): Promise<Source> {
@@ -58,15 +58,20 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     })
     await verifyQueuedReadContext(this.d, source.operationContext)
   }
-  private async releaseCacheCustody(source: Source, releaseQueue: () => void) {
+  private async releaseCacheCustody(source: Source, releaseQueue: () => void, confirmedData?: SoilRxData) {
     await this.cacheTransaction(async () => {
       this.cacheEpoch += 1
       this.workspace = null
       // This synchronous fence closes the interruption window between a
       // confirmed queue release and IndexedDB deletion.
       const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))
+      const cacheCustody = captureWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context))
       releaseQueue()
       await finishInvalidation()
+      if (confirmedData && verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), cacheCustody)) {
+        await writeWorkspaceCache(this.cacheScope(source.context), confirmedData, captureWorkspaceCacheFence(this.cacheScope(source.context)), undefined, cacheCustody)
+        if (verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), cacheCustody)) this.workspace = { data: confirmedData, cacheCustody }
+      }
     })
   }
   private pending(entry: SoilRxQueueEntryV1): SoilTest { return { ...entry.draft, farm_id: entry.farmId, created_by: entry.userId, created_at: entry.enqueuedAt, updated_at: entry.enqueuedAt, attachment: null, pending: true } }
@@ -224,22 +229,28 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
           const entry = envelope.entries[0]!
           await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
           setModuleSyncStatus('soilRx', { kind: 'syncing', pending: envelope.entries.length })
-          let confirmed = this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes
+          const inMemoryConfirmation = this.confirmedInMemory.get(entry.operationId)
+          let confirmed = inMemoryConfirmation?.payloadBytes === entry.payloadBytes
+          let current: SoilRxData
+          try {
+            // The full server snapshot is the only safe retained projection.
+            // Durable confirmation remains only a hint; it never replaces this
+            // read when completing cache cleanup.
+            current = await this.live.getData()
+            await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
+            if (!confirmed) confirmed = this.confirmedTest(entry, current.tests.find((test) => test.id === entry.draft.id))
+          } catch (error) {
+            await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
+            if (isTransportFailure(error, this.d.isOffline())) { setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); return }
+            setModuleSyncStatus('soilRx', { kind: 'blocked', pending: envelope.entries.length, message: 'Soil Rx could not verify a saved change. Connect and retry safely.' })
+            return
+          }
+          let confirmedData = current
+          if (confirmed && inMemoryConfirmation?.payloadBytes === entry.payloadBytes) confirmedData = { tests: sortSoilTestsNewestFirst([...current.tests.filter((test) => test.id !== inMemoryConfirmation.test.id), inMemoryConfirmation.test]) }
           if (!confirmed) {
             try {
-              // Durable confirmed custody is only a recovery hint. A restarted
-              // process must prove the exact ID-bound row before skipping a save.
-              const current = await this.live.getData()
-              await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
-              confirmed = this.confirmedTest(entry, current.tests.find((test) => test.id === entry.draft.id))
-            } catch (error) {
-              await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
-              if (isTransportFailure(error, this.d.isOffline())) { setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); return }
-              setModuleSyncStatus('soilRx', { kind: 'blocked', pending: envelope.entries.length, message: 'Soil Rx could not verify a saved change. Connect and retry safely.' })
-              return
-            }
-            if (!confirmed) try {
-              await this.live.saveTestOperation(entry.draft, source.operationContext)
+              const saved = await this.live.saveTestOperation(entry.draft, source.operationContext)
+              confirmedData = { tests: sortSoilTestsNewestFirst([...current.tests.filter((test) => test.id !== saved.id), saved]) }
             } catch (error) {
               await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
               if (isTransportFailure(error, this.d.isOffline())) { setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); return }
@@ -247,7 +258,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
               await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) }); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
               continue
             }
-            this.confirmedInMemory.set(entry.operationId, entry.payloadBytes)
+            this.confirmedInMemory.set(entry.operationId, { payloadBytes: entry.payloadBytes, test: confirmedData.tests.find((test) => test.id === entry.draft.id)! })
             try { envelope = source.queue.markConfirmedHead(entry.operationId) }
             catch (error) {
               // Storage cannot prove confirmed custody yet. Keep this process
@@ -260,7 +271,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
           // A completed upsert must leave the queue before best-effort IndexedDB
           // cleanup. The invalidation tombstone still makes a failed deletion
           // fail closed, without reclassifying or replaying the confirmed write.
-          await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) }); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
+          await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) }, confirmedData); verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
           this.confirmedInMemory.delete(entry.operationId)
         }
         this.refreshSync(source)

@@ -9,7 +9,9 @@ export const operationalCacheMaxAgeMs = 7 * 24 * 60 * 60 * 1_000
 
 export type WorkspaceCacheScope = { projectRef: string; userId: string; farmId: string; module: string }
 export type WorkspaceMemoryGuard = { key: string; fence: FarmRevocationSnapshot }
-type WorkspaceEnvelope<T> = WorkspaceCacheScope & { version: 3; key: string; generation: number; fenceToken: string; serverEpoch: number; cacheCustody: number; cachedAt: string; data: T }
+type WorkspaceEnvelopeV2<T> = WorkspaceCacheScope & { version: 2; key: string; generation: number; fenceToken: string; serverEpoch: number; cachedAt: string; data: T }
+type WorkspaceEnvelopeV3<T> = WorkspaceCacheScope & { version: 3; key: string; generation: number; fenceToken: string; serverEpoch: number; cacheCustody: number; cachedAt: string; data: T }
+type WorkspaceEnvelope<T> = WorkspaceEnvelopeV2<T> | WorkspaceEnvelopeV3<T>
 export type WorkspaceCacheNotice = { module: string; cachedAt: string }
 
 const storeName = 'workspaces'
@@ -60,7 +62,8 @@ function complete(transaction: IDBTransaction): Promise<void> { return new Promi
 function validEnvelope<T>(value: unknown, scope: WorkspaceCacheScope, fence: FarmRevocationSnapshot, cacheCustody: number): value is WorkspaceEnvelope<T> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as Record<string, unknown>
-  return row.version === 3 && row.key === cacheKey(scope) && row.projectRef === scope.projectRef && row.userId === scope.userId && row.farmId === scope.farmId && row.module === scope.module && row.generation === fence.generation && row.fenceToken === fence.token && row.serverEpoch === fence.serverEpoch && row.cacheCustody === cacheCustody && typeof row.cachedAt === 'string' && !Number.isNaN(Date.parse(row.cachedAt)) && Object.hasOwn(row, 'data')
+  const matchingScope = row.key === cacheKey(scope) && row.projectRef === scope.projectRef && row.userId === scope.userId && row.farmId === scope.farmId && row.module === scope.module && row.generation === fence.generation && row.fenceToken === fence.token && row.serverEpoch === fence.serverEpoch && typeof row.cachedAt === 'string' && !Number.isNaN(Date.parse(row.cachedAt)) && Object.hasOwn(row, 'data')
+  return matchingScope && (row.version === 3 ? row.cacheCustody === cacheCustody : row.version === 2 && cacheCustody === 0)
 }
 function publish(notice: WorkspaceCacheNotice) { notices.set(notice.module, notice); noticeSnapshot = [...notices.values()].sort((a, b) => a.cachedAt.localeCompare(b.cachedAt)); for (const listener of listeners) listener() }
 
@@ -129,7 +132,7 @@ export function beginWorkspaceCacheInvalidation(storage: StorageLike, scope: Wor
       const store = transaction.objectStore(storeName)
       const request = store.get(cacheKey(scope))
       request.onsuccess = () => {
-        const value = request.result as Partial<WorkspaceEnvelope<unknown>> | undefined
+        const value = request.result as { cacheCustody?: unknown } | undefined
         if (value === undefined || shouldDeleteInvalidatedWorkspaceCache(value.cacheCustody, nextCustody)) store.delete(cacheKey(scope))
       }
       await complete(transaction)

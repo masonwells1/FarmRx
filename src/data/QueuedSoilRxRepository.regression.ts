@@ -39,9 +39,9 @@ class MemoryStorage implements StorageLike {
 }
 
 type Mode = 'success' | 'metadata_ambiguous' | 'permanent_save_failure'
-function harness(projectRef: string, selectedFarmId = farmId, storage = new MemoryStorage()) {
+function harness(projectRef: string, selectedFarmId = farmId, storage = new MemoryStorage(), resetGrant = true) {
   const scope = { projectRef, userId, farmId: selectedFarmId }
-  resetFarmGrantFromLive(storage, scope, 1, stamp)
+  if (resetGrant) resetFarmGrantFromLive(storage, scope, 1, stamp)
   const rows = new Map<string, SoilTest>()
   const attachments = new Map<string, NonNullable<SoilTest['attachment']>>()
   const objects = new Set<string>()
@@ -390,10 +390,21 @@ try {
   await finish()
   const preservedFresh = await readWorkspaceCache<{ fresh: boolean }>(heldScope, 9e9)
   assert.deepEqual(preservedFresh?.data, { fresh: true }, 'An older invalidation finisher deleted a fresh current-custody cache envelope.')
+  const legacyCachedAt = new Date().toISOString(); heldCacheStorage.removeItem(custodyStorageKey(heldKey)); heldValues.set(heldKey, { version: 2, key: heldKey, ...heldScope, generation: heldFence.generation, fenceToken: heldFence.token, serverEpoch: heldFence.serverEpoch, cachedAt: legacyCachedAt, data: { legacy: true } })
+  assert.deepEqual((await readWorkspaceCache<{ legacy: boolean }>(heldScope, 9e9))?.data, { legacy: true }, 'A valid legacy v2 cache was not readable before custody changed.')
+  assert.deepEqual((await readWorkspaceCachePure<{ legacy: boolean }>(heldScope, heldFence, 9e9, heldCacheStorage, Date.parse(legacyCachedAt)))?.data, { legacy: true }, 'A valid legacy v2 cache was not pure-readable before custody changed.')
+  const finishLegacy = beginWorkspaceCacheInvalidation(heldCacheStorage, heldScope)
+  assert.equal(await readWorkspaceCache<{ legacy: boolean }>(heldScope, 9e9), null, 'A legacy v2 cache remained readable after custody changed.')
+  assert.equal(await readWorkspaceCachePure<{ legacy: boolean }>(heldScope, heldFence, 9e9, heldCacheStorage, Date.parse(legacyCachedAt)), null, 'A legacy v2 cache remained pure-readable after custody changed.')
+  await finishLegacy()
 } finally { heldDatabase.restore() }
 async function assertReplayDoesNotResurrect(name: string, settle: (value: ReturnType<typeof harness>, key: string) => Promise<void>) {
   const value = harness(`soil-rx-cache-${name}`)
   const key = soilRxWriteQueueKey(value.scope.projectRef, userId, farmId)
+  if (name === 'success') {
+    await value.repository.saveTest(draft(uid(590)))
+    await value.repository.saveTest(draft(uid(591)))
+  }
   value.setOffline(true); await value.repository.saveTest(draft(uid(600 + name.length)))
   const scoped = cacheKey(value.scope.projectRef, userId, farmId)
   const siblingUser = cacheKey(value.scope.projectRef, uid(601), farmId)
@@ -403,10 +414,21 @@ async function assertReplayDoesNotResurrect(name: string, settle: (value: Return
   const database = scopedCacheDatabase(value.storage, snapshots)
   try {
     value.setOffline(false); await settle(value, key)
-    assert.equal(snapshots.has(scoped), false, `${name} did not delete the exact Soil Rx offline cache.`)
+    if (name === 'success') {
+      const retained = snapshots.get(scoped) as { version?: number; cacheCustody?: number; data?: { tests?: SoilTest[] } }
+      assert.equal(retained.version, 3, 'Confirmed replay did not retain a current cache envelope.')
+      assert.equal(retained.cacheCustody, 1, 'Confirmed replay did not advance cache custody before retaining history.')
+      assert.deepEqual(retained.data?.tests?.map((test) => test.id).sort(), [uid(590), uid(591), uid(607)].sort(), 'Confirmed replay discarded unaffected multi-year Soil Rx history.')
+      assert.equal(retained.data?.tests.find((test) => test.id === uid(607))?.pending, undefined, 'Confirmed replay retained a pending projection instead of the confirmed Soil Rx record.')
+    } else assert.equal(snapshots.has(scoped), false, `${name} did not delete the exact Soil Rx offline cache.`)
     assert.ok(snapshots.has(siblingUser) && snapshots.has(siblingFarm) && snapshots.has(siblingModule), `${name} deleted another user, farm, or module cache.`)
     value.setOffline(true)
-    await assert.rejects(() => value.repository.getData(), /Connect to the internet once/, `${name} let same-session offline data resurrect a released pending record.`)
+    if (name === 'success') {
+      const reopened = harness(value.scope.projectRef, farmId, value.storage, false); reopened.setOffline(true)
+      const offline = await reopened.repository.getData()
+      assert.deepEqual(offline.tests.map((test) => test.id).sort(), [uid(590), uid(591), uid(607)].sort(), 'Confirmed replay did not preserve complete history for an offline reopen.')
+      assert.equal(offline.tests.find((test) => test.id === uid(607))?.pending, undefined, 'Offline reopen rendered the confirmed record as pending.')
+    } else await assert.rejects(() => value.repository.getData(), /Connect to the internet once/, `${name} let same-session offline data resurrect a released pending record.`)
   } finally { database.restore() }
 }
 await assertReplayDoesNotResurrect('success', async (value) => { await value.repository.inspectAndReplay(); assert.equal(new SoilRxWriteQueue(value.storage, soilRxWriteQueueKey(value.scope.projectRef, userId, farmId)).read().entries.length, 0) })
@@ -453,10 +475,11 @@ try {
   assert.equal(new SoilRxWriteQueue(heldRead.storage, heldReadQueueKey).read().entries.length, 0, 'Held-read replay did not release confirmed queue custody.')
   releaseHeldRead()
   await assert.rejects(() => staleGetData, /cache custody changed/, 'A held pre-replay live response published after replay cache custody changed.')
-  assert.equal(heldReadSnapshots.has(heldReadScope), false, 'A held pre-replay live response recreated the released offline cache.')
-  assert.equal(heldRead.storage.getItem(custodyStorageKey(heldReadScope)), '1', 'A successful exact cache deletion did not retain its shared custody revision.')
+  const retainedHeldRead = heldReadSnapshots.get(heldReadScope) as { cacheCustody?: number; data?: { tests?: SoilTest[] } }
+  assert.equal(retainedHeldRead.cacheCustody, 1, 'A successful replay did not retain its shared custody revision.')
+  assert.equal(retainedHeldRead.data?.tests?.find((test) => test.id === uid(660))?.pending, undefined, 'A held pre-replay live response overwrote the confirmed cache projection.')
   heldRead.setOffline(true)
-  await assert.rejects(() => heldRead.repository.getData(), /Connect to the internet once/, 'A held pre-replay live response resurrected a same-session pending record.')
+  assert.equal((await heldRead.repository.getData()).tests.find((test) => test.id === uid(660))?.pending, undefined, 'A held pre-replay live response resurrected a same-session pending record.')
 } finally { heldReadCache.restore() }
 
 // Cache custody is shared across repository instances/tabs. A read held in A
@@ -483,10 +506,12 @@ try {
   assert.equal(new SoilRxWriteQueue(sharedTabsStorage, sharedTabsQueueKey).read().entries.length, 0, 'Second-tab replay did not release confirmed custody.')
   releaseSharedTabsRead()
   await assert.rejects(() => staleTabRead, /cache custody changed/, 'A stale first-tab read republished after second-tab cache release.')
-  assert.equal(sharedTabsSnapshots.has(sharedTabsScope), false, 'A stale first-tab read rewrote the released shared cache.')
+  const retainedSharedTab = sharedTabsSnapshots.get(sharedTabsScope) as { cacheCustody?: number; data?: { tests?: SoilTest[] } }
+  assert.equal(retainedSharedTab.cacheCustody, 1, 'A second-tab replay did not retain the current cache custody.')
+  assert.equal(retainedSharedTab.data?.tests?.find((test) => test.id === uid(665))?.pending, undefined, 'A stale first-tab read overwrote the confirmed shared cache projection.')
   assert.ok(sharedTabsSnapshots.has(sharedTabsSibling), 'A shared-tab release crossed user cache scope.')
   sharedTabsA.setOffline(true)
-  await assert.rejects(() => sharedTabsA.repository.getData(), /Connect to the internet once/, 'A retained custody-0 memory snapshot rendered after the second tab advanced custody.')
+  assert.equal((await sharedTabsA.repository.getData()).tests.find((test) => test.id === uid(665))?.pending, undefined, 'A retained custody-0 memory snapshot rendered after the second tab advanced custody.')
   sharedTabsA.setOffline(false)
   const freshTabRead = await sharedTabsB.repository.getData()
   assert.equal(freshTabRead.tests[0]?.id, uid(665), 'A fresh post-release read did not publish the confirmed server row.')
@@ -537,7 +562,9 @@ try {
   tombstoneWriteFailure.setOffline(false); await tombstoneWriteFailure.repository.inspectAndReplay()
   assert.equal(tombstoneWriteFailure.savedIds.filter((id) => id === uid(680)).length, 1, 'Recovery after tombstone storage recovered repeated the confirmed server save.')
   assert.equal(new SoilRxWriteQueue(tombstoneWriteFailure.storage, tombstoneWriteFailureQueueKey).read().entries.length, 0, 'Recovery did not release durable confirmed queue custody.')
-  assert.equal(tombstoneWriteFailureSnapshots.has(tombstoneWriteFailureScope), false, 'Recovered cleanup did not remove the exact stale cache.')
+  const recoveredCache = tombstoneWriteFailureSnapshots.get(tombstoneWriteFailureScope) as { cacheCustody?: number; data?: { tests?: SoilTest[] } }
+  assert.equal(recoveredCache.cacheCustody, 1, 'Recovered cleanup did not retain the current cache custody.')
+  assert.equal(recoveredCache.data?.tests?.find((test) => test.id === uid(680))?.pending, undefined, 'Recovered cleanup retained a pending cache projection.')
   assert.ok(tombstoneWriteFailureSnapshots.has(cacheKey(tombstoneWriteFailure.scope.projectRef, uid(681), farmId)), 'Recovered cleanup deleted another user cache.')
 } finally { tombstoneWriteFailureCache.restore() }
 
@@ -734,16 +761,17 @@ assert.match(validateSoilReportFile({ name: `${'x'.repeat(252)}.pdf`, type: 'app
 // stranding window. Custody begins before the first remote write, retained UI
 // state precedes release, and retry replacement follows completed cleanup.
 const source = readFileSync(new URL('./QueuedSoilRxRepository.ts', import.meta.url), 'utf8')
-const replayRelease = 'await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) })'
+const parkedReplayRelease = 'await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) })'
+const confirmedReplayRelease = 'await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) }, confirmedData)'
 function assertReplayCacheGuards(candidate: string) {
   const replayMethod = candidate.slice(candidate.indexOf('async inspectAndReplay()'), candidate.indexOf('async getReportUrl'))
-  assert.equal(replayMethod.split(replayRelease).length - 1, 2, 'Both replay custody exits must use the fenced queue-release path.')
-  assert.ok(replayMethod.includes('let confirmed = this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes'), 'Replay may skip a current-process confirmation only when operation and payload bytes both match.')
-  assert.ok(replayMethod.lastIndexOf('await this.releaseCacheCustody(source, () => { envelope = source.queue.removeConfirmedHead(entry.operationId) })') < replayMethod.lastIndexOf('this.confirmedInMemory.delete(entry.operationId)'), 'Completed confirmed replay custody must be released before its in-memory duplicate guard is removed.')
-  assert.ok(replayMethod.includes('const current = await this.live.getData()'), 'Durable confirmed custody must prove the exact server row after restart.')
+  assert.equal(replayMethod.split(parkedReplayRelease).length - 1 + replayMethod.split(confirmedReplayRelease).length - 1, 2, 'Both replay custody exits must use the fenced queue-release path.')
+  assert.ok(replayMethod.includes('let confirmed = inMemoryConfirmation?.payloadBytes === entry.payloadBytes'), 'Replay may skip a current-process confirmation only when operation and payload bytes both match.')
+  assert.ok(replayMethod.lastIndexOf(confirmedReplayRelease) < replayMethod.lastIndexOf('this.confirmedInMemory.delete(entry.operationId)'), 'Completed confirmed replay custody must be released before its in-memory duplicate guard is removed.')
+  assert.ok(replayMethod.includes('current = await this.live.getData()'), 'Durable confirmed custody must prove the exact server row after restart.')
   assert.ok(candidate.includes('cacheCustody: captureWorkspaceCacheCustody(this.d.storage, cacheScope)'), 'A live read must capture shared cache custody with its source.')
   assert.ok(candidate.includes('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)'), 'A live read must compare shared cache custody before and after publication.')
-  assert.ok(replayMethod.indexOf('source.queue.markConfirmedHead(entry.operationId)') < replayMethod.lastIndexOf(replayRelease), 'Replay must durably mark confirmation before successful cache-and-queue release.')
+  assert.ok(replayMethod.indexOf('source.queue.markConfirmedHead(entry.operationId)') < replayMethod.lastIndexOf(confirmedReplayRelease), 'Replay must durably mark confirmation before successful cache-and-queue release.')
   const replayCatch = replayMethod.slice(replayMethod.lastIndexOf('    } catch (error) {'))
   assert.ok(!replayCatch.includes('source.queue.read()'), 'Blocked replay reporting must not re-read malformed queue bytes.')
   const dismissMethod = candidate.slice(candidate.indexOf('async dismissNeedsAttention'), candidate.lastIndexOf('\n}'))
@@ -753,12 +781,12 @@ function assertReplayCacheGuards(candidate: string) {
 }
 assertReplayCacheGuards(source)
 for (const [name, mutation] of [
-  ['replay-cache-invalidation', source.replace(replayRelease, 'await Promise.resolve()')],
+  ['replay-cache-invalidation', source.replace(confirmedReplayRelease, 'await Promise.resolve()')],
   ['replay-malformed-reread', source.replace("pending: 1, message: attention", "pending: source.queue.read().entries.length, message: attention")],
   ['dismiss-cache-invalidation', source.replace('await this.releaseCacheCustody(source, () => dismissNeedsAttention(this.d.storage, queueKey, operationId)); verify()', 'await Promise.resolve()')],
-  ['tombstone-after-release', source.replace('const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      releaseQueue()', 'releaseQueue()\n      const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))')],
-  ['confirmed-custody-bypass', source.replace('this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes', 'true')],
-  ['confirmed-payload-unbound', source.replace('this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes', 'this.confirmedInMemory.has(entry.operationId)')],
+  ['tombstone-after-release', source.replace('const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      const cacheCustody = captureWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context))\n      releaseQueue()', 'releaseQueue()\n      const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      const cacheCustody = captureWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context))')],
+  ['confirmed-custody-bypass', source.replace('inMemoryConfirmation?.payloadBytes === entry.payloadBytes', 'true')],
+  ['confirmed-payload-unbound', source.replace('inMemoryConfirmation?.payloadBytes === entry.payloadBytes', 'this.confirmedInMemory.has(entry.operationId)')],
   ['confirmed-retention-leak', source.replace('this.confirmedInMemory.delete(entry.operationId)', 'void entry.operationId')],
   ['shared-custody-bypass', source.replaceAll('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)', 'true')],
 ] as const) {
