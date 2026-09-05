@@ -37,10 +37,112 @@ function hasDistinctLoginFormIdentities(source) {
   return protectedForms
 }
 
+const replacementArtifact = {
+  token: 'b9ad08aeb66ed961e8426b2cce527365',
+  id: 'sha256:7cbc0a183ba33c4318a9784dae376104e55282e8e0c716511336afaf924f3302',
+  tag: 'maple-faketime-artifacts-b9ad08aeb66ed961e8426b2cce527365:synthetic',
+  ref: 'maple-faketime-artifacts-b9ad08aeb66ed961e8426b2cce527365@sha256:7cbc0a183ba33c4318a9784dae376104e55282e8e0c716511336afaf924f3302',
+}
+const retiredArtifact = {
+  token: '225c197c34164c90b08a4c8b6b10e6c7',
+  id: 'sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746',
+  tag: 'maple-faketime-artifacts-225c197c34164c90b08a4c8b6b10e6c7:synthetic',
+}
+
+const completeFaketimeArtifactReplacementContract = (sources) => {
+  const [harvest, adapter, adapterRegression, topology, topologyRegression, canonicalManifestRegression, spike, evidence, frozenEvidence, evidenceManifest, dockerfile] = sources
+  const liveSources = [harvest, adapter, adapterRegression, topology, topologyRegression, spike]
+  const cleanupSource = adapter.slice(adapter.indexOf('$adapter.RemoveDerivedImageIfOwned = {'), adapter.indexOf('return $adapter'))
+  const cleanupTargets = [...cleanupSource.matchAll(/@\('image','rm',([^\)]+)\)/g)].map((match) => match[1])
+  return liveSources.every((source) => !source.includes(retiredArtifact.id) && !source.includes(retiredArtifact.token) && !source.includes(retiredArtifact.tag))
+    && harvest.includes(replacementArtifact.ref) && harvest.includes(replacementArtifact.id) && harvest.includes(replacementArtifact.tag) && harvest.includes(replacementArtifact.token)
+    && adapter.includes(replacementArtifact.ref) && adapter.includes(replacementArtifact.id) && adapter.includes(replacementArtifact.tag) && adapter.includes(replacementArtifact.token)
+    && adapterRegression.includes(replacementArtifact.ref) && adapterRegression.includes(replacementArtifact.id) && adapterRegression.includes(replacementArtifact.tag) && adapterRegression.includes(replacementArtifact.token)
+    && topology.split(replacementArtifact.ref).length - 1 === 2 && topology.split(replacementArtifact.id).length - 1 === 4 && topology.includes('Observed=$true;LabelsVerified=$true') && topologyRegression.split(replacementArtifact.ref).length - 1 === 1
+    && canonicalManifestRegression.includes('$paths.Sort([StringComparer]::Ordinal)') && canonicalManifestRegression.includes('HashSet[string]') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CANONICAL_MANIFEST_PASS') && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_REPLACEMENT_CLEAN_FALLBACK_PASS') && canonicalManifestRegression.includes("@('diff-tree','--no-commit-id','--name-status','-r','-z','-M100%','HEAD^','HEAD')") && canonicalManifestRegression.includes('FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY') && !canonicalManifestRegression.includes('Sort-Object')
+    && spike.includes(replacementArtifact.tag) && spike.includes(replacementArtifact.ref) && spike.includes(replacementArtifact.id) && spike.split('Assert-ExactReusableArtifact').length === 3 && [
+      "'farmrx.synthetic-bootstrap'='b9ad08aeb66ed961e8426b2cce527365'", "'farmrx.synthetic-owner'='maple-faketime-bootstrap'", "'farmrx.synthetic-role'='faketime-artifacts'", "'farmrx.source-digest'='debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818'", "'farmrx.package-contract'='libfaketime=0.9.10-2.1;gcc;libc6-dev'",
+    ].every((label) => spike.includes(label))
+    && adapter.includes('$artifactByRef=& $inspectImage $artifactRef') && adapter.includes('$artifactByTag=& $inspectImage $artifactLocalTag')
+    && cleanupTargets.length === 2 && cleanupTargets.includes('$Inventory.derived_tag') && cleanupTargets.includes('$Inventory.snapshot_tag')
+    && !/artifact(?:LocalTag|Ref|Id)|(?:image|system)\s+prune|@\('image','prune'/.test(cleanupSource)
+    && evidence.includes(retiredArtifact.id) && evidence.includes(replacementArtifact.ref) && evidence.includes('No continuity')
+    && frozenEvidence.includes(retiredArtifact.tag) && frozenEvidence.includes(replacementArtifact.tag) && frozenEvidence.includes('historical')
+    && evidenceManifest.includes(replacementArtifact.ref) && evidenceManifest.includes(replacementArtifact.id) && evidenceManifest.includes(replacementArtifact.tag)
+    && evidenceManifest.includes('d8b95bfa5a83c56b3236a5579ad33043456e0fb5b09d1f93005efb1ec48e4276') && evidenceManifest.includes('97cbbca788a38b14b11e7780fdeb00b6852a224bf39076174ef626f7411e29de') && evidenceManifest.includes('5ee6803f958a960c0ee11b423e63b81d6bcfb1f5301afe99f8fa86531eaeff48') && evidenceManifest.includes('9ecb1ceb867d28184bd21187901c909e9901a71b7cf86f2c3cadcf332bf1bed8') && evidenceManifest.includes('9f1400fc2b3dcf6a9454551e827bfcc58883e730772771583f2f466c92babc4e') && evidenceManifest.includes('aed05d2f6937223d8bbd53ea79a3043ce79a4436ce7e29d7569c04c66d77dbf2')
+    && evidenceManifest.includes('clear-ld-preload.c') && evidenceManifest.includes('b6d9b439ccbfdf88f87b9c2f2d89b560d2370964074759373949c2bbb67cd66e')
+    && evidenceManifest.includes('derived_image_proof') && evidenceManifest.includes('0ba1615005224ec79d44fcdb3998021d') && evidenceManifest.includes('sha256:ac2901f891cd4a96d70cde28c9dd9f1db6ca518f4d9e5db821518ecb518a0f74') && evidenceManifest.includes('eb43ca8c6035e8125e9ddbd7498f3bea8674a5a34c164c4e7ac4a1d1c9fc06d1')
+    && evidenceManifest.includes('reusable_postcleanup_attestation') && evidenceManifest.includes('5469560cee6b3f5f863ea84aaab8376a38b3a909d2b2145e03671a32e5578eb5') && evidenceManifest.includes('efd709072eb35f838fcf5b81c22da204baadf3f54e016f5dfa64e4735d073163')
+    && evidenceManifest.includes('combined_source_artifact_identity_recipe') && evidenceManifest.includes('NUL-delimited dirty tracked, staged, and untracked existing source') && evidenceManifest.includes('refusing missing/non-rename deleted paths') && evidenceManifest.includes('accepting only Git R100 renames by their existing destination path')
+    && dockerfile.includes('ARG FAKETIME_ARTIFACTS_IMAGE') && !dockerfile.includes('ARG FAKETIME_ARTIFACTS_IMAGE=') && !dockerfile.match(/apt-get|curl|wget|https?:\/\//)
+}
+
+const exactForcedGitLiveSpanContract = (source) => {
+  const normalizedSource = source.replace(/\r\n/g, '\n')
+  const forcedSpanStart = '$forcedGitFailure=$null\n$forcedGitExit=$null;$tracePrimary=$null;$traceCleanupErrors=[Collections.Generic.List[Exception]]::new()'
+  const forcedSpanEnd = "if($ErrorActionPreference-cne$expectedErrorActionPreference){throw 'FAKETIME_ARTIFACT_MANIFEST_GIT_FAILURE_EAP_RESTORE_FAILED'}"
+  const forcedSpanStartIndex = normalizedSource.indexOf(forcedSpanStart)
+  const forcedSpanEndIndex = normalizedSource.indexOf(forcedSpanEnd, forcedSpanStartIndex)
+  const forcedSpan = forcedSpanStartIndex >= 0 && forcedSpanEndIndex > forcedSpanStartIndex
+    ? normalizedSource.slice(forcedSpanStartIndex, forcedSpanEndIndex + forcedSpanEnd.length)
+    : ''
+  const forcedSpanHash = createHash('sha256').update(forcedSpan, 'utf8').digest('hex')
+  return forcedSpanStartIndex >= 0 && normalizedSource.indexOf(forcedSpanStart, forcedSpanStartIndex + forcedSpanStart.length) < 0
+    && forcedSpanEndIndex > forcedSpanStartIndex && normalizedSource.indexOf(forcedSpanEnd, forcedSpanEndIndex + forcedSpanEnd.length) < 0
+    && forcedSpanHash === '654108f692edf3b073a1f5d2d651a21124ac33838024c40b9fb5d12e72ef4f36'
+}
+
+const canonicalManifestDiscoveryContract = (source) => {
+  const dirty = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff','--name-only','-z') 'FAKETIME_ARTIFACT_MANIFEST_DIRTY_DIFF_GIT_FAILED'")
+  const staged = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff','--cached','--name-only','-z') 'FAKETIME_ARTIFACT_MANIFEST_STAGED_DIFF_GIT_FAILED'")
+  const untracked = source.indexOf("Invoke-Cw2ArtifactGitPathList @('ls-files','--others','--exclude-standard','-z') 'FAKETIME_ARTIFACT_MANIFEST_UNTRACKED_GIT_FAILED'")
+  const fallback = source.indexOf("Invoke-Cw2ArtifactGitPathList @('diff-tree','--no-commit-id','--name-status','-r','-z','-M100%','HEAD^','HEAD') 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_GIT_FAILED'")
+  const empty = source.indexOf("if($paths.Count-eq0){throw 'FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DIFF_EMPTY'}")
+  const forced = source.indexOf('$cleanFallback=Get-Cw2ArtifactCanonicalManifest -ForceCleanFallback')
+  const forcedRefusal = source.indexOf("if($cleanFallback.Source-cne'exact-previous-commit-diff'-or$cleanFallback.Lines.Count-eq0-or-not$cleanFallback.Canonical.EndsWith(\"`n\")){throw 'FAKETIME_ARTIFACT_MANIFEST_CLEAN_FALLBACK_PROOF_FAILED'}")
+  const forcedGitFailure = source.indexOf("try{[void](Invoke-Cw2ArtifactGitPathList @('rev-parse','--verify',$forcedGitMissingRef) 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE')}catch{$forcedGitFailure=$_.Exception.Message;$forcedGitExit=$LASTEXITCODE}")
+  const forcedGitRefusal = source.indexOf("if($forcedGitFailure-notmatch'^FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_FAILURE:exit=([1-9][0-9]*):detail=.+$'){throw \"FAKETIME_ARTIFACT_MANIFEST_GIT_FAILURE_CAPTURE_PROOF_FAILED:$forcedGitFailure\"}")
+  const forcedGitEapRefusal = source.indexOf("if($ErrorActionPreference-cne$expectedErrorActionPreference){throw 'FAKETIME_ARTIFACT_MANIFEST_GIT_FAILURE_EAP_RESTORE_FAILED'}")
+  const forcedGitPass = source.indexOf("Write-Output 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_FAILURE_CAPTURE_PASS'")
+  const pathCustody = [
+    '$seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal);$paths=[Collections.Generic.List[string]]::new()',
+    'if(-not(Test-Path -LiteralPath (Join-Path $root $dirtyPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_DIRTY_PATH_MISSING:$dirtyPath"}', 'if($seen.Add($dirtyNormalized)){[void]$paths.Add($dirtyNormalized)}',
+    'if(-not(Test-Path -LiteralPath (Join-Path $root $stagedPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_STAGED_PATH_MISSING:$stagedPath"}', 'if($seen.Add($stagedNormalized)){[void]$paths.Add($stagedNormalized)}',
+    'if(-not(Test-Path -LiteralPath (Join-Path $root $untrackedPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_UNTRACKED_PATH_MISSING:$untrackedPath"}', 'if($seen.Add($untrackedNormalized)){[void]$paths.Add($untrackedNormalized)}',
+    'if(-not(Test-Path -LiteralPath (Join-Path $root $previousPath) -PathType Leaf)){throw "FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_PATH_MISSING:$previousPath"}', 'if($seen.Add($previousNormalized)){[void]$paths.Add($previousNormalized)}', '$paths.Sort([StringComparer]::Ordinal)',
+  ]
+  if (!exactForcedGitLiveSpanContract(source)) return false
+  return source.includes('function Invoke-Cw2ArtifactGitPathList([string[]]$Arguments,[string]$FailureMarker)')
+    && source.includes('$previousErrorActionPreference=$ErrorActionPreference')
+    && source.includes("try{$ErrorActionPreference='Continue';$output=@(& $gitExe -C $root @Arguments 2>&1);$exitCode=$LASTEXITCODE}finally{$ErrorActionPreference=$previousErrorActionPreference}")
+    && source.includes('throw "${FailureMarker}:exit=${exitCode}:detail=${detail}"')
+    && source.includes("if($ErrorActionPreference-cne$expectedErrorActionPreference){throw 'FAKETIME_ARTIFACT_MANIFEST_GIT_SUCCESS_EAP_RESTORE_FAILED'}")
+    && source.includes('function Get-Cw2ForcedGitFailureAstContract([string]$Source)') && source.includes('function Invoke-Cw2ForcedGitFailureControlFlowProof([string]$Source,[pscustomobject]$Contract)')
+    && source.includes("if(-not$forcedGitAstContract.Valid){throw 'FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_CONTRACT_FAILED'}")
+    && source.includes("$expectedNames=@('baseline-stop','baseline-continue','dead-call-with-synthetic-result','synthetic-result-after-call')") && source.includes('$cases.Count-ne4')
+    && source.includes('if(-not$ControlFlowChild){Invoke-Cw2ForcedGitFailureControlFlowProof $selfSource $forcedGitAstContract}')
+    && source.includes("if($ControlFlowChild){if([string]::IsNullOrWhiteSpace($RepositoryRoot)-or-not[IO.Path]::IsPathRooted($RepositoryRoot)){throw 'FAKETIME_ARTIFACT_MANIFEST_PROOF_CHILD_REPOSITORY_ROOT_REQUIRED'}")
+    && source.includes('$tempRoot=Join-Path ([IO.Path]::GetTempPath())("farmrx-cw2-artifact-git-ast-$([guid]::NewGuid().ToString(\'N\'))")')
+    && source.includes('elseif($exitCode-eq0){throw "FAKETIME_ARTIFACT_MANIFEST_FORCED_GIT_AST_MUTATION_SURVIVED:$($case.Name)"}')
+    && source.includes('$gitExe=[IO.Path]::GetFullPath($gitCommands[0].Source)') && source.includes('$matchingStarts.Count-ne1-or$matchingExits.Count-ne1')
+    && source.includes('FAKETIME_ARTIFACT_REPLACEMENT_GIT_TRACE_OBSERVATION_PASS') && source.includes('farmrx-cw2-artifact-git-ast-')
+    && source.includes('-RepositoryRoot $root -InitialErrorActionPreference $case.Preference') && source.includes('if([IO.File]::Exists($path)){[IO.File]::Delete($path)}') && source.includes('if([IO.Directory]::Exists($tempRoot)){[IO.Directory]::Delete($tempRoot,$false)}')
+    && source.split('@($joined.Split([char[]]@([char]0),[StringSplitOptions]::RemoveEmptyEntries))').length - 1 === 1
+    && pathCustody.every((needle) => source.includes(needle)) && source.includes("if($status-ceq'R100'){") && source.includes('FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_RENAME_DESTINATION_MISSING') && source.includes("}elseif($status-ceq'D'){") && source.includes('FAKETIME_ARTIFACT_MANIFEST_PREVIOUS_COMMIT_DELETION_REFUSED') && source.includes('if(-not$ForceCleanFallback){')
+    && dirty >= 0 && staged > dirty && untracked > staged && fallback > untracked && empty > fallback && forced > empty && forcedRefusal > forced && forcedGitFailure > forcedRefusal && forcedGitRefusal > forcedGitFailure && forcedGitEapRefusal > forcedGitRefusal && forcedGitPass > forcedGitEapRefusal
+}
+
 export function foundationStaticGuard(root = process.cwd()) {
   const errors = []
+  const staticOwnerSource = read(root, 'scripts/foundation-static-guards.mjs')
+  const forcedGitOwnerNeedle = 'if (!exactForcedGitLiveSpan' + 'Contract(source)) return false'
+  if ((staticOwnerSource.split(forcedGitOwnerNeedle).length - 1) !== 1) errors.push('artifact:manifest-forced-git-live-span-owner')
+  const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
+  const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
+  const artifactMutationBegin = '// SOIL_' + 'ARTIFACT_MUTATION_MATRIX_BEGIN'
+  const artifactMutationEnd = '// SOIL_' + 'ARTIFACT_MUTATION_MATRIX_END'
   const app = read(root, 'src/App.tsx')
-  const expectedRoutes = ['/fields', '/fields/new', '/fields/:id', '/fields/:id/edit', '/grain/*', '/inventory', '/profitability/*', '/equipment', '/tasks', '/weather', '/field-log', '/scouting', '/harvest', '/programs', '/notifications', '/privacy', '*', '/login', '/update-password', '/*']
+  const expectedRoutes = ['/fields', '/fields/new', '/fields/:id', '/fields/:id/edit', '/grain/*', '/inventory', '/profitability/*', '/equipment', '/tasks', '/weather', '/field-log', '/scouting', '/harvest', '/programs', '/notifications', '/soil-rx', '/privacy', '*', '/login', '/update-password', '/*']
   const actualRoutes = [...app.matchAll(/<Route\b[^>]*?\bpath="([^"]+)"/g)].map((match) => match[1])
   if (actualRoutes.length !== expectedRoutes.length || actualRoutes.some((route, index) => route !== expectedRoutes[index])) errors.push('routes:exact-ordered-manifest')
   requireText(errors, app, 'mobilePrimaryPaths = new Set(["/fields", "/grain", "/tasks", "/weather"])', 'mobile:primary-destinations')
@@ -59,17 +161,111 @@ export function foundationStaticGuard(root = process.cwd()) {
   if (/set\s+user_id\s*=\s*excluded\.user_id/i.test(unscopedWriteFencing)) errors.push('rpc:push-endpoint-owner-transfer')
   const notificationsGateway = read(root, 'src/data/SupabaseNotificationsDataGateway.ts')
   if ((notificationsGateway.match(/p_farm_id: context\.farmId/g) ?? []).length !== 2) errors.push('rpc:push-farm-context-forwarding')
+  const queuedSoil = read(root, 'src/data/QueuedSoilRxRepository.ts')
+  if ((queuedSoil.match(/this\.cleanupLocked\(/g) ?? []).length !== 3) errors.push('soil-rx:cleanup-shared-transaction-callers')
+  const attachmentCleanup = queuedSoil.slice(queuedSoil.indexOf('private async cleanAttachmentResources'), queuedSoil.indexOf('private async forgetRolledBackTest'))
+  if (attachmentCleanup.indexOf('removeReports') < 0 || attachmentCleanup.indexOf('rollbackTestOperation') < 0 || attachmentCleanup.indexOf('removeReports') > attachmentCleanup.indexOf('rollbackTestOperation')) errors.push('soil-rx:attachment-cleanup-storage-before-row')
+  if (attachmentCleanup.indexOf('confirmSoilRxAttachmentRemoval') < 0 || attachmentCleanup.indexOf('confirmSoilRxAttachmentRemoval') > attachmentCleanup.indexOf('rollbackTestOperation')) errors.push('soil-rx:attachment-cleanup-durable-storage-receipt')
+  const soilStorage = read(root, 'src/data/soilRxStorage.ts')
+  const soilStorageRemove = soilStorage.slice(soilStorage.indexOf('export async function removeSoilRxReportsWithGateway'), soilStorage.indexOf('export async function createSignedSoilRxReportUrl'))
+  requireText(errors, soilStorage, 'const { data, error } = await storage.from(soilRxReportBucket).remove(requested)', 'soil-rx:storage-remove-receipt-data')
+  requireText(errors, soilStorageRemove, 'if (exactRemovalReceipt(paths, removed)) return confirmSoilRxReportRemoval(paths, removed)', 'soil-rx:storage-remove-receipt-required')
+  requireText(errors, soilStorageRemove, 'if (removed.length !== 0) return confirmSoilRxReportRemoval(paths, removed)', 'soil-rx:storage-malformed-nonempty-receipt-refused')
+  requireText(errors, soilStorageRemove, 'const absent = await gateway.verifyAbsent(paths, context)', 'soil-rx:storage-physical-absence-required')
+  requireText(errors, soilStorageRemove, "supabase.rpc('verify_soil_report_objects_absent', { p_farm_id: expected.farmId, p_paths: requested })", 'soil-rx:storage-scoped-absence-rpc')
+  if (/\.list\(/.test(soilStorageRemove)) errors.push('soil-rx:storage-remove-ambiguous-recovery-refused')
+  requireText(errors, soilStorage, "(error as { code?: unknown }).code === '42501' && (error as { message?: unknown }).message === 'soil report path is not owned by the current farm test'", 'soil-rx:storage-terminal-fallback-exact-error')
+  requireText(errors, soilStorageRemove, 'if (!missingTestOwnership(error) || !scope || !gateway.verifyTerminalAbsence) throw error', 'soil-rx:storage-terminal-fallback-fail-closed')
+  requireText(errors, soilStorageRemove, 'const absent = await gateway.verifyTerminalAbsence(paths, context, scope)', 'soil-rx:storage-terminal-absence-required')
+  requireText(errors, soilStorageRemove, "supabase.rpc('verify_soil_report_cleanup_terminal_absence', { p_farm_id: expected.farmId, p_field_id: scope.fieldId, p_test_id: scope.testId, p_paths: requested })", 'soil-rx:storage-terminal-scoped-rpc')
+  if ((soilStorageRemove.match(/\bcatch \(error\)/g) ?? []).length !== 1) errors.push('soil-rx:storage-terminal-fallback-single-catch')
+  const supabaseSoil = read(root, 'src/data/SupabaseSoilRxRepository.ts')
+  requireText(errors, supabaseSoil, "deleted.length === 1 && deleted.every((value) => { const row = object(value); return exact(row, ['id']) && id(row.id) === idValue })", 'soil-rx:row-delete-exact-receipt')
+  requireText(errors, supabaseSoil, "deleted.length !== 0 || await this.d.gateway.verifyTestAbsent({ farmId: context.farmId, testId: idValue }, context) !== true", 'soil-rx:row-delete-physical-absence-required')
+  const soilMigration = read(root, 'supabase/migrations/20260810223508_soil_rx_storage.sql')
+  const normalAbsenceStart = soilMigration.indexOf('create function public.verify_soil_report_objects_absent(p_farm_id uuid, p_paths text[])')
+  const terminalAbsenceStart = soilMigration.indexOf('create function public.verify_soil_report_cleanup_terminal_absence(')
+  const absenceAclStart = soilMigration.indexOf('revoke all on function public.verify_soil_test_absent(uuid, uuid)', terminalAbsenceStart)
+  const normalAbsence = normalAbsenceStart >= 0 && terminalAbsenceStart > normalAbsenceStart ? soilMigration.slice(normalAbsenceStart, terminalAbsenceStart) : ''
+  const terminalAbsence = terminalAbsenceStart >= 0 && absenceAclStart > terminalAbsenceStart ? soilMigration.slice(terminalAbsenceStart, absenceAclStart) : ''
+  for (const [required, label] of [["create function public.verify_soil_test_absent(p_farm_id uuid, p_test_id uuid)", 'row-function'], ["create function public.verify_soil_report_objects_absent(p_farm_id uuid, p_paths text[])", 'storage-function'], ['grant execute on function public.verify_soil_test_absent(uuid, uuid)', 'authenticated-grant']]) requireText(errors, soilMigration, required, `soil-rx:absence-rpc-${label}`)
+  for (const [required, label] of [['perform public.assert_current_farm_access_epoch(p_farm_id);', 'epoch'], ['not public.can_edit_farm(p_farm_id)', 'edit-access'], ["where test.farm_id = p_farm_id\n        and test.field_id::text = split_part(requested.path, '/', 2)\n        and test.id::text = split_part(requested.path, '/', 3)", 'owned-test'], ["raise exception using errcode = '42501', message = 'soil report path is not owned by the current farm test'", 'owned-test-error'], ["object.bucket_id = 'soil-test-reports' and object.name = requested.path", 'physical-object']]) requireText(errors, normalAbsence, required, `soil-rx:absence-rpc-${label}`)
+  for (const [required, label] of [["returns table(name text)\nlanguage plpgsql\nstable\nsecurity definer\nset search_path = public, pg_temp", 'shape'], ['perform public.assert_current_farm_access_epoch(p_farm_id);', 'epoch'], ['not public.can_edit_farm(p_farm_id)', 'edit-access'], ["where test.farm_id = p_farm_id and test.id = p_test_id", 'farm-scoped-row'], ["object.bucket_id = 'soil-test-reports'\n      and object.name = any (p_paths)", 'physical-object'], ["return query select requested.path from unnest(p_paths) requested(path) order by requested.path", 'exact-receipt']]) requireText(errors, terminalAbsence, required, `soil-rx:terminal-absence-rpc-${label}`)
+  requireText(errors, soilMigration, 'public.verify_soil_report_cleanup_terminal_absence(uuid, uuid, uuid, text[])\nto authenticated;', 'soil-rx:terminal-absence-rpc-authenticated-grant')
+  const soilModule = read(root, 'src/SoilRxModule.tsx')
+  requireText(errors, soilModule, "soybeanNitrogen: { label: 'University of Delaware Cooperative Extension, Nitrogen Removal by Delaware Crops'", 'soil-rx:nutrient-removal-soybean-source')
+  requireText(errors, soilModule, "corn: { nitrogen: 0.60, phosphorus: 0.37, potassium: 0.24 },\n  soybeans: { nitrogen: 3.44, phosphorus: 0.75, potassium: 1.17 },\n} as const", 'soil-rx:nutrient-removal-corn-soy-only')
+  requireText(errors, soilModule, '!Object.hasOwn(nutrientRemovalCoefficients, family)', 'soil-rx:nutrient-removal-own-family')
+  requireText(errors, soilModule, 'Harvest-removal estimates are available for corn and soybeans only.', 'soil-rx:nutrient-removal-unsupported-copy')
+  if (/\bwheat\s*:\s*\{\s*nitrogen/.test(soilModule) || soilModule.includes('soybeanWheatNitrogen')) errors.push('soil-rx:nutrient-removal-corn-soy-only')
+  const openReport = soilModule.slice(soilModule.indexOf('async function openReport'), soilModule.indexOf('\n\n  return <section', soilModule.indexOf('async function openReport')))
+  const popupOpen = openReport.indexOf("const popup = window.open('about:blank', '_blank')")
+  const signedUrl = openReport.indexOf('await repository.getReportUrl')
+  if (popupOpen < 0 || signedUrl < 0 || popupOpen > signedUrl) errors.push('soil-rx:report-popup-synchronous-order')
+  requireText(errors, openReport, "if (!popup) { setError('Your browser blocked the lab report window. Allow pop-ups for Farm Rx and try again.'); return }", 'soil-rx:report-popup-blocked-before-url')
+  requireText(errors, openReport, 'popup.opener = null', 'soil-rx:report-popup-opener-cleared')
+  requireText(errors, openReport, 'popup.location.replace(url)', 'soil-rx:report-popup-navigate')
+  requireText(errors, openReport, 'popup.close()', 'soil-rx:report-popup-failure-cleanup')
+  const revokedFarmRecovery = read(root, 'src/data/revokedFarmRecovery.ts')
+  requireText(errors, revokedFarmRecovery, 'return isSoilRxStoredCleanupEntry(value) && entry.userId === userId && entry.farmId === farmId', 'soil-rx:revoked-custody-canonical-schema')
+  const soilCleanupOutbox = read(root, 'src/data/soilRxCleanupOutbox.ts')
+  requireText(errors, soilCleanupOutbox, 'return coordinatedDeviceTransaction(soilRxCleanupOutboxKey(projectRef, userId), storage, createId, task)', 'soil-rx:cleanup-shared-transaction')
+  requireText(errors, soilCleanupOutbox, "const soilRxAttachmentLegacyKeys = ['kind', 'testId', 'paths', 'userId', 'farmId', 'recordedAt'] as const", 'soil-rx:cleanup-legacy-own-key-set')
+  requireText(errors, soilCleanupOutbox, "const soilRxAttachmentCurrentKeys = [...soilRxAttachmentLegacyKeys, 'removedPaths'] as const", 'soil-rx:cleanup-current-own-key-set')
+  requireText(errors, soilCleanupOutbox, 'function hasExactOwnKeys(row: Record<string, unknown>, keys: readonly string[]) { return Object.keys(row).length === keys.length && keys.every((key) => Object.hasOwn(row, key)) }', 'soil-rx:cleanup-exact-own-membership')
+  requireText(errors, soilCleanupOutbox, "if ('removedPaths' in row && !Object.hasOwn(row, 'removedPaths')) return false", 'soil-rx:cleanup-inherited-removed-paths-refused')
+  requireText(errors, soilCleanupOutbox, 'if (hasExactOwnKeys(row, soilRxAttachmentLegacyKeys)) return true', 'soil-rx:cleanup-legacy-shape-required')
+  requireText(errors, soilCleanupOutbox, 'return hasExactOwnKeys(row, soilRxAttachmentCurrentKeys) && Array.isArray(removedPaths)', 'soil-rx:cleanup-current-shape-required')
+  const farmContext = read(root, 'src/auth/farmContext.ts')
+  if ((farmContext.match(/soilRxCleanupOutboxTransaction\(/g) ?? []).length !== 2) errors.push('soil-rx:revoked-cleanup-shared-transaction')
+  const pendingFarmWork = farmContext.slice(farmContext.indexOf('export function hasPendingFarmWork'), farmContext.indexOf('export async function clearFarmAccess'))
+  requireText(errors, pendingFarmWork, 'if (readSoilRxCleanupOutbox(target, soilCleanupKey).some((entry) => entry.userId === userId && entry.farmId === farmId)) return true', 'soil-rx:farm-switch-pending-cleanup')
+  requireText(errors, pendingFarmWork, '} catch { return true }', 'soil-rx:farm-switch-pending-fail-closed')
 
   const foundationOrchestrator = read(root, 'scripts/verify-foundation.ps1')
+  const foundationOrchestratorLf = foundationOrchestrator.replace(/\r\n/g, '\n')
+  const playwrightConfig = read(root, 'playwright.config.ts')
+  const foundationNativeLane = read(root, 'scripts/foundation-native-lane.ps1')
+  const foundationNativeRegression = read(root, 'scripts/foundation-native-lane.regression.ps1')
+  const foundationNativeRegressionLf = foundationNativeRegression.replace(/\r\n/g, '\n')
+  const soilDisposableCapture = read(root, 'scripts/verify-soil-rx-disposable-capture.ps1')
+  const soilDisposableCaptureRegression = read(root, 'scripts/verify-soil-rx-disposable-capture.regression.ps1')
+  const soilDisposable = read(root, 'scripts/verify-soil-rx-disposable.ps1')
   requireText(errors, foundationOrchestrator, 'if ($LASTEXITCODE -ne 0) { throw $Failure }', 'orchestrator:native-exit-check')
   requireText(errors, foundationOrchestrator, 'Assert-IntermediateLaneFailureIsFatal', 'orchestrator:controlled-failure-probe')
+  requireText(errors, foundationOrchestrator, 'Assert-FoundationBrowserPortIsFree', 'orchestrator:browser-port-preflight')
+  if ((foundationOrchestrator.match(/^\s*Assert-FoundationBrowserPortIsFree\s*$/gm) ?? []).length !== 1) errors.push('orchestrator:browser-port-preflight')
+  const foundationEntry = "Push-Location $root\ntry {\n  Assert-FoundationBrowserPortIsFree\n  Assert-IntermediateLaneFailureIsFatal\n"
+  if ((foundationOrchestratorLf.split(foundationEntry).length - 1) !== 1) errors.push('orchestrator:browser-port-preflight-order')
+  requireText(errors, foundationOrchestrator, "throw 'FOUNDATION_BROWSER_PORT_4173_OCCUPIED: refusing to reuse an existing server.'", 'orchestrator:browser-port-refusal')
+  requireText(errors, playwrightConfig, 'reuseExistingServer: false,', 'orchestrator:browser-server-reuse-refused')
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'powershell.exe')", 'orchestrator:desktop-probe-shell')
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh.exe')", 'orchestrator:windows-core-probe-shell')
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh')", 'orchestrator:unix-core-probe-shell')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & $probeShell -NoProfile -Command 'exit 23' } $expected", 'orchestrator:resolved-probe-shell')
-  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 24) errors.push('orchestrator:all-lanes-checked')
+  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 26) errors.push('orchestrator:all-lanes-checked')
+  requireText(errors, foundationOrchestrator, ". (Join-Path $PSScriptRoot 'foundation-native-lane.ps1')", 'orchestrator:native-lane-import')
+  requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'foundation-native-lane.regression.ps1') } 'Foundation native-lane regression failed.'", 'orchestrator:native-lane-regression')
+  const nativeBrowserInvocation = "Invoke-FoundationNativeLane -Lane 'built-browser' -Executable $nativeNpm -Arguments @('run','test:e2e') -Failure 'Built-browser foundation suite failed.' | Out-Null"
+  if ((foundationOrchestrator.split(nativeBrowserInvocation).length - 1) !== 1) errors.push('orchestrator:native-browser-lane')
+  if ((foundationOrchestrator.match(/test:e2e/g) ?? []).length !== 1) errors.push('orchestrator:native-browser-exactly-once')
+  if (foundationOrchestrator.includes('Invoke-FoundationLane { & npm run test:e2e }')) errors.push('orchestrator:native-browser-legacy-capture')
   for (const proof of ['0033', '0034', '0035', '0036', '0037', '0039', '0040', '0041', '0042', '0043']) requireText(errors, foundationOrchestrator, `Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-${proof}-disposable.ps1') }`, `orchestrator:checked-${proof}`)
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-equipment-cost-snapshots-disposable.ps1') }", 'orchestrator:checked-equipment-cost-snapshots')
+  requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-soil-rx-disposable.ps1') }", 'orchestrator:checked-soil-rx')
+  requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-soil-rx-disposable-capture.regression.ps1') }", 'orchestrator:checked-soil-rx-capture-regression')
+  if ((soilDisposableCapture.match(/Invoke-FoundationNativeLane -Lane 'soil-rx-disposable'/g) ?? []).length !== 1 || !soilDisposableCapture.includes('-LogRoot $runDirectory | Out-Null')) errors.push('soil-rx:capture-native-lane')
+  requireText(errors, soilDisposableCapture, "$passMarkers = @($logLines | Where-Object { $_ -ceq 'SOIL_RX_DISPOSABLE_RLS_STORAGE_PASS' })", 'soil-rx:capture-pass-marker')
+  requireText(errors, soilDisposableCapture, 'Assert-SoilRxCapture ($passMarkers.Count -eq 1)', 'soil-rx:capture-pass-marker-exactly-once')
+  requireText(errors, soilDisposableCapture, "$exitMarkers = @($logLines | Where-Object { $_ -ceq 'exitCode=0' })", 'soil-rx:capture-zero-exit')
+  requireText(errors, soilDisposableCapture, 'Assert-SoilRxCapture ($exitMarkers.Count -eq 1)', 'soil-rx:capture-zero-exit-exactly-once')
+  requireText(errors, soilDisposableCapture, "$causeMarkers = @($logLines | Where-Object { $_ -ceq 'cause=success' })", 'soil-rx:capture-success-cause')
+  requireText(errors, soilDisposableCapture, 'Assert-SoilRxCapture ($causeMarkers.Count -eq 1)', 'soil-rx:capture-success-cause-exactly-once')
+  requireText(errors, soilDisposableCapture, '[IO.File]::WriteAllLines($receiptPath, @(', 'soil-rx:capture-durable-receipt')
+  if ((soilDisposableCapture.match(/if \(-not \$Condition\) \{ throw \$Failure \}/g) ?? []).length !== 1) errors.push('soil-rx:capture-assertion-fail-closed')
+  if ((soilDisposableCapture.match(/\$runDirectory = Join-Path \$EvidenceRoot \(\[Guid\]::NewGuid\(\)\.ToString\('N'\)\)/g) ?? []).length !== 1) errors.push('soil-rx:capture-unique-directory')
+  requireText(errors, soilDisposableCaptureRegression, 'SOIL_RX_DISPOSABLE_CAPTURE_REGRESSION_PASS', 'soil-rx:capture-regression-marker')
+  for (const required of ["raise exception using errcode = 'ZX001', message = 'SOIL_RX_CROSS_FARM_ROW_GUARD_BYPASSED'", "raise exception using errcode = 'ZX002', message = 'SOIL_RX_CROSS_FARM_STORAGE_GUARD_BYPASSED'", "if sqlstate <> 'P0001' or sqlerrm <> 'FARM_ACCESS_EPOCH_CHANGED' then raise", "'terminal-epoch' = 'SOIL_RX_TERMINAL_EPOCH_GUARD_BYPASSED'", "'terminal-edit' = 'SOIL_RX_TERMINAL_EDIT_GUARD_BYPASSED'", "'terminal-path' = 'SOIL_RX_TERMINAL_PATH_GUARD_BYPASSED'", "'terminal-row' = 'SOIL_RX_TERMINAL_ROW_ABSENCE_GUARD_BYPASSED'", "'terminal-object' = 'SOIL_RX_TERMINAL_OBJECT_ABSENCE_GUARD_BYPASSED'", "'terminal-duplicate' = 'SOIL_RX_TERMINAL_DUPLICATE_GUARD_BYPASSED'", 'foreach ($entry in $mutations.GetEnumerator()) { Invoke-ExpectedGuardMutation $entry.Key $entry.Value }', 'if ($exitCode -eq 0 -or $text -notmatch [regex]::Escape($expected))', 'SOIL_RX_GUARD_MUTATIONS_PASS row=detected storage=detected terminal-epoch=detected terminal-edit=detected terminal-path=detected terminal-row=detected terminal-object=detected terminal-duplicate=detected']) requireText(errors, soilDisposable, required, 'soil-rx:cross-farm-runtime-mutations')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-rls-role-matrix.ps1') }", 'orchestrator:checked-rls-role-matrix')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & deno check --no-config --lock=deno.lock --frozen --node-modules-dir=none supabase/functions/send-push/index.ts }", 'orchestrator:frozen-send-push-deno-check')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-push-access-concurrency-mutation.ps1') }", 'orchestrator:checked-push-concurrency-mutation')
@@ -106,6 +302,120 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, pushDeliveryRegression, 'if(revokeRaceProviderCalls!==0||revokeRace.gone!==1||revokeRace.sent!==0)', 'push:revoke-after-claim-provider-deny-control')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-push-access-revocation-disposable.ps1') }", 'orchestrator:checked-push-access-revocation')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-password-form-browser.ps1') }", 'orchestrator:checked-password-form-browser')
+  requireText(errors, foundationNativeLane, "$ErrorActionPreference = 'Continue'", 'orchestrator:native-eap-scope')
+  requireText(errors, foundationNativeLane, '$output = @(& $Executable @Arguments 2>&1)', 'orchestrator:native-output-capture')
+  if ((foundationNativeLane.match(/\$exitCode = \[int\]\$LASTEXITCODE/g) ?? []).length !== 2) errors.push('orchestrator:native-exit-capture')
+  if (!/}\s*finally\s*{\s*\$ErrorActionPreference = \$priorErrorActionPreference/.test(foundationNativeLane)) errors.push('orchestrator:native-eap-restore')
+  requireText(errors, foundationNativeLane, '[IO.File]::AppendAllLines($logPath, $durableLines, $utf8)', 'orchestrator:native-durable-log')
+  requireText(errors, foundationNativeLane, '([string]$line) | Out-Host', 'orchestrator:native-host-replay')
+  requireText(errors, foundationNativeLane, 'if ([int]$exitCode -ne 0) {', 'orchestrator:native-nonzero-guard')
+  requireText(errors, foundationNativeLane, 'return $true', 'orchestrator:native-scalar-success')
+  const uniqueLogAssignment = '$logPath = Join-Path $LogRoot ("{0}-{1}-{2}.log" -f [DateTime]::UtcNow.ToString(\'yyyyMMddTHHmmssfffZ\'), $safeLane, [Guid]::NewGuid().ToString(\'N\'))'
+  if ((foundationNativeLane.split(uniqueLogAssignment).length - 1) !== 1) errors.push('orchestrator:native-unique-log')
+  if (!/(?:^|\r?\n)  if \(\$null -ne \$captureFailure\) \{\r?\n    throw \[AggregateException\]::new\(\r?\n      "\$Failure Native capture failed; durable log: \$logPath",\r?\n      \[Exception\[\]\]@\(\$captureFailure\)\)\r?\n  \}/.test(foundationNativeLane)) errors.push('orchestrator:native-capture-failure-guard')
+  if (!/(?:^|\r?\n)  if \(\$null -eq \$exitCode\) \{\r?\n    throw "\$Failure Native process ended without an exit code; durable log: \$logPath"\r?\n  \}/.test(foundationNativeLane)) errors.push('orchestrator:native-missing-exit-guard')
+  if (foundationNativeLane.includes('playwright-report') || foundationNativeLane.includes('report.stats')) errors.push('orchestrator:native-report-override')
+  const ownerLaneDefinition = "function Invoke-FoundationRegressionOwnerLane([scriptblock]$Command,[string]$Failure) {\n  $global:LASTEXITCODE = 0\n  & $Command\n  if ($LASTEXITCODE -ne 0) { throw $Failure }\n}"
+  if ((foundationNativeRegressionLf.split(ownerLaneDefinition).length - 1) !== 1) errors.push('orchestrator:native-regression-owner-semantics')
+  const ownerIntegrationInvocation = "$ownerOutput = @(Invoke-FoundationRegressionOwnerLane { & $PSCommandPath -SkipOwnerIntegration -StubSuffix 'OwnerNoPrior' } 'Owner integration regression failed.')"
+  if ((foundationNativeRegressionLf.split(ownerIntegrationInvocation).length - 1) !== 1) errors.push('orchestrator:native-regression-owner-integration')
+  requireText(errors, foundationNativeRegressionLf, "Invoke-FoundationRegressionOwnerLane { & $probeShell -NoProfile -Command 'exit 41' } 'Controlled owner child failure.'", 'orchestrator:native-regression-owner-failure')
+  requireText(errors, foundationNativeRegressionLf, "Assert-FoundationNative $ownerFailureRefused 'Owner integration masked a genuine child failure.'", 'orchestrator:native-regression-owner-failure')
+  const lastEvidenceAssertion = foundationNativeRegressionLf.indexOf("Assert-FoundationNative ($captureFailureLog.Contains('exitCode=<missing>')")
+  const ownerIntegration = foundationNativeRegressionLf.indexOf(ownerIntegrationInvocation)
+  const ownerPassAssertion = foundationNativeRegressionLf.indexOf("Assert-FoundationNative ($ownerOutput.Count -eq 1 -and $ownerOutput[0] -ceq 'FOUNDATION_NATIVE_LANE_REGRESSION_PASS')", ownerIntegration)
+  const ownerExitAssertion = foundationNativeRegressionLf.indexOf("Assert-FoundationNative ($LASTEXITCODE -eq 0) 'Owner integration regression poisoned caller-visible LASTEXITCODE.'", ownerPassAssertion)
+  const custodyFinally = foundationNativeRegressionLf.indexOf('} finally {\n  for ($stubIndex = $installedStubNames.Count - 1;', ownerExitAssertion)
+  const cleanupFailureRefusal = foundationNativeRegressionLf.indexOf("if ($cleanupFailures.Count) { throw [AggregateException]::new('Foundation native regression cleanup failed.'", custodyFinally)
+  const primaryFailureRefusal = foundationNativeRegressionLf.indexOf('if ($primaryFailure) { throw $primaryFailure }', cleanupFailureRefusal)
+  const callerExitRestore = foundationNativeRegressionLf.indexOf('$global:LASTEXITCODE = 0', primaryFailureRefusal)
+  const finalRegressionPass = foundationNativeRegressionLf.indexOf("Write-Output 'FOUNDATION_NATIVE_LANE_REGRESSION_PASS'", callerExitRestore)
+  if (!(lastEvidenceAssertion >= 0 && ownerIntegration > lastEvidenceAssertion && ownerPassAssertion > ownerIntegration && ownerExitAssertion > ownerPassAssertion && custodyFinally > ownerExitAssertion && cleanupFailureRefusal > custodyFinally && primaryFailureRefusal > cleanupFailureRefusal && callerExitRestore > primaryFailureRefusal && finalRegressionPass > callerExitRestore)) errors.push('orchestrator:native-regression-caller-exit-order')
+  if ((foundationNativeRegressionLf.match(/\$global:LASTEXITCODE = 0/g) ?? []).length !== 3) errors.push('orchestrator:native-regression-caller-exit-count')
+  requireText(errors, foundationNativeRegressionLf, '$priorState = Get-FoundationVisibleFunctionState $stubName\n    $stubStates[$stubName] = $priorState\n    $ownedStubStates[$stubName] = Set-FoundationScriptFunction $stubName $stubDefinitions[$stubName]', 'orchestrator:native-regression-scope-snapshot')
+  requireText(errors, foundationNativeRegressionLf, '$definition = [scriptblock]::Create("function script:$Name {`n$($ScriptBlock.ToString())`n}")', 'orchestrator:native-regression-script-scope')
+  const scriptInstaller = foundationNativeRegressionLf.slice(foundationNativeRegressionLf.indexOf('function Set-FoundationScriptFunction'), foundationNativeRegressionLf.indexOf('function Assert-FoundationNativeSource'))
+  if (scriptInstaller.includes('function global:')) errors.push('orchestrator:native-regression-scope-broadening')
+  requireText(errors, foundationNativeRegressionLf, '$current = Get-FoundationVisibleFunctionState $stubName\n      if (-not $current.Exists -or $current.Definition -cne $ownedStubStates[$stubName].Definition', 'orchestrator:native-regression-cleanup-ownership')
+  requireText(errors, foundationNativeRegressionLf, 'Remove-Item -LiteralPath $priorState.Path -Force -ErrorAction Stop\n      $after = Get-FoundationVisibleFunctionState $stubName', 'orchestrator:native-regression-cleanup-fail-closed')
+  requireText(errors, foundationNativeRegressionLf, 'if ($priorState.Exists) {\n        if (-not $after.Exists -or $after.Definition -cne $priorState.Definition -or $after.Options -ne $priorState.Options)', 'orchestrator:native-regression-scope-restoration')
+  if ((foundationNativeRegressionLf.match(/\$cleanupFailures\.Add\(\$_\.Exception\)/g) ?? []).length !== 3) errors.push('orchestrator:native-regression-cleanup-retention')
+  if (/Remove-Item[^\r\n]*-ErrorAction SilentlyContinue/.test(foundationNativeRegressionLf)) errors.push('orchestrator:native-regression-cleanup-swallowed')
+  const sentinelSuffixAssignment = '$sentinelSuffix = "Owner$([Guid]::NewGuid().ToString(\'N\'))"'
+  if ((foundationNativeRegressionLf.split(sentinelSuffixAssignment).length - 1) !== 1 || foundationNativeRegressionLf.includes('StubOwnerSentinel') || foundationNativeRegressionLf.includes('StubOwnerRestoreCleanup')) errors.push('orchestrator:native-regression-sentinel-randomized')
+  requireText(errors, foundationNativeRegressionLf, "[ValidatePattern('^[A-Za-z0-9]+$')][string]$Suffix", 'orchestrator:native-regression-sentinel-name-validation')
+  requireText(errors, foundationNativeRegressionLf, '$prior = Get-SentinelState $Name\n  if ($prior.Exists) { throw "FOUNDATION_SENTINEL_COLLISION_REFUSED:$Name" }', 'orchestrator:native-regression-sentinel-snapshot')
+  requireText(errors, foundationNativeRegressionLf, '$collisionRefused -and $afterCollision.Definition -ceq $collisionState.Definition -and $afterCollision.Options -eq $collisionState.Options', 'orchestrator:native-regression-sentinel-collision')
+  requireText(errors, foundationNativeRegressionLf, '$current = Get-SentinelState $sentinel.Name\n        if (-not $current.Exists -or $current.Definition -cne $sentinel.Owned.Definition -or $current.Options -ne $sentinel.Owned.Options)', 'orchestrator:native-regression-sentinel-cleanup-ownership')
+  requireText(errors, foundationNativeRegressionLf, 'for ($sentinelIndex=$ownedSentinels.Count-1; $sentinelIndex -ge 0; $sentinelIndex--)', 'orchestrator:native-regression-sentinel-independent-cleanup')
+  const sentinelCleanupStart = foundationNativeRegressionLf.indexOf('for ($sentinelIndex=$ownedSentinels.Count-1;')
+  const sentinelCleanupEnd = foundationNativeRegressionLf.indexOf("if ($sentinelPrimaryFailure -and $sentinelCleanupFailures.Count) { throw [AggregateException]::new('Sentinel probe primary and cleanup failures.'", sentinelCleanupStart)
+  const sentinelCleanup = foundationNativeRegressionLf.slice(sentinelCleanupStart, sentinelCleanupEnd)
+  if (sentinelCleanupStart < 0 || sentinelCleanupEnd < 0 || /\b(?:break|return)\b/.test(sentinelCleanup)) errors.push('orchestrator:native-regression-sentinel-independent-cleanup')
+  if ((foundationNativeRegressionLf.match(/\$sentinelCleanupFailures\.Add\(\$_\.Exception\)/g) ?? []).length !== 2) errors.push('orchestrator:native-regression-sentinel-cleanup-retention')
+  requireText(errors, foundationNativeRegressionLf, '$sentinelCleanupAttempts.Add($sentinelCleanupOrdinal)', 'orchestrator:native-regression-sentinel-attempt-count')
+  requireText(errors, foundationNativeRegressionLf, '$sentinelCleanupAttempts.Count -ne 2 -or $sentinelCleanupAttempts[0] -ne 1 -or $sentinelCleanupAttempts[1] -ne 2', 'orchestrator:native-regression-sentinel-attempt-order')
+  requireText(errors, foundationNativeRegressionLf, "if ($sentinelPrimaryFailure -and $sentinelCleanupFailures.Count) { throw [AggregateException]::new('Sentinel probe primary and cleanup failures.',[Exception[]]@($sentinelPrimaryFailure) + [Exception[]]$sentinelCleanupFailures.ToArray()) }", 'orchestrator:native-regression-sentinel-cleanup-aggregation')
+  requireText(errors, foundationNativeRegressionLf, 'if ($sentinel.Prior.Exists) {\n          if (-not $after.Exists -or $after.Definition -cne $sentinel.Prior.Definition -or $after.Options -ne $sentinel.Prior.Options)', 'orchestrator:native-regression-sentinel-restoration')
+  const sentinelModes = "@('success','primary','first','second','both','primary-first','primary-second','primary-both')"
+  if ((foundationNativeRegressionLf.split(sentinelModes).length - 1) !== 1) errors.push('orchestrator:native-regression-sentinel-matrix')
+  requireText(errors, foundationNativeRegressionLf, "$cleanupMode -ceq 'both' -or ($cleanupMode -ceq 'first' -and $sentinelCleanupOrdinal -eq 1) -or ($cleanupMode -ceq 'second' -and $sentinelCleanupOrdinal -eq 2)", 'orchestrator:native-regression-sentinel-cleanup-order')
+  requireText(errors, foundationNativeRegressionLf, 'FOUNDATION_SENTINEL_INJECTED_CLEANUP_$($sentinelCleanupOrdinal)_FAILURE', 'orchestrator:native-regression-sentinel-cleanup-cause')
+  if (foundationNativeRegressionLf.includes('$invokeParameters.InjectCleanupFailure')) errors.push('orchestrator:native-regression-sentinel-injection-redirection')
+  const sentinelAggregate = foundationNativeRegressionLf.indexOf("if ($sentinelPrimaryFailure -and $sentinelCleanupFailures.Count) { throw [AggregateException]::new('Sentinel probe primary and cleanup failures.'", sentinelCleanupEnd)
+  const sentinelCleanupOnly = foundationNativeRegressionLf.indexOf("if ($sentinelCleanupFailures.Count) { throw [AggregateException]::new('Sentinel probe cleanup failed.'", sentinelAggregate)
+  const sentinelPrimaryOnly = foundationNativeRegressionLf.indexOf('if ($sentinelPrimaryFailure) { throw $sentinelPrimaryFailure }', sentinelCleanupOnly)
+  const sentinelCasePass = foundationNativeRegressionLf.indexOf("Write-Output 'FOUNDATION_SENTINEL_CUSTODY_CASE_PASS'", sentinelPrimaryOnly)
+  const sentinelAbsence = foundationNativeRegressionLf.indexOf("Assert-SentinelProbe ($null -eq (Get-Command -Name $missingName", sentinelCasePass)
+  const sentinelExitRestore = foundationNativeRegressionLf.indexOf('$global:LASTEXITCODE = 0', sentinelAbsence)
+  const sentinelProbePass = foundationNativeRegressionLf.indexOf('Write-Output "FOUNDATION_NATIVE_SENTINEL_PROBE_PASS:$Mode"', sentinelExitRestore)
+  if (!(sentinelAggregate === sentinelCleanupEnd && sentinelCleanupOnly > sentinelAggregate && sentinelPrimaryOnly > sentinelCleanupOnly && sentinelCasePass > sentinelPrimaryOnly && sentinelAbsence > sentinelCasePass && sentinelExitRestore > sentinelAbsence && sentinelProbePass > sentinelExitRestore)) errors.push('orchestrator:native-regression-sentinel-pass-order')
+  requireText(errors, foundationNativeRegressionLf, "$InjectCleanupFailure -ceq 'both' -or ($InjectCleanupFailure -ceq 'first' -and $cleanupOrdinal -eq 1) -or ($InjectCleanupFailure -ceq 'second' -and $cleanupOrdinal -eq 2)", 'orchestrator:native-regression-cleanup-order')
+  requireText(errors, foundationNativeRegressionLf, 'FOUNDATION_NATIVE_INJECTED_CLEANUP_$($cleanupOrdinal)_FAILURE', 'orchestrator:native-regression-cleanup-cause')
+
+  // SOIL_ARTIFACT_STATIC_GUARD_BEGIN
+  const packageSource = read(root, 'package.json')
+  const artifactPackageLane = 'tsx src/data/programsChunk5.regression.ts && pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/maple-season-db-clock-docker-adapter.regression.ps1 && pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/maple-synthetic-docker-topology-plan.regression.ps1 && pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/faketime-artifact-replacement-manifest.regression.ps1 && tsx src/data/programDueItems.regression.ts'
+  if ((packageSource.split(artifactPackageLane).length - 1) !== 1) errors.push('artifact:package-regression-wiring')
+  const artifactSources = [
+    read(root, 'scripts/harvest-ridge-db-clock.psm1'),
+    read(root, 'scripts/maple-season-db-clock-docker-adapter.psm1'),
+    read(root, 'scripts/maple-season-db-clock-docker-adapter.regression.ps1'),
+    read(root, 'scripts/maple-synthetic-docker-topology-plan.ps1'),
+    read(root, 'scripts/maple-synthetic-docker-topology-plan.regression.ps1'),
+    read(root, 'scripts/faketime-artifact-replacement-manifest.regression.ps1'),
+    read(root, 'scripts/verify-maple-season-db-clock-spike.ps1'),
+    read(root, 'docs/season-readiness/FAKETIME-ARTIFACT-EVIDENCE.md'),
+    read(root, 'docs/season-readiness/FROZEN-OFFLINE-BUILD-EVIDENCE.md'),
+    read(root, 'docs/season-readiness/FAKETIME-ARTIFACT-REPLACEMENT-MANIFEST.json'),
+    read(root, 'tests/season/frozen-postgres-clock-spike.Dockerfile'),
+  ]
+  if (!completeFaketimeArtifactReplacementContract(artifactSources)) errors.push('artifact:portable-contract')
+  if (!canonicalManifestDiscoveryContract(artifactSources[5])) errors.push('artifact:manifest-discovery-contract')
+  const julyWiring = read(root, 'scripts/maple-july-db-clock-wiring.regression.ps1')
+  const julyIdentity = "Assert-True ($replacementArtifactNeedles.Count -eq 8 -and @($replacementArtifactNeedles | Where-Object { -not $clockModule.Contains($_) }).Count -eq 0 -and -not $clockModule.Contains('225c197c34164c90b08a4c8b6b10e6c7') -and -not $clockModule.Contains('sha256:4c4b06188e1c60639f6b7f3da7f1e6913e240a339ae305e7d9f60ccdb43ac746')) 'Harvest Ridge clock module does not retain the exact replacement artifact identity and five-label refusal contract.'"
+  const julyIdentityIndex = julyWiring.indexOf(julyIdentity)
+  const julyPortIndex = julyWiring.indexOf('$portRegression = @(& npx tsx', julyIdentityIndex)
+  if (julyIdentityIndex < 0 || julyPortIndex <= julyIdentityIndex) errors.push('artifact:july-identity-guard')
+  const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
+  const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
+  if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 184')) errors.push('artifact:soil-mutation-proof')
+  for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
+    if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
+  }
+  // SOIL_ARTIFACT_STATIC_GUARD_END
+
+  const seasonOrchestrator = read(root, 'scripts/verify-season.ps1')
+  const seasonSharedRegression = read(root, 'scripts/season-shared-harness-repair.regression.ps1')
+  const soilSeasonBridge = "  Invoke-SeasonLane { & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/season-shared-harness-repair.regression.ps1 } 'Season shared harness repair regression failed.' | Out-Null"
+  const seasonContractRegression = seasonOrchestrator.indexOf("  Invoke-SeasonLane { & node scripts/verify-season-contract.regression.mjs } 'Season fixture contract regression failed.'")
+  const seasonBridge = seasonOrchestrator.indexOf(soilSeasonBridge)
+  const seasonContractPass = seasonOrchestrator.indexOf("  Write-Output 'Farm Rx season contract gate: PASS (contract/isolation only; disposable-backend and browser workflow proof not yet run)'")
+  if ((seasonOrchestrator.split(soilSeasonBridge).length - 1) !== 1 || (seasonOrchestrator.match(/scripts\/season-shared-harness-repair\.regression\.ps1/g) ?? []).length !== 1) errors.push('season:shared-harness-bridge-exactly-once')
+  if (!(seasonContractRegression >= 0 && seasonBridge > seasonContractRegression && seasonContractPass > seasonBridge)) errors.push('season:shared-harness-bridge-order')
+  requireText(errors, seasonSharedRegression, 'function Assert-SoilSeasonBridgeShape([string]$Text)', 'season:shared-harness-bridge-static-guard')
+  requireText(errors, seasonSharedRegression, "Assert-SeasonHarness ($soilSeasonBridgeRejected -eq 7) 'Soil season bridge mutation count drifted.'", 'season:shared-harness-bridge-mutations')
 
   const queues = [
     'src/data/fieldLocation.ts',

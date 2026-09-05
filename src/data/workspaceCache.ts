@@ -9,8 +9,14 @@ export const operationalCacheMaxAgeMs = 7 * 24 * 60 * 60 * 1_000
 
 export type WorkspaceCacheScope = { projectRef: string; userId: string; farmId: string; module: string }
 export type WorkspaceMemoryGuard = { key: string; fence: FarmRevocationSnapshot }
-type WorkspaceEnvelope<T> = WorkspaceCacheScope & { version: 2; key: string; generation: number; fenceToken: string; serverEpoch: number; cachedAt: string; data: T }
+type WorkspaceEnvelopeV2<T> = WorkspaceCacheScope & { version: 2; key: string; generation: number; fenceToken: string; serverEpoch: number; cachedAt: string; data: T }
+type WorkspaceEnvelopeV3<T> = WorkspaceCacheScope & { version: 3; key: string; generation: number; fenceToken: string; serverEpoch: number; cacheCustody: number; cachedAt: string; data: T }
+type WorkspaceEnvelope<T> = WorkspaceEnvelopeV2<T> | WorkspaceEnvelopeV3<T>
 export type WorkspaceCacheNotice = { module: string; cachedAt: string }
+
+export class WorkspaceCacheCustodyError extends Error {
+  constructor() { super('Farm Rx could not verify offline cache custody.') }
+}
 
 const storeName = 'workspaces'
 const listeners = new Set<() => void>()
@@ -18,6 +24,11 @@ const notices = new Map<string, WorkspaceCacheNotice>()
 let noticeSnapshot: WorkspaceCacheNotice[] = []
 
 function cacheKey(scope: WorkspaceCacheScope) { return `${scope.projectRef}:${scope.userId}:${scope.farmId}:${scope.module}` }
+function custodyKey(scope: WorkspaceCacheScope) { return `farm-rx-workspace-cache-custody:v1:${cacheKey(scope)}` }
+export function captureWorkspaceCacheCustody(storage: StorageLike, scope: WorkspaceCacheScope): number { const raw = storage.getItem(custodyKey(scope)); if (raw === null) return 0; const value = Number(raw); if (!Number.isSafeInteger(value) || value < 0 || String(value) !== raw) throw new WorkspaceCacheCustodyError() ; return value }
+export function verifyWorkspaceCacheCustody(storage: StorageLike, scope: WorkspaceCacheScope, expected: number): boolean { try { return captureWorkspaceCacheCustody(storage, scope) === expected } catch { return false } }
+/** Older or malformed snapshots may be deleted; same/newer custody belongs to a later writer. */
+export function shouldDeleteInvalidatedWorkspaceCache(cacheCustody: unknown, invalidationCustody: number): boolean { return !Number.isSafeInteger(cacheCustody) || Number(cacheCustody) < invalidationCustody }
 function databaseName(projectRef: string) { return `farm-rx-offline-v1-${projectRef}` }
 function available() { return typeof indexedDB !== 'undefined' }
 function open(projectRef: string): Promise<IDBDatabase> {
@@ -52,10 +63,11 @@ async function openExisting(projectRef: string): Promise<IDBDatabase | null> {
 }
 function requestResult<T>(request: IDBRequest<T>): Promise<T> { return new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error ?? new Error('Farm Rx could not use offline storage.')) }) }
 function complete(transaction: IDBTransaction): Promise<void> { return new Promise((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error ?? new Error('Farm Rx could not save offline data.')); transaction.onabort = () => reject(transaction.error ?? new Error('Farm Rx could not save offline data.')) }) }
-function validEnvelope<T>(value: unknown, scope: WorkspaceCacheScope, fence: FarmRevocationSnapshot): value is WorkspaceEnvelope<T> {
+function validEnvelope<T>(value: unknown, scope: WorkspaceCacheScope, fence: FarmRevocationSnapshot, cacheCustody: number): value is WorkspaceEnvelope<T> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as Record<string, unknown>
-  return row.version === 2 && row.key === cacheKey(scope) && row.projectRef === scope.projectRef && row.userId === scope.userId && row.farmId === scope.farmId && row.module === scope.module && row.generation === fence.generation && row.fenceToken === fence.token && row.serverEpoch === fence.serverEpoch && typeof row.cachedAt === 'string' && !Number.isNaN(Date.parse(row.cachedAt)) && Object.hasOwn(row, 'data')
+  const matchingScope = row.key === cacheKey(scope) && row.projectRef === scope.projectRef && row.userId === scope.userId && row.farmId === scope.farmId && row.module === scope.module && row.generation === fence.generation && row.fenceToken === fence.token && row.serverEpoch === fence.serverEpoch && typeof row.cachedAt === 'string' && !Number.isNaN(Date.parse(row.cachedAt)) && Object.hasOwn(row, 'data')
+  return matchingScope && (row.version === 3 ? row.cacheCustody === cacheCustody : row.version === 2 && cacheCustody === 0)
 }
 function publish(notice: WorkspaceCacheNotice) { notices.set(notice.module, notice); noticeSnapshot = [...notices.values()].sort((a, b) => a.cachedAt.localeCompare(b.cachedAt)); for (const listener of listeners) listener() }
 
@@ -92,34 +104,62 @@ export function captureWorkspaceCacheFence(scope: WorkspaceCacheScope): FarmRevo
   try { return captureFarmRevocationFence(localStorage, scope) } catch { return null }
 }
 
-export async function writeWorkspaceCache<T>(scope: WorkspaceCacheScope, data: T, fence: FarmRevocationSnapshot | null, cachedAt = new Date().toISOString()): Promise<boolean> {
+export async function writeWorkspaceCache<T>(scope: WorkspaceCacheScope, data: T, fence: FarmRevocationSnapshot | null, cachedAt = new Date().toISOString(), expectedCacheCustody?: number): Promise<boolean> {
   if (!available() || !fence) return false
   let database: IDBDatabase | null = null
   try {
+    const cacheCustody = expectedCacheCustody ?? captureWorkspaceCacheCustody(localStorage, scope)
+    if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return false
     database = await open(scope.projectRef)
     verifyFarmRevocationFence(localStorage, fence)
+    if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return false
     const transaction = database.transaction(storeName, 'readwrite')
-    transaction.objectStore(storeName).put({ version: 2, key: cacheKey(scope), ...scope, generation: fence.generation, fenceToken: fence.token, serverEpoch: fence.serverEpoch, cachedAt, data: structuredClone(data) } satisfies WorkspaceEnvelope<T>)
+    transaction.objectStore(storeName).put({ version: 3, key: cacheKey(scope), ...scope, generation: fence.generation, fenceToken: fence.token, serverEpoch: fence.serverEpoch, cacheCustody, cachedAt, data: structuredClone(data) } satisfies WorkspaceEnvelope<T>)
     await complete(transaction)
     verifyFarmRevocationFence(localStorage, fence)
+    if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return false
     return true
   } catch { return false }
   finally { database?.close() }
 }
 
+/** Records a synchronous fence before a queue can release its matching
+ * projection. Call the returned finisher after that durable release. */
+export function beginWorkspaceCacheInvalidation(storage: StorageLike, scope: WorkspaceCacheScope): () => Promise<void> {
+  const nextCustody = captureWorkspaceCacheCustody(storage, scope) + 1
+  storage.setItem(custodyKey(scope), String(nextCustody))
+  return async () => {
+    if (!available()) return
+    const database = await open(scope.projectRef)
+    try {
+      const transaction = database.transaction(storeName, 'readwrite')
+      const store = transaction.objectStore(storeName)
+      const request = store.get(cacheKey(scope))
+      request.onsuccess = () => {
+        const value = request.result as { cacheCustody?: unknown } | undefined
+        if (value === undefined || shouldDeleteInvalidatedWorkspaceCache(value.cacheCustody, nextCustody)) store.delete(cacheKey(scope))
+      }
+      await complete(transaction)
+    } finally { database.close() }
+  }
+}
+
 export async function readWorkspaceCache<T>(scope: WorkspaceCacheScope, maximumAgeMs: number): Promise<{ data: T; cachedAt: string } | null> {
   if (!available()) return null
   let fence
-  try { fence = captureFarmRevocationFence(localStorage, scope) } catch { return null }
+  let cacheCustody
+  try { fence = captureFarmRevocationFence(localStorage, scope); cacheCustody = captureWorkspaceCacheCustody(localStorage, scope) } catch { return null }
   const database = await open(scope.projectRef)
   try {
     const transaction = database.transaction(storeName, 'readonly')
     const value = await requestResult(transaction.objectStore(storeName).get(cacheKey(scope)))
     if (value === undefined) return null
-    if (!validEnvelope<T>(value, scope, fence)) return null
+    if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return null
+    if (!validEnvelope<T>(value, scope, fence, cacheCustody)) return null
     const ageMs = Date.now() - Date.parse(value.cachedAt)
     if (ageMs < -maximumClockSkewMs || ageMs > maximumAgeMs) throw new WorkspaceCacheExpiredError()
     try { verifyFarmRevocationFence(localStorage, fence) } catch { return null }
+    if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return null
     publish({ module: scope.module.split(':')[0], cachedAt: value.cachedAt })
     return { data: structuredClone(value.data), cachedAt: value.cachedAt }
   } finally { database.close() }
@@ -128,16 +168,20 @@ export async function readWorkspaceCache<T>(scope: WorkspaceCacheScope, maximumA
 /** Read-only projection cache access. It never creates/upgrades IndexedDB and never publishes UI notices. */
 export async function readWorkspaceCachePure<T>(scope: WorkspaceCacheScope, fence: FarmRevocationSnapshot, maximumAgeMs: number, storage: StorageLike, nowMs = Date.now()): Promise<ReadOnlySnapshot<T> | null> {
   if (!Number.isFinite(nowMs) || fence.projectRef !== scope.projectRef || fence.userId !== scope.userId || fence.farmId !== scope.farmId) return null
+  let cacheCustody: number
+  try { cacheCustody = captureWorkspaceCacheCustody(storage, scope) } catch { return null }
   try { verifyFarmRevocationFence(storage, fence) } catch { return null }
   const database = await openExisting(scope.projectRef)
   if (!database) return null
   try {
     const transaction = database.transaction(storeName, 'readonly')
     const value = await requestResult(transaction.objectStore(storeName).get(cacheKey(scope)))
-    if (value === undefined || !validEnvelope<T>(value, scope, fence)) return null
+    if (value === undefined || !validEnvelope<T>(value, scope, fence, cacheCustody)) return null
+    if (!verifyWorkspaceCacheCustody(storage, scope, cacheCustody)) return null
     const ageMs = nowMs - Date.parse(value.cachedAt)
     if (ageMs < -maximumClockSkewMs || ageMs > maximumAgeMs) throw new WorkspaceCacheExpiredError()
     try { verifyFarmRevocationFence(storage, fence) } catch { return null }
+    if (!verifyWorkspaceCacheCustody(storage, scope, cacheCustody)) return null
     return { data: structuredClone(value.data), source: 'offline', capturedAt: value.cachedAt }
   } finally { database.close() }
 }

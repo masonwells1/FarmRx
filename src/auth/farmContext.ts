@@ -3,6 +3,7 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import type { Farm } from '../data/fields'
 import { deleteUserWorkspaceCaches, maximumClockSkewMs } from '../data/workspaceCache'
 import { quarantineRevokedFarmWork } from '../data/revokedFarmRecovery'
+import { readSoilRxCleanupOutbox, soilRxCleanupOutboxKey, soilRxCleanupOutboxTransaction } from '../data/soilRxCleanupOutbox'
 import { captureFarmRevocationFence, clearFarmRevocationRecoveryFence, inspectFarmRevocationState, listFarmRevocationScopes, markFarmGranted, markFarmRevoked, prepareFarmRevocationRecoveryFence, readFarmRevocationRecoveryFence, resetFarmGrantFromLive, resetFarmRevokedFromLive, verifyFarmRevocationFence, type FarmRevocationSnapshot } from '../data/farmRevocationFence'
 import { coordinatedDeviceTransaction, coordinatedFarmCustodyTransaction } from '../data/queueTransaction'
 import { clearDeviceClockHighWater, DeviceClockRollbackError, observeDeviceTime, verifyObservedDeviceTime } from '../data/deviceClockFence'
@@ -41,7 +42,7 @@ export type FarmAccessProfile = {
   capabilities: FarmAccessCapabilities
 }
 export type LoadedFarmAccessProfile = FarmAccessProfile & { operationContext: FarmRevocationSnapshot }
-export type FarmAppModule = 'fields' | 'grain' | 'inventory' | 'profitability' | 'equipment' | 'tasks' | 'weather' | 'field_log' | 'scouting' | 'harvest' | 'programs' | 'notifications'
+export type FarmAppModule = 'fields' | 'grain' | 'inventory' | 'profitability' | 'equipment' | 'tasks' | 'weather' | 'field_log' | 'scouting' | 'harvest' | 'programs' | 'notifications' | 'soil_rx'
 const membershipOnlyModules = new Set<FarmAppModule>(['equipment', 'tasks', 'field_log', 'scouting', 'harvest', 'programs'])
 const privateFinancialModules = new Set<FarmAppModule>(['grain', 'profitability'])
 export function canAccessFarmModule(profile: FarmAccessProfile, module: FarmAppModule): boolean {
@@ -783,8 +784,11 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
         if (!capturedPriorFieldLogFence) capturedPriorFieldLogFence = readFarmRevocationRecoveryFence(target, scope)
       }
       await coordinatedFarmCustodyTransaction(scope, target, createId, async (verifyCustody) => {
-        verifyValidation(); verifyCustody()
-        quarantineRevokedFarmWork(target, scope, undefined, capturedPriorFieldLogFence)
+        await soilRxCleanupOutboxTransaction(target, scope.projectRef, scope.userId, createId, async (verifyCleanup) => {
+          verifyValidation(); verifyCustody(); verifyCleanup()
+          quarantineRevokedFarmWork(target, scope, undefined, capturedPriorFieldLogFence)
+          verifyValidation(); verifyCustody(); verifyCleanup()
+        })
         if (capturedPriorFieldLogFence) clearFarmRevocationRecoveryFence(target, scope, capturedPriorFieldLogFence)
         // Quarantine is synchronous, but cache cleanup yields. Revoke before that
         // yield so a stale tab holding the old fence cannot append work after the
@@ -825,9 +829,11 @@ async function fetchAccessibleFarms(userId: string, accountEpoch: number): Promi
       }
       if (state.kind !== 'active' || state.serverEpoch !== serverEpoch) {
         await coordinatedFarmCustodyTransaction(scope, target, createId, async (verifyCustody) => {
-          verifyValidation(); verifyCustody()
-          quarantineRevokedFarmWork(target, scope)
-          verifyCustody()
+          await soilRxCleanupOutboxTransaction(target, scope.projectRef, scope.userId, createId, async (verifyCleanup) => {
+            verifyValidation(); verifyCustody(); verifyCleanup()
+            quarantineRevokedFarmWork(target, scope)
+            verifyValidation(); verifyCustody(); verifyCleanup()
+          })
           await deleteUserWorkspaceCaches(supabaseConfig.projectRef, userId, farm.id)
           verifyValidation(); verifyCustody()
           resetFarmGrantFromLive(target, scope, serverEpoch, validationStartedAt)
@@ -895,6 +901,12 @@ export async function selectFarm(userId: string, farmId: string): Promise<void> 
 
 export function hasPendingFarmWork(userId: string, farmId: string): boolean {
   const target = storage(); if (!target) return false
+  const soilCleanupKey = soilRxCleanupOutboxKey(supabaseConfig.projectRef, userId)
+  if (target.getItem(soilCleanupKey) !== null) {
+    try {
+      if (readSoilRxCleanupOutbox(target, soilCleanupKey).some((entry) => entry.userId === userId && entry.farmId === farmId)) return true
+    } catch { return true }
+  }
   for (let index = 0; index < target.length; index += 1) {
     const key = target.key(index); if (!key || !key.includes(supabaseConfig.projectRef) || !key.includes(userId) || !key.includes(farmId) || key.endsWith(':lease')) continue
     const raw = target.getItem(key); if (!raw) continue

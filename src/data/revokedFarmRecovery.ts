@@ -11,9 +11,11 @@ import { parseProfitabilityQueue } from './profitabilityWriteQueue'
 import { parseEquipmentTasksQueue } from './equipmentTasksWriteQueue'
 import { parseNotificationsQueue } from './notificationsWriteQueue'
 import { parseProgramsQueue } from './programsWriteQueue'
+import { parseSoilRxQueue } from './soilRxWriteQueue'
+import { isSoilRxStoredCleanupEntry, readSoilRxCleanupOutbox, soilRxCleanupOutboxKey, type SoilRxStoredCleanupEntry } from './soilRxCleanupOutbox'
 import type { FarmOperationContext } from './farmOperationContext'
 
-export type RevokedWorkKind = 'queue' | 'needs_attention' | 'scouting_cleanup'
+export type RevokedWorkKind = 'queue' | 'needs_attention' | 'scouting_cleanup' | 'soil_rx_cleanup'
 export type RevokedWorkItem = { version: 1; id: string; projectRef: string; userId: string; farmId: string; originalKey: string; kind: RevokedWorkKind; capturedAt: string; reason: 'farm_access_removed'; payload: unknown }
 type Envelope = { version: 1; records: RevokedWorkItem[] }
 type Scope = { projectRef: string; userId: string; farmId: string }
@@ -36,6 +38,7 @@ const queueDefinitions: readonly QueueDefinition[] = [
   { prefix: 'farm-rx-equipment-tasks-queue:v1:', parse: parseEquipmentTasksQueue },
   { prefix: 'farm-rx-notifications-write-queue:v1:', parse: parseNotificationsQueue },
   { prefix: 'farm-rx-programs-write-queue:v1:', parse: parseProgramsQueue },
+  { prefix: 'farm-rx-soil-rx-write-queue:v1:', parse: parseSoilRxQueue },
 ] as const
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const recoveryId = /^rw1-[0-9a-f]{16}(?:-\d+)?$/
@@ -86,6 +89,7 @@ function validItem(value: unknown): value is RevokedWorkItem {
   if (Object.keys(row).length !== 10 || row.version !== 1 || typeof row.id !== 'string' || !recoveryId.test(row.id) || typeof row.projectRef !== 'string' || typeof row.userId !== 'string' || typeof row.farmId !== 'string' || typeof row.originalKey !== 'string' || typeof row.capturedAt !== 'string' || Number.isNaN(Date.parse(row.capturedAt)) || row.reason !== 'farm_access_removed' || !plainJson(row.payload)) return false
   const kind = row.kind
   if (kind === 'scouting_cleanup') return row.originalKey === scoutingCleanupOutboxKey(String(row.projectRef), String(row.userId)) && Array.isArray(row.payload) && row.payload.every((entry) => validScoutingCleanup(entry, String(row.farmId), String(row.userId)))
+  if (kind === 'soil_rx_cleanup') return row.originalKey === soilRxCleanupOutboxKey(String(row.projectRef), String(row.userId)) && Array.isArray(row.payload) && row.payload.every((entry) => validSoilRxCleanup(entry, String(row.farmId), String(row.userId)))
   if (kind !== 'queue' && kind !== 'needs_attention') return false
   const scope = { projectRef: String(row.projectRef), userId: String(row.userId), farmId: String(row.farmId) }
   const expected = expectedQueueKey(String(row.originalKey), scope)
@@ -98,6 +102,11 @@ function validScoutingCleanup(value: unknown, farmId: string, userId: string): v
   if (typeof entry.path !== 'string' || typeof entry.userId !== 'string' || entry.userId !== userId || !uuid.test(entry.userId) || typeof entry.farmId !== 'string' || entry.farmId !== farmId || !uuid.test(entry.farmId) || typeof entry.recordedAt !== 'string' || Number.isNaN(Date.parse(entry.recordedAt))) return false
   const [pathFarm, fieldId, noteId, file, ...extra] = entry.path.split('/')
   return extra.length === 0 && pathFarm === farmId && uuid.test(fieldId ?? '') && uuid.test(noteId ?? '') && !!file && file !== '.' && file !== '..'
+}
+function validSoilRxCleanup(value: unknown, farmId: string, userId: string): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const entry = value as Record<string, unknown>
+  return isSoilRxStoredCleanupEntry(value) && entry.userId === userId && entry.farmId === farmId
 }
 function parse(raw: string | null): Envelope {
   if (raw === null) return { version: 1, records: [] }
@@ -144,6 +153,14 @@ export function quarantineRevokedFarmWork(storage: EnumeratedStorage, scope: Sco
     if (partition.length) candidate.push({ key: cleanupKey, kind: 'scouting_cleanup', payload: partition })
   }
   quarantineLegacyScoutingCleanup(storage, scope.projectRef)
+  const soilCleanupKey = soilRxCleanupOutboxKey(scope.projectRef, scope.userId)
+  const soilCleanupRaw = storage.getItem(soilCleanupKey)
+  let soilCleanupAll: SoilRxStoredCleanupEntry[] = []
+  if (soilCleanupRaw !== null) {
+    try { soilCleanupAll = readSoilRxCleanupOutbox(storage, soilCleanupKey); if (!soilCleanupAll.every((entry) => validSoilRxCleanup(entry, entry.farmId, scope.userId))) throw new Error() } catch { throw new Error('Farm Rx could not safely read saved Soil Rx cleanup work. Nothing was cleared.') }
+    const partition = soilCleanupAll.filter((entry) => entry.farmId === scope.farmId)
+    if (partition.length) candidate.push({ key: soilCleanupKey, kind: 'soil_rx_cleanup', payload: partition })
+  }
   const recoveryKey = revokedFarmRecoveryKey(scope.projectRef, scope.userId)
   const prior = candidate.length ? parse(storage.getItem(recoveryKey)) : { version: 1 as const, records: [] }
   const additions: RevokedWorkItem[] = []
@@ -160,6 +177,9 @@ export function quarantineRevokedFarmWork(storage: EnumeratedStorage, scope: Sco
     if (item.kind === 'scouting_cleanup') {
       const bytes = JSON.stringify({ version: 2, entries: cleanupAll.filter((entry) => entry.farmId !== scope.farmId || entry.userId !== scope.userId) })
       storage.setItem(item.key, bytes); if (storage.getItem(item.key) !== bytes) throw new Error('Farm Rx could not remove active scouting cleanup work after recovery was saved.')
+    } else if (item.kind === 'soil_rx_cleanup') {
+      const bytes = JSON.stringify({ version: 2, entries: soilCleanupAll.filter((entry) => entry.farmId !== scope.farmId || entry.userId !== scope.userId) })
+      storage.setItem(item.key, bytes); if (storage.getItem(item.key) !== bytes) throw new Error('Farm Rx could not remove active Soil Rx cleanup work after recovery was saved.')
     } else { storage.removeItem(item.key); if (storage.getItem(item.key) !== null) throw new Error('Farm Rx could not remove active saved work after recovery was saved.') }
   }
   for (const key of emptyKeys) { storage.removeItem(key); if (storage.getItem(key) !== null) throw new Error('Farm Rx could not remove an empty saved-work queue for a farm you no longer can open.') }
