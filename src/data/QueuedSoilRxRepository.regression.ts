@@ -714,7 +714,7 @@ for (const [name, mutation] of [
   ['tombstone-after-release', source.replace('const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      releaseQueue()', 'releaseQueue()\n      const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))')],
   ['confirmed-custody-bypass', source.replace('this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes', 'true')],
   ['confirmed-payload-unbound', source.replace('this.confirmedInMemory.get(entry.operationId) === entry.payloadBytes', 'this.confirmedInMemory.has(entry.operationId)')],
-  ['shared-custody-bypass', source.replace('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)', 'true')],
+  ['shared-custody-bypass', source.replaceAll('verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)', 'true')],
 ] as const) {
   assert.notEqual(mutation, source, `${name} mutation was not applied`)
   assert.throws(() => assertReplayCacheGuards(mutation), `${name} mutation must turn the replay proof red`)
