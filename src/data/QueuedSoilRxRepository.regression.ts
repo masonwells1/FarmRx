@@ -439,9 +439,12 @@ await assertReplayDoesNotResurrect('dismissed', async (value, key) => { value.se
 // old canonical replay snapshot with the new access fence.
 const releaseRegrant = harness('soil-rx-release-regrant')
 const releaseRegrantQueueKey = soilRxWriteQueueKey(releaseRegrant.scope.projectRef, userId, farmId)
-releaseRegrant.setOffline(true); await releaseRegrant.repository.saveTest(draft(uid(610)))
-await releaseRegrant.repository.inspectAndReplay()
-assert.equal(new SoilRxWriteQueue(releaseRegrant.storage, releaseRegrantQueueKey).read().entries.length, 1, 'The offline replay barrier did not retain pending queue custody.')
+const releaseRegrantFence = captureFarmRevocationFence(releaseRegrant.storage, releaseRegrant.scope)
+const releaseRegrantEntry = createSoilRxQueueEntry({ version: 1, module: 'soilRx', kind: 'saveTest', operationId: uid(611), userId, farmId, enqueuedAt: stamp, operationContext: releaseRegrantFence, draft: draft(uid(610)) as SoilRxQueueEntryPayloadV1['draft'] })
+const releaseRegrantQueue = new SoilRxWriteQueue(releaseRegrant.storage, releaseRegrantQueueKey)
+releaseRegrantQueue.append(releaseRegrantEntry)
+assert.equal(releaseRegrantQueue.read().entries.length, 1, 'The single-actor release-regrant proof did not retain its exact queued head.')
+assert.equal(releaseRegrantQueue.read().entries[0]?.payloadBytes, releaseRegrantEntry.payloadBytes, 'The single-actor release-regrant proof changed its signed queued head before replay.')
 const releaseRegrantScope = cacheKey(releaseRegrant.scope.projectRef, userId, farmId)
 const releaseRegrantSnapshots = new Map<string, unknown>([[releaseRegrantScope, { stale: 'pending' }]])
 const releaseRegrantCache = scopedCacheDatabase(releaseRegrant.storage, releaseRegrantSnapshots)
@@ -453,7 +456,6 @@ releaseRegrant.storage.onSet = (key) => {
   }
 }
 try {
-  releaseRegrant.setOffline(false)
   await assert.rejects(() => releaseRegrant.repository.inspectAndReplay(), /signed-in account or selected farm changed/)
   assert.ok(regrantedDuringRelease, 'The release-regrant proof did not mutate farm access during cache cleanup.')
   assert.equal(releaseRegrant.savedIds.filter((id) => id === uid(610)).length, 1, 'A release-time regrant repeated an already confirmed server save.')
