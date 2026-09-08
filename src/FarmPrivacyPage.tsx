@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { confirmDialog } from './components/ConfirmDialog'
 import { useFarmAccess } from './auth/FarmAccessContext'
 import type { FarmSharingRepository } from './data/farmSharing'
 import { createSubmitLock } from './lib/submitLock'
@@ -41,7 +42,7 @@ export function FarmPrivacyPage({ repository }: { repository: FarmSharingReposit
 
   async function changeSharing(next: boolean) {
     if (!canManage || saving || !saveLock.current.acquire()) return
-    if (next && !window.confirm('Turn sharing on? Your assigned Crop RX rep will be able to see this farm\'s grain position and private financial information.')) {
+    if (next && !(await confirmDialog({ title: 'Turn sharing on?', body: "Your assigned Crop RX rep will be able to see this farm's grain position and private financial information. You can turn it off any time.", confirmLabel: 'Turn sharing on', cancelLabel: 'Keep it private' }))) {
       saveLock.current.release()
       return
     }

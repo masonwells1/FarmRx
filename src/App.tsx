@@ -18,6 +18,7 @@ import {
 } from "react-router";
 import type { User } from "@supabase/supabase-js";
 import { useAuth } from "./auth/AuthProvider";
+import { ConfirmDialogHost, confirmDialog } from "./components/ConfirmDialog";
 import { isPasswordRecoveryStorageError, minimumPasswordLength, passwordEmailDeliveryEnabled, passwordRecoveryCleanupAuthority, passwordRecoveryExitUrl, passwordRecoveryStorageErrorMessage, passwordResetPublicResponse, passwordStrength, passwordValidationMessage } from './auth/passwordRecovery';
 import {
   bootstrapInitialOwnerFarm,
@@ -781,7 +782,7 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
   if (!activeFarm) return null;
   const chooseFarm = async (farmId: string) => {
     if (farmId === activeFarm.id) return;
-    if (hasPendingFarmWork(user.id, activeFarm.id) && !window.confirm(`Saved changes are still waiting for ${activeFarm.name}. They will stay with that farm. Switch farms anyway?`)) return;
+    if (hasPendingFarmWork(user.id, activeFarm.id) && !(await confirmDialog({ title: `Switch away from ${activeFarm.name}?`, body: `Saved changes are still waiting for ${activeFarm.name}. They will stay with that farm and send when you come back.`, confirmLabel: "Switch farms", cancelLabel: "Stay here" }))) return;
     try {
       await dependencies.selectFarm(user.id, farmId);
     } catch (error) {
@@ -1204,7 +1205,7 @@ function UpdatePasswordPage() {
 }
 
 export function App() {
-  return (
+  return (<>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/update-password" element={<UpdatePasswordPage />} />
@@ -1219,5 +1220,6 @@ export function App() {
         }
       />
     </Routes>
-  );
+    <ConfirmDialogHost />
+  </>);
 }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { confirmDialog } from "./components/ConfirmDialog";
 import { useSearchParams } from "react-router";
 import {
   canEditPrograms,
@@ -372,9 +373,7 @@ function ProgramBuilder({
     }
   }
   async function archive() {
-    if (
-      !window.confirm(`Archive ${program.name}? It will stay in your history.`)
-    )
+    if (!(await confirmDialog({ title: `Archive ${program.name}?`, body: "It comes off your active list and stays in your history.", confirmLabel: "Archive program" })))
       return;
     if (!programLock.current.acquire()) return;
     setSaving(true);
@@ -577,7 +576,7 @@ function PassCard({
   const [error, setError] = useState<string | null>(null);
   const passLock = useRef(createSubmitLock());
   async function remove() {
-    if (!window.confirm(`Archive ${pass.name}?`)) return;
+    if (!(await confirmDialog({ title: `Archive ${pass.name}?`, body: "This pass comes off the program template. Passes already assigned to fields are not changed.", confirmLabel: "Archive pass" }))) return;
     if (!passLock.current.acquire()) return;
     try {
       await repository.deleteProgramPass(pass.program_id, pass.id);
@@ -1303,9 +1302,12 @@ function SeasonTracker({
     ).length;
     const terminal = assignment.passes.length - affected;
     if (
-      !window.confirm(
-        `Remove ${assignment.program_name_snapshot} from ${cropLabel(assignment)}? ${affected} planned pass${affected === 1 ? "" : "es"} will no longer be on your list. ${terminal} completed pass${terminal === 1 ? "" : "es"} will stay in your records.`,
-      )
+      !(await confirmDialog({
+        title: `Remove ${assignment.program_name_snapshot} from ${cropLabel(assignment)}?`,
+        body: `${affected} planned pass${affected === 1 ? "" : "es"} will no longer be on your list. ${terminal} completed pass${terminal === 1 ? "" : "es"} will stay in your records.`,
+        confirmLabel: "Remove program",
+        destructive: true,
+      }))
     )
       return;
     const reason = window
@@ -1480,9 +1482,11 @@ function ReassignControl({
       (pass) => pass.status === "planned",
     ).length;
     if (
-      !window.confirm(
-        `Use ${replacement.name} instead of ${assignment.program_name_snapshot} on ${cropLabel(assignment)}? ${planned} planned pass${planned === 1 ? "" : "es"} will no longer be on your list. Completed history stays.`,
-      )
+      !(await confirmDialog({
+        title: `Use ${replacement.name} instead of ${assignment.program_name_snapshot} on ${cropLabel(assignment)}?`,
+        body: `${planned} planned pass${planned === 1 ? "" : "es"} will no longer be on your list. Completed history stays.`,
+        confirmLabel: "Switch program",
+      }))
     )
       return;
     const reason = window

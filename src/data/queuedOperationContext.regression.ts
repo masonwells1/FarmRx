@@ -1800,17 +1800,22 @@ try {
     clearRetryActions: () => setModuleSyncRetryAction('equipment_tasks', null),
     selectFarm: async () => { switchCalls.select += 1; createFarmAccessValidationGate().begin(); throw new TypeError('network timeout during farm switch') },
   }
+  const { ConfirmDialogHost } = await import('../components/ConfirmDialog')
   function SwitchHarness() { const value = useFarmAccess(); return createElement(FarmSwitcher, { farms: value.farms, activeFarm: value.activeFarm, chooseFarm: value.chooseFarm }) }
   const confirmWindow = noticeWindow as unknown as { confirm: (message?: string) => boolean }
-  const priorConfirm = confirmWindow.confirm; confirmWindow.confirm = () => true
+  const priorConfirm = confirmWindow.confirm; confirmWindow.confirm = () => { throw new Error('window.confirm must not be used: the in-app dialog host is mounted.') }
   const switchContainer = noticeWindow.document.createElement('div'); noticeWindow.document.body.append(switchContainer); const switchRoot = createRoot(switchContainer as unknown as HTMLElement)
   try {
-    await act(async () => { switchRoot.render(createElement(FarmAccessGateForUser, { user: gateUser as never, dependencies: switchDependencies, children: createElement(SwitchHarness) })) })
+    await act(async () => { switchRoot.render(createElement(FarmAccessGateForUser, { user: gateUser as never, dependencies: switchDependencies, children: createElement(React.Fragment, null, createElement(SwitchHarness), createElement(ConfirmDialogHost)) })) })
     for (let attempt = 0; attempt < 100 && !switchContainer.querySelector('select'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const switchSelect = switchContainer.querySelector('select') as unknown as HTMLSelectElement | null
     assert(switchSelect?.value === farmA && switchCalls.install === 1, 'The mounted switch fixture did not open Farm A with retry actions installed.')
     switchSelect.value = farmB
     await act(async () => { switchSelect.dispatchEvent(new noticeWindow.Event('change', { bubbles: true }) as unknown as Event); await Promise.resolve() })
+    for (let attempt = 0; attempt < 100 && !switchContainer.querySelector('[role="dialog"]'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const switchDialog = switchContainer.querySelector('[role="dialog"]'); assert(switchDialog?.textContent?.includes('Saved changes are still waiting for') && switchCalls.select === 0, 'Switching farms with waiting saved work must ask in-app before any farm selection.')
+    const switchAnyway = [...switchContainer.querySelectorAll('[role="dialog"] button')].find((item) => item.textContent === 'Switch farms') as unknown as HTMLElement | undefined; assert(switchAnyway, 'The farm-switch dialog must offer Switch farms.')
+    await act(async () => { switchAnyway.dispatchEvent(new noticeWindow.MouseEvent('click', { bubbles: true }) as unknown as Event); await Promise.resolve() })
     for (let attempt = 0; attempt < 100 && !switchContainer.querySelector('[role="alert"]'); attempt += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     assert(switchContainer.querySelector('[role="alert"]') && switchSelect.value === farmA && Number(switchCalls.select) === 1 && Number(switchCalls.install) === 2, 'A failed farm switch was swallowed, changed the selected farm, or failed to reinstall Farm A retry actions.')
     assert(gateStorage.getItem(equipmentTasksWriteQueueKey(supabaseConfig.projectRef, userA, farmA)) === switchQueueBytes && switchQueue.read().entries.length === 1, 'A failed farm switch changed Farm A queue bytes before recovery.')

@@ -3,6 +3,7 @@ import { useLocation } from "react-router";
 import { NeedsAttentionList } from "./components/NeedsAttentionList";
 import { SaveReceipt } from "./components/SaveReceipt";
 import { MarketQuoteSection } from "./components/MarketQuote";
+import { confirmDialog } from "./components/ConfirmDialog";
 import { SectionTabs } from "./SectionTabs";
 import { farmerError } from "./lib/farmerErrors";
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
@@ -483,7 +484,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
               {deliveryNotice}
             </p>
           )}
-          <MarketQuoteSection />
+          <MarketQuoteSection cropYear={selectedScope.crop_year} />
           <section aria-label="Commodity positions" className="position-grid">
             {workspace.production_estimates.map((estimate) => (
               <PositionCard
@@ -820,7 +821,7 @@ function MarketingAlerts({
     }
   };
   const remove = async (id: string) => {
-    if (!window.confirm("Delete this alert rule?")) return;
+    if (!(await confirmDialog({ title: "Delete this alert rule?", body: "You will stop getting this alert. Past notifications stay.", confirmLabel: "Delete rule", destructive: true }))) return;
     const alertLock = alertLocks.current.get(id);
     if (!alertLock.acquire()) return;
     try {
@@ -1090,7 +1091,7 @@ function FirmOffers({
     }
   };
   const remove = async (id: string) => {
-    if (!window.confirm("Delete this firm offer?")) return;
+    if (!(await confirmDialog({ title: "Delete this firm offer?", body: "Only your record of the offer is removed. Check with the buyer if it is still working at the elevator.", confirmLabel: "Delete offer", destructive: true }))) return;
     const offerLock = offerLocks.current.get(id);
     if (!offerLock.acquire()) return;
     try {
@@ -2218,7 +2219,7 @@ export function PositionCard({
           ? ". Add a cash price target to estimate it."
           : ` using your cash price target of ${money.format(plannedPrice)}.`}
       </p>
-      <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p><button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { if (window.confirm("Use the harvest total as Grain actual? This changes Grain actual only; it does not change bins.")) void reconcileHarvest() }}>Use harvest total as Grain actual</button></section>
+      <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p><button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { void confirmDialog({ title: "Use the harvest total as Grain actual?", body: "This changes Grain actual only; it does not change bins.", confirmLabel: "Use harvest total" }).then((ok) => { if (ok) void reconcileHarvest() }) }}>Use harvest total as Grain actual</button></section>
       <div className="position-stats">
         <Metric
           label="Fully priced"
@@ -2747,18 +2748,18 @@ export function ContractEntry({
 export function ContractActions({ contract, workspace, services, onSaved, onDeliverySaved, onReceipt }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; onSaved: () => Promise<void>; onDeliverySaved: () => Promise<void>; onReceipt: (id: string) => void }) {
   const [price, setPrice] = useState(""); const [delivery, setDelivery] = useState(""); const [message, setMessage] = useState(""); const [saving, setSaving] = useState(false); const [deliveryUnconfirmed, setDeliveryUnconfirmed] = useState(false); const lock = useRef(createSubmitLock()); const deliveryDraft = useRef<GrainContractDelivery | null>(null);
   const missingLeg = contract.contract_type === "basis" ? "futures_price" : contract.contract_type === "hta" ? "basis" : null;
-  const finalize = async () => { if (!missingLeg || !lock.current.acquire()) return; setSaving(true); try { if (price.trim() === "") throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const value = Number(price); if (!Number.isFinite(value) || (missingLeg === "futures_price" && value <= 0)) throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const shown = `${missingLeg === "basis" && value < 0 ? "-" : ""}$${Math.abs(value).toFixed(2)}/bu`; if (!window.confirm(`Set ${missingLeg === "basis" ? "basis" : "futures price"} to ${shown}? This cannot be changed afterward.`)) return; await services.grainRepository.finalizeContractPriceLeg(contract.id, missingLeg, value); setMessage("Price leg set. Add a contract note for any correction."); await onSaved() } catch (error) { setMessage(farmerError(error, "set this price")) } finally { lock.current.release(); setSaving(false) } };
+  const finalize = async () => { if (!missingLeg || !lock.current.acquire()) return; setSaving(true); try { if (price.trim() === "") throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const value = Number(price); if (!Number.isFinite(value) || (missingLeg === "futures_price" && value <= 0)) throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const shown = `${missingLeg === "basis" && value < 0 ? "-" : ""}$${Math.abs(value).toFixed(2)}/bu`; if (!(await confirmDialog({ title: `Set ${missingLeg === "basis" ? "basis" : "futures price"} to ${shown}?`, body: "This cannot be changed afterward. Add a contract note for any correction.", confirmLabel: "Set price" }))) return; await services.grainRepository.finalizeContractPriceLeg(contract.id, missingLeg, value); setMessage("Price leg set. Add a contract note for any correction."); await onSaved() } catch (error) { setMessage(farmerError(error, "set this price")) } finally { lock.current.release(); setSaving(false) } };
   const record = async () => {
     if (!lock.current.acquire()) return;
-    setSaving(true);
     let writeAccepted = false;
     try {
       const value = deliveryDraft.current?.bushels ?? Number(delivery);
       if (!Number.isFinite(value) || value <= 0) throw new Error("Enter delivered bushels.");
       const delivered = workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((sum, item) => sum + item.bushels, 0);
       const excess = delivered + value - contract.bushels;
-      const allow_overdelivery = excess > 0 && window.confirm(`This is ${preciseBushels.format(excess)} bu more than the contract. Record anyway?`);
+      const allow_overdelivery = excess > 0 && (await confirmDialog({ title: `This is ${preciseBushels.format(excess)} bu more than the contract. Record anyway?`, body: "The contract will show as over-delivered.", confirmLabel: "Record anyway" }));
       if (excess > 0 && !allow_overdelivery) return;
+      setSaving(true);
       deliveryDraft.current ??= { id: services.createGrainId(), farm_id: workspace.fields.farm.id, grain_contract_id: contract.id, bushels: value, delivered_on: localCalendarDay(new Date()), note: null, created_at: new Date().toISOString(), allow_overdelivery };
       onReceipt(deliveryDraft.current.id);
       await services.grainRepository.recordContractDelivery(deliveryDraft.current);

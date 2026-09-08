@@ -1088,3 +1088,17 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .privacy-offline, .privacy-warning { border-left: 5px solid var(--amber); background: var(--warn-bg); color: #604a22; }
 .save-success { margin: 0; padding: 14px 16px; border-left: 5px solid var(--deep-green); border-radius: 8px; background: var(--light-green); color: var(--deep-green); font-weight: 800; }
 @media (max-width: 767px) { .farm-privacy-page { gap: 18px; }.privacy-card { padding: 20px 16px; }.privacy-status-row { align-items: stretch; flex-direction: column; }.privacy-status { width: fit-content; }.privacy-control { grid-template-columns: 1fr; }.privacy-switch { width: 100%; }.privacy-card .secondary-action { width: 100%; } }
+
+/* In-app confirm / prompt dialog (replaces browser confirm and prompt). */
+.confirm-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; background: rgba(46, 46, 46, 0.55); }
+.confirm-dialog { width: min(100%, 480px); padding: 24px; border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-card-hover); font-size: 18px; }
+.confirm-dialog form { display: grid; gap: 16px; }
+.confirm-dialog h2 { margin: 0; color: var(--deep-green); font-family: var(--brand-font); font-size: 24px; line-height: 1.2; }
+.confirm-dialog p { margin: 0; color: var(--charcoal); line-height: 1.4; }
+.confirm-dialog label { display: grid; gap: 6px; color: var(--charcoal); font-weight: 700; }
+.confirm-dialog input { min-height: 48px; width: 100%; padding: 8px 10px; border: 2px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); font: inherit; }
+.confirm-dialog__actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 12px; }
+.confirm-dialog__actions button { min-height: 52px; }
+.confirm-dialog__actions .confirm-dialog__destructive { border: 0; background: var(--warn-red); color: var(--on-dark); }
+.confirm-dialog__actions .confirm-dialog__destructive:disabled, .confirm-dialog__actions .primary-action:disabled { opacity: 0.55; }
+@media (max-width: 767px) { .confirm-dialog { padding: 20px 16px; } .confirm-dialog__actions { flex-direction: column-reverse; } .confirm-dialog__actions button { width: 100%; } }
