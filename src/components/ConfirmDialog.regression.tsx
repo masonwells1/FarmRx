@@ -1,7 +1,7 @@
 import { Window } from 'happy-dom'
 import React, { createElement } from 'react'
 import { act } from 'react'
-import { ConfirmDialogHost, confirmDialog, hasOpenDialog, promptDialog } from './ConfirmDialog'
+import { ConfirmDialogHost, cancelPendingDialogs, confirmDialog, hasOpenDialog, promptDialog } from './ConfirmDialog'
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 const win = new Window({ url: 'http://farmrx.test/' })
@@ -93,6 +93,29 @@ const secondInput = document.querySelector('[role="dialog"] input') as HTMLInput
 assert(secondInput && secondInput !== firstInput && secondInput.value === '' && document.activeElement === secondInput && buttonNamed('Yes, continue')?.disabled === true, 'The second queued prompt must mount a fresh card: empty text, focused input, confirm disabled.')
 await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await flush() }); await secondPrompt
 assert(secondReason.value === null && dialog() === null && !hasOpenDialog(), 'Escape on the second queued request must cancel that request and close the dialog.')
+
+// 7. Tab and Shift+Tab stay inside the card.
+let trapped: boolean | null = null
+const trappedDialog = confirmDialog({ title: 'Delete this task?', confirmLabel: 'Delete task', destructive: true }).then((value) => { trapped = value })
+await act(async () => { await flush() })
+const trapButtons = [...document.querySelectorAll('[role="dialog"] button')] as HTMLButtonElement[]
+assert(trapButtons.length === 2 && document.activeElement === trapButtons[0], 'The destructive dialog must start on the safe button.')
+await act(async () => { trapButtons[1].focus(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })); await flush() })
+assert(document.activeElement === trapButtons[0], 'Tab from the last control must wrap to the first control inside the dialog.')
+await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true })); await flush() })
+assert(document.activeElement === trapButtons[1], 'Shift+Tab from the first control must wrap to the last control inside the dialog.')
+await click(buttonNamed('Go back')); await trappedDialog
+assert(trapped === false, 'The trapped dialog must still answer normally.')
+
+// 8. cancelPendingDialogs answers every waiting request as Go back and closes the card.
+let staleConfirm: boolean | null = null; let staleReason: string | null | undefined
+const staleA = confirmDialog({ title: 'Delete this field log entry?' }).then((value) => { staleConfirm = value })
+const staleB = promptDialog({ title: 'Cancel this receipt?', label: 'Why?', required: true }).then((value) => { staleReason = value })
+await act(async () => { await flush() })
+assert(dialog() !== null && hasOpenDialog(), 'Requests must be open before the view goes away.')
+await act(async () => { cancelPendingDialogs(); await flush() }); await staleA; await staleB
+assert(staleConfirm === false && staleReason === null && dialog() === null && !hasOpenDialog(), 'Cancelling pending dialogs must resolve confirm false, prompt null, and close the card.')
+cancelPendingDialogs()
 
 await act(async () => { root.unmount() }); container.remove()
 window.confirm = priorConfirm; window.prompt = priorPrompt

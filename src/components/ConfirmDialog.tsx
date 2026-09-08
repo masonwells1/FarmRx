@@ -57,6 +57,19 @@ export function promptDialog(options: PromptDialogOptions): Promise<string | nul
 /** Test seam: true while a dialog is waiting for an answer. */
 export function hasOpenDialog() { return queue.length > 0 }
 
+/**
+ * Cancel every waiting request as if the farmer had pressed Go back. Called when
+ * the view that asked has gone away (route change, farm change, sign-out) so a
+ * stale question can never run its captured action against a record that is no
+ * longer on screen.
+ */
+export function cancelPendingDialogs() {
+  if (queue.length === 0) return
+  const pending = queue.splice(0, queue.length)
+  for (const request of pending) { if (request.kind === 'confirm') request.resolve(false); else request.resolve(null) }
+  notify()
+}
+
 export function ConfirmDialogHost() {
   const [current, setCurrent] = useState<Request | null>(queue[0] ?? null)
   useEffect(() => {
@@ -91,7 +104,18 @@ function DialogCard({ request }: { request: Request }) {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const first = request.kind === 'prompt' ? inputRef.current : options.destructive ? safeButtonRef.current : confirmButtonRef.current
     first?.focus()
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); cancel() } }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); cancel(); return }
+      if (event.key !== 'Tab' || !cardRef.current) return
+      // Keep Tab and Shift+Tab inside the card: the page behind is not usable while a question is open.
+      const focusable = [...cardRef.current.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')]
+      if (focusable.length === 0) return
+      const first = focusable[0]; const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+      const inside = active instanceof HTMLElement && cardRef.current.contains(active)
+      if (event.shiftKey && (!inside || active === first)) { event.preventDefault(); last.focus() }
+      else if (!event.shiftKey && (!inside || active === last)) { event.preventDefault(); first.focus() }
+    }
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('keydown', onKey); previous?.focus() }
     // The request identity is fixed for the life of this card.

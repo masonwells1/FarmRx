@@ -76,6 +76,8 @@ Farm Rx never uses the browser's `confirm()` or `prompt()`. Every "are you sure?
 | Destructive | `destructive: true` gives the confirm a solid `WARN_RED` fill and starts keyboard focus on the safe button |
 | Prompt | `promptDialog({ label, required })` adds one text field; a required reason keeps the confirm disabled until typed |
 | Phone | Full-width stacked buttons, 52px tall, with the safe button on the bottom nearest the thumb so a stray tap never confirms; Escape and tapping the backdrop cancel |
+| Keyboard | Tab and Shift+Tab stay inside the card while it is open |
+| Stale questions | Leaving the route, switching or losing the farm, or signing out cancels any open dialog, so a question can never run its action against a record that is no longer on screen |
 
 The host queues requests, so two questions never overlap; the second shows after the first is answered.
 
