@@ -18,6 +18,7 @@ import {
 } from "react-router";
 import type { User } from "@supabase/supabase-js";
 import { useAuth } from "./auth/AuthProvider";
+import { ConfirmDialogHost, cancelPendingDialogs, confirmDialog } from "./components/ConfirmDialog";
 import { isPasswordRecoveryStorageError, minimumPasswordLength, passwordEmailDeliveryEnabled, passwordRecoveryCleanupAuthority, passwordRecoveryExitUrl, passwordRecoveryStorageErrorMessage, passwordResetPublicResponse, passwordStrength, passwordValidationMessage } from './auth/passwordRecovery';
 import {
   bootstrapInitialOwnerFarm,
@@ -621,6 +622,8 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
     mounted.current = true;
     return () => { mounted.current = false; validationGate.current.invalidate(); };
   }, []);
+  // Switching or losing the active farm invalidates any question asked about the previous farm.
+  useEffect(() => { cancelPendingDialogs(); }, [access?.selectedFarmId]);
   useEffect(() => {
     let active = true;
     dependencies.clearRetryActions();
@@ -781,7 +784,7 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
   if (!activeFarm) return null;
   const chooseFarm = async (farmId: string) => {
     if (farmId === activeFarm.id) return;
-    if (hasPendingFarmWork(user.id, activeFarm.id) && !window.confirm(`Saved changes are still waiting for ${activeFarm.name}. They will stay with that farm. Switch farms anyway?`)) return;
+    if (hasPendingFarmWork(user.id, activeFarm.id) && !(await confirmDialog({ title: `Switch away from ${activeFarm.name}?`, body: `Saved changes are still waiting for ${activeFarm.name}. They will stay with that farm and send when you come back.`, confirmLabel: "Switch farms", cancelLabel: "Stay here" }))) return;
     try {
       await dependencies.selectFarm(user.id, farmId);
     } catch (error) {
@@ -912,7 +915,9 @@ function MobileNavigation() {
   const mobilePrimaryNavigation = allowed.filter((item) => mobilePrimaryPaths.has(item.path));
   const mobileMoreNavigation = allowed.filter((item) => !mobilePrimaryPaths.has(item.path));
   const moreActive = mobileMoreNavigation.some((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`));
-  useEffect(() => setMoreOpen(false), [location.pathname]);
+  // A route change means the view that asked a question is gone; drop the question with it.
+  useEffect(() => { setMoreOpen(false); cancelPendingDialogs(); }, [location.pathname]);
+  useEffect(() => () => cancelPendingDialogs(), []);
   return (
     <>
       {moreOpen && (
@@ -1204,7 +1209,7 @@ function UpdatePasswordPage() {
 }
 
 export function App() {
-  return (
+  return (<>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/update-password" element={<UpdatePasswordPage />} />
@@ -1219,5 +1224,6 @@ export function App() {
         }
       />
     </Routes>
-  );
+    <ConfirmDialogHost />
+  </>);
 }

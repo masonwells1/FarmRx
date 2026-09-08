@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { confirmDialog } from "./components/ConfirmDialog";
 import { useNavigate } from "react-router";
 import type {
   Equipment,
@@ -618,8 +619,7 @@ function EquipmentDetail({
                 <button
                   className="danger-action"
                   onClick={() => {
-                    if (window.confirm("Delete this service reminder?"))
-                      void removeInterval(x.id);
+                    void confirmDialog({ title: "Delete this service reminder?", body: "It will no longer remind you. Service history is not changed.", confirmLabel: "Delete reminder", destructive: true }).then((ok) => { if (ok) void removeInterval(x.id) });
                   }}
                 >
                   Delete
@@ -707,8 +707,7 @@ function EquipmentDetail({
                     className="danger-action"
                     disabled={!operationalIntegrityReady}
                     onClick={() => {
-                      if (window.confirm("Delete this service entry?"))
-                        void removeServiceLog(x.id);
+                      void confirmDialog({ title: "Delete this service entry?", body: "This removes it from the machine's service history.", confirmLabel: "Delete entry", destructive: true }).then((ok) => { if (ok) void removeServiceLog(x.id) });
                     }}
                   >
                     Delete
@@ -1042,8 +1041,7 @@ function TaskColumn({
                   <button
                     className="danger-action"
                     onClick={() => {
-                      if (window.confirm("Delete this task?"))
-                        void remove(task);
+                      void confirmDialog({ title: "Delete this task?", body: "It comes off your list. Nothing else is changed.", confirmLabel: "Delete task", destructive: true }).then((ok) => { if (ok) void remove(task) });
                     }}
                   >
                     Delete
