@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "react-router";
 import { NeedsAttentionList } from "./components/NeedsAttentionList";
 import { SaveReceipt } from "./components/SaveReceipt";
-import { MarketQuoteSection } from "./components/MarketQuote";
+import { MarketQuoteSection, quoteCropYear } from "./components/MarketQuote";
 import { confirmDialog } from "./components/ConfirmDialog";
 import { SectionTabs } from "./SectionTabs";
 import { farmerError } from "./lib/farmerErrors";
@@ -484,7 +484,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
               {deliveryNotice}
             </p>
           )}
-          <MarketQuoteSection cropYear={selectedScope.crop_year} />
+          <MarketQuoteSection cropYear={quoteCropYear(workspace.production_estimates.map((estimate) => estimate.crop_year))} />
           <section aria-label="Commodity positions" className="position-grid">
             {workspace.production_estimates.map((estimate) => (
               <PositionCard
@@ -2748,7 +2748,7 @@ export function ContractEntry({
 export function ContractActions({ contract, workspace, services, onSaved, onDeliverySaved, onReceipt }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; onSaved: () => Promise<void>; onDeliverySaved: () => Promise<void>; onReceipt: (id: string) => void }) {
   const [price, setPrice] = useState(""); const [delivery, setDelivery] = useState(""); const [message, setMessage] = useState(""); const [saving, setSaving] = useState(false); const [deliveryUnconfirmed, setDeliveryUnconfirmed] = useState(false); const lock = useRef(createSubmitLock()); const deliveryDraft = useRef<GrainContractDelivery | null>(null);
   const missingLeg = contract.contract_type === "basis" ? "futures_price" : contract.contract_type === "hta" ? "basis" : null;
-  const finalize = async () => { if (!missingLeg || !lock.current.acquire()) return; setSaving(true); try { if (price.trim() === "") throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const value = Number(price); if (!Number.isFinite(value) || (missingLeg === "futures_price" && value <= 0)) throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const shown = `${missingLeg === "basis" && value < 0 ? "-" : ""}$${Math.abs(value).toFixed(2)}/bu`; if (!(await confirmDialog({ title: `Set ${missingLeg === "basis" ? "basis" : "futures price"} to ${shown}?`, body: "This cannot be changed afterward. Add a contract note for any correction.", confirmLabel: "Set price" }))) return; await services.grainRepository.finalizeContractPriceLeg(contract.id, missingLeg, value); setMessage("Price leg set. Add a contract note for any correction."); await onSaved() } catch (error) { setMessage(farmerError(error, "set this price")) } finally { lock.current.release(); setSaving(false) } };
+  const finalize = async () => { if (!missingLeg || !lock.current.acquire()) return; setSaving(true); try { if (price.trim() === "") throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const value = Number(price); if (!Number.isFinite(value) || (missingLeg === "futures_price" && value <= 0)) throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const shown = `${missingLeg === "basis" && value < 0 ? "-" : ""}$${Math.abs(value).toFixed(2)}/bu`; if (!(await confirmDialog({ title: `Set ${missingLeg === "basis" ? "basis" : "futures price"} to ${shown}?`, body: "This cannot be changed afterward. Add a contract note for any correction.", confirmLabel: "Set price", destructive: true }))) return; await services.grainRepository.finalizeContractPriceLeg(contract.id, missingLeg, value); setMessage("Price leg set. Add a contract note for any correction."); await onSaved() } catch (error) { setMessage(farmerError(error, "set this price")) } finally { lock.current.release(); setSaving(false) } };
   const record = async () => {
     if (!lock.current.acquire()) return;
     let writeAccepted = false;

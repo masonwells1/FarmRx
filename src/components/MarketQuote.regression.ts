@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { marketQuotes, newCropQuotes } from './MarketQuote'
+import { marketQuotes, newCropQuotes, quoteCropYear } from './MarketQuote'
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 
@@ -9,6 +9,13 @@ assert(quotes2026.map((quote) => quote.detail).join('|') === 'Dec 2026|Nov 2026|
 assert(newCropQuotes(2027)[2]?.symbol === 'CBOT:ZWN2028', 'Wheat must roll to the year after the crop year.')
 assert(newCropQuotes(Number.NaN).length === 0 && newCropQuotes(1990).length === 0, 'An invalid crop year must produce no contract quotes rather than a bad symbol.')
 assert(marketQuotes(2026).length === 6 && marketQuotes(2026)[0]?.symbol === 'CBOT:ZC1!', 'Front-month quotes stay first, followed by the crop-year contracts.')
+
+const sept2026 = new Date(2026, 8, 8)
+assert(quoteCropYear([2026, 2027], sept2026) === 2027, 'With estimates for two years the tiles must follow the newest, not the oldest estimate on file.')
+assert(quoteCropYear([2025, 2026], sept2026) === 2026, 'The newest estimate year is used when it is the current year.')
+assert(quoteCropYear([2025], sept2026) === 2026, 'Tiles never point earlier than the current calendar year.')
+assert(quoteCropYear([], sept2026) === 2026, 'With no estimates the current calendar year is used.')
+assert(quoteCropYear([2026], new Date(2027, 0, 15)) === 2027, 'In January the tiles already follow the new crop year even before an estimate exists for it.')
 
 // The quote frame is plain HTML and cannot import this module, so its symbol
 // allowlist is a regex literal. Extract it and prove every derived symbol passes.

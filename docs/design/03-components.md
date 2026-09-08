@@ -73,7 +73,7 @@ Farm Rx never uses the browser's `confirm()` or `prompt()`. Every "are you sure?
 | Body | One or two sentences on what changes and what does not: "Only your record of the offer is removed." |
 | Confirm button | Names the action, never "OK" or "Yes": "Delete offer", "Switch farms", "Use harvest total" |
 | Cancel button | Default "Go back"; use a specific safe label when it reads better: "Keep it private", "Stay here" |
-| Destructive | `destructive: true` gives the confirm a solid `WARN_RED` fill and starts keyboard focus on the safe button |
+| Destructive or irreversible | `destructive: true` gives the confirm a solid `WARN_RED` fill and starts keyboard focus on the safe button; use it for deletes and for anything that cannot be undone, such as setting a contract's final price leg |
 | Prompt | `promptDialog({ label, required })` adds one text field; a required reason keeps the confirm disabled until typed |
 | Phone | Full-width stacked buttons, 52px tall, with the safe button on the bottom nearest the thumb so a stray tap never confirms; Escape and tapping the backdrop cancel |
 | Keyboard | Tab and Shift+Tab stay inside the card while it is open |

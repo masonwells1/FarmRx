@@ -25,6 +25,18 @@ export function newCropQuotes(cropYear: number): MarketQuoteSpec[] {
 
 export function marketQuotes(cropYear: number): MarketQuoteSpec[] { return [...FRONT_MONTH, ...newCropQuotes(cropYear)] }
 
+/**
+ * The crop year the new-crop tiles follow: the newest crop year the farm has an
+ * estimate for, but never earlier than the current calendar year. The front-month
+ * tiles already cover old-crop grain, so the contract tiles always point at the
+ * crop being planned or grown rather than the oldest estimate on file.
+ */
+export function quoteCropYear(estimateCropYears: readonly number[], today = new Date()): number {
+  const current = today.getFullYear()
+  const newest = estimateCropYears.filter((year) => Number.isInteger(year)).reduce((max, year) => Math.max(max, year), current)
+  return newest
+}
+
 function MarketQuote({ symbol, label, detail }: MarketQuoteSpec) {
   const [failed, setFailed] = useState(false)
   return <article className={`market-quote${failed ? ' market-quote--unavailable' : ''}`}>
