@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { confirmDialog } from "./components/ConfirmDialog";
+import { confirmDialog, promptDialog } from "./components/ConfirmDialog";
 import { useSearchParams } from "react-router";
 import {
   canEditPrograms,
@@ -1301,20 +1301,14 @@ function SeasonTracker({
       (pass) => pass.status === "planned",
     ).length;
     const terminal = assignment.passes.length - affected;
-    if (
-      !(await confirmDialog({
-        title: `Remove ${assignment.program_name_snapshot} from ${cropLabel(assignment)}?`,
-        body: `${affected} planned pass${affected === 1 ? "" : "es"} will no longer be on your list. ${terminal} completed pass${terminal === 1 ? "" : "es"} will stay in your records.`,
-        confirmLabel: "Remove program",
-        destructive: true,
-      }))
-    )
-      return;
-    const reason = window
-      .prompt(
-        `Why are you removing ${assignment.program_name_snapshot} from ${cropLabel(assignment)}?`,
-      )
-      ?.trim();
+    const reason = await promptDialog({
+      title: `Remove ${assignment.program_name_snapshot} from ${cropLabel(assignment)}?`,
+      body: `${affected} planned pass${affected === 1 ? "" : "es"} will no longer be on your list. ${terminal} completed pass${terminal === 1 ? "" : "es"} will stay in your records.`,
+      label: "Why are you removing it?",
+      required: true,
+      confirmLabel: "Remove program",
+      destructive: true,
+    });
     if (!reason) return;
     const assignmentLock = assignmentLocks.current.get(assignment.assignment_id);
     if (!assignmentLock.acquire()) return;
@@ -1481,17 +1475,13 @@ function ReassignControl({
     const planned = assignment.passes.filter(
       (pass) => pass.status === "planned",
     ).length;
-    if (
-      !(await confirmDialog({
-        title: `Use ${replacement.name} instead of ${assignment.program_name_snapshot} on ${cropLabel(assignment)}?`,
-        body: `${planned} planned pass${planned === 1 ? "" : "es"} will no longer be on your list. Completed history stays.`,
-        confirmLabel: "Switch program",
-      }))
-    )
-      return;
-    const reason = window
-      .prompt(`Why are you changing the program on ${cropLabel(assignment)}?`)
-      ?.trim();
+    const reason = await promptDialog({
+      title: `Use ${replacement.name} instead of ${assignment.program_name_snapshot} on ${cropLabel(assignment)}?`,
+      body: `${planned} planned pass${planned === 1 ? "" : "es"} will no longer be on your list. Completed history stays.`,
+      label: "Why are you changing the program?",
+      required: true,
+      confirmLabel: "Switch program",
+    });
     if (!reason) return;
     if (!submitLock.current.acquire()) return;
     try {

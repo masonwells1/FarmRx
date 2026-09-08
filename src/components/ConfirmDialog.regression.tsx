@@ -80,6 +80,20 @@ await act(async () => { await flush() })
 await click(buttonNamed('Go back')); await kept
 assert(reason === null, 'Cancelling a prompt must resolve null.')
 
+// 6. A queued prompt after a prompt mounts fresh: no carried-over text, focus on its own input, and Escape cancels the current request only.
+const firstReason: { value?: string | null } = {}; const secondReason: { value?: string | null } = {}
+const firstPrompt = promptDialog({ title: 'First reason?', label: 'Why?', required: true }).then((value) => { firstReason.value = value })
+const secondPrompt = promptDialog({ title: 'Second reason?', label: 'Why?', required: true }).then((value) => { secondReason.value = value })
+await act(async () => { await flush() })
+const firstInput = document.querySelector('[role="dialog"] input') as HTMLInputElement | null; assert(firstInput, 'First queued prompt must render its input.')
+await act(async () => { Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, 'value')!.set!.call(firstInput, 'Rain delay'); firstInput.dispatchEvent(new (win.InputEvent ?? win.Event)('input', { bubbles: true }) as unknown as Event); await flush() })
+await click(buttonNamed('Yes, continue')); await firstPrompt
+assert(firstReason.value === 'Rain delay' && dialog()?.textContent?.includes('Second reason?'), 'The first prompt must resolve its text and hand off to the second request.')
+const secondInput = document.querySelector('[role="dialog"] input') as HTMLInputElement | null
+assert(secondInput && secondInput !== firstInput && secondInput.value === '' && document.activeElement === secondInput && buttonNamed('Yes, continue')?.disabled === true, 'The second queued prompt must mount a fresh card: empty text, focused input, confirm disabled.')
+await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await flush() }); await secondPrompt
+assert(secondReason.value === null && dialog() === null && !hasOpenDialog(), 'Escape on the second queued request must cancel that request and close the dialog.')
+
 await act(async () => { root.unmount() }); container.remove()
 window.confirm = priorConfirm; window.prompt = priorPrompt
 console.log('ConfirmDialog regression passed.')

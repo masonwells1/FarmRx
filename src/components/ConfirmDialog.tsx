@@ -26,10 +26,11 @@ export interface PromptDialogOptions extends ConfirmDialogOptions {
 }
 
 type Request =
-  | { kind: 'confirm'; options: ConfirmDialogOptions; resolve: (value: boolean) => void }
-  | { kind: 'prompt'; options: PromptDialogOptions; resolve: (value: string | null) => void }
+  | { id: number; kind: 'confirm'; options: ConfirmDialogOptions; resolve: (value: boolean) => void }
+  | { id: number; kind: 'prompt'; options: PromptDialogOptions; resolve: (value: string | null) => void }
 
 const queue: Request[] = []
+let nextRequestId = 1
 const listeners = new Set<() => void>()
 
 function notify() { for (const listener of listeners) listener() }
@@ -42,7 +43,7 @@ function finish(request: Request) {
 
 export function confirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
   if (listeners.size === 0) return Promise.resolve(window.confirm(options.body ? `${options.title} ${options.body}` : options.title))
-  return new Promise((resolve) => { queue.push({ kind: 'confirm', options, resolve }); notify() })
+  return new Promise((resolve) => { queue.push({ id: nextRequestId++, kind: 'confirm', options, resolve }); notify() })
 }
 
 export function promptDialog(options: PromptDialogOptions): Promise<string | null> {
@@ -50,7 +51,7 @@ export function promptDialog(options: PromptDialogOptions): Promise<string | nul
     const answer = window.prompt(options.body ? `${options.title} ${options.body}` : options.title)
     return Promise.resolve(answer === null || (options.required && answer.trim() === '') ? null : answer)
   }
-  return new Promise((resolve) => { queue.push({ kind: 'prompt', options, resolve }); notify() })
+  return new Promise((resolve) => { queue.push({ id: nextRequestId++, kind: 'prompt', options, resolve }); notify() })
 }
 
 /** Test seam: true while a dialog is waiting for an answer. */
@@ -65,7 +66,8 @@ export function ConfirmDialogHost() {
     return () => { listeners.delete(update) }
   }, [])
   if (!current) return null
-  return <DialogCard key={queue.indexOf(current)} request={current} />
+  // Keyed by request id so a queued request mounts a fresh card: cleared text, fresh focus, its own Escape handler.
+  return <DialogCard key={current.id} request={current} />
 }
 
 function DialogCard({ request }: { request: Request }) {
