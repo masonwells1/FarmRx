@@ -92,7 +92,10 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))
       const cacheCustody = captureWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context))
       releaseQueue()
-      await finishInvalidation()
+      // The synchronous custody tombstone is the durable no-resurrection
+      // fence. IndexedDB deletion is best effort: a device-level cache fault
+      // must not turn an already-confirmed server save into a failed save.
+      try { await finishInvalidation() } catch { return }
       if (confirmedData && verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), cacheCustody)) {
         await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
         const retained = await writeWorkspaceCache(this.cacheScope(source.context), confirmedData, source.operationContext, undefined, cacheCustody)
@@ -242,10 +245,10 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       }))
     }
     const entry = createSoilRxQueueEntry({ version: 1, module: 'soilRx', kind: 'saveTest', operationId: this.d.createId(), userId: source.context.userId, farmId: source.context.farmId, enqueuedAt: this.d.clock(), operationContext: source.operationContext, draft: normalized })
-    return queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
+    const result = await queueTransaction(source.queue.key, this.d.storage, this.d.createId, async (verify) => {
       await verifyQueuedOperationContext(this.d, source.operationContext, source.context); verify()
       const enqueue = async () => { const envelope = source.queue.append(entry); setModuleSyncStatus('soilRx', { kind: 'pending', pending: envelope.entries.length }); const pending = this.pending(entry); await this.retain(source, { tests: sortSoilTestsNewestFirst([...(this.workspace?.data.tests ?? []).filter((test) => test.id !== pending.id), pending]) }); return pending }
-      if (this.d.isOffline() || source.queue.read().entries.length) { const result = await enqueue(); launchReplayInBackground(() => this.inspectAndReplay()); return result }
+      if (this.d.isOffline() || source.queue.read().entries.length) return enqueue()
       try {
         const saved = await this.live.saveTestOperation(normalized, source.operationContext)
         verify(); await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
@@ -259,6 +262,8 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       }
       catch (error) { await verifyQueuedOperationContext(this.d, source.operationContext, source.context); if (!isTransportFailure(error, this.d.isOffline())) throw error; return enqueue() }
     })
+    if (!this.d.isOffline()) launchReplayInBackground(() => this.inspectAndReplay())
+    return result
   }
 
   async inspectAndReplay() {
