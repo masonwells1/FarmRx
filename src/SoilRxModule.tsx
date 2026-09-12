@@ -71,7 +71,7 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
       if (caught instanceof SoilRxHistoryUnavailableOfflineError) return null
       throw caught
     })
-    const [fieldData, soilData, queueKey] = await Promise.all([fieldsRepository.getData(), history, repository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)])
+    const [fieldData, soilData, queueKey] = await Promise.all([fieldsRepository.getData(), history, repository.getNeedsAttentionQueueKey?.() ?? Promise.resolve(null)])
     const nextFields = fieldData.fields.map(({ id, name, is_active }) => ({ id, name, isActive: is_active }))
     const nextActiveFields = nextFields.filter((field) => field.isActive)
     const nextTests = sortSoilTestsNewestFirst(soilData?.tests ?? []); setFields(nextFields); setTests(nextTests); setHarvestAssignments(fieldData.crop_assignments); setCommodities(fieldData.commodities); setHistoryUnavailableOffline(soilData === null)

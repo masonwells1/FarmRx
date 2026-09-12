@@ -69,6 +69,7 @@ function Assert-MaplePortFree {
 function Invoke-MaplePhase([string]$Name, [string]$FrozenUtc, [string]$ClientInstant, [string]$WriteTag, [string]$PhoneTag, [string]$SqlPath, [bool]$ReadOnly) {
   Assert-MaplePortFree
   $action = {
+    param([string]$Name, [string]$ClientInstant, [bool]$ReadOnly, [string]$WriteTag, [string]$PhoneTag, [string]$SqlPath)
     $before = Get-MapleCanonicalSnapshot $Name
     $prior = [Environment]::GetEnvironmentVariable('FARMRX_MAPLE_CLIENT_INSTANT', [EnvironmentVariableTarget]::Process)
     try {
@@ -81,7 +82,7 @@ function Invoke-MaplePhase([string]$Name, [string]$FrozenUtc, [string]$ClientIns
       $true
     } finally { [Environment]::SetEnvironmentVariable('FARMRX_MAPLE_CLIENT_INSTANT', $prior, [EnvironmentVariableTarget]::Process) }
   }
-  $result = @(Invoke-HarvestRidgeClockPhase -Root $root -Phase "maple-$Name" -FrozenInstant $FrozenUtc -ApiUrl $boundary.ApiUrl -PublishableKey $boundary.PublishableKey -AccessToken $token -ProofFarmId '27010000-0000-4000-8000-000000000001' -ProofFarmName 'Maple Ridge' -Action $action)
+  $result = @(Invoke-HarvestRidgeClockPhase -Root $root -Phase "maple-$Name" -FrozenInstant $FrozenUtc -ApiUrl $boundary.ApiUrl -PublishableKey $boundary.PublishableKey -AccessToken $token -ProofFarmId '27010000-0000-4000-8000-000000000001' -ProofFarmName 'Maple Ridge' -Action $action -ActionParameters @{ Name=$Name; ClientInstant=$ClientInstant; ReadOnly=$ReadOnly; WriteTag=$WriteTag; PhoneTag=$PhoneTag; SqlPath=$SqlPath })
   foreach ($line in @($result | Where-Object { $_ -is [string] })) { Write-Output $line }
   if ($result[-1] -ne $true) { throw "Maple $Name clock phase did not return exact success." }
   Assert-MaplePortFree

@@ -155,7 +155,8 @@ function Invoke-HarvestRidgeClockPhase {
     [Parameter(Mandatory)][scriptblock]$Action,
     [string]$ProofFarmId=$script:HrFarmId,
     [string]$ProofFarmName=$script:HrFarmName,
-    [switch]$ResumeRecovery
+    [switch]$ResumeRecovery,
+    [hashtable]$ActionParameters=@{}
   )
   $instant=Assert-HrClockPhaseInput $ApiUrl $PublishableKey $AccessToken $ProofFarmId $ProofFarmName $FrozenInstant
   $journal=Join-Path ([IO.Path]::GetTempPath()) "farmrx-harvest-ridge-clock-$Phase.json"
@@ -192,7 +193,7 @@ function Invoke-HarvestRidgeClockPhase {
   $primary=$null
   try{
     if($ResumeRecovery){$resume=Invoke-MapleSwapRecovery $adapter $inventory;if(-not$resume.Restored){throw "HARVEST_RIDGE_CLOCK_RECOVERY_INCOMPLETE: $($resume.Failures-join'; ')"}}
-    elseif((Invoke-MapleSwapStateMachine $adapter $inventory $Action)-cne'MAPLE_DB_CLOCK_SWAP_ADAPTER_PASS'){throw 'HARVEST_RIDGE_CLOCK_FAILED: state machine result was not exact.'}
+    elseif((Invoke-MapleSwapStateMachine $adapter $inventory $Action $ActionParameters)-cne'MAPLE_DB_CLOCK_SWAP_ADAPTER_PASS'){throw 'HARVEST_RIDGE_CLOCK_FAILED: state machine result was not exact.'}
   }
   catch{$primary=$_.Exception;try{$retry=Invoke-MapleSwapRecovery $adapter $inventory}catch{$retry=[pscustomobject]@{Restored=$false;Failures=@($_.Exception.Message)}};if(-not$retry.Restored){throw [AggregateException]::new("Harvest Ridge clock phase failed: $($primary.Message) Recovery remained incomplete: $($retry.Failures-join'; ')",[Exception[]]@($primary,[Exception]::new(($retry.Failures-join'; '))))}}
   $ordinary=Get-HrClockContainer $Root $n.Db;$parked=Get-HrClockContainer $Root $n.Parked

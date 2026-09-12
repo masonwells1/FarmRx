@@ -120,7 +120,7 @@ export async function drainSoilRxCleanupOutbox(storage: StorageLike, key: string
   const target = current.filter((row): row is StoredReportCleanup => row.kind === 'report_path' && row.userId === userId && row.farmId === farmId)
   if (!target.length) return
   let confirmed: string[]
-  try { confirmed = await remove(target.map((row) => row.path)) } catch { return }
+  confirmed = await remove(target.map((row) => row.path))
   if (!confirmed.length) return
   write(storage, key, current.filter((row) => row.kind !== 'report_path' || !confirmed.includes(row.path)))
 }

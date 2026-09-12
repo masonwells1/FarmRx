@@ -59,7 +59,7 @@ function Invoke-NativeCaptureProbe([int]$ExitCode, [string]$Summary) {
   try {
     $ErrorActionPreference = 'Continue'
     $nativeCommand = "[Console]::Error.WriteLine('routine-native-stderr'); [Console]::Out.WriteLine('$Summary'); exit $ExitCode"
-    $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+    $pwsh = if ($PSVersionTable.PSEdition -eq 'Desktop') { Join-Path $PSHOME 'powershell.exe' } elseif ($IsWindows) { Join-Path $PSHOME 'pwsh.exe' } else { Join-Path $PSHOME 'pwsh' }
     $browserOutput = @(& $pwsh -NoProfile -Command $nativeCommand 2>&1)
     $browserExit = $LASTEXITCODE
   } finally {

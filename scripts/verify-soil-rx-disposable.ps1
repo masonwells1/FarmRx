@@ -35,7 +35,7 @@ function Mutate-TerminalGuard([string]$sql, [string]$mode) {
 }
 
 function Invoke-ExpectedGuardMutation([string]$mode, [string]$expected) {
-  $shell = (Get-Command pwsh -ErrorAction Stop).Source
+  $shell = if ($PSVersionTable.PSEdition -eq 'Desktop') { Join-Path $PSHOME 'powershell.exe' } elseif ($IsWindows) { Join-Path $PSHOME 'pwsh.exe' } else { Join-Path $PSHOME 'pwsh' }
   $priorPreference = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   try {

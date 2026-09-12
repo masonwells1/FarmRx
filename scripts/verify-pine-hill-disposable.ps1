@@ -253,7 +253,7 @@ try {
   Invoke-PineSequence phone phone $boundary.PublishableKey $token $temp
   Reset-Pine $supabase;$token=Get-PineAccessToken $boundary.PublishableKey;Wait-PineFarmApi $boundary.PublishableKey $token
   Invoke-PineSequence phone corrupt-active-phone $boundary.PublishableKey $token $temp -Mode corrupt-active
-  Reset-Pine $supabase;$token=Get-PineAccessToken $boundary.PublishableKey
+  Reset-Pine $supabase;$token=Get-PineAccessToken $boundary.PublishableKey;Wait-PineFarmApi $boundary.PublishableKey $token
   Invoke-PineCorruptVaultSequence phone corrupt-vault-phone $temp
   Write-Output 'PINE_HILL_2027_DISPOSABLE_PASS'
 } finally {

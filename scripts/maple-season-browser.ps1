@@ -25,7 +25,10 @@ function Get-MapleSeasonJobIdentitySnapshot {
   foreach ($processId in @($Job.GetActiveProcessIds())) {
     $identity = Get-MapleSeasonProcessIdentity -ProcessId $processId
     if ($null -eq $identity) {
-      throw "$Scenario could not capture an exact identity for owned browser process $processId."
+      if (@($Job.GetActiveProcessIds()) -contains [int]$processId) {
+        throw "$Scenario could not capture an exact identity for owned browser process $processId."
+      }
+      continue
     }
     $snapshot.Add($identity)
   }

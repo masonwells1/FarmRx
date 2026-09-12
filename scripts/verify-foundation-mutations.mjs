@@ -210,7 +210,7 @@ try {
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("Invoke-FoundationNativeLane -Lane 'built-browser' -Executable $nativeNpm -Arguments @('run','test:e2e') -Failure 'Built-browser foundation suite failed.' | Out-Null", "Invoke-FoundationLane { & npm run test:e2e } 'Built-browser foundation suite failed.'"))
   detected('built-browser native-lane bypass', 'orchestrator:native-browser-lane')
   reset()
-  mutate('scripts/verify-foundation.ps1', (source) => source.replace('  Assert-FoundationBrowserPortIsFree\n', ''))
+  mutate('scripts/verify-foundation.ps1', (source) => replaceExactlyOne(source, /^  Assert-FoundationBrowserPortIsFree\r?\n/gm, '', 'built-browser port preflight removal'))
   detected('built-browser port preflight removal', 'orchestrator:browser-port-preflight')
   reset()
   mutate('scripts/verify-foundation.ps1', (source) => {

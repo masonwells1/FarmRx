@@ -381,12 +381,12 @@ Write-Output "FOUNDATION_NATIVE_SENTINEL_PROBE_PASS:$Mode"
   }
 }
 
+$expectedInjectedCleanupCount = if ($InjectCleanupFailure -ceq 'both') { 2 } elseif ($InjectCleanupFailure -ceq 'none') { 0 } else { 1 }
+if ($cleanupFailureInjected.Count -ne $expectedInjectedCleanupCount) { throw "Requested cleanup failure was not exercised exactly: $InjectCleanupFailure" }
 if ($primaryFailure -and $cleanupFailures.Count) {
   throw [AggregateException]::new('Foundation native regression primary and cleanup failures.',[Exception[]]@($primaryFailure) + [Exception[]]$cleanupFailures.ToArray())
 }
 if ($cleanupFailures.Count) { throw [AggregateException]::new('Foundation native regression cleanup failed.',[Exception[]]$cleanupFailures.ToArray()) }
 if ($primaryFailure) { throw $primaryFailure }
-$expectedInjectedCleanupCount = if ($InjectCleanupFailure -ceq 'both') { 2 } elseif ($InjectCleanupFailure -ceq 'none') { 0 } else { 1 }
-if ($cleanupFailureInjected.Count -ne $expectedInjectedCleanupCount) { throw "Requested cleanup failure was not exercised exactly: $InjectCleanupFailure" }
 $global:LASTEXITCODE = 0
 Write-Output 'FOUNDATION_NATIVE_LANE_REGRESSION_PASS'
