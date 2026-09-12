@@ -2,8 +2,8 @@ import { isTransportFailure } from './QueuedFieldsRepository'
 import { appendNeedsAttention, dismissNeedsAttention, readNeedsAttention, type NeedsAttentionRecord } from './needsAttentionStore'
 import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 import { queueTransaction } from './queueTransaction'
-import { beginSoilRxAttachmentCustody, confirmSoilRxAttachmentRemoval, drainSoilRxCleanupOutbox, readSoilRxAttachmentCustody, readSoilRxCleanupOutbox, releaseSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, soilRxCleanupOutboxKey, soilRxCleanupOutboxTransaction, type SoilRxAttachmentCustodyEntry } from './soilRxCleanupOutbox'
-import { createSoilRxQueueEntry, SoilRxWriteQueue, parseSoilRxQueue, soilRxWriteQueueKey, type QueuedSoilTestDraft, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
+import { beginSoilRxAttachmentCustody, confirmSoilRxAttachmentRemoval, drainSoilRxCleanupOutbox, readSoilRxAttachmentCustody, readSoilRxCleanupOutbox, releaseSoilRxAttachmentCustody, replaceSoilRxAttachmentCustody, SoilRxMalformedCleanupCustodyError, soilRxCleanupOutboxKey, soilRxCleanupOutboxTransaction, type SoilRxAttachmentCustodyEntry } from './soilRxCleanupOutbox'
+import { createSoilRxQueueEntry, SoilRxMalformedQueueError, SoilRxWriteQueue, parseSoilRxQueue, soilRxWriteQueueKey, type QueuedSoilTestDraft, type SoilRxQueueEntryV1 } from './soilRxWriteQueue'
 import { normalizeSoilTestDraft, soilMeasurementKeys, SoilRxHistoryUnavailableOfflineError, sortSoilTestsNewestFirst, validateSoilTestDraft, type SoilReportMime, type SoilRxData, type SoilRxRepository, type SoilTest, type SoilTestDraft } from './soilRx'
 import { validateSoilReportFile } from './soilRxStorage'
 import { setModuleSyncStatus } from './syncStatus'
@@ -66,7 +66,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     await verifyQueuedReadContext(this.d, source.operationContext)
     await this.cacheTransaction(async () => {
       await verifyQueuedReadContext(this.d, source.operationContext)
-      if (source.cacheEpoch !== this.cacheEpoch) throw new Error('Soil Rx cache custody changed while data was loading.')
+      if (source.cacheEpoch !== this.cacheEpoch) throw new SoilRxCacheCustodyChangedError()
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new SoilRxCacheCustodyChangedError()
       await verifyQueuedReadContext(this.d, source.operationContext)
       this.workspace = { data, cacheCustody: source.cacheCustody }
@@ -75,7 +75,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
   }
   private async retain(source: Source, data: SoilRxData) {
     await this.cacheTransaction(async () => {
-      if (source.cacheEpoch !== this.cacheEpoch) throw new Error('Soil Rx cache custody changed while data was loading.')
+      if (source.cacheEpoch !== this.cacheEpoch) throw new SoilRxCacheCustodyChangedError()
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new SoilRxCacheCustodyChangedError()
       await writeWorkspaceCache(this.cacheScope(source.context), data, captureWorkspaceCacheFence(this.cacheScope(source.context)), undefined, source.cacheCustody)
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new SoilRxCacheCustodyChangedError()
@@ -331,9 +331,14 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       })
     } catch (error) {
       if (isFarmReplayContextChangedError(error)) throw error
-      // The queue read itself can be what failed (for example malformed durable
-      // bytes). Do not re-read it while reporting the blocked state.
-      setModuleSyncStatus('soilRx', { kind: 'blocked', pending: 1, message: attention })
+      if (error instanceof SoilRxMalformedQueueError || error instanceof SoilRxMalformedCleanupCustodyError) {
+        // Only malformed durable Soil Rx envelopes are contained here. Ordinary
+        // storage, authorization, and farm-context failures must reach the
+        // caller so startup cannot falsely report recoverable local corruption.
+        setModuleSyncStatus('soilRx', { kind: 'blocked', pending: 1, message: attention })
+        return
+      }
+      throw error
     }
   }
   async getReportUrl(path: string) { const source = await this.source(); if (this.d.isOffline()) throw new Error('Connect to the internet to open this lab report.'); return this.live.getReportUrlOperation(path, source.operationContext) }

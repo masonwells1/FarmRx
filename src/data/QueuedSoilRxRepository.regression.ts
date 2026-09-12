@@ -351,6 +351,23 @@ await malformed.repository.inspectAndReplay()
 assert.equal(getSyncStatus().kind, 'blocked')
 assert.equal(malformed.storage.reads.get(malformedQueueKey), 1, 'Malformed Soil Rx queue bytes were re-read while reporting blocked sync.')
 
+// Replay containment is limited to typed malformed durable envelopes. A
+// later storage read failure must still reject so startup can surface the
+// actual device fault instead of falsely converting it into local corruption.
+const replayStorageFailure = harness('soil-rx-replay-storage-failure')
+const replayStorageFailureKey = soilRxWriteQueueKey(replayStorageFailure.scope.projectRef, userId, farmId)
+replayStorageFailure.setOffline(true)
+await replayStorageFailure.repository.saveTest(draft(uid(705)))
+await new Promise((resolve) => setTimeout(resolve, 50))
+replayStorageFailure.setOffline(false)
+replayStorageFailure.storage.failGetKey = replayStorageFailureKey
+await assert.rejects(() => replayStorageFailure.repository.inspectAndReplay(), /simulated storage read failure/)
+
+const malformedCleanup = harness('soil-rx-malformed-cleanup')
+malformedCleanup.storage.setItem(soilRxCleanupOutboxKey(malformedCleanup.scope.projectRef, userId), '{not-json')
+await malformedCleanup.repository.inspectAndReplay()
+assert.equal(getSyncStatus().kind, 'blocked', 'Malformed Soil Rx cleanup custody did not become module-level blocked state.')
+
 function scopedCacheDatabase(storage: MemoryStorage, values: Map<string, unknown>, failDelete = false) {
   const priorIndexedDb = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB')
   const priorLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
@@ -496,6 +513,18 @@ try {
   postCommitCustody.setOffline(true)
   await assert.rejects(() => postCommitCustody.repository.getData(), (error: unknown) => error instanceof SoilRxHistoryUnavailableOfflineError, 'Post-commit cache reconciliation published stale history after custody advanced.')
 } finally { postCommitDatabase.restore() }
+
+// A same-process cache epoch can advance after the server confirms a direct
+// save. This is a cache-only conflict: the confirmed server result must still
+// be returned rather than reported as a failed save.
+const inProcessEpoch = harness('soil-rx-in-process-cache-epoch')
+inProcessEpoch.setSaveHook(async () => {
+  const internal = inProcessEpoch.repository as unknown as { cacheEpoch: number }
+  internal.cacheEpoch += 1
+})
+const inProcessSaved = await inProcessEpoch.repository.saveTest(draft(uid(745)))
+assert.equal(inProcessSaved.id, uid(745), 'A cache epoch race converted a confirmed direct save into a failure.')
+assert.equal(inProcessEpoch.rows.has(uid(745)), true, 'The cache epoch race lost the confirmed server row.')
 
 async function assertReplayDoesNotResurrect(name: string, settle: (value: ReturnType<typeof harness>, key: string) => Promise<void>) {
   const value = harness(`soil-rx-cache-${name}`)
@@ -682,7 +711,7 @@ const tombstoneWriteFailureSnapshots = new Map<string, unknown>([[tombstoneWrite
 const tombstoneWriteFailureCache = scopedCacheDatabase(tombstoneWriteFailure.storage, tombstoneWriteFailureSnapshots)
 try {
   tombstoneWriteFailure.storage.failNextKey = custodyStorageKey(tombstoneWriteFailureScope)
-  tombstoneWriteFailure.setOffline(false); await tombstoneWriteFailure.repository.inspectAndReplay()
+  tombstoneWriteFailure.setOffline(false); await assert.rejects(() => tombstoneWriteFailure.repository.inspectAndReplay(), /simulated process interruption/)
   const confirmedHead = new SoilRxWriteQueue(tombstoneWriteFailure.storage, tombstoneWriteFailureQueueKey).read().entries[0]
   assert.equal(tombstoneWriteFailure.savedIds.filter((id) => id === uid(680)).length, 1, 'A tombstone-write failure repeated the confirmed server save.')
   assert.equal(confirmedHead?.confirmed, true, 'A tombstone-write failure did not preserve durable confirmed replay custody.')

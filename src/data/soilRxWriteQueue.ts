@@ -20,6 +20,9 @@ export interface SoilRxQueueEntryV1 extends SoilRxQueueEntryPayloadV1 { payloadB
 export interface SoilRxQueueEnvelopeV1 { version: 1; entries: SoilRxQueueEntryV1[] }
 
 const blocked = 'Saved Soil Rx changes on this device need attention. Nothing was deleted.'
+export class SoilRxMalformedQueueError extends Error {
+  constructor() { super(blocked); this.name = 'SoilRxMalformedQueueError' }
+}
 const draftKeys = ['id', 'field_id', 'sample_date', 'lab_name', ...soilMeasurementKeys]
 const entryPayloadKeys = ['version', 'module', 'kind', 'operationId', 'userId', 'farmId', 'enqueuedAt', 'operationContext', 'draft']
 const exact = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
@@ -76,8 +79,8 @@ function isEntry(value: unknown): value is SoilRxQueueEntryV1 {
 }
 export function parseSoilRxQueue(serialized: string): SoilRxQueueEnvelopeV1 {
   let value: unknown
-  try { value = JSON.parse(serialized) } catch { throw new Error(blocked) }
-  if (!value || typeof value !== 'object' || Array.isArray(value) || !exact(value as Record<string, unknown>, ['version', 'entries']) || (value as { version?: unknown }).version !== 1 || !Array.isArray((value as { entries?: unknown }).entries) || !(value as { entries: unknown[] }).entries.every(isEntry)) throw new Error(blocked)
+  try { value = JSON.parse(serialized) } catch { throw new SoilRxMalformedQueueError() }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !exact(value as Record<string, unknown>, ['version', 'entries']) || (value as { version?: unknown }).version !== 1 || !Array.isArray((value as { entries?: unknown }).entries) || !(value as { entries: unknown[] }).entries.every(isEntry)) throw new SoilRxMalformedQueueError()
   return value as SoilRxQueueEnvelopeV1
 }
 export class SoilRxWriteQueue {

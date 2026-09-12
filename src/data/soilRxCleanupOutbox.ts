@@ -8,6 +8,10 @@ type StoredReportCleanup = SoilRxCleanupEntry & { kind: 'report_path' }
 export type SoilRxStoredCleanupEntry = StoredReportCleanup | SoilRxAttachmentCustodyEntry
 interface Envelope { version: 2; entries: SoilRxStoredCleanupEntry[] }
 
+export class SoilRxMalformedCleanupCustodyError extends Error {
+  constructor() { super('Farm Rx could not safely read saved Soil Rx cleanup custody.'); this.name = 'SoilRxMalformedCleanupCustodyError' }
+}
+
 export function soilRxCleanupOutboxKey(projectRef: string, userId: string) { return `farm-rx-soil-rx-cleanup:v1:${projectRef}:${userId}` }
 export function soilRxCleanupOutboxTransaction<T>(storage: StorageLike, projectRef: string, userId: string, createId: () => string, task: (verify: () => void) => Promise<T>) {
   return coordinatedDeviceTransaction(soilRxCleanupOutboxKey(projectRef, userId), storage, createId, task)
@@ -54,7 +58,7 @@ function parse(raw: string | null): Envelope {
       }
     }
   } catch { /* fail closed below */ }
-  throw new Error('Farm Rx could not safely read saved Soil Rx cleanup custody.')
+  throw new SoilRxMalformedCleanupCustodyError()
 }
 function write(storage: StorageLike, key: string, entries: SoilRxStoredCleanupEntry[]) {
   const bytes = JSON.stringify({ version: 2, entries } satisfies Envelope)
