@@ -11,6 +11,7 @@ import { createSupabaseScoutingServices } from './createSupabaseScoutingServices
 import { createSupabaseHarvestServices } from './createSupabaseHarvestServices'
 import { createSupabaseProgramsServices } from './createSupabaseProgramsServices'
 import { createSupabaseNotificationsServices } from './createSupabaseNotificationsServices'
+import { createSupabaseSoilRxServices } from './createSupabaseSoilRxServices'
 import { DueProgramItemsService, SupabaseDueProgramItemsGateway } from './programDueItems'
 import { SupabaseFieldsDataGateway } from './SupabaseFieldsDataGateway'
 import { SupabaseFieldsRepository } from './SupabaseFieldsRepository'
@@ -46,7 +47,7 @@ export const replayFieldsQueue = () => queuedFields.inspectAndReplay()
 export const fieldLocationClient = createFieldLocationClient({ gateway: new SupabaseFieldLocationGateway(), getContext: currentFarmContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), clock: () => new Date().toISOString(), isOffline: farmReplayIsOffline })
 export const replayFieldLocationQueue = () => fieldLocationClient.replay()
 
-if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'supabase' || moduleBackends.inventory !== 'supabase' || moduleBackends.profitability !== 'supabase' || moduleBackends.equipment_tasks !== 'supabase' || moduleBackends.fieldLog !== 'supabase' || moduleBackends.scouting !== 'supabase' || moduleBackends.harvest !== 'supabase' || moduleBackends.programs !== 'supabase' || moduleBackends.notifications !== 'supabase') throw new Error('Farm Rx backend configuration is invalid.')
+if (moduleBackends.fields !== 'supabase' || moduleBackends.grain !== 'supabase' || moduleBackends.inventory !== 'supabase' || moduleBackends.profitability !== 'supabase' || moduleBackends.equipment_tasks !== 'supabase' || moduleBackends.fieldLog !== 'supabase' || moduleBackends.scouting !== 'supabase' || moduleBackends.harvest !== 'supabase' || moduleBackends.programs !== 'supabase' || moduleBackends.notifications !== 'supabase' || moduleBackends.soilRx !== 'supabase') throw new Error('Farm Rx backend configuration is invalid.')
 const getContext = currentFarmContext
 const liveProfitability = createSupabaseProfitabilityServices({ fieldsRepository, getFarmId: currentFarmId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: farmReplayIsOffline })
 export const profitabilityRepository = liveProfitability.profitabilityRepository
@@ -78,6 +79,9 @@ export const replayScoutingQueue = () => liveScouting.replayScoutingQueue()
 const liveNotifications = createSupabaseNotificationsServices({ getUserId: currentUserId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: farmReplayIsOffline })
 export const notificationsRepository = liveNotifications.notificationsRepository
 export const replayNotificationsQueue = () => liveNotifications.replayNotificationsQueue()
+const liveSoilRx = createSupabaseSoilRxServices({ getFarmId: currentFarmId, getContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), isOffline: farmReplayIsOffline })
+export const soilRxRepository = liveSoilRx.soilRxRepository
+export const replaySoilRxQueue = () => liveSoilRx.replaySoilRxQueue()
 const liveGrain = createSupabaseGrainServices({ fieldsRepository, profitabilityRepository, getFarmId: currentFarmId, getContext, projectRef: supabaseConfig.projectRef, storage, isOffline: farmReplayIsOffline })
 export const grainServices = liveGrain.services
 export const replayGrainQueue = () => liveGrain.replayGrainQueue()

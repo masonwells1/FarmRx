@@ -45,6 +45,39 @@ function Get-PineAccessToken([string]$PublishableKey) {
   finally{$password=$null;$payload=$null;$response=$null}
 }
 
+function Wait-PineFarmApi([string]$PublishableKey,[string]$AccessToken) {
+  for($attempt=1;$attempt-le30;$attempt++){
+    try {
+      $response=Invoke-WebRequest -UseBasicParsing -Method Get -Uri "$apiUrl/rest/v1/farms?id=eq.27010000-0000-4000-8000-000000000006&select=id,name" -Headers @{apikey=$PublishableKey;Authorization="Bearer $AccessToken"} -TimeoutSec 2
+      $rows=@($response.Content|ConvertFrom-Json -ErrorAction Stop)
+      if($response.StatusCode-eq200-and$rows.Count-eq1-and$rows[0].id-ceq'27010000-0000-4000-8000-000000000006'-and$rows[0].name-ceq'Pine Hill'){return}
+    }catch{}
+    if($attempt-lt30){Start-Sleep -Milliseconds 500}
+  }
+  throw 'Pine Hill disposable authenticated farm API did not become ready.'
+}
+
+function Restart-PineGateway([string]$PublishableKey,[string]$AccessToken) {
+  docker restart $gateway|Out-Null
+  if($LASTEXITCODE-ne0){throw 'Pine Hill gateway refresh failed.'}
+  Wait-PineAuth
+  Wait-PineFarmApi $PublishableKey $AccessToken
+}
+
+function Invoke-PineClockPhase([string]$Phase,[string]$FrozenInstant,[string]$PublishableKey,[string]$AccessToken,[scriptblock]$Action) {
+  try {
+    return @(Invoke-HarvestRidgeClockPhase -Root $root -Phase $Phase -FrozenInstant $FrozenInstant -ApiUrl $apiUrl -PublishableKey $PublishableKey -AccessToken $AccessToken -ProofFarmId '27010000-0000-4000-8000-000000000006' -ProofFarmName 'Pine Hill' -Action $Action)
+  } catch {
+    $journal=Join-Path ([IO.Path]::GetTempPath()) "farmrx-harvest-ridge-clock-$Phase.json"
+    if($_.Exception.Message-notmatch'authenticated API read failed'-or-not(Test-Path -LiteralPath $journal)){throw}
+    Restart-PineGateway $PublishableKey $AccessToken
+    $recovery=@(Invoke-HarvestRidgeClockPhase -Root $root -Phase $Phase -FrozenInstant $FrozenInstant -ApiUrl $apiUrl -PublishableKey $PublishableKey -AccessToken $AccessToken -ProofFarmId '27010000-0000-4000-8000-000000000006' -ProofFarmName 'Pine Hill' -Action {$true} -ResumeRecovery)
+    if($recovery[-1]-ne$true){throw "Pine Hill governed route recovery did not return exact success: $Phase"}
+    Restart-PineGateway $PublishableKey $AccessToken
+    return @(Invoke-HarvestRidgeClockPhase -Root $root -Phase $Phase -FrozenInstant $FrozenInstant -ApiUrl $apiUrl -PublishableKey $PublishableKey -AccessToken $AccessToken -ProofFarmId '27010000-0000-4000-8000-000000000006' -ProofFarmName 'Pine Hill' -Action $Action)
+  }
+}
+
 function Get-PineSnapshot([hashtable]$WhereOverrides=@{}) {
   $tables=@((Invoke-PineSql "select tablename from pg_catalog.pg_tables where schemaname='public' order by tablename;")-split"`r?`n"|Where-Object{$_})
   $lines=[Collections.Generic.List[string]]::new()
@@ -95,6 +128,7 @@ function Invoke-PineZeroWriteBrowser {
 }
 
 function Reset-Pine([string]$Supabase) {
+  Assert-PineNoClockResidue
   & $Supabase --profile supabase db reset --local --no-seed --yes
   if($LASTEXITCODE-ne0){throw 'Pine Hill disposable reset failed.'}
   docker restart $gateway|Out-Null;if($LASTEXITCODE-ne0){throw 'Pine Hill gateway refresh failed.'}
@@ -123,7 +157,7 @@ function Invoke-PineSequence {
     if($proof-cnotmatch'^1\|2027-08-04 19:10:00\+00\|1\|1$'){throw "Pine PH-2 exact write proof failed: $proof"}
     return $true
   }.GetNewClosure()
-  $result=@(Invoke-HarvestRidgeClockPhase -Root $root -Phase "$Prefix-ph2" -FrozenInstant '2027-08-04 19:10:00+00:00' -ApiUrl $apiUrl -PublishableKey $PublishableKey -AccessToken $AccessToken -ProofFarmId '27010000-0000-4000-8000-000000000006' -ProofFarmName 'Pine Hill' -Action $ph2)
+  $result=@(Invoke-PineClockPhase "$Prefix-ph2" '2027-08-04 19:10:00+00:00' $PublishableKey $AccessToken $ph2)
   if($result[-1]-ne$true){throw 'Pine PH-2 clock phase did not return exact success.'}
 
   Invoke-PineZeroWriteBrowser ph3 '2027-08-04T14:30:00-05:00' $s3 $s2 '' $Viewport
@@ -167,7 +201,7 @@ commit;
     if((Get-PineFileSha256 $s3)-cne$stateHash){throw 'Pine PH-4 changed browser state.'}
     return $true
   }.GetNewClosure()
-  $result=@(Invoke-HarvestRidgeClockPhase -Root $root -Phase "$Prefix-ph4" -FrozenInstant '2027-08-04 19:35:00+00:00' -ApiUrl $apiUrl -PublishableKey $PublishableKey -AccessToken $AccessToken -ProofFarmId '27010000-0000-4000-8000-000000000006' -ProofFarmName 'Pine Hill' -Action $ph4)
+  $result=@(Invoke-PineClockPhase "$Prefix-ph4" '2027-08-04 19:35:00+00:00' $PublishableKey $AccessToken $ph4)
   if($result[-1]-ne$true){throw 'Pine PH-4 clock phase did not return exact success.'}
 
   if($Mode-eq'corrupt-active'){
@@ -213,11 +247,11 @@ try {
   Enter-MapleSeasonCredential
   $env:VITE_LOCAL_SUPABASE_PROJECT_REF='farmrxlocalsimplicity2027';$env:VITE_LOCAL_SUPABASE_URL=$boundary.ApiUrl;$env:VITE_LOCAL_SUPABASE_PUBLISHABLE_KEY=$boundary.PublishableKey
 
-  Reset-Pine $supabase;$token=Get-PineAccessToken $boundary.PublishableKey
+  Reset-Pine $supabase;$token=Get-PineAccessToken $boundary.PublishableKey;Wait-PineFarmApi $boundary.PublishableKey $token
   Invoke-PineSequence desktop desktop $boundary.PublishableKey $token $temp
-  Reset-Pine $supabase;$token=Get-PineAccessToken $boundary.PublishableKey
+  Reset-Pine $supabase;$token=Get-PineAccessToken $boundary.PublishableKey;Wait-PineFarmApi $boundary.PublishableKey $token
   Invoke-PineSequence phone phone $boundary.PublishableKey $token $temp
-  Reset-Pine $supabase;$token=Get-PineAccessToken $boundary.PublishableKey
+  Reset-Pine $supabase;$token=Get-PineAccessToken $boundary.PublishableKey;Wait-PineFarmApi $boundary.PublishableKey $token
   Invoke-PineSequence phone corrupt-active-phone $boundary.PublishableKey $token $temp -Mode corrupt-active
   Reset-Pine $supabase;$token=Get-PineAccessToken $boundary.PublishableKey
   Invoke-PineCorruptVaultSequence phone corrupt-vault-phone $temp

@@ -41,7 +41,7 @@ export function FarmPrivacyPage({ repository }: { repository: FarmSharingReposit
 
   async function changeSharing(next: boolean) {
     if (!canManage || saving || !saveLock.current.acquire()) return
-    if (next && !window.confirm('Turn sharing on? Your assigned Crop RX rep will be able to see this farm\'s grain position and private financial information.')) {
+    if (next && !window.confirm('Turn sharing on? Your assigned Crop RX rep will be able to see this farm\'s grain, financial, and Soil Rx data.')) {
       saveLock.current.release()
       return
     }
@@ -58,7 +58,7 @@ export function FarmPrivacyPage({ repository }: { repository: FarmSharingReposit
       })
       savedOnServer = true
       setConfirmedFarm(saved)
-      setMessage(next ? 'Sharing is on. Your assigned Crop RX rep can now see this farm\'s private grain information.' : 'Sharing is off. Your Crop RX rep can no longer see this farm\'s private grain information.')
+      setMessage(next ? 'Sharing is on. Your assigned Crop RX rep can now see this farm\'s grain, financial, and Soil Rx data.' : 'Sharing is off. Your Crop RX rep can no longer see this farm\'s grain, financial, or Soil Rx data.')
     } catch (caught) {
       setError(farmerError(caught, 'change this privacy setting'))
     }
@@ -80,7 +80,7 @@ export function FarmPrivacyPage({ repository }: { repository: FarmSharingReposit
         <div>
           <p className="eyebrow">{confirmedFarm.name}</p>
           <h1 id="farm-privacy-title">Farm privacy</h1>
-          <p>Grain and financial information stays private unless you choose to share it.</p>
+          <p>Grain, financial, and Soil Rx information stays private unless you choose to share it.</p>
         </div>
       </header>
 
@@ -94,13 +94,13 @@ export function FarmPrivacyPage({ repository }: { repository: FarmSharingReposit
         </div>
         <p className="privacy-explanation">
           {isShared
-            ? 'Your assigned Crop RX rep can see this farm\'s grain position and private financial information.'
-            : 'Your Crop RX rep cannot see this farm\'s grain position or private financial information.'}
+            ? 'Your assigned Crop RX rep can see this farm\'s grain, financial, and Soil Rx data.'
+            : 'Your Crop RX rep cannot see this farm\'s grain, financial, or Soil Rx data.'}
         </p>
 
         {canManage ? (
           <div className="privacy-control">
-            <span id="rep-sharing-label">Share my grain position with my Crop RX rep</span>
+            <span id="rep-sharing-label">Share my grain, financial, and Soil Rx data with my Crop RX rep</span>
             <button
               className="privacy-switch"
               type="button"

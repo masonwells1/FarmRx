@@ -1,0 +1,52 @@
+import { StorageClient, type FileObject } from '@supabase/storage-js'
+import { supabase } from '../lib/supabaseClient'
+import { supabaseConfig } from '../lib/supabaseConfig'
+import { bindFarmOperationRequest, farmOperationRequestHeaders, type FarmOperationContext } from './farmOperationContext'
+import { isSoilReportPath, isSoilRxUuid, type SoilReportMime } from './soilRx'
+
+export const soilRxReportBucket = 'soil-test-reports'
+export const maximumSoilReportBytes = 20 * 1024 * 1024
+const mimes = new Set<SoilReportMime>(['application/pdf', 'image/jpeg', 'image/png', 'image/heic', 'image/heif'])
+const extensions: Record<SoilReportMime, string> = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/heic': 'heic', 'image/heif': 'heif' }
+export function validateSoilReportFile(file: Pick<File, 'name' | 'type' | 'size'>): string | null { if (!mimes.has(file.type.toLowerCase() as SoilReportMime)) return 'Choose a PDF, JPEG, PNG, HEIC, or HEIF lab report.'; if (!Number.isSafeInteger(file.size) || file.size <= 0 || file.size > maximumSoilReportBytes) return 'Choose a lab report larger than 0 bytes and no more than 20 MB.'; if (!file.name.trim() || file.name.trim().length > 255) return 'The lab report filename must be 255 characters or fewer.'; return null }
+async function operationStorage(context: FarmOperationContext) { const { data, error } = await supabase.auth.getSession(); if (error || !data.session?.access_token || data.session.user.id !== context.userId) throw new Error('The signed-in account changed before this Soil Rx file operation could finish.'); return new StorageClient(`${supabaseConfig.url}/storage/v1`, { apikey: supabaseConfig.publishableKey, Authorization: `Bearer ${data.session.access_token}`, ...farmOperationRequestHeaders(context) }) }
+export function createSoilRxReportPath(farmId: string, fieldId: string, testId: string, file: Pick<File, 'name' | 'type' | 'size'>, createId: () => string) { const validation = validateSoilReportFile(file); if (validation) throw new Error(validation); if (!isSoilRxUuid(farmId) || !isSoilRxUuid(fieldId) || !isSoilRxUuid(testId)) throw new Error('This Soil Rx report path is invalid.'); const mime = file.type.toLowerCase() as SoilReportMime; const path = `${farmId}/${fieldId}/${testId}/${createId()}.${extensions[mime]}`; if (!isSoilReportPath(path, { farmId, fieldId, testId })) throw new Error('This Soil Rx report path is invalid.'); return path }
+export async function uploadSoilRxReport(path: string, file: File, context: FarmOperationContext) { const validation = validateSoilReportFile(file); if (validation) throw new Error(validation); const parts = path.split('/'); if (parts.length !== 4 || parts[0] !== context.farmId || !isSoilRxUuid(parts[1]) || !isSoilRxUuid(parts[2]) || !isSoilReportPath(path, { farmId: parts[0]!, fieldId: parts[1], testId: parts[2] })) throw new Error('The selected farm changed before this Soil Rx file operation could finish.'); const mime = file.type.toLowerCase() as SoilReportMime; const storage = await operationStorage(context); const { error } = await storage.from(soilRxReportBucket).upload(path, file, { contentType: mime, upsert: false }); if (error) throw error }
+export function confirmSoilRxReportRemoval(paths: string[], removed: ReadonlyArray<Pick<FileObject, 'name'>>) { const expected = new Set(paths); const confirmed = new Set<string>(); if (expected.size !== paths.length) throw new Error('Farm Rx could not safely confirm duplicate Soil Rx attachment cleanup paths.'); for (const object of removed) { if (typeof object.name !== 'string' || !expected.has(object.name) || confirmed.has(object.name)) throw new Error('Farm Rx could not confirm Soil Rx attachment cleanup. The cleanup remains safely queued.'); confirmed.add(object.name) } if (confirmed.size !== expected.size) throw new Error('Farm Rx could not confirm Soil Rx attachment cleanup. The cleanup remains safely queued.'); return paths }
+function validRemovalPaths(paths: string[], context: FarmOperationContext) { const unique = new Set(paths); return paths.length <= 100 && unique.size === paths.length && paths.every((path) => { const parts = path.split('/'); return parts.length === 4 && parts[0] === context.farmId && isSoilRxUuid(parts[1]) && isSoilRxUuid(parts[2]) && isSoilReportPath(path, { farmId: context.farmId, fieldId: parts[1], testId: parts[2] }) }) }
+function exactRemovalReceipt(paths: string[], removed: ReadonlyArray<Pick<FileObject, 'name'>>) { const expected = new Set(paths); const confirmed = new Set<string>(); if (expected.size !== paths.length) return false; for (const object of removed) { if (typeof object.name !== 'string' || !expected.has(object.name) || confirmed.has(object.name)) return false; confirmed.add(object.name) } return confirmed.size === expected.size }
+type CleanupScope = { fieldId: string; testId: string }
+type RemovalGateway = {
+  remove: (paths: string[]) => Promise<ReadonlyArray<Pick<FileObject, 'name'>>>
+  verifyAbsent: (paths: string[], context: FarmOperationContext) => Promise<ReadonlyArray<Pick<FileObject, 'name'>>>
+  verifyTerminalAbsence?: (paths: string[], context: FarmOperationContext, scope: CleanupScope) => Promise<ReadonlyArray<Pick<FileObject, 'name'>>>
+}
+function missingTestOwnership(error: unknown) { return !!error && typeof error === 'object' && (error as { code?: unknown }).code === '42501' && (error as { message?: unknown }).message === 'soil report path is not owned by the current farm test' }
+function oneCleanupScope(paths: string[]): CleanupScope | null { const first = paths[0]?.split('/'); if (!first || first.length !== 4) return null; const scope = { fieldId: first[1]!, testId: first[2]! }; return paths.every((path) => { const parts = path.split('/'); return parts.length === 4 && parts[1] === scope.fieldId && parts[2] === scope.testId }) ? scope : null }
+export async function removeSoilRxReportsWithGateway(paths: string[], context: FarmOperationContext, gateway: RemovalGateway): Promise<string[]> {
+  if (!paths.length) return []
+  if (!validRemovalPaths(paths, context)) throw new Error('The selected farm or Soil Rx report path changed before this file operation could finish.')
+  const removed = await gateway.remove(paths)
+  if (exactRemovalReceipt(paths, removed)) return confirmSoilRxReportRemoval(paths, removed)
+  if (removed.length !== 0) return confirmSoilRxReportRemoval(paths, removed)
+  try {
+    const absent = await gateway.verifyAbsent(paths, context)
+    return confirmSoilRxReportRemoval(paths, absent)
+  } catch (error) {
+    const scope = oneCleanupScope(paths)
+    if (!missingTestOwnership(error) || !scope || !gateway.verifyTerminalAbsence) throw error
+    const absent = await gateway.verifyTerminalAbsence(paths, context, scope)
+    return confirmSoilRxReportRemoval(paths, absent)
+  }
+}
+export async function removeSoilRxReports(paths: string[], context: FarmOperationContext): Promise<string[]> {
+  if (!paths.length) return []
+  if (!validRemovalPaths(paths, context)) throw new Error('The selected farm or Soil Rx report path changed before this file operation could finish.')
+  const storage = await operationStorage(context)
+  return removeSoilRxReportsWithGateway(paths, context, {
+    remove: async (requested) => { const { data, error } = await storage.from(soilRxReportBucket).remove(requested); if (error) throw error; return data },
+    verifyAbsent: async (requested, expected) => { const result = await bindFarmOperationRequest(supabase.rpc('verify_soil_report_objects_absent', { p_farm_id: expected.farmId, p_paths: requested }), expected); if (result.error || !Array.isArray(result.data)) throw result.error ?? new Error('Farm Rx could not verify Soil Rx attachment cleanup.'); return result.data },
+    verifyTerminalAbsence: async (requested, expected, scope) => { const result = await bindFarmOperationRequest(supabase.rpc('verify_soil_report_cleanup_terminal_absence', { p_farm_id: expected.farmId, p_field_id: scope.fieldId, p_test_id: scope.testId, p_paths: requested }), expected); if (result.error || !Array.isArray(result.data)) throw result.error ?? new Error('Farm Rx could not verify terminal Soil Rx attachment cleanup.'); return result.data },
+  })
+}
+export async function createSignedSoilRxReportUrl(path: string, context: FarmOperationContext) { const parts = path.split('/'); if (parts.length !== 4 || parts[0] !== context.farmId || !isSoilRxUuid(parts[1]) || !isSoilRxUuid(parts[2]) || !isSoilReportPath(path, { farmId: parts[0]!, fieldId: parts[1], testId: parts[2] })) throw new Error('This Soil Rx report path is invalid.'); const storage = await operationStorage(context); const { data, error } = await storage.from(soilRxReportBucket).createSignedUrl(path, 300); if (error || !data?.signedUrl) throw error ?? new Error('Farm Rx could not open this Soil Rx report.'); return data.signedUrl }

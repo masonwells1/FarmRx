@@ -36,6 +36,7 @@ try {
   Assert-IntermediateLaneFailureIsFatal
   Invoke-SeasonLane { & node scripts/verify-season-contract.mjs } 'Season fixture contract validation failed.'
   Invoke-SeasonLane { & node scripts/verify-season-contract.regression.mjs } 'Season fixture contract regression failed.'
+  Invoke-SeasonLane { & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/season-shared-harness-repair.regression.ps1 } 'Season shared harness repair regression failed.' | Out-Null
   Write-Output 'Farm Rx season contract gate: PASS (contract/isolation only; disposable-backend and browser workflow proof not yet run)'
 } finally {
   Pop-Location
