@@ -354,6 +354,13 @@ export function ProfitabilityPage() {
       </section>
     );
   const budget = workspace.budgets.find((item) => item.id === selectedId);
+  // Declared before the empty-state return below, which also seeds a budget. While the live database has no badge column (or an
+  // older cached copy cannot say), every seeded line's badge amount is kept in this browser before any row is written, all or
+  // nothing, so a browser that refuses leaves no budget shell or partial batch behind.
+  const retainSeededBadges = (lines: BudgetCostLine[]) => {
+    if (workspace.capabilities?.university_default_amount === true || !farmAccess) return;
+    retainSeededDefaults({ projectRef: supabaseConfig.projectRef, userId: farmAccess.profile.userId, farmId: workspace.fields.farm.id }, lines);
+  };
   if (!budget) {
     const commodity = workspace.fields.commodities[0];
     return (
@@ -469,12 +476,6 @@ export function ProfitabilityPage() {
     (item) => item.crop_year === currentOverviewYear,
   );
   const wholeFarm = wholeFarmTotals(workspace, overviewBudgets);
-  // While the live database has no badge column (or an older cached copy cannot say), every seeded line's badge amount is kept in
-  // this browser before the budget is created, all or nothing, so a browser that refuses leaves no budget shell behind.
-  const retainSeededBadges = (lines: BudgetCostLine[]) => {
-    if (workspace.capabilities?.university_default_amount === true || !farmAccess) return;
-    retainSeededDefaults({ projectRef: supabaseConfig.projectRef, userId: farmAccess.profile.userId, farmId: workspace.fields.farm.id }, lines);
-  };
   const createUniversityBudget = (
     kind: FarmdocCropKind,
     forCommodity: Commodity,
@@ -876,6 +877,7 @@ export function ProfitabilityPage() {
               cropKind={cropKind}
               onAdd={(lines) =>
                 save(budget.id, async () => {
+                  retainSeededBadges(lines);
                   for (const line of lines)
                     await profitabilityRepository.saveCostLine(line);
                 })
