@@ -363,7 +363,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
             saleLimitDraftRevisions.current[kept.key] = revision;
             // The browser refused the rebased draft (full or blocked storage): the newer value is kept nowhere durable, so the stale
             // draft goes and the value is committed at once instead of waiting for the next blur (after the adoption below, if any).
-            if (revision === null) { clearSettingsDraft(scope, entry.key); const estimate = data.production_estimates.find((candidate) => scopeKey(scopeOf(candidate)) === kept.key); if (estimate) setTimeout(() => void commitSaleLimit(estimate), 0); }
+            if (revision === null) { clearSettingsDraft(scope, entry.key, entry.revision); const estimate = data.production_estimates.find((candidate) => scopeKey(scopeOf(candidate)) === kept.key); if (estimate) setTimeout(() => void commitSaleLimit(estimate), 0); }
           }
           if (typing) continue; // the farmer is already typing here
           saleLimitDraftRevisions.current[kept.key] = revision; saleLimitBases.current[kept.key] = base; saleLimitSent.current[kept.key] = sent;
@@ -510,7 +510,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
         if (!typedSince) { dirtySaleLimits.current.delete(key); delete saleLimitBases.current[key]; adopt(savedValue); clearDraft(); }
         // The farmer typed more while this save ran: rewrite the newer draft on top of the saved row, so a reload before the follow-up
         // commit does not mistake this save for another device's change and drop the newer value.
-        else { const scope = draftScopeFor(estimate.farm_id); if (scope) { const revision = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: saleLimitsRef.current[key] ?? null, base: { id: saved.id, updated_at: saved.updated_at }, sent: saved.sale_limit_bushels } satisfies SaleLimitDraft); saleLimitDraftRevisions.current[key] = revision; if (revision === null) clearSettingsDraft(scope, `sale-limit:${key}`); } }
+        else { const scope = draftScopeFor(estimate.farm_id); if (scope) { const previous = saleLimitDraftRevisions.current[key]; const revision = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: saleLimitsRef.current[key] ?? null, base: { id: saved.id, updated_at: saved.updated_at }, sent: saved.sale_limit_bushels } satisfies SaleLimitDraft); saleLimitDraftRevisions.current[key] = revision; if (revision === null && previous) clearSettingsDraft(scope, `sale-limit:${key}`, previous); } }
         setSettingsNotice("");
         // Keep the ref current too, so a follow-up commit chained below sees the saved row before React renders it.
         const next = (workspaceCurrent: GrainWorkspace) => ({ ...workspaceCurrent, grain_sale_limits: [...workspaceCurrent.grain_sale_limits.filter((limit) => scopeKey(scopeOf(limit)) !== key), saved] });
@@ -729,7 +729,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
                   // If the browser refuses the draft (private mode, blocked or full storage), commit the value at once rather than waiting for blur.
                   const existing = workspace.grain_sale_limits.find((row) => scopeKey(scopeOf(row)) === key);
                   if (saleLimitBases.current[key] === undefined) saleLimitBases.current[key] = existing ? { id: existing.id, updated_at: existing.updated_at } : null;
-                  if (scope) { const revision = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: limit, base: saleLimitBases.current[key] ?? null, sent: saleLimitSent.current[key] } satisfies SaleLimitDraft); saleLimitDraftRevisions.current[key] = revision; if (revision === null) { clearSettingsDraft(scope, `sale-limit:${key}`); setTimeout(() => void commitSaleLimit(estimate), 0); } }
+                  // A refused write removes only the revision this tab wrote before; a newer draft another tab wrote stays.
+                  if (scope) { const previous = saleLimitDraftRevisions.current[key]; const revision = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: limit, base: saleLimitBases.current[key] ?? null, sent: saleLimitSent.current[key] } satisfies SaleLimitDraft); saleLimitDraftRevisions.current[key] = revision; if (revision === null) { if (previous) clearSettingsDraft(scope, `sale-limit:${key}`, previous); setTimeout(() => void commitSaleLimit(estimate), 0); } }
                   markSaleLimitUnflushed(scopeKey(scopeOf(estimate)));
                   setSaleLimits((current) => ({ ...current, [scopeKey(scopeOf(estimate))]: limit }));
                 }}

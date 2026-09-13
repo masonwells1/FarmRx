@@ -10,8 +10,9 @@ function rows(data: unknown, error: { message: string } | null): unknown[] { if 
 function row(data: unknown, error: { message: string } | null): unknown { if (error) throw error; if (!data || typeof data !== 'object') throw new Error('Farm Rx could not confirm the profitability save. Please try again.'); return data }
 function budgetColumns(value: CropBudget & { farm_id: string }) { const { id, farm_id, crop_year, commodity_id, operating_entity_id, enterprise_label, name, expected_yield_per_acre, expected_price_per_bushel, rp_coverage_pct, rp_aph_yield, rp_projected_price, rp_premium_per_acre, copied_from_budget_id } = value; return { id, farm_id, crop_year, commodity_id, operating_entity_id, enterprise_label, name, expected_yield_per_acre, expected_price_per_bushel, rp_coverage_pct, rp_aph_yield, rp_projected_price, rp_premium_per_acre, copied_from_budget_id, notes: null } }
 /** PGRST204 means the badge column is not on the live database yet (slice-3 migration pending): save the line without its badge rather than
- * fail the farmer's number, and keep the seeded amount in this browser (`retain`) so the badge is written into the column once it exists. */
-export async function saveCostLineWithBadgeFallback<T>(attempt: (columns: Record<string, unknown>) => Promise<T>, columns: Record<string, unknown>, universityDefaultAmount: number | null, retain: (lineId: string, amount: number) => void = rememberLegacyDefault): Promise<T> {
+ * fail the farmer's number, and keep the seeded amount in this browser (`retain`) so the badge is written into the column once it exists;
+ * a browser that refuses to keep it is reported by the Profitability page (the number is saved, the badge is not). */
+export async function saveCostLineWithBadgeFallback<T>(attempt: (columns: Record<string, unknown>) => Promise<T>, columns: Record<string, unknown>, universityDefaultAmount: number | null, retain: (lineId: string, amount: number) => boolean = rememberLegacyDefault): Promise<T> {
   try { return await attempt({ ...columns, university_default_amount: universityDefaultAmount }) }
   catch (error) {
     if ((error as { code?: string } | null)?.code !== 'PGRST204') throw error

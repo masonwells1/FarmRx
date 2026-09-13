@@ -96,7 +96,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   // Every draft write goes through here. If the browser refuses the draft (private mode, blocked or full storage), the edit is not
   // kept anywhere durable: the stale entry is cleared and the part is re-sent at once from its newest snapshot, whether it was still
   // being typed or already queued behind an earlier save (the resend marks the part dirty so the flush is never a no-op).
-  const keepDraft = (key: string, payload: unknown, resend: () => void): string | null => { const scope = draftScopeRef.current; if (!scope) return null; const revision = writeSettingsDraft(scope, key, payload); if (revision === null) { clearSettingsDraft(scope, key); setTimeout(resend, 0) } return revision }
+  const keepDraft = (key: string, payload: unknown, resend: () => void): string | null => { const scope = draftScopeRef.current; if (!scope) return null; const previous = key === 'carry-settings' ? draftRevisions.current.settings : draftRevisions.current.grids[key.slice('carry-grid:'.length)]; const revision = writeSettingsDraft(scope, key, payload); if (revision === null) { if (previous) clearSettingsDraft(scope, key, previous); setTimeout(resend, 0) } return revision }
   const resendSettings = () => { settingsDirty.current = true; flushSettings() }
   const resendGrid = (estimateId: string) => () => { gridsDirty.current.add(estimateId); flushGrids() }
   const flushSettings = () => {
@@ -203,6 +203,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   useEffect(() => persisted && draftScope ? registerPendingSettingsFlush({ userId: draftScope.userId, farmId }, () => { flushSettings(); flushGrids() }) : undefined, [farmId, persisted, draftScope?.userId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Every edit is written to the browser draft at once, before the save pause, so a reload or closed tab cannot lose it.
   // If the browser refuses the draft (private mode, blocked or full storage), the edit is not kept anywhere durable: save it at once instead of waiting.
+  // Only the revision this tab wrote before is removed then; a newer draft another tab wrote under the same key stays.
   const changeSettings = (change: (current: CarrySettings) => CarrySettings) => { const next = change(settingsRef.current); settingsRef.current = next; settingsDirty.current = true; failedSettings.current = false; if (persisted) markUnflushed(); draftRevisions.current.settings = keepDraft('carry-settings', { draft: next, base: baseVersions.current.settings, sent: sentRows.current.settings } satisfies CarrySettingsDraft, resendSettings); setSettings(next) }
   // Discrete choices (the storage-mode buttons) save as soon as React has committed the click, not after the typing pause.
   const chooseMode = (mode: CarrySettings['mode']) => { changeSettings((current) => ({ ...current, mode })); setTimeout(flushSettings, 0) }
