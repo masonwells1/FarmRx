@@ -15,9 +15,9 @@ const EXPECTED_YEAR = 2027;
 const EXPECTED_TIMEZONE = "America/Chicago";
 const EXPECTED_FIXTURE_COUNT = 101;
 const EXPECTED_PACKAGE_COMMAND = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-season.ps1";
-const EXPECTED_POWERSHELL_SHA256 = "c60b8a74434742c005d5a49a45e12180775745c65102c1606b252fe356bb4e02";
+const EXPECTED_POWERSHELL_SHA256 = "16f142f46baaefabd4687126fe52ce8c67ee732c247a9f798ff64245b8c45ca1";
 const EXPECTED_SOIL_SHARED_HARNESS_BRIDGE =
-  "  Invoke-SeasonLane { & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/season-shared-harness-repair.regression.ps1 } 'Season shared harness repair regression failed.' | Out-Null";
+  "  Invoke-SeasonLane { & $harnessShell -NoProfile -ExecutionPolicy Bypass -File scripts/season-shared-harness-repair.regression.ps1 } 'Season shared harness repair regression failed.' | Out-Null";
 
 const EXPECTED_SCENARIOS = new Map([
   [

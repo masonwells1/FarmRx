@@ -368,7 +368,7 @@ malformedCleanup.storage.setItem(soilRxCleanupOutboxKey(malformedCleanup.scope.p
 await malformedCleanup.repository.inspectAndReplay()
 assert.equal(getSyncStatus().kind, 'blocked', 'Malformed Soil Rx cleanup custody did not become module-level blocked state.')
 
-function scopedCacheDatabase(storage: MemoryStorage, values: Map<string, unknown>, failDelete = false) {
+function scopedCacheDatabase(storage: MemoryStorage, values: Map<string, unknown>, failDelete = false, globalStorage = storage) {
   const priorIndexedDb = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB')
   const priorLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
   const database = {
@@ -387,7 +387,7 @@ function scopedCacheDatabase(storage: MemoryStorage, values: Map<string, unknown
   }
   const factory = { open: () => { const request: { result?: typeof database; onsuccess?: () => void } = {}; queueMicrotask(() => { request.result = database; request.onsuccess?.() }); return request } }
   Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: factory })
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage })
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: globalStorage })
   return { restore: () => { if (priorIndexedDb) Object.defineProperty(globalThis, 'indexedDB', priorIndexedDb); else Reflect.deleteProperty(globalThis, 'indexedDB'); if (priorLocalStorage) Object.defineProperty(globalThis, 'localStorage', priorLocalStorage); else Reflect.deleteProperty(globalThis, 'localStorage') } }
 }
 const cacheKey = (projectRef: string, user: string, farm: string, module = 'soilRx') => `${projectRef}:${user}:${farm}:${module}`
@@ -455,6 +455,36 @@ try {
   reopened.setOffline(true)
   assert.deepEqual((await reopened.repository.getData()).tests.map((test) => test.id).sort(), [...historicalIds, pending.id].sort(), 'A fresh offline reopen lost historical Soil Rx records after a queued text save.')
 } finally { freshOfflineDatabase.restore() }
+
+// A fresh online repository may save before its full history has been loaded.
+// It must merge the saved record into the durable canonical projection rather
+// than replacing that projection with a one-record subset. The injected store
+// is intentionally different from global localStorage to prove every cache
+// fence and write uses the repository's custody store.
+const freshOnlineCache = harness('soil-rx-fresh-online-cache')
+const freshOnlineScope = cacheKey(freshOnlineCache.scope.projectRef, userId, farmId)
+const freshOnlineFence = captureFarmRevocationFence(freshOnlineCache.storage, freshOnlineCache.scope)
+const freshOnlineHistory = [cachedTest(uid(724)), cachedTest(uid(725), otherHistoryField)]
+const freshOnlineSnapshots = new Map<string, unknown>([[freshOnlineScope, { version: 3, key: freshOnlineScope, ...freshOnlineCache.scope, module: 'soilRx', generation: freshOnlineFence.generation, fenceToken: freshOnlineFence.token, serverEpoch: freshOnlineFence.serverEpoch, cacheCustody: 0, cachedAt: new Date().toISOString(), data: { tests: freshOnlineHistory } }]])
+const freshOnlineDatabase = scopedCacheDatabase(freshOnlineCache.storage, freshOnlineSnapshots, false, new MemoryStorage())
+try {
+  const saved = await freshOnlineCache.repository.saveTest(draft(uid(726)))
+  assert.equal(saved.id, uid(726), 'A fresh online save did not return its confirmed Soil Rx record.')
+  const retained = freshOnlineSnapshots.get(freshOnlineScope) as { data?: { tests?: SoilTest[] } }
+  assert.deepEqual(retained.data?.tests?.map((test) => test.id).sort(), [uid(724), uid(725), uid(726)].sort(), 'A fresh online save replaced cached Soil Rx history with only its saved record.')
+} finally { freshOnlineDatabase.restore() }
+
+// With no existing canonical projection, an online save remains successful
+// and the durable cache is left untouched; the queue/server result is the
+// authoritative record until a complete read establishes a projection.
+const freshOnlineNoCache = harness('soil-rx-fresh-online-no-cache')
+const freshOnlineNoCacheSnapshots = new Map<string, unknown>()
+const freshOnlineNoCacheDatabase = scopedCacheDatabase(freshOnlineNoCache.storage, freshOnlineNoCacheSnapshots, false, new MemoryStorage())
+try {
+  const saved = await freshOnlineNoCache.repository.saveTest(draft(uid(727)))
+  assert.equal(saved.id, uid(727), 'An online save without a cache projection was reported as failed.')
+  assert.equal(freshOnlineNoCacheSnapshots.size, 0, 'An online save without a cache projection created an incomplete cache envelope.')
+} finally { freshOnlineNoCacheDatabase.restore() }
 
 // A malformed module custody marker must not reject the whole farm startup.
 // Soil Rx reports its own blocked state and leaves both its cache and a
@@ -940,7 +970,7 @@ function assertReplayCacheGuards(candidate: string) {
   assert.ok(dismissMethod.includes('await this.releaseCacheCustody(source, () => dismissNeedsAttention(this.d.storage, queueKey, operationId)); verify()'), 'Dismiss must use the fenced cache-and-custody release path.')
   const releaseMethod = candidate.slice(candidate.indexOf('private async releaseCacheCustody'), candidate.indexOf('private pending'))
   assert.ok(releaseMethod.indexOf('beginWorkspaceCacheInvalidation') < releaseMethod.indexOf('releaseQueue()') && releaseMethod.indexOf('releaseQueue()') < releaseMethod.indexOf('await finishInvalidation()'), 'The tombstone must precede queue release, and IndexedDB deletion must follow it.')
-  const retainedWrite = 'writeWorkspaceCache(this.cacheScope(source.context), confirmedData, source.operationContext, undefined, cacheCustody)'
+  const retainedWrite = 'writeWorkspaceCache(this.cacheScope(source.context), confirmedData, source.operationContext, undefined, cacheCustody, this.d.storage)'
   assert.ok(releaseMethod.indexOf('await verifyQueuedOperationContext(this.d, source.operationContext, source.context)') < releaseMethod.indexOf(retainedWrite), 'Confirmed replay retention must verify the original operation context before writing.')
   assert.ok(releaseMethod.includes(retainedWrite), 'Confirmed replay retention must use the original operation fence, not a newly captured fence.')
 }
@@ -968,7 +998,7 @@ for (const [name, mutation] of [
   ['replay-malformed-reread', source.replace("if (error instanceof SoilRxMalformedCacheCustodyError) {\n        setModuleSyncStatus('soilRx', { kind: 'blocked', pending: 1, message: attention })", "if (error instanceof SoilRxMalformedCacheCustodyError) {\n        setModuleSyncStatus('soilRx', { kind: 'blocked', pending: source.queue.read().entries.length, message: attention })")],
   ['dismiss-cache-invalidation', source.replace('await this.releaseCacheCustody(source, () => dismissNeedsAttention(this.d.storage, queueKey, operationId)); verify()', 'await Promise.resolve()')],
   ['tombstone-after-release', source.replace('const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      const cacheCustody = captureWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context))\n      releaseQueue()', 'releaseQueue()\n      const finishInvalidation = beginWorkspaceCacheInvalidation(this.d.storage, this.cacheScope(source.context))\n      const cacheCustody = captureWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context))')],
-  ['replay-new-fence-retention', source.replace('writeWorkspaceCache(this.cacheScope(source.context), confirmedData, source.operationContext, undefined, cacheCustody)', 'writeWorkspaceCache(this.cacheScope(source.context), confirmedData, captureWorkspaceCacheFence(this.cacheScope(source.context)), undefined, cacheCustody)')],
+  ['replay-new-fence-retention', source.replace('writeWorkspaceCache(this.cacheScope(source.context), confirmedData, source.operationContext, undefined, cacheCustody, this.d.storage)', 'writeWorkspaceCache(this.cacheScope(source.context), confirmedData, captureWorkspaceCacheFence(this.cacheScope(source.context), this.d.storage), undefined, cacheCustody, this.d.storage)')],
   ['confirmed-custody-bypass', source.replace('inMemoryConfirmation?.payloadBytes === entry.payloadBytes', 'true')],
   ['confirmed-payload-unbound', source.replace('inMemoryConfirmation?.payloadBytes === entry.payloadBytes', 'this.confirmedInMemory.has(entry.operationId)')],
   ['confirmed-retention-leak', source.replace('this.confirmedInMemory.delete(entry.operationId)', 'void entry.operationId')],

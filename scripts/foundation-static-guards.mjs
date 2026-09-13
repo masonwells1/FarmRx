@@ -408,7 +408,7 @@ export function foundationStaticGuard(root = process.cwd()) {
 
   const seasonOrchestrator = read(root, 'scripts/verify-season.ps1')
   const seasonSharedRegression = read(root, 'scripts/season-shared-harness-repair.regression.ps1')
-  const soilSeasonBridge = "  Invoke-SeasonLane { & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/season-shared-harness-repair.regression.ps1 } 'Season shared harness repair regression failed.' | Out-Null"
+  const soilSeasonBridge = "  Invoke-SeasonLane { & $harnessShell -NoProfile -ExecutionPolicy Bypass -File scripts/season-shared-harness-repair.regression.ps1 } 'Season shared harness repair regression failed.' | Out-Null"
   const seasonContractRegression = seasonOrchestrator.indexOf("  Invoke-SeasonLane { & node scripts/verify-season-contract.regression.mjs } 'Season fixture contract regression failed.'")
   const seasonBridge = seasonOrchestrator.indexOf(soilSeasonBridge)
   const seasonContractPass = seasonOrchestrator.indexOf("  Write-Output 'Farm Rx season contract gate: PASS (contract/isolation only; disposable-backend and browser workflow proof not yet run)'")

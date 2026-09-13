@@ -38,7 +38,7 @@ function Get-MapleSeasonJobIdentitySnapshot {
 function Assert-MapleSeasonJobIdentitySnapshot {
   param(
     [Parameter(Mandatory)][MapleSeasonOwnedJob]$Job,
-    [Parameter(Mandatory)][object[]]$Expected,
+    [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Expected,
     [Parameter(Mandatory)][string]$Scenario
   )
   $currentIds = @($Job.GetActiveProcessIds() | Sort-Object)

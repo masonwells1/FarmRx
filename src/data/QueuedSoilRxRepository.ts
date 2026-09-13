@@ -73,13 +73,22 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     })
     await verifyQueuedReadContext(this.d, source.operationContext)
   }
-  private async retain(source: Source, data: SoilRxData) {
+  private async retain(source: Source, data: SoilRxData, complete = false) {
+    let retainedData: SoilRxData | null = data
     await this.cacheTransaction(async () => {
       if (source.cacheEpoch !== this.cacheEpoch) throw new SoilRxCacheCustodyChangedError()
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new SoilRxCacheCustodyChangedError()
-      await writeWorkspaceCache(this.cacheScope(source.context), data, captureWorkspaceCacheFence(this.cacheScope(source.context)), undefined, source.cacheCustody)
+      if (!complete && !this.workspace) {
+        const cached = await readWorkspaceCache<SoilRxData>(this.cacheScope(source.context), operationalCacheMaxAgeMs, this.d.storage)
+        if (!cached) { retainedData = null; return }
+        const tests = new Map(cached.data.tests.map((test) => [test.id, test]))
+        for (const test of data.tests) tests.set(test.id, test)
+        retainedData = { tests: sortSoilTestsNewestFirst([...tests.values()]) }
+      }
+      if (!retainedData) return
+      await writeWorkspaceCache(this.cacheScope(source.context), retainedData, captureWorkspaceCacheFence(this.cacheScope(source.context), this.d.storage), undefined, source.cacheCustody, this.d.storage)
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new SoilRxCacheCustodyChangedError()
-      this.workspace = { data, cacheCustody: source.cacheCustody }
+      this.workspace = { data: retainedData, cacheCustody: source.cacheCustody }
     })
     await verifyQueuedReadContext(this.d, source.operationContext)
   }
@@ -98,7 +107,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       try { await finishInvalidation() } catch { return }
       if (confirmedData && verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), cacheCustody)) {
         await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
-        const retained = await writeWorkspaceCache(this.cacheScope(source.context), confirmedData, source.operationContext, undefined, cacheCustody)
+        const retained = await writeWorkspaceCache(this.cacheScope(source.context), confirmedData, source.operationContext, undefined, cacheCustody, this.d.storage)
         await verifyQueuedOperationContext(this.d, source.operationContext, source.context)
         if (retained && verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), cacheCustody)) this.workspace = { data: confirmedData, cacheCustody }
       }
@@ -183,7 +192,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
     const entries = source.queue.read().entries; this.refreshSync(source)
     try {
       const data = await this.live.getData(fieldId); await verifyQueuedReadContext(this.d, source.operationContext)
-      if (!fieldId) await this.retain(source, data)
+      if (!fieldId) await this.retain(source, data, true)
       return this.overlay(data, entries.filter((entry) => !fieldId || entry.draft.field_id === fieldId))
     } catch (error) {
       await verifyQueuedReadContext(this.d, source.operationContext)
@@ -193,7 +202,7 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       if (!isTransportFailure(error, false)) throw error
       if (entries.some((entry) => entry.confirmed)) throw new Error('A confirmed Soil Rx save is finishing device cleanup. Connect to finish safely.')
       const memory = verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody) && this.workspace?.cacheCustody === source.cacheCustody ? this.workspace.data : null
-      const cached = memory ?? (await readWorkspaceCache<SoilRxData>(this.cacheScope(source.context), operationalCacheMaxAgeMs))?.data ?? null
+      const cached = memory ?? (await readWorkspaceCache<SoilRxData>(this.cacheScope(source.context), operationalCacheMaxAgeMs, this.d.storage))?.data ?? null
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new Error('Soil Rx cache custody changed while data was loading.')
       await verifyQueuedReadContext(this.d, source.operationContext)
       if (!cached && !entries.length) throw new SoilRxHistoryUnavailableOfflineError()

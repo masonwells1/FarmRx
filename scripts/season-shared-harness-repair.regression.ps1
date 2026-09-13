@@ -142,7 +142,7 @@ $resetMutation = $pine.IndexOf('--profile supabase db reset', $pine.IndexOf('fun
 Assert-SeasonHarness ($residueFence -ge 0 -and $resetMutation -gt $residueFence) 'Pine does not refuse clock residue before its reset mutation.'
 
 $season = Read-SeasonHarness 'scripts/verify-season.ps1'
-$soilSeasonBridge = "  Invoke-SeasonLane { & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/season-shared-harness-repair.regression.ps1 } 'Season shared harness repair regression failed.' | Out-Null"
+$soilSeasonBridge = "  Invoke-SeasonLane { & `$harnessShell -NoProfile -ExecutionPolicy Bypass -File scripts/season-shared-harness-repair.regression.ps1 } 'Season shared harness repair regression failed.' | Out-Null"
 function Assert-SoilSeasonBridgeShape([string]$Text) {
   $contract = $Text.IndexOf("  Invoke-SeasonLane { & node scripts/verify-season-contract.regression.mjs } 'Season fixture contract regression failed.'")
   $bridge = $Text.IndexOf($soilSeasonBridge)
@@ -159,7 +159,7 @@ $soilSeasonBridgeMutations = [ordered]@{
   wrong_failure = $season.Replace('Season shared harness repair regression failed.','Season harness failed.')
   raw_invocation = $season.Replace($soilSeasonBridge,'  & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/season-shared-harness-repair.regression.ps1')
   after_pass = $season.Replace("$soilSeasonBridge`r`n",'').Replace("$soilSeasonBridge`n",'').Replace("  Write-Output 'Farm Rx season contract gate: PASS (contract/isolation only; disposable-backend and browser workflow proof not yet run)'","  Write-Output 'Farm Rx season contract gate: PASS (contract/isolation only; disposable-backend and browser workflow proof not yet run)'`n$soilSeasonBridge")
-  success_stream_pollution = $season.Replace("$soilSeasonBridge","  Invoke-SeasonLane { & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/season-shared-harness-repair.regression.ps1 } 'Season shared harness repair regression failed.'")
+  success_stream_pollution = $season.Replace($soilSeasonBridge,"  Invoke-SeasonLane { & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/season-shared-harness-repair.regression.ps1 } 'Season shared harness repair regression failed.'")
 }
 $soilSeasonBridgeRejected = 0
 foreach ($entry in $soilSeasonBridgeMutations.GetEnumerator()) {

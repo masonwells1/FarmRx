@@ -99,25 +99,32 @@ export class WorkspaceCacheExpiredError extends Error {
   constructor() { super('This offline copy is too old to show safely. Connect to verify your farm access.'); this.name = 'WorkspaceCacheExpiredError' }
 }
 
-export function captureWorkspaceCacheFence(scope: WorkspaceCacheScope): FarmRevocationSnapshot | null {
-  if (typeof localStorage === 'undefined') return null
-  try { return captureFarmRevocationFence(localStorage, scope) } catch { return null }
+function resolveStorage(storage?: StorageLike): StorageLike | null {
+  if (storage) return storage
+  return typeof localStorage === 'undefined' ? null : localStorage
 }
 
-export async function writeWorkspaceCache<T>(scope: WorkspaceCacheScope, data: T, fence: FarmRevocationSnapshot | null, cachedAt = new Date().toISOString(), expectedCacheCustody?: number): Promise<boolean> {
-  if (!available() || !fence) return false
+export function captureWorkspaceCacheFence(scope: WorkspaceCacheScope, storage?: StorageLike): FarmRevocationSnapshot | null {
+  const store = resolveStorage(storage)
+  if (!store) return null
+  try { return captureFarmRevocationFence(store, scope) } catch { return null }
+}
+
+export async function writeWorkspaceCache<T>(scope: WorkspaceCacheScope, data: T, fence: FarmRevocationSnapshot | null, cachedAt = new Date().toISOString(), expectedCacheCustody?: number, storage?: StorageLike): Promise<boolean> {
+  const store = resolveStorage(storage)
+  if (!available() || !fence || !store) return false
   let database: IDBDatabase | null = null
   try {
-    const cacheCustody = expectedCacheCustody ?? captureWorkspaceCacheCustody(localStorage, scope)
-    if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return false
+    const cacheCustody = expectedCacheCustody ?? captureWorkspaceCacheCustody(store, scope)
+    if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return false
     database = await open(scope.projectRef)
-    verifyFarmRevocationFence(localStorage, fence)
-    if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return false
+    verifyFarmRevocationFence(store, fence)
+    if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return false
     const transaction = database.transaction(storeName, 'readwrite')
     transaction.objectStore(storeName).put({ version: 3, key: cacheKey(scope), ...scope, generation: fence.generation, fenceToken: fence.token, serverEpoch: fence.serverEpoch, cacheCustody, cachedAt, data: structuredClone(data) } satisfies WorkspaceEnvelope<T>)
     await complete(transaction)
-    verifyFarmRevocationFence(localStorage, fence)
-    if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return false
+    verifyFarmRevocationFence(store, fence)
+    if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return false
     return true
   } catch { return false }
   finally { database?.close() }
@@ -144,22 +151,23 @@ export function beginWorkspaceCacheInvalidation(storage: StorageLike, scope: Wor
   }
 }
 
-export async function readWorkspaceCache<T>(scope: WorkspaceCacheScope, maximumAgeMs: number): Promise<{ data: T; cachedAt: string } | null> {
-  if (!available()) return null
+export async function readWorkspaceCache<T>(scope: WorkspaceCacheScope, maximumAgeMs: number, storage?: StorageLike): Promise<{ data: T; cachedAt: string } | null> {
+  const store = resolveStorage(storage)
+  if (!available() || !store) return null
   let fence
   let cacheCustody
-  try { fence = captureFarmRevocationFence(localStorage, scope); cacheCustody = captureWorkspaceCacheCustody(localStorage, scope) } catch { return null }
+  try { fence = captureFarmRevocationFence(store, scope); cacheCustody = captureWorkspaceCacheCustody(store, scope) } catch { return null }
   const database = await open(scope.projectRef)
   try {
     const transaction = database.transaction(storeName, 'readonly')
     const value = await requestResult(transaction.objectStore(storeName).get(cacheKey(scope)))
     if (value === undefined) return null
-    if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return null
+    if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return null
     if (!validEnvelope<T>(value, scope, fence, cacheCustody)) return null
     const ageMs = Date.now() - Date.parse(value.cachedAt)
     if (ageMs < -maximumClockSkewMs || ageMs > maximumAgeMs) throw new WorkspaceCacheExpiredError()
-    try { verifyFarmRevocationFence(localStorage, fence) } catch { return null }
-    if (!verifyWorkspaceCacheCustody(localStorage, scope, cacheCustody)) return null
+    try { verifyFarmRevocationFence(store, fence) } catch { return null }
+    if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return null
     publish({ module: scope.module.split(':')[0], cachedAt: value.cachedAt })
     return { data: structuredClone(value.data), cachedAt: value.cachedAt }
   } finally { database.close() }
