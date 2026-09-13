@@ -1,4 +1,4 @@
-import { CARRY_GRID_ROWS, defaultCarrySettings, emptyCarryRows, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
+import { CARRY_GRID_ROWS, defaultCarrySettings, emptyCarryRows, normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
 import { parseGrainQueue } from './grainWriteQueue'
 import { readGrain } from './MockGrainRepository'
 import type { GrainCarryGrid, GrainCarrySettings, GrainSaleLimit } from './grain'
@@ -172,6 +172,25 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...fakeStorage, setItem: () => { throw new Error('QuotaExceededError') } } })
   assert(writeSettingsDraft(scopeA, 'carry-settings', { draft: 'S3' }, stamp) === null, 'A refused write must return null.')
   Reflect.deleteProperty(globalThis, 'localStorage')
+}
+
+// Every repository saves and returns the row as the database stores it, so a screen's "last sent" row equals the row a replay
+// produces: bushels at two decimals, rates and prices at four, ties away from zero, and a value too large for its column refused.
+{
+  const stamp = '2026-09-13T12:00:00.000Z'
+  const limit: GrainSaleLimit = { id: '00000000-0000-4000-8000-000000000201', farm_id: 'farm-a', crop_year: 2026, commodity_id: 'corn', operating_entity_id: null, enterprise_label: null, sale_limit_bushels: 1234.565, created_at: stamp, updated_at: stamp }
+  assert(normalizeGrainSaleLimit(limit).sale_limit_bushels === 1234.57, 'A sale limit is rounded to two decimals, ties away from zero.')
+  assert(normalizeGrainSaleLimit({ ...limit, sale_limit_bushels: null }).sale_limit_bushels === null, 'A cleared sale limit stays null.')
+  let refused = false
+  try { normalizeGrainSaleLimit({ ...limit, sale_limit_bushels: 1e15 }) } catch { refused = true }
+  assert(refused, 'A sale limit too large for its column is refused before it can be queued.')
+  const settings: GrainCarrySettings = { farm_id: 'farm-a', mode: 'monthly', monthly_rate_cents_per_bu_month: 4.12345, flat_rate_per_bu: 0.18, interest_rate_pct: 7.00005, trucking_per_bu: 0.123456, updated_at: stamp }
+  const normalizedSettings = normalizeGrainCarrySettings(settings)
+  assert(normalizedSettings.monthly_rate_cents_per_bu_month === 4.1235 && normalizedSettings.interest_rate_pct === 7.0001 && normalizedSettings.trucking_per_bu === 0.1235 && normalizedSettings.flat_rate_per_bu === 0.18, 'Carry rates are rounded to four decimals.')
+  const grid: GrainCarryGrid = { id: '00000000-0000-4000-8000-000000000202', farm_id: 'farm-a', production_estimate_id: '00000000-0000-4000-8000-000000000012', harvest_month: 8, default_basis: -0.30005, rows: emptyCarryRows().map((row, index) => index === 0 ? { market_price: 4.23456, basis: -0.30004 } : row), updated_at: stamp }
+  const normalizedGrid = normalizeGrainCarryGrid(grid)
+  assert(normalizedGrid.default_basis === -0.3001 && normalizedGrid.rows[0]?.market_price === 4.2346 && normalizedGrid.rows[0]?.basis === -0.3 && normalizedGrid.rows[1]?.market_price === null, 'Grid prices and bases are rounded to four decimals; blanks stay blank.')
+  assert(JSON.stringify(normalizeGrainCarryGrid(normalizedGrid)) === JSON.stringify(normalizedGrid), 'Normalizing an already normalized grid changes nothing.')
 }
 
 console.log('Grain settings regressions passed.')

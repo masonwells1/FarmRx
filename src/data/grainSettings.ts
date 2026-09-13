@@ -1,4 +1,5 @@
 import type { GrainCarryGrid, GrainCarryGridRow, GrainCarrySettings, GrainSaleLimit } from './grain'
+import { boundedDecimal, nullableBoundedDecimal } from './decimal'
 
 /** The carry grid always holds the harvest month plus twelve stored months. */
 export const CARRY_GRID_ROWS = 13
@@ -33,4 +34,20 @@ export function validateGrainCarryGrid(value: GrainCarryGrid): string[] {
   if (!Array.isArray(value.rows) || value.rows.length !== CARRY_GRID_ROWS) errors.push(`The carry grid needs ${CARRY_GRID_ROWS} rows.`)
   else if (value.rows.some((row) => !row || typeof row !== 'object' || (row.market_price !== null && !finite(row.market_price)) || (row.basis !== null && !finite(row.basis)))) errors.push('Each price and basis must be a number or blank.')
   return errors
+}
+
+// The rows as the database will store them (numeric scale 2 for bushels, 4 for rates and prices, PostgreSQL rounding). Every
+// repository saves and returns this shape, so a row kept as "last sent" by a screen equals the row the server (or a later queue
+// replay) produces, and the screen can recognise its own write coming back. A value too large for its column throws here, before
+// it is queued.
+export function normalizeGrainSaleLimit(value: GrainSaleLimit): GrainSaleLimit {
+  return { ...value, sale_limit_bushels: nullableBoundedDecimal(value.sale_limit_bushels, { precision: 16, scale: 2, label: 'the sale limit' }) }
+}
+export function normalizeGrainCarrySettings(value: GrainCarrySettings): GrainCarrySettings {
+  const rate = (amount: number, label: string) => boundedDecimal(amount, { precision: 10, scale: 4, label })
+  return { ...value, monthly_rate_cents_per_bu_month: rate(value.monthly_rate_cents_per_bu_month, 'the monthly storage rate'), flat_rate_per_bu: rate(value.flat_rate_per_bu, 'the flat storage rate'), interest_rate_pct: boundedDecimal(value.interest_rate_pct, { precision: 8, scale: 4, label: 'the interest rate' }), trucking_per_bu: rate(value.trucking_per_bu, 'the trucking rate') }
+}
+export function normalizeGrainCarryGrid(value: GrainCarryGrid): GrainCarryGrid {
+  const price = (amount: number | null, label: string) => nullableBoundedDecimal(amount, { precision: 10, scale: 4, label })
+  return { ...value, default_basis: boundedDecimal(value.default_basis, { precision: 10, scale: 4, label: 'the default basis' }), rows: value.rows.map(({ market_price, basis }) => ({ market_price: price(market_price, 'a market price'), basis: price(basis, 'a basis') })) }
 }
