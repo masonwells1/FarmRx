@@ -69,6 +69,7 @@ const entry = createSoilRxQueueEntry({ version: 1, module: 'soilRx', kind: 'save
 queue.append(entry); assert.equal(queue.read().entries[0]?.draft.id, testId); queue.removeConfirmedHead(operation); assert.equal(queue.read().entries.length, 0)
 assert.throws(() => parseSoilRxQueue(JSON.stringify({ version: 1, entries: [{ ...entry, farmId: 'wrong' }] })), /need attention/)
 assert.throws(() => parseSoilRxQueue(JSON.stringify({ version: 1, entries: [{ ...entry, draft: { ...entry.draft, lab_name: 'Changed without byte binding' } }] })), /need attention/)
+assert.throws(() => parseSoilRxQueue(JSON.stringify({ version: 1, entries: [{ ...entry, draft: { ...entry.draft, lab_name: 42 } }] })), /need attention/)
 
 const cleanupKey = soilRxCleanupOutboxKey('test-project', user)
 assert.equal(recordSoilRxCleanup(queueStorage, cleanupKey, { path, userId: user, farmId: farm, recordedAt: stamp }), true)
@@ -88,4 +89,5 @@ assert.equal(/create\s+(?:table|function|view)\s+storage\./i.test(migration), fa
 assert.match(migration, /soil report path is not owned by the current farm test/, 'The normal Storage absence verifier must retain exact row ownership.')
 for (const required of ['verify_soil_report_cleanup_terminal_absence', 'p_field_id uuid', 'p_test_id uuid', "split_part(requested.path, '/', 2) <> p_field_id::text", "split_part(requested.path, '/', 3) <> p_test_id::text", 'where test.farm_id = p_farm_id and test.id = p_test_id', "object.bucket_id = 'soil-test-reports'", 'object.name = any (p_paths)']) assert.ok(migration.includes(required), `Terminal cleanup proof is missing: ${required}`)
 assert.match(migration, /grant execute on function[\s\S]*public\.verify_soil_report_cleanup_terminal_absence\(uuid, uuid, uuid, text\[\]\)[\s\S]*to authenticated;/, 'Terminal cleanup verifier must be executable only by authenticated callers.')
+assert.match(migration, /revoke all on function[\s\S]*public\.verify_soil_report_cleanup_terminal_absence\(uuid, uuid, uuid, text\[\]\)[\s\S]*from public, anon, authenticated, service_role;/, 'Terminal cleanup verifier must revoke execution from every role before granting authenticated access.')
 console.log('SOIL_RX_REPOSITORY_REGRESSION_PASS')

@@ -47,7 +47,7 @@ const ranges: Record<SoilMeasurementKey, readonly [number, number]> = {
 }
 export const isSoilRxUuid = (value: unknown): value is string => typeof value === 'string' && uuid.test(value)
 export const isSoilRxDate = (value: unknown): value is string => typeof value === 'string' && date.test(value) && value >= '1900-01-01' && value <= '2200-12-31' && new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value
-export function normalizeSoilTestDraft(draft: SoilTestDraft): SoilTestDraft { const result = { ...draft, lab_name: draft.lab_name.trim() }; for (const key of soilMeasurementKeys) result[key] = draft[key] === null ? null : Number(draft[key]); return result }
+export function normalizeSoilTestDraft(draft: SoilTestDraft): SoilTestDraft { const result = { ...draft, lab_name: typeof draft.lab_name === 'string' ? draft.lab_name.trim() : draft.lab_name }; for (const key of soilMeasurementKeys) result[key] = draft[key] === null ? null : Number(draft[key]); return result }
 export function validateSoilTestDraft(draft: SoilTestDraft): string | null {
   if (draft.id !== undefined && !isSoilRxUuid(draft.id) || !isSoilRxUuid(draft.field_id)) return 'This soil test is invalid. Reopen the form and try again.'
   if (!isSoilRxDate(draft.sample_date)) return 'Enter a valid sample date.'
