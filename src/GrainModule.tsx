@@ -401,8 +401,10 @@ export function GrainPage({ services }: { services: GrainServices }) {
       lock.release();
       // The farmer kept typing while the save was in flight: commit the newest value once more.
       if (savedValue !== undefined && (saleLimitsRef.current[key] ?? null) !== savedValue) void commitSaleLimit(estimate);
-      // A failed save keeps the typed limit on screen and makes a confirmed farm switch stop rather than discard it.
+      // A failed save keeps the typed limit on screen, dirty and pending: the farm switcher warns, and a confirmed switch
+      // retries it through the registered flush and stops if it fails again, rather than discarding it.
       done(failure);
+      if (failure !== undefined && dirtySaleLimits.current.has(key)) markSaleLimitUnflushed(key);
     }
   };
   const commitSaleLimitRef = useRef(commitSaleLimit);

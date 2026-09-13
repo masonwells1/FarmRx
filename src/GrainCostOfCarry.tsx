@@ -62,6 +62,10 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   const chain = useRef(Promise.resolve())
   const settingsDirty = useRef(false)
   const gridsDirty = useRef(new Set<string>())
+  // Drafts whose last save failed: they stay dirty and pending so the next flush (or a confirmed farm switch) retries them,
+  // and a newer row arriving from the recovery refresh replaces them like a pristine draft instead of being held back.
+  const failedSettings = useRef(false)
+  const failedGrids = useRef(new Set<string>())
   const newGridIds = useRef<Record<string, string>>({})
   // Every queued save (and any unflushed edit) keeps the farm marked pending for the farm switcher until it has run.
   // A save that fails before reaching the server or the durable queue marks its token failed, so a confirmed farm switch stops instead of discarding the edit.
@@ -74,7 +78,17 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
     settingsDirty.current = false
     settleUnflushed()
     const snapshot = settingsRef.current
-    enqueue(async () => { const current = workspaceRef.current; const saved = await persistenceRef.current?.saveSettings(settingsToRow(current.fields.farm.id, snapshot, baseVersions.current.settings ?? new Date().toISOString())); if (saved) baseVersions.current.settings = saved.updated_at })
+    enqueue(async () => {
+      const current = workspaceRef.current
+      try {
+        const saved = await persistenceRef.current?.saveSettings(settingsToRow(current.fields.farm.id, snapshot, baseVersions.current.settings ?? new Date().toISOString()))
+        if (saved) baseVersions.current.settings = saved.updated_at
+        failedSettings.current = false
+      } catch (error) {
+        settingsDirty.current = true; failedSettings.current = true; markUnflushed()
+        throw error
+      }
+    })
   }
   const flushGrids = () => {
     if (!persisted) return
@@ -88,20 +102,27 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
         if (!active || !current.production_estimates.some((estimate) => estimate.id === estimateId)) return
         const existing = current.grain_carry_grids.find((grid) => grid.production_estimate_id === estimateId)
         const id = existing?.id ?? (newGridIds.current[estimateId] ??= active.createId())
-        const saved = await active.saveGrid(carryToGrid(snapshot, { id, farm_id: current.fields.farm.id, production_estimate_id: estimateId, updated_at: baseVersions.current.grids[estimateId] ?? existing?.updated_at ?? new Date().toISOString() }))
-        if (saved) baseVersions.current.grids[estimateId] = saved.updated_at
+        try {
+          const saved = await active.saveGrid(carryToGrid(snapshot, { id, farm_id: current.fields.farm.id, production_estimate_id: estimateId, updated_at: baseVersions.current.grids[estimateId] ?? existing?.updated_at ?? new Date().toISOString() }))
+          if (saved) baseVersions.current.grids[estimateId] = saved.updated_at
+          failedGrids.current.delete(estimateId)
+        } catch (error) {
+          gridsDirty.current.add(estimateId); failedGrids.current.add(estimateId); markUnflushed()
+          throw error
+        }
       })
     }
   }
-  useEffect(() => { setSettings(initialSettings()); setByEstimate(initialGrids()); settingsDirty.current = false; gridsDirty.current.clear(); baseVersions.current = { settings: workspace.grain_carry_settings?.updated_at ?? null, grids: Object.fromEntries(workspace.grain_carry_grids.map((grid) => [grid.production_estimate_id, grid.updated_at])) } }, [farmId, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setSettings(initialSettings()); setByEstimate(initialGrids()); settingsDirty.current = false; gridsDirty.current.clear(); failedSettings.current = false; failedGrids.current.clear(); settleUnflushed(); baseVersions.current = { settings: workspace.grain_carry_settings?.updated_at ?? null, grids: Object.fromEntries(workspace.grain_carry_grids.map((grid) => [grid.production_estimate_id, grid.updated_at])) } }, [farmId, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
   // Rows changed elsewhere (another device, or a refresh after another Grain save) replace a pristine draft and its version;
   // a draft still being edited keeps its original version so its save conflicts rather than overwriting the newer row.
   useEffect(() => {
     if (!persisted) return
     const row = workspace.grain_carry_settings; const version = row?.updated_at ?? null
-    if (version !== baseVersions.current.settings && !settingsDirty.current) { baseVersions.current.settings = version; setSettings(row ? settingsFromRow(row) : defaultSettings) }
+    if (version !== baseVersions.current.settings && (!settingsDirty.current || failedSettings.current)) { baseVersions.current.settings = version; setSettings(row ? settingsFromRow(row) : defaultSettings); settingsDirty.current = false; failedSettings.current = false; settleUnflushed() }
     for (const grid of workspace.grain_carry_grids) {
-      if (grid.updated_at !== (baseVersions.current.grids[grid.production_estimate_id] ?? null) && !gridsDirty.current.has(grid.production_estimate_id)) { baseVersions.current.grids[grid.production_estimate_id] = grid.updated_at; setByEstimate((current) => ({ ...current, [grid.production_estimate_id]: carryFromGrid(grid) })) }
+      const estimateId = grid.production_estimate_id
+      if (grid.updated_at !== (baseVersions.current.grids[estimateId] ?? null) && (!gridsDirty.current.has(estimateId) || failedGrids.current.has(estimateId))) { baseVersions.current.grids[estimateId] = grid.updated_at; setByEstimate((current) => ({ ...current, [estimateId]: carryFromGrid(grid) })); gridsDirty.current.delete(estimateId); failedGrids.current.delete(estimateId); settleUnflushed() }
     }
   }, [workspace.grain_carry_settings, workspace.grain_carry_grids, persisted])
   useEffect(() => { if (persisted) return; try { window.localStorage.setItem(settingsKey(farmId), JSON.stringify(settings)) } catch { /* private mode: calculator still works this visit */ } }, [farmId, settings, persisted])
@@ -110,10 +131,10 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   useEffect(() => () => { flushSettings(); flushGrids() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // A confirmed farm switch sends unflushed edits through here and then waits for the chain before the farm changes.
   useEffect(() => persisted ? registerPendingSettingsFlush(farmId, () => { flushSettings(); flushGrids() }) : undefined, [farmId, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
-  const changeSettings = (change: (current: CarrySettings) => CarrySettings) => { settingsDirty.current = true; if (persisted) markUnflushed(); setSettings(change) }
+  const changeSettings = (change: (current: CarrySettings) => CarrySettings) => { settingsDirty.current = true; failedSettings.current = false; if (persisted) markUnflushed(); setSettings(change) }
   // Discrete choices (the storage-mode buttons) save as soon as React has committed the click, not after the typing pause.
   const chooseMode = (mode: CarrySettings['mode']) => { changeSettings((current) => ({ ...current, mode })); setTimeout(flushSettings, 0) }
-  const updateCarry = (change: (current: CommodityCarry) => CommodityCarry) => { gridsDirty.current.add(selectedEstimateId); if (persisted) markUnflushed(); setByEstimate((current) => ({ ...current, [selectedEstimateId]: change(current[selectedEstimateId] ?? freshCommodityCarry()) })) }
+  const updateCarry = (change: (current: CommodityCarry) => CommodityCarry) => { gridsDirty.current.add(selectedEstimateId); failedGrids.current.delete(selectedEstimateId); if (persisted) markUnflushed(); setByEstimate((current) => ({ ...current, [selectedEstimateId]: change(current[selectedEstimateId] ?? freshCommodityCarry()) })) }
   const calculated = useMemo(() => {
     const harvestMarket = toNumber(carry.rows[0]?.marketPrice ?? '')
     const harvestBasis = toNumber(carry.rows[0]?.basis ?? '')
