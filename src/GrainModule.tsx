@@ -10,6 +10,7 @@ import { currentFarmContext } from "./auth/farmContext";
 import { beginPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_CONTEXT_CHANGED } from "./data/pendingSettingsWork";
 import { clearSettingsDraft, readSettingsDrafts, writeSettingsDraft, type SettingsDraftScope } from "./data/settingsDrafts";
 import { supabaseConfig } from "./lib/supabaseConfig";
+import { getModuleSyncStatus, subscribeSyncStatus } from "./data/syncStatus";
 type SaleLimitDraft = { key: string; value: number | null; base: { id: string; updated_at: string } | null };
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
@@ -396,6 +397,17 @@ export function GrainPage({ services }: { services: GrainServices }) {
   // This page instance is gone once the route changes (the route boundary remounts per path); saves that fail after that retain their draft instead.
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
+  // A save queued offline returns the client row with its old version; replay later advances the version on the server. Once the
+  // grain queue has drained, refetch so the rows carry their replayed versions and the next edit does not conflict with its own save.
+  useEffect(() => {
+    let previous = getModuleSyncStatus("grain").kind;
+    const unsubscribe = subscribeSyncStatus(() => {
+      const next = getModuleSyncStatus("grain").kind;
+      if ((previous === "pending" || previous === "syncing") && next === "synced" && mountedRef.current) void refresh().catch(() => undefined);
+      previous = next;
+    });
+    return () => { unsubscribe(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   // The account and farm this page loaded for: a save runs only while both are still the live selection (another tab may have changed either).
   const originRef = useRef<{ userId: string; farmId: string } | null>(null);
   // The revision of the browser draft last written or adopted per position: a save clears only that revision (another tab may have written since).
