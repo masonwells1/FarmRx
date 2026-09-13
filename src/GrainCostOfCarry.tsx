@@ -64,12 +64,13 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   const newGridIds = useRef<Record<string, string>>({})
   const enqueue = (work: () => Promise<void>) => { chain.current = chain.current.then(() => work().catch(() => undefined)) }
   const flushSettings = () => {
-    if (!settingsDirty.current) return
+    if (!persisted || !settingsDirty.current) return
     settingsDirty.current = false
     const snapshot = settingsRef.current
     enqueue(async () => { const current = workspaceRef.current; const saved = await persistenceRef.current?.saveSettings(settingsToRow(current.fields.farm.id, snapshot, baseVersions.current.settings ?? new Date().toISOString())); if (saved) baseVersions.current.settings = saved.updated_at })
   }
   const flushGrids = () => {
+    if (!persisted) return
     const ids = [...gridsDirty.current]; gridsDirty.current.clear()
     for (const estimateId of ids) {
       const snapshot = byEstimateRef.current[estimateId]
@@ -100,6 +101,8 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   useEffect(() => { if (!persisted || gridsDirty.current.size === 0) return; const timer = setTimeout(flushGrids, SAVE_DELAY_MS); return () => clearTimeout(timer) }, [byEstimate, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { flushSettings(); flushGrids() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const changeSettings = (change: (current: CarrySettings) => CarrySettings) => { settingsDirty.current = true; setSettings(change) }
+  // Discrete choices (the storage-mode buttons) save as soon as React has committed the click, not after the typing pause.
+  const chooseMode = (mode: CarrySettings['mode']) => { changeSettings((current) => ({ ...current, mode })); setTimeout(flushSettings, 0) }
   const updateCarry = (change: (current: CommodityCarry) => CommodityCarry) => { gridsDirty.current.add(selectedEstimateId); setByEstimate((current) => ({ ...current, [selectedEstimateId]: change(current[selectedEstimateId] ?? freshCommodityCarry()) })) }
   const calculated = useMemo(() => {
     const harvestMarket = toNumber(carry.rows[0]?.marketPrice ?? '')
@@ -127,7 +130,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   return <>
     <section className="grain-section carry-settings-card" aria-labelledby="carry-settings-title">
       <div className="section-heading"><div><span className="eyebrow">Carry costs</span><h2 id="carry-settings-title">How do you pay for storage?</h2><p>Monthly rate accumulates — the longer you store, the higher the cost. {storageNote}</p></div></div>
-      <div className="carry-settings"><div className="carry-toggle" role="group" aria-label="Storage payment method"><button type="button" className={settings.mode === 'monthly' ? 'active' : ''} onClick={() => changeSettings((current) => ({ ...current, mode: 'monthly' }))}>Option A — Monthly</button><button type="button" className={settings.mode === 'flat' ? 'active' : ''} onClick={() => changeSettings((current) => ({ ...current, mode: 'flat' }))}>Option B — Flat rate</button></div>{settings.mode === 'monthly' ? <label>Monthly storage rate ¢/bu/mo<input aria-label="Monthly storage rate cents per bushel per month" type="number" min="0" step="0.1" inputMode="decimal" value={settings.monthlyRateCentsPerBuMonth} onChange={(event) => setRate('monthlyRateCentsPerBuMonth', event.target.value)} onBlur={flushSettings} /></label> : <label>Flat storage rate $/bu<input aria-label="Flat storage rate dollars per bushel" type="number" min="0" step="0.01" inputMode="decimal" value={settings.flatRatePerBu} onChange={(event) => setRate('flatRatePerBu', event.target.value)} onBlur={flushSettings} /></label>}<label>Interest rate %<input type="number" min="0" step="0.1" inputMode="decimal" value={settings.interestRatePct} onChange={(event) => setRate('interestRatePct', event.target.value)} onBlur={flushSettings} /></label><label>2nd-haul trucking $/bu<input type="number" min="0" step="0.01" inputMode="decimal" value={settings.truckingPerBu} onChange={(event) => setRate('truckingPerBu', event.target.value)} onBlur={flushSettings} /></label></div>
+      <div className="carry-settings"><div className="carry-toggle" role="group" aria-label="Storage payment method"><button type="button" className={settings.mode === 'monthly' ? 'active' : ''} onClick={() => chooseMode('monthly')}>Option A — Monthly</button><button type="button" className={settings.mode === 'flat' ? 'active' : ''} onClick={() => chooseMode('flat')}>Option B — Flat rate</button></div>{settings.mode === 'monthly' ? <label>Monthly storage rate ¢/bu/mo<input aria-label="Monthly storage rate cents per bushel per month" type="number" min="0" step="0.1" inputMode="decimal" value={settings.monthlyRateCentsPerBuMonth} onChange={(event) => setRate('monthlyRateCentsPerBuMonth', event.target.value)} onBlur={flushSettings} /></label> : <label>Flat storage rate $/bu<input aria-label="Flat storage rate dollars per bushel" type="number" min="0" step="0.01" inputMode="decimal" value={settings.flatRatePerBu} onChange={(event) => setRate('flatRatePerBu', event.target.value)} onBlur={flushSettings} /></label>}<label>Interest rate %<input type="number" min="0" step="0.1" inputMode="decimal" value={settings.interestRatePct} onChange={(event) => setRate('interestRatePct', event.target.value)} onBlur={flushSettings} /></label><label>2nd-haul trucking $/bu<input type="number" min="0" step="0.01" inputMode="decimal" value={settings.truckingPerBu} onChange={(event) => setRate('truckingPerBu', event.target.value)} onBlur={flushSettings} /></label></div>
     </section>
     <section className="grain-section carry-calculator" aria-labelledby="carry-title">
       <div className="section-heading"><div><span className="eyebrow">Your numbers</span><h2 id="carry-title">Store or deliver at harvest</h2><p>Type the prices you can get. These manual prices run the math; delayed market quotes do not.</p></div><label className="commodity-picker"><span>Commodity</span><select value={selectedEstimateId} onChange={(event) => onSelectEstimate(event.target.value)}>{workspace.production_estimates.map((estimate) => <option key={estimate.id} value={estimate.id}>{workspace.fields.commodities.find((commodity) => commodity.id === estimate.commodity_id)?.name ?? estimate.commodity_id}</option>)}</select></label></div>

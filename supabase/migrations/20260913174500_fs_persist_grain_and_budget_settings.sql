@@ -161,7 +161,9 @@ before insert or update or delete on public.grain_carry_grids
 for each row execute function public.guard_row_farm_access_epoch();
 
 -- ---------------------------------------------------------------------------
--- Row Level Security: private financial read, farm edit write
+-- Row Level Security: private financial read; writes need farm edit AND private
+-- financial access, so a worker without financial access can neither read nor
+-- seed these rows through the Data API.
 -- ---------------------------------------------------------------------------
 alter table public.grain_sale_limits enable row level security;
 alter table public.grain_carry_settings enable row level security;
@@ -180,39 +182,39 @@ on public.grain_sale_limits for select to authenticated
 using (public.can_read_private_financials(farm_id));
 create policy grain_sale_limits_insert
 on public.grain_sale_limits for insert to authenticated
-with check (public.can_edit_farm(farm_id));
+with check (public.can_edit_farm(farm_id) and public.can_read_private_financials(farm_id));
 create policy grain_sale_limits_update
 on public.grain_sale_limits for update to authenticated
-using (public.can_edit_farm(farm_id))
-with check (public.can_edit_farm(farm_id));
+using (public.can_edit_farm(farm_id) and public.can_read_private_financials(farm_id))
+with check (public.can_edit_farm(farm_id) and public.can_read_private_financials(farm_id));
 create policy grain_sale_limits_delete
 on public.grain_sale_limits for delete to authenticated
-using (public.can_edit_farm(farm_id));
+using (public.can_edit_farm(farm_id) and public.can_read_private_financials(farm_id));
 
 create policy grain_carry_settings_select
 on public.grain_carry_settings for select to authenticated
 using (public.can_read_private_financials(farm_id));
 create policy grain_carry_settings_insert
 on public.grain_carry_settings for insert to authenticated
-with check (public.can_edit_farm(farm_id));
+with check (public.can_edit_farm(farm_id) and public.can_read_private_financials(farm_id));
 create policy grain_carry_settings_update
 on public.grain_carry_settings for update to authenticated
-using (public.can_edit_farm(farm_id))
-with check (public.can_edit_farm(farm_id));
+using (public.can_edit_farm(farm_id) and public.can_read_private_financials(farm_id))
+with check (public.can_edit_farm(farm_id) and public.can_read_private_financials(farm_id));
 create policy grain_carry_settings_delete
 on public.grain_carry_settings for delete to authenticated
-using (public.can_edit_farm(farm_id));
+using (public.can_edit_farm(farm_id) and public.can_read_private_financials(farm_id));
 
 create policy grain_carry_grids_select
 on public.grain_carry_grids for select to authenticated
 using (public.can_read_private_financials(farm_id));
 create policy grain_carry_grids_insert
 on public.grain_carry_grids for insert to authenticated
-with check (public.can_edit_farm(farm_id));
+with check (public.can_edit_farm(farm_id) and public.can_read_private_financials(farm_id));
 create policy grain_carry_grids_update
 on public.grain_carry_grids for update to authenticated
-using (public.can_edit_farm(farm_id))
-with check (public.can_edit_farm(farm_id));
+using (public.can_edit_farm(farm_id) and public.can_read_private_financials(farm_id))
+with check (public.can_edit_farm(farm_id) and public.can_read_private_financials(farm_id));
 create policy grain_carry_grids_delete
 on public.grain_carry_grids for delete to authenticated
-using (public.can_edit_farm(farm_id));
+using (public.can_edit_farm(farm_id) and public.can_read_private_financials(farm_id));

@@ -188,10 +188,21 @@ end $$;
 select set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-000000000003"}',false);
 select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000003','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000010',1)::text)::text,false);
 do $$
+declare v_ok boolean; v_count integer;
 begin
   if (select count(*) from public.grain_sale_limits) <> 0 then raise exception 'worker without financials can read sale limits'; end if;
   if (select count(*) from public.grain_carry_settings) <> 0 then raise exception 'worker without financials can read carry settings'; end if;
   if (select count(*) from public.grain_carry_grids) <> 0 then raise exception 'worker without financials can read carry grids'; end if;
+  -- A worker who can edit the farm but cannot read financials must not seed these rows either.
+  v_ok := false;
+  begin insert into public.grain_sale_limits(farm_id,crop_year,commodity_id,sale_limit_bushels) values ('00000000-0000-4000-8000-000000000010',2028,'wheat',1); v_ok := true; exception when insufficient_privilege then null; end;
+  if v_ok then raise exception 'worker without financials could insert a sale limit'; end if;
+  v_ok := false;
+  begin insert into public.grain_carry_grids(farm_id,production_estimate_id,harvest_month,default_basis,rows) values ('00000000-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000012',9,0,(select jsonb_agg(jsonb_build_object('market_price',null,'basis',0)) from generate_series(1,13))); v_ok := true; exception when insufficient_privilege then null; end;
+  if v_ok then raise exception 'worker without financials could insert a carry grid'; end if;
+  update public.grain_carry_settings set trucking_per_bu = 9 where farm_id = '00000000-0000-4000-8000-000000000010';
+  get diagnostics v_count = row_count;
+  if v_count <> 0 then raise exception 'worker without financials could update carry settings'; end if;
 end $$;
 reset role;
 
