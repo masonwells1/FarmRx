@@ -7,7 +7,8 @@ import { confirmDialog } from "./components/ConfirmDialog";
 import { SectionTabs } from "./SectionTabs";
 import { farmerError } from "./lib/farmerErrors";
 import { currentFarmContext } from "./auth/farmContext";
-import { beginPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_CONTEXT_CHANGED } from "./data/pendingSettingsWork";
+import { beginPendingSettingsWork, registerPendingSettingsFlush, retainFailedSettingsDraft, SETTINGS_CONTEXT_CHANGED, takeRetainedSettingsDrafts } from "./data/pendingSettingsWork";
+type RetainedSaleLimit = { key: string; value: number | null; base: { id: string; updated_at: string } | null };
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type {
@@ -295,6 +296,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const refresh = async (strict = false) => {
     try {
       const alertOperationContext = await captureGrainAlertOperationContext();
+      originRef.current = { userId: alertOperationContext.userId, farmId: alertOperationContext.farmId };
       const [data, queueKey] = await Promise.all([services.grainRepository.getData(), services.grainRepository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)]);
       await verifyGrainAlertOperationContext(alertOperationContext);
       if (data.fields.farm.id !== alertOperationContext.farmId) throw new Error("The selected farm changed while grain alerts were loading.");
@@ -319,6 +321,14 @@ export function GrainPage({ services }: { services: GrainServices }) {
         });
         for (const key of adopted) { dirtySaleLimits.current.delete(key); failedSaleLimits.current.delete(key); settleSaleLimitUnflushed(key); }
         setSaleLimits((current) => ({ ...current, ...Object.fromEntries(rows.map((limit) => [scopeKey(scopeOf(limit)), limit.sale_limit_bushels])) }));
+        // A limit whose save failed after this page was left comes back dirty and pending, unless the farm's row moved on since.
+        for (const [, payload] of takeRetainedSettingsDrafts(data.fields.farm.id, "sale-limit:")) {
+          const retained = payload as RetainedSaleLimit;
+          const row = data.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === retained.key);
+          if ((row?.id ?? null) !== (retained.base?.id ?? null) || (row?.updated_at ?? null) !== (retained.base?.updated_at ?? null)) continue;
+          dirtySaleLimits.current.add(retained.key); failedSaleLimits.current.add(retained.key); markSaleLimitUnflushed(retained.key, data.fields.farm.id);
+          setSaleLimits((current) => ({ ...current, [retained.key]: retained.value }));
+        }
       }
       setAlerts(nextAlerts);
       void recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions, alertOperationContext).then((transitioned) => {
@@ -375,12 +385,17 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const failedSaleLimits = useRef(new Set<string>());
   // An edit not yet committed keeps the farm marked pending for the farm switcher; the commit below then holds its own token.
   const unflushedSaleLimits = useRef(new Map<string, () => void>());
-  const markSaleLimitUnflushed = (key: string) => { const farmId = workspaceRef.current?.fields.farm.id; if (farmId && !unflushedSaleLimits.current.has(key)) unflushedSaleLimits.current.set(key, beginPendingSettingsWork(farmId)); };
+  const markSaleLimitUnflushed = (key: string, farmId = workspaceRef.current?.fields.farm.id) => { if (farmId && !unflushedSaleLimits.current.has(key)) unflushedSaleLimits.current.set(key, beginPendingSettingsWork(farmId)); };
+  // This page instance is gone once the route changes (the route boundary remounts per path); saves that fail after that retain their draft instead.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+  // The account and farm this page loaded for: a save runs only while both are still the live selection (another tab may have changed either).
+  const originRef = useRef<{ userId: string; farmId: string } | null>(null);
   const settleSaleLimitUnflushed = (key: string) => { unflushedSaleLimits.current.get(key)?.(); unflushedSaleLimits.current.delete(key); };
   // One lock per position: a slow save on one card must not swallow a commit on another.
   const saleLimitLocks = useRef(createSubmitLockMap());
   // A debounced, unmount-time, or blur-time save must never run under a farm the farmer (or another tab) has since switched to.
-  const farmStillSelected = async (farmId: string) => { try { return (await currentFarmContext()).farmId === farmId; } catch { return false; } };
+  const farmStillSelected = async (farmId: string) => { try { const live = await currentFarmContext(); const origin = originRef.current; return live.farmId === farmId && origin !== null && live.userId === origin.userId; } catch { return false; } };
   // A failed settings save refreshes once so the screen learns the row another device may have created.
   const recoverSettings = async (caught: unknown, action: string) => {
     setSettingsNotice(farmerError(caught, action));
@@ -429,7 +444,10 @@ export function GrainPage({ services }: { services: GrainServices }) {
       // A failed save keeps the typed limit on screen, dirty and pending: the farm switcher warns, and a confirmed switch
       // retries it through the registered flush and stops if it fails again, rather than discarding it.
       done(failure);
-      if (failure !== undefined && dirtySaleLimits.current.has(key)) markSaleLimitUnflushed(key);
+      if (failure !== undefined && dirtySaleLimits.current.has(key)) {
+        if (mountedRef.current) markSaleLimitUnflushed(key);
+        else { const existing = workspaceRef.current?.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === key); retainFailedSettingsDraft(estimate.farm_id, `sale-limit:${key}`, { payload: { key, value: saleLimitsRef.current[key] ?? null, base: existing ? { id: existing.id, updated_at: existing.updated_at } : null } satisfies RetainedSaleLimit, retry: async () => { await commitSaleLimitRef.current(estimate); if (failedSaleLimits.current.has(key)) throw new Error("Sale limit save failed."); } }); }
+      }
     }
   };
   const commitSaleLimitRef = useRef(commitSaleLimit);

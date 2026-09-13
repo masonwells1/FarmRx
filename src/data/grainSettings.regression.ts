@@ -4,7 +4,7 @@ import { readGrain } from './MockGrainRepository'
 import type { GrainCarryGrid, GrainCarrySettings, GrainSaleLimit } from './grain'
 import { settingsSlicesFromResults } from './SupabaseGrainDataGateway'
 import { saveCostLineWithBadgeFallback } from './SupabaseProfitabilityDataGateway'
-import { beginPendingSettingsWork, hasPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_SAVE_FAILED, SETTINGS_SAVE_STILL_RUNNING, settlePendingSettingsWork } from './pendingSettingsWork'
+import { beginPendingSettingsWork, hasPendingSettingsWork, hasRetainedSettingsDrafts, registerPendingSettingsFlush, retainFailedSettingsDraft, SETTINGS_SAVE_FAILED, SETTINGS_SAVE_STILL_RUNNING, settlePendingSettingsWork, takeRetainedSettingsDrafts } from './pendingSettingsWork'
 
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message) }
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -128,6 +128,28 @@ assert(!hasPendingSettingsWork(farm), 'The farm is clear once every queued save 
   stalled()
   await settlePendingSettingsWork(farm, { timeoutMs: 20 })
   assert(!hasPendingSettingsWork(farm), 'Nothing pending settles at once.')
+  // A failed save surfaces at once even while another token is still open.
+  const open = beginPendingSettingsWork(farm); const quickFail = beginPendingSettingsWork(farm)
+  const fast = settlePendingSettingsWork(farm, { timeoutMs: 500 }).then(() => 'resolved', (error: Error) => error.message)
+  quickFail(new Error('boom'))
+  assert((await fast) === SETTINGS_SAVE_FAILED && hasPendingSettingsWork(farm), 'A failure must not wait for the other saves or the time limit.')
+  open()
+}
+
+// Drafts retained after their screen was left: the farm stays pending, a settle retries them, and the next mount takes them back.
+{
+  let attempts = 0; const count = () => attempts
+  retainFailedSettingsDraft(farm, 'carry-settings', { payload: { draft: 'D' }, retry: async () => { attempts += 1; if (attempts === 1) throw new Error('still failing') } })
+  assert(hasPendingSettingsWork(farm) && hasRetainedSettingsDrafts(farm), 'A retained draft keeps the farm pending.')
+  const first = await settlePendingSettingsWork(farm, { timeoutMs: 500 }).then(() => 'resolved', (error: Error) => error.message)
+  assert(first === SETTINGS_SAVE_FAILED && count() === 1 && hasRetainedSettingsDrafts(farm), 'A retained draft whose retry fails refuses the switch at once and stays retained.')
+  await settlePendingSettingsWork(farm, { timeoutMs: 500 })
+  assert(count() === 2 && !hasPendingSettingsWork(farm) && !hasRetainedSettingsDrafts(farm), 'A retained draft whose retry succeeds clears the farm.')
+  retainFailedSettingsDraft(farm, 'sale-limit:a', { payload: 'A', retry: async () => undefined })
+  retainFailedSettingsDraft(farm, 'carry-grid:x', { payload: 'G', retry: async () => undefined })
+  const taken = takeRetainedSettingsDrafts(farm, 'sale-limit:')
+  assert(taken.size === 1 && taken.get('sale-limit:a') === 'A' && hasPendingSettingsWork(farm), 'Taking drafts by prefix leaves the others retained and pending.')
+  assert(takeRetainedSettingsDrafts(farm, 'carry-').get('carry-grid:x') === 'G' && !hasPendingSettingsWork(farm) && !hasRetainedSettingsDrafts(farm), 'Taking the last draft releases the hold.')
 }
 
 console.log('Grain settings regressions passed.')

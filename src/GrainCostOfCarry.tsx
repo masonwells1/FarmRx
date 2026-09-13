@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { bestMonth, carryRow, verdict, type CarryRow, type CarrySettings } from './data/costOfCarry'
 import type { GrainCarryGrid, GrainCarrySettings, GrainWorkspace, ProductionEstimate } from './data/grain'
 import { CARRY_GRID_ROWS } from './data/grainSettings'
-import { beginPendingSettingsWork, registerPendingSettingsFlush } from './data/pendingSettingsWork'
+import { beginPendingSettingsWork, registerPendingSettingsFlush, retainFailedSettingsDraft, takeRetainedSettingsDrafts } from './data/pendingSettingsWork'
 
 // Legacy device-only storage, used until the farm's settings tables exist on the live database.
 // Keyed per farm: one device can serve several farms and their storage costs differ.
@@ -23,6 +23,10 @@ function readSettings(farmId: string): CarrySettings {
     return { mode: saved.mode === 'flat' ? 'flat' : 'monthly', monthlyRateCentsPerBuMonth: nonNegative(saved.monthlyRateCentsPerBuMonth, defaultSettings.monthlyRateCentsPerBuMonth), flatRatePerBu: nonNegative(saved.flatRatePerBu, defaultSettings.flatRatePerBu), interestRatePct: nonNegative(saved.interestRatePct, defaultSettings.interestRatePct), truckingPerBu: nonNegative(saved.truckingPerBu, defaultSettings.truckingPerBu) }
   } catch { return defaultSettings }
 }
+/** The per-device rates a farm saved before its settings table was live, or null when this device never stored any. */
+function readStoredSettings(farmId: string): CarrySettings | null { try { return window.localStorage.getItem(settingsKey(farmId)) === null ? null : readSettings(farmId) } catch { return null } }
+type RetainedCarrySettings = { draft: CarrySettings; base: string | null }
+type RetainedCarryGrid = { estimateId: string; draft: CommodityCarry; base: string | null }
 function settingsFromRow(row: GrainCarrySettings): CarrySettings { return { mode: row.mode === 'flat' ? 'flat' : 'monthly', monthlyRateCentsPerBuMonth: nonNegative(row.monthly_rate_cents_per_bu_month, defaultSettings.monthlyRateCentsPerBuMonth), flatRatePerBu: nonNegative(row.flat_rate_per_bu, defaultSettings.flatRatePerBu), interestRatePct: nonNegative(row.interest_rate_pct, defaultSettings.interestRatePct), truckingPerBu: nonNegative(row.trucking_per_bu, defaultSettings.truckingPerBu) } }
 function settingsToRow(farmId: string, settings: CarrySettings, updatedAt: string): GrainCarrySettings { return { farm_id: farmId, mode: settings.mode, monthly_rate_cents_per_bu_month: settings.monthlyRateCentsPerBuMonth, flat_rate_per_bu: settings.flatRatePerBu, interest_rate_pct: settings.interestRatePct, trucking_per_bu: settings.truckingPerBu, updated_at: updatedAt } }
 function freshCommodityCarry(): CommodityCarry { return { harvestMonth: 9, defaultBasis: '0', rows: Array.from({ length: CARRY_GRID_ROWS }, () => ({ marketPrice: '', basis: '0' })) } }
@@ -44,7 +48,8 @@ export type GrainCarryPersistence = { saveSettings: (settings: GrainCarrySetting
 export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimateId, onSelectEstimate, persistence }: { workspace: GrainWorkspace; selectedEstimate: ProductionEstimate; selectedEstimateId: string; onSelectEstimate: (id: string) => void; persistence?: GrainCarryPersistence }) {
   const farmId = workspace.fields.farm.id
   const persisted = !!persistence && workspace.capabilities?.persisted_settings === true
-  const initialSettings = () => persisted ? (workspace.grain_carry_settings ? settingsFromRow(workspace.grain_carry_settings) : defaultSettings) : readSettings(farmId)
+  // A farm with no row yet starts from the rates this device stored before the table was live (saved for the farm below), else the defaults.
+  const initialSettings = () => persisted ? (workspace.grain_carry_settings ? settingsFromRow(workspace.grain_carry_settings) : readStoredSettings(farmId) ?? defaultSettings) : readSettings(farmId)
   const initialGrids = () => persisted ? Object.fromEntries(workspace.grain_carry_grids.map((grid) => [grid.production_estimate_id, carryFromGrid(grid)])) : {}
   const [settings, setSettings] = useState<CarrySettings>(initialSettings)
   const [byEstimate, setByEstimate] = useState<Record<string, CommodityCarry>>(initialGrids)
@@ -66,6 +71,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   // and a newer row arriving from the recovery refresh replaces them like a pristine draft instead of being held back.
   const failedSettings = useRef(false)
   const failedGrids = useRef(new Set<string>())
+  const mounted = useRef(true)
   const newGridIds = useRef<Record<string, string>>({})
   // Every queued save (and any unflushed edit) keeps the farm marked pending for the farm switcher until it has run.
   // A save that fails before reaching the server or the durable queue marks its token failed, so a confirmed farm switch stops instead of discarding the edit.
@@ -85,7 +91,9 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
         if (saved) baseVersions.current.settings = saved.updated_at
         failedSettings.current = false
       } catch (error) {
-        settingsDirty.current = true; failedSettings.current = true; markUnflushed()
+        if (mounted.current) { settingsDirty.current = true; failedSettings.current = true; markUnflushed() }
+        // The screen was left before this save failed: keep the draft (and the farm's pending state) outside the component.
+        else retainFailedSettingsDraft(current.fields.farm.id, 'carry-settings', { payload: { draft: snapshot, base: baseVersions.current.settings } satisfies RetainedCarrySettings, retry: async () => { const saved = await persistenceRef.current?.saveSettings(settingsToRow(current.fields.farm.id, snapshot, baseVersions.current.settings ?? new Date().toISOString())); if (saved) baseVersions.current.settings = saved.updated_at } })
         throw error
       }
     })
@@ -107,13 +115,25 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
           if (saved) baseVersions.current.grids[estimateId] = saved.updated_at
           failedGrids.current.delete(estimateId)
         } catch (error) {
-          gridsDirty.current.add(estimateId); failedGrids.current.add(estimateId); markUnflushed()
+          if (mounted.current) { gridsDirty.current.add(estimateId); failedGrids.current.add(estimateId); markUnflushed() }
+          else retainFailedSettingsDraft(current.fields.farm.id, `carry-grid:${estimateId}`, { payload: { estimateId, draft: snapshot, base: baseVersions.current.grids[estimateId] ?? null } satisfies RetainedCarryGrid, retry: async () => { const saved = await active.saveGrid(carryToGrid(snapshot, { id, farm_id: current.fields.farm.id, production_estimate_id: estimateId, updated_at: baseVersions.current.grids[estimateId] ?? existing?.updated_at ?? new Date().toISOString() })); if (saved) baseVersions.current.grids[estimateId] = saved.updated_at } })
           throw error
         }
       })
     }
   }
-  useEffect(() => { setSettings(initialSettings()); setByEstimate(initialGrids()); settingsDirty.current = false; gridsDirty.current.clear(); failedSettings.current = false; failedGrids.current.clear(); settleUnflushed(); baseVersions.current = { settings: workspace.grain_carry_settings?.updated_at ?? null, grids: Object.fromEntries(workspace.grain_carry_grids.map((grid) => [grid.production_estimate_id, grid.updated_at])) } }, [farmId, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setSettings(initialSettings()); setByEstimate(initialGrids()); settingsDirty.current = false; gridsDirty.current.clear(); failedSettings.current = false; failedGrids.current.clear(); settleUnflushed()
+    baseVersions.current = { settings: workspace.grain_carry_settings?.updated_at ?? null, grids: Object.fromEntries(workspace.grain_carry_grids.map((grid) => [grid.production_estimate_id, grid.updated_at])) }
+    if (!persisted) return
+    // Rates this device stored before the farm's table was live, where the farm has no row yet: save them for the farm now.
+    if (!workspace.grain_carry_settings && readStoredSettings(farmId)) { settingsDirty.current = true; markUnflushed() }
+    // Drafts whose save failed after this screen was left come back dirty and pending; a newer row replaces them in the resync below.
+    for (const [key, payload] of takeRetainedSettingsDrafts(farmId, 'carry-')) {
+      if (key === 'carry-settings') { const retained = payload as RetainedCarrySettings; setSettings(retained.draft); baseVersions.current.settings = retained.base; settingsDirty.current = true; failedSettings.current = true; markUnflushed() }
+      else { const retained = payload as RetainedCarryGrid; setByEstimate((current) => ({ ...current, [retained.estimateId]: retained.draft })); baseVersions.current.grids[retained.estimateId] = retained.base; gridsDirty.current.add(retained.estimateId); failedGrids.current.add(retained.estimateId); markUnflushed() }
+    }
+  }, [farmId, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
   // Rows changed elsewhere (another device, or a refresh after another Grain save) replace a pristine draft and its version;
   // a draft still being edited keeps its original version so its save conflicts rather than overwriting the newer row.
   useEffect(() => {
@@ -128,7 +148,8 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   useEffect(() => { if (persisted) return; try { window.localStorage.setItem(settingsKey(farmId), JSON.stringify(settings)) } catch { /* private mode: calculator still works this visit */ } }, [farmId, settings, persisted])
   useEffect(() => { if (!persisted || !settingsDirty.current) return; const timer = setTimeout(flushSettings, SAVE_DELAY_MS); return () => clearTimeout(timer) }, [settings, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!persisted || gridsDirty.current.size === 0) return; const timer = setTimeout(flushGrids, SAVE_DELAY_MS); return () => clearTimeout(timer) }, [byEstimate, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => { flushSettings(); flushGrids() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Leaving the screen sends whatever is still unflushed; a save that fails after that is retained for the next visit (see enqueue).
+  useEffect(() => () => { mounted.current = false; flushSettings(); flushGrids() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // A confirmed farm switch sends unflushed edits through here and then waits for the chain before the farm changes.
   useEffect(() => persisted ? registerPendingSettingsFlush(farmId, () => { flushSettings(); flushGrids() }) : undefined, [farmId, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
   const changeSettings = (change: (current: CarrySettings) => CarrySettings) => { settingsDirty.current = true; failedSettings.current = false; if (persisted) markUnflushed(); setSettings(change) }
