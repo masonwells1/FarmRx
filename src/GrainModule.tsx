@@ -342,26 +342,30 @@ export function GrainPage({ services }: { services: GrainServices }) {
         if (scope) for (const entry of readSettingsDrafts(scope, "sale-limit:")) {
           const kept = entry.payload as SaleLimitDraft;
           const row = data.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === kept.key);
-          if ((row?.id ?? null) !== (kept.base?.id ?? null) || (row?.updated_at ?? null) !== (kept.base?.updated_at ?? null)) {
-            // The row moved on. A scope still being typed keeps its draft: when the refreshed row carries the value this browser last
-            // saved, it is this browser's own queued write coming back, so the draft is rebased onto it; otherwise the draft keeps its
-            // base, its commit conflicts, and the recovery refresh then replaces it with the other device's row. An idle scope's older
-            // draft is dropped.
-            if (dirtySaleLimits.current.has(kept.key)) {
-              const sent = saleLimitSent.current[kept.key] ?? kept.sent;
-              if (row && sent !== undefined && row.sale_limit_bushels === sent) {
-                saleLimitBases.current[kept.key] = { id: row.id, updated_at: row.updated_at };
-                const revision = writeSettingsDraft(scope, entry.key, { ...kept, base: { id: row.id, updated_at: row.updated_at }, sent } satisfies SaleLimitDraft);
-                saleLimitDraftRevisions.current[kept.key] = revision;
-                // The browser refused the rebased draft (full or blocked storage): the value being typed is kept nowhere durable, so the
-                // stale draft goes and the value is committed at once instead of waiting for the next blur.
-                if (revision === null) { clearSettingsDraft(scope, entry.key); const estimate = data.production_estimates.find((candidate) => scopeKey(scopeOf(candidate)) === kept.key); if (estimate) setTimeout(() => void commitSaleLimit(estimate), 0); }
-              }
-            } else clearSettingsDraft(scope, entry.key, entry.revision);
+          const typing = dirtySaleLimits.current.has(kept.key);
+          const moved = (row?.id ?? null) !== (kept.base?.id ?? null) || (row?.updated_at ?? null) !== (kept.base?.updated_at ?? null);
+          // The lineage travels with the draft, so it decides whether a moved row is this browser's own queued write coming back
+          // (same value as last saved) even after a reload, when nothing is dirty in memory yet.
+          const sent = saleLimitSent.current[kept.key] ?? kept.sent;
+          const own = moved && row !== undefined && sent !== undefined && row.sale_limit_bushels === sent;
+          if (moved && !own) {
+            // Another device changed the row. A scope still being typed keeps its draft and base: its commit conflicts, and the
+            // recovery refresh then replaces it with the other device's row. An idle scope's older draft is dropped.
+            if (!typing) clearSettingsDraft(scope, entry.key, entry.revision);
             continue;
           }
-          if (dirtySaleLimits.current.has(kept.key)) continue; // the farmer is already typing here
-          saleLimitDraftRevisions.current[kept.key] = entry.revision; saleLimitBases.current[kept.key] = kept.base; saleLimitSent.current[kept.key] = kept.sent;
+          let base = kept.base; let revision: string | null = entry.revision;
+          if (own && row) {
+            // This browser's own queued write replayed: rebase the draft onto it, whether it is still being typed or comes back from a reload.
+            base = { id: row.id, updated_at: row.updated_at }; saleLimitBases.current[kept.key] = base;
+            revision = writeSettingsDraft(scope, entry.key, { ...kept, base, sent } satisfies SaleLimitDraft);
+            saleLimitDraftRevisions.current[kept.key] = revision;
+            // The browser refused the rebased draft (full or blocked storage): the newer value is kept nowhere durable, so the stale
+            // draft goes and the value is committed at once instead of waiting for the next blur (after the adoption below, if any).
+            if (revision === null) { clearSettingsDraft(scope, entry.key); const estimate = data.production_estimates.find((candidate) => scopeKey(scopeOf(candidate)) === kept.key); if (estimate) setTimeout(() => void commitSaleLimit(estimate), 0); }
+          }
+          if (typing) continue; // the farmer is already typing here
+          saleLimitDraftRevisions.current[kept.key] = revision; saleLimitBases.current[kept.key] = base; saleLimitSent.current[kept.key] = sent;
           dirtySaleLimits.current.add(kept.key); failedSaleLimits.current.add(kept.key); markSaleLimitUnflushed(kept.key, data.fields.farm.id);
           saleLimitsRef.current = { ...saleLimitsRef.current, [kept.key]: kept.value };
           setSaleLimits((current) => ({ ...current, [kept.key]: kept.value }));
