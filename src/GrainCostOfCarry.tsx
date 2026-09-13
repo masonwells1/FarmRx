@@ -100,7 +100,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
     if (!persisted || !settingsDirty.current) return
     settingsDirty.current = false
     settleUnflushed()
-    const snapshot = settingsRef.current; const revision = draftRevisions.current.settings
+    const snapshot = settingsRef.current
     enqueue(async () => {
       const current = workspaceRef.current; const scope = draftScopeRef.current
       try {
@@ -108,10 +108,14 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
         const saved = await persistenceRef.current?.saveSettings(sent)
         if (saved) { baseVersions.current.settings = saved.updated_at; sentRows.current.settings = saved }
         failedSettings.current = false
-        // Confirmed by the server or the durable queue: the browser draft is no longer needed unless the farmer typed more meanwhile,
-        // in which case the newer draft is rewritten on top of the saved version so a reload cannot mistake this save for an outside change.
-        if (scope && revision && !settingsDirty.current) clearSettingsDraft(scope, 'carry-settings', revision)
-        else if (scope && settingsDirty.current) draftRevisions.current.settings = keepDraft('carry-settings', { draft: settingsRef.current, base: baseVersions.current.settings, sent: sentRows.current.settings } satisfies CarrySettingsDraft, flushSettings)
+        // Confirmed by the server or the durable queue: the browser draft is no longer needed unless a newer draft exists (the farmer
+        // typed more, or a successor edit already flushed and is queued behind this save), in which case the newer draft is rewritten
+        // on top of the saved version so a reload cannot mistake this save for an outside change.
+        if (scope) {
+          const newer = settingsDirty.current || JSON.stringify(settingsRef.current) !== JSON.stringify(snapshot)
+          if (!newer) { const revision = draftRevisions.current.settings; if (revision) clearSettingsDraft(scope, 'carry-settings', revision); draftRevisions.current.settings = null }
+          else draftRevisions.current.settings = keepDraft('carry-settings', { draft: settingsRef.current, base: baseVersions.current.settings, sent: sentRows.current.settings } satisfies CarrySettingsDraft, flushSettings)
+        }
       } catch (error) {
         // The browser draft stays until a later save is confirmed; a mounted screen also keeps the draft dirty and pending here.
         if (mounted.current) { settingsDirty.current = true; failedSettings.current = true; markUnflushed() }
@@ -124,7 +128,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
     const ids = [...gridsDirty.current]; gridsDirty.current.clear()
     settleUnflushed()
     for (const estimateId of ids) {
-      const snapshot = byEstimateRef.current[estimateId]; const revision = draftRevisions.current.grids[estimateId] ?? null
+      const snapshot = byEstimateRef.current[estimateId]
       if (!snapshot) continue
       enqueue(async () => {
         const current = workspaceRef.current; const active = persistenceRef.current; const scope = draftScopeRef.current
@@ -135,8 +139,12 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
           const saved = await active.saveGrid(carryToGrid(snapshot, { id, farm_id: current.fields.farm.id, production_estimate_id: estimateId, updated_at: baseVersions.current.grids[estimateId] ?? existing?.updated_at ?? new Date().toISOString() }))
           if (saved) { baseVersions.current.grids[estimateId] = saved.updated_at; sentRows.current.grids[estimateId] = saved }
           failedGrids.current.delete(estimateId)
-          if (scope && revision && !gridsDirty.current.has(estimateId)) clearSettingsDraft(scope, `carry-grid:${estimateId}`, revision)
-          else if (scope && gridsDirty.current.has(estimateId)) { const newer = byEstimateRef.current[estimateId]; if (newer) draftRevisions.current.grids[estimateId] = keepDraft(`carry-grid:${estimateId}`, { estimateId, draft: newer, base: baseVersions.current.grids[estimateId] ?? null, sent: sentRows.current.grids[estimateId] ?? null } satisfies CarryGridDraft, flushGrids) }
+          if (scope) {
+            const latest = byEstimateRef.current[estimateId]
+            const newer = gridsDirty.current.has(estimateId) || JSON.stringify(latest) !== JSON.stringify(snapshot)
+            if (!newer) { const revision = draftRevisions.current.grids[estimateId]; if (revision) clearSettingsDraft(scope, `carry-grid:${estimateId}`, revision); draftRevisions.current.grids[estimateId] = null }
+            else if (latest) draftRevisions.current.grids[estimateId] = keepDraft(`carry-grid:${estimateId}`, { estimateId, draft: latest, base: baseVersions.current.grids[estimateId] ?? null, sent: sentRows.current.grids[estimateId] ?? null } satisfies CarryGridDraft, flushGrids)
+          }
         } catch (error) {
           if (mounted.current) { gridsDirty.current.add(estimateId); failedGrids.current.add(estimateId); markUnflushed() }
           throw error
