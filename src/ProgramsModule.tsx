@@ -1348,9 +1348,11 @@ function SeasonTracker({
           <p>
             Assign a program to a field crop to start tracking the season here.
           </p>
-          <button className="primary-action" type="button" onClick={onAssign}>
-            Assign a program to a field
-          </button>
+          {canEdit && (
+            <button className="primary-action" type="button" onClick={onAssign}>
+              Assign a program to a field
+            </button>
+          )}
         </section>
       )}
       {[...byCrop.values()].map((tracks) => (

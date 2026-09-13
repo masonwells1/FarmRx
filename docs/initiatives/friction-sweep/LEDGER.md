@@ -41,3 +41,9 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Finding 2 (P2):** the `Set up a grain price alert` button on the empty Alerts screen showed to every viewer, but Grain requires private-financial access, and even an eligible member landed on the Grain overview rather than the alerts tab. The button now renders only when `canEditFarmModule(profile, 'grain')` is true and navigates to `/grain/alerts`.
 - **Rule recorded:** an empty-state action must be gated by the same permission as the action it advertises, and must land on the screen where the action is completed.
 - **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; regressions passed for the Supabase Notifications repository, Field Log legacy recovery and delete double-tap, and Harvest receipt. The Soil Rx spec's pinned empty-state source string is unchanged by this edit.
+
+## FS-004 — Third Codex round: Programs assignment action gated
+
+- **Date/time:** 2026-09-13 11:30 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `96cc540d8dab04e7232f56f3d6450bd3e10ca294` and returned one finding: the `Assign a program to a field` button on the Programs season tracker's empty state rendered for read-only members, where the route's write lock disables it. The button is now gated by the tracker's existing `canEdit` prop, matching the `Add a program` empty-state action. This is the last empty-state action added by slice 2 that lacked a permission gate; every one now follows the rule recorded in FS-003.
+- **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; Programs regressions (chunk 5, Supabase Programs repository) passed.
