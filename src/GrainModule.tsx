@@ -405,7 +405,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const failedSaleLimits = useRef(new Set<string>());
   // An edit not yet committed keeps the farm marked pending for the farm switcher; the commit below then holds its own token.
   const unflushedSaleLimits = useRef(new Map<string, () => void>());
-  const markSaleLimitUnflushed = (key: string, farmId = workspaceRef.current?.fields.farm.id) => { if (farmId && !unflushedSaleLimits.current.has(key)) unflushedSaleLimits.current.set(key, beginPendingSettingsWork(farmId)); };
+  const pendingScopeFor = (farmId: string | undefined) => originRef.current && farmId ? { userId: originRef.current.userId, farmId } : null;
+  const markSaleLimitUnflushed = (key: string, farmId = workspaceRef.current?.fields.farm.id) => { const scope = pendingScopeFor(farmId); if (scope && !unflushedSaleLimits.current.has(key)) unflushedSaleLimits.current.set(key, beginPendingSettingsWork(scope)); };
   // This page instance is gone once the route changes (the route boundary remounts per path); saves that fail after that retain their draft instead.
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
@@ -449,7 +450,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
     const lock = saleLimitLocks.current.get(key);
     if (!lock.acquire()) return; // a commit for this same position is in flight; it re-runs below if the value changed meanwhile
     // Held synchronously, before the first await, so a farm-switch click that blurred this input sees the save as pending work.
-    const done = beginPendingSettingsWork(estimate.farm_id);
+    const pendingScope = pendingScopeFor(estimate.farm_id); const done = pendingScope ? beginPendingSettingsWork(pendingScope) : () => undefined;
     settleSaleLimitUnflushed(key);
     let savedValue: number | null | undefined;
     let failure: unknown;
@@ -474,7 +475,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
         if ((saleLimitsRef.current[key] ?? null) === savedValue) { dirtySaleLimits.current.delete(key); delete saleLimitBases.current[key]; clearDraft(); }
         // The farmer typed more while this save ran: rewrite the newer draft on top of the saved row, so a reload before the follow-up
         // commit does not mistake this save for another device's change and drop the newer value.
-        else { const scope = draftScopeFor(estimate.farm_id); if (scope) saleLimitDraftRevisions.current[key] = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: saleLimitsRef.current[key] ?? null, base: { id: saved.id, updated_at: saved.updated_at }, sent: saved.sale_limit_bushels } satisfies SaleLimitDraft); }
+        else { const scope = draftScopeFor(estimate.farm_id); if (scope) { const revision = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: saleLimitsRef.current[key] ?? null, base: { id: saved.id, updated_at: saved.updated_at }, sent: saved.sale_limit_bushels } satisfies SaleLimitDraft); saleLimitDraftRevisions.current[key] = revision; if (revision === null) clearSettingsDraft(scope, `sale-limit:${key}`); } }
         setSettingsNotice("");
         // Keep the ref current too, so a follow-up commit chained below sees the saved row before React renders it.
         const next = (workspaceCurrent: GrainWorkspace) => ({ ...workspaceCurrent, grain_sale_limits: [...workspaceCurrent.grain_sale_limits.filter((limit) => scopeKey(scopeOf(limit)) !== key), saved] });
@@ -502,8 +503,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const activeFarmId = workspace?.fields.farm.id;
   const persistedSettings = workspace?.capabilities?.persisted_settings === true;
   useEffect(() => {
-    if (!activeFarmId || !persistedSettings) return;
-    return registerPendingSettingsFlush(activeFarmId, () => {
+    const scope = pendingScopeFor(activeFarmId);
+    if (!scope || !persistedSettings) return;
+    return registerPendingSettingsFlush(scope, () => {
       for (const estimate of workspaceRef.current?.production_estimates ?? []) if (dirtySaleLimits.current.has(scopeKey(scopeOf(estimate)))) void commitSaleLimitRef.current(estimate);
     });
   }, [activeFarmId, persistedSettings]);

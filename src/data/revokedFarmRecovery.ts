@@ -14,7 +14,7 @@ import { parseProgramsQueue } from './programsWriteQueue'
 import { parseSoilRxQueue } from './soilRxWriteQueue'
 import { isSoilRxStoredCleanupEntry, readSoilRxCleanupOutbox, soilRxCleanupOutboxKey, type SoilRxStoredCleanupEntry } from './soilRxCleanupOutbox'
 import type { FarmOperationContext } from './farmOperationContext'
-import { settingsDraftsKey } from './settingsDrafts'
+import { settingsDraftKeyOf } from './settingsDrafts'
 
 export type RevokedWorkKind = 'queue' | 'needs_attention' | 'scouting_cleanup' | 'soil_rx_cleanup' | 'settings_drafts'
 export type RevokedWorkItem = { version: 1; id: string; projectRef: string; userId: string; farmId: string; originalKey: string; kind: RevokedWorkKind; capturedAt: string; reason: 'farm_access_removed'; payload: unknown }
@@ -51,13 +51,13 @@ function plainJson(value: unknown): boolean {
   if (Array.isArray(value)) return value.every(plainJson)
   return !!value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype && Object.values(value as Record<string, unknown>).every(plainJson)
 }
-/** The browser's unsaved Grain settings drafts for a scope (see settingsDrafts.ts): private financial values that must leave
- * active storage with the rest of the farm's work when access is removed. */
-function validSettingsDrafts(value: unknown): value is { version: 1; entries: Array<{ key: string; payload: unknown; savedAt: string; revision: string }> } {
+/** One of the browser's unsaved Grain settings drafts for a scope (see settingsDrafts.ts; one storage key per draft): private
+ * financial values that must leave active storage with the rest of the farm's work when access is removed. */
+function validSettingsDraft(value: unknown, draftKey: string): value is { version: 1; entries: Array<{ key: string; payload: unknown; savedAt: string; revision: string }> } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const envelope = value as Record<string, unknown>
-  if (Object.keys(envelope).length !== 2 || envelope.version !== 1 || !Array.isArray(envelope.entries)) return false
-  return envelope.entries.every((entry) => !!entry && typeof entry === 'object' && !Array.isArray(entry) && Object.keys(entry as object).length === 4 && typeof (entry as { key?: unknown }).key === 'string' && typeof (entry as { savedAt?: unknown }).savedAt === 'string' && typeof (entry as { revision?: unknown }).revision === 'string' && plainJson((entry as { payload?: unknown }).payload))
+  if (Object.keys(envelope).length !== 2 || envelope.version !== 1 || !Array.isArray(envelope.entries) || envelope.entries.length > 1) return false
+  return envelope.entries.every((entry) => !!entry && typeof entry === 'object' && !Array.isArray(entry) && Object.keys(entry as object).length === 4 && (entry as { key?: unknown }).key === draftKey && typeof (entry as { savedAt?: unknown }).savedAt === 'string' && typeof (entry as { revision?: unknown }).revision === 'string' && plainJson((entry as { payload?: unknown }).payload))
 }
 function expectedQueueKey(key: string, scope: Scope) {
   const base = key.endsWith(':needs-attention') ? key.slice(0, -':needs-attention'.length) : key
@@ -99,7 +99,7 @@ function validItem(value: unknown): value is RevokedWorkItem {
   const kind = row.kind
   if (kind === 'scouting_cleanup') return row.originalKey === scoutingCleanupOutboxKey(String(row.projectRef), String(row.userId)) && Array.isArray(row.payload) && row.payload.every((entry) => validScoutingCleanup(entry, String(row.farmId), String(row.userId)))
   if (kind === 'soil_rx_cleanup') return row.originalKey === soilRxCleanupOutboxKey(String(row.projectRef), String(row.userId)) && Array.isArray(row.payload) && row.payload.every((entry) => validSoilRxCleanup(entry, String(row.farmId), String(row.userId)))
-  if (kind === 'settings_drafts') return row.originalKey === settingsDraftsKey({ projectRef: String(row.projectRef), userId: String(row.userId), farmId: String(row.farmId) }) && validSettingsDrafts(row.payload) && row.payload.entries.length > 0
+  if (kind === 'settings_drafts') { const draftKey = settingsDraftKeyOf(String(row.originalKey), { projectRef: String(row.projectRef), userId: String(row.userId), farmId: String(row.farmId) }); return draftKey !== null && validSettingsDraft(row.payload, draftKey) && row.payload.entries.length > 0 }
   if (kind !== 'queue' && kind !== 'needs_attention') return false
   const scope = { projectRef: String(row.projectRef), userId: String(row.userId), farmId: String(row.farmId) }
   const expected = expectedQueueKey(String(row.originalKey), scope)
@@ -145,12 +145,13 @@ export function quarantineRevokedFarmWork(storage: EnumeratedStorage, scope: Sco
   const emptyKeys: string[] = []
   for (let index = 0; index < storage.length; index += 1) {
     const key = storage.key(index); if (!key || key.endsWith(':lease')) continue
-    if (key === settingsDraftsKey(scope)) {
+    const draftKey = settingsDraftKeyOf(key, scope)
+    if (draftKey !== null) {
       const raw = storage.getItem(key); if (raw === null) continue
-      let drafts: unknown
-      try { drafts = JSON.parse(raw) } catch { throw new Error('Farm Rx found unreadable or mismatched saved work for a farm you no longer can open. Nothing was cleared.') }
-      if (!validSettingsDrafts(drafts)) throw new Error('Farm Rx found unreadable or mismatched saved work for a farm you no longer can open. Nothing was cleared.')
-      if (drafts.entries.length === 0) emptyKeys.push(key); else candidate.push({ key, kind: 'settings_drafts', payload: drafts })
+      let draft: unknown
+      try { draft = JSON.parse(raw) } catch { throw new Error('Farm Rx found unreadable or mismatched saved work for a farm you no longer can open. Nothing was cleared.') }
+      if (!validSettingsDraft(draft, draftKey)) throw new Error('Farm Rx found unreadable or mismatched saved work for a farm you no longer can open. Nothing was cleared.')
+      if (draft.entries.length === 0) emptyKeys.push(key); else candidate.push({ key, kind: 'settings_drafts', payload: draft })
       continue
     }
     const expected = expectedQueueKey(key, scope); if (!expected) continue

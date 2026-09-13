@@ -902,7 +902,7 @@ export async function selectFarm(userId: string, farmId: string): Promise<void> 
 
 export function hasPendingFarmWork(userId: string, farmId: string): boolean {
   // Settings saves in flight (or waiting behind one) are not in a durable queue yet; warn before leaving the farm.
-  if (hasPendingSettingsWork(farmId)) return true
+  if (hasPendingSettingsWork({ userId, farmId })) return true
   const target = storage(); if (!target) return false
   const soilCleanupKey = soilRxCleanupOutboxKey(supabaseConfig.projectRef, userId)
   if (target.getItem(soilCleanupKey) !== null) {

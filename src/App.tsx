@@ -805,7 +805,7 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
     // so each reaches the server or the durable queue for that farm before the context changes and the page reloads.
     // A save that failed, or one still running after the time limit, rejects here: the switch stops, the switcher
     // shows why (see farmerError), and the unsent work stays with the farm that is still selected.
-    await settlePendingSettingsWork(activeFarm.id);
+    await settlePendingSettingsWork({ userId: user.id, farmId: activeFarm.id });
     try {
       await dependencies.selectFarm(user.id, farmId);
     } catch (error) {

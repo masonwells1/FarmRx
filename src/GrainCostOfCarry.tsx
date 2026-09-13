@@ -88,10 +88,14 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   const newGridIds = useRef<Record<string, string>>({})
   // Every queued save (and any unflushed edit) keeps the farm marked pending for the farm switcher until it has run.
   // A save that fails before reaching the server or the durable queue marks its token failed, so a confirmed farm switch stops instead of discarding the edit.
-  const enqueue = (work: () => Promise<void>) => { const done = beginPendingSettingsWork(workspaceRef.current.fields.farm.id); chain.current = chain.current.then(() => work().then(() => done(), (error: unknown) => done(error ?? new Error('Settings save failed.')))) }
+  const pendingScope = () => { const scope = draftScopeRef.current; return scope ? { userId: scope.userId, farmId: scope.farmId } : null }
+  const enqueue = (work: () => Promise<void>) => { const scope = pendingScope(); const done = scope ? beginPendingSettingsWork(scope) : () => undefined; chain.current = chain.current.then(() => work().then(() => done(), (error: unknown) => done(error ?? new Error('Settings save failed.')))) }
   const unflushed = useRef<(() => void) | null>(null)
-  const markUnflushed = () => { unflushed.current ??= beginPendingSettingsWork(workspaceRef.current.fields.farm.id) }
+  const markUnflushed = () => { const scope = pendingScope(); if (scope) unflushed.current ??= beginPendingSettingsWork(scope) }
   const settleUnflushed = () => { if (!settingsDirty.current && gridsDirty.current.size === 0) { unflushed.current?.(); unflushed.current = null } }
+  // Every draft write goes through here. If the browser refuses the draft (private mode, blocked or full storage), the edit is not
+  // kept anywhere durable: the stale entry is cleared and the part is saved at once instead of waiting.
+  const keepDraft = (key: string, payload: unknown, flush: () => void): string | null => { const scope = draftScopeRef.current; if (!scope) return null; const revision = writeSettingsDraft(scope, key, payload); if (revision === null) { clearSettingsDraft(scope, key); setTimeout(flush, 0) } return revision }
   const flushSettings = () => {
     if (!persisted || !settingsDirty.current) return
     settingsDirty.current = false
@@ -107,7 +111,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
         // Confirmed by the server or the durable queue: the browser draft is no longer needed unless the farmer typed more meanwhile,
         // in which case the newer draft is rewritten on top of the saved version so a reload cannot mistake this save for an outside change.
         if (scope && revision && !settingsDirty.current) clearSettingsDraft(scope, 'carry-settings', revision)
-        else if (scope && settingsDirty.current) draftRevisions.current.settings = writeSettingsDraft(scope, 'carry-settings', { draft: settingsRef.current, base: baseVersions.current.settings, sent: sentRows.current.settings } satisfies CarrySettingsDraft)
+        else if (scope && settingsDirty.current) draftRevisions.current.settings = keepDraft('carry-settings', { draft: settingsRef.current, base: baseVersions.current.settings, sent: sentRows.current.settings } satisfies CarrySettingsDraft, flushSettings)
       } catch (error) {
         // The browser draft stays until a later save is confirmed; a mounted screen also keeps the draft dirty and pending here.
         if (mounted.current) { settingsDirty.current = true; failedSettings.current = true; markUnflushed() }
@@ -132,7 +136,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
           if (saved) { baseVersions.current.grids[estimateId] = saved.updated_at; sentRows.current.grids[estimateId] = saved }
           failedGrids.current.delete(estimateId)
           if (scope && revision && !gridsDirty.current.has(estimateId)) clearSettingsDraft(scope, `carry-grid:${estimateId}`, revision)
-          else if (scope && gridsDirty.current.has(estimateId)) { const newer = byEstimateRef.current[estimateId]; if (newer) draftRevisions.current.grids[estimateId] = writeSettingsDraft(scope, `carry-grid:${estimateId}`, { estimateId, draft: newer, base: baseVersions.current.grids[estimateId] ?? null, sent: sentRows.current.grids[estimateId] ?? null } satisfies CarryGridDraft) }
+          else if (scope && gridsDirty.current.has(estimateId)) { const newer = byEstimateRef.current[estimateId]; if (newer) draftRevisions.current.grids[estimateId] = keepDraft(`carry-grid:${estimateId}`, { estimateId, draft: newer, base: baseVersions.current.grids[estimateId] ?? null, sent: sentRows.current.grids[estimateId] ?? null } satisfies CarryGridDraft, flushGrids) }
         } catch (error) {
           if (mounted.current) { gridsDirty.current.add(estimateId); failedGrids.current.add(estimateId); markUnflushed() }
           throw error
@@ -146,7 +150,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
     if (!persisted) return
     // Rates this device stored before the farm's table was live, where the farm has no row yet: save them for the farm now.
     const legacy = workspace.grain_carry_settings ? null : readStoredSettings(farmId)
-    if (legacy) { settingsDirty.current = true; markUnflushed(); if (draftScope) draftRevisions.current.settings = writeSettingsDraft(draftScope, 'carry-settings', { draft: legacy, base: null, sent: null } satisfies CarrySettingsDraft) }
+    if (legacy) { settingsDirty.current = true; markUnflushed(); if (draftScope) draftRevisions.current.settings = keepDraft('carry-settings', { draft: legacy, base: null, sent: null } satisfies CarrySettingsDraft, flushSettings) }
     // Drafts this browser kept for this account and farm (an edit cut short by a reload, or a save that failed after the screen was
     // left) come back dirty and pending, marked like a failed draft so a newer row from elsewhere replaces them in the resync below.
     if (!draftScope) return
@@ -164,7 +168,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
       // This screen's own queued save came back with its replayed version (even after a remount, since the lineage travels with the
       // draft): keep the draft being edited and rebase it.
       baseVersions.current.settings = version; failedSettings.current = false
-      if (draftScope) draftRevisions.current.settings = writeSettingsDraft(draftScope, 'carry-settings', { draft: settingsRef.current, base: version, sent: sentRows.current.settings } satisfies CarrySettingsDraft)
+      if (draftScope) draftRevisions.current.settings = keepDraft('carry-settings', { draft: settingsRef.current, base: version, sent: sentRows.current.settings } satisfies CarrySettingsDraft, flushSettings)
     } else if (version !== baseVersions.current.settings && (!settingsDirty.current || failedSettings.current)) { baseVersions.current.settings = version; setSettings(row ? settingsFromRow(row) : defaultSettings); settingsDirty.current = false; failedSettings.current = false; settleUnflushed(); if (draftScope && draftRevisions.current.settings) clearSettingsDraft(draftScope, 'carry-settings', draftRevisions.current.settings) }
     for (const grid of workspace.grain_carry_grids) {
       const estimateId = grid.production_estimate_id
@@ -172,7 +176,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
       if (grid.updated_at !== (baseVersions.current.grids[estimateId] ?? null) && gridsDirty.current.has(estimateId) && sent && sameGridContent(grid, sent)) {
         baseVersions.current.grids[estimateId] = grid.updated_at; failedGrids.current.delete(estimateId)
         const draft = byEstimateRef.current[estimateId]
-        if (draftScope && draft) draftRevisions.current.grids[estimateId] = writeSettingsDraft(draftScope, `carry-grid:${estimateId}`, { estimateId, draft, base: grid.updated_at, sent } satisfies CarryGridDraft)
+        if (draftScope && draft) draftRevisions.current.grids[estimateId] = keepDraft(`carry-grid:${estimateId}`, { estimateId, draft, base: grid.updated_at, sent } satisfies CarryGridDraft, flushGrids)
       } else if (grid.updated_at !== (baseVersions.current.grids[estimateId] ?? null) && (!gridsDirty.current.has(estimateId) || failedGrids.current.has(estimateId))) { baseVersions.current.grids[estimateId] = grid.updated_at; setByEstimate((current) => ({ ...current, [estimateId]: carryFromGrid(grid) })); gridsDirty.current.delete(estimateId); failedGrids.current.delete(estimateId); settleUnflushed(); const revision = draftRevisions.current.grids[estimateId]; if (draftScope && revision) clearSettingsDraft(draftScope, `carry-grid:${estimateId}`, revision) }
     }
   }, [workspace.grain_carry_settings, workspace.grain_carry_grids, persisted, draftScope?.userId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -182,10 +186,9 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   // Leaving the screen sends whatever is still unflushed; a save that fails after that leaves the browser draft for the next visit.
   useEffect(() => () => { mounted.current = false; flushSettings(); flushGrids() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // A confirmed farm switch sends unflushed edits through here and then waits for the chain before the farm changes.
-  useEffect(() => persisted ? registerPendingSettingsFlush(farmId, () => { flushSettings(); flushGrids() }) : undefined, [farmId, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => persisted && draftScope ? registerPendingSettingsFlush({ userId: draftScope.userId, farmId }, () => { flushSettings(); flushGrids() }) : undefined, [farmId, persisted, draftScope?.userId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Every edit is written to the browser draft at once, before the save pause, so a reload or closed tab cannot lose it.
   // If the browser refuses the draft (private mode, blocked or full storage), the edit is not kept anywhere durable: save it at once instead of waiting.
-  const keepDraft = (key: string, payload: unknown, flush: () => void): string | null => { if (!draftScope) return null; const revision = writeSettingsDraft(draftScope, key, payload); if (revision === null) { clearSettingsDraft(draftScope, key); setTimeout(flush, 0) } return revision }
   const changeSettings = (change: (current: CarrySettings) => CarrySettings) => { const next = change(settingsRef.current); settingsRef.current = next; settingsDirty.current = true; failedSettings.current = false; if (persisted) markUnflushed(); draftRevisions.current.settings = keepDraft('carry-settings', { draft: next, base: baseVersions.current.settings, sent: sentRows.current.settings } satisfies CarrySettingsDraft, flushSettings); setSettings(next) }
   // Discrete choices (the storage-mode buttons) save as soon as React has committed the click, not after the typing pause.
   const chooseMode = (mode: CarrySettings['mode']) => { changeSettings((current) => ({ ...current, mode })); setTimeout(flushSettings, 0) }

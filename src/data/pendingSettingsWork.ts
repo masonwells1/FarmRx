@@ -4,8 +4,11 @@
  * server (or the durable queue) yet; once they confirm, `settlePendingSettingsWork`
  * flushes unflushed edits and waits for every save to finish before the farm changes,
  * and refuses the switch when a save failed or is still running after the time limit.
- * Keyed by farm only: one page session serves one signed-in user. */
+ * Keyed by account and farm. */
 type Token = { settled: Promise<void>; finish: () => void; failure: unknown }
+/** Pending work belongs to one account on one farm: another account signing in on the same farm must neither see nor wait for it. */
+export type PendingSettingsScope = { userId: string; farmId: string }
+const scopeKey = (scope: PendingSettingsScope) => `${scope.userId}|${scope.farmId}`
 const pending = new Map<string, Set<Token>>()
 const flushers = new Map<string, Set<() => void>>()
 
@@ -16,7 +19,8 @@ export const SETTINGS_CONTEXT_CHANGED = 'SETTINGS_CONTEXT_CHANGED'
 
 /** Marks a save as pending until the returned function runs. Pass the error to it when the save
  * failed before reaching the server or the durable queue, so a confirmed farm switch stops. */
-export function beginPendingSettingsWork(farmId: string): (failure?: unknown) => void {
+export function beginPendingSettingsWork(scope: PendingSettingsScope): (failure?: unknown) => void {
+  const farmId = scopeKey(scope)
   let finish: () => void = () => undefined
   const settled = new Promise<void>((resolve) => { finish = resolve })
   const token: Token = { settled, finish, failure: undefined }
@@ -32,10 +36,11 @@ export function beginPendingSettingsWork(farmId: string): (failure?: unknown) =>
   }
 }
 
-export function hasPendingSettingsWork(farmId: string): boolean { return (pending.get(farmId)?.size ?? 0) > 0 }
+export function hasPendingSettingsWork(scope: PendingSettingsScope): boolean { return (pending.get(scopeKey(scope))?.size ?? 0) > 0 }
 
 /** A screen with edits that have not been sent yet registers how to send them now; returns the unregister function. */
-export function registerPendingSettingsFlush(farmId: string, flush: () => void): () => void {
+export function registerPendingSettingsFlush(scope: PendingSettingsScope, flush: () => void): () => void {
+  const farmId = scopeKey(scope)
   const set = flushers.get(farmId) ?? new Set<() => void>()
   set.add(flush); flushers.set(farmId, set)
   return () => { set.delete(flush); if (set.size === 0) flushers.delete(farmId) }
@@ -45,7 +50,8 @@ export function registerPendingSettingsFlush(farmId: string, flush: () => void):
  * Saves chained behind one another finish in turn. Rejects with `SETTINGS_SAVE_FAILED` when any save failed, and with
  * `SETTINGS_SAVE_STILL_RUNNING` when saves are still running after `timeoutMs`; either way the unsent work stays with
  * the farm that is still selected, so the caller must not change farms. */
-export async function settlePendingSettingsWork(farmId: string, options: { timeoutMs?: number; maxRounds?: number } = {}): Promise<void> {
+export async function settlePendingSettingsWork(scope: PendingSettingsScope, options: { timeoutMs?: number; maxRounds?: number } = {}): Promise<void> {
+  const farmId = scopeKey(scope)
   const { timeoutMs = 20_000, maxRounds = 50 } = options
   for (const flush of [...(flushers.get(farmId) ?? [])]) { try { flush() } catch { /* the screen reports its own save errors */ } }
   let timer: ReturnType<typeof setTimeout> | undefined
