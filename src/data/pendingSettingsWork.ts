@@ -61,38 +61,3 @@ export async function settlePendingSettingsWork(farmId: string, options: { timeo
     throw new Error(SETTINGS_SAVE_STILL_RUNNING)
   } finally { clearTimeout(timer) }
 }
-
-/** Drafts whose save failed after their screen was left. The screen is gone, so the draft is kept here with a retry:
- * the farm stays pending, a confirmed farm switch retries it through the flush (and is refused if that fails too),
- * and the next mount of the screen takes the draft back (`takeRetainedSettingsDrafts`) to show it dirty and pending. */
-export type RetainedSettingsDraft = { payload: unknown; retry: () => Promise<void> }
-const retainedDrafts = new Map<string, Map<string, RetainedSettingsDraft>>()
-const retainedHolds = new Map<string, { release: () => void; unregister: () => void }>()
-
-export function retainFailedSettingsDraft(farmId: string, key: string, draft: RetainedSettingsDraft): void {
-  const drafts = retainedDrafts.get(farmId) ?? new Map<string, RetainedSettingsDraft>()
-  drafts.set(key, draft); retainedDrafts.set(farmId, drafts)
-  if (!retainedHolds.has(farmId)) retainedHolds.set(farmId, { release: beginPendingSettingsWork(farmId), unregister: registerPendingSettingsFlush(farmId, () => retryRetainedDrafts(farmId)) })
-}
-
-function dropRetainedDraft(farmId: string, key: string): void {
-  const drafts = retainedDrafts.get(farmId); if (!drafts) return
-  drafts.delete(key)
-  if (drafts.size === 0) { retainedDrafts.delete(farmId); const hold = retainedHolds.get(farmId); retainedHolds.delete(farmId); hold?.unregister(); hold?.release() }
-}
-
-function retryRetainedDrafts(farmId: string): void {
-  for (const [key, draft] of [...(retainedDrafts.get(farmId) ?? [])]) {
-    const done = beginPendingSettingsWork(farmId)
-    draft.retry().then(() => { dropRetainedDraft(farmId, key); done() }, (error: unknown) => done(error ?? new Error('Retained settings draft could not be saved.')))
-  }
-}
-
-export function hasRetainedSettingsDrafts(farmId: string): boolean { return (retainedDrafts.get(farmId)?.size ?? 0) > 0 }
-
-/** Removes and returns the retained drafts whose key starts with `prefix`; releases the hold once none remain. */
-export function takeRetainedSettingsDrafts(farmId: string, prefix: string): Map<string, unknown> {
-  const taken = new Map<string, unknown>()
-  for (const [key, draft] of [...(retainedDrafts.get(farmId) ?? [])]) if (key.startsWith(prefix)) { taken.set(key, draft.payload); dropRetainedDraft(farmId, key) }
-  return taken
-}

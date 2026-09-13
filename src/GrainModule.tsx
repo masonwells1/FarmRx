@@ -7,8 +7,10 @@ import { confirmDialog } from "./components/ConfirmDialog";
 import { SectionTabs } from "./SectionTabs";
 import { farmerError } from "./lib/farmerErrors";
 import { currentFarmContext } from "./auth/farmContext";
-import { beginPendingSettingsWork, registerPendingSettingsFlush, retainFailedSettingsDraft, SETTINGS_CONTEXT_CHANGED, takeRetainedSettingsDrafts } from "./data/pendingSettingsWork";
-type RetainedSaleLimit = { key: string; value: number | null; base: { id: string; updated_at: string } | null };
+import { beginPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_CONTEXT_CHANGED } from "./data/pendingSettingsWork";
+import { clearSettingsDraft, readSettingsDrafts, writeSettingsDraft, type SettingsDraftScope } from "./data/settingsDrafts";
+import { supabaseConfig } from "./lib/supabaseConfig";
+type SaleLimitDraft = { key: string; value: number | null; base: { id: string; updated_at: string } | null };
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type {
@@ -321,13 +323,17 @@ export function GrainPage({ services }: { services: GrainServices }) {
         });
         for (const key of adopted) { dirtySaleLimits.current.delete(key); failedSaleLimits.current.delete(key); settleSaleLimitUnflushed(key); }
         setSaleLimits((current) => ({ ...current, ...Object.fromEntries(rows.map((limit) => [scopeKey(scopeOf(limit)), limit.sale_limit_bushels])) }));
-        // A limit whose save failed after this page was left comes back dirty and pending, unless the farm's row moved on since.
-        for (const [, payload] of takeRetainedSettingsDrafts(data.fields.farm.id, "sale-limit:")) {
-          const retained = payload as RetainedSaleLimit;
-          const row = data.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === retained.key);
-          if ((row?.id ?? null) !== (retained.base?.id ?? null) || (row?.updated_at ?? null) !== (retained.base?.updated_at ?? null)) continue;
-          dirtySaleLimits.current.add(retained.key); failedSaleLimits.current.add(retained.key); markSaleLimitUnflushed(retained.key, data.fields.farm.id);
-          setSaleLimits((current) => ({ ...current, [retained.key]: retained.value }));
+        // A limit this browser kept for this account and farm (its save failed, or the page was left before it ran) comes back
+        // dirty and pending, unless the farm's row moved on since, in which case the newer row wins and the draft is dropped.
+        const scope = draftScopeFor(data.fields.farm.id);
+        if (scope) for (const entry of readSettingsDrafts(scope, "sale-limit:")) {
+          const kept = entry.payload as SaleLimitDraft;
+          const row = data.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === kept.key);
+          if ((row?.id ?? null) !== (kept.base?.id ?? null) || (row?.updated_at ?? null) !== (kept.base?.updated_at ?? null)) { clearSettingsDraft(scope, entry.key); continue; }
+          if (dirtySaleLimits.current.has(kept.key)) continue; // the farmer is already typing here
+          dirtySaleLimits.current.add(kept.key); failedSaleLimits.current.add(kept.key); markSaleLimitUnflushed(kept.key, data.fields.farm.id);
+          saleLimitsRef.current = { ...saleLimitsRef.current, [kept.key]: kept.value };
+          setSaleLimits((current) => ({ ...current, [kept.key]: kept.value }));
         }
       }
       setAlerts(nextAlerts);
@@ -391,6 +397,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
   useEffect(() => () => { mountedRef.current = false; }, []);
   // The account and farm this page loaded for: a save runs only while both are still the live selection (another tab may have changed either).
   const originRef = useRef<{ userId: string; farmId: string } | null>(null);
+  // The browser draft scope for this account and farm (see settingsDrafts.ts); undefined until the page knows its account.
+  const draftScopeFor = (farmId: string): SettingsDraftScope | undefined => originRef.current ? { projectRef: supabaseConfig.projectRef, userId: originRef.current.userId, farmId } : undefined;
   const settleSaleLimitUnflushed = (key: string) => { unflushedSaleLimits.current.get(key)?.(); unflushedSaleLimits.current.delete(key); };
   // One lock per position: a slow save on one card must not swallow a commit on another.
   const saleLimitLocks = useRef(createSubmitLockMap());
@@ -419,14 +427,14 @@ export function GrainPage({ services }: { services: GrainServices }) {
       if (!current || current.capabilities?.persisted_settings !== true) return;
       const value = saleLimitsRef.current[key] ?? null;
       const existing = current.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === key);
-      if ((existing?.sale_limit_bushels ?? null) === value) { dirtySaleLimits.current.delete(key); savedValue = value; return; }
+      if ((existing?.sale_limit_bushels ?? null) === value) { dirtySaleLimits.current.delete(key); savedValue = value; const scope = draftScopeFor(estimate.farm_id); if (scope) clearSettingsDraft(scope, `sale-limit:${key}`); return; }
       const stamp = new Date().toISOString();
       try {
         if (!(await farmStillSelected(estimate.farm_id))) contextChanged();
         const saved = await services.grainRepository.saveGrainSaleLimit({ id: existing?.id ?? services.createGrainId(), ...scopeOf(estimate), sale_limit_bushels: value, created_at: existing?.created_at ?? stamp, updated_at: existing?.updated_at ?? stamp });
         savedValue = saved.sale_limit_bushels;
         failedSaleLimits.current.delete(key);
-        if ((saleLimitsRef.current[key] ?? null) === savedValue) dirtySaleLimits.current.delete(key);
+        if ((saleLimitsRef.current[key] ?? null) === savedValue) { dirtySaleLimits.current.delete(key); const scope = draftScopeFor(estimate.farm_id); if (scope) clearSettingsDraft(scope, `sale-limit:${key}`); }
         setSettingsNotice("");
         // Keep the ref current too, so a follow-up commit chained below sees the saved row before React renders it.
         const next = (workspaceCurrent: GrainWorkspace) => ({ ...workspaceCurrent, grain_sale_limits: [...workspaceCurrent.grain_sale_limits.filter((limit) => scopeKey(scopeOf(limit)) !== key), saved] });
@@ -444,10 +452,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
       // A failed save keeps the typed limit on screen, dirty and pending: the farm switcher warns, and a confirmed switch
       // retries it through the registered flush and stops if it fails again, rather than discarding it.
       done(failure);
-      if (failure !== undefined && dirtySaleLimits.current.has(key)) {
-        if (mountedRef.current) markSaleLimitUnflushed(key);
-        else { const existing = workspaceRef.current?.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === key); retainFailedSettingsDraft(estimate.farm_id, `sale-limit:${key}`, { payload: { key, value: saleLimitsRef.current[key] ?? null, base: existing ? { id: existing.id, updated_at: existing.updated_at } : null } satisfies RetainedSaleLimit, retry: async () => { await commitSaleLimitRef.current(estimate); if (failedSaleLimits.current.has(key)) throw new Error("Sale limit save failed."); } }); }
-      }
+      // A failed save leaves the browser draft in place; a mounted page also keeps the scope pending for the farm switcher.
+      if (failure !== undefined && dirtySaleLimits.current.has(key) && mountedRef.current) markSaleLimitUnflushed(key);
     }
   };
   const commitSaleLimitRef = useRef(commitSaleLimit);
@@ -481,6 +487,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
       } catch (caught) { await recoverSettings(caught, "save your carry prices"); throw caught; }
     },
     createId: services.createGrainId,
+    draftScope: workspace ? draftScopeFor(workspace.fields.farm.id) : undefined,
   };
   if (!workspace)
     return (
@@ -636,8 +643,12 @@ export function GrainPage({ services }: { services: GrainServices }) {
                 saleLimitPersisted={workspace.capabilities?.persisted_settings === true}
                 onSaleLimitCommit={() => void commitSaleLimit(estimate)}
                 onSaleLimitChange={(limit) => {
-                  dirtySaleLimits.current.add(scopeKey(scopeOf(estimate)));
-                  failedSaleLimits.current.delete(scopeKey(scopeOf(estimate)));
+                  const key = scopeKey(scopeOf(estimate));
+                  dirtySaleLimits.current.add(key);
+                  failedSaleLimits.current.delete(key);
+                  // Written to the browser at once, so a reload or a save that fails after leaving the page keeps what was typed.
+                  const scope = draftScopeFor(estimate.farm_id);
+                  if (scope) { const existing = workspace.grain_sale_limits.find((row) => scopeKey(scopeOf(row)) === key); writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: limit, base: existing ? { id: existing.id, updated_at: existing.updated_at } : null } satisfies SaleLimitDraft); }
                   markSaleLimitUnflushed(scopeKey(scopeOf(estimate)));
                   setSaleLimits((current) => ({ ...current, [scopeKey(scopeOf(estimate))]: limit }));
                 }}

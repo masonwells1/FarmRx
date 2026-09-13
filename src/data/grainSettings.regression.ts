@@ -4,7 +4,8 @@ import { readGrain } from './MockGrainRepository'
 import type { GrainCarryGrid, GrainCarrySettings, GrainSaleLimit } from './grain'
 import { settingsSlicesFromResults } from './SupabaseGrainDataGateway'
 import { saveCostLineWithBadgeFallback } from './SupabaseProfitabilityDataGateway'
-import { beginPendingSettingsWork, hasPendingSettingsWork, hasRetainedSettingsDrafts, registerPendingSettingsFlush, retainFailedSettingsDraft, SETTINGS_SAVE_FAILED, SETTINGS_SAVE_STILL_RUNNING, settlePendingSettingsWork, takeRetainedSettingsDrafts } from './pendingSettingsWork'
+import { beginPendingSettingsWork, hasPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_SAVE_FAILED, SETTINGS_SAVE_STILL_RUNNING, settlePendingSettingsWork } from './pendingSettingsWork'
+import { clearSettingsDraft, readSettingsDrafts, settingsDraftsKey, writeSettingsDraft } from './settingsDrafts'
 
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message) }
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -136,20 +137,26 @@ assert(!hasPendingSettingsWork(farm), 'The farm is clear once every queued save 
   open()
 }
 
-// Drafts retained after their screen was left: the farm stays pending, a settle retries them, and the next mount takes them back.
+// Browser drafts: written per account and farm on every edit, cleared only after a confirmed save, invisible to other accounts,
+// and shaped so the farm switcher's scan counts them as work waiting for that farm.
 {
-  let attempts = 0; const count = () => attempts
-  retainFailedSettingsDraft(farm, 'carry-settings', { payload: { draft: 'D' }, retry: async () => { attempts += 1; if (attempts === 1) throw new Error('still failing') } })
-  assert(hasPendingSettingsWork(farm) && hasRetainedSettingsDrafts(farm), 'A retained draft keeps the farm pending.')
-  const first = await settlePendingSettingsWork(farm, { timeoutMs: 500 }).then(() => 'resolved', (error: Error) => error.message)
-  assert(first === SETTINGS_SAVE_FAILED && count() === 1 && hasRetainedSettingsDrafts(farm), 'A retained draft whose retry fails refuses the switch at once and stays retained.')
-  await settlePendingSettingsWork(farm, { timeoutMs: 500 })
-  assert(count() === 2 && !hasPendingSettingsWork(farm) && !hasRetainedSettingsDrafts(farm), 'A retained draft whose retry succeeds clears the farm.')
-  retainFailedSettingsDraft(farm, 'sale-limit:a', { payload: 'A', retry: async () => undefined })
-  retainFailedSettingsDraft(farm, 'carry-grid:x', { payload: 'G', retry: async () => undefined })
-  const taken = takeRetainedSettingsDrafts(farm, 'sale-limit:')
-  assert(taken.size === 1 && taken.get('sale-limit:a') === 'A' && hasPendingSettingsWork(farm), 'Taking drafts by prefix leaves the others retained and pending.')
-  assert(takeRetainedSettingsDrafts(farm, 'carry-').get('carry-grid:x') === 'G' && !hasPendingSettingsWork(farm) && !hasRetainedSettingsDrafts(farm), 'Taking the last draft releases the hold.')
+  const store = new Map<string, string>()
+  const fakeStorage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, value) }, removeItem: (key: string) => { store.delete(key) }, key: (index: number) => [...store.keys()][index] ?? null, get length() { return store.size }, clear: () => store.clear() }
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: fakeStorage })
+  const scopeA = { projectRef: 'proj', userId: uid(1), farmId: farm }; const scopeB = { ...scopeA, userId: uid(2) }
+  assert(readSettingsDrafts(scopeA).length === 0, 'No drafts before any edit.')
+  writeSettingsDraft(scopeA, 'carry-settings', { draft: 'S1' }, stamp); writeSettingsDraft(scopeA, 'carry-grid:x', { draft: 'G' }, stamp); writeSettingsDraft(scopeA, 'carry-settings', { draft: 'S2' }, stamp)
+  const key = settingsDraftsKey(scopeA)
+  assert(key.includes('proj') && key.includes(uid(1)) && key.includes(farm) && !key.endsWith(':lease'), 'The draft key names the project, account, and farm so the farm switcher scan finds it.')
+  const stored = JSON.parse(store.get(key)!) as { entries: unknown[] }
+  assert(Array.isArray(stored.entries) && stored.entries.length === 2, 'The stored value carries a non-empty entries array, one per draft key, latest write winning.')
+  assert(readSettingsDrafts(scopeA, 'carry-').length === 2 && (readSettingsDrafts(scopeA, 'carry-settings')[0].payload as { draft: string }).draft === 'S2', 'Drafts read back by prefix with the latest payload.')
+  assert(readSettingsDrafts(scopeB).length === 0, 'Another account on the same farm sees no drafts.')
+  clearSettingsDraft(scopeA, 'carry-settings')
+  assert(readSettingsDrafts(scopeA).length === 1 && readSettingsDrafts(scopeA)[0].key === 'carry-grid:x', 'Clearing one draft leaves the others.')
+  clearSettingsDraft(scopeA, 'carry-grid:x')
+  assert(store.get(key) === undefined, 'Clearing the last draft removes the key, so the farm no longer looks pending.')
+  Reflect.deleteProperty(globalThis, 'localStorage')
 }
 
 console.log('Grain settings regressions passed.')
