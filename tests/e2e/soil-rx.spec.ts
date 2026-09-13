@@ -117,6 +117,7 @@ function assertArchivedFieldHistoryContract(source: string) {
   expect(source).toContain("{field.name}{!field.isActive && ' (Archived)'}")
   expect(source).toContain("? selectedFieldId : nextActiveFields[0]?.id ?? nextFields.find((field) => nextTests.some((test) => test.field_id === field.id))?.id")
   expect(source).toContain("canEdit && selectedField?.isActive")
+  expect(source).toContain('{canEdit && <NeedsAttentionList module="soilRx"')
   expect(source).toContain("{activeFields.map((field) => <option")
   expect(source).toContain('Its Soil Rx history remains available, but new tests can only be added to active fields.')
 }

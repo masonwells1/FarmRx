@@ -106,7 +106,7 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
     {error && <p className="auth-error" role="alert">{error}</p>}
     {historyUnavailableOffline && <p className="auth-error" role="alert">Soil Rx history is not available on this device yet. Connect once to load it. You can still save a text-only test for an active field.</p>}
     {message && <p className="save-success" role="status">{message}</p>}
-    <NeedsAttentionList module="soilRx" queueKey={attentionQueueKey} onRetry={(row) => repository.retryNeedsAttention?.(row.queueKey, row.id)} onDismiss={(row) => repository.dismissNeedsAttention?.(row.queueKey, row.id)} onChanged={refresh} />
+    {canEdit && <NeedsAttentionList module="soilRx" queueKey={attentionQueueKey} onRetry={(row) => repository.retryNeedsAttention?.(row.queueKey, row.id)} onDismiss={(row) => repository.dismissNeedsAttention?.(row.queueKey, row.id)} onChanged={refresh} />}
     {loading ? <p className="loading-state">Loading Soil Rx…</p> : <>
       {!fields.length ? <p className="soil-rx-empty">Add a field before saving a soil test.</p> : <>
         <div className="soil-rx-layout">
