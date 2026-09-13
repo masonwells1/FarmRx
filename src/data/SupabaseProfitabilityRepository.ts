@@ -187,7 +187,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     let bundle: ProfitabilityRowBundle
     try { bundle = await this.dependencies.gateway.loadWorkspace(farmId) }
     catch (error) { if (error instanceof Error && error.message === 'PROFITABILITY_PRIVATE_ACCESS_DENIED') fail(PRIVACY_DENIED); throw error }
-    return { budgets: bundle.budgets.map(mapBudget), cost_lines: bundle.cost_lines.map(mapCostLine), matrix_steps: bundle.matrix_steps.map(mapMatrixStep), allocations: bundle.allocations.map(mapAllocation), equipment: bundle.equipment.map(mapEquipment) }
+    return { budgets: bundle.budgets.map(mapBudget), cost_lines: bundle.cost_lines.map(mapCostLine), matrix_steps: bundle.matrix_steps.map(mapMatrixStep), allocations: bundle.allocations.map(mapAllocation), equipment: bundle.equipment.map(mapEquipment), capabilities: bundle.capabilities ?? { university_default_amount: null } }
   }
   private validateBudget(value: CropBudget, farmId: string, fields: FieldsData) {
     if (value.farm_id !== farmId) fail('Farm Rx could not verify the farm for this budget.')
@@ -247,7 +247,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     const matrix_steps = [...raw.matrix_steps].sort((left, right) => left.budget_id.localeCompare(right.budget_id) || left.axis.localeCompare(right.axis) || left.sort_order - right.sort_order)
     const allocations = [...raw.allocations].sort((left, right) => left.budget_id.localeCompare(right.budget_id) || left.crop_assignment_id.localeCompare(right.crop_assignment_id))
     const equipment = [...raw.equipment].sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
-    return { budgets, cost_lines, matrix_steps, allocations, fields, equipment }
+    return { budgets, cost_lines, matrix_steps, allocations, fields, equipment, capabilities: raw.capabilities }
   }
 
   async createBudget(value: CropBudget) {

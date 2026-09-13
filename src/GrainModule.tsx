@@ -353,9 +353,10 @@ export function GrainPage({ services }: { services: GrainServices }) {
           const row = data.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === kept.key);
           const typing = dirtySaleLimits.current.has(kept.key);
           const moved = (row?.id ?? null) !== (kept.base?.id ?? null) || (row?.updated_at ?? null) !== (kept.base?.updated_at ?? null);
-          // The lineage travels with the draft, so it decides whether a moved row is this browser's own queued write coming back
-          // (same value as last saved) even after a reload, when nothing is dirty in memory yet.
-          const sent = saleLimitSent.current[kept.key] ?? kept.sent;
+          // The lineage travels with the draft and decides whether a moved row is the draft writer's own queued write coming back
+          // (same value as last saved): after a reload nothing is in memory yet, and the draft may belong to another tab, whose
+          // lineage must not be overridden by this tab's stale idea of what it last saved (every draft write carries its writer's).
+          const sent = kept.sent;
           const own = moved && row !== undefined && sent !== undefined && row.sale_limit_bushels === sent;
           if (moved && !own) {
             // Another device changed the row. A scope still being typed keeps its draft and base: its commit conflicts, and the

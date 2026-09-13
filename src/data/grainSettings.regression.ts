@@ -6,7 +6,7 @@ import { readGrain } from './MockGrainRepository'
 import type { GrainCarryGrid, GrainCarrySettings, GrainSaleLimit } from './grain'
 import { settingsSlicesFromResults } from './SupabaseGrainDataGateway'
 import { BADGE_PROVENANCE_NOT_KEPT, saveCostLineWithBadgeFallback } from './SupabaseProfitabilityDataGateway'
-import { forgetLegacyDefaults, readLegacyDefaults, rememberLegacyDefault, universityDefaultKey, universityDefaultLineOf } from './universityDefaultProvenance'
+import { forgetLegacyDefaults, readLegacyDefaults, rememberLegacyDefault, retainSeededDefaults, universityDefaultKey, universityDefaultLineOf } from './universityDefaultProvenance'
 import { beginPendingSettingsWork, hasPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_SAVE_FAILED, SETTINGS_SAVE_STILL_RUNNING, settlePendingSettingsWork } from './pendingSettingsWork'
 import { clearSettingsDraft, readSettingsDrafts, settingsDraftKey, settingsDraftKeyOf, writeSettingsDraft } from './settingsDrafts'
 import { queueFarmRevocationScope } from './farmRevocationFence'
@@ -227,6 +227,17 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
   assert(after[uid(50)] === undefined && after[uid(52)] === undefined && after[uid(51)] === 110 && after[uid(53)] === 130, 'Forgetting removes the per-line key and prunes the older map.')
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...fakeStorage, setItem: () => { throw new Error('QuotaExceededError') } } })
   assert(rememberLegacyDefault(badgeScope, uid(54), 140) === false, 'A refused write returns false.')
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: fakeStorage })
+  // A seeded budget keeps every badge before its shell is created, all or nothing.
+  retainSeededDefaults(badgeScope, [{ id: uid(57), university_default_amount: 10 }, { id: uid(58), university_default_amount: null }, { id: uid(59), university_default_amount: 30 }])
+  const seeded = readLegacyDefaults(badgeScope)
+  assert(seeded[uid(57)] === 10 && seeded[uid(59)] === 30 && seeded[uid(58)] === undefined, 'Every seeded amount is kept and a line without one is skipped.')
+  forgetLegacyDefaults(badgeScope, [uid(57), uid(59)])
+  let writes = 0
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...fakeStorage, setItem: (key: string, value: string) => { writes += 1; if (writes === 2) throw new Error('QuotaExceededError'); store.set(key, value) } } })
+  let seedRefused = ''
+  try { retainSeededDefaults(badgeScope, [{ id: uid(57), university_default_amount: 10 }, { id: uid(59), university_default_amount: 30 }]) } catch (error) { seedRefused = (error as Error).message }
+  assert(seedRefused === BADGE_PROVENANCE_NOT_KEPT && readLegacyDefaults(badgeScope)[uid(57)] === undefined && readLegacyDefaults(badgeScope)[uid(59)] === undefined, 'A refusal part-way removes what was written and throws, so no budget row is created.')
   Reflect.deleteProperty(globalThis, 'localStorage')
   assert(Object.keys(readLegacyDefaults(badgeScope)).length === 0 && rememberLegacyDefault(badgeScope, uid(55), 150) === false, 'Without browser storage nothing is read and a write reports as refused.')
 }

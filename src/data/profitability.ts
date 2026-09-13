@@ -117,6 +117,8 @@ export interface ProfitabilityData {
   cost_lines: BudgetCostLine[]
   matrix_steps: ProfitabilityMatrixStep[]
   allocations: BudgetFieldAllocation[]
+  /** Whether the live database stores the U of I badge (`budget_cost_lines.university_default_amount`); null when not known (an older cached copy). */
+  capabilities?: { university_default_amount: boolean | null }
 }
 
 export interface ProfitabilityWorkspace extends ProfitabilityData { fields: FieldsData; equipment: ProfitabilityEquipment[] }

@@ -44,6 +44,19 @@ export function readLegacyDefaults(scope: UniversityDefaultScope): Record<string
     return entries
   } catch { return {} }
 }
+/** Thrown when the live database has no badge column yet and this browser refuses to keep a seeded amount: nothing is saved at all,
+ * so the farmer sees one clear message instead of a saved number (or a budget shell) with a silently lost badge. */
+export const BADGE_PROVENANCE_NOT_KEPT = 'badge_provenance_not_kept'
+/** Keeps every seeded amount of a budget about to be created, all or nothing: on the first refusal the entries written so far are
+ * removed again and `BADGE_PROVENANCE_NOT_KEPT` is thrown, before any row reaches the server. Lines without a badge amount are skipped. */
+export function retainSeededDefaults(scope: UniversityDefaultScope, lines: ReadonlyArray<{ id: string; university_default_amount?: number | null }>): void {
+  const written: string[] = []
+  for (const line of lines) {
+    if (line.university_default_amount == null) continue
+    if (!rememberLegacyDefault(scope, line.id, line.university_default_amount)) { forgetLegacyDefaults(scope, written); throw new Error(BADGE_PROVENANCE_NOT_KEPT) }
+    written.push(line.id)
+  }
+}
 /** A seeded amount the live database could not store yet: kept here until the column exists. False when the browser refused it
  * (private mode, blocked or full storage); the caller then fails the save closed rather than saving a number with a lost badge. */
 export function rememberLegacyDefault(scope: UniversityDefaultScope, lineId: string, value: number): boolean {

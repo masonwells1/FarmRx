@@ -55,7 +55,7 @@ import {
 import type { Commodity } from "./data/fields";
 import type { ProgramsData } from "./data/programs";
 import { SAVE_DURABILITY_UPDATE_MESSAGE } from "./data/saveDurability";
-import { forgetLegacyDefaults, readLegacyDefaults } from "./data/universityDefaultProvenance";
+import { forgetLegacyDefaults, readLegacyDefaults, retainSeededDefaults } from "./data/universityDefaultProvenance";
 import { supabaseConfig } from "./lib/supabaseConfig";
 
 const money = new Intl.NumberFormat("en-US", {
@@ -422,6 +422,7 @@ export function ProfitabilityPage() {
                   new Date().getFullYear(),
                 );
                 void save(created.budget.id, async () => {
+                  retainSeededBadges(created.lines);
                   await profitabilityRepository.createBudget(created.budget);
                   for (const line of created.lines)
                     await profitabilityRepository.saveCostLine(line);
@@ -468,6 +469,12 @@ export function ProfitabilityPage() {
     (item) => item.crop_year === currentOverviewYear,
   );
   const wholeFarm = wholeFarmTotals(workspace, overviewBudgets);
+  // While the live database has no badge column (or an older cached copy cannot say), every seeded line's badge amount is kept in
+  // this browser before the budget is created, all or nothing, so a browser that refuses leaves no budget shell behind.
+  const retainSeededBadges = (lines: BudgetCostLine[]) => {
+    if (workspace.capabilities?.university_default_amount === true || !farmAccess) return;
+    retainSeededDefaults({ projectRef: supabaseConfig.projectRef, userId: farmAccess.profile.userId, farmId: workspace.fields.farm.id }, lines);
+  };
   const createUniversityBudget = (
     kind: FarmdocCropKind,
     forCommodity: Commodity,
@@ -480,6 +487,7 @@ export function ProfitabilityPage() {
       cropYear,
     );
     void save(created.budget.id, async () => {
+      retainSeededBadges(created.lines);
       await profitabilityRepository.createBudget(created.budget);
       for (const line of created.lines)
         await profitabilityRepository.saveCostLine(line);

@@ -4,15 +4,13 @@ import type { BudgetFieldAllocation, CropBudget, EquipmentCostSnapshotRequest, I
 import { DELETE_PERMISSION_MESSAGE, SAVE_DURABILITY_UPDATE_MESSAGE } from './saveDurability'
 import { optimisticSave } from './optimisticSave'
 import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
-import { rememberLegacyDefault } from './universityDefaultProvenance'
+import { BADGE_PROVENANCE_NOT_KEPT, rememberLegacyDefault } from './universityDefaultProvenance'
 import { supabaseConfig } from '../lib/supabaseConfig'
 
 function rows(data: unknown, error: { message: string } | null): unknown[] { if (error) throw error; if (!Array.isArray(data)) throw new Error('Farm Rx could not load the complete profitability workspace.'); return data }
 function row(data: unknown, error: { message: string } | null): unknown { if (error) throw error; if (!data || typeof data !== 'object') throw new Error('Farm Rx could not confirm the profitability save. Please try again.'); return data }
 function budgetColumns(value: CropBudget & { farm_id: string }) { const { id, farm_id, crop_year, commodity_id, operating_entity_id, enterprise_label, name, expected_yield_per_acre, expected_price_per_bushel, rp_coverage_pct, rp_aph_yield, rp_projected_price, rp_premium_per_acre, copied_from_budget_id } = value; return { id, farm_id, crop_year, commodity_id, operating_entity_id, enterprise_label, name, expected_yield_per_acre, expected_price_per_bushel, rp_coverage_pct, rp_aph_yield, rp_projected_price, rp_premium_per_acre, copied_from_budget_id, notes: null } }
-/** Thrown when the live database has no badge column yet and this browser refuses to keep the seeded amount: the line is not saved
- * at all, so the farmer sees one clear message instead of a saved number with a silently lost badge. */
-export const BADGE_PROVENANCE_NOT_KEPT = 'badge_provenance_not_kept'
+export { BADGE_PROVENANCE_NOT_KEPT }
 /** PGRST204 means the badge column is not on the live database yet (slice-3 migration pending): keep the seeded amount in this browser
  * first (`retain`, keyed by project, account, and farm, so the badge is written into the column once it exists), then save the line
  * without the column. If the browser refuses to keep it, nothing is written and the save fails closed with `BADGE_PROVENANCE_NOT_KEPT`. */
@@ -68,7 +66,17 @@ export class SupabaseProfitabilityDataGateway implements ProfitabilityDataGatewa
     ])
     if (permission.error) throw permission.error
     if (permission.data !== true) throw new Error('PROFITABILITY_PRIVATE_ACCESS_DENIED')
-    return { budgets: rows(budgets.data, budgets.error), cost_lines: rows(cost_lines.data, cost_lines.error), matrix_steps: rows(matrix_steps.data, matrix_steps.error), allocations: rows(allocations.data, allocations.error), equipment: rows(equipment.data, equipment.error) }
+    const lines = rows(cost_lines.data, cost_lines.error)
+    return { budgets: rows(budgets.data, budgets.error), cost_lines: lines, matrix_steps: rows(matrix_steps.data, matrix_steps.error), allocations: rows(allocations.data, allocations.error), equipment: rows(equipment.data, equipment.error), capabilities: { university_default_amount: await this.badgeColumnPresent(farmId, lines) } }
+  }
+  /** Whether the badge column exists: read off a loaded line when there is one, otherwise a one-column probe (an undefined column answers 42703). */
+  private async badgeColumnPresent(farmId: string, lines: unknown[]): Promise<boolean | null> {
+    const sample = lines.find((row) => !!row && typeof row === 'object')
+    if (sample) return Object.hasOwn(sample, 'university_default_amount')
+    const probe = await supabase.from('budget_cost_lines').select('university_default_amount').eq('farm_id', farmId).limit(1)
+    if (!probe.error) return true
+    const code = (probe.error as { code?: string }).code
+    return code === '42703' || /university_default_amount/.test(probe.error.message ?? '') ? false : null
   }
   async upsertBudget(farmId: string, value: CropBudget, context: FarmOperationContext) { return optimisticSave('crop_budgets', farmId, value.id, budgetColumns({ ...value, farm_id: farmId }), value.updated_at, context) }
   async patchBudgetInsurance(farmId: string, budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt: string | null | undefined, context: FarmOperationContext) { return optimisticSave('crop_budgets', farmId, budgetId, insuranceColumns(patch), expectedUpdatedAt, context) }
