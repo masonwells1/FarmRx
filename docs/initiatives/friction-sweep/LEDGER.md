@@ -53,3 +53,9 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Date/time:** 2026-09-13 11:40 -05:00 (`America/Chicago`).
 - **Trigger:** Codex reviewed `c95132dfba10d98291251e98ebf22cc3cce1f1e5` and returned one finding: on phones the cost table's category subtotal row showed a bare dollar amount beside the item count and toggle, because that cell had no `data-label`. The cell now carries `Subtotal $ per acre`, so every stacked number in the table has a visible label.
 - **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; Profitability equipment-cost regression passed.
+
+## FS-006 — Fifth Codex round: empty season tracker routes to a completable step
+
+- **Date/time:** 2026-09-13 11:50 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `d8ec4b317e1a2c4d1a33af875391d9eafef4d85b` and returned one finding: on a farm with no unarchived program, or no field crop, the season tracker's `Assign a program to a field` button opened an assignment picker that could not be completed. The empty tracker now chooses its one button from what exists: no program yet offers `Add a program` (opens the program builder); no field crop yet offers `Add a field` (goes to Fields); otherwise `Assign a program to a field` opens the assign tab. The sentence above the button changes to match. Read-only members see the sentence only.
+- **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; Programs chunk 5 and Supabase Programs repository regressions passed.
