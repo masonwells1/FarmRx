@@ -11,6 +11,8 @@ const flushers = new Map<string, Set<() => void>>()
 
 export const SETTINGS_SAVE_FAILED = 'SETTINGS_SAVE_FAILED'
 export const SETTINGS_SAVE_STILL_RUNNING = 'SETTINGS_SAVE_STILL_RUNNING'
+/** The selected farm changed (another tab, or a switch already under way) before a settings save could run under its farm. */
+export const SETTINGS_CONTEXT_CHANGED = 'SETTINGS_CONTEXT_CHANGED'
 
 /** Marks a save as pending until the returned function runs. Pass the error to it when the save
  * failed before reaching the server or the durable queue, so a confirmed farm switch stops. */

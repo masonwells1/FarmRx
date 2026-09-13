@@ -7,6 +7,7 @@ function details(error: unknown) { const values: string[] = []; const seen = new
 /** Fixed UI taxonomy: technical adapter/database text never reaches a farmer. */
 export function farmerError(error: unknown, action = 'save this field') {
   const message = details(error)
+  if (message.includes('settings_context_changed')) return 'The selected farm changed in another tab. Reload this page before saving again.'
   if (message.includes('settings_save_still_running')) return 'Farm Rx is still saving your changes for this farm. Wait a moment and try again.'
   if (message.includes('settings_save_failed')) return 'Some changes for this farm could not be saved yet. Check the notice on that screen, then try again.'
   if (message.includes('farm_rx_stale_write')) return 'This record changed in another tab or device. Reload before saving again.'
