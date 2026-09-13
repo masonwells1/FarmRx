@@ -352,7 +352,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
   saleLimitsRef.current = saleLimits;
   // Scopes the farmer is still typing in; a workspace refresh must not overwrite them.
   const dirtySaleLimits = useRef(new Set<string>());
-  const saleLimitLock = useRef(createSubmitLock());
+  // One lock per position: a slow save on one card must not swallow a commit on another.
+  const saleLimitLocks = useRef(createSubmitLockMap());
   // A debounced or unmount-time save must never run under a farm the farmer has since switched to.
   const farmStillSelected = async (farmId: string) => { try { return (await currentFarmContext()).farmId === farmId; } catch { return false; } };
   // A failed settings save refreshes once so the screen learns the row another device may have created.
@@ -360,25 +361,36 @@ export function GrainPage({ services }: { services: GrainServices }) {
     setSettingsNotice(farmerError(caught, action));
     await refresh().catch(() => undefined);
   };
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
   const commitSaleLimit = async (estimate: ProductionEstimate) => {
-    if (!workspace || workspace.capabilities?.persisted_settings !== true) return;
-    if (!saleLimitLock.current.acquire()) return;
+    const key = scopeKey(scopeOf(estimate));
+    const lock = saleLimitLocks.current.get(key);
+    if (!lock.acquire()) return; // a commit for this same position is in flight; it re-runs below if the value changed meanwhile
+    let savedValue: number | null | undefined;
     try {
-      const key = scopeKey(scopeOf(estimate));
+      const current = workspaceRef.current;
+      if (!current || current.capabilities?.persisted_settings !== true) return;
       const value = saleLimitsRef.current[key] ?? null;
-      const existing = workspace.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === key);
-      if ((existing?.sale_limit_bushels ?? null) === value) { dirtySaleLimits.current.delete(key); return; }
+      const existing = current.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === key);
+      if ((existing?.sale_limit_bushels ?? null) === value) { dirtySaleLimits.current.delete(key); savedValue = value; return; }
       const stamp = new Date().toISOString();
       try {
         const saved = await services.grainRepository.saveGrainSaleLimit({ id: existing?.id ?? services.createGrainId(), ...scopeOf(estimate), sale_limit_bushels: value, created_at: existing?.created_at ?? stamp, updated_at: existing?.updated_at ?? stamp });
-        dirtySaleLimits.current.delete(key);
+        savedValue = saved.sale_limit_bushels;
+        if ((saleLimitsRef.current[key] ?? null) === savedValue) dirtySaleLimits.current.delete(key);
         setSettingsNotice("");
-        setWorkspace((current) => current ? { ...current, grain_sale_limits: [...current.grain_sale_limits.filter((limit) => scopeKey(scopeOf(limit)) !== key), saved] } : current);
+        // Keep the ref current too, so a follow-up commit chained below sees the saved row before React renders it.
+        const next = (workspaceCurrent: GrainWorkspace) => ({ ...workspaceCurrent, grain_sale_limits: [...workspaceCurrent.grain_sale_limits.filter((limit) => scopeKey(scopeOf(limit)) !== key), saved] });
+        if (workspaceRef.current) workspaceRef.current = next(workspaceRef.current);
+        setWorkspace((workspaceCurrent) => workspaceCurrent ? next(workspaceCurrent) : workspaceCurrent);
       } catch (caught) {
         await recoverSettings(caught, "save your sale limit");
       }
     } finally {
-      saleLimitLock.current.release();
+      lock.release();
+      // The farmer kept typing while the save was in flight: commit the newest value once more.
+      if (savedValue !== undefined && (saleLimitsRef.current[key] ?? null) !== savedValue) void commitSaleLimit(estimate);
     }
   };
   const carryPersistence = {
