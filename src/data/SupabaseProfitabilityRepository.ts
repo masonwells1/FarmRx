@@ -410,7 +410,8 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     // service costs look hand-entered. The copied budget can import a fresh snapshot.
     const costLines: BudgetCostLineWrite[] = raw.cost_lines
       .filter((line) => line.budget_id === sourceBudgetId && line.source_kind !== 'equipment')
-      .map((line, index) => manualCostLineWrite({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id, sort_order: index }))
+      // A copied line is the farmer's own figure in the new budget: it does not inherit the source line's U of I provenance.
+      .map((line, index) => manualCostLineWrite({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id, sort_order: index, university_default_amount: null }))
     const matrixSteps: ProfitabilityMatrixStep[] = raw.matrix_steps.filter((step) => step.budget_id === sourceBudgetId).map((step) => ({ ...structuredClone(step), id: this.dependencies.createId(), budget_id: copy.id }))
     await this.copyBudgetOperation(sourceBudgetId, { ...copy, copied_from_budget_id: sourceBudgetId }, costLines, matrixSteps, context)
   }

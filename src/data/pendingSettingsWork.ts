@@ -2,22 +2,29 @@
  * The farm switcher asks `hasPendingFarmWork`, which consults this, so a farmer is
  * warned before leaving a farm whose carry or sale-limit edits have not reached the
  * server (or the durable queue) yet; once they confirm, `settlePendingSettingsWork`
- * flushes unflushed edits and waits for every save to finish before the farm changes.
+ * flushes unflushed edits and waits for every save to finish before the farm changes,
+ * and refuses the switch when a save failed or is still running after the time limit.
  * Keyed by farm only: one page session serves one signed-in user. */
-type Token = { settled: Promise<void>; finish: () => void }
+type Token = { settled: Promise<void>; finish: () => void; failure: unknown }
 const pending = new Map<string, Set<Token>>()
 const flushers = new Map<string, Set<() => void>>()
 
-export function beginPendingSettingsWork(farmId: string): () => void {
+export const SETTINGS_SAVE_FAILED = 'SETTINGS_SAVE_FAILED'
+export const SETTINGS_SAVE_STILL_RUNNING = 'SETTINGS_SAVE_STILL_RUNNING'
+
+/** Marks a save as pending until the returned function runs. Pass the error to it when the save
+ * failed before reaching the server or the durable queue, so a confirmed farm switch stops. */
+export function beginPendingSettingsWork(farmId: string): (failure?: unknown) => void {
   let finish: () => void = () => undefined
   const settled = new Promise<void>((resolve) => { finish = resolve })
-  const token: Token = { settled, finish }
+  const token: Token = { settled, finish, failure: undefined }
   const tokens = pending.get(farmId) ?? new Set<Token>()
   tokens.add(token); pending.set(farmId, tokens)
   let done = false
-  return () => {
+  return (failure?: unknown) => {
     if (done) return
     done = true
+    token.failure = failure
     tokens.delete(token); if (tokens.size === 0) pending.delete(farmId)
     token.finish()
   }
@@ -33,12 +40,22 @@ export function registerPendingSettingsFlush(farmId: string, flush: () => void):
 }
 
 /** Sends every unflushed edit for the farm and waits until each save has reached the server or the durable queue.
- * Saves chained behind one another finish in turn; the wait is bounded so a save that keeps re-queuing itself cannot hold the switch forever. */
-export async function settlePendingSettingsWork(farmId: string, maxRounds = 50): Promise<void> {
+ * Saves chained behind one another finish in turn. Rejects with `SETTINGS_SAVE_FAILED` when any save failed, and with
+ * `SETTINGS_SAVE_STILL_RUNNING` when saves are still running after `timeoutMs`; either way the unsent work stays with
+ * the farm that is still selected, so the caller must not change farms. */
+export async function settlePendingSettingsWork(farmId: string, options: { timeoutMs?: number; maxRounds?: number } = {}): Promise<void> {
+  const { timeoutMs = 20_000, maxRounds = 50 } = options
   for (const flush of [...(flushers.get(farmId) ?? [])]) { try { flush() } catch { /* the screen reports its own save errors */ } }
-  for (let round = 0; round < maxRounds; round += 1) {
-    const tokens = [...(pending.get(farmId) ?? [])]
-    if (tokens.length === 0) return
-    await Promise.all(tokens.map((token) => token.settled))
-  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), timeoutMs) })
+  try {
+    for (let round = 0; round < maxRounds; round += 1) {
+      const tokens = [...(pending.get(farmId) ?? [])]
+      if (tokens.length === 0) return
+      const outcome = await Promise.race([Promise.all(tokens.map((token) => token.settled)).then(() => 'settled' as const), timedOut])
+      if (outcome === 'timeout') throw new Error(SETTINGS_SAVE_STILL_RUNNING)
+      if (tokens.some((token) => token.failure !== undefined)) throw new Error(SETTINGS_SAVE_FAILED)
+    }
+    throw new Error(SETTINGS_SAVE_STILL_RUNNING)
+  } finally { clearTimeout(timer) }
 }

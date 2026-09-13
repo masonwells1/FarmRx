@@ -4,7 +4,7 @@ import { readGrain } from './MockGrainRepository'
 import type { GrainCarryGrid, GrainCarrySettings, GrainSaleLimit } from './grain'
 import { settingsSlicesFromResults } from './SupabaseGrainDataGateway'
 import { saveCostLineWithBadgeFallback } from './SupabaseProfitabilityDataGateway'
-import { beginPendingSettingsWork, hasPendingSettingsWork, registerPendingSettingsFlush, settlePendingSettingsWork } from './pendingSettingsWork'
+import { beginPendingSettingsWork, hasPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_SAVE_FAILED, SETTINGS_SAVE_STILL_RUNNING, settlePendingSettingsWork } from './pendingSettingsWork'
 
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message) }
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -107,13 +107,27 @@ assert(!hasPendingSettingsWork(farm), 'The farm is clear once every queued save 
   unregister(); otherFarmDone()
   await settlePendingSettingsWork(farm)
   assert(events.length === 1, 'An unregistered screen is not flushed again.')
-  // A save that keeps re-queuing itself cannot hold the switch forever.
+  // A save that keeps re-queuing itself cannot hold the switch forever: the switch is refused instead.
   let hops = 0
   const repeat = () => { const done = beginPendingSettingsWork(farm); hops += 1; setTimeout(() => { if (hops < 100) repeat(); done() }, 0) }
   repeat()
-  await settlePendingSettingsWork(farm, 5)
-  assert(hops >= 5 && hops < 100, 'The wait is bounded.')
+  const rounds = await settlePendingSettingsWork(farm, { maxRounds: 5 }).then(() => 'resolved', (error: Error) => error.message)
+  assert(rounds === SETTINGS_SAVE_STILL_RUNNING && hops >= 5 && hops < 100, 'The round count is bounded and refuses the switch.')
   await new Promise((resolve) => setTimeout(resolve, 20)); hops = 100
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert(!hasPendingSettingsWork(farm), 'The repeating save has stopped.')
+  // A save that failed before reaching the server or the durable queue refuses the switch, so the edit is not discarded.
+  const failing = beginPendingSettingsWork(farm)
+  const failed = settlePendingSettingsWork(farm).then(() => 'resolved', (error: Error) => error.message)
+  failing(new Error('boom'))
+  assert((await failed) === SETTINGS_SAVE_FAILED && !hasPendingSettingsWork(farm), 'A failed save must refuse the switch and clear its token.')
+  // A save still running after the time limit refuses the switch and keeps the work pending for the farm.
+  const stalled = beginPendingSettingsWork(farm)
+  const stall = await settlePendingSettingsWork(farm, { timeoutMs: 20 }).then(() => 'resolved', (error: Error) => error.message)
+  assert(stall === SETTINGS_SAVE_STILL_RUNNING && hasPendingSettingsWork(farm), 'A stalled save must refuse the switch after the time limit and stay pending.')
+  stalled()
+  await settlePendingSettingsWork(farm, { timeoutMs: 20 })
+  assert(!hasPendingSettingsWork(farm), 'Nothing pending settles at once.')
 }
 
 console.log('Grain settings regressions passed.')

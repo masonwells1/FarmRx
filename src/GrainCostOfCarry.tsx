@@ -64,7 +64,8 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   const gridsDirty = useRef(new Set<string>())
   const newGridIds = useRef<Record<string, string>>({})
   // Every queued save (and any unflushed edit) keeps the farm marked pending for the farm switcher until it has run.
-  const enqueue = (work: () => Promise<void>) => { const done = beginPendingSettingsWork(workspaceRef.current.fields.farm.id); chain.current = chain.current.then(() => work().catch(() => undefined)).finally(done) }
+  // A save that fails before reaching the server or the durable queue marks its token failed, so a confirmed farm switch stops instead of discarding the edit.
+  const enqueue = (work: () => Promise<void>) => { const done = beginPendingSettingsWork(workspaceRef.current.fields.farm.id); chain.current = chain.current.then(() => work().then(() => done(), (error: unknown) => done(error ?? new Error('Settings save failed.')))) }
   const unflushed = useRef<(() => void) | null>(null)
   const markUnflushed = () => { unflushed.current ??= beginPendingSettingsWork(workspaceRef.current.fields.farm.id) }
   const settleUnflushed = () => { if (!settingsDirty.current && gridsDirty.current.size === 0) { unflushed.current?.(); unflushed.current = null } }

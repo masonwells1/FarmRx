@@ -803,6 +803,8 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
     if (hasPendingFarmWork(user.id, activeFarm.id) && !(await confirmDialog({ title: `Switch away from ${activeFarm.name}?`, body: `Saved changes are still waiting for ${activeFarm.name}. They will stay with that farm and send when you come back.`, confirmLabel: "Switch farms", cancelLabel: "Stay here" }))) return;
     // Settings edits live in memory until their save runs: send them and wait while the old farm is still selected,
     // so each reaches the server or the durable queue for that farm before the context changes and the page reloads.
+    // A save that failed, or one still running after the time limit, rejects here: the switch stops, the switcher
+    // shows why (see farmerError), and the unsent work stays with the farm that is still selected.
     await settlePendingSettingsWork(activeFarm.id);
     try {
       await dependencies.selectFarm(user.id, farmId);

@@ -376,6 +376,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
     const done = beginPendingSettingsWork(estimate.farm_id);
     settleSaleLimitUnflushed(key);
     let savedValue: number | null | undefined;
+    let failure: unknown;
     try {
       const current = workspaceRef.current;
       if (!current || current.capabilities?.persisted_settings !== true) return;
@@ -393,13 +394,15 @@ export function GrainPage({ services }: { services: GrainServices }) {
         if (workspaceRef.current) workspaceRef.current = next(workspaceRef.current);
         setWorkspace((workspaceCurrent) => workspaceCurrent ? next(workspaceCurrent) : workspaceCurrent);
       } catch (caught) {
+        failure = caught ?? new Error("Sale limit save failed.");
         await recoverSettings(caught, "save your sale limit");
       }
     } finally {
       lock.release();
       // The farmer kept typing while the save was in flight: commit the newest value once more.
       if (savedValue !== undefined && (saleLimitsRef.current[key] ?? null) !== savedValue) void commitSaleLimit(estimate);
-      done();
+      // A failed save keeps the typed limit on screen and makes a confirmed farm switch stop rather than discard it.
+      done(failure);
     }
   };
   const commitSaleLimitRef = useRef(commitSaleLimit);
@@ -421,7 +424,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
         setSettingsNotice("");
         setWorkspace((current) => current ? { ...current, grain_carry_settings: saved } : current);
         return saved;
-      } catch (caught) { await recoverSettings(caught, "save your storage cost settings"); }
+      } catch (caught) { await recoverSettings(caught, "save your storage cost settings"); throw caught; }
     },
     saveGrid: async (grid: GrainCarryGrid) => {
       if (!(await farmStillSelected(grid.farm_id))) return;
@@ -430,7 +433,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
         setSettingsNotice("");
         setWorkspace((current) => current ? { ...current, grain_carry_grids: [...current.grain_carry_grids.filter((row) => row.id !== saved.id && row.production_estimate_id !== saved.production_estimate_id), saved] } : current);
         return saved;
-      } catch (caught) { await recoverSettings(caught, "save your carry prices"); }
+      } catch (caught) { await recoverSettings(caught, "save your carry prices"); throw caught; }
     },
     createId: services.createGrainId,
   };
