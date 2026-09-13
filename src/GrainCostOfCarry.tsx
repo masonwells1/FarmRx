@@ -37,10 +37,15 @@ const isCarrySettings = (value: unknown): value is CarrySettings => isObject(val
 const isPriceRow = (value: unknown): value is PriceRow => isObject(value) && typeof value.marketPrice === 'string' && typeof value.basis === 'string'
 const isCommodityCarry = (value: unknown): value is CommodityCarry => isObject(value) && Number.isInteger(value.harvestMonth) && (value.harvestMonth as number) >= 0 && (value.harvestMonth as number) <= 11 && typeof value.defaultBasis === 'string' && Array.isArray(value.rows) && value.rows.length === CARRY_GRID_ROWS && value.rows.every(isPriceRow)
 const validBase = (value: unknown) => value === null || typeof value === 'string'
-const validSent = (value: unknown) => value === undefined || value === null || isObject(value)
-const isCarryDraft = (key: string, payload: unknown): boolean => key === 'carry-settings'
-  ? isObject(payload) && isCarrySettings(payload.draft) && validBase(payload.base) && validSent(payload.sent)
-  : key.startsWith('carry-grid:') && isObject(payload) && typeof payload.estimateId === 'string' && payload.estimateId === key.slice('carry-grid:'.length) && isCommodityCarry(payload.draft) && validBase(payload.base) && validSent(payload.sent)
+// The lineage is the row the last save returned; only a complete row of the right kind is accepted, so the resync's content
+// comparison never reads a field that is not there.
+const isSentSettings = (value: unknown): value is GrainCarrySettings => isObject(value) && typeof value.farm_id === 'string' && (value.mode === 'monthly' || value.mode === 'flat') && finiteNumber(value.monthly_rate_cents_per_bu_month) && finiteNumber(value.flat_rate_per_bu) && finiteNumber(value.interest_rate_pct) && finiteNumber(value.trucking_per_bu) && typeof value.updated_at === 'string'
+const isSentGridRow = (value: unknown) => isObject(value) && (value.market_price === null || finiteNumber(value.market_price)) && (value.basis === null || finiteNumber(value.basis))
+const isSentGrid = (value: unknown): value is GrainCarryGrid => isObject(value) && typeof value.id === 'string' && typeof value.farm_id === 'string' && typeof value.production_estimate_id === 'string' && Number.isInteger(value.harvest_month) && finiteNumber(value.default_basis) && Array.isArray(value.rows) && value.rows.length === CARRY_GRID_ROWS && value.rows.every(isSentGridRow) && typeof value.updated_at === 'string'
+const validSent = (value: unknown, isRow: (row: unknown) => boolean) => value === undefined || value === null || isRow(value)
+export const isCarryDraft = (key: string, payload: unknown): boolean => key === 'carry-settings'
+  ? isObject(payload) && isCarrySettings(payload.draft) && validBase(payload.base) && validSent(payload.sent, isSentSettings)
+  : key.startsWith('carry-grid:') && isObject(payload) && typeof payload.estimateId === 'string' && payload.estimateId === key.slice('carry-grid:'.length) && isCommodityCarry(payload.draft) && validBase(payload.base) && validSent(payload.sent, isSentGrid)
 function sameSettingsContent(a: GrainCarrySettings, b: GrainCarrySettings): boolean { return a.mode === b.mode && a.monthly_rate_cents_per_bu_month === b.monthly_rate_cents_per_bu_month && a.flat_rate_per_bu === b.flat_rate_per_bu && a.interest_rate_pct === b.interest_rate_pct && a.trucking_per_bu === b.trucking_per_bu }
 function sameGridContent(a: GrainCarryGrid, b: GrainCarryGrid): boolean { return a.harvest_month === b.harvest_month && a.default_basis === b.default_basis && a.rows.length === b.rows.length && a.rows.every((row, index) => row.market_price === b.rows[index]?.market_price && row.basis === b.rows[index]?.basis) }
 function settingsFromRow(row: GrainCarrySettings): CarrySettings { return { mode: row.mode === 'flat' ? 'flat' : 'monthly', monthlyRateCentsPerBuMonth: nonNegative(row.monthly_rate_cents_per_bu_month, defaultSettings.monthlyRateCentsPerBuMonth), flatRatePerBu: nonNegative(row.flat_rate_per_bu, defaultSettings.flatRatePerBu), interestRatePct: nonNegative(row.interest_rate_pct, defaultSettings.interestRatePct), truckingPerBu: nonNegative(row.trucking_per_bu, defaultSettings.truckingPerBu) } }
@@ -110,12 +115,16 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   const keepDraft = (key: string, payload: unknown, resend: () => void): string | null => { const scope = draftScopeRef.current; if (!scope) return null; const previous = key === 'carry-settings' ? draftRevisions.current.settings : draftRevisions.current.grids[key.slice('carry-grid:'.length)]; const revision = writeSettingsDraft(scope, key, payload); if (revision === null) { if (previous) clearSettingsDraft(scope, key, previous); setTimeout(resend, 0) } return revision }
   const resendSettings = () => { settingsDirty.current = true; flushSettings() }
   const resendGrid = (estimateId: string) => () => { gridsDirty.current.add(estimateId); flushGrids() }
+  // A save queued while the member could write must not go out after edit access was lost (offline it would be queued and replayed
+  // later, online it would be refused and re-mark the farm pending with no flusher left): the draft stays in storage, nothing is sent.
+  const readOnly = () => persistenceRef.current?.writable === false
   const flushSettings = () => {
-    if (!persisted || !settingsDirty.current) return
+    if (!persisted || !settingsDirty.current || readOnly()) return
     settingsDirty.current = false
     settleUnflushed()
     const snapshot = settingsRef.current
     enqueue(async () => {
+      if (readOnly()) return
       const current = workspaceRef.current; const scope = draftScopeRef.current
       try {
         const sent = settingsToRow(current.fields.farm.id, snapshot, baseVersions.current.settings ?? new Date().toISOString())
@@ -131,14 +140,14 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
           else draftRevisions.current.settings = keepDraft('carry-settings', { draft: settingsRef.current, base: baseVersions.current.settings, sent: sentRows.current.settings } satisfies CarrySettingsDraft, resendSettings)
         }
       } catch (error) {
-        // The browser draft stays until a later save is confirmed; a mounted screen also keeps the draft dirty and pending here.
-        if (mounted.current) { settingsDirty.current = true; failedSettings.current = true; markUnflushed() }
+        // The browser draft stays until a later save is confirmed; a mounted screen that may still write also keeps the draft dirty and pending here.
+        if (mounted.current && !readOnly()) { settingsDirty.current = true; failedSettings.current = true; markUnflushed() }
         throw error
       }
     })
   }
   const flushGrids = () => {
-    if (!persisted) return
+    if (!persisted || readOnly()) return
     const ids = [...gridsDirty.current]; gridsDirty.current.clear()
     settleUnflushed()
     for (const estimateId of ids) {
@@ -146,7 +155,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
       if (!snapshot) continue
       enqueue(async () => {
         const current = workspaceRef.current; const active = persistenceRef.current; const scope = draftScopeRef.current
-        if (!active || !current.production_estimates.some((estimate) => estimate.id === estimateId)) return
+        if (!active || readOnly() || !current.production_estimates.some((estimate) => estimate.id === estimateId)) return
         const existing = current.grain_carry_grids.find((grid) => grid.production_estimate_id === estimateId)
         const id = existing?.id ?? (newGridIds.current[estimateId] ??= active.createId())
         try {
@@ -160,7 +169,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
             else if (latest) draftRevisions.current.grids[estimateId] = keepDraft(`carry-grid:${estimateId}`, { estimateId, draft: latest, base: baseVersions.current.grids[estimateId] ?? null, sent: sentRows.current.grids[estimateId] ?? null } satisfies CarryGridDraft, resendGrid(estimateId))
           }
         } catch (error) {
-          if (mounted.current) { gridsDirty.current.add(estimateId); failedGrids.current.add(estimateId); markUnflushed() }
+          if (mounted.current && !readOnly()) { gridsDirty.current.add(estimateId); failedGrids.current.add(estimateId); markUnflushed() }
           throw error
         }
       })

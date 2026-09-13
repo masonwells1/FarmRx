@@ -1,5 +1,6 @@
 import { CARRY_GRID_ROWS, defaultCarrySettings, emptyCarryRows, normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
 import { parseGrainQueue } from './grainWriteQueue'
+import { isCarryDraft } from '../GrainCostOfCarry'
 import { readGrain } from './MockGrainRepository'
 import type { GrainCarryGrid, GrainCarrySettings, GrainSaleLimit } from './grain'
 import { settingsSlicesFromResults } from './SupabaseGrainDataGateway'
@@ -244,6 +245,19 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
   assert(kept.length === 1 && kept[0]?.key === 'carry-grid:e1', 'With a guard, an entry the screen cannot use is skipped.')
   assert(store.has(settingsDraftKey(scope, 'carry-grid:e1')) && !store.has(settingsDraftKey(scope, 'carry-settings')), 'The unusable entry is removed from storage; the usable one stays.')
   Reflect.deleteProperty(globalThis, 'localStorage')
+}
+
+// The calculator accepts a kept draft only in the shape it writes, including the lineage row a save returned.
+{
+  const settingsDraft = { draft: { mode: 'flat', monthlyRateCentsPerBuMonth: 4, flatRatePerBu: 0.2, interestRatePct: 6.5, truckingPerBu: 0.1 }, base: 'T1', sent: null }
+  const sentSettings = { farm_id: 'farm-a', mode: 'flat', monthly_rate_cents_per_bu_month: 4, flat_rate_per_bu: 0.2, interest_rate_pct: 6.5, trucking_per_bu: 0.1, updated_at: 'T1' }
+  const rows = Array.from({ length: CARRY_GRID_ROWS }, () => ({ marketPrice: '', basis: '0' }))
+  const sentGrid = { id: uid(60), farm_id: 'farm-a', production_estimate_id: uid(12), harvest_month: 8, default_basis: 0, rows: Array.from({ length: CARRY_GRID_ROWS }, () => ({ market_price: null, basis: 0 })), updated_at: 'T1' }
+  const gridDraft = { estimateId: uid(12), draft: { harvestMonth: 8, defaultBasis: '0', rows }, base: 'T1', sent: sentGrid }
+  assert(isCarryDraft('carry-settings', settingsDraft) && isCarryDraft('carry-settings', { ...settingsDraft, sent: sentSettings }), 'A settings draft with no lineage or a complete settings row is accepted.')
+  assert(!isCarryDraft('carry-settings', { ...settingsDraft, sent: {} }) && !isCarryDraft('carry-settings', { ...settingsDraft, draft: { mode: 'flat' } }) && !isCarryDraft('carry-settings', { ...settingsDraft, sent: sentGrid }), 'A settings draft with an incomplete rate set, an empty lineage, or a grid as lineage is dropped.')
+  assert(isCarryDraft(`carry-grid:${uid(12)}`, gridDraft) && isCarryDraft(`carry-grid:${uid(12)}`, { ...gridDraft, sent: undefined }), 'A grid draft with a complete grid row as lineage, or none, is accepted.')
+  assert(!isCarryDraft(`carry-grid:${uid(12)}`, { ...gridDraft, sent: {} }) && !isCarryDraft(`carry-grid:${uid(12)}`, { ...gridDraft, sent: { ...sentGrid, rows: [] } }) && !isCarryDraft(`carry-grid:${uid(12)}`, { ...gridDraft, draft: { ...gridDraft.draft, rows: rows.slice(1) } }) && !isCarryDraft(`carry-grid:${uid(13)}`, gridDraft), 'A grid draft with an empty or short lineage, twelve rows, or another estimate\'s key is dropped.')
 }
 
 console.log('Grain settings regressions passed.')
