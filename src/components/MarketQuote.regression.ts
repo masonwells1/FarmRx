@@ -8,6 +8,7 @@ assert(JSON.stringify(quotes2026.map((quote) => quote.symbol)) === JSON.stringif
 assert(quotes2026.map((quote) => quote.detail).join('|') === 'Dec 2026|Nov 2026|Jul 2027', 'Contract labels must name the month and year.')
 assert(newCropQuotes(2027)[2]?.symbol === 'CBOT:ZWN2028', 'Wheat must roll to the year after the crop year.')
 assert(newCropQuotes(Number.NaN).length === 0 && newCropQuotes(1990).length === 0, 'An invalid crop year must produce no contract quotes rather than a bad symbol.')
+assert(newCropQuotes(2098).length === 3 && newCropQuotes(2099).length === 0 && newCropQuotes(2100).length === 0, 'Crop years whose wheat contract falls outside the frame allowlist must produce no contract quotes.')
 assert(marketQuotes(2026).length === 6 && marketQuotes(2026)[0]?.symbol === 'CBOT:ZC1!', 'Front-month quotes stay first, followed by the crop-year contracts.')
 
 const sept2026 = new Date(2026, 8, 8)
@@ -23,6 +24,6 @@ const frame = readFileSync(new URL('../../public/market-quote-frame.html', impor
 const match = frame.match(/const allowed=(\/.+?\/);/)
 assert(match?.[1], 'The quote frame must declare its symbol allowlist as a regex literal.')
 const allowed = new RegExp(match[1].slice(1, -1))
-for (const year of [2025, 2026, 2027, 2035]) for (const quote of marketQuotes(year)) assert(allowed.test(quote.symbol), `Frame allowlist rejects derived symbol ${quote.symbol}.`)
+for (const year of [2025, 2026, 2027, 2035, 2098]) for (const quote of marketQuotes(year)) assert(allowed.test(quote.symbol), `Frame allowlist rejects derived symbol ${quote.symbol}.`)
 for (const bad of ['CBOT:ZCZ26', 'NASDAQ:AAPL', 'CBOT:ZCZ2026;alert(1)', 'CBOT:ZCF2026', '']) assert(!allowed.test(bad), `Frame allowlist must reject ${JSON.stringify(bad)}.`)
 console.log('MarketQuote regression passed.')

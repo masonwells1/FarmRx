@@ -12,10 +12,12 @@ const FRONT_MONTH: readonly MarketQuoteSpec[] = [
  * The new-crop futures contract for a crop year: December corn and November
  * soybeans of that year, and July wheat of the following year (wheat planted in
  * the crop year's fall is harvested the next summer). Derived, never hardcoded,
- * so the widget follows the farmer's selected crop year.
+ * so the widget follows the farmer's selected crop year. The quote frame's
+ * allowlist accepts contract years 2000–2099, and wheat is the crop year plus
+ * one, so 2098 is the last crop year every derived symbol is valid for.
  */
 export function newCropQuotes(cropYear: number): MarketQuoteSpec[] {
-  if (!Number.isInteger(cropYear) || cropYear < 2000 || cropYear > 2100) return []
+  if (!Number.isInteger(cropYear) || cropYear < 2000 || cropYear > 2098) return []
   return [
     { symbol: `CBOT:ZCZ${cropYear}`, label: 'Corn', detail: `Dec ${cropYear}` },
     { symbol: `CBOT:ZSX${cropYear}`, label: 'Soybeans', detail: `Nov ${cropYear}` },

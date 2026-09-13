@@ -373,9 +373,13 @@ function ProgramBuilder({
     }
   }
   async function archive() {
-    if (!(await confirmDialog({ title: `Archive ${program.name}?`, body: "It comes off your active list and stays in your history.", confirmLabel: "Archive program" })))
-      return;
+    // Hold the lock while the question is open so a second tap cannot queue a
+    // second archive behind the first answer.
     if (!programLock.current.acquire()) return;
+    if (!(await confirmDialog({ title: `Archive ${program.name}?`, body: "It comes off your active list and stays in your history.", confirmLabel: "Archive program" }))) {
+      programLock.current.release();
+      return;
+    }
     setSaving(true);
     try {
       await repository.deleteProgram(program.id);
@@ -576,8 +580,11 @@ function PassCard({
   const [error, setError] = useState<string | null>(null);
   const passLock = useRef(createSubmitLock());
   async function remove() {
-    if (!(await confirmDialog({ title: `Archive ${pass.name}?`, body: "This pass comes off the program template. Passes already assigned to fields are not changed.", confirmLabel: "Archive pass" }))) return;
     if (!passLock.current.acquire()) return;
+    if (!(await confirmDialog({ title: `Archive ${pass.name}?`, body: "This pass comes off the program template. Passes already assigned to fields are not changed.", confirmLabel: "Archive pass" }))) {
+      passLock.current.release();
+      return;
+    }
     try {
       await repository.deleteProgramPass(pass.program_id, pass.id);
       onDeleted();
@@ -1301,6 +1308,8 @@ function SeasonTracker({
       (pass) => pass.status === "planned",
     ).length;
     const terminal = assignment.passes.length - affected;
+    const assignmentLock = assignmentLocks.current.get(assignment.assignment_id);
+    if (!assignmentLock.acquire()) return;
     const reason = await promptDialog({
       title: `Remove ${assignment.program_name_snapshot} from ${cropLabel(assignment)}?`,
       body: `${affected} planned pass${affected === 1 ? "" : "es"} will no longer be on your list. ${terminal} completed pass${terminal === 1 ? "" : "es"} will stay in your records.`,
@@ -1309,9 +1318,10 @@ function SeasonTracker({
       confirmLabel: "Remove program",
       destructive: true,
     });
-    if (!reason) return;
-    const assignmentLock = assignmentLocks.current.get(assignment.assignment_id);
-    if (!assignmentLock.acquire()) return;
+    if (!reason) {
+      assignmentLock.release();
+      return;
+    }
     try {
       await repository.unassignProgram(assignment.assignment_id, reason);
       await onChanged();
@@ -1475,6 +1485,7 @@ function ReassignControl({
     const planned = assignment.passes.filter(
       (pass) => pass.status === "planned",
     ).length;
+    if (!submitLock.current.acquire()) return;
     const reason = await promptDialog({
       title: `Use ${replacement.name} instead of ${assignment.program_name_snapshot} on ${cropLabel(assignment)}?`,
       body: `${planned} planned pass${planned === 1 ? "" : "es"} will no longer be on your list. Completed history stays.`,
@@ -1482,8 +1493,10 @@ function ReassignControl({
       required: true,
       confirmLabel: "Switch program",
     });
-    if (!reason) return;
-    if (!submitLock.current.acquire()) return;
+    if (!reason) {
+      submitLock.current.release();
+      return;
+    }
     try {
       await repository.reassignProgramAssignment(
         assignment.assignment_id,

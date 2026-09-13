@@ -821,9 +821,12 @@ function MarketingAlerts({
     }
   };
   const remove = async (id: string) => {
-    if (!(await confirmDialog({ title: "Delete this alert rule?", body: "You will stop getting this alert. Past notifications stay.", confirmLabel: "Delete rule", destructive: true }))) return;
     const alertLock = alertLocks.current.get(id);
     if (!alertLock.acquire()) return;
+    if (!(await confirmDialog({ title: "Delete this alert rule?", body: "You will stop getting this alert. Past notifications stay.", confirmLabel: "Delete rule", destructive: true }))) {
+      alertLock.release();
+      return;
+    }
     try {
       await services.grainRepository.deleteMarketingAlertRule(id);
       setError("");
@@ -1091,9 +1094,12 @@ function FirmOffers({
     }
   };
   const remove = async (id: string) => {
-    if (!(await confirmDialog({ title: "Delete this firm offer?", body: "Only your record of the offer is removed. Check with the buyer if it is still working at the elevator.", confirmLabel: "Delete offer", destructive: true }))) return;
     const offerLock = offerLocks.current.get(id);
     if (!offerLock.acquire()) return;
+    if (!(await confirmDialog({ title: "Delete this firm offer?", body: "Only your record of the offer is removed. Check with the buyer if it is still working at the elevator.", confirmLabel: "Delete offer", destructive: true }))) {
+      offerLock.release();
+      return;
+    }
     try {
       await services.grainRepository.deleteFirmOffer(id);
       setError("");

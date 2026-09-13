@@ -433,6 +433,10 @@ function EquipmentDetail({
   }
   async function removeInterval(id: string) {
     if (!equipmentLock.current.acquire()) return;
+    if (!(await confirmDialog({ title: "Delete this service reminder?", body: "It will no longer remind you. Service history is not changed.", confirmLabel: "Delete reminder", destructive: true }))) {
+      equipmentLock.current.release();
+      return;
+    }
     try {
       await repository.deleteInterval(id);
       close();
@@ -468,6 +472,10 @@ function EquipmentDetail({
   }
   async function removeServiceLog(id: string) {
     if (!equipmentLock.current.acquire()) return;
+    if (!(await confirmDialog({ title: "Delete this service entry?", body: "This removes it from the machine's service history.", confirmLabel: "Delete entry", destructive: true }))) {
+      equipmentLock.current.release();
+      return;
+    }
     try {
       await repository.deleteServiceLogEntry(id);
       close();
@@ -619,7 +627,7 @@ function EquipmentDetail({
                 <button
                   className="danger-action"
                   onClick={() => {
-                    void confirmDialog({ title: "Delete this service reminder?", body: "It will no longer remind you. Service history is not changed.", confirmLabel: "Delete reminder", destructive: true }).then((ok) => { if (ok) void removeInterval(x.id) });
+                    void removeInterval(x.id);
                   }}
                 >
                   Delete
@@ -707,7 +715,7 @@ function EquipmentDetail({
                     className="danger-action"
                     disabled={!operationalIntegrityReady}
                     onClick={() => {
-                      void confirmDialog({ title: "Delete this service entry?", body: "This removes it from the machine's service history.", confirmLabel: "Delete entry", destructive: true }).then((ok) => { if (ok) void removeServiceLog(x.id) });
+                      void removeServiceLog(x.id);
                     }}
                   >
                     Delete
@@ -939,6 +947,10 @@ function TaskColumn({
   const remove = async (task: FarmTask) => {
     const taskLock = taskLocks.current.get(task.id);
     if (!taskLock.acquire()) return;
+    if (!(await confirmDialog({ title: "Delete this task?", body: "It comes off your list. Nothing else is changed.", confirmLabel: "Delete task", destructive: true }))) {
+      taskLock.release();
+      return;
+    }
     try {
       await repository.deleteTask(task.id);
       await refresh();
@@ -1041,7 +1053,7 @@ function TaskColumn({
                   <button
                     className="danger-action"
                     onClick={() => {
-                      void confirmDialog({ title: "Delete this task?", body: "It comes off your list. Nothing else is changed.", confirmLabel: "Delete task", destructive: true }).then((ok) => { if (ok) void remove(task) });
+                      void remove(task);
                     }}
                   >
                     Delete
