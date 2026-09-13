@@ -25,6 +25,7 @@ function readSettings(farmId: string): CarrySettings {
   } catch { return defaultSettings }
 }
 /** The per-device rates a farm saved before its settings table was live, or null when this device never stored any. */
+function forgetStoredSettings(farmId: string) { try { window.localStorage.removeItem(settingsKey(farmId)) } catch { /* nothing to remove, or storage blocked: the key is retried on the next confirmed save */ } }
 function readStoredSettings(farmId: string): CarrySettings | null { try { return window.localStorage.getItem(settingsKey(farmId)) === null ? null : readSettings(farmId) } catch { return null } }
 // `sent` is the content of the last row this screen saved for the part, kept with the draft so a remount still recognises its own
 // write coming back (a queued save replayed with a newer version) and rebases the draft instead of replacing it.
@@ -131,6 +132,8 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
         const saved = await persistenceRef.current?.saveSettings(sent)
         if (saved) { baseVersions.current.settings = saved.updated_at; sentRows.current.settings = saved }
         failedSettings.current = false
+        // Confirmed by the server or the durable queue: the device-only rates this farm may have adopted are superseded and removed.
+        forgetStoredSettings(current.fields.farm.id)
         // Confirmed by the server or the durable queue: the browser draft is no longer needed unless a newer draft exists (the farmer
         // typed more, or a successor edit already flushed and is queued behind this save), in which case the newer draft is rewritten
         // on top of the saved version so a reload cannot mistake this save for an outside change.
@@ -181,6 +184,9 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
     if (!persisted) return
     // Rates this device stored before the farm's table was live, where the farm has no row yet: save them for the farm now, but only
     // for a member who may write them (a read-only viewer would see every such save refused and the farm stuck as pending).
+    // Once the farm has its own row, the rates this device stored before the table was live are superseded and are removed: the key
+    // names neither the account nor the project, so the revocation quarantine cannot claim it, and nothing reads it again.
+    if (workspace.grain_carry_settings) forgetStoredSettings(farmId)
     const legacy = workspace.grain_carry_settings || persistence?.writable === false ? null : readStoredSettings(farmId)
     if (legacy) { settingsDirty.current = true; markUnflushed(); if (draftScope) draftRevisions.current.settings = keepDraft('carry-settings', { draft: legacy, base: null, sent: null } satisfies CarrySettingsDraft, resendSettings) }
     // Drafts this browser kept for this account and farm (an edit cut short by a reload, or a save that failed after the screen was
