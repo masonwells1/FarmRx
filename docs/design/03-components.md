@@ -61,6 +61,26 @@ The signature tank-label element. Label on top, huge number, unit below.
 
 - Alert copy: first line says what happened; second line says what to do; one button max.
 
+## Dialogs (confirm and prompt)
+
+Farm Rx never uses the browser's `confirm()` or `prompt()`. Every "are you sure?" and every
+"give me a reason" goes through `confirmDialog()` / `promptDialog()` in
+`src/components/ConfirmDialog.tsx`, rendered by the one `ConfirmDialogHost` at the app root.
+
+| Part | Rule |
+|---|---|
+| Title | A plain question the farmer would say out loud: "Delete this firm offer?" |
+| Body | One or two sentences on what changes and what does not: "Only your record of the offer is removed." |
+| Confirm button | Names the action, never "OK" or "Yes": "Delete offer", "Switch farms", "Use harvest total" |
+| Cancel button | Default "Go back"; use a specific safe label when it reads better: "Keep it private", "Stay here" |
+| Destructive or irreversible | `destructive: true` gives the confirm a solid `WARN_RED` fill and starts keyboard focus on the safe button; use it for deletes and for anything that cannot be undone, such as setting a contract's final price leg |
+| Prompt | `promptDialog({ label, required })` adds one text field; a required reason keeps the confirm disabled until typed |
+| Phone | Full-width stacked buttons, 52px tall, with the safe button on the bottom nearest the thumb so a stray tap never confirms; Escape and tapping the backdrop cancel |
+| Keyboard | Tab and Shift+Tab stay inside the card while it is open |
+| Stale questions | Leaving the route, switching or losing the farm, or signing out cancels any open dialog, so a question can never run its action against a record that is no longer on screen |
+
+The host queues requests, so two questions never overlap; the second shows after the first is answered.
+
 ## Badges / chips
 
 - Pill radius, 30px min height, bold, tinted fill + dark text of the same hue.

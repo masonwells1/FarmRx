@@ -7,7 +7,7 @@
     {
       "source": "/market-quote-frame.html",
       "headers": [
-        { "key": "Content-Security-Policy", "value": "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; script-src 'sha256-pe7MF8UrhGK8YK2ftOaWledeIQMEdpyAyH5ZArs5LJM=' https://s3.tradingview.com; style-src 'unsafe-inline'; img-src data: https://*.tradingview.com; connect-src https://*.tradingview.com wss://*.tradingview.com; frame-src https://*.tradingview.com; form-action 'none'" },
+        { "key": "Content-Security-Policy", "value": "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; script-src 'sha256-7wIUayU1S3yLLJd2+QeBLTUTt17ZVgGqqqISHI847s8=' https://s3.tradingview.com; style-src 'unsafe-inline'; img-src data: https://*.tradingview.com; connect-src https://*.tradingview.com wss://*.tradingview.com; frame-src https://*.tradingview.com; form-action 'none'" },
         { "key": "Referrer-Policy", "value": "no-referrer" },
         { "key": "Permissions-Policy", "value": "geolocation=(), camera=(), microphone=(), payment=(), usb=()" },
         { "key": "X-Content-Type-Options", "value": "nosniff" }

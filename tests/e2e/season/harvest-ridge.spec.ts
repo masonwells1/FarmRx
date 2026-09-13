@@ -116,8 +116,8 @@ test('@harvest-ridge-canonical-hr2 Grain reads harvest without automatic reconci
 
 test('@harvest-ridge-canonical-hr3 explicit reconciliation changes Grain actual only', async ({ page }) => {
   const requests = phaseRequests({ direct: ['PATCH /rest/v1/production_estimates'] }); const { external } = await fence(page, requests); await signIn(page); await page.getByRole('link', { name: 'Grain' }).click()
-  await page.once('dialog', dialog => dialog.accept()); const saved = page.waitForResponse(response => new URL(response.url()).pathname === '/rest/v1/production_estimates' && response.request().method() === 'PATCH' && response.ok())
-  await page.getByRole('button', { name: 'Use harvest total as Grain actual' }).click(); await saved
+  const saved = page.waitForResponse(response => new URL(response.url()).pathname === '/rest/v1/production_estimates' && response.request().method() === 'PATCH' && response.ok())
+  await page.getByRole('button', { name: 'Use harvest total as Grain actual' }).click(); await page.getByRole('dialog').getByRole('button', { name: 'Use harvest total' }).click(); await saved
   await expect(page.locator('.grain-reconciliation p').first()).toContainText('Harvest actuals: 27,600 bu · Grain actual production: 27,600 bu')
   expect(requests.observedTargetMutationPaths).toEqual(['PATCH /rest/v1/production_estimates']); assertFence(requests, external)
 })
