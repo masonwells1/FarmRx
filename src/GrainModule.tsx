@@ -300,6 +300,12 @@ export function GrainPage({ services }: { services: GrainServices }) {
   ].includes(rawTab)
     ? rawTab
     : "";
+  const farmAccess = useOptionalFarmAccess();
+  // Whether this member may write the farm's grain settings. Read through a ref inside refresh, which older closures (the sync-status
+  // subscription) keep calling, so a change of access is always seen.
+  const canWriteSettings = farmAccess ? canEditFarmModule(farmAccess.profile, "grain") : true;
+  const canWriteSettingsRef = useRef(canWriteSettings);
+  canWriteSettingsRef.current = canWriteSettings;
   const refresh = async (strict = false) => {
     try {
       const alertOperationContext = await captureGrainAlertOperationContext();
@@ -330,7 +336,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
         setSaleLimits((current) => ({ ...current, ...Object.fromEntries(rows.map((limit) => [scopeKey(scopeOf(limit)), limit.sale_limit_bushels])) }));
         // A limit this browser kept for this account and farm (its save failed, or the page was left before it ran) comes back
         // dirty and pending, unless the farm's row moved on since, in which case the newer row wins and the draft is dropped.
-        const scope = draftScopeFor(data.fields.farm.id);
+        // A member who may read but not write leaves every kept draft in storage, untouched and unsent, until edit access returns
+        // (the refresh below on that change adopts it then); nothing is saved on their behalf.
+        const scope = canWriteSettingsRef.current ? draftScopeFor(data.fields.farm.id) : null;
         if (scope) for (const entry of readSettingsDrafts(scope, "sale-limit:")) {
           const kept = entry.payload as SaleLimitDraft;
           const row = data.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === kept.key);
@@ -341,7 +349,14 @@ export function GrainPage({ services }: { services: GrainServices }) {
             // draft is dropped.
             if (dirtySaleLimits.current.has(kept.key)) {
               const sent = saleLimitSent.current[kept.key] ?? kept.sent;
-              if (row && sent !== undefined && row.sale_limit_bushels === sent) { saleLimitBases.current[kept.key] = { id: row.id, updated_at: row.updated_at }; saleLimitDraftRevisions.current[kept.key] = writeSettingsDraft(scope, entry.key, { ...kept, base: { id: row.id, updated_at: row.updated_at }, sent } satisfies SaleLimitDraft); }
+              if (row && sent !== undefined && row.sale_limit_bushels === sent) {
+                saleLimitBases.current[kept.key] = { id: row.id, updated_at: row.updated_at };
+                const revision = writeSettingsDraft(scope, entry.key, { ...kept, base: { id: row.id, updated_at: row.updated_at }, sent } satisfies SaleLimitDraft);
+                saleLimitDraftRevisions.current[kept.key] = revision;
+                // The browser refused the rebased draft (full or blocked storage): the value being typed is kept nowhere durable, so the
+                // stale draft goes and the value is committed at once instead of waiting for the next blur.
+                if (revision === null) { clearSettingsDraft(scope, entry.key); const estimate = data.production_estimates.find((candidate) => scopeKey(scopeOf(candidate)) === kept.key); if (estimate) setTimeout(() => void commitSaleLimit(estimate), 0); }
+              }
             } else clearSettingsDraft(scope, entry.key, entry.revision);
             continue;
           }
@@ -396,12 +411,18 @@ export function GrainPage({ services }: { services: GrainServices }) {
   useEffect(() => {
     void refresh();
   }, []);
+  // Edit access returned (a member re-promoted while on the page): refresh so the drafts left untouched while read-only are adopted.
+  const previousCanWrite = useRef(canWriteSettings);
+  useEffect(() => {
+    const returned = !previousCanWrite.current && canWriteSettings;
+    previousCanWrite.current = canWriteSettings;
+    if (returned && workspaceRef.current) void refresh().catch(() => undefined);
+  }, [canWriteSettings]); // eslint-disable-line react-hooks/exhaustive-deps
   const whisper = () => undefined;
   const saleLimitsRef = useRef(saleLimits);
   saleLimitsRef.current = saleLimits;
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
-  const farmAccess = useOptionalFarmAccess();
   // Scopes the farmer is still typing in; a workspace refresh must not overwrite them.
   const dirtySaleLimits = useRef(new Set<string>());
   // Scopes whose last save failed: kept dirty and pending for retry, but replaced when a refresh brings a newer row.
@@ -533,7 +554,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
     },
     createId: services.createGrainId,
     draftScope: workspace ? draftScopeFor(workspace.fields.farm.id) : undefined,
-    writable: farmAccess ? canEditFarmModule(farmAccess.profile, "grain") : true,
+    writable: canWriteSettings,
   };
   if (!workspace)
     return (

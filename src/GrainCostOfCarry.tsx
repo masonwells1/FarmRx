@@ -165,12 +165,14 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
     if (legacy) { settingsDirty.current = true; markUnflushed(); if (draftScope) draftRevisions.current.settings = keepDraft('carry-settings', { draft: legacy, base: null, sent: null } satisfies CarrySettingsDraft, resendSettings) }
     // Drafts this browser kept for this account and farm (an edit cut short by a reload, or a save that failed after the screen was
     // left) come back dirty and pending, marked like a failed draft so a newer row from elsewhere replaces them in the resync below.
-    if (!draftScope) return
+    // A member who may read but not write leaves them in storage, untouched and unsent, until edit access returns (this effect then
+    // runs again and adopts them); nothing is saved on their behalf.
+    if (!draftScope || persistence?.writable === false) return
     for (const entry of readSettingsDrafts(draftScope, 'carry-')) {
       if (entry.key === 'carry-settings') { const kept = entry.payload as CarrySettingsDraft; setSettings(kept.draft); settingsRef.current = kept.draft; baseVersions.current.settings = kept.base; sentRows.current.settings = kept.sent ?? null; draftRevisions.current.settings = entry.revision; settingsDirty.current = true; failedSettings.current = true; markUnflushed() }
       else { const kept = entry.payload as CarryGridDraft; setByEstimate((current) => ({ ...current, [kept.estimateId]: kept.draft })); byEstimateRef.current = { ...byEstimateRef.current, [kept.estimateId]: kept.draft }; baseVersions.current.grids[kept.estimateId] = kept.base; if (kept.sent) sentRows.current.grids[kept.estimateId] = kept.sent; draftRevisions.current.grids[kept.estimateId] = entry.revision; gridsDirty.current.add(kept.estimateId); failedGrids.current.add(kept.estimateId); markUnflushed() }
     }
-  }, [farmId, persisted, draftScope?.userId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [farmId, persisted, draftScope?.userId, persistence?.writable]) // eslint-disable-line react-hooks/exhaustive-deps
   // Rows changed elsewhere (another device, or a refresh after another Grain save) replace a pristine draft and its version;
   // a draft still being edited keeps its original version so its save conflicts rather than overwriting the newer row.
   useEffect(() => {
