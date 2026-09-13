@@ -32,3 +32,12 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Finding 2 (P2, permission):** the new Equipment empty-state `Add a machine` button showed for every member, but the add form only renders for owners and managers, so a worker who tapped it saw a blank page. The button now renders only when the viewer can manage equipment, matching the header button.
 - **Finding 3 (P2, layout):** the editable cost line's bushels cell had no `data-label`, so a hand-entered cost row showed a bare `20 bu` on phones. The label `Bushels to cover` was added.
 - **Proof:** `npx tsc -b --force` exit 0; focused regressions and `npm run build` rerun as recorded in the pull request; Foundation gate on the new head.
+
+## FS-003 — Second Codex round: empty-state actions gated by permission
+
+- **Date/time:** 2026-09-13 11:20 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `34ba047d94b5c5453fb83537223a25873b0a9057` and returned two findings of the same class as FS-002's Equipment finding: an empty-state button offered to members who cannot complete the action.
+- **Finding 1 (P2):** the `Add a field` link on the Soil Rx, Field Log, Harvest, and Scouting empty states showed for read-only members and named reps, who land on a write-locked Fields page. Each link is now gated by that module's existing edit check (`canEdit` in Soil Rx, the owner/manager/worker role check in Field Log, Harvest, and Scouting). Weather needs no gate: its route is only reachable by members who can edit.
+- **Finding 2 (P2):** the `Set up a grain price alert` button on the empty Alerts screen showed to every viewer, but Grain requires private-financial access, and even an eligible member landed on the Grain overview rather than the alerts tab. The button now renders only when `canEditFarmModule(profile, 'grain')` is true and navigates to `/grain/alerts`.
+- **Rule recorded:** an empty-state action must be gated by the same permission as the action it advertises, and must land on the screen where the action is completed.
+- **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; regressions passed for the Supabase Notifications repository, Field Log legacy recovery and delete double-tap, and Harvest receipt. The Soil Rx spec's pinned empty-state source string is unchanged by this edit.
