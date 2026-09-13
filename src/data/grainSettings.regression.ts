@@ -4,7 +4,7 @@ import { readGrain } from './MockGrainRepository'
 import type { GrainCarryGrid, GrainCarrySettings, GrainSaleLimit } from './grain'
 import { settingsSlicesFromResults } from './SupabaseGrainDataGateway'
 import { saveCostLineWithBadgeFallback } from './SupabaseProfitabilityDataGateway'
-import { beginPendingSettingsWork, hasPendingSettingsWork } from './pendingSettingsWork'
+import { beginPendingSettingsWork, hasPendingSettingsWork, registerPendingSettingsFlush, settlePendingSettingsWork } from './pendingSettingsWork'
 
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message) }
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -84,5 +84,36 @@ doneA(); doneA()
 assert(hasPendingSettingsWork(farm), 'One finished save must not clear another still pending, and finishing twice is harmless.')
 doneB()
 assert(!hasPendingSettingsWork(farm), 'The farm is clear once every queued save has run.')
+
+// A confirmed farm switch sends unflushed edits and waits for every save (including one chained behind another) before the farm changes.
+{
+  const events: string[] = []
+  let releaseFirst: () => void = () => undefined
+  let releaseSecond: () => void = () => undefined
+  const unregister = registerPendingSettingsFlush(farm, () => { events.push('flushed'); releaseFirst = beginPendingSettingsWork(farm) })
+  const otherFarmDone = beginPendingSettingsWork(uid(20))
+  let settled = false
+  const waiting = settlePendingSettingsWork(farm).then(() => { settled = true })
+  assert(events.join() === 'flushed' && hasPendingSettingsWork(farm), 'Settling must send unflushed edits first and then wait for their save.')
+  await Promise.resolve()
+  assert(!settled, 'Settling must not finish while a save is still in flight.')
+  releaseSecond = beginPendingSettingsWork(farm) // a follow-up save chained behind the first
+  releaseFirst()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert(!settled, 'Settling must also wait for a save that started while the first one was running.')
+  releaseSecond()
+  await waiting
+  assert(settled && !hasPendingSettingsWork(farm) && hasPendingSettingsWork(uid(20)), 'Settling finishes once the farm is clear and leaves other farms alone.')
+  unregister(); otherFarmDone()
+  await settlePendingSettingsWork(farm)
+  assert(events.length === 1, 'An unregistered screen is not flushed again.')
+  // A save that keeps re-queuing itself cannot hold the switch forever.
+  let hops = 0
+  const repeat = () => { const done = beginPendingSettingsWork(farm); hops += 1; setTimeout(() => { if (hops < 100) repeat(); done() }, 0) }
+  repeat()
+  await settlePendingSettingsWork(farm, 5)
+  assert(hops >= 5 && hops < 100, 'The wait is bounded.')
+  await new Promise((resolve) => setTimeout(resolve, 20)); hops = 100
+}
 
 console.log('Grain settings regressions passed.')

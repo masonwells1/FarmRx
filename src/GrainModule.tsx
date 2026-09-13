@@ -7,6 +7,7 @@ import { confirmDialog } from "./components/ConfirmDialog";
 import { SectionTabs } from "./SectionTabs";
 import { farmerError } from "./lib/farmerErrors";
 import { currentFarmContext } from "./auth/farmContext";
+import { beginPendingSettingsWork, registerPendingSettingsFlush } from "./data/pendingSettingsWork";
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type {
@@ -350,8 +351,14 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const whisper = () => undefined;
   const saleLimitsRef = useRef(saleLimits);
   saleLimitsRef.current = saleLimits;
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
   // Scopes the farmer is still typing in; a workspace refresh must not overwrite them.
   const dirtySaleLimits = useRef(new Set<string>());
+  // An edit not yet committed keeps the farm marked pending for the farm switcher; the commit below then holds its own token.
+  const unflushedSaleLimits = useRef(new Map<string, () => void>());
+  const markSaleLimitUnflushed = (key: string) => { const farmId = workspaceRef.current?.fields.farm.id; if (farmId && !unflushedSaleLimits.current.has(key)) unflushedSaleLimits.current.set(key, beginPendingSettingsWork(farmId)); };
+  const settleSaleLimitUnflushed = (key: string) => { unflushedSaleLimits.current.get(key)?.(); unflushedSaleLimits.current.delete(key); };
   // One lock per position: a slow save on one card must not swallow a commit on another.
   const saleLimitLocks = useRef(createSubmitLockMap());
   // A debounced or unmount-time save must never run under a farm the farmer has since switched to.
@@ -361,12 +368,13 @@ export function GrainPage({ services }: { services: GrainServices }) {
     setSettingsNotice(farmerError(caught, action));
     await refresh().catch(() => undefined);
   };
-  const workspaceRef = useRef(workspace);
-  workspaceRef.current = workspace;
   const commitSaleLimit = async (estimate: ProductionEstimate) => {
     const key = scopeKey(scopeOf(estimate));
     const lock = saleLimitLocks.current.get(key);
     if (!lock.acquire()) return; // a commit for this same position is in flight; it re-runs below if the value changed meanwhile
+    // Held synchronously, before the first await, so a farm-switch click that blurred this input sees the save as pending work.
+    const done = beginPendingSettingsWork(estimate.farm_id);
+    settleSaleLimitUnflushed(key);
     let savedValue: number | null | undefined;
     try {
       const current = workspaceRef.current;
@@ -391,8 +399,20 @@ export function GrainPage({ services }: { services: GrainServices }) {
       lock.release();
       // The farmer kept typing while the save was in flight: commit the newest value once more.
       if (savedValue !== undefined && (saleLimitsRef.current[key] ?? null) !== savedValue) void commitSaleLimit(estimate);
+      done();
     }
   };
+  const commitSaleLimitRef = useRef(commitSaleLimit);
+  commitSaleLimitRef.current = commitSaleLimit;
+  // A confirmed farm switch commits every sale limit still being typed, then waits for those saves before the farm changes.
+  const activeFarmId = workspace?.fields.farm.id;
+  const persistedSettings = workspace?.capabilities?.persisted_settings === true;
+  useEffect(() => {
+    if (!activeFarmId || !persistedSettings) return;
+    return registerPendingSettingsFlush(activeFarmId, () => {
+      for (const estimate of workspaceRef.current?.production_estimates ?? []) if (dirtySaleLimits.current.has(scopeKey(scopeOf(estimate)))) void commitSaleLimitRef.current(estimate);
+    });
+  }, [activeFarmId, persistedSettings]);
   const carryPersistence = {
     saveSettings: async (settings: GrainCarrySettings) => {
       if (!(await farmStillSelected(settings.farm_id))) return;
@@ -569,6 +589,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
                 onSaleLimitCommit={() => void commitSaleLimit(estimate)}
                 onSaleLimitChange={(limit) => {
                   dirtySaleLimits.current.add(scopeKey(scopeOf(estimate)));
+                  markSaleLimitUnflushed(scopeKey(scopeOf(estimate)));
                   setSaleLimits((current) => ({ ...current, [scopeKey(scopeOf(estimate))]: limit }));
                 }}
                 onSaved={async () => {

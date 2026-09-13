@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { bestMonth, carryRow, verdict, type CarryRow, type CarrySettings } from './data/costOfCarry'
 import type { GrainCarryGrid, GrainCarrySettings, GrainWorkspace, ProductionEstimate } from './data/grain'
 import { CARRY_GRID_ROWS } from './data/grainSettings'
-import { beginPendingSettingsWork } from './data/pendingSettingsWork'
+import { beginPendingSettingsWork, registerPendingSettingsFlush } from './data/pendingSettingsWork'
 
 // Legacy device-only storage, used until the farm's settings tables exist on the live database.
 // Keyed per farm: one device can serve several farms and their storage costs differ.
@@ -107,6 +107,8 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   useEffect(() => { if (!persisted || !settingsDirty.current) return; const timer = setTimeout(flushSettings, SAVE_DELAY_MS); return () => clearTimeout(timer) }, [settings, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!persisted || gridsDirty.current.size === 0) return; const timer = setTimeout(flushGrids, SAVE_DELAY_MS); return () => clearTimeout(timer) }, [byEstimate, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { flushSettings(); flushGrids() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // A confirmed farm switch sends unflushed edits through here and then waits for the chain before the farm changes.
+  useEffect(() => persisted ? registerPendingSettingsFlush(farmId, () => { flushSettings(); flushGrids() }) : undefined, [farmId, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
   const changeSettings = (change: (current: CarrySettings) => CarrySettings) => { settingsDirty.current = true; if (persisted) markUnflushed(); setSettings(change) }
   // Discrete choices (the storage-mode buttons) save as soon as React has committed the click, not after the typing pause.
   const chooseMode = (mode: CarrySettings['mode']) => { changeSettings((current) => ({ ...current, mode })); setTimeout(flushSettings, 0) }

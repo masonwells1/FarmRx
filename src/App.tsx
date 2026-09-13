@@ -24,6 +24,7 @@ import {
   bootstrapInitialOwnerFarm,
 } from "./auth/bootstrapFarm";
 import { FarmAccessProvider, useFarmAccess } from "./auth/FarmAccessContext";
+import { settlePendingSettingsWork } from "./data/pendingSettingsWork";
 import { beginFarmReplayAuthorization, canAccessFarmModule, canEditFarmModule, canReplayFarmModule, createFarmAccessValidationGate, FarmAccessStorageUnsafeError, hasPendingFarmWork, loadFarmAccess, loadFarmAccessProfile, publishFarmReadyAuthorization, selectFarm, type FarmAccess, type FarmAppModule, type LoadedFarmAccessProfile } from "./auth/farmContext";
 import { RevokedFarmRecovery } from './components/RevokedFarmRecovery';
 import { LazyRouteErrorBoundary } from "./components/LazyRouteErrorBoundary";
@@ -800,6 +801,9 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
   const chooseFarm = async (farmId: string) => {
     if (farmId === activeFarm.id) return;
     if (hasPendingFarmWork(user.id, activeFarm.id) && !(await confirmDialog({ title: `Switch away from ${activeFarm.name}?`, body: `Saved changes are still waiting for ${activeFarm.name}. They will stay with that farm and send when you come back.`, confirmLabel: "Switch farms", cancelLabel: "Stay here" }))) return;
+    // Settings edits live in memory until their save runs: send them and wait while the old farm is still selected,
+    // so each reaches the server or the durable queue for that farm before the context changes and the page reloads.
+    await settlePendingSettingsWork(activeFarm.id);
     try {
       await dependencies.selectFarm(user.id, farmId);
     } catch (error) {
