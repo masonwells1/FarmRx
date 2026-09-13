@@ -42,6 +42,12 @@ The signature tank-label element. Label on top, huge number, unit below.
   row. This is a keeper in ALL directions; it's the most recognized brand element.
 - Row height ≥ 56px; whole row tappable when it navigates.
 - On phones, tables collapse to cards (label/value pairs), never horizontal-scroll-only.
+- Implementation: give the table `phone-stack` and every `td` a `data-label`; the shared
+  CSS stacks rows into label/value pairs at 767px and below. Use `phone-full` on the one
+  cell that should span the row (category, verdict).
+- Exception: a true two-axis grid like the profit matrix (yield down, price across)
+  cannot stack. Keep horizontal scroll with a sticky first column, 48px-tall cells, and a
+  one-line phone-only hint that says to swipe.
 
 ## Forms
 

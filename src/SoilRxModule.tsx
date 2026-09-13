@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { Link } from 'react-router'
 import type { CropAssignment, FieldsRepository, Commodity } from './data/fields'
 import { soilMeasurementKeys, SoilRxHistoryUnavailableOfflineError, sortSoilTestsNewestFirst, type SoilMeasurementKey, type SoilRxRepository, type SoilTest, type SoilTestDraft } from './data/soilRx'
 import { createSubmitLock } from './lib/submitLock'
@@ -108,7 +109,7 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
     {message && <p className="save-success" role="status">{message}</p>}
     {canEdit && <NeedsAttentionList module="soilRx" queueKey={attentionQueueKey} onRetry={(row) => repository.retryNeedsAttention?.(row.queueKey, row.id)} onDismiss={(row) => repository.dismissNeedsAttention?.(row.queueKey, row.id)} onChanged={refresh} />}
     {loading ? <p className="loading-state">Loading Soil Rx…</p> : <>
-      {!fields.length ? <p className="soil-rx-empty">Add a field before saving a soil test.</p> : <>
+      {!fields.length ? <section className="empty-state"><h2>Add a field before saving a soil test.</h2><p>Soil tests stay with the field they were pulled from.</p><Link className="primary-action" to="/fields">Add a field</Link></section> : <>
         <div className="soil-rx-layout">
           <aside className="soil-rx-fields" aria-label="Fields"><h2>Your fields</h2>{fields.map((field) => <button key={field.id} type="button" className={field.id === selectedField?.id ? 'active' : ''} onClick={() => chooseField(field.id)}>{field.name}{!field.isActive && ' (Archived)'}<small>{tests.filter((test) => test.field_id === field.id).length} tests</small></button>)}</aside>
           <div className="soil-rx-history"><h2>{selectedField?.name ?? 'Field'} history</h2>{selectedField && !selectedField.isActive && <p className="card-empty">This field is archived. Its Soil Rx history remains available, but new tests can only be added to active fields.</p>}<HarvestRemoval estimates={harvestRemoval} hasUnsupportedHarvest={hasUnsupportedHarvest} />{fieldTests.length ? fieldTests.map((test) => <SoilTestCard key={test.id} test={test} expanded={openTests.has(test.id)} onToggle={() => setOpenTests((current) => { const next = new Set(current); next.has(test.id) ? next.delete(test.id) : next.add(test.id); return next })} onOpen={() => void openReport(test)} />) : <p className="soil-rx-empty">No soil tests saved for this field yet.</p>}</div>

@@ -113,7 +113,7 @@ function assertNutrientRemovalContract(source: string) {
 function assertArchivedFieldHistoryContract(source: string) {
   expect(source).toContain("fieldData.fields.map(({ id, name, is_active }) => ({ id, name, isActive: is_active }))")
   expect(source).toContain("const activeFields = fields.filter((field) => field.isActive)")
-  expect(source).toContain("!fields.length ? <p className=\"soil-rx-empty\">Add a field before saving a soil test.</p>")
+  expect(source).toContain("!fields.length ? <section className=\"empty-state\"><h2>Add a field before saving a soil test.</h2>")
   expect(source).toContain("{field.name}{!field.isActive && ' (Archived)'}")
   expect(source).toContain("? selectedFieldId : nextActiveFields[0]?.id ?? nextFields.find((field) => nextTests.some((test) => test.field_id === field.id))?.id")
   expect(source).toContain("canEdit && selectedField?.isActive")
@@ -177,7 +177,7 @@ test('Soil Rx archived-history guard rejects active-only history and inactive-cr
   assertArchivedFieldHistoryContract(source)
   const mutations: Array<[string, string]> = [
     ['filter archived fields from history', source.replace('fieldData.fields.map(({ id, name, is_active })', 'fieldData.fields.filter((field) => field.is_active).map(({ id, name, is_active })')],
-    ['show add-field empty state for all-inactive farms', source.replace('!fields.length ? <p className="soil-rx-empty">Add a field before saving a soil test.</p>', '!activeFields.length ? <p className="soil-rx-empty">Add a field before saving a soil test.</p>')],
+    ['show add-field empty state for all-inactive farms', source.replace('!fields.length ? <section className="empty-state"><h2>Add a field before saving a soil test.</h2>', '!activeFields.length ? <section className="empty-state"><h2>Add a field before saving a soil test.</h2>')],
     ['offer archived fields in create selector', source.replace('{activeFields.map((field) => <option', '{fields.map((field) => <option')],
     ['allow create form for archived selection', source.replace('canEdit && selectedField?.isActive', 'canEdit')],
     ['remove archived field semantics', source.replace("{field.name}{!field.isActive && ' (Archived)'}", '{field.name}')],

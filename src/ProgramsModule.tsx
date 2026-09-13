@@ -149,6 +149,15 @@ export function ProgramsPage({
       />
     );
   const editable = canEditPrograms(role as never);
+  const startNewProgram = () =>
+    setEditing({
+      ...emptyProgram(),
+      id: crypto.randomUUID(),
+      farm_id: "",
+      revision: 1,
+      is_archived: false,
+      passes: [],
+    });
   const tabs = (
     <div className="program-tabs" role="tablist">
       <button
@@ -217,6 +226,7 @@ export function ProgramsPage({
           canEdit={editable}
           repository={repository}
           onChanged={reload}
+          onAssign={() => setView("assign")}
         />
       </section>
     );
@@ -233,16 +243,7 @@ export function ProgramsPage({
         {editable && (
           <button
             className="primary-action"
-            onClick={() =>
-              setEditing({
-                ...emptyProgram(),
-                id: crypto.randomUUID(),
-                farm_id: "",
-                revision: 1,
-                is_archived: false,
-                passes: [],
-              })
-            }
+            onClick={startNewProgram}
           >
             New program
           </button>
@@ -270,6 +271,11 @@ export function ProgramsPage({
             Add a program now, then put in the passes you plan to make this
             season.
           </p>
+          {editable && (
+            <button className="primary-action" type="button" onClick={startNewProgram}>
+              Add a program
+            </button>
+          )}
         </section>
       ) : (
         <div className="program-list">
@@ -1278,6 +1284,7 @@ function SeasonTracker({
   canEdit,
   repository,
   onChanged,
+  onAssign,
 }: {
   assignments: ProgramAssignment[];
   programs: Program[];
@@ -1287,6 +1294,7 @@ function SeasonTracker({
   canEdit: boolean;
   repository: ProgramsRepository;
   onChanged: () => Promise<void>;
+  onAssign: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const assignmentLocks = useRef(createSubmitLockMap());
@@ -1340,6 +1348,9 @@ function SeasonTracker({
           <p>
             Assign a program to a field crop to start tracking the season here.
           </p>
+          <button className="primary-action" type="button" onClick={onAssign}>
+            Assign a program to a field
+          </button>
         </section>
       )}
       {[...byCrop.values()].map((tracks) => (

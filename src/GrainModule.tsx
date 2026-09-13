@@ -688,8 +688,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
                       <td className="align-right numeric">
                         {finalCashPrice(contract) === null
                           ? contract.contract_type === "hta"
-                            ? "Basis open"
-                            : "Futures open"
+                            ? "Basis not set"
+                            : "Futures not set"
                           : money.format(finalCashPrice(contract)!)}
                       </td>
                       <td>
@@ -2237,9 +2237,9 @@ export function PositionCard({
           note={`${Math.round(pricedPct)}%`}
         />
         <Metric
-          label="Open legs"
+          label="Still needs a price"
           value={`${bushels.format(partiallyPricedBushels)} bu`}
-          note="manual valuation"
+          note="valued at your estimate"
         />
         <Metric
           label="Planned revenue"
@@ -2251,7 +2251,7 @@ export function PositionCard({
           }
         />
         <Metric
-          label="Insurance-backed marketing estimate"
+          label="Bushels safe to sell"
           value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`}
           note={estimateNote}
         />
@@ -3006,7 +3006,7 @@ export function Bins({
                             month: "short",
                             day: "numeric",
                           })}{" "}
-                            · {workspace.fields.commodities.find((commodity) => commodity.id === item.commodity_id)?.name ?? item.commodity_id} · {item.source_kind ?? "Manual entry"}{ledgerRow.superseded ? " · superseded by baseline" : ""}
+                            · {workspace.fields.commodities.find((commodity) => commodity.id === item.commodity_id)?.name ?? item.commodity_id} · {item.source_kind ?? "Manual entry"}{ledgerRow.superseded ? " · replaced by a later bin count" : ""}
                         </span>
                         {item.note && <small>{item.note}</small>}
                       </div>;

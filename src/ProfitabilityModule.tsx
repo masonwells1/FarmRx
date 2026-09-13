@@ -736,13 +736,13 @@ export function ProfitabilityPage() {
               </div>
             </div>
             <div className="table-scroll">
-              <table>
+              <table className="phone-stack cost-table">
                 <thead>
                   <tr>
                     <th>Cost</th>
                     <th>Category</th>
                     <th className="numeric">$/ac</th>
-                    <th className="numeric">BU TO COVER</th>
+                    <th className="numeric">Bushels to cover</th>
                     <th>
                       <span className="sr-only">Remove</span>
                     </th>
@@ -1763,7 +1763,7 @@ function InsuranceCalculator({
             </small>
           </div>
           <div>
-            <span>Insurance-backed marketing estimate</span>
+            <span>Bushels safe to sell (insurance floor)</span>
             <strong>
               {insurance.insuranceBackedMarketingEstimateBushels === null
                 ? "Allocate acres to calculate"
@@ -1936,11 +1936,12 @@ function ProfitabilityMatrix({
   const breakeven = breakevenCellKeys(cells);
   return (
     <>
+      <p className="phone-only-hint">Swipe sideways to see more prices. Tap a cell to use it.</p>
       <div className="matrix-scroll">
         <table className="profit-matrix">
           <thead>
             <tr>
-              <th>Yield \ Price</th>
+              <th><span className="sr-only">Yield down the side, price across the top</span><span aria-hidden="true">Yield ↓ · Price →</span></th>
               {prices.map((price) => (
                 <th key={price.id}>{money.format(price.value)}</th>
               ))}
@@ -2026,7 +2027,7 @@ function CostLine({
   if (line.source_kind !== undefined && line.source_kind !== "manual") {
     return (
       <tr>
-        <td>
+        <td className="phone-full">
           {line.name}
           <span className="default-badge">
             From your {line.source_kind === "inventory" ? "Inventory" : "Equipment"} records
@@ -2037,12 +2038,12 @@ function CostLine({
             </small>
           )}
         </td>
-        <td>
+        <td data-label="Category">
           {categories.find((category) => category.value === line.category)
             ?.label ?? line.category}
         </td>
-        <td className="numeric">{money.format(line.amount_per_acre)}</td>
-        <td className="numeric">
+        <td className="numeric" data-label="$ per acre">{money.format(line.amount_per_acre)}</td>
+        <td className="numeric" data-label="Bushels to cover">
           {decimal.format(line.amount_per_acre / price)} bu
         </td>
         <td>
@@ -2060,7 +2061,7 @@ function CostLine({
   }
   return (
     <tr>
-      <td>
+      <td className="phone-full">
         <input
           aria-label={`${line.name} name`}
           defaultValue={line.name}
@@ -2074,7 +2075,7 @@ function CostLine({
             <span className="default-badge">U of I default</span>
           )}
       </td>
-      <td>
+      <td data-label="Category">
         <select
           aria-label={`${line.name} category`}
           defaultValue={line.category}
@@ -2089,7 +2090,7 @@ function CostLine({
           ))}
         </select>
       </td>
-      <td className="numeric">
+      <td className="numeric" data-label="$ per acre">
         <input
           aria-label={`${line.name} dollars per acre`}
           defaultValue={line.amount_per_acre}
@@ -2480,13 +2481,13 @@ function PlanComparison({
         </div>
       </div>
       <div className="table-scroll">
-        <table className="plan-compare">
+        <table className="plan-compare phone-stack">
           <thead>
             <tr>
               <th>Plan</th>
-              <th className="numeric">Cost/ac</th>
-              <th className="numeric">BE price</th>
-              <th className="numeric">BE yield</th>
+              <th className="numeric">Cost per acre</th>
+              <th className="numeric">Break-even price</th>
+              <th className="numeric">Break-even yield</th>
               <th className="numeric">Price cushion</th>
               <th className="numeric">Yield cushion</th>
               <th className="numeric">As budgeted</th>
@@ -2521,25 +2522,28 @@ function PlanComparison({
                       {whole.format(plan.expected_yield_per_acre)} bu/ac
                     </span>
                   </th>
-                  <td className="numeric">{money.format(cost)}</td>
-                  <td className="numeric">
+                  <td className="numeric" data-label="Cost per acre">{money.format(cost)}</td>
+                  <td className="numeric" data-label="Break-even price">
                     {money.format(planNumbers.breakevenPricePerBushel)}
                   </td>
-                  <td className="numeric">
+                  <td className="numeric" data-label="Break-even yield">
                     {decimal.format(planNumbers.breakevenYieldPerAcre)} bu
                   </td>
                   <td
                     className={`numeric${cushions.priceCushion < 0 ? " negative" : ""}`}
+                    data-label="Price cushion"
                   >
                     {money.format(cushions.priceCushion)}
                   </td>
                   <td
                     className={`numeric${cushions.yieldCushion < 0 ? " negative" : ""}`}
+                    data-label="Yield cushion"
                   >
                     {decimal.format(cushions.yieldCushion)} bu
                   </td>
                   <td
                     className={`numeric${asBudgeted[planIndex] < 0 ? " negative" : ""}`}
+                    data-label="As budgeted"
                   >
                     {money.format(asBudgeted[planIndex])}
                     {asBudgeted[planIndex] === bestBudgeted && (
@@ -2552,6 +2556,7 @@ function PlanComparison({
                       <td
                         key={column.field.id}
                         className={`numeric${value !== null && value < 0 ? " negative" : ""}`}
+                        data-label={column.label}
                       >
                         {value === null
                           ? "Set up in Fields"
@@ -2673,11 +2678,11 @@ function RoiAnalyzer({
       ) : (
         <>
           <div className="table-scroll">
-            <table className="plan-compare roi-table">
+            <table className="plan-compare roi-table phone-stack">
               <thead>
                 <tr>
                   <th className="numeric">At this price</th>
-                  <th className="numeric">Extra bu needed</th>
+                  <th className="numeric">Extra bushels needed</th>
                   <th>Verdict</th>
                 </tr>
               </thead>
@@ -2686,9 +2691,9 @@ function RoiAnalyzer({
                   const needed = extraBushelsToJustify(difference, ladderPrice);
                   return (
                     <tr key={ladderPrice}>
-                      <td className="numeric">{money.format(ladderPrice)}</td>
-                      <td className="numeric">{decimal.format(needed)} bu</td>
-                      <td>{roiVerdict(needed, thresholds)}</td>
+                      <td className="numeric" data-label="At this price">{money.format(ladderPrice)}</td>
+                      <td className="numeric" data-label="Extra bushels needed">{decimal.format(needed)} bu</td>
+                      <td className="phone-full" data-label="Verdict">{roiVerdict(needed, thresholds)}</td>
                     </tr>
                   );
                 })}
