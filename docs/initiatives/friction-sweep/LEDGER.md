@@ -59,3 +59,9 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Date/time:** 2026-09-13 11:50 -05:00 (`America/Chicago`).
 - **Trigger:** Codex reviewed `d8ec4b317e1a2c4d1a33af875391d9eafef4d85b` and returned one finding: on a farm with no unarchived program, or no field crop, the season tracker's `Assign a program to a field` button opened an assignment picker that could not be completed. The empty tracker now chooses its one button from what exists: no program yet offers `Add a program` (opens the program builder); no field crop yet offers `Add a field` (goes to Fields); otherwise `Assign a program to a field` opens the assign tab. The sentence above the button changes to match. Read-only members see the sentence only.
 - **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; Programs chunk 5 and Supabase Programs repository regressions passed.
+
+## FS-007 — Sixth Codex round: assign offered only when a program fits a crop
+
+- **Date/time:** 2026-09-13 12:00 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `90d70413c7aaa4e9ed4f03b47c95f53fdda607aa` and returned one finding: FS-006 offered `Assign a program to a field` whenever any program and any crop existed, but the assignment picker only pairs a program with crops of a matching commodity and crop year, so a soybean program plus a corn-only farm still led to a dead picker. The empty tracker now offers Assign only when at least one unarchived program fits at least one field crop; otherwise it offers `Add a program` with a sentence explaining that no program matches a field crop's crop and year yet. The fit rule is one shared function, `programFitsCrop`, used by both the picker and the empty state so the two cannot drift.
+- **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; Programs chunk 5 and Supabase Programs repository regressions passed.

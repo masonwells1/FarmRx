@@ -173,11 +173,19 @@ export function ProgramsPage({
             label: "Add a field",
             run: () => navigate("/fields"),
           }
-        : {
-            hint: "Assign a program to a field crop to start tracking the season here.",
-            label: "Assign a program to a field",
-            run: () => setView("assign"),
-          };
+        : programs.some((program) =>
+              crops.some((crop) => programFitsCrop(program, crop)),
+            )
+          ? {
+              hint: "Assign a program to a field crop to start tracking the season here.",
+              label: "Assign a program to a field",
+              run: () => setView("assign"),
+            }
+          : {
+              hint: "None of your programs matches a field crop's crop and year yet. Add a program for the crop you grow, then assign it.",
+              label: "Add a program",
+              run: startNewProgram,
+            };
   const tabs = (
     <div className="program-tabs" role="tablist">
       <button
@@ -999,13 +1007,7 @@ function AssignmentPicker({
   const submitLock = useRef(createSubmitLock());
   const program = programs.find((item) => item.id === programId);
   const eligible = program
-    ? crops.filter(
-        (crop) =>
-          !program.is_archived &&
-          (program.commodity_id === null ||
-            program.commodity_id === crop.commodity_id) &&
-          (program.crop_year === null || program.crop_year === crop.crop_year),
-      )
+    ? crops.filter((crop) => programFitsCrop(program, crop))
     : [];
   const activePrograms = (cropId: string) =>
     assignments
@@ -1296,6 +1298,14 @@ function CropRollup({ rollup }: { rollup: ProgramCropCostRollup | undefined }) {
   );
 }
 type SeasonTrackerEmptyAction = { hint: string; label: string; run: () => void };
+function programFitsCrop(program: Program, crop: CropAssignmentChoice): boolean {
+  return (
+    !program.is_archived &&
+    (program.commodity_id === null ||
+      program.commodity_id === crop.commodity_id) &&
+    (program.crop_year === null || program.crop_year === crop.crop_year)
+  );
+}
 function SeasonTracker({
   assignments,
   programs,
