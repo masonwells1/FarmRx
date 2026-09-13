@@ -96,8 +96,10 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
         const saved = await persistenceRef.current?.saveSettings(settingsToRow(current.fields.farm.id, snapshot, baseVersions.current.settings ?? new Date().toISOString()))
         if (saved) baseVersions.current.settings = saved.updated_at
         failedSettings.current = false
-        // Confirmed by the server or the durable queue: the browser draft is no longer needed unless the farmer typed more meanwhile.
+        // Confirmed by the server or the durable queue: the browser draft is no longer needed unless the farmer typed more meanwhile,
+        // in which case the newer draft is rewritten on top of the saved version so a reload cannot mistake this save for an outside change.
         if (scope && revision && !settingsDirty.current) clearSettingsDraft(scope, 'carry-settings', revision)
+        else if (scope && settingsDirty.current) draftRevisions.current.settings = writeSettingsDraft(scope, 'carry-settings', { draft: settingsRef.current, base: baseVersions.current.settings } satisfies CarrySettingsDraft)
       } catch (error) {
         // The browser draft stays until a later save is confirmed; a mounted screen also keeps the draft dirty and pending here.
         if (mounted.current) { settingsDirty.current = true; failedSettings.current = true; markUnflushed() }
@@ -122,6 +124,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
           if (saved) baseVersions.current.grids[estimateId] = saved.updated_at
           failedGrids.current.delete(estimateId)
           if (scope && revision && !gridsDirty.current.has(estimateId)) clearSettingsDraft(scope, `carry-grid:${estimateId}`, revision)
+          else if (scope && gridsDirty.current.has(estimateId)) { const newer = byEstimateRef.current[estimateId]; if (newer) draftRevisions.current.grids[estimateId] = writeSettingsDraft(scope, `carry-grid:${estimateId}`, { estimateId, draft: newer, base: baseVersions.current.grids[estimateId] ?? null } satisfies CarryGridDraft) }
         } catch (error) {
           if (mounted.current) { gridsDirty.current.add(estimateId); failedGrids.current.add(estimateId); markUnflushed() }
           throw error

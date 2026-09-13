@@ -440,6 +440,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
         savedValue = saved.sale_limit_bushels;
         failedSaleLimits.current.delete(key);
         if ((saleLimitsRef.current[key] ?? null) === savedValue) { dirtySaleLimits.current.delete(key); clearDraft(); }
+        // The farmer typed more while this save ran: rewrite the newer draft on top of the saved row, so a reload before the follow-up
+        // commit does not mistake this save for another device's change and drop the newer value.
+        else { const scope = draftScopeFor(estimate.farm_id); if (scope) saleLimitDraftRevisions.current[key] = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: saleLimitsRef.current[key] ?? null, base: { id: saved.id, updated_at: saved.updated_at } } satisfies SaleLimitDraft); }
         setSettingsNotice("");
         // Keep the ref current too, so a follow-up commit chained below sees the saved row before React renders it.
         const next = (workspaceCurrent: GrainWorkspace) => ({ ...workspaceCurrent, grain_sale_limits: [...workspaceCurrent.grain_sale_limits.filter((limit) => scopeKey(scopeOf(limit)) !== key), saved] });
