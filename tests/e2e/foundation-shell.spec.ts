@@ -1003,7 +1003,7 @@ test('a stale tab cannot recreate revoked queue or readable cache work after reg
     const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open(name); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
     try { return await new Promise<Record<string, unknown>>((resolve, reject) => { const request = database.transaction('workspaces').objectStore('workspaces').get(key); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) }) } finally { database.close() }
   }, { databaseName, key: cacheKey })
-  expect(staleCache).toMatchObject({ version: 2, farmId: farmA, serverEpoch: 1 })
+  expect(staleCache).toMatchObject({ version: 3, cacheCustody: 0, farmId: farmA, serverEpoch: 1 })
   expect(staleCache.generation).toEqual(expect.any(Number))
   expect(staleCache.fenceToken).toEqual(expect.any(String))
 

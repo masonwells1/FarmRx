@@ -99,7 +99,7 @@ function Invoke-MapleSwapRecovery {
 }
 
 function Invoke-MapleSwapStateMachine {
-  param([hashtable]$Adapter,[hashtable]$Inventory,[scriptblock]$WhileFrozen)
+  param([hashtable]$Adapter,[hashtable]$Inventory,[scriptblock]$WhileFrozen,[hashtable]$WhileFrozenParameters=@{})
   Assert-MapleSwapInventory $Inventory $Adapter.ExpectedContract|Out-Null
   $primaryFailure=$null
   $completed=$false
@@ -114,7 +114,7 @@ function Invoke-MapleSwapStateMachine {
     if((&$Adapter['ProveRouteClockAndLineage'])-ne$true){throw 'MAPLE_DB_SWAP_FAILED: route/clock/lineage proof was not exactly true.'}
     if($null-ne$WhileFrozen){
       if((&$Adapter['WriteJournal'] 'run_frozen_action' 'prove_after_frozen_action' $Inventory)-ne$true){throw 'MAPLE_DB_SWAP_FAILED: frozen-action journal callback was not exactly true.'}
-      if((&$WhileFrozen)-ne$true){throw 'MAPLE_DB_SWAP_FAILED: frozen action did not return exactly true.'}
+      if((&$WhileFrozen @WhileFrozenParameters)-ne$true){throw 'MAPLE_DB_SWAP_FAILED: frozen action did not return exactly true.'}
       if((&$Adapter['ProveRouteClockAndLineage'])-ne$true){throw 'MAPLE_DB_SWAP_FAILED: post-action route/clock/lineage proof was not exactly true.'}
     }
     $completed=$true
