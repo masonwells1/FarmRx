@@ -505,6 +505,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
     try {
       const current = workspaceRef.current;
       if (!current || current.capabilities?.persisted_settings !== true) return;
+      // A commit scheduled earlier (the follow-up after a save, the at-once commit after a refused draft write) may run after edit
+      // access was lost: nothing is sent for a member who may not write, and the browser draft stays for a later visit with access.
+      if (!canWriteSettingsRef.current) return;
       const existing = current.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === key);
       const stamp = new Date().toISOString();
       try {
