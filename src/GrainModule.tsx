@@ -6,6 +6,7 @@ import { MarketQuoteSection, quoteCropYear } from "./components/MarketQuote";
 import { confirmDialog } from "./components/ConfirmDialog";
 import { SectionTabs } from "./SectionTabs";
 import { farmerError } from "./lib/farmerErrors";
+import { currentFarmContext } from "./auth/farmContext";
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type {
@@ -352,6 +353,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
   // Scopes the farmer is still typing in; a workspace refresh must not overwrite them.
   const dirtySaleLimits = useRef(new Set<string>());
   const saleLimitLock = useRef(createSubmitLock());
+  // A debounced or unmount-time save must never run under a farm the farmer has since switched to.
+  const farmStillSelected = async (farmId: string) => { try { return (await currentFarmContext()).farmId === farmId; } catch { return false; } };
   // A failed settings save refreshes once so the screen learns the row another device may have created.
   const recoverSettings = async (caught: unknown, action: string) => {
     setSettingsNotice(farmerError(caught, action));
@@ -380,17 +383,21 @@ export function GrainPage({ services }: { services: GrainServices }) {
   };
   const carryPersistence = {
     saveSettings: async (settings: GrainCarrySettings) => {
+      if (!(await farmStillSelected(settings.farm_id))) return;
       try {
         const saved = await services.grainRepository.saveGrainCarrySettings(settings);
         setSettingsNotice("");
         setWorkspace((current) => current ? { ...current, grain_carry_settings: saved } : current);
+        return saved;
       } catch (caught) { await recoverSettings(caught, "save your storage cost settings"); }
     },
     saveGrid: async (grid: GrainCarryGrid) => {
+      if (!(await farmStillSelected(grid.farm_id))) return;
       try {
         const saved = await services.grainRepository.saveGrainCarryGrid(grid);
         setSettingsNotice("");
         setWorkspace((current) => current ? { ...current, grain_carry_grids: [...current.grain_carry_grids.filter((row) => row.id !== saved.id && row.production_estimate_id !== saved.production_estimate_id), saved] } : current);
+        return saved;
       } catch (caught) { await recoverSettings(caught, "save your carry prices"); }
     },
     createId: services.createGrainId,
