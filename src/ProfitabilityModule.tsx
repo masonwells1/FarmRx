@@ -17,6 +17,8 @@ import type {
   ProfitabilityWorkspace,
 } from "./data/profitability";
 import { farmerError } from "./lib/farmerErrors";
+import { useOptionalFarmAccess } from "./auth/FarmAccessContext";
+import { canEditFarmModule } from "./auth/farmContext";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import { SaveReceipt } from "./components/SaveReceipt";
 import { NeedsAttentionList } from "./components/NeedsAttentionList";
@@ -192,7 +194,21 @@ function stepsFromRange(
   }));
 }
 
+/** Before the column existed, the "U of I default" badge was remembered per line in this browser only. Once the column is live,
+ * each remembered amount is written into its line once (for a member who may edit) and dropped from the browser when the row
+ * confirms it, so existing badges survive the release instead of vanishing. Entries for lines this farm does not show stay for the
+ * farm that owns them. */
+const LEGACY_DEFAULTS_KEY = "farm-rx.profitability.university-defaults";
+function readLegacyDefaults(): Record<string, number> {
+  try { const value = JSON.parse(window.localStorage.getItem(LEGACY_DEFAULTS_KEY) ?? "{}") as unknown; return value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value as Record<string, unknown>).filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]) && entry[1] >= 0)) : {}; } catch { return {}; }
+}
+function forgetLegacyDefaults(ids: string[]) {
+  try { const kept = Object.fromEntries(Object.entries(readLegacyDefaults()).filter(([id]) => !ids.includes(id))); if (Object.keys(kept).length === 0) window.localStorage.removeItem(LEGACY_DEFAULTS_KEY); else window.localStorage.setItem(LEGACY_DEFAULTS_KEY, JSON.stringify(kept)); } catch { /* the entries are retried on the next visit */ }
+}
+
 export function ProfitabilityPage() {
+  const farmAccess = useOptionalFarmAccess();
+  const canEditProfitability = farmAccess ? canEditFarmModule(farmAccess.profile, "profitability") : false;
   const [workspace, setWorkspace] = useState<ProfitabilityWorkspace | null>(
     null,
   );
@@ -283,6 +299,24 @@ export function ProfitabilityPage() {
         : (years[0] ?? null),
     );
   }, [workspace]);
+  // Legacy badge provenance (see LEGACY_DEFAULTS_KEY): forget entries the rows now carry, and write the rest into their lines once.
+  const legacyBadgeAttempts = useRef(new Set<string>());
+  useEffect(() => {
+    if (!workspace) return;
+    const legacy = readLegacyDefaults();
+    const ids = Object.keys(legacy);
+    if (ids.length === 0) return;
+    const confirmed = workspace.cost_lines.filter((line) => legacy[line.id] !== undefined && line.university_default_amount === legacy[line.id]).map((line) => line.id);
+    if (confirmed.length) forgetLegacyDefaults(confirmed);
+    if (!canEditProfitability) return;
+    const pending = workspace.cost_lines.filter((line) => legacy[line.id] !== undefined && line.university_default_amount == null && !legacyBadgeAttempts.current.has(line.id));
+    if (pending.length === 0) return;
+    for (const line of pending) legacyBadgeAttempts.current.add(line.id);
+    void (async () => {
+      try { for (const line of pending) await profitabilityRepository.saveCostLine({ ...line, university_default_amount: legacy[line.id] }); } catch { /* the entries stay in the browser and are retried on the next visit */ }
+      await refresh().catch(() => undefined);
+    })();
+  }, [workspace, canEditProfitability]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = async (key: string, work: () => Promise<void | "saved" | "queued offline">): Promise<boolean> => {
     const writeLock = writeLocks.current.get(key);
     if (!writeLock.acquire()) return false;

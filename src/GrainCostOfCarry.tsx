@@ -48,7 +48,7 @@ function displayMonth(cropYear: number, harvestMonth: number, monthsStored: numb
 function signedMoney(value: number) { return `${value > 0 ? '+' : value < 0 ? '−' : ''}${money.format(Math.abs(value))}` }
 
 /** Farm-level persistence for the calculator. Absent (or unsupported by the live database) means device-only behavior. */
-export type GrainCarryPersistence = { saveSettings: (settings: GrainCarrySettings) => Promise<GrainCarrySettings | void>; saveGrid: (grid: GrainCarryGrid) => Promise<GrainCarryGrid | void>; createId: () => string; draftScope?: SettingsDraftScope }
+export type GrainCarryPersistence = { saveSettings: (settings: GrainCarrySettings) => Promise<GrainCarrySettings | void>; saveGrid: (grid: GrainCarryGrid) => Promise<GrainCarryGrid | void>; createId: () => string; draftScope?: SettingsDraftScope; /** False for a member who may read but not write the farm's settings: nothing is saved on their behalf (the legacy-rate adoption in particular). */ writable?: boolean }
 
 export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimateId, onSelectEstimate, persistence }: { workspace: GrainWorkspace; selectedEstimate: ProductionEstimate; selectedEstimateId: string; onSelectEstimate: (id: string) => void; persistence?: GrainCarryPersistence }) {
   const farmId = workspace.fields.farm.id
@@ -94,8 +94,11 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   const markUnflushed = () => { const scope = pendingScope(); if (scope) unflushed.current ??= beginPendingSettingsWork(scope) }
   const settleUnflushed = () => { if (!settingsDirty.current && gridsDirty.current.size === 0) { unflushed.current?.(); unflushed.current = null } }
   // Every draft write goes through here. If the browser refuses the draft (private mode, blocked or full storage), the edit is not
-  // kept anywhere durable: the stale entry is cleared and the part is saved at once instead of waiting.
-  const keepDraft = (key: string, payload: unknown, flush: () => void): string | null => { const scope = draftScopeRef.current; if (!scope) return null; const revision = writeSettingsDraft(scope, key, payload); if (revision === null) { clearSettingsDraft(scope, key); setTimeout(flush, 0) } return revision }
+  // kept anywhere durable: the stale entry is cleared and the part is re-sent at once from its newest snapshot, whether it was still
+  // being typed or already queued behind an earlier save (the resend marks the part dirty so the flush is never a no-op).
+  const keepDraft = (key: string, payload: unknown, resend: () => void): string | null => { const scope = draftScopeRef.current; if (!scope) return null; const revision = writeSettingsDraft(scope, key, payload); if (revision === null) { clearSettingsDraft(scope, key); setTimeout(resend, 0) } return revision }
+  const resendSettings = () => { settingsDirty.current = true; flushSettings() }
+  const resendGrid = (estimateId: string) => () => { gridsDirty.current.add(estimateId); flushGrids() }
   const flushSettings = () => {
     if (!persisted || !settingsDirty.current) return
     settingsDirty.current = false
@@ -114,7 +117,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
         if (scope) {
           const newer = settingsDirty.current || JSON.stringify(settingsRef.current) !== JSON.stringify(snapshot)
           if (!newer) { const revision = draftRevisions.current.settings; if (revision) clearSettingsDraft(scope, 'carry-settings', revision); draftRevisions.current.settings = null }
-          else draftRevisions.current.settings = keepDraft('carry-settings', { draft: settingsRef.current, base: baseVersions.current.settings, sent: sentRows.current.settings } satisfies CarrySettingsDraft, flushSettings)
+          else draftRevisions.current.settings = keepDraft('carry-settings', { draft: settingsRef.current, base: baseVersions.current.settings, sent: sentRows.current.settings } satisfies CarrySettingsDraft, resendSettings)
         }
       } catch (error) {
         // The browser draft stays until a later save is confirmed; a mounted screen also keeps the draft dirty and pending here.
@@ -143,7 +146,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
             const latest = byEstimateRef.current[estimateId]
             const newer = gridsDirty.current.has(estimateId) || JSON.stringify(latest) !== JSON.stringify(snapshot)
             if (!newer) { const revision = draftRevisions.current.grids[estimateId]; if (revision) clearSettingsDraft(scope, `carry-grid:${estimateId}`, revision); draftRevisions.current.grids[estimateId] = null }
-            else if (latest) draftRevisions.current.grids[estimateId] = keepDraft(`carry-grid:${estimateId}`, { estimateId, draft: latest, base: baseVersions.current.grids[estimateId] ?? null, sent: sentRows.current.grids[estimateId] ?? null } satisfies CarryGridDraft, flushGrids)
+            else if (latest) draftRevisions.current.grids[estimateId] = keepDraft(`carry-grid:${estimateId}`, { estimateId, draft: latest, base: baseVersions.current.grids[estimateId] ?? null, sent: sentRows.current.grids[estimateId] ?? null } satisfies CarryGridDraft, resendGrid(estimateId))
           }
         } catch (error) {
           if (mounted.current) { gridsDirty.current.add(estimateId); failedGrids.current.add(estimateId); markUnflushed() }
@@ -156,9 +159,10 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
     setSettings(initialSettings()); setByEstimate(initialGrids()); settingsDirty.current = false; gridsDirty.current.clear(); failedSettings.current = false; failedGrids.current.clear(); settleUnflushed()
     baseVersions.current = { settings: workspace.grain_carry_settings?.updated_at ?? null, grids: Object.fromEntries(workspace.grain_carry_grids.map((grid) => [grid.production_estimate_id, grid.updated_at])) }
     if (!persisted) return
-    // Rates this device stored before the farm's table was live, where the farm has no row yet: save them for the farm now.
-    const legacy = workspace.grain_carry_settings ? null : readStoredSettings(farmId)
-    if (legacy) { settingsDirty.current = true; markUnflushed(); if (draftScope) draftRevisions.current.settings = keepDraft('carry-settings', { draft: legacy, base: null, sent: null } satisfies CarrySettingsDraft, flushSettings) }
+    // Rates this device stored before the farm's table was live, where the farm has no row yet: save them for the farm now, but only
+    // for a member who may write them (a read-only viewer would see every such save refused and the farm stuck as pending).
+    const legacy = workspace.grain_carry_settings || persistence?.writable === false ? null : readStoredSettings(farmId)
+    if (legacy) { settingsDirty.current = true; markUnflushed(); if (draftScope) draftRevisions.current.settings = keepDraft('carry-settings', { draft: legacy, base: null, sent: null } satisfies CarrySettingsDraft, resendSettings) }
     // Drafts this browser kept for this account and farm (an edit cut short by a reload, or a save that failed after the screen was
     // left) come back dirty and pending, marked like a failed draft so a newer row from elsewhere replaces them in the resync below.
     if (!draftScope) return
@@ -176,7 +180,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
       // This screen's own queued save came back with its replayed version (even after a remount, since the lineage travels with the
       // draft): keep the draft being edited and rebase it.
       baseVersions.current.settings = version; failedSettings.current = false
-      if (draftScope) draftRevisions.current.settings = keepDraft('carry-settings', { draft: settingsRef.current, base: version, sent: sentRows.current.settings } satisfies CarrySettingsDraft, flushSettings)
+      if (draftScope) draftRevisions.current.settings = keepDraft('carry-settings', { draft: settingsRef.current, base: version, sent: sentRows.current.settings } satisfies CarrySettingsDraft, resendSettings)
     } else if (version !== baseVersions.current.settings && (!settingsDirty.current || failedSettings.current)) { baseVersions.current.settings = version; setSettings(row ? settingsFromRow(row) : defaultSettings); settingsDirty.current = false; failedSettings.current = false; settleUnflushed(); if (draftScope && draftRevisions.current.settings) clearSettingsDraft(draftScope, 'carry-settings', draftRevisions.current.settings) }
     for (const grid of workspace.grain_carry_grids) {
       const estimateId = grid.production_estimate_id
@@ -184,7 +188,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
       if (grid.updated_at !== (baseVersions.current.grids[estimateId] ?? null) && gridsDirty.current.has(estimateId) && sent && sameGridContent(grid, sent)) {
         baseVersions.current.grids[estimateId] = grid.updated_at; failedGrids.current.delete(estimateId)
         const draft = byEstimateRef.current[estimateId]
-        if (draftScope && draft) draftRevisions.current.grids[estimateId] = keepDraft(`carry-grid:${estimateId}`, { estimateId, draft, base: grid.updated_at, sent } satisfies CarryGridDraft, flushGrids)
+        if (draftScope && draft) draftRevisions.current.grids[estimateId] = keepDraft(`carry-grid:${estimateId}`, { estimateId, draft, base: grid.updated_at, sent } satisfies CarryGridDraft, resendGrid(estimateId))
       } else if (grid.updated_at !== (baseVersions.current.grids[estimateId] ?? null) && (!gridsDirty.current.has(estimateId) || failedGrids.current.has(estimateId))) { baseVersions.current.grids[estimateId] = grid.updated_at; setByEstimate((current) => ({ ...current, [estimateId]: carryFromGrid(grid) })); gridsDirty.current.delete(estimateId); failedGrids.current.delete(estimateId); settleUnflushed(); const revision = draftRevisions.current.grids[estimateId]; if (draftScope && revision) clearSettingsDraft(draftScope, `carry-grid:${estimateId}`, revision) }
     }
   }, [workspace.grain_carry_settings, workspace.grain_carry_grids, persisted, draftScope?.userId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -197,10 +201,10 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   useEffect(() => persisted && draftScope ? registerPendingSettingsFlush({ userId: draftScope.userId, farmId }, () => { flushSettings(); flushGrids() }) : undefined, [farmId, persisted, draftScope?.userId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Every edit is written to the browser draft at once, before the save pause, so a reload or closed tab cannot lose it.
   // If the browser refuses the draft (private mode, blocked or full storage), the edit is not kept anywhere durable: save it at once instead of waiting.
-  const changeSettings = (change: (current: CarrySettings) => CarrySettings) => { const next = change(settingsRef.current); settingsRef.current = next; settingsDirty.current = true; failedSettings.current = false; if (persisted) markUnflushed(); draftRevisions.current.settings = keepDraft('carry-settings', { draft: next, base: baseVersions.current.settings, sent: sentRows.current.settings } satisfies CarrySettingsDraft, flushSettings); setSettings(next) }
+  const changeSettings = (change: (current: CarrySettings) => CarrySettings) => { const next = change(settingsRef.current); settingsRef.current = next; settingsDirty.current = true; failedSettings.current = false; if (persisted) markUnflushed(); draftRevisions.current.settings = keepDraft('carry-settings', { draft: next, base: baseVersions.current.settings, sent: sentRows.current.settings } satisfies CarrySettingsDraft, resendSettings); setSettings(next) }
   // Discrete choices (the storage-mode buttons) save as soon as React has committed the click, not after the typing pause.
   const chooseMode = (mode: CarrySettings['mode']) => { changeSettings((current) => ({ ...current, mode })); setTimeout(flushSettings, 0) }
-  const updateCarry = (change: (current: CommodityCarry) => CommodityCarry) => { const next = change(byEstimateRef.current[selectedEstimateId] ?? freshCommodityCarry()); byEstimateRef.current = { ...byEstimateRef.current, [selectedEstimateId]: next }; gridsDirty.current.add(selectedEstimateId); failedGrids.current.delete(selectedEstimateId); if (persisted) markUnflushed(); draftRevisions.current.grids[selectedEstimateId] = keepDraft(`carry-grid:${selectedEstimateId}`, { estimateId: selectedEstimateId, draft: next, base: baseVersions.current.grids[selectedEstimateId] ?? null, sent: sentRows.current.grids[selectedEstimateId] ?? null } satisfies CarryGridDraft, flushGrids); setByEstimate((current) => ({ ...current, [selectedEstimateId]: next })) }
+  const updateCarry = (change: (current: CommodityCarry) => CommodityCarry) => { const next = change(byEstimateRef.current[selectedEstimateId] ?? freshCommodityCarry()); byEstimateRef.current = { ...byEstimateRef.current, [selectedEstimateId]: next }; gridsDirty.current.add(selectedEstimateId); failedGrids.current.delete(selectedEstimateId); if (persisted) markUnflushed(); draftRevisions.current.grids[selectedEstimateId] = keepDraft(`carry-grid:${selectedEstimateId}`, { estimateId: selectedEstimateId, draft: next, base: baseVersions.current.grids[selectedEstimateId] ?? null, sent: sentRows.current.grids[selectedEstimateId] ?? null } satisfies CarryGridDraft, resendGrid(selectedEstimateId)); setByEstimate((current) => ({ ...current, [selectedEstimateId]: next })) }
   const calculated = useMemo(() => {
     const harvestMarket = toNumber(carry.rows[0]?.marketPrice ?? '')
     const harvestBasis = toNumber(carry.rows[0]?.basis ?? '')

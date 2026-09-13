@@ -15,3 +15,5 @@ const FarmContext = createContext<FarmAccessContextValue | null>(null)
 
 export function FarmAccessProvider({ value, children }: { value: FarmAccessContextValue; children: ReactNode }) { return <FarmContext.Provider value={value}>{children}</FarmContext.Provider> }
 export function useFarmAccess() { const value = useContext(FarmContext); if (!value) throw new Error('useFarmAccess must be used inside FarmAccessProvider.'); return value }
+/** The farm access when a provider is present, else null (a screen rendered on its own, as in a regression harness). */
+export function useOptionalFarmAccess() { return useContext(FarmContext) }

@@ -11,6 +11,8 @@ import { beginPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_CONTEX
 import { clearSettingsDraft, readSettingsDrafts, writeSettingsDraft, type SettingsDraftScope } from "./data/settingsDrafts";
 import { supabaseConfig } from "./lib/supabaseConfig";
 import { getModuleSyncStatus, subscribeSyncStatus } from "./data/syncStatus";
+import { useOptionalFarmAccess } from "./auth/FarmAccessContext";
+import { canEditFarmModule } from "./auth/farmContext";
 // `base` is the row the editing session started from (the version the commit sends, so a row changed elsewhere conflicts);
 // `sent` is the last value this browser saved for the scope, kept so a replayed row of this browser's own is recognised.
 type SaleLimitDraft = { key: string; value: number | null; base: { id: string; updated_at: string } | null; sent?: number | null };
@@ -399,6 +401,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
   saleLimitsRef.current = saleLimits;
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
+  const farmAccess = useOptionalFarmAccess();
   // Scopes the farmer is still typing in; a workspace refresh must not overwrite them.
   const dirtySaleLimits = useRef(new Set<string>());
   // Scopes whose last save failed: kept dirty and pending for retry, but replaced when a refresh brings a newer row.
@@ -530,6 +533,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
     },
     createId: services.createGrainId,
     draftScope: workspace ? draftScopeFor(workspace.fields.farm.id) : undefined,
+    writable: farmAccess ? canEditFarmModule(farmAccess.profile, "grain") : true,
   };
   if (!workspace)
     return (
