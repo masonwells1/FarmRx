@@ -1,11 +1,12 @@
 import { CARRY_GRID_ROWS, defaultCarrySettings, emptyCarryRows, normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
 import { parseGrainQueue } from './grainWriteQueue'
 import { isCarryDraft } from '../GrainCostOfCarry'
+import { farmerError } from '../lib/farmerErrors'
 import { readGrain } from './MockGrainRepository'
 import type { GrainCarryGrid, GrainCarrySettings, GrainSaleLimit } from './grain'
 import { settingsSlicesFromResults } from './SupabaseGrainDataGateway'
-import { saveCostLineWithBadgeFallback } from './SupabaseProfitabilityDataGateway'
-import { forgetLegacyDefaults, readLegacyDefaults, rememberLegacyDefault, takeUnretainedLegacyDefaults, universityDefaultKey, universityDefaultLineOf } from './universityDefaultProvenance'
+import { BADGE_PROVENANCE_NOT_KEPT, saveCostLineWithBadgeFallback } from './SupabaseProfitabilityDataGateway'
+import { forgetLegacyDefaults, readLegacyDefaults, rememberLegacyDefault, universityDefaultKey, universityDefaultLineOf } from './universityDefaultProvenance'
 import { beginPendingSettingsWork, hasPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_SAVE_FAILED, SETTINGS_SAVE_STILL_RUNNING, settlePendingSettingsWork } from './pendingSettingsWork'
 import { clearSettingsDraft, readSettingsDrafts, settingsDraftKey, settingsDraftKeyOf, writeSettingsDraft } from './settingsDrafts'
 import { queueFarmRevocationScope } from './farmRevocationFence'
@@ -74,7 +75,7 @@ const attempts: Array<Record<string, unknown>> = []
 const savedWith = await saveCostLineWithBadgeFallback(async (columns) => { attempts.push(columns); return columns }, { id: uid(40), label: 'Seed' }, 120, () => true)
 assert(attempts.length === 1 && savedWith.university_default_amount === 120, 'The badge column is written on the first attempt when the database has it.')
 attempts.length = 0
-const savedWithout = await saveCostLineWithBadgeFallback(async (columns) => { attempts.push(columns); if ('university_default_amount' in columns) throw Object.assign(new Error('column not found'), { code: 'PGRST204' }); return columns }, { id: uid(40), label: 'Seed' }, 120, (id, amount) => rememberLegacyDefault({ projectRef: 'proj', userId: 'user-a', farmId: 'farm-a' }, id, amount))
+const savedWithout = await saveCostLineWithBadgeFallback(async (columns) => { attempts.push(columns); if ('university_default_amount' in columns) throw Object.assign(new Error('column not found'), { code: 'PGRST204' }); return columns }, { id: uid(40), label: 'Seed' }, 120, () => true)
 assert(attempts.length === 2 && !('university_default_amount' in savedWithout), 'PGRST204 must retry once without the badge column.')
 const retained: Array<[string, number]> = []
 const lineId = uid(41)
@@ -82,6 +83,12 @@ await saveCostLineWithBadgeFallback(async (columns) => { if ('university_default
 await saveCostLineWithBadgeFallback(async (columns) => { if ('university_default_amount' in columns) throw Object.assign(new Error('column not found'), { code: 'PGRST204' }); return columns }, { id: uid(42), label: 'Hand-entered' }, null, (id, amount) => { retained.push([id, amount]); return true })
 await saveCostLineWithBadgeFallback(async (columns) => columns, { id: uid(43), label: 'Seed' }, 120, (id, amount) => { retained.push([id, amount]); return true })
 assert(retained.length === 1 && retained[0]?.[0] === lineId && retained[0]?.[1] === 120, 'A seeded amount dropped on PGRST204 is retained for the line; a hand-entered line and a stored badge retain nothing.')
+// A browser that refuses to keep the seeded amount fails the save closed: nothing is written and the message names the cause.
+attempts.length = 0
+let refusedMessage = ''
+try { await saveCostLineWithBadgeFallback(async (columns) => { attempts.push(columns); if ('university_default_amount' in columns) throw Object.assign(new Error('column not found'), { code: 'PGRST204' }); return columns }, { id: uid(44), label: 'Seed' }, 120, () => false) } catch (error) { refusedMessage = (error as Error).message }
+assert(refusedMessage === BADGE_PROVENANCE_NOT_KEPT && attempts.length === 1, 'A refused retention throws before the second attempt, so the line is not saved without its badge.')
+assert(farmerError(new Error(BADGE_PROVENANCE_NOT_KEPT), 'save profitability').includes('was not added'), 'The farmer sees why the line was not added.')
 let rethrown = false
 try { await saveCostLineWithBadgeFallback(async () => { throw Object.assign(new Error('stale'), { code: '23505' }) }, { id: uid(40) }, null, () => true) } catch { rethrown = true }
 assert(rethrown, 'Any other error must not be swallowed by the badge fallback.')
@@ -204,9 +211,6 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
 // Badge provenance kept in the browser while the column is missing: one key per line (two tabs never overwrite each other), the
 // older single-map key still read and pruned, a refused write reported once instead of silently lost.
 {
-  // The badge-fallback checks above ran the real retainer without browser storage once, so that seeded amount (uid 40) was reported as not kept.
-  const earlier = takeUnretainedLegacyDefaults()
-  assert(earlier.length === 1 && earlier[0] === uid(40), 'The default retainer reports a seeded amount it could not keep without browser storage.')
   const store = new Map<string, string>()
   const fakeStorage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, value) }, removeItem: (key: string) => { store.delete(key) }, key: (index: number) => [...store.keys()][index] ?? null, get length() { return store.size } }
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: fakeStorage })
@@ -221,14 +225,10 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
   forgetLegacyDefaults(badgeScope, [uid(50), uid(52)])
   const after = readLegacyDefaults(badgeScope)
   assert(after[uid(50)] === undefined && after[uid(52)] === undefined && after[uid(51)] === 110 && after[uid(53)] === 130, 'Forgetting removes the per-line key and prunes the older map.')
-  assert(takeUnretainedLegacyDefaults().length === 0, 'Nothing is reported while every write succeeded.')
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...fakeStorage, setItem: () => { throw new Error('QuotaExceededError') } } })
   assert(rememberLegacyDefault(badgeScope, uid(54), 140) === false, 'A refused write returns false.')
-  const lost = takeUnretainedLegacyDefaults()
-  assert(lost.length === 1 && lost[0] === uid(54) && takeUnretainedLegacyDefaults().length === 0, 'A refused write is reported once, by line.')
   Reflect.deleteProperty(globalThis, 'localStorage')
   assert(Object.keys(readLegacyDefaults(badgeScope)).length === 0 && rememberLegacyDefault(badgeScope, uid(55), 150) === false, 'Without browser storage nothing is read and a write reports as refused.')
-  takeUnretainedLegacyDefaults()
 }
 
 // A kept draft whose payload is not the shape the screen writes is dropped and its key removed, instead of reaching the screen.

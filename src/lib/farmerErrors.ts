@@ -10,6 +10,7 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (message.includes('settings_context_changed')) return 'The selected farm changed in another tab. Reload this page before saving again.'
   if (message.includes('settings_save_still_running')) return 'Farm Rx is still saving your changes for this farm. Wait a moment and try again.'
   if (message.includes('settings_save_failed')) return 'Some changes for this farm could not be saved yet. Check the notice on that screen, then try again.'
+  if (message.includes('badge_provenance_not_kept')) return 'This browser could not keep the "U of I default" badge for that cost line (its storage is full or blocked), so the line was not added. Free up space or use another browser, or add the line by hand without the badge.'
   if (message.includes('farm_rx_stale_write')) return 'This record changed in another tab or device. Reload before saving again.'
   if (message.includes(FIRM_OFFER_FILL_PARTIAL_SUCCESS.toLowerCase())) return firmOfferFillPartialSuccessMessage
   if (/delivery tracking arrives with the next database update/.test(message)) return 'Delivery tracking arrives with the next database update.'

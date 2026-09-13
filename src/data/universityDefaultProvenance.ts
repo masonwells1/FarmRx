@@ -44,14 +44,11 @@ export function readLegacyDefaults(scope: UniversityDefaultScope): Record<string
     return entries
   } catch { return {} }
 }
-// Seeded amounts the browser refused to keep (private mode, blocked or full storage): the Profitability page reports them once.
-const unretained = new Set<string>()
-/** A seeded amount the live database could not store yet: kept here until the column exists. False when the browser refused it. */
+/** A seeded amount the live database could not store yet: kept here until the column exists. False when the browser refused it
+ * (private mode, blocked or full storage); the caller then fails the save closed rather than saving a number with a lost badge. */
 export function rememberLegacyDefault(scope: UniversityDefaultScope, lineId: string, value: number): boolean {
-  try { const store = storage(); if (!store) throw new Error('no storage'); store.setItem(universityDefaultKey(scope, lineId), JSON.stringify({ version: 1, amount: value })); return true } catch { unretained.add(lineId); return false }
+  try { const store = storage(); if (!store) return false; store.setItem(universityDefaultKey(scope, lineId), JSON.stringify({ version: 1, amount: value })); const written = store.getItem(universityDefaultKey(scope, lineId)); return written !== null && validUniversityDefault(JSON.parse(written)) } catch { return false }
 }
-/** Line ids whose seeded amount could not be kept since the last call: the farmer's numbers are saved, their badge is not. */
-export function takeUnretainedLegacyDefaults(): string[] { const ids = [...unretained]; unretained.clear(); return ids }
 export function forgetLegacyDefaults(scope: UniversityDefaultScope, ids: string[]) {
   const store = storage(); if (!store) return
   try {

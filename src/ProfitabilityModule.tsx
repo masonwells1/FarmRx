@@ -55,7 +55,7 @@ import {
 import type { Commodity } from "./data/fields";
 import type { ProgramsData } from "./data/programs";
 import { SAVE_DURABILITY_UPDATE_MESSAGE } from "./data/saveDurability";
-import { forgetLegacyDefaults, readLegacyDefaults, takeUnretainedLegacyDefaults } from "./data/universityDefaultProvenance";
+import { forgetLegacyDefaults, readLegacyDefaults } from "./data/universityDefaultProvenance";
 import { supabaseConfig } from "./lib/supabaseConfig";
 
 const money = new Intl.NumberFormat("en-US", {
@@ -298,12 +298,8 @@ export function ProfitabilityPage() {
   // store it for yet: shown as the badge meanwhile, forgotten once the rows carry it, and written into their lines once.
   const legacyBadgeAttempts = useRef(new Set<string>());
   const [browserBadges, setBrowserBadges] = useState<Record<string, number>>({});
-  const [badgeNotice, setBadgeNotice] = useState("");
   useEffect(() => {
     if (!workspace) return;
-    // Seeded amounts this browser refused to keep while the column is missing: the numbers are saved, the badge is not, say so once.
-    const lost = takeUnretainedLegacyDefaults().filter((id) => workspace.cost_lines.some((line) => line.id === id));
-    if (lost.length) setBadgeNotice(`Your cost lines are saved, but this browser could not keep the "U of I default" badge for ${lost.length === 1 ? "one line" : `${lost.length} lines`} (its storage is full or blocked). Those lines show no badge; re-add the typical lines after the farm settings update is live to restore it.`);
     // The entries are kept per account and farm; a screen rendered outside the farm-access provider (regression harnesses) has neither and reads none.
     if (!farmAccess) return;
     const scope = { projectRef: supabaseConfig.projectRef, userId: farmAccess.profile.userId, farmId: workspace.fields.farm.id };
@@ -366,11 +362,6 @@ export function ProfitabilityPage() {
         {error && (
           <p className="profitability-error" role="alert">
             {error}
-          </p>
-        )}
-        {badgeNotice && (
-          <p className="university-note" role="status">
-            {badgeNotice}
           </p>
         )}
         <p>Start a budget to see what every acre needs to earn.</p>
