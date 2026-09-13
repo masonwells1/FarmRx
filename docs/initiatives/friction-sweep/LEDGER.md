@@ -1,0 +1,67 @@
+# Initiative FS — Friction Sweep ledger
+
+This ledger is append-only. Never edit, reorder, or delete an earlier entry. If an entry is wrong, append a correction that cites it. Times use `America/Chicago`.
+
+## FS-000 — Initiative context and slice 1 outcome
+
+- **Date/time:** 2026-09-13 10:45 -05:00 (`America/Chicago`), recorded after the fact.
+- **Authority:** the `Initiative FS — Friction Sweep` section of the 2026-09-05 owner amendment in `docs/GOAL.md`. Mason authorized agents to push feature branches and open, update, label, and comment on their pull requests without asking (`docs/agent-delivery.md`). Merge, deploy, live migration or data, secrets/auth/permissions, customer actions, purchases, and destructive actions still require Mason's explicit approval in the current conversation. Only Mason posts `@coderabbitai review`.
+- **Slice plan:** FS is one tranche split by module into three slices. Slice 1 (screen tier plus one pure helper change): replace browser `prompt`/`confirm` with in-app dialogs and derive TradingView contract months from the crop year. Slice 2 (screen tier): phone layouts for the profit matrix, cost table, cost-of-carry, and plan-comparison tables; plain-English relabel pass; one sentence and one button on every empty state. Slice 3 (full tier): persist the Grain sale limit, the cost-of-carry grid, and the U of I default badges to farm-scoped settings, and seed `usda_report_dates` by migration.
+- **Slice 1 outcome:** pull request #42 (`claude/app-improvement-strategy-kzqk6s`) was reviewed by CodeRabbit (four findings, all repaired or withdrawn) and Codex (ten findings across seven rounds, all repaired), brought current with `main` after the Soil Rx merge (#37), and merged by Mason's explicit approval on 2026-09-13 as `9a9a1c54ee33f0b690ac33fc19035bcb60e69637`. Repairs proven during review included acquiring the submit lock before opening a dialog and releasing it on cancel across Programs, Grain, Field Log, Scouting, Inventory, and Equipment (`src/FieldLogModule.deleteDoubleTap.regression.tsx` pins the double-tap behavior), and rejecting crop years above 2098 in `src/components/MarketQuote.tsx` so the wheat contract year stays inside the frame allowlist.
+- **Deploy state:** Vercel deploys `main` to production automatically. This session cannot see the Farm Rx Vercel project; Mason has not yet confirmed that the `9a9a1c5` production deploy is live.
+
+## FS-001 — Slice 2 implementation and screen-tier proof
+
+- **Date/time:** 2026-09-13 10:45 -05:00 (`America/Chicago`).
+- **WHERE:** branch `claude/app-improvement-strategy-kzqk6s` restarted from `origin/main` `9a9a1c54ee33f0b690ac33fc19035bcb60e69637` (the slice 1 merge). This entry is committed together with the slice 2 code.
+- **Tier:** screen tier. No migration, Row Level Security, capability check, privacy rule, money math, edge function, or write path changed. The pure-presentation boundary was checked by reading the diff: every change is JSX structure, class names, `data-label` attributes, wording, a `Link` or button that navigates, or CSS.
+- **Phone layouts:** the cost table, plan-comparison table, ROI table, and cost-of-carry table now carry `phone-stack`, and each cell carries a `data-label`. At 767px and below the header row becomes screen-reader-only, each row becomes a two-column label/value grid, and category and verdict cells span the full width. The profit matrix is a true two-axis grid, so instead of stacking it keeps horizontal scroll with a sticky yield column, 72px by 48px cell buttons, and a one-line hint that only shows on phones. Desktop rendering is unchanged.
+- **Relabels:** `BU TO COVER` → `Bushels to cover`; `Mo` → `Months stored`; `Basis open` / `Futures open` → `Basis not set` / `Futures not set`; `Open legs` / `manual valuation` → `Still needs a price` / `valued at your estimate`; `Insurance-backed marketing estimate` → `Bushels safe to sell (insurance floor)`; `superseded by baseline` → `replaced by a later bin count`; plan-comparison headers spelled out (`Cost per acre`, `Break-even price`, `Break-even yield`, `Extra bushels needed`); the matrix corner now reads `Yield ↓ · Price →` with a screen-reader sentence.
+- **Empty states:** Field Log, Harvest, Scouting, Soil Rx, and Weather now offer `Add a field`; Equipment offers `Add a machine`; Programs offers `Add a program` (editable members) and `Assign a program to a field`; Notifications offers `Set up a grain price alert`. Each keeps one plain sentence. `tests/e2e/soil-rx.spec.ts` pinned the old Soil Rx empty-state source string and was updated to the new one.
+- **Proof observed:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `npm run test:agent-guidance` passed; `git diff --check` clean; focused regressions passed (Profitability equipment cost, Grain receipt, Equipment quick action, Field Log legacy recovery and delete double-tap, Harvest receipt, Programs chunk 5, Supabase Programs repository, cost of carry, Inventory compliance); the dedicated Soil Rx Playwright spec passed 36 of 36 locally with the pre-installed Chromium. `npm run regression` includes the `programInventoryCW2` lane, which needs PowerShell and cannot run in this Linux session; it runs in the Foundation workflow on the pull request.
+- **Browser proof:** a scratchpad harness rendered the real `GrainCostOfCarry`, `FieldLogPage`, and `EquipmentPage` components with the real stylesheet inside a router, plus faithful replicas of the four Profitability tables (the Profitability screen needs live Supabase data, which this session does not have). At 390×844: all four stacked tables measured 388px wide, rows rendered as grids, `data-label` pseudo-content was present, the header row was visually hidden, the matrix yield column was sticky, matrix buttons measured 72×48px, the phone hint was visible, empty-state buttons measured 52px, and the page had no horizontal scroll. At 1280×800 the tables rendered as ordinary rows and the hint was hidden. Fourteen screenshots were kept in the session scratchpad. The one console error seen on the phone run was Chromium's own blocked outbound probe, not an app asset.
+- **Remaining risk:** the Profitability tables were proven through replicas, not the live screen; the pull request's Vercel preview is the place to confirm them with real data. A fresh-context read-only review of the exact commit is still required for the screen tier.
+- **Rollback path:** revert the slice 2 commit; it touches no data.
+- **Next:** push the branch, open a draft pull request, request the Codex review, and stop at `READY FOR APPROVAL` before merge. Slice 3 starts after slice 2 has a committed, reviewed tip.
+
+## FS-002 — Codex review repairs on slice 2
+
+- **Date/time:** 2026-09-13 11:05 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed commit `204ef34b125a6d3da64b9291d2e165ad56b0a30a` on pull request #43 and returned three findings. All three were verified against the code and repaired in the next commit; this entry corrects FS-001 where noted.
+- **Finding 1 (P1, wording):** FS-001 relabeled the insurance number `Bushels safe to sell`. That overstates it. The value is APH × coverage × acres, Revenue Protection pays money rather than bushels, and the note beside it already warns the farmer can be left exposed. Both labels now read `Insurance floor estimate` (Grain) and `Insurance floor estimate (bushels)` (Profitability). Plain English must not promise more than the math does.
+- **Finding 2 (P2, permission):** the new Equipment empty-state `Add a machine` button showed for every member, but the add form only renders for owners and managers, so a worker who tapped it saw a blank page. The button now renders only when the viewer can manage equipment, matching the header button.
+- **Finding 3 (P2, layout):** the editable cost line's bushels cell had no `data-label`, so a hand-entered cost row showed a bare `20 bu` on phones. The label `Bushels to cover` was added.
+- **Proof:** `npx tsc -b --force` exit 0; focused regressions and `npm run build` rerun as recorded in the pull request; Foundation gate on the new head.
+
+## FS-003 — Second Codex round: empty-state actions gated by permission
+
+- **Date/time:** 2026-09-13 11:20 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `34ba047d94b5c5453fb83537223a25873b0a9057` and returned two findings of the same class as FS-002's Equipment finding: an empty-state button offered to members who cannot complete the action.
+- **Finding 1 (P2):** the `Add a field` link on the Soil Rx, Field Log, Harvest, and Scouting empty states showed for read-only members and named reps, who land on a write-locked Fields page. Each link is now gated by that module's existing edit check (`canEdit` in Soil Rx, the owner/manager/worker role check in Field Log, Harvest, and Scouting). Weather needs no gate: its route is only reachable by members who can edit.
+- **Finding 2 (P2):** the `Set up a grain price alert` button on the empty Alerts screen showed to every viewer, but Grain requires private-financial access, and even an eligible member landed on the Grain overview rather than the alerts tab. The button now renders only when `canEditFarmModule(profile, 'grain')` is true and navigates to `/grain/alerts`.
+- **Rule recorded:** an empty-state action must be gated by the same permission as the action it advertises, and must land on the screen where the action is completed.
+- **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; regressions passed for the Supabase Notifications repository, Field Log legacy recovery and delete double-tap, and Harvest receipt. The Soil Rx spec's pinned empty-state source string is unchanged by this edit.
+
+## FS-004 — Third Codex round: Programs assignment action gated
+
+- **Date/time:** 2026-09-13 11:30 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `96cc540d8dab04e7232f56f3d6450bd3e10ca294` and returned one finding: the `Assign a program to a field` button on the Programs season tracker's empty state rendered for read-only members, where the route's write lock disables it. The button is now gated by the tracker's existing `canEdit` prop, matching the `Add a program` empty-state action. This is the last empty-state action added by slice 2 that lacked a permission gate; every one now follows the rule recorded in FS-003.
+- **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; Programs regressions (chunk 5, Supabase Programs repository) passed.
+
+## FS-005 — Fourth Codex round: category subtotal labeled on phones
+
+- **Date/time:** 2026-09-13 11:40 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `c95132dfba10d98291251e98ebf22cc3cce1f1e5` and returned one finding: on phones the cost table's category subtotal row showed a bare dollar amount beside the item count and toggle, because that cell had no `data-label`. The cell now carries `Subtotal $ per acre`, so every stacked number in the table has a visible label.
+- **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; Profitability equipment-cost regression passed.
+
+## FS-006 — Fifth Codex round: empty season tracker routes to a completable step
+
+- **Date/time:** 2026-09-13 11:50 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `d8ec4b317e1a2c4d1a33af875391d9eafef4d85b` and returned one finding: on a farm with no unarchived program, or no field crop, the season tracker's `Assign a program to a field` button opened an assignment picker that could not be completed. The empty tracker now chooses its one button from what exists: no program yet offers `Add a program` (opens the program builder); no field crop yet offers `Add a field` (goes to Fields); otherwise `Assign a program to a field` opens the assign tab. The sentence above the button changes to match. Read-only members see the sentence only.
+- **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; Programs chunk 5 and Supabase Programs repository regressions passed.
+
+## FS-007 — Sixth Codex round: assign offered only when a program fits a crop
+
+- **Date/time:** 2026-09-13 12:00 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `90d70413c7aaa4e9ed4f03b47c95f53fdda607aa` and returned one finding: FS-006 offered `Assign a program to a field` whenever any program and any crop existed, but the assignment picker only pairs a program with crops of a matching commodity and crop year, so a soybean program plus a corn-only farm still led to a dead picker. The empty tracker now offers Assign only when at least one unarchived program fits at least one field crop; otherwise it offers `Add a program` with a sentence explaining that no program matches a field crop's crop and year yet. The fit rule is one shared function, `programFitsCrop`, used by both the picker and the empty state so the two cannot drift.
+- **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; Programs chunk 5 and Supabase Programs repository regressions passed.

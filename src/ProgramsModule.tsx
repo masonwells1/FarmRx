@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { confirmDialog, promptDialog } from "./components/ConfirmDialog";
-import { useSearchParams } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import {
   canEditPrograms,
   canonicalProgramInventoryProduct,
@@ -71,6 +71,7 @@ export function ProgramsPage({
   generateDueItems?: () => Promise<unknown>;
 }) {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [programs, setPrograms] = useState<Program[]>([]);
   const [assignments, setAssignments] = useState<ProgramAssignment[]>([]);
   const [crops, setCrops] = useState<CropAssignmentChoice[]>([]);
@@ -149,6 +150,42 @@ export function ProgramsPage({
       />
     );
   const editable = canEditPrograms(role as never);
+  const startNewProgram = () =>
+    setEditing({
+      ...emptyProgram(),
+      id: crypto.randomUUID(),
+      farm_id: "",
+      revision: 1,
+      is_archived: false,
+      passes: [],
+    });
+  const emptyTrackerAction: SeasonTrackerEmptyAction | null = !editable
+    ? null
+    : programs.every((program) => program.is_archived)
+      ? {
+          hint: "Add a program first, then assign it to a field crop.",
+          label: "Add a program",
+          run: startNewProgram,
+        }
+      : crops.length === 0
+        ? {
+            hint: "Add a field and its crop first, then assign a program to it.",
+            label: "Add a field",
+            run: () => navigate("/fields"),
+          }
+        : programs.some((program) =>
+              crops.some((crop) => programFitsCrop(program, crop)),
+            )
+          ? {
+              hint: "Assign a program to a field crop to start tracking the season here.",
+              label: "Assign a program to a field",
+              run: () => setView("assign"),
+            }
+          : {
+              hint: "None of your programs matches a field crop's crop and year yet. Add a program for the crop you grow, then assign it.",
+              label: "Add a program",
+              run: startNewProgram,
+            };
   const tabs = (
     <div className="program-tabs" role="tablist">
       <button
@@ -217,6 +254,7 @@ export function ProgramsPage({
           canEdit={editable}
           repository={repository}
           onChanged={reload}
+          emptyAction={emptyTrackerAction}
         />
       </section>
     );
@@ -233,16 +271,7 @@ export function ProgramsPage({
         {editable && (
           <button
             className="primary-action"
-            onClick={() =>
-              setEditing({
-                ...emptyProgram(),
-                id: crypto.randomUUID(),
-                farm_id: "",
-                revision: 1,
-                is_archived: false,
-                passes: [],
-              })
-            }
+            onClick={startNewProgram}
           >
             New program
           </button>
@@ -270,6 +299,11 @@ export function ProgramsPage({
             Add a program now, then put in the passes you plan to make this
             season.
           </p>
+          {editable && (
+            <button className="primary-action" type="button" onClick={startNewProgram}>
+              Add a program
+            </button>
+          )}
         </section>
       ) : (
         <div className="program-list">
@@ -973,13 +1007,7 @@ function AssignmentPicker({
   const submitLock = useRef(createSubmitLock());
   const program = programs.find((item) => item.id === programId);
   const eligible = program
-    ? crops.filter(
-        (crop) =>
-          !program.is_archived &&
-          (program.commodity_id === null ||
-            program.commodity_id === crop.commodity_id) &&
-          (program.crop_year === null || program.crop_year === crop.crop_year),
-      )
+    ? crops.filter((crop) => programFitsCrop(program, crop))
     : [];
   const activePrograms = (cropId: string) =>
     assignments
@@ -1269,6 +1297,15 @@ function CropRollup({ rollup }: { rollup: ProgramCropCostRollup | undefined }) {
     </div>
   );
 }
+type SeasonTrackerEmptyAction = { hint: string; label: string; run: () => void };
+function programFitsCrop(program: Program, crop: CropAssignmentChoice): boolean {
+  return (
+    !program.is_archived &&
+    (program.commodity_id === null ||
+      program.commodity_id === crop.commodity_id) &&
+    (program.crop_year === null || program.crop_year === crop.crop_year)
+  );
+}
 function SeasonTracker({
   assignments,
   programs,
@@ -1278,6 +1315,7 @@ function SeasonTracker({
   canEdit,
   repository,
   onChanged,
+  emptyAction,
 }: {
   assignments: ProgramAssignment[];
   programs: Program[];
@@ -1287,6 +1325,7 @@ function SeasonTracker({
   canEdit: boolean;
   repository: ProgramsRepository;
   onChanged: () => Promise<void>;
+  emptyAction: SeasonTrackerEmptyAction | null;
 }) {
   const [error, setError] = useState<string | null>(null);
   const assignmentLocks = useRef(createSubmitLockMap());
@@ -1338,8 +1377,14 @@ function SeasonTracker({
         <section className="empty-state">
           <h2>No program history yet.</h2>
           <p>
-            Assign a program to a field crop to start tracking the season here.
+            {emptyAction?.hint ??
+              "Assign a program to a field crop to start tracking the season here."}
           </p>
+          {canEdit && emptyAction && (
+            <button className="primary-action" type="button" onClick={emptyAction.run}>
+              {emptyAction.label}
+            </button>
+          )}
         </section>
       )}
       {[...byCrop.values()].map((tracks) => (
