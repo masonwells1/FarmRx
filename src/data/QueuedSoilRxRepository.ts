@@ -79,7 +79,9 @@ export class QueuedSoilRxRepository implements SoilRxRepository {
       if (source.cacheEpoch !== this.cacheEpoch) throw new SoilRxCacheCustodyChangedError()
       if (!verifyWorkspaceCacheCustody(this.d.storage, this.cacheScope(source.context), source.cacheCustody)) throw new SoilRxCacheCustodyChangedError()
       if (!complete && !this.workspace) {
-        const cached = await readWorkspaceCache<SoilRxData>(this.cacheScope(source.context), operationalCacheMaxAgeMs, this.d.storage)
+        let cached: { data: SoilRxData } | null = null
+        try { cached = await readWorkspaceCache<SoilRxData>(this.cacheScope(source.context), operationalCacheMaxAgeMs, this.d.storage) }
+        catch { retainedData = null; return }
         if (!cached) { retainedData = null; return }
         const tests = new Map(cached.data.tests.map((test) => [test.id, test]))
         for (const test of data.tests) tests.set(test.id, test)

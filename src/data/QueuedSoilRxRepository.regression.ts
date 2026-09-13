@@ -486,6 +486,22 @@ try {
   assert.equal(freshOnlineNoCacheSnapshots.size, 0, 'An online save without a cache projection created an incomplete cache envelope.')
 } finally { freshOnlineNoCacheDatabase.restore() }
 
+// An expired durable projection is not usable for a post-save merge. The
+// confirmed server save must still succeed, and the stale envelope must remain
+// untouched until a complete fresh read replaces it.
+const freshOnlineExpiredCache = harness('soil-rx-fresh-online-expired-cache')
+const freshOnlineExpiredScope = cacheKey(freshOnlineExpiredCache.scope.projectRef, userId, farmId)
+const freshOnlineExpiredFence = captureFarmRevocationFence(freshOnlineExpiredCache.storage, freshOnlineExpiredCache.scope)
+const freshOnlineExpiredSnapshots = new Map<string, unknown>([[freshOnlineExpiredScope, { version: 3, key: freshOnlineExpiredScope, ...freshOnlineExpiredCache.scope, module: 'soilRx', generation: freshOnlineExpiredFence.generation, fenceToken: freshOnlineExpiredFence.token, serverEpoch: freshOnlineExpiredFence.serverEpoch, cacheCustody: 0, cachedAt: '2020-01-01T00:00:00.000Z', data: { tests: [cachedTest(uid(728))] } }]])
+const freshOnlineExpiredDatabase = scopedCacheDatabase(freshOnlineExpiredCache.storage, freshOnlineExpiredSnapshots, false, new MemoryStorage())
+try {
+  const saved = await freshOnlineExpiredCache.repository.saveTest(draft(uid(729)))
+  assert.equal(saved.id, uid(729), 'An expired cache projection turned a confirmed online save into a failure.')
+  const retained = freshOnlineExpiredSnapshots.get(freshOnlineExpiredScope) as { data?: { tests?: SoilTest[] }; cachedAt?: string }
+  assert.equal(retained.cachedAt, '2020-01-01T00:00:00.000Z', 'An expired cache projection was overwritten by an incomplete save projection.')
+  assert.deepEqual(retained.data?.tests?.map((test) => test.id), [uid(728)], 'An expired cache projection was mutated during an online save.')
+} finally { freshOnlineExpiredDatabase.restore() }
+
 // A malformed module custody marker must not reject the whole farm startup.
 // Soil Rx reports its own blocked state and leaves both its cache and a
 // sibling farm's cache untouched rather than risking a cross-tab cache race.
