@@ -4,6 +4,7 @@ import { readGrain } from './MockGrainRepository'
 import type { GrainCarryGrid, GrainCarrySettings, GrainSaleLimit } from './grain'
 import { settingsSlicesFromResults } from './SupabaseGrainDataGateway'
 import { saveCostLineWithBadgeFallback } from './SupabaseProfitabilityDataGateway'
+import { beginPendingSettingsWork, hasPendingSettingsWork } from './pendingSettingsWork'
 
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message) }
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -74,5 +75,14 @@ assert(attempts.length === 2 && !('university_default_amount' in savedWithout), 
 let rethrown = false
 try { await saveCostLineWithBadgeFallback(async () => { throw Object.assign(new Error('stale'), { code: '23505' }) }, { id: uid(40) }, null) } catch { rethrown = true }
 assert(rethrown, 'Any other error must not be swallowed by the badge fallback.')
+
+// Pending-work registry: the farm switcher warns while any settings save is queued or in flight.
+assert(!hasPendingSettingsWork(farm), 'No settings work is pending before any save.')
+const doneA = beginPendingSettingsWork(farm); const doneB = beginPendingSettingsWork(farm)
+assert(hasPendingSettingsWork(farm) && !hasPendingSettingsWork(uid(20)), 'Pending work is tracked per farm.')
+doneA(); doneA()
+assert(hasPendingSettingsWork(farm), 'One finished save must not clear another still pending, and finishing twice is harmless.')
+doneB()
+assert(!hasPendingSettingsWork(farm), 'The farm is clear once every queued save has run.')
 
 console.log('Grain settings regressions passed.')

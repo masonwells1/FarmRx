@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { bestMonth, carryRow, verdict, type CarryRow, type CarrySettings } from './data/costOfCarry'
 import type { GrainCarryGrid, GrainCarrySettings, GrainWorkspace, ProductionEstimate } from './data/grain'
 import { CARRY_GRID_ROWS } from './data/grainSettings'
+import { beginPendingSettingsWork } from './data/pendingSettingsWork'
 
 // Legacy device-only storage, used until the farm's settings tables exist on the live database.
 // Keyed per farm: one device can serve several farms and their storage costs differ.
@@ -62,16 +63,22 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   const settingsDirty = useRef(false)
   const gridsDirty = useRef(new Set<string>())
   const newGridIds = useRef<Record<string, string>>({})
-  const enqueue = (work: () => Promise<void>) => { chain.current = chain.current.then(() => work().catch(() => undefined)) }
+  // Every queued save (and any unflushed edit) keeps the farm marked pending for the farm switcher until it has run.
+  const enqueue = (work: () => Promise<void>) => { const done = beginPendingSettingsWork(workspaceRef.current.fields.farm.id); chain.current = chain.current.then(() => work().catch(() => undefined)).finally(done) }
+  const unflushed = useRef<(() => void) | null>(null)
+  const markUnflushed = () => { unflushed.current ??= beginPendingSettingsWork(workspaceRef.current.fields.farm.id) }
+  const settleUnflushed = () => { if (!settingsDirty.current && gridsDirty.current.size === 0) { unflushed.current?.(); unflushed.current = null } }
   const flushSettings = () => {
     if (!persisted || !settingsDirty.current) return
     settingsDirty.current = false
+    settleUnflushed()
     const snapshot = settingsRef.current
     enqueue(async () => { const current = workspaceRef.current; const saved = await persistenceRef.current?.saveSettings(settingsToRow(current.fields.farm.id, snapshot, baseVersions.current.settings ?? new Date().toISOString())); if (saved) baseVersions.current.settings = saved.updated_at })
   }
   const flushGrids = () => {
     if (!persisted) return
     const ids = [...gridsDirty.current]; gridsDirty.current.clear()
+    settleUnflushed()
     for (const estimateId of ids) {
       const snapshot = byEstimateRef.current[estimateId]
       if (!snapshot) continue
@@ -100,10 +107,10 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   useEffect(() => { if (!persisted || !settingsDirty.current) return; const timer = setTimeout(flushSettings, SAVE_DELAY_MS); return () => clearTimeout(timer) }, [settings, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!persisted || gridsDirty.current.size === 0) return; const timer = setTimeout(flushGrids, SAVE_DELAY_MS); return () => clearTimeout(timer) }, [byEstimate, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { flushSettings(); flushGrids() }, []) // eslint-disable-line react-hooks/exhaustive-deps
-  const changeSettings = (change: (current: CarrySettings) => CarrySettings) => { settingsDirty.current = true; setSettings(change) }
+  const changeSettings = (change: (current: CarrySettings) => CarrySettings) => { settingsDirty.current = true; if (persisted) markUnflushed(); setSettings(change) }
   // Discrete choices (the storage-mode buttons) save as soon as React has committed the click, not after the typing pause.
   const chooseMode = (mode: CarrySettings['mode']) => { changeSettings((current) => ({ ...current, mode })); setTimeout(flushSettings, 0) }
-  const updateCarry = (change: (current: CommodityCarry) => CommodityCarry) => { gridsDirty.current.add(selectedEstimateId); setByEstimate((current) => ({ ...current, [selectedEstimateId]: change(current[selectedEstimateId] ?? freshCommodityCarry()) })) }
+  const updateCarry = (change: (current: CommodityCarry) => CommodityCarry) => { gridsDirty.current.add(selectedEstimateId); if (persisted) markUnflushed(); setByEstimate((current) => ({ ...current, [selectedEstimateId]: change(current[selectedEstimateId] ?? freshCommodityCarry()) })) }
   const calculated = useMemo(() => {
     const harvestMarket = toNumber(carry.rows[0]?.marketPrice ?? '')
     const harvestBasis = toNumber(carry.rows[0]?.basis ?? '')

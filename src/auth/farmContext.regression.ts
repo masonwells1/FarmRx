@@ -52,6 +52,17 @@ const farm = (id: string, userId: string, name: string, shareWithRep = false) =>
   Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
 }
 
+// Settings saves in flight (or waiting behind one) are not in a durable queue yet;
+// the farm switcher must warn until they finish, and only for that farm.
+;{
+  const { beginPendingSettingsWork } = await import('../data/pendingSettingsWork')
+  const done = beginPendingSettingsWork(farmA)
+  assert.equal(hasPendingFarmWork(userA, farmA), true, 'Farm switching ignored an in-flight settings save.')
+  assert.equal(hasPendingFarmWork(userA, farmB), false, 'In-flight settings work on one farm blocked a switch to another.')
+  done()
+  assert.equal(hasPendingFarmWork(userA, farmA), false, 'Finished settings work still blocked the farm switch.')
+}
+
 let currentUser = userA
 let currentToken = 'session-user-a'
 let releaseA!: (value: { data: ReturnType<typeof farm>[]; error: null }) => void
