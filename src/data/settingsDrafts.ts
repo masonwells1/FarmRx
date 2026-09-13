@@ -41,14 +41,20 @@ function readOne(target: EnumeratedStorage, storageKey: string): SettingsDraftEn
   } catch { return null }
 }
 
-export function readSettingsDrafts(scope: SettingsDraftScope, prefix = ''): SettingsDraftEntry[] {
+/** The scope's drafts whose key starts with `prefix`. With `isPayload`, an entry whose payload the screen cannot use (a malformed
+ * or older shape) is removed from storage and skipped, so a bad local record never reaches the screen. */
+export function readSettingsDrafts(scope: SettingsDraftScope, prefix = '', isPayload?: (key: string, payload: unknown) => boolean): SettingsDraftEntry[] {
   const target = storage(); if (!target) return []
   const found: SettingsDraftEntry[] = []
+  const discard: string[] = []
   for (let index = 0; index < target.length; index += 1) {
     const storageKey = target.key(index); if (!storageKey) continue
     const key = settingsDraftKeyOf(storageKey, scope); if (key === null || !key.startsWith(prefix)) continue
-    const entry = readOne(target, storageKey); if (entry && entry.key === key) found.push(entry)
+    const entry = readOne(target, storageKey); if (!entry || entry.key !== key) continue
+    if (isPayload && !isPayload(key, entry.payload)) { discard.push(storageKey); continue }
+    found.push(entry)
   }
+  for (const storageKey of discard) { try { target.removeItem(storageKey) } catch { /* it is skipped again on the next read */ } }
   return found
 }
 

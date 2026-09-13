@@ -30,6 +30,17 @@ function readStoredSettings(farmId: string): CarrySettings | null { try { return
 // write coming back (a queued save replayed with a newer version) and rebases the draft instead of replacing it.
 type CarrySettingsDraft = { draft: CarrySettings; base: string | null; sent?: GrainCarrySettings | null }
 type CarryGridDraft = { estimateId: string; draft: CommodityCarry; base: string | null; sent?: GrainCarryGrid | null }
+// A kept draft is used only when its shape is the one this screen writes; anything else (an older release, a damaged entry) is dropped.
+const finiteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
+const isCarrySettings = (value: unknown): value is CarrySettings => isObject(value) && (value.mode === 'monthly' || value.mode === 'flat') && finiteNumber(value.monthlyRateCentsPerBuMonth) && finiteNumber(value.flatRatePerBu) && finiteNumber(value.interestRatePct) && finiteNumber(value.truckingPerBu)
+const isPriceRow = (value: unknown): value is PriceRow => isObject(value) && typeof value.marketPrice === 'string' && typeof value.basis === 'string'
+const isCommodityCarry = (value: unknown): value is CommodityCarry => isObject(value) && Number.isInteger(value.harvestMonth) && (value.harvestMonth as number) >= 0 && (value.harvestMonth as number) <= 11 && typeof value.defaultBasis === 'string' && Array.isArray(value.rows) && value.rows.length === CARRY_GRID_ROWS && value.rows.every(isPriceRow)
+const validBase = (value: unknown) => value === null || typeof value === 'string'
+const validSent = (value: unknown) => value === undefined || value === null || isObject(value)
+const isCarryDraft = (key: string, payload: unknown): boolean => key === 'carry-settings'
+  ? isObject(payload) && isCarrySettings(payload.draft) && validBase(payload.base) && validSent(payload.sent)
+  : key.startsWith('carry-grid:') && isObject(payload) && typeof payload.estimateId === 'string' && payload.estimateId === key.slice('carry-grid:'.length) && isCommodityCarry(payload.draft) && validBase(payload.base) && validSent(payload.sent)
 function sameSettingsContent(a: GrainCarrySettings, b: GrainCarrySettings): boolean { return a.mode === b.mode && a.monthly_rate_cents_per_bu_month === b.monthly_rate_cents_per_bu_month && a.flat_rate_per_bu === b.flat_rate_per_bu && a.interest_rate_pct === b.interest_rate_pct && a.trucking_per_bu === b.trucking_per_bu }
 function sameGridContent(a: GrainCarryGrid, b: GrainCarryGrid): boolean { return a.harvest_month === b.harvest_month && a.default_basis === b.default_basis && a.rows.length === b.rows.length && a.rows.every((row, index) => row.market_price === b.rows[index]?.market_price && row.basis === b.rows[index]?.basis) }
 function settingsFromRow(row: GrainCarrySettings): CarrySettings { return { mode: row.mode === 'flat' ? 'flat' : 'monthly', monthlyRateCentsPerBuMonth: nonNegative(row.monthly_rate_cents_per_bu_month, defaultSettings.monthlyRateCentsPerBuMonth), flatRatePerBu: nonNegative(row.flat_rate_per_bu, defaultSettings.flatRatePerBu), interestRatePct: nonNegative(row.interest_rate_pct, defaultSettings.interestRatePct), truckingPerBu: nonNegative(row.trucking_per_bu, defaultSettings.truckingPerBu) } }
@@ -168,7 +179,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
     // A member who may read but not write leaves them in storage, untouched and unsent, until edit access returns (this effect then
     // runs again and adopts them); nothing is saved on their behalf.
     if (!draftScope || persistence?.writable === false) return
-    for (const entry of readSettingsDrafts(draftScope, 'carry-')) {
+    for (const entry of readSettingsDrafts(draftScope, 'carry-', isCarryDraft)) {
       if (entry.key === 'carry-settings') { const kept = entry.payload as CarrySettingsDraft; setSettings(kept.draft); settingsRef.current = kept.draft; baseVersions.current.settings = kept.base; sentRows.current.settings = kept.sent ?? null; draftRevisions.current.settings = entry.revision; settingsDirty.current = true; failedSettings.current = true; markUnflushed() }
       else { const kept = entry.payload as CarryGridDraft; setByEstimate((current) => ({ ...current, [kept.estimateId]: kept.draft })); byEstimateRef.current = { ...byEstimateRef.current, [kept.estimateId]: kept.draft }; baseVersions.current.grids[kept.estimateId] = kept.base; if (kept.sent) sentRows.current.grids[kept.estimateId] = kept.sent; draftRevisions.current.grids[kept.estimateId] = entry.revision; gridsDirty.current.add(kept.estimateId); failedGrids.current.add(kept.estimateId); markUnflushed() }
     }
@@ -200,7 +211,8 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   // Leaving the screen sends whatever is still unflushed; a save that fails after that leaves the browser draft for the next visit.
   useEffect(() => () => { mounted.current = false; flushSettings(); flushGrids() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // A confirmed farm switch sends unflushed edits through here and then waits for the chain before the farm changes.
-  useEffect(() => persisted && draftScope ? registerPendingSettingsFlush({ userId: draftScope.userId, farmId }, () => { flushSettings(); flushGrids() }) : undefined, [farmId, persisted, draftScope?.userId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // A member who may not write has nothing to send (the reset effect above settled the registry and left the drafts in storage).
+  useEffect(() => persisted && draftScope && persistence?.writable !== false ? registerPendingSettingsFlush({ userId: draftScope.userId, farmId }, () => { flushSettings(); flushGrids() }) : undefined, [farmId, persisted, draftScope?.userId, persistence?.writable]) // eslint-disable-line react-hooks/exhaustive-deps
   // Every edit is written to the browser draft at once, before the save pause, so a reload or closed tab cannot lose it.
   // If the browser refuses the draft (private mode, blocked or full storage), the edit is not kept anywhere durable: save it at once instead of waiting.
   // Only the revision this tab wrote before is removed then; a newer draft another tab wrote under the same key stays.

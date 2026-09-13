@@ -5,6 +5,7 @@ import { DELETE_PERMISSION_MESSAGE, SAVE_DURABILITY_UPDATE_MESSAGE } from './sav
 import { optimisticSave } from './optimisticSave'
 import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
 import { rememberLegacyDefault } from './universityDefaultProvenance'
+import { supabaseConfig } from '../lib/supabaseConfig'
 
 function rows(data: unknown, error: { message: string } | null): unknown[] { if (error) throw error; if (!Array.isArray(data)) throw new Error('Farm Rx could not load the complete profitability workspace.'); return data }
 function row(data: unknown, error: { message: string } | null): unknown { if (error) throw error; if (!data || typeof data !== 'object') throw new Error('Farm Rx could not confirm the profitability save. Please try again.'); return data }
@@ -12,7 +13,7 @@ function budgetColumns(value: CropBudget & { farm_id: string }) { const { id, fa
 /** PGRST204 means the badge column is not on the live database yet (slice-3 migration pending): save the line without its badge rather than
  * fail the farmer's number, and keep the seeded amount in this browser (`retain`) so the badge is written into the column once it exists;
  * a browser that refuses to keep it is reported by the Profitability page (the number is saved, the badge is not). */
-export async function saveCostLineWithBadgeFallback<T>(attempt: (columns: Record<string, unknown>) => Promise<T>, columns: Record<string, unknown>, universityDefaultAmount: number | null, retain: (lineId: string, amount: number) => boolean = rememberLegacyDefault): Promise<T> {
+export async function saveCostLineWithBadgeFallback<T>(attempt: (columns: Record<string, unknown>) => Promise<T>, columns: Record<string, unknown>, universityDefaultAmount: number | null, retain: (lineId: string, amount: number) => boolean): Promise<T> {
   try { return await attempt({ ...columns, university_default_amount: universityDefaultAmount }) }
   catch (error) {
     if ((error as { code?: string } | null)?.code !== 'PGRST204') throw error
@@ -71,7 +72,7 @@ export class SupabaseProfitabilityDataGateway implements ProfitabilityDataGatewa
   async patchBudgetInsurance(farmId: string, budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt: string | null | undefined, context: FarmOperationContext) { return optimisticSave('crop_budgets', farmId, budgetId, insuranceColumns(patch), expectedUpdatedAt, context) }
   async upsertCostLine(farmId: string, value: BudgetCostLineWrite, context: FarmOperationContext) {
     const columns = costLineColumns({ ...value, farm_id: farmId })
-    return saveCostLineWithBadgeFallback((attempt) => optimisticSave('budget_cost_lines', farmId, value.id, attempt, value.updated_at, context), columns, value.university_default_amount ?? null)
+    return saveCostLineWithBadgeFallback((attempt) => optimisticSave('budget_cost_lines', farmId, value.id, attempt, value.updated_at, context), columns, value.university_default_amount ?? null, (lineId, amount) => rememberLegacyDefault({ projectRef: supabaseConfig.projectRef, userId: context.userId, farmId }, lineId, amount))
   }
   async deleteCostLine(farmId: string, id: string, context: FarmOperationContext) { return confirmDelete('budget_cost_lines', farmId, id, context) }
   async equipmentCostSnapshot(farmId: string, request: EquipmentCostSnapshotRequest, action: 'preview' | 'insert' | 'replace', context: FarmOperationContext) {

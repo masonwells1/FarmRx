@@ -7,6 +7,7 @@ import { beginSoilRxAttachmentCustody, confirmSoilRxAttachmentRemoval, isSoilRxS
 import { soilMeasurementKeys } from './soilRx'
 import { createSoilRxQueueEntry } from './soilRxWriteQueue'
 import { settingsDraftKey } from './settingsDrafts'
+import { universityDefaultKey } from './universityDefaultProvenance'
 
 class MemoryStorage {
   values = new Map<string, string>(); failWrites = false
@@ -97,3 +98,11 @@ console.log('revokedFarmRecovery regression passed')
   assert.equal(quarantineRevokedFarmWork(storage, scope, stamp), 0) }
 { const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const key = settingsDraftKey(scope, 'carry-settings'); storage.setItem(key, JSON.stringify({ version: 1, entries: [] })); assert.equal(quarantineRevokedFarmWork(storage, scope, stamp), 0); assert.equal(storage.getItem(key), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }
 { const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const key = settingsDraftKey(scope, 'carry-settings'); storage.setItem(key, '{"version":1,"entries":[{"key":1}]}'); assert.throws(() => quarantineRevokedFarmWork(storage, scope, stamp)); assert.notEqual(storage.getItem(key), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }
+
+// A seeded U of I amount kept for a budget line while the badge column is missing is captured into custody with the farm's
+// other work and removed from active storage; another farm's entry stays; an unreadable one stops the capture.
+{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const mine = universityDefaultKey(scope, '00000000-0000-4000-8000-000000000501'); const other = universityDefaultKey({ ...scope, farmId: otherFarm }, '00000000-0000-4000-8000-000000000502'); storage.setItem(mine, JSON.stringify({ version: 1, amount: 120 })); storage.setItem(other, JSON.stringify({ version: 1, amount: 130 }))
+  assert.equal(quarantineRevokedFarmWork(storage, scope, stamp), 1); assert.equal(storage.getItem(mine), null); assert.notEqual(storage.getItem(other), null)
+  const saved = readRevokedFarmRecovery(storage, project, user); assert.equal(saved.length, 1); assert.equal(saved[0]!.kind, 'university_defaults'); assert.equal(saved[0]!.originalKey, mine); assert.deepEqual(saved[0]!.payload, { version: 1, amount: 120 })
+  assert.equal(quarantineRevokedFarmWork(storage, scope, stamp), 0) }
+{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const key = universityDefaultKey(scope, '00000000-0000-4000-8000-000000000503'); storage.setItem(key, '{"version":1,"amount":"x"}'); assert.throws(() => quarantineRevokedFarmWork(storage, scope, stamp)); assert.notEqual(storage.getItem(key), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }

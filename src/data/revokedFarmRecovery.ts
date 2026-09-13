@@ -15,8 +15,9 @@ import { parseSoilRxQueue } from './soilRxWriteQueue'
 import { isSoilRxStoredCleanupEntry, readSoilRxCleanupOutbox, soilRxCleanupOutboxKey, type SoilRxStoredCleanupEntry } from './soilRxCleanupOutbox'
 import type { FarmOperationContext } from './farmOperationContext'
 import { settingsDraftKeyOf } from './settingsDrafts'
+import { universityDefaultLineOf, validUniversityDefault } from './universityDefaultProvenance'
 
-export type RevokedWorkKind = 'queue' | 'needs_attention' | 'scouting_cleanup' | 'soil_rx_cleanup' | 'settings_drafts'
+export type RevokedWorkKind = 'queue' | 'needs_attention' | 'scouting_cleanup' | 'soil_rx_cleanup' | 'settings_drafts' | 'university_defaults'
 export type RevokedWorkItem = { version: 1; id: string; projectRef: string; userId: string; farmId: string; originalKey: string; kind: RevokedWorkKind; capturedAt: string; reason: 'farm_access_removed'; payload: unknown }
 type Envelope = { version: 1; records: RevokedWorkItem[] }
 type Scope = { projectRef: string; userId: string; farmId: string }
@@ -100,6 +101,7 @@ function validItem(value: unknown): value is RevokedWorkItem {
   if (kind === 'scouting_cleanup') return row.originalKey === scoutingCleanupOutboxKey(String(row.projectRef), String(row.userId)) && Array.isArray(row.payload) && row.payload.every((entry) => validScoutingCleanup(entry, String(row.farmId), String(row.userId)))
   if (kind === 'soil_rx_cleanup') return row.originalKey === soilRxCleanupOutboxKey(String(row.projectRef), String(row.userId)) && Array.isArray(row.payload) && row.payload.every((entry) => validSoilRxCleanup(entry, String(row.farmId), String(row.userId)))
   if (kind === 'settings_drafts') { const draftKey = settingsDraftKeyOf(String(row.originalKey), { projectRef: String(row.projectRef), userId: String(row.userId), farmId: String(row.farmId) }); return draftKey !== null && validSettingsDraft(row.payload, draftKey) && row.payload.entries.length > 0 }
+  if (kind === 'university_defaults') return universityDefaultLineOf(String(row.originalKey), { projectRef: String(row.projectRef), userId: String(row.userId), farmId: String(row.farmId) }) !== null && validUniversityDefault(row.payload)
   if (kind !== 'queue' && kind !== 'needs_attention') return false
   const scope = { projectRef: String(row.projectRef), userId: String(row.userId), farmId: String(row.farmId) }
   const expected = expectedQueueKey(String(row.originalKey), scope)
@@ -152,6 +154,16 @@ export function quarantineRevokedFarmWork(storage: EnumeratedStorage, scope: Sco
       try { draft = JSON.parse(raw) } catch { throw new Error('Farm Rx found unreadable or mismatched saved work for a farm you no longer can open. Nothing was cleared.') }
       if (!validSettingsDraft(draft, draftKey)) throw new Error('Farm Rx found unreadable or mismatched saved work for a farm you no longer can open. Nothing was cleared.')
       if (draft.entries.length === 0) emptyKeys.push(key); else candidate.push({ key, kind: 'settings_drafts', payload: draft })
+      continue
+    }
+    // A seeded U of I amount kept for a line while the badge column is missing (see universityDefaultProvenance.ts): private
+    // financial provenance that leaves active storage with the rest of the farm's work.
+    if (universityDefaultLineOf(key, scope) !== null) {
+      const raw = storage.getItem(key); if (raw === null) continue
+      let value: unknown
+      try { value = JSON.parse(raw) } catch { throw new Error('Farm Rx found unreadable or mismatched saved work for a farm you no longer can open. Nothing was cleared.') }
+      if (!validUniversityDefault(value)) throw new Error('Farm Rx found unreadable or mismatched saved work for a farm you no longer can open. Nothing was cleared.')
+      candidate.push({ key, kind: 'university_defaults', payload: value })
       continue
     }
     const expected = expectedQueueKey(key, scope); if (!expected) continue

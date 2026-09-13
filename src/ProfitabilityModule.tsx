@@ -56,6 +56,7 @@ import type { Commodity } from "./data/fields";
 import type { ProgramsData } from "./data/programs";
 import { SAVE_DURABILITY_UPDATE_MESSAGE } from "./data/saveDurability";
 import { forgetLegacyDefaults, readLegacyDefaults, takeUnretainedLegacyDefaults } from "./data/universityDefaultProvenance";
+import { supabaseConfig } from "./lib/supabaseConfig";
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -303,12 +304,15 @@ export function ProfitabilityPage() {
     // Seeded amounts this browser refused to keep while the column is missing: the numbers are saved, the badge is not, say so once.
     const lost = takeUnretainedLegacyDefaults().filter((id) => workspace.cost_lines.some((line) => line.id === id));
     if (lost.length) setBadgeNotice(`Your cost lines are saved, but this browser could not keep the "U of I default" badge for ${lost.length === 1 ? "one line" : `${lost.length} lines`} (its storage is full or blocked). Those lines show no badge; re-add the typical lines after the farm settings update is live to restore it.`);
-    const legacy = readLegacyDefaults();
+    // The entries are kept per account and farm; a screen rendered outside the farm-access provider (regression harnesses) has neither and reads none.
+    if (!farmAccess) return;
+    const scope = { projectRef: supabaseConfig.projectRef, userId: farmAccess.profile.userId, farmId: workspace.fields.farm.id };
+    const legacy = readLegacyDefaults(scope);
     const ids = Object.keys(legacy);
     setBrowserBadges(Object.fromEntries(Object.entries(legacy).filter(([id]) => workspace.cost_lines.some((line) => line.id === id && line.university_default_amount == null))));
     if (ids.length === 0) return;
     const confirmed = workspace.cost_lines.filter((line) => legacy[line.id] !== undefined && line.university_default_amount === legacy[line.id]).map((line) => line.id);
-    if (confirmed.length) forgetLegacyDefaults(confirmed);
+    if (confirmed.length) forgetLegacyDefaults(scope, confirmed);
     if (!canEditProfitability) return;
     const pending = workspace.cost_lines.filter((line) => legacy[line.id] !== undefined && line.university_default_amount == null && !legacyBadgeAttempts.current.has(line.id));
     if (pending.length === 0) return;
@@ -317,7 +321,7 @@ export function ProfitabilityPage() {
       try { for (const line of pending) await profitabilityRepository.saveCostLine({ ...line, university_default_amount: legacy[line.id] }); } catch { /* the entries stay in the browser and are retried on the next visit */ }
       await refresh().catch(() => undefined);
     })();
-  }, [workspace, canEditProfitability]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [workspace, canEditProfitability, farmAccess]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = async (key: string, work: () => Promise<void | "saved" | "queued offline">): Promise<boolean> => {
     const writeLock = writeLocks.current.get(key);
     if (!writeLock.acquire()) return false;

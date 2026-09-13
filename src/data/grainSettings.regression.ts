@@ -4,7 +4,7 @@ import { readGrain } from './MockGrainRepository'
 import type { GrainCarryGrid, GrainCarrySettings, GrainSaleLimit } from './grain'
 import { settingsSlicesFromResults } from './SupabaseGrainDataGateway'
 import { saveCostLineWithBadgeFallback } from './SupabaseProfitabilityDataGateway'
-import { forgetLegacyDefaults, readLegacyDefaults, rememberLegacyDefault, takeUnretainedLegacyDefaults } from './universityDefaultProvenance'
+import { forgetLegacyDefaults, readLegacyDefaults, rememberLegacyDefault, takeUnretainedLegacyDefaults, universityDefaultKey, universityDefaultLineOf } from './universityDefaultProvenance'
 import { beginPendingSettingsWork, hasPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_SAVE_FAILED, SETTINGS_SAVE_STILL_RUNNING, settlePendingSettingsWork } from './pendingSettingsWork'
 import { clearSettingsDraft, readSettingsDrafts, settingsDraftKey, settingsDraftKeyOf, writeSettingsDraft } from './settingsDrafts'
 import { queueFarmRevocationScope } from './farmRevocationFence'
@@ -70,10 +70,10 @@ assert(threw, 'Any other carry-settings error must still fail closed.')
 
 // The badge column is written when present and dropped only on PGRST204 (column missing on the live database).
 const attempts: Array<Record<string, unknown>> = []
-const savedWith = await saveCostLineWithBadgeFallback(async (columns) => { attempts.push(columns); return columns }, { id: uid(40), label: 'Seed' }, 120)
+const savedWith = await saveCostLineWithBadgeFallback(async (columns) => { attempts.push(columns); return columns }, { id: uid(40), label: 'Seed' }, 120, () => true)
 assert(attempts.length === 1 && savedWith.university_default_amount === 120, 'The badge column is written on the first attempt when the database has it.')
 attempts.length = 0
-const savedWithout = await saveCostLineWithBadgeFallback(async (columns) => { attempts.push(columns); if ('university_default_amount' in columns) throw Object.assign(new Error('column not found'), { code: 'PGRST204' }); return columns }, { id: uid(40), label: 'Seed' }, 120)
+const savedWithout = await saveCostLineWithBadgeFallback(async (columns) => { attempts.push(columns); if ('university_default_amount' in columns) throw Object.assign(new Error('column not found'), { code: 'PGRST204' }); return columns }, { id: uid(40), label: 'Seed' }, 120, (id, amount) => rememberLegacyDefault({ projectRef: 'proj', userId: 'user-a', farmId: 'farm-a' }, id, amount))
 assert(attempts.length === 2 && !('university_default_amount' in savedWithout), 'PGRST204 must retry once without the badge column.')
 const retained: Array<[string, number]> = []
 const lineId = uid(41)
@@ -82,7 +82,7 @@ await saveCostLineWithBadgeFallback(async (columns) => { if ('university_default
 await saveCostLineWithBadgeFallback(async (columns) => columns, { id: uid(43), label: 'Seed' }, 120, (id, amount) => { retained.push([id, amount]); return true })
 assert(retained.length === 1 && retained[0]?.[0] === lineId && retained[0]?.[1] === 120, 'A seeded amount dropped on PGRST204 is retained for the line; a hand-entered line and a stored badge retain nothing.')
 let rethrown = false
-try { await saveCostLineWithBadgeFallback(async () => { throw Object.assign(new Error('stale'), { code: '23505' }) }, { id: uid(40) }, null) } catch { rethrown = true }
+try { await saveCostLineWithBadgeFallback(async () => { throw Object.assign(new Error('stale'), { code: '23505' }) }, { id: uid(40) }, null, () => true) } catch { rethrown = true }
 assert(rethrown, 'Any other error must not be swallowed by the badge fallback.')
 
 // Pending-work registry: the farm switcher warns while any settings save is queued or in flight, for that account and farm only.
@@ -203,28 +203,47 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
 // Badge provenance kept in the browser while the column is missing: one key per line (two tabs never overwrite each other), the
 // older single-map key still read and pruned, a refused write reported once instead of silently lost.
 {
-  // The badge-fallback checks above ran without browser storage, so their one seeded amount (uid 40) was reported as not kept.
+  // The badge-fallback checks above ran the real retainer without browser storage once, so that seeded amount (uid 40) was reported as not kept.
   const earlier = takeUnretainedLegacyDefaults()
   assert(earlier.length === 1 && earlier[0] === uid(40), 'The default retainer reports a seeded amount it could not keep without browser storage.')
   const store = new Map<string, string>()
   const fakeStorage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, value) }, removeItem: (key: string) => { store.delete(key) }, key: (index: number) => [...store.keys()][index] ?? null, get length() { return store.size } }
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: fakeStorage })
+  const badgeScope = { projectRef: 'proj', userId: 'user-a', farmId: 'farm-a' }
   store.set('farm-rx.profitability.university-defaults', JSON.stringify({ [uid(50)]: 100, [uid(51)]: 110 }))
-  assert(rememberLegacyDefault(uid(52), 120) && rememberLegacyDefault(uid(53), 130), 'A seeded amount is kept under its own key.')
-  const read = readLegacyDefaults()
-  assert(read[uid(50)] === 100 && read[uid(51)] === 110 && read[uid(52)] === 120 && read[uid(53)] === 130, 'Older single-map entries and per-line entries are read together.')
-  assert([...store.keys()].filter((key) => key.startsWith('farm-rx.profitability.university-default:')).length === 2, 'Each line has its own key, so tabs never replace each other\'s entries.')
-  forgetLegacyDefaults([uid(50), uid(52)])
-  const after = readLegacyDefaults()
+  assert(rememberLegacyDefault(badgeScope, uid(52), 120) && rememberLegacyDefault(badgeScope, uid(53), 130) && rememberLegacyDefault({ ...badgeScope, farmId: 'farm-b' }, uid(56), 160), 'A seeded amount is kept under its own key for its account and farm.')
+  const read = readLegacyDefaults(badgeScope)
+  assert(read[uid(50)] === 100 && read[uid(51)] === 110 && read[uid(52)] === 120 && read[uid(53)] === 130 && read[uid(56)] === undefined, 'Older single-map entries and this scope\'s per-line entries are read together; another farm\'s entry is not.')
+  assert(universityDefaultKey(badgeScope, uid(52)) === `farm-rx-university-default-${uid(52)}:v1:proj:user-a:farm-a` && universityDefaultLineOf(universityDefaultKey(badgeScope, uid(52)), badgeScope) === uid(52) && universityDefaultLineOf(universityDefaultKey({ ...badgeScope, farmId: 'farm-b' }, uid(56)), badgeScope) === null, 'The key names the project, account, and farm in the offline-queue shape, so the revocation scope discovery and the quarantine find it.')
+  assert(queueFarmRevocationScope(universityDefaultKey(badgeScope, uid(52)))?.farmId === 'farm-a', 'The revocation scope discovery reads the farm from the key.')
+  assert(JSON.parse(store.get(universityDefaultKey(badgeScope, uid(52))) ?? 'null')?.entries === undefined, 'The value carries no entries, so the farm switcher\'s unsaved-work scan does not count it.')
+  forgetLegacyDefaults(badgeScope, [uid(50), uid(52)])
+  const after = readLegacyDefaults(badgeScope)
   assert(after[uid(50)] === undefined && after[uid(52)] === undefined && after[uid(51)] === 110 && after[uid(53)] === 130, 'Forgetting removes the per-line key and prunes the older map.')
   assert(takeUnretainedLegacyDefaults().length === 0, 'Nothing is reported while every write succeeded.')
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...fakeStorage, setItem: () => { throw new Error('QuotaExceededError') } } })
-  assert(rememberLegacyDefault(uid(54), 140) === false, 'A refused write returns false.')
+  assert(rememberLegacyDefault(badgeScope, uid(54), 140) === false, 'A refused write returns false.')
   const lost = takeUnretainedLegacyDefaults()
   assert(lost.length === 1 && lost[0] === uid(54) && takeUnretainedLegacyDefaults().length === 0, 'A refused write is reported once, by line.')
   Reflect.deleteProperty(globalThis, 'localStorage')
-  assert(Object.keys(readLegacyDefaults()).length === 0 && rememberLegacyDefault(uid(55), 150) === false, 'Without browser storage nothing is read and a write reports as refused.')
+  assert(Object.keys(readLegacyDefaults(badgeScope)).length === 0 && rememberLegacyDefault(badgeScope, uid(55), 150) === false, 'Without browser storage nothing is read and a write reports as refused.')
   takeUnretainedLegacyDefaults()
+}
+
+// A kept draft whose payload is not the shape the screen writes is dropped and its key removed, instead of reaching the screen.
+{
+  const store = new Map<string, string>()
+  const fakeStorage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, value) }, removeItem: (key: string) => { store.delete(key) }, key: (index: number) => [...store.keys()][index] ?? null, get length() { return store.size } }
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: fakeStorage })
+  const scope = { projectRef: 'proj', userId: 'user-a', farmId: 'farm-a' }
+  writeSettingsDraft(scope, 'carry-settings', { draft: { mode: 'flat' }, base: null }, '2026-09-13T12:00:00.000Z')
+  writeSettingsDraft(scope, 'carry-grid:e1', { estimateId: 'e1', draft: { harvestMonth: 8, defaultBasis: '0', rows: [] }, base: null }, '2026-09-13T12:00:00.000Z')
+  const isGood = (key: string, payload: unknown) => key === 'carry-grid:e1' && !!payload
+  assert(readSettingsDrafts(scope, 'carry-').length === 2, 'Without a guard every entry is returned.')
+  const kept = readSettingsDrafts(scope, 'carry-', isGood)
+  assert(kept.length === 1 && kept[0]?.key === 'carry-grid:e1', 'With a guard, an entry the screen cannot use is skipped.')
+  assert(store.has(settingsDraftKey(scope, 'carry-grid:e1')) && !store.has(settingsDraftKey(scope, 'carry-settings')), 'The unusable entry is removed from storage; the usable one stays.')
+  Reflect.deleteProperty(globalThis, 'localStorage')
 }
 
 console.log('Grain settings regressions passed.')

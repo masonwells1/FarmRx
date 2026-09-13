@@ -17,6 +17,14 @@ import { normalizeGrainSaleLimit } from "./data/grainSettings";
 // `base` is the row the editing session started from (the version the commit sends, so a row changed elsewhere conflicts);
 // `sent` is the last value this browser saved for the scope, kept so a replayed row of this browser's own is recognised.
 type SaleLimitDraft = { key: string; value: number | null; base: { id: string; updated_at: string } | null; sent?: number | null };
+// A kept draft is used only when its shape is the one this page writes; anything else (an older release, a damaged entry) is dropped.
+const isSaleLimitDraft = (key: string, payload: unknown): payload is SaleLimitDraft => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const draft = payload as Record<string, unknown>;
+  const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value);
+  const base = draft.base as Record<string, unknown> | null | undefined;
+  return draft.key === key.slice("sale-limit:".length) && (draft.value === null || finite(draft.value)) && (base === null || (!!base && typeof base === "object" && typeof base.id === "string" && typeof base.updated_at === "string")) && (draft.sent === undefined || draft.sent === null || finite(draft.sent));
+};
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type {
@@ -340,7 +348,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
         // A member who may read but not write leaves every kept draft in storage, untouched and unsent, until edit access returns
         // (the refresh below on that change adopts it then); nothing is saved on their behalf.
         const scope = canWriteSettingsRef.current ? draftScopeFor(data.fields.farm.id) : null;
-        if (scope) for (const entry of readSettingsDrafts(scope, "sale-limit:")) {
+        if (scope) for (const entry of readSettingsDrafts(scope, "sale-limit:", isSaleLimitDraft)) {
           const kept = entry.payload as SaleLimitDraft;
           const row = data.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === kept.key);
           const typing = dirtySaleLimits.current.has(kept.key);
@@ -417,11 +425,15 @@ export function GrainPage({ services }: { services: GrainServices }) {
     void refresh();
   }, []);
   // Edit access returned (a member re-promoted while on the page): refresh so the drafts left untouched while read-only are adopted.
+  // Edit access lost while a limit was still being typed: the browser draft stays for a later visit with edit access, but nothing is
+  // sent for this member any more, so the in-memory pending work is released and a confirmed farm switch is not refused.
   const previousCanWrite = useRef(canWriteSettings);
   useEffect(() => {
     const returned = !previousCanWrite.current && canWriteSettings;
+    const lost = previousCanWrite.current && !canWriteSettings;
     previousCanWrite.current = canWriteSettings;
     if (returned && workspaceRef.current) void refresh().catch(() => undefined);
+    if (lost) { for (const key of dirtySaleLimits.current) settleSaleLimitUnflushed(key); dirtySaleLimits.current.clear(); failedSaleLimits.current.clear(); saleLimitBases.current = {}; saleLimitDraftRevisions.current = {}; }
   }, [canWriteSettings]); // eslint-disable-line react-hooks/exhaustive-deps
   const whisper = () => undefined;
   const saleLimitsRef = useRef(saleLimits);
@@ -539,11 +551,11 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const persistedSettings = workspace?.capabilities?.persisted_settings === true;
   useEffect(() => {
     const scope = pendingScopeFor(activeFarmId);
-    if (!scope || !persistedSettings) return;
+    if (!scope || !persistedSettings || !canWriteSettings) return; // a member who may not write has nothing to send
     return registerPendingSettingsFlush(scope, () => {
       for (const estimate of workspaceRef.current?.production_estimates ?? []) if (dirtySaleLimits.current.has(scopeKey(scopeOf(estimate)))) void commitSaleLimitRef.current(estimate);
     });
-  }, [activeFarmId, persistedSettings]);
+  }, [activeFarmId, persistedSettings, canWriteSettings]);
   const carryPersistence = {
     saveSettings: async (settings: GrainCarrySettings) => {
       if (!(await farmStillSelected(settings.farm_id))) contextChanged();
