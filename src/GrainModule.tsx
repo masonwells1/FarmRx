@@ -653,7 +653,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
                   failedSaleLimits.current.delete(key);
                   // Written to the browser at once, so a reload or a save that fails after leaving the page keeps what was typed.
                   const scope = draftScopeFor(estimate.farm_id);
-                  if (scope) { const existing = workspace.grain_sale_limits.find((row) => scopeKey(scopeOf(row)) === key); const revision = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: limit, base: existing ? { id: existing.id, updated_at: existing.updated_at } : null } satisfies SaleLimitDraft); saleLimitDraftRevisions.current[key] = revision; if (revision === null) clearSettingsDraft(scope, `sale-limit:${key}`); }
+                  // If the browser refuses the draft (private mode, blocked or full storage), commit the value at once rather than waiting for blur.
+                  if (scope) { const existing = workspace.grain_sale_limits.find((row) => scopeKey(scopeOf(row)) === key); const revision = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: limit, base: existing ? { id: existing.id, updated_at: existing.updated_at } : null } satisfies SaleLimitDraft); saleLimitDraftRevisions.current[key] = revision; if (revision === null) { clearSettingsDraft(scope, `sale-limit:${key}`); setTimeout(() => void commitSaleLimit(estimate), 0); } }
                   markSaleLimitUnflushed(scopeKey(scopeOf(estimate)));
                   setSaleLimits((current) => ({ ...current, [scopeKey(scopeOf(estimate))]: limit }));
                 }}
