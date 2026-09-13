@@ -204,6 +204,8 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   useEffect(() => {
     if (!persisted) return
     const row = workspace.grain_carry_settings; const version = row?.updated_at ?? null
+    // Whatever brought the row (this screen's save, another device's row after a conflict, a replay), it supersedes the device-only rates.
+    if (row) forgetStoredSettings(farmId)
     if (version !== baseVersions.current.settings && settingsDirty.current && row && sentRows.current.settings && sameSettingsContent(row, sentRows.current.settings)) {
       // This screen's own queued save came back with its replayed version (even after a remount, since the lineage travels with the
       // draft): keep the draft being edited and rebase it.
