@@ -1763,7 +1763,7 @@ function InsuranceCalculator({
             </small>
           </div>
           <div>
-            <span>Bushels safe to sell (insurance floor)</span>
+            <span>Insurance floor estimate (bushels)</span>
             <strong>
               {insurance.insuranceBackedMarketingEstimateBushels === null
                 ? "Allocate acres to calculate"
@@ -2101,7 +2101,7 @@ function CostLine({
           }}
         />
       </td>
-      <td className="numeric">
+      <td className="numeric" data-label="Bushels to cover">
         {decimal.format(line.amount_per_acre / price)} bu
       </td>
       <td>

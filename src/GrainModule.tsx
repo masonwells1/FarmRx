@@ -2251,7 +2251,7 @@ export function PositionCard({
           }
         />
         <Metric
-          label="Bushels safe to sell"
+          label="Insurance floor estimate"
           value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`}
           note={estimateNote}
         />

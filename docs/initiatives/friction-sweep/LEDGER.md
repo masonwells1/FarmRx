@@ -23,3 +23,12 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Remaining risk:** the Profitability tables were proven through replicas, not the live screen; the pull request's Vercel preview is the place to confirm them with real data. A fresh-context read-only review of the exact commit is still required for the screen tier.
 - **Rollback path:** revert the slice 2 commit; it touches no data.
 - **Next:** push the branch, open a draft pull request, request the Codex review, and stop at `READY FOR APPROVAL` before merge. Slice 3 starts after slice 2 has a committed, reviewed tip.
+
+## FS-002 — Codex review repairs on slice 2
+
+- **Date/time:** 2026-09-13 11:05 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed commit `204ef34b125a6d3da64b9291d2e165ad56b0a30a` on pull request #43 and returned three findings. All three were verified against the code and repaired in the next commit; this entry corrects FS-001 where noted.
+- **Finding 1 (P1, wording):** FS-001 relabeled the insurance number `Bushels safe to sell`. That overstates it. The value is APH × coverage × acres, Revenue Protection pays money rather than bushels, and the note beside it already warns the farmer can be left exposed. Both labels now read `Insurance floor estimate` (Grain) and `Insurance floor estimate (bushels)` (Profitability). Plain English must not promise more than the math does.
+- **Finding 2 (P2, permission):** the new Equipment empty-state `Add a machine` button showed for every member, but the add form only renders for owners and managers, so a worker who tapped it saw a blank page. The button now renders only when the viewer can manage equipment, matching the header button.
+- **Finding 3 (P2, layout):** the editable cost line's bushels cell had no `data-label`, so a hand-entered cost row showed a bare `20 bu` on phones. The label `Bushels to cover` was added.
+- **Proof:** `npx tsc -b --force` exit 0; focused regressions and `npm run build` rerun as recorded in the pull request; Foundation gate on the new head.

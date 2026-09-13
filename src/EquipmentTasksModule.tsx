@@ -142,7 +142,11 @@ export function EquipmentPage({
         />
       )}
       {!current && !adding && (
-        <EquipmentCards workspace={workspace} choose={setSelected} onAdd={() => setAdding(true)} />
+        <EquipmentCards
+          workspace={workspace}
+          choose={setSelected}
+          onAdd={canManage ? () => setAdding(true) : undefined}
+        />
       )}
     </section>
   );
@@ -154,7 +158,7 @@ function EquipmentCards({
 }: {
   workspace: EquipmentTasksWorkspace;
   choose: (id: string) => void;
-  onAdd: () => void;
+  onAdd?: () => void;
 }) {
   const grouped = categories
     .map(
@@ -170,7 +174,9 @@ function EquipmentCards({
       <div className="teaching-empty">
         <h2>No machines yet.</h2>
         <p>Add the first machine to track service, costs, and hours.</p>
-        <button className="primary-action" type="button" onClick={onAdd}>Add a machine</button>
+        {onAdd && (
+          <button className="primary-action" type="button" onClick={onAdd}>Add a machine</button>
+        )}
       </div>
     );
   return (
