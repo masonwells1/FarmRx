@@ -152,10 +152,20 @@ assert(!hasPendingSettingsWork(farm), 'The farm is clear once every queued save 
   assert(Array.isArray(stored.entries) && stored.entries.length === 2, 'The stored value carries a non-empty entries array, one per draft key, latest write winning.')
   assert(readSettingsDrafts(scopeA, 'carry-').length === 2 && (readSettingsDrafts(scopeA, 'carry-settings')[0].payload as { draft: string }).draft === 'S2', 'Drafts read back by prefix with the latest payload.')
   assert(readSettingsDrafts(scopeB).length === 0, 'Another account on the same farm sees no drafts.')
+  // Two tabs on the same account and farm: a save that covered an older write must not clear a newer draft under the same key.
+  const older = writeSettingsDraft(scopeA, 'sale-limit:p', { value: 1 }, stamp); const newer = writeSettingsDraft(scopeA, 'sale-limit:p', { value: 2 }, stamp)
+  assert(older !== null && newer !== null && older !== newer, 'Every write has its own revision.')
+  clearSettingsDraft(scopeA, 'sale-limit:p', older)
+  assert((readSettingsDrafts(scopeA, 'sale-limit:p')[0]?.payload as { value: number })?.value === 2, 'Clearing with an older revision must leave the newer draft.')
+  clearSettingsDraft(scopeA, 'sale-limit:p', newer)
+  assert(readSettingsDrafts(scopeA, 'sale-limit:p').length === 0, 'Clearing with the current revision removes the draft.')
   clearSettingsDraft(scopeA, 'carry-settings')
   assert(readSettingsDrafts(scopeA).length === 1 && readSettingsDrafts(scopeA)[0].key === 'carry-grid:x', 'Clearing one draft leaves the others.')
   clearSettingsDraft(scopeA, 'carry-grid:x')
   assert(store.get(key) === undefined, 'Clearing the last draft removes the key, so the farm no longer looks pending.')
+  // A browser that refuses the write reports it, so the screen saves at once instead of believing the edit is kept.
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...fakeStorage, setItem: () => { throw new Error('QuotaExceededError') } } })
+  assert(writeSettingsDraft(scopeA, 'carry-settings', { draft: 'S3' }, stamp) === null, 'A refused write must return null.')
   Reflect.deleteProperty(globalThis, 'localStorage')
 }
 

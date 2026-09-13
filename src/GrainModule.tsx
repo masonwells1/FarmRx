@@ -329,8 +329,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
         if (scope) for (const entry of readSettingsDrafts(scope, "sale-limit:")) {
           const kept = entry.payload as SaleLimitDraft;
           const row = data.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === kept.key);
-          if ((row?.id ?? null) !== (kept.base?.id ?? null) || (row?.updated_at ?? null) !== (kept.base?.updated_at ?? null)) { clearSettingsDraft(scope, entry.key); continue; }
+          if ((row?.id ?? null) !== (kept.base?.id ?? null) || (row?.updated_at ?? null) !== (kept.base?.updated_at ?? null)) { clearSettingsDraft(scope, entry.key, entry.revision); continue; }
           if (dirtySaleLimits.current.has(kept.key)) continue; // the farmer is already typing here
+          saleLimitDraftRevisions.current[kept.key] = entry.revision;
           dirtySaleLimits.current.add(kept.key); failedSaleLimits.current.add(kept.key); markSaleLimitUnflushed(kept.key, data.fields.farm.id);
           saleLimitsRef.current = { ...saleLimitsRef.current, [kept.key]: kept.value };
           setSaleLimits((current) => ({ ...current, [kept.key]: kept.value }));
@@ -397,6 +398,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
   useEffect(() => () => { mountedRef.current = false; }, []);
   // The account and farm this page loaded for: a save runs only while both are still the live selection (another tab may have changed either).
   const originRef = useRef<{ userId: string; farmId: string } | null>(null);
+  // The revision of the browser draft last written or adopted per position: a save clears only that revision (another tab may have written since).
+  const saleLimitDraftRevisions = useRef<Record<string, string | null>>({});
   // The browser draft scope for this account and farm (see settingsDrafts.ts); undefined until the page knows its account.
   const draftScopeFor = (farmId: string): SettingsDraftScope | undefined => originRef.current ? { projectRef: supabaseConfig.projectRef, userId: originRef.current.userId, farmId } : undefined;
   const settleSaleLimitUnflushed = (key: string) => { unflushedSaleLimits.current.get(key)?.(); unflushedSaleLimits.current.delete(key); };
@@ -422,19 +425,21 @@ export function GrainPage({ services }: { services: GrainServices }) {
     settleSaleLimitUnflushed(key);
     let savedValue: number | null | undefined;
     let failure: unknown;
+    const draftRevision = saleLimitDraftRevisions.current[key] ?? null;
+    const clearDraft = () => { const scope = draftScopeFor(estimate.farm_id); if (scope && draftRevision) clearSettingsDraft(scope, `sale-limit:${key}`, draftRevision); };
     try {
       const current = workspaceRef.current;
       if (!current || current.capabilities?.persisted_settings !== true) return;
       const value = saleLimitsRef.current[key] ?? null;
       const existing = current.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === key);
-      if ((existing?.sale_limit_bushels ?? null) === value) { dirtySaleLimits.current.delete(key); savedValue = value; const scope = draftScopeFor(estimate.farm_id); if (scope) clearSettingsDraft(scope, `sale-limit:${key}`); return; }
+      if ((existing?.sale_limit_bushels ?? null) === value) { dirtySaleLimits.current.delete(key); savedValue = value; clearDraft(); return; }
       const stamp = new Date().toISOString();
       try {
         if (!(await farmStillSelected(estimate.farm_id))) contextChanged();
         const saved = await services.grainRepository.saveGrainSaleLimit({ id: existing?.id ?? services.createGrainId(), ...scopeOf(estimate), sale_limit_bushels: value, created_at: existing?.created_at ?? stamp, updated_at: existing?.updated_at ?? stamp });
         savedValue = saved.sale_limit_bushels;
         failedSaleLimits.current.delete(key);
-        if ((saleLimitsRef.current[key] ?? null) === savedValue) { dirtySaleLimits.current.delete(key); const scope = draftScopeFor(estimate.farm_id); if (scope) clearSettingsDraft(scope, `sale-limit:${key}`); }
+        if ((saleLimitsRef.current[key] ?? null) === savedValue) { dirtySaleLimits.current.delete(key); clearDraft(); }
         setSettingsNotice("");
         // Keep the ref current too, so a follow-up commit chained below sees the saved row before React renders it.
         const next = (workspaceCurrent: GrainWorkspace) => ({ ...workspaceCurrent, grain_sale_limits: [...workspaceCurrent.grain_sale_limits.filter((limit) => scopeKey(scopeOf(limit)) !== key), saved] });
@@ -648,7 +653,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
                   failedSaleLimits.current.delete(key);
                   // Written to the browser at once, so a reload or a save that fails after leaving the page keeps what was typed.
                   const scope = draftScopeFor(estimate.farm_id);
-                  if (scope) { const existing = workspace.grain_sale_limits.find((row) => scopeKey(scopeOf(row)) === key); writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: limit, base: existing ? { id: existing.id, updated_at: existing.updated_at } : null } satisfies SaleLimitDraft); }
+                  if (scope) { const existing = workspace.grain_sale_limits.find((row) => scopeKey(scopeOf(row)) === key); const revision = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: limit, base: existing ? { id: existing.id, updated_at: existing.updated_at } : null } satisfies SaleLimitDraft); saleLimitDraftRevisions.current[key] = revision; if (revision === null) clearSettingsDraft(scope, `sale-limit:${key}`); }
                   markSaleLimitUnflushed(scopeKey(scopeOf(estimate)));
                   setSaleLimits((current) => ({ ...current, [scopeKey(scopeOf(estimate))]: limit }));
                 }}

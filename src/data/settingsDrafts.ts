@@ -5,7 +5,11 @@
  * project, account, and farm, and the value has a non-empty `entries` array, so the farm switcher's existing scan
  * (`hasPendingFarmWork`) counts it as work waiting for that farm and that account only. */
 export type SettingsDraftScope = { projectRef: string; userId: string; farmId: string }
-export type SettingsDraftEntry = { key: string; payload: unknown; savedAt: string }
+/** `revision` identifies one write; a save clears the entry only when the revision it covered is still the stored one,
+ * so a tab finishing an older save never removes a newer draft another tab wrote under the same key. */
+export type SettingsDraftEntry = { key: string; payload: unknown; savedAt: string; revision: string }
+let revisionCounter = 0
+function nextRevision(now: string): string { revisionCounter += 1; return `${now}#${revisionCounter}#${Math.random().toString(36).slice(2, 10)}` }
 
 export function settingsDraftsKey(scope: SettingsDraftScope): string { return `farm-rx-settings-drafts:v1:${scope.projectRef}:${scope.userId}:${scope.farmId}` }
 
@@ -17,22 +21,27 @@ function readAll(scope: SettingsDraftScope): SettingsDraftEntry[] {
     const raw = target.getItem(settingsDraftsKey(scope)); if (!raw) return []
     const value = JSON.parse(raw) as { entries?: unknown }
     if (!Array.isArray(value.entries)) return []
-    return value.entries.filter((entry): entry is SettingsDraftEntry => typeof entry === 'object' && entry !== null && typeof (entry as SettingsDraftEntry).key === 'string')
+    return value.entries.filter((entry): entry is SettingsDraftEntry => typeof entry === 'object' && entry !== null && typeof (entry as SettingsDraftEntry).key === 'string' && typeof (entry as SettingsDraftEntry).revision === 'string')
   } catch { return [] }
 }
 
-function writeAll(scope: SettingsDraftScope, entries: SettingsDraftEntry[]): void {
-  const target = storage(); if (!target) return
-  try { if (entries.length === 0) target.removeItem(settingsDraftsKey(scope)); else target.setItem(settingsDraftsKey(scope), JSON.stringify({ version: 1, entries })) } catch { /* private mode or a full store: the in-memory draft still saves normally */ }
+/** True when the browser accepted the write; false in private mode, with storage blocked, or when the store is full. */
+function writeAll(scope: SettingsDraftScope, entries: SettingsDraftEntry[]): boolean {
+  const target = storage(); if (!target) return false
+  try { if (entries.length === 0) target.removeItem(settingsDraftsKey(scope)); else target.setItem(settingsDraftsKey(scope), JSON.stringify({ version: 1, entries })); return true } catch { return false }
 }
 
 export function readSettingsDrafts(scope: SettingsDraftScope, prefix = ''): SettingsDraftEntry[] { return readAll(scope).filter((entry) => entry.key.startsWith(prefix)) }
 
-export function writeSettingsDraft(scope: SettingsDraftScope, key: string, payload: unknown, now = new Date().toISOString()): void {
-  writeAll(scope, [...readAll(scope).filter((entry) => entry.key !== key), { key, payload, savedAt: now }])
+/** Writes the draft and returns its revision, or null when the browser refused the write: the caller must then not treat
+ * the edit as kept and should save it at once instead of waiting. */
+export function writeSettingsDraft(scope: SettingsDraftScope, key: string, payload: unknown, now = new Date().toISOString()): string | null {
+  const revision = nextRevision(now)
+  return writeAll(scope, [...readAll(scope).filter((entry) => entry.key !== key), { key, payload, savedAt: now, revision }]) ? revision : null
 }
 
-export function clearSettingsDraft(scope: SettingsDraftScope, key: string): void {
-  const entries = readAll(scope); const kept = entries.filter((entry) => entry.key !== key)
+/** Removes the draft; with `revision`, only when the stored entry is still that write (another tab may have written a newer one). */
+export function clearSettingsDraft(scope: SettingsDraftScope, key: string, revision?: string): void {
+  const entries = readAll(scope); const kept = entries.filter((entry) => entry.key !== key || (revision !== undefined && entry.revision !== revision))
   if (kept.length !== entries.length) writeAll(scope, kept)
 }
