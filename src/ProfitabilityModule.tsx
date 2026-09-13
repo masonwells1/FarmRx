@@ -1335,7 +1335,9 @@ function CostLineGroups({
                   {lines.length === 1 ? "item" : "items"}
                 </small>
               </th>
-              <td className="numeric">{money.format(subtotal)}</td>
+              <td className="numeric" data-label="Subtotal $ per acre">
+                {money.format(subtotal)}
+              </td>
               <td colSpan={2}>
                 <button
                   className="cost-category-toggle"

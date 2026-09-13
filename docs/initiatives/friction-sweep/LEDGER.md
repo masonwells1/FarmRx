@@ -47,3 +47,9 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Date/time:** 2026-09-13 11:30 -05:00 (`America/Chicago`).
 - **Trigger:** Codex reviewed `96cc540d8dab04e7232f56f3d6450bd3e10ca294` and returned one finding: the `Assign a program to a field` button on the Programs season tracker's empty state rendered for read-only members, where the route's write lock disables it. The button is now gated by the tracker's existing `canEdit` prop, matching the `Add a program` empty-state action. This is the last empty-state action added by slice 2 that lacked a permission gate; every one now follows the rule recorded in FS-003.
 - **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; Programs regressions (chunk 5, Supabase Programs repository) passed.
+
+## FS-005 — Fourth Codex round: category subtotal labeled on phones
+
+- **Date/time:** 2026-09-13 11:40 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `c95132dfba10d98291251e98ebf22cc3cce1f1e5` and returned one finding: on phones the cost table's category subtotal row showed a bare dollar amount beside the item count and toggle, because that cell had no `data-label`. The cell now carries `Subtotal $ per acre`, so every stacked number in the table has a visible label.
+- **Proof:** `npx tsc -b --force` exit 0; `npm run build` exit 0; `git diff --check` clean; Profitability equipment-cost regression passed.
