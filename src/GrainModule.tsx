@@ -11,7 +11,9 @@ import { beginPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_CONTEX
 import { clearSettingsDraft, readSettingsDrafts, writeSettingsDraft, type SettingsDraftScope } from "./data/settingsDrafts";
 import { supabaseConfig } from "./lib/supabaseConfig";
 import { getModuleSyncStatus, subscribeSyncStatus } from "./data/syncStatus";
-type SaleLimitDraft = { key: string; value: number | null; base: { id: string; updated_at: string } | null };
+// `base` is the row the editing session started from (the version the commit sends, so a row changed elsewhere conflicts);
+// `sent` is the last value this browser saved for the scope, kept so a replayed row of this browser's own is recognised.
+type SaleLimitDraft = { key: string; value: number | null; base: { id: string; updated_at: string } | null; sent?: number | null };
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type {
@@ -322,7 +324,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
           if (newer) adopted.push(key);
           return newer;
         });
-        for (const key of adopted) { dirtySaleLimits.current.delete(key); failedSaleLimits.current.delete(key); settleSaleLimitUnflushed(key); }
+        for (const key of adopted) { dirtySaleLimits.current.delete(key); failedSaleLimits.current.delete(key); delete saleLimitBases.current[key]; settleSaleLimitUnflushed(key); }
         setSaleLimits((current) => ({ ...current, ...Object.fromEntries(rows.map((limit) => [scopeKey(scopeOf(limit)), limit.sale_limit_bushels])) }));
         // A limit this browser kept for this account and farm (its save failed, or the page was left before it ran) comes back
         // dirty and pending, unless the farm's row moved on since, in which case the newer row wins and the draft is dropped.
@@ -331,14 +333,18 @@ export function GrainPage({ services }: { services: GrainServices }) {
           const kept = entry.payload as SaleLimitDraft;
           const row = data.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === kept.key);
           if ((row?.id ?? null) !== (kept.base?.id ?? null) || (row?.updated_at ?? null) !== (kept.base?.updated_at ?? null)) {
-            // The row moved on. A scope still being typed keeps its draft, rebased onto the refreshed row (the commit reads the row's
-            // version from this workspace, so the typed value is what the farmer will save); an idle scope's older draft is dropped.
-            if (dirtySaleLimits.current.has(kept.key)) saleLimitDraftRevisions.current[kept.key] = writeSettingsDraft(scope, entry.key, { ...kept, base: row ? { id: row.id, updated_at: row.updated_at } : null } satisfies SaleLimitDraft);
-            else clearSettingsDraft(scope, entry.key, entry.revision);
+            // The row moved on. A scope still being typed keeps its draft: when the refreshed row carries the value this browser last
+            // saved, it is this browser's own queued write coming back, so the draft is rebased onto it; otherwise the draft keeps its
+            // base, its commit conflicts, and the recovery refresh then replaces it with the other device's row. An idle scope's older
+            // draft is dropped.
+            if (dirtySaleLimits.current.has(kept.key)) {
+              const sent = saleLimitSent.current[kept.key] ?? kept.sent;
+              if (row && sent !== undefined && row.sale_limit_bushels === sent) { saleLimitBases.current[kept.key] = { id: row.id, updated_at: row.updated_at }; saleLimitDraftRevisions.current[kept.key] = writeSettingsDraft(scope, entry.key, { ...kept, base: { id: row.id, updated_at: row.updated_at }, sent } satisfies SaleLimitDraft); }
+            } else clearSettingsDraft(scope, entry.key, entry.revision);
             continue;
           }
           if (dirtySaleLimits.current.has(kept.key)) continue; // the farmer is already typing here
-          saleLimitDraftRevisions.current[kept.key] = entry.revision;
+          saleLimitDraftRevisions.current[kept.key] = entry.revision; saleLimitBases.current[kept.key] = kept.base; saleLimitSent.current[kept.key] = kept.sent;
           dirtySaleLimits.current.add(kept.key); failedSaleLimits.current.add(kept.key); markSaleLimitUnflushed(kept.key, data.fields.farm.id);
           saleLimitsRef.current = { ...saleLimitsRef.current, [kept.key]: kept.value };
           setSaleLimits((current) => ({ ...current, [kept.key]: kept.value }));
@@ -418,6 +424,10 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const originRef = useRef<{ userId: string; farmId: string } | null>(null);
   // The revision of the browser draft last written or adopted per position: a save clears only that revision (another tab may have written since).
   const saleLimitDraftRevisions = useRef<Record<string, string | null>>({});
+  // Per position: the row the current editing session started from (sent as the version, so another device's change conflicts instead
+  // of being overwritten) and the last value this browser saved (lineage: a refreshed row with that value is this browser's own write).
+  const saleLimitBases = useRef<Record<string, { id: string; updated_at: string } | null | undefined>>({});
+  const saleLimitSent = useRef<Record<string, number | null | undefined>>({});
   // The browser draft scope for this account and farm (see settingsDrafts.ts); undefined until the page knows its account.
   const draftScopeFor = (farmId: string): SettingsDraftScope | undefined => originRef.current ? { projectRef: supabaseConfig.projectRef, userId: originRef.current.userId, farmId } : undefined;
   const settleSaleLimitUnflushed = (key: string) => { unflushedSaleLimits.current.get(key)?.(); unflushedSaleLimits.current.delete(key); };
@@ -450,17 +460,21 @@ export function GrainPage({ services }: { services: GrainServices }) {
       if (!current || current.capabilities?.persisted_settings !== true) return;
       const value = saleLimitsRef.current[key] ?? null;
       const existing = current.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === key);
-      if ((existing?.sale_limit_bushels ?? null) === value) { dirtySaleLimits.current.delete(key); savedValue = value; clearDraft(); return; }
+      if ((existing?.sale_limit_bushels ?? null) === value) { dirtySaleLimits.current.delete(key); delete saleLimitBases.current[key]; savedValue = value; clearDraft(); return; }
       const stamp = new Date().toISOString();
       try {
         if (!(await farmStillSelected(estimate.farm_id))) contextChanged();
-        const saved = await services.grainRepository.saveGrainSaleLimit({ id: existing?.id ?? services.createGrainId(), ...scopeOf(estimate), sale_limit_bushels: value, created_at: existing?.created_at ?? stamp, updated_at: existing?.updated_at ?? stamp });
+        // The version sent is the row this editing session started from, so a row changed on another device since then conflicts
+        // (and the recovery refresh replaces the draft) instead of being overwritten with the typed value.
+        const base = saleLimitBases.current[key]; const origin = base === undefined ? existing : base;
+        const saved = await services.grainRepository.saveGrainSaleLimit({ id: origin?.id ?? services.createGrainId(), ...scopeOf(estimate), sale_limit_bushels: value, created_at: existing?.created_at ?? stamp, updated_at: origin?.updated_at ?? stamp });
         savedValue = saved.sale_limit_bushels;
         failedSaleLimits.current.delete(key);
-        if ((saleLimitsRef.current[key] ?? null) === savedValue) { dirtySaleLimits.current.delete(key); clearDraft(); }
+        saleLimitBases.current[key] = { id: saved.id, updated_at: saved.updated_at }; saleLimitSent.current[key] = saved.sale_limit_bushels;
+        if ((saleLimitsRef.current[key] ?? null) === savedValue) { dirtySaleLimits.current.delete(key); delete saleLimitBases.current[key]; clearDraft(); }
         // The farmer typed more while this save ran: rewrite the newer draft on top of the saved row, so a reload before the follow-up
         // commit does not mistake this save for another device's change and drop the newer value.
-        else { const scope = draftScopeFor(estimate.farm_id); if (scope) saleLimitDraftRevisions.current[key] = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: saleLimitsRef.current[key] ?? null, base: { id: saved.id, updated_at: saved.updated_at } } satisfies SaleLimitDraft); }
+        else { const scope = draftScopeFor(estimate.farm_id); if (scope) saleLimitDraftRevisions.current[key] = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: saleLimitsRef.current[key] ?? null, base: { id: saved.id, updated_at: saved.updated_at }, sent: saved.sale_limit_bushels } satisfies SaleLimitDraft); }
         setSettingsNotice("");
         // Keep the ref current too, so a follow-up commit chained below sees the saved row before React renders it.
         const next = (workspaceCurrent: GrainWorkspace) => ({ ...workspaceCurrent, grain_sale_limits: [...workspaceCurrent.grain_sale_limits.filter((limit) => scopeKey(scopeOf(limit)) !== key), saved] });
@@ -675,7 +689,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
                   // Written to the browser at once, so a reload or a save that fails after leaving the page keeps what was typed.
                   const scope = draftScopeFor(estimate.farm_id);
                   // If the browser refuses the draft (private mode, blocked or full storage), commit the value at once rather than waiting for blur.
-                  if (scope) { const existing = workspace.grain_sale_limits.find((row) => scopeKey(scopeOf(row)) === key); const revision = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: limit, base: existing ? { id: existing.id, updated_at: existing.updated_at } : null } satisfies SaleLimitDraft); saleLimitDraftRevisions.current[key] = revision; if (revision === null) { clearSettingsDraft(scope, `sale-limit:${key}`); setTimeout(() => void commitSaleLimit(estimate), 0); } }
+                  const existing = workspace.grain_sale_limits.find((row) => scopeKey(scopeOf(row)) === key);
+                  if (saleLimitBases.current[key] === undefined) saleLimitBases.current[key] = existing ? { id: existing.id, updated_at: existing.updated_at } : null;
+                  if (scope) { const revision = writeSettingsDraft(scope, `sale-limit:${key}`, { key, value: limit, base: saleLimitBases.current[key] ?? null, sent: saleLimitSent.current[key] } satisfies SaleLimitDraft); saleLimitDraftRevisions.current[key] = revision; if (revision === null) { clearSettingsDraft(scope, `sale-limit:${key}`); setTimeout(() => void commitSaleLimit(estimate), 0); } }
                   markSaleLimitUnflushed(scopeKey(scopeOf(estimate)));
                   setSaleLimits((current) => ({ ...current, [scopeKey(scopeOf(estimate))]: limit }));
                 }}
