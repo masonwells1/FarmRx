@@ -131,6 +131,12 @@ begin
   v_ok := false;
   begin update public.grain_carry_grids set harvest_month = 12 where id = '00000000-0000-4000-8000-000000000031'; v_ok := true; exception when check_violation then null; end;
   if v_ok then raise exception 'harvest month 12 accepted'; end if;
+  v_ok := false;
+  begin update public.grain_carry_grids set rows = '5'::jsonb where id = '00000000-0000-4000-8000-000000000031'; v_ok := true; exception when check_violation then null; end;
+  if v_ok then raise exception 'scalar carry grid accepted'; end if;
+  v_ok := false;
+  begin update public.grain_carry_grids set rows = (select jsonb_agg(g) from generate_series(1,13) g) where id = '00000000-0000-4000-8000-000000000031'; v_ok := true; exception when check_violation then null; end;
+  if v_ok then raise exception 'array of scalars accepted as carry grid'; end if;
 
   -- A row can never move to another farm.
   v_ok := false;

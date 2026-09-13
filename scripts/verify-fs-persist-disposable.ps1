@@ -12,6 +12,11 @@ function Invoke-Probe([string]$sql, [string]$failure) {
   if ($LASTEXITCODE -ne 0) { throw $failure }
 }
 
+function Invoke-ProbeExpecting([string]$sql, [string]$token, [string]$failure) {
+  $output = $sql | docker exec -i $name psql -q -v ON_ERROR_STOP=1 -U postgres -d farmrx_disposable 2>&1
+  if ($LASTEXITCODE -ne 0 -or (($output -join "`n") -notmatch [regex]::Escape($token))) { throw $failure }
+}
+
 try {
   docker run --rm -d --name $name -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=farmrx_disposable postgres:17 | Out-Null
   $ready = $false
@@ -33,7 +38,7 @@ try {
     }
 
   # The assertions live in one SQL file shared with scripts/verify-fs-persist-disposable.sh (Linux twin).
-  Invoke-Probe (Get-Content -Raw (Join-Path $root 'scripts/sql/fs-persist-disposable-assertions.sql')) 'Friction Sweep persistence assertions failed.'
+  Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/fs-persist-disposable-assertions.sql')) 'FS_PERSIST_DISPOSABLE_PASS' 'Friction Sweep persistence assertions failed.'
 
   $passed = $true
 } finally {

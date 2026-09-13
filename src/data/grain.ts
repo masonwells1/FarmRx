@@ -130,9 +130,10 @@ export interface GrainRepository {
   upsertGrainBin(bin: GrainBin): Promise<void>
   appendBinTransaction(transaction: BinTransaction): Promise<void>
   saveGrainAlertSettings(settings: GrainAlertSettings): Promise<void>
-  saveGrainSaleLimit(limit: GrainSaleLimit): Promise<void>
-  saveGrainCarrySettings(settings: GrainCarrySettings): Promise<void>
-  saveGrainCarryGrid(grid: GrainCarryGrid): Promise<void>
+  /** These three return the saved row so the screen can adopt the server's updated_at without a full workspace reload. */
+  saveGrainSaleLimit(limit: GrainSaleLimit): Promise<GrainSaleLimit>
+  saveGrainCarrySettings(settings: GrainCarrySettings): Promise<GrainCarrySettings>
+  saveGrainCarryGrid(grid: GrainCarryGrid): Promise<GrainCarryGrid>
 }
 export interface GrainServices { grainRepository: GrainRepository; marketDataService: MarketDataService; profitabilityRepository: ProfitabilityRepository; createGrainId: () => string }
 export interface GrainContext { commodity: Commodity; data: GrainWorkspace }

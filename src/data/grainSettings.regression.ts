@@ -2,6 +2,8 @@ import { CARRY_GRID_ROWS, defaultCarrySettings, emptyCarryRows, validateGrainCar
 import { parseGrainQueue } from './grainWriteQueue'
 import { readGrain } from './MockGrainRepository'
 import type { GrainCarryGrid, GrainCarrySettings, GrainSaleLimit } from './grain'
+import { settingsSlicesFromResults } from './SupabaseGrainDataGateway'
+import { saveCostLineWithBadgeFallback } from './SupabaseProfitabilityDataGateway'
 
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message) }
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -46,5 +48,31 @@ const stored = readGrain({ production_estimates: [], grain_contracts: [], market
 assert(stored && stored.grain_sale_limits.length === 1 && stored.grain_carry_settings?.mode === 'monthly' && stored.grain_carry_grids[0].rows.length === CARRY_GRID_ROWS && stored.capabilities?.persisted_settings === true, 'Mock grain storage must keep sale limits, carry settings, and carry grids.')
 const legacy = readGrain({ production_estimates: [], grain_contracts: [], marketing_plan_targets: [], insurance_units: [], grain_bins: [], bin_inventory: [], cash_bids: [], marketing_alert_rules: [] })
 assert(legacy && legacy.grain_sale_limits.length === 0 && legacy.grain_carry_settings === null && legacy.grain_carry_grids.length === 0, 'An older mock envelope must default the new slices to empty.')
+
+// Backward compatibility: before the slice-3 migration is applied, the three tables are missing and the
+// gateway must report persisted_settings=false with empty slices instead of failing the whole Grain load.
+const ok = (data: unknown) => ({ data, error: null })
+const missing = (code: string) => ({ data: null, error: { code, message: 'relation does not exist' } })
+const live = settingsSlicesFromResults(ok([limit]), ok(settings), ok([grid]))
+assert(live.persisted && live.grain_sale_limits.length === 1 && live.grain_carry_settings !== null && live.grain_carry_grids.length === 1, 'Present tables must map through with persisted=true.')
+for (const code of ['42P01', 'PGRST205']) {
+  for (const [label, slices] of [['sale limits', settingsSlicesFromResults(missing(code), ok(settings), ok([grid]))], ['carry settings', settingsSlicesFromResults(ok([limit]), missing(code), ok([grid]))], ['carry grids', settingsSlicesFromResults(ok([limit]), ok(settings), missing(code))]] as const) {
+    assert(!slices.persisted && slices.grain_sale_limits.length === 0 && slices.grain_carry_settings === null && slices.grain_carry_grids.length === 0, `A missing ${label} table (${code}) must yield persisted=false and empty slices.`)
+  }
+}
+let threw = false
+try { settingsSlicesFromResults(ok([limit]), { data: null, error: { code: '42501', message: 'denied' } }, ok([grid])) } catch { threw = true }
+assert(threw, 'Any other carry-settings error must still fail closed.')
+
+// The badge column is written when present and dropped only on PGRST204 (column missing on the live database).
+const attempts: Array<Record<string, unknown>> = []
+const savedWith = await saveCostLineWithBadgeFallback(async (columns) => { attempts.push(columns); return columns }, { id: uid(40), label: 'Seed' }, 120)
+assert(attempts.length === 1 && savedWith.university_default_amount === 120, 'The badge column is written on the first attempt when the database has it.')
+attempts.length = 0
+const savedWithout = await saveCostLineWithBadgeFallback(async (columns) => { attempts.push(columns); if ('university_default_amount' in columns) throw Object.assign(new Error('column not found'), { code: 'PGRST204' }); return columns }, { id: uid(40), label: 'Seed' }, 120)
+assert(attempts.length === 2 && !('university_default_amount' in savedWithout), 'PGRST204 must retry once without the badge column.')
+let rethrown = false
+try { await saveCostLineWithBadgeFallback(async () => { throw Object.assign(new Error('stale'), { code: '23505' }) }, { id: uid(40) }, null) } catch { rethrown = true }
+assert(rethrown, 'Any other error must not be swallowed by the badge fallback.')
 
 console.log('Grain settings regressions passed.')

@@ -301,7 +301,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
       const nextAlerts = evaluateGrainAlerts(data);
       setWorkspace(data);
       // Farm-saved sale limits win over anything typed but not yet committed for the same position.
-      if (data.capabilities?.persisted_settings === true) setSaleLimits((current) => ({ ...current, ...Object.fromEntries(data.grain_sale_limits.map((limit) => [scopeKey(scopeOf(limit)), limit.sale_limit_bushels])) }));
+      if (data.capabilities?.persisted_settings === true) setSaleLimits((current) => ({ ...current, ...Object.fromEntries(data.grain_sale_limits.filter((limit) => !dirtySaleLimits.current.has(scopeKey(scopeOf(limit)))).map((limit) => [scopeKey(scopeOf(limit)), limit.sale_limit_bushels])) }));
       setAlerts(nextAlerts);
       void recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions, alertOperationContext).then((transitioned) => {
         if (transitioned !== null) return requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId || transitioned.has(alert.ruleId)), data.fields.farm.id, alertOperationContext);
@@ -349,27 +349,49 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const whisper = () => undefined;
   const saleLimitsRef = useRef(saleLimits);
   saleLimitsRef.current = saleLimits;
+  // Scopes the farmer is still typing in; a workspace refresh must not overwrite them.
+  const dirtySaleLimits = useRef(new Set<string>());
+  const saleLimitLock = useRef(createSubmitLock());
+  // A failed settings save refreshes once so the screen learns the row another device may have created.
+  const recoverSettings = async (caught: unknown, action: string) => {
+    setSettingsNotice(farmerError(caught, action));
+    await refresh().catch(() => undefined);
+  };
   const commitSaleLimit = async (estimate: ProductionEstimate) => {
     if (!workspace || workspace.capabilities?.persisted_settings !== true) return;
-    const key = scopeKey(scopeOf(estimate));
-    const value = saleLimitsRef.current[key] ?? null;
-    const existing = workspace.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === key);
-    if ((existing?.sale_limit_bushels ?? null) === value) return;
-    const stamp = new Date().toISOString();
+    if (!saleLimitLock.current.acquire()) return;
     try {
-      await services.grainRepository.saveGrainSaleLimit({ id: existing?.id ?? services.createGrainId(), ...scopeOf(estimate), sale_limit_bushels: value, created_at: existing?.created_at ?? stamp, updated_at: existing?.updated_at ?? stamp });
-      setSettingsNotice("");
-      await refresh();
-    } catch (caught) {
-      setSettingsNotice(farmerError(caught, "save your sale limit"));
+      const key = scopeKey(scopeOf(estimate));
+      const value = saleLimitsRef.current[key] ?? null;
+      const existing = workspace.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === key);
+      if ((existing?.sale_limit_bushels ?? null) === value) { dirtySaleLimits.current.delete(key); return; }
+      const stamp = new Date().toISOString();
+      try {
+        const saved = await services.grainRepository.saveGrainSaleLimit({ id: existing?.id ?? services.createGrainId(), ...scopeOf(estimate), sale_limit_bushels: value, created_at: existing?.created_at ?? stamp, updated_at: existing?.updated_at ?? stamp });
+        dirtySaleLimits.current.delete(key);
+        setSettingsNotice("");
+        setWorkspace((current) => current ? { ...current, grain_sale_limits: [...current.grain_sale_limits.filter((limit) => scopeKey(scopeOf(limit)) !== key), saved] } : current);
+      } catch (caught) {
+        await recoverSettings(caught, "save your sale limit");
+      }
+    } finally {
+      saleLimitLock.current.release();
     }
   };
   const carryPersistence = {
     saveSettings: async (settings: GrainCarrySettings) => {
-      try { await services.grainRepository.saveGrainCarrySettings(settings); setSettingsNotice(""); await refresh(); } catch (caught) { setSettingsNotice(farmerError(caught, "save your storage cost settings")); }
+      try {
+        const saved = await services.grainRepository.saveGrainCarrySettings(settings);
+        setSettingsNotice("");
+        setWorkspace((current) => current ? { ...current, grain_carry_settings: saved } : current);
+      } catch (caught) { await recoverSettings(caught, "save your storage cost settings"); }
     },
     saveGrid: async (grid: GrainCarryGrid) => {
-      try { await services.grainRepository.saveGrainCarryGrid(grid); setSettingsNotice(""); await refresh(); } catch (caught) { setSettingsNotice(farmerError(caught, "save your carry prices")); }
+      try {
+        const saved = await services.grainRepository.saveGrainCarryGrid(grid);
+        setSettingsNotice("");
+        setWorkspace((current) => current ? { ...current, grain_carry_grids: [...current.grain_carry_grids.filter((row) => row.id !== saved.id && row.production_estimate_id !== saved.production_estimate_id), saved] } : current);
+      } catch (caught) { await recoverSettings(caught, "save your carry prices"); }
     },
     createId: services.createGrainId,
   };
@@ -526,9 +548,10 @@ export function GrainPage({ services }: { services: GrainServices }) {
                 saleLimit={saleLimitForScope(saleLimits, estimate)}
                 saleLimitPersisted={workspace.capabilities?.persisted_settings === true}
                 onSaleLimitCommit={() => void commitSaleLimit(estimate)}
-                onSaleLimitChange={(limit) =>
-                  setSaleLimits((current) => ({ ...current, [scopeKey(scopeOf(estimate))]: limit }))
-                }
+                onSaleLimitChange={(limit) => {
+                  dirtySaleLimits.current.add(scopeKey(scopeOf(estimate)));
+                  setSaleLimits((current) => ({ ...current, [scopeKey(scopeOf(estimate))]: limit }));
+                }}
                 onSaved={async () => {
                   whisper();
                   await refresh();
@@ -2318,7 +2341,10 @@ export function PositionCard({
             }}
             onBlur={() => onSaleLimitCommit?.()}
             onKeyDown={(event) => {
-              if (event.key === "Enter") onSaleLimitCommit?.();
+              if (event.key === "Enter") {
+                event.preventDefault();
+                onSaleLimitCommit?.();
+              }
             }}
           />
           <small>{saleLimitPersisted ? "Saved for this farm; it is your limit, not an insurance guarantee." : "Used only in this open session; it is your limit, not an insurance guarantee."}</small>

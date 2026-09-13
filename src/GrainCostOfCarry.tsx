@@ -47,7 +47,9 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   const initialGrids = () => persisted ? Object.fromEntries(workspace.grain_carry_grids.map((grid) => [grid.production_estimate_id, carryFromGrid(grid)])) : {}
   const [settings, setSettings] = useState<CarrySettings>(initialSettings)
   const [byEstimate, setByEstimate] = useState<Record<string, CommodityCarry>>(initialGrids)
-  const carry = byEstimate[selectedEstimateId] ?? freshCommodityCarry()
+  // One stable empty grid per mount so the calculation memo is not invalidated on every render.
+  const emptyCarry = useRef(freshCommodityCarry()).current
+  const carry = byEstimate[selectedEstimateId] ?? emptyCarry
   // Latest props for the debounced savers; saves run one after another so each carries the freshest updated_at.
   const workspaceRef = useRef(workspace); workspaceRef.current = workspace
   const persistenceRef = useRef(persistence); persistenceRef.current = persistence

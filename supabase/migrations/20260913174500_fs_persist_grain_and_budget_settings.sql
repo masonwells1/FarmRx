@@ -29,7 +29,6 @@ create table public.grain_sale_limits (
     check (sale_limit_bushels is null or sale_limit_bushels >= 0),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (id, farm_id),
   constraint grain_sale_limits_entity_same_farm_fk
     foreign key (operating_entity_id, farm_id)
     references public.entities(id, farm_id)
@@ -73,20 +72,29 @@ create function public.grain_carry_rows_valid(p_rows jsonb)
 returns boolean
 language sql
 immutable
+set search_path = public, pg_temp
 as $$
-  select jsonb_typeof(p_rows) = 'array'
-    and jsonb_array_length(p_rows) = 13
-    and not exists (
+  -- Guard each step explicitly so a scalar or an array of scalars is simply
+  -- invalid (false) rather than a raw type error from the JSON functions.
+  select case
+    when p_rows is null or jsonb_typeof(p_rows) <> 'array' then false
+    when jsonb_array_length(p_rows) <> 13 then false
+    else not exists (
       select 1
       from jsonb_array_elements(p_rows) as e
-      where jsonb_typeof(e) <> 'object'
-        or (select count(*) from jsonb_object_keys(e)) <> 2
-        or not (e ? 'market_price')
-        or not (e ? 'basis')
-        or jsonb_typeof(e -> 'market_price') not in ('number', 'null')
-        or jsonb_typeof(e -> 'basis') not in ('number', 'null')
-    );
+      where case
+        when jsonb_typeof(e) <> 'object' then true
+        when (select count(*) from jsonb_object_keys(e)) <> 2 then true
+        when not (e ? 'market_price') or not (e ? 'basis') then true
+        when jsonb_typeof(e -> 'market_price') not in ('number', 'null') then true
+        when jsonb_typeof(e -> 'basis') not in ('number', 'null') then true
+        else false
+      end
+    )
+  end;
 $$;
+revoke all on function public.grain_carry_rows_valid(jsonb) from public, anon;
+grant execute on function public.grain_carry_rows_valid(jsonb) to authenticated, service_role;
 
 create table public.grain_carry_grids (
   id uuid primary key default gen_random_uuid(),
@@ -97,7 +105,6 @@ create table public.grain_carry_grids (
   rows jsonb not null check (public.grain_carry_rows_valid(rows)),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (id, farm_id),
   unique (production_estimate_id, farm_id),
   constraint grain_carry_grids_estimate_same_farm_fk
     foreign key (production_estimate_id, farm_id)
