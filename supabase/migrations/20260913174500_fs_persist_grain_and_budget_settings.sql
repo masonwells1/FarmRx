@@ -141,6 +141,18 @@ create trigger grain_carry_grids_prevent_farm_move
 before update on public.grain_carry_grids
 for each row execute function public.prevent_farm_id_change();
 
+-- Access-epoch fencing (migration 0040): a request whose farm access epoch is
+-- stale can never write a farm-scoped row, exactly like every other farm table.
+create trigger farm_access_epoch_guard
+before insert or update or delete on public.grain_sale_limits
+for each row execute function public.guard_row_farm_access_epoch();
+create trigger farm_access_epoch_guard
+before insert or update or delete on public.grain_carry_settings
+for each row execute function public.guard_row_farm_access_epoch();
+create trigger farm_access_epoch_guard
+before insert or update or delete on public.grain_carry_grids
+for each row execute function public.guard_row_farm_access_epoch();
+
 -- ---------------------------------------------------------------------------
 -- Row Level Security: private financial read, farm edit write
 -- ---------------------------------------------------------------------------

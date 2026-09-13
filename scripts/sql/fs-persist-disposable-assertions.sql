@@ -50,6 +50,10 @@ begin
   select count(*) into v_count from pg_catalog.pg_policies
    where schemaname = 'public' and tablename in ('grain_sale_limits','grain_carry_settings','grain_carry_grids') and roles = array['authenticated']::name[];
   if v_count <> 12 then raise exception 'expected 12 authenticated policies, found %', v_count; end if;
+  -- Every farm-scoped table carries the access-epoch guard (the 0040 rule the Foundation lane enforces).
+  select count(*) into v_count from pg_catalog.pg_trigger t join pg_catalog.pg_class c on c.oid = t.tgrelid join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'public' and c.relname in ('grain_sale_limits','grain_carry_settings','grain_carry_grids') and t.tgname = 'farm_access_epoch_guard' and not t.tgisinternal;
+  if v_count <> 3 then raise exception 'expected the access-epoch guard on all three tables, found %', v_count; end if;
   -- Every foreign key on the new tables has a covering index (database advisor rule).
   with foreign_keys as (
     select c.conrelid, c.conkey, c.conname
@@ -159,11 +163,12 @@ begin
   if (select count(*) from public.grain_sale_limits) <> 0 then raise exception 'another farm can read sale limits'; end if;
   if (select count(*) from public.grain_carry_settings) <> 0 then raise exception 'another farm can read carry settings'; end if;
   if (select count(*) from public.grain_carry_grids) <> 0 then raise exception 'another farm can read carry grids'; end if;
+  -- The access-epoch guard (0040) fires before row-level security; either refusal is correct, anything else is not.
   v_ok := false;
-  begin insert into public.grain_sale_limits(farm_id,crop_year,commodity_id,sale_limit_bushels) values ('00000000-0000-4000-8000-000000000010',2027,'soybeans',1); v_ok := true; exception when insufficient_privilege then null; end;
+  begin insert into public.grain_sale_limits(farm_id,crop_year,commodity_id,sale_limit_bushels) values ('00000000-0000-4000-8000-000000000010',2027,'soybeans',1); v_ok := true; exception when others then if sqlerrm <> 'FARM_ACCESS_EPOCH_CHANGED' and sqlerrm not like '%row-level security%' then raise; end if; end;
   if v_ok then raise exception 'another farm could insert a sale limit'; end if;
   v_ok := false;
-  begin insert into public.grain_carry_settings(farm_id) values ('00000000-0000-4000-8000-000000000010'); v_ok := true; exception when insufficient_privilege then null; end;
+  begin insert into public.grain_carry_settings(farm_id) values ('00000000-0000-4000-8000-000000000010'); v_ok := true; exception when others then if sqlerrm <> 'FARM_ACCESS_EPOCH_CHANGED' and sqlerrm not like '%row-level security%' then raise; end if; end;
   if v_ok then raise exception 'another farm could insert carry settings'; end if;
   update public.grain_sale_limits set sale_limit_bushels = 1 where farm_id = '00000000-0000-4000-8000-000000000010';
   get diagnostics v_count = row_count;
