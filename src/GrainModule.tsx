@@ -330,7 +330,13 @@ export function GrainPage({ services }: { services: GrainServices }) {
         if (scope) for (const entry of readSettingsDrafts(scope, "sale-limit:")) {
           const kept = entry.payload as SaleLimitDraft;
           const row = data.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === kept.key);
-          if ((row?.id ?? null) !== (kept.base?.id ?? null) || (row?.updated_at ?? null) !== (kept.base?.updated_at ?? null)) { clearSettingsDraft(scope, entry.key, entry.revision); continue; }
+          if ((row?.id ?? null) !== (kept.base?.id ?? null) || (row?.updated_at ?? null) !== (kept.base?.updated_at ?? null)) {
+            // The row moved on. A scope still being typed keeps its draft, rebased onto the refreshed row (the commit reads the row's
+            // version from this workspace, so the typed value is what the farmer will save); an idle scope's older draft is dropped.
+            if (dirtySaleLimits.current.has(kept.key)) saleLimitDraftRevisions.current[kept.key] = writeSettingsDraft(scope, entry.key, { ...kept, base: row ? { id: row.id, updated_at: row.updated_at } : null } satisfies SaleLimitDraft);
+            else clearSettingsDraft(scope, entry.key, entry.revision);
+            continue;
+          }
           if (dirtySaleLimits.current.has(kept.key)) continue; // the farmer is already typing here
           saleLimitDraftRevisions.current[kept.key] = entry.revision;
           dirtySaleLimits.current.add(kept.key); failedSaleLimits.current.add(kept.key); markSaleLimitUnflushed(kept.key, data.fields.farm.id);
