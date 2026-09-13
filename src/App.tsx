@@ -53,7 +53,9 @@ import {
   replayProfitabilityQueue,
   replayProgramsQueue,
   replayScoutingQueue,
+  replaySoilRxQueue,
   scoutingRepository,
+  soilRxRepository,
 } from "./data";
 import {
   getSyncStatus,
@@ -82,6 +84,7 @@ const ScoutingPage = lazy(() => recoverLazyRoute("scouting", () => import("./Sco
 const HarvestPage = lazy(() => recoverLazyRoute("harvest", () => import("./HarvestModule")).then((module) => ({ default: module.HarvestPage })));
 const ProgramsPage = lazy(() => recoverLazyRoute("programs", () => import("./ProgramsModule")).then((module) => ({ default: module.ProgramsPage })));
 const FarmPrivacyPage = lazy(() => recoverLazyRoute("farm-privacy", () => import("./FarmPrivacyPage")).then((module) => ({ default: module.FarmPrivacyPage })));
+const SoilRxPage = lazy(() => recoverLazyRoute("soil-rx", () => import("./SoilRxModule")).then((module) => ({ default: module.SoilRxPage })));
 
 function NavGlyph({ d }: { d: string }) {
   return (
@@ -101,6 +104,12 @@ function NavGlyph({ d }: { d: string }) {
 
 type NavigationItem = { label: string; path: string; icon: ReactNode; module: FarmAppModule };
 const navigation: NavigationItem[] = [
+  {
+    label: "Soil Rx",
+    path: "/soil-rx",
+    module: "soil_rx",
+    icon: <NavGlyph d="M4 19c4-8 12-8 16 0M7 14c2-4 8-4 10 0M12 3v8" />,
+  },
   {
     label: "Fields",
     path: "/fields",
@@ -368,6 +377,7 @@ function AppLayout() {
                 /></CapabilityRoute>
               }
             />
+            <Route path="/soil-rx" element={<CapabilityRoute module="soil_rx"><SoilRxPage repository={soilRxRepository} fieldsRepository={fieldsRepository} /></CapabilityRoute>} />
             <Route path="/privacy" element={<FarmPrivacyPage repository={farmSharingRepository} />} />
             <Route path="*" element={<Navigate to="/fields" replace />} />
             </Routes>
@@ -463,9 +473,9 @@ function FarmAccessGate({ children }: { children: ReactNode }) {
   return <FarmAccessGateForUser key={user.id} user={user} onSignOut={async () => { await signOut(); navigate("/login", { replace: true }); }}>{children}</FarmAccessGateForUser>;
 }
 
-const farmRetryModules = ["fields", "grain", "profitability", "inventory", "equipment_tasks", "weather", "fieldLog", "scouting", "harvest", "programs", "notifications"] as const;
+const farmRetryModules = ["fields", "grain", "profitability", "inventory", "equipment_tasks", "weather", "fieldLog", "scouting", "harvest", "programs", "notifications", "soilRx"] as const;
 function clearFarmRetryActions() { for (const module of farmRetryModules) setModuleSyncRetryAction(module, null) }
-const farmSyncModule: Partial<Record<FarmAppModule, Parameters<typeof setModuleSyncStatus>[0]>> = { fields: "fields", grain: "grain", profitability: "profitability", inventory: "inventory", equipment: "equipment_tasks", weather: "weather", field_log: "fieldLog", scouting: "scouting", harvest: "harvest", programs: "programs", notifications: "notifications" };
+const farmSyncModule: Partial<Record<FarmAppModule, Parameters<typeof setModuleSyncStatus>[0]>> = { fields: "fields", grain: "grain", profitability: "profitability", inventory: "inventory", equipment: "equipment_tasks", weather: "weather", field_log: "fieldLog", scouting: "scouting", harvest: "harvest", programs: "programs", notifications: "notifications", soil_rx: "soilRx" };
 function clearSkippedFarmModuleStatus(module: FarmAppModule) { const syncModule = farmSyncModule[module]; if (syncModule) setModuleSyncStatus(syncModule, { kind: "synced", pending: 0 }) }
 function authorizedFarmRetry(latestProfile: LoadedFarmAccessProfile, module: FarmAppModule, action: () => Promise<unknown>) {
   return async () => {
@@ -502,6 +512,7 @@ export function installFarmRetryActions(
     if (canReplayFarmModule(latestProfile, "harvest")) setRetryAction("harvest", revalidateOnce);
     if (canReplayFarmModule(latestProfile, "programs")) setRetryAction("programs", revalidateOnce);
     if (canReplayFarmModule(latestProfile, "notifications")) setRetryAction("notifications", revalidateOnce);
+    if (canReplayFarmModule(latestProfile, "soil_rx")) setRetryAction("soilRx", revalidateOnce);
     return;
   }
   if (canReplayFarmModule(latestProfile, "fields")) { setRetryAction("fields", authorizedFarmRetry(latestProfile, "fields", actions.replayFieldsQueue)); setRetryAction("weather", authorizedFarmRetry(latestProfile, "fields", actions.replayFieldLocationQueue)) }
@@ -514,6 +525,7 @@ export function installFarmRetryActions(
   if (canReplayFarmModule(latestProfile, "harvest")) setRetryAction("harvest", authorizedFarmRetry(latestProfile, "harvest", actions.replayHarvestQueue));
   if (canReplayFarmModule(latestProfile, "programs")) setRetryAction("programs", authorizedFarmRetry(latestProfile, "programs", async () => { await actions.replayProgramsQueue(); if (latestProfile.source === "live") await actions.generateDueProgramItems() }));
   if (canReplayFarmModule(latestProfile, "notifications")) setRetryAction("notifications", authorizedFarmRetry(latestProfile, "notifications", actions.replayNotificationsQueue));
+  if (actions.replaySoilRxQueue && canReplayFarmModule(latestProfile, "soil_rx")) setRetryAction("soilRx", authorizedFarmRetry(latestProfile, "soil_rx", actions.replaySoilRxQueue));
 }
 
 export interface FarmReplayWorkActions {
@@ -530,6 +542,7 @@ export interface FarmReplayWorkActions {
   replayFieldLogQueue: typeof replayFieldLogQueue;
   replayScoutingQueue: typeof replayScoutingQueue;
   replayNotificationsQueue: typeof replayNotificationsQueue;
+  replaySoilRxQueue?: typeof replaySoilRxQueue;
 }
 
 const defaultFarmReplayWorkActions: FarmReplayWorkActions = {
@@ -546,6 +559,7 @@ const defaultFarmReplayWorkActions: FarmReplayWorkActions = {
   replayFieldLogQueue,
   replayScoutingQueue,
   replayNotificationsQueue,
+  replaySoilRxQueue,
 };
 
 export async function replayAuthorizedFarmWork(latestProfile: LoadedFarmAccessProfile, isCurrent: () => boolean = () => true, actions: FarmReplayWorkActions = defaultFarmReplayWorkActions) {
@@ -567,6 +581,7 @@ export async function replayAuthorizedFarmWork(latestProfile: LoadedFarmAccessPr
     await replay("field_log", actions.replayFieldLogQueue);
     await replay("scouting", actions.replayScoutingQueue);
     await replay("notifications", actions.replayNotificationsQueue);
+    if (actions.replaySoilRxQueue) await replay("soil_rx", actions.replaySoilRxQueue);
   } finally { authorization.end(); }
 }
 
