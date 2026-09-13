@@ -55,6 +55,7 @@ import {
 import type { Commodity } from "./data/fields";
 import type { ProgramsData } from "./data/programs";
 import { SAVE_DURABILITY_UPDATE_MESSAGE } from "./data/saveDurability";
+import { forgetLegacyDefaults, readLegacyDefaults } from "./data/universityDefaultProvenance";
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -198,13 +199,6 @@ function stepsFromRange(
  * each remembered amount is written into its line once (for a member who may edit) and dropped from the browser when the row
  * confirms it, so existing badges survive the release instead of vanishing. Entries for lines this farm does not show stay for the
  * farm that owns them. */
-const LEGACY_DEFAULTS_KEY = "farm-rx.profitability.university-defaults";
-function readLegacyDefaults(): Record<string, number> {
-  try { const value = JSON.parse(window.localStorage.getItem(LEGACY_DEFAULTS_KEY) ?? "{}") as unknown; return value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value as Record<string, unknown>).filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]) && entry[1] >= 0)) : {}; } catch { return {}; }
-}
-function forgetLegacyDefaults(ids: string[]) {
-  try { const kept = Object.fromEntries(Object.entries(readLegacyDefaults()).filter(([id]) => !ids.includes(id))); if (Object.keys(kept).length === 0) window.localStorage.removeItem(LEGACY_DEFAULTS_KEY); else window.localStorage.setItem(LEGACY_DEFAULTS_KEY, JSON.stringify(kept)); } catch { /* the entries are retried on the next visit */ }
-}
 
 export function ProfitabilityPage() {
   const farmAccess = useOptionalFarmAccess();
@@ -299,12 +293,15 @@ export function ProfitabilityPage() {
         : (years[0] ?? null),
     );
   }, [workspace]);
-  // Legacy badge provenance (see LEGACY_DEFAULTS_KEY): forget entries the rows now carry, and write the rest into their lines once.
+  // Badge provenance kept in this browser (see src/data/universityDefaultProvenance.ts) for lines the live database could not
+  // store it for yet: shown as the badge meanwhile, forgotten once the rows carry it, and written into their lines once.
   const legacyBadgeAttempts = useRef(new Set<string>());
+  const [browserBadges, setBrowserBadges] = useState<Record<string, number>>({});
   useEffect(() => {
     if (!workspace) return;
     const legacy = readLegacyDefaults();
     const ids = Object.keys(legacy);
+    setBrowserBadges(Object.fromEntries(Object.entries(legacy).filter(([id]) => workspace.cost_lines.some((line) => line.id === id && line.university_default_amount == null))));
     if (ids.length === 0) return;
     const confirmed = workspace.cost_lines.filter((line) => legacy[line.id] !== undefined && line.university_default_amount === legacy[line.id]).map((line) => line.id);
     if (confirmed.length) forgetLegacyDefaults(confirmed);
@@ -436,7 +433,7 @@ export function ProfitabilityPage() {
   }
   const costs = workspace.cost_lines.filter(
     (line) => line.budget_id === budget.id,
-  );
+  ).map((line) => line.university_default_amount == null && browserBadges[line.id] !== undefined ? { ...line, university_default_amount: browserBadges[line.id] } : line);
   const costsPerAcre = totalCostPerAcre(costs);
   const prices = sortedSteps(workspace, budget.id, "price");
   const yields = sortedSteps(workspace, budget.id, "yield");

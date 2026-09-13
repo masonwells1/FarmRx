@@ -74,6 +74,12 @@ assert(attempts.length === 1 && savedWith.university_default_amount === 120, 'Th
 attempts.length = 0
 const savedWithout = await saveCostLineWithBadgeFallback(async (columns) => { attempts.push(columns); if ('university_default_amount' in columns) throw Object.assign(new Error('column not found'), { code: 'PGRST204' }); return columns }, { id: uid(40), label: 'Seed' }, 120)
 assert(attempts.length === 2 && !('university_default_amount' in savedWithout), 'PGRST204 must retry once without the badge column.')
+const retained: Array<[string, number]> = []
+const lineId = uid(41)
+await saveCostLineWithBadgeFallback(async (columns) => { if ('university_default_amount' in columns) throw Object.assign(new Error('column not found'), { code: 'PGRST204' }); return columns }, { id: lineId, label: 'Seed' }, 120, (id, amount) => retained.push([id, amount]))
+await saveCostLineWithBadgeFallback(async (columns) => { if ('university_default_amount' in columns) throw Object.assign(new Error('column not found'), { code: 'PGRST204' }); return columns }, { id: uid(42), label: 'Hand-entered' }, null, (id, amount) => retained.push([id, amount]))
+await saveCostLineWithBadgeFallback(async (columns) => columns, { id: uid(43), label: 'Seed' }, 120, (id, amount) => retained.push([id, amount]))
+assert(retained.length === 1 && retained[0]?.[0] === lineId && retained[0]?.[1] === 120, 'A seeded amount dropped on PGRST204 is retained for the line; a hand-entered line and a stored badge retain nothing.')
 let rethrown = false
 try { await saveCostLineWithBadgeFallback(async () => { throw Object.assign(new Error('stale'), { code: '23505' }) }, { id: uid(40) }, null) } catch { rethrown = true }
 assert(rethrown, 'Any other error must not be swallowed by the badge fallback.')

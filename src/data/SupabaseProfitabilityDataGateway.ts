@@ -4,16 +4,20 @@ import type { BudgetFieldAllocation, CropBudget, EquipmentCostSnapshotRequest, I
 import { DELETE_PERMISSION_MESSAGE, SAVE_DURABILITY_UPDATE_MESSAGE } from './saveDurability'
 import { optimisticSave } from './optimisticSave'
 import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
+import { rememberLegacyDefault } from './universityDefaultProvenance'
 
 function rows(data: unknown, error: { message: string } | null): unknown[] { if (error) throw error; if (!Array.isArray(data)) throw new Error('Farm Rx could not load the complete profitability workspace.'); return data }
 function row(data: unknown, error: { message: string } | null): unknown { if (error) throw error; if (!data || typeof data !== 'object') throw new Error('Farm Rx could not confirm the profitability save. Please try again.'); return data }
 function budgetColumns(value: CropBudget & { farm_id: string }) { const { id, farm_id, crop_year, commodity_id, operating_entity_id, enterprise_label, name, expected_yield_per_acre, expected_price_per_bushel, rp_coverage_pct, rp_aph_yield, rp_projected_price, rp_premium_per_acre, copied_from_budget_id } = value; return { id, farm_id, crop_year, commodity_id, operating_entity_id, enterprise_label, name, expected_yield_per_acre, expected_price_per_bushel, rp_coverage_pct, rp_aph_yield, rp_projected_price, rp_premium_per_acre, copied_from_budget_id, notes: null } }
-/** PGRST204 means the badge column is not on the live database yet (slice-3 migration pending): save the line without its badge rather than fail the farmer's number. */
-export async function saveCostLineWithBadgeFallback<T>(attempt: (columns: Record<string, unknown>) => Promise<T>, columns: Record<string, unknown>, universityDefaultAmount: number | null): Promise<T> {
+/** PGRST204 means the badge column is not on the live database yet (slice-3 migration pending): save the line without its badge rather than
+ * fail the farmer's number, and keep the seeded amount in this browser (`retain`) so the badge is written into the column once it exists. */
+export async function saveCostLineWithBadgeFallback<T>(attempt: (columns: Record<string, unknown>) => Promise<T>, columns: Record<string, unknown>, universityDefaultAmount: number | null, retain: (lineId: string, amount: number) => void = rememberLegacyDefault): Promise<T> {
   try { return await attempt({ ...columns, university_default_amount: universityDefaultAmount }) }
   catch (error) {
-    if ((error as { code?: string } | null)?.code === 'PGRST204') return attempt(columns)
-    throw error
+    if ((error as { code?: string } | null)?.code !== 'PGRST204') throw error
+    const saved = await attempt(columns)
+    if (universityDefaultAmount !== null && typeof columns.id === 'string') retain(columns.id, universityDefaultAmount)
+    return saved
   }
 }
 function costLineColumns(value: BudgetCostLineWrite & { farm_id: string }) { const { id, farm_id, budget_id, category, name, amount_per_acre, sort_order } = value; return { id, farm_id, budget_id, category, label: name, amount_per_acre, source_kind: 'manual' as const, source_record_id: null, sort_order, notes: null } }
