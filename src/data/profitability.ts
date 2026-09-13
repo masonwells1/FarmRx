@@ -33,6 +33,8 @@ export interface BudgetCostLine {
   source_kind?: CostLineSourceKind
   source_record_id?: string | null
   equipment_snapshot?: EquipmentCostSnapshotProvenance | null
+  /** The U of I budget amount this line was seeded with. The badge shows while amount_per_acre still equals it; null or missing for hand-entered lines. */
+  university_default_amount?: number | null
   created_at: string
   updated_at: string
 }

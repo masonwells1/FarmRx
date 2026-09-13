@@ -56,7 +56,15 @@ export class SupabaseProfitabilityDataGateway implements ProfitabilityDataGatewa
   }
   async upsertBudget(farmId: string, value: CropBudget, context: FarmOperationContext) { return optimisticSave('crop_budgets', farmId, value.id, budgetColumns({ ...value, farm_id: farmId }), value.updated_at, context) }
   async patchBudgetInsurance(farmId: string, budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt: string | null | undefined, context: FarmOperationContext) { return optimisticSave('crop_budgets', farmId, budgetId, insuranceColumns(patch), expectedUpdatedAt, context) }
-  async upsertCostLine(farmId: string, value: BudgetCostLineWrite, context: FarmOperationContext) { return optimisticSave('budget_cost_lines', farmId, value.id, costLineColumns({ ...value, farm_id: farmId }), value.updated_at, context) }
+  async upsertCostLine(farmId: string, value: BudgetCostLineWrite, context: FarmOperationContext) {
+    const columns = costLineColumns({ ...value, farm_id: farmId })
+    try { return await optimisticSave('budget_cost_lines', farmId, value.id, { ...columns, university_default_amount: value.university_default_amount ?? null }, value.updated_at, context) }
+    catch (error) {
+      // PGRST204: the column is not on the live database yet (slice-3 migration pending). Save the line without its badge rather than fail the farmer's number.
+      if ((error as { code?: string } | null)?.code === 'PGRST204') return optimisticSave('budget_cost_lines', farmId, value.id, columns, value.updated_at, context)
+      throw error
+    }
+  }
   async deleteCostLine(farmId: string, id: string, context: FarmOperationContext) { return confirmDelete('budget_cost_lines', farmId, id, context) }
   async equipmentCostSnapshot(farmId: string, request: EquipmentCostSnapshotRequest, action: 'preview' | 'insert' | 'replace', context: FarmOperationContext) {
     const { data, error } = await bindFarmOperationRequest(supabase.rpc('upsert_equipment_cost_snapshot', {

@@ -99,28 +99,9 @@ const sortedSteps = (
     .sort((a, b) => a.sort_order - b.sort_order);
 
 /** Lines seeded from the U of I budget keep a "university default" badge until the farmer
- * overwrites the amount — stored locally so a default never masquerades as their number. */
-const DEFAULTS_KEY = "farm-rx.profitability.university-defaults";
+ * overwrites the amount. The seeded amount travels with the line (university_default_amount)
+ * so the badge follows the farm, not one browser. */
 const COACH_KEY = "farm-rx.profitability.coach-dismissed";
-function readDefaultsMap(): Record<string, number> {
-  try {
-    return JSON.parse(
-      window.localStorage.getItem(DEFAULTS_KEY) ?? "{}",
-    ) as Record<string, number>;
-  } catch {
-    return {};
-  }
-}
-function recordDefaults(entries: Record<string, number>) {
-  try {
-    window.localStorage.setItem(
-      DEFAULTS_KEY,
-      JSON.stringify({ ...readDefaultsMap(), ...entries }),
-    );
-  } catch {
-    /* private mode: badges just won't show */
-  }
-}
 function readCoachDismissed(): string[] {
   try {
     return JSON.parse(
@@ -163,12 +144,10 @@ function universityBudget(
     category: line.category,
     name: line.name,
     amount_per_acre: line.amount_per_acre,
+    university_default_amount: line.amount_per_acre,
     created_at: at,
     updated_at: at,
   }));
-  recordDefaults(
-    Object.fromEntries(lines.map((line) => [line.id, line.amount_per_acre])),
-  );
   return { budget, lines };
 }
 
@@ -446,7 +425,6 @@ export function ProfitabilityPage() {
   const cropKind = farmdocCropKind(
     commodity?.crop_family ?? commodity?.name ?? "",
   );
-  const defaultsMap = readDefaultsMap();
   const overviewYears = [
     ...new Set(workspace.budgets.map((item) => item.crop_year)),
   ].sort((left, right) => right - left);
@@ -751,7 +729,6 @@ export function ProfitabilityPage() {
                 <CostLineGroups
                   costs={costs}
                   price={budget.expected_price_per_bushel}
-                  defaultsMap={defaultsMap}
                   collapsed={collapsedCategories}
                   onToggle={(category) =>
                     setCollapsedCategories((current) => {
@@ -847,7 +824,7 @@ export function ProfitabilityPage() {
               <span>Total cost / acre</span>
               <strong>{money.format(costsPerAcre)}</strong>
             </div>
-            {costs.some((line) => defaultsMap[line.id] !== undefined) && (
+            {costs.some((line) => line.university_default_amount != null) && (
               <p className="university-note">{FARMDOC_SOURCE_NOTE}</p>
             )}
             <CoachNudge
@@ -1304,7 +1281,6 @@ function OverviewBudgetCard({
 function CostLineGroups({
   costs,
   price,
-  defaultsMap,
   collapsed,
   onToggle,
   onSave,
@@ -1312,7 +1288,6 @@ function CostLineGroups({
 }: {
   costs: BudgetCostLine[];
   price: number;
-  defaultsMap: Record<string, number>;
   collapsed: Set<CostCategory>;
   onToggle: (category: CostCategory) => void;
   onSave: (line: BudgetCostLine) => void;
@@ -1360,7 +1335,7 @@ function CostLineGroups({
                   key={line.id}
                   line={line}
                   price={price}
-                  defaultAmount={defaultsMap[line.id]}
+                  defaultAmount={line.university_default_amount ?? undefined}
                   onSave={onSave}
                   onRemove={() => onRemove(line.id)}
                 />
@@ -2800,14 +2775,10 @@ function CoachNudge({
                 category: line.category,
                 name: line.name,
                 amount_per_acre: line.amount_per_acre,
+                university_default_amount: line.amount_per_acre,
                 created_at: at,
                 updated_at: at,
               }));
-              recordDefaults(
-                Object.fromEntries(
-                  lines.map((line) => [line.id, line.amount_per_acre]),
-                ),
-              );
               onAdd(lines);
             }}
           >

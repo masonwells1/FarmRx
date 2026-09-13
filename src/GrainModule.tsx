@@ -26,6 +26,8 @@ import type {
   MarketingPlanTarget,
   PositionScope,
   ProductionEstimate,
+  GrainCarryGrid,
+  GrainCarrySettings,
 } from "./data/grain";
 import { marketedPercent, sameScope, scopeKey, scopeOf } from "./data/grain";
 import {
@@ -269,6 +271,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
   } | null>(null);
   const [planError, setPlanError] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [settingsNotice, setSettingsNotice] = useState("");
   const [alerts, setAlerts] = useState<GrainAlert[]>([]);
   const [deliveryNotice, setDeliveryNotice] = useState("");
   // No existing per-scope settings field is suitable, so this farmer decision is
@@ -297,6 +300,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
       const ruleEvaluation = evaluateMarketingAlertRules(data);
       const nextAlerts = evaluateGrainAlerts(data);
       setWorkspace(data);
+      // Farm-saved sale limits win over anything typed but not yet committed for the same position.
+      if (data.capabilities?.persisted_settings === true) setSaleLimits((current) => ({ ...current, ...Object.fromEntries(data.grain_sale_limits.map((limit) => [scopeKey(scopeOf(limit)), limit.sale_limit_bushels])) }));
       setAlerts(nextAlerts);
       void recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions, alertOperationContext).then((transitioned) => {
         if (transitioned !== null) return requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId || transitioned.has(alert.ruleId)), data.fields.farm.id, alertOperationContext);
@@ -342,6 +347,32 @@ export function GrainPage({ services }: { services: GrainServices }) {
     void refresh();
   }, []);
   const whisper = () => undefined;
+  const saleLimitsRef = useRef(saleLimits);
+  saleLimitsRef.current = saleLimits;
+  const commitSaleLimit = async (estimate: ProductionEstimate) => {
+    if (!workspace || workspace.capabilities?.persisted_settings !== true) return;
+    const key = scopeKey(scopeOf(estimate));
+    const value = saleLimitsRef.current[key] ?? null;
+    const existing = workspace.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === key);
+    if ((existing?.sale_limit_bushels ?? null) === value) return;
+    const stamp = new Date().toISOString();
+    try {
+      await services.grainRepository.saveGrainSaleLimit({ id: existing?.id ?? services.createGrainId(), ...scopeOf(estimate), sale_limit_bushels: value, created_at: existing?.created_at ?? stamp, updated_at: existing?.updated_at ?? stamp });
+      setSettingsNotice("");
+      await refresh();
+    } catch (caught) {
+      setSettingsNotice(farmerError(caught, "save your sale limit"));
+    }
+  };
+  const carryPersistence = {
+    saveSettings: async (settings: GrainCarrySettings) => {
+      try { await services.grainRepository.saveGrainCarrySettings(settings); setSettingsNotice(""); await refresh(); } catch (caught) { setSettingsNotice(farmerError(caught, "save your storage cost settings")); }
+    },
+    saveGrid: async (grid: GrainCarryGrid) => {
+      try { await services.grainRepository.saveGrainCarryGrid(grid); setSettingsNotice(""); await refresh(); } catch (caught) { setSettingsNotice(farmerError(caught, "save your carry prices")); }
+    },
+    createId: services.createGrainId,
+  };
   if (!workspace)
     return (
       <section className="page">
@@ -493,6 +524,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
                 workspace={workspace}
                 services={services}
                 saleLimit={saleLimitForScope(saleLimits, estimate)}
+                saleLimitPersisted={workspace.capabilities?.persisted_settings === true}
+                onSaleLimitCommit={() => void commitSaleLimit(estimate)}
                 onSaleLimitChange={(limit) =>
                   setSaleLimits((current) => ({ ...current, [scopeKey(scopeOf(estimate))]: limit }))
                 }
@@ -593,12 +626,18 @@ export function GrainPage({ services }: { services: GrainServices }) {
           <ActualVsPlan estimate={selectedEstimate} workspace={workspace} />
         </>
       )}
+      {settingsNotice && (
+        <p className="form-error grain-inline-error" role="status">
+          {settingsNotice}
+        </p>
+      )}
       {tabPath === "carry" && (
         <GrainCostOfCarry
           workspace={workspace}
           selectedEstimate={selectedEstimate}
           selectedEstimateId={selectedEstimateId}
           onSelectEstimate={setSelectedEstimateId}
+          persistence={carryPersistence}
         />
       )}
       {tabPath === "alerts" && (
@@ -1987,7 +2026,9 @@ export function PositionCard({
   workspace,
   services,
   saleLimit,
+  saleLimitPersisted = false,
   onSaleLimitChange,
+  onSaleLimitCommit,
   onSaved,
   onReceipt,
 }: {
@@ -1995,7 +2036,9 @@ export function PositionCard({
   workspace: GrainWorkspace;
   services: GrainServices;
   saleLimit: number | null;
+  saleLimitPersisted?: boolean;
   onSaleLimitChange: (limit: number | null) => void;
+  onSaleLimitCommit?: () => void;
   onSaved: () => Promise<void>;
   onReceipt: (id: string) => void;
 }) {
@@ -2273,8 +2316,12 @@ export function PositionCard({
               const value = event.target.value.trim();
               onSaleLimitChange(value === "" ? null : Number(value));
             }}
+            onBlur={() => onSaleLimitCommit?.()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onSaleLimitCommit?.();
+            }}
           />
-          <small>Used only in this open session; it is your limit, not an insurance guarantee.</small>
+          <small>{saleLimitPersisted ? "Saved for this farm; it is your limit, not an insurance guarantee." : "Used only in this open session; it is your limit, not an insurance guarantee."}</small>
         </label>
         <Metric label="Insurance estimate guarantee" value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`} note={estimateNote} />
         <Metric label="Already contracted" value={`${bushels.format(contractedBushels)} bu`} note="Signed contracts" />

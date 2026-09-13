@@ -1,4 +1,4 @@
-import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainCapabilities, GrainContract, GrainContractDelivery, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate } from './grain'
+import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainCapabilities, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainSaleLimit, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate } from './grain'
 import type { FarmOperationContext } from './farmOperationContext'
 
 /** The network boundary deliberately exposes untrusted rows only. */
@@ -16,6 +16,9 @@ export interface GrainRowBundle {
   marketing_alert_rules: unknown[]
   firm_offers: unknown[]
   grain_alert_settings: unknown | null
+  grain_sale_limits: unknown[]
+  grain_carry_settings: unknown | null
+  grain_carry_grids: unknown[]
   capabilities?: GrainCapabilities
 }
 
@@ -37,4 +40,7 @@ export interface GrainDataGateway {
   appendContractDeliveryRpc?(farmId: string, row: GrainContractDelivery, allowOverdelivery: boolean, context: FarmOperationContext): Promise<unknown>
   finalizeContractPriceLegRpc?(farmId: string, contractId: string, leg: 'futures_price' | 'basis', value: number, context: FarmOperationContext): Promise<unknown>
   upsertGrainAlertSettings(farmId: string, row: GrainAlertSettings, context: FarmOperationContext): Promise<unknown>
+  upsertGrainSaleLimit(farmId: string, row: GrainSaleLimit, context: FarmOperationContext): Promise<unknown>
+  upsertGrainCarrySettings(farmId: string, row: GrainCarrySettings, context: FarmOperationContext): Promise<unknown>
+  upsertGrainCarryGrid(farmId: string, row: GrainCarryGrid, context: FarmOperationContext): Promise<unknown>
 }

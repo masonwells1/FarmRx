@@ -59,7 +59,9 @@ function mapCostLine(value: unknown): BudgetCostLineWrite {
     }
   } else if (equipmentValues.some((item) => item !== null)) fail('Farm Rx found equipment snapshot details on a different cost source.')
   const result: BudgetCostLineWrite = { id: id(required(row, 'id')), budget_id: id(required(row, 'budget_id')), category: category as BudgetCostLine['category'], name: text(required(row, 'label'), 160), amount_per_acre: number(required(row, 'amount_per_acre')), source_kind, source_record_id: source_record_id === null ? null : id(source_record_id), equipment_snapshot, sort_order: integer(required(row, 'sort_order'), 0, 32_767), created_at: stamp(required(row, 'created_at')), updated_at: stamp(required(row, 'updated_at')) }
-  if (!result.name.trim() || result.amount_per_acre < 0) fail('Farm Rx found an invalid cost line.')
+  // Additive column from the slice-3 migration; rows read before it is applied simply have no badge.
+  result.university_default_amount = Object.hasOwn(row, 'university_default_amount') && row.university_default_amount !== null ? number(row.university_default_amount) : null
+  if (!result.name.trim() || result.amount_per_acre < 0 || (result.university_default_amount !== null && result.university_default_amount < 0)) fail('Farm Rx found an invalid cost line.')
   return result
 }
 function mapEquipment(value: unknown): ProfitabilityEquipment {
@@ -109,7 +111,7 @@ function mintCostLine(value: BudgetCostLine, siblings: BudgetCostLineWrite[]): B
 /** Write shape for the offline queue and gateway: exactly the manual-entry columns (audit P2-14). */
 export function manualCostLineWrite(line: BudgetCostLineWrite): BudgetCostLineWrite {
   const { id, budget_id, category, name, amount_per_acre, sort_order, created_at, updated_at } = line
-  return { id, budget_id, category, name, amount_per_acre, sort_order, created_at, updated_at }
+  return { id, budget_id, category, name, amount_per_acre, sort_order, created_at, updated_at, university_default_amount: line.university_default_amount ?? null }
 }
 
 /** numeric(precision, scale) column contracts from migrations 0006 and 0030 (audit P2-04).
@@ -139,7 +141,7 @@ export function normalizeMatrixStepDecimals(step: ProfitabilityMatrixStep): Prof
   return { ...step, value: boundedDecimal(step.value, { precision: 14, scale: 6, label: 'a matrix step' }) }
 }
 export function normalizeCostLineDecimals(line: BudgetCostLineWrite): BudgetCostLineWrite {
-  return { ...line, amount_per_acre: boundedDecimal(line.amount_per_acre, { precision: 14, scale: 4, label: 'the cost per acre' }) }
+  return { ...line, amount_per_acre: boundedDecimal(line.amount_per_acre, { precision: 14, scale: 4, label: 'the cost per acre' }), ...(line.university_default_amount == null ? {} : { university_default_amount: boundedDecimal(line.university_default_amount, { precision: 14, scale: 4, label: 'the university default' }) }) }
 }
 export function normalizeAllocationDecimals(value: BudgetFieldAllocation): BudgetFieldAllocation {
   return {

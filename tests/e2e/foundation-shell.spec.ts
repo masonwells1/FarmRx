@@ -140,6 +140,9 @@ const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, str
   marketing_alert_rules: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,created_at.asc,id.asc' }),
   firm_offers: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,created_at.asc,id.asc' }),
   grain_alert_settings: (farm) => ({ select: '*', farm_id: `eq.${farm.id}` }),
+  grain_sale_limits: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
+  grain_carry_settings: (farm) => ({ select: '*', farm_id: `eq.${farm.id}` }),
+  grain_carry_grids: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'production_estimate_id.asc' }),
 }
 const profitabilityReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
   crop_budgets: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
@@ -150,7 +153,7 @@ const profitabilityReadQueries: Record<string, (farm: FarmFixture) => Record<str
 }
 function grainRows(table: string, farm: FarmFixture) {
   if (table === 'production_estimates') return [{ id: '00000000-0000-4000-8000-000000000051', farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, planted_acres: 80, aph_yield: 190, expected_bushels: 15_200, actual_bushels: null, drives_math: 'projected', notes: null, created_at: now, updated_at: now }]
-  return table === 'grain_alert_settings' ? null : []
+  return table === 'grain_alert_settings' || table === 'grain_carry_settings' ? null : []
 }
 
 async function fulfillJson(route: Route, body: unknown) {
