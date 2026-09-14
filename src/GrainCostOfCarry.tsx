@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { bestMonth, carryRow, verdict, type CarryRow, type CarrySettings } from './data/costOfCarry'
 import type { GrainCarryGrid, GrainCarrySettings, GrainWorkspace, ProductionEstimate } from './data/grain'
-import { CARRY_GRID_ROWS, normalizeGrainCarrySettings, validateGrainCarrySettings } from './data/grainSettings'
+import { CARRY_GRID_ROWS, normalizeGrainCarrySettings, stableGrainCarryGridId, validateGrainCarrySettings } from './data/grainSettings'
 import { boundedDecimal } from './data/decimal'
 import { quarantineTiedSettingsDrafts } from './data/revokedFarmRecovery'
 import { beginPendingSettingsWork, registerPendingSettingsFlush } from './data/pendingSettingsWork'
@@ -90,7 +90,7 @@ function displayMonth(cropYear: number, harvestMonth: number, monthsStored: numb
 function signedMoney(value: number) { return `${value > 0 ? '+' : value < 0 ? '−' : ''}${money.format(Math.abs(value))}` }
 
 /** Farm-level persistence for the calculator. Absent (or unsupported by the live database) means device-only behavior. */
-export type GrainCarryPersistence = { saveSettings: (settings: GrainCarrySettings) => Promise<GrainCarrySettings | void>; saveGrid: (grid: GrainCarryGrid) => Promise<GrainCarryGrid | void>; createId: () => string; draftScope?: SettingsDraftScope; /** False for a member who may read but not write the farm's settings: nothing is saved on their behalf (the legacy-rate adoption in particular). */ writable?: boolean }
+export type GrainCarryPersistence = { saveSettings: (settings: GrainCarrySettings) => Promise<GrainCarrySettings | void>; saveGrid: (grid: GrainCarryGrid) => Promise<GrainCarryGrid | void>; draftScope?: SettingsDraftScope; /** False for a member who may read but not write the farm's settings: nothing is saved on their behalf (the legacy-rate adoption in particular). */ writable?: boolean }
 
 export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimateId, onSelectEstimate, persistence }: { workspace: GrainWorkspace; selectedEstimate: ProductionEstimate; selectedEstimateId: string; onSelectEstimate: (id: string) => void; persistence?: GrainCarryPersistence }) {
   const farmId = workspace.fields.farm.id
@@ -192,7 +192,8 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
         const current = workspaceRef.current; const active = persistenceRef.current; const scope = draftScopeRef.current
         if (!active || readOnly() || !current.production_estimates.some((estimate) => estimate.id === estimateId)) return
         const existing = current.grain_carry_grids.find((grid) => grid.production_estimate_id === estimateId)
-        const id = existing?.id ?? (newGridIds.current[estimateId] ??= active.createId())
+        // A first insert takes the id derived from the farm and the estimate, so another tab's first insert of the same grid is the same row.
+        const id = existing?.id ?? (newGridIds.current[estimateId] ??= await stableGrainCarryGridId(current.fields.farm.id, estimateId))
         try {
           const saved = await active.saveGrid(carryToGrid(snapshot, { id, farm_id: current.fields.farm.id, production_estimate_id: estimateId, updated_at: baseVersions.current.grids[estimateId] ?? existing?.updated_at ?? new Date().toISOString() }))
           if (saved) { baseVersions.current.grids[estimateId] = saved.updated_at; sentRows.current.grids[estimateId] = saved }

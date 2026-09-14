@@ -1,4 +1,4 @@
-import type { GrainCarryGrid, GrainCarryGridRow, GrainCarrySettings, GrainSaleLimit } from './grain'
+import type { GrainCarryGrid, GrainCarryGridRow, GrainCarrySettings, GrainSaleLimit, PositionScope } from './grain'
 import { boundedDecimal, nullableBoundedDecimal } from './decimal'
 
 /** The carry grid always holds the harvest month plus twelve stored months. */
@@ -51,3 +51,19 @@ export function normalizeGrainCarryGrid(value: GrainCarryGrid): GrainCarryGrid {
   const price = (amount: number | null, label: string) => nullableBoundedDecimal(amount, { precision: 10, scale: 4, label })
   return { ...value, default_basis: boundedDecimal(value.default_basis, { precision: 10, scale: 4, label: 'the default basis' }), rows: value.rows.map(({ market_price, basis }) => ({ market_price: price(market_price, 'a market price'), basis: price(basis, 'a basis') })) }
 }
+
+// The first save of a sale limit or a carry grid is an insert whose id the browser chooses. Two tabs (or two visits) that both saw
+// no row yet would each choose a random id, and the second insert would then break the table's natural key (one sale limit per
+// position scope, one grid per production estimate) forever: a queued replay or a retry identifies the row by id, so it could never
+// resolve. The id is therefore derived from the row's logical key, the same in every tab, so the second write is an update of the
+// same row (the queue rebases it onto the first write's version) instead of a duplicate insert. Version 5 shape from SHA-256.
+async function stableGrainRowId(kind: 'sale-limit' | 'carry-grid', parts: ReadonlyArray<string | number | null>): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`farm-rx:${kind}:${JSON.stringify(parts)}`))).slice(0, 16)
+  digest[6] = ((digest[6] ?? 0) & 0x0f) | 0x50; digest[8] = ((digest[8] ?? 0) & 0x3f) | 0x80
+  const hex = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+/** The id of the sale limit row for a position scope, the same in every tab of every browser. */
+export function stableGrainSaleLimitId(scope: PositionScope): Promise<string> { return stableGrainRowId('sale-limit', [scope.farm_id, scope.crop_year, scope.commodity_id, scope.operating_entity_id, scope.enterprise_label]) }
+/** The id of the carry grid row for a production estimate, the same in every tab of every browser. */
+export function stableGrainCarryGridId(farmId: string, productionEstimateId: string): Promise<string> { return stableGrainRowId('carry-grid', [farmId, productionEstimateId]) }

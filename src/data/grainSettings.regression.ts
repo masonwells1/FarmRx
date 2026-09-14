@@ -1,4 +1,4 @@
-import { CARRY_GRID_ROWS, defaultCarrySettings, emptyCarryRows, normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
+import { CARRY_GRID_ROWS, defaultCarrySettings, emptyCarryRows, normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit, stableGrainCarryGridId, stableGrainSaleLimitId } from './grainSettings'
 import { parseGrainQueue } from './grainWriteQueue'
 import { isCarryDraft } from '../GrainCostOfCarry'
 import { farmerError } from '../lib/farmerErrors'
@@ -304,3 +304,15 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
 }
 
 console.log('Grain settings regressions passed.')
+
+// The first insert of a sale limit or a carry grid takes an id derived from its logical key: the same in every tab and browser, in
+// the uuid shape the repository accepts, different for a different scope or estimate and between the two kinds.
+{
+  const scope = { farm_id: '00000000-0000-4000-8000-000000000010', crop_year: 2026, commodity_id: 'corn', operating_entity_id: null, enterprise_label: null }
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  const a = await stableGrainSaleLimitId(scope); const b = await stableGrainSaleLimitId({ ...scope })
+  assert(a === b && uuid.test(a), 'The same position scope always gives the same uuid-shaped id.')
+  assert(await stableGrainSaleLimitId({ ...scope, enterprise_label: 'north' }) !== a && await stableGrainSaleLimitId({ ...scope, crop_year: 2027 }) !== a && await stableGrainSaleLimitId({ ...scope, operating_entity_id: '00000000-0000-4000-8000-000000000002' }) !== a, 'A different scope gives a different id.')
+  const grid = await stableGrainCarryGridId(scope.farm_id, '00000000-0000-4000-8000-000000000012')
+  assert(uuid.test(grid) && grid === await stableGrainCarryGridId(scope.farm_id, '00000000-0000-4000-8000-000000000012') && grid !== await stableGrainCarryGridId(scope.farm_id, '00000000-0000-4000-8000-000000000013') && grid !== a, 'A carry grid id is stable per farm and estimate and differs from a sale-limit id.')
+}

@@ -14,7 +14,7 @@ import { supabaseConfig } from "./lib/supabaseConfig";
 import { getModuleSyncStatus, subscribeSyncStatus } from "./data/syncStatus";
 import { useOptionalFarmAccess } from "./auth/FarmAccessContext";
 import { canEditFarmModule } from "./auth/farmContext";
-import { normalizeGrainSaleLimit } from "./data/grainSettings";
+import { normalizeGrainSaleLimit, stableGrainSaleLimitId } from "./data/grainSettings";
 // `base` is the row the editing session started from (the version the commit sends, so a row changed elsewhere conflicts);
 // `sent` is the last value this browser saved for the scope, kept so a replayed row of this browser's own is recognised.
 type SaleLimitDraft = { key: string; value: number | null; base: { id: string; updated_at: string } | null; sent?: number | null };
@@ -523,7 +523,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
         // The version sent is the row this editing session started from, so a row changed on another device since then conflicts
         // (and the recovery refresh replaces the draft) instead of being overwritten with the typed value.
         const base = saleLimitBases.current[key]; const origin = base === undefined ? existing : base;
-        const saved = await services.grainRepository.saveGrainSaleLimit({ id: origin?.id ?? services.createGrainId(), ...scopeOf(estimate), sale_limit_bushels: value, created_at: existing?.created_at ?? stamp, updated_at: origin?.updated_at ?? stamp });
+        // A first insert takes the id derived from its position scope, so another tab's first insert of the same scope is the same row.
+        const saved = await services.grainRepository.saveGrainSaleLimit({ id: origin?.id ?? await stableGrainSaleLimitId(scopeOf(estimate)), ...scopeOf(estimate), sale_limit_bushels: value, created_at: existing?.created_at ?? stamp, updated_at: origin?.updated_at ?? stamp });
         savedValue = saved.sale_limit_bushels;
         failedSaleLimits.current.delete(key);
         saleLimitBases.current[key] = { id: saved.id, updated_at: saved.updated_at }; saleLimitSent.current[key] = saved.sale_limit_bushels;
@@ -584,7 +585,6 @@ export function GrainPage({ services }: { services: GrainServices }) {
         return saved;
       } catch (caught) { await recoverSettings(caught, "save your carry prices"); throw caught; }
     },
-    createId: services.createGrainId,
     draftScope: workspace ? draftScopeFor(workspace.fields.farm.id) : undefined,
     writable: canWriteSettings,
   };
