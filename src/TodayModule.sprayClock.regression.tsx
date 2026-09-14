@@ -10,7 +10,7 @@ import type { Field, FieldsData, FieldsRepository } from './data/fields'
 import type { InventoryRepository } from './data/inventory'
 import type { NotificationsRepository } from './data/notifications'
 import { weatherCacheKey } from './data/weatherService'
-import { TodayPage } from './TodayModule'
+import { loadTodaySnapshots, TodayPage } from './TodayModule'
 
 // FD-1 (FD-010): the spray card's two-hour freshness ceiling is judged against the clock while Today stays open, not only at load.
 
@@ -66,6 +66,11 @@ try {
   await act(async () => { tickAll(); await flush() })
   assert(!cardText().includes('Good spray'), `A stale forecast kept showing a spray verdict after the ceiling (saw: ${cardText()}).`)
   assert(cardText().includes('Check the spray window'), `The stale card did not fall back to the Weather link (saw: ${cardText()}).`)
+  // FD-013: when Equipment fails for its own reasons, Fields is read on its own so the spray card does not vanish with it.
+  const failingEquipment = { getWorkspace: async () => { throw new Error('boom') }, getSnapshot: async () => { throw new Error('Equipment and Tasks found invalid data.') } } as unknown as EquipmentTasksRepository
+  const sections = await loadTodaySnapshots(profile, { fieldsRepository, equipmentTasksRepository: failingEquipment, notificationsRepository, inventoryRepository })
+  assert(sections.equipment.status === 'failed', 'The failing Equipment snapshot must report as failed.')
+  assert(sections.fields.status === 'ready' && sections.fields.data.length === 1 && sections.fields.data[0].name === 'North Forty', 'Fields must still load on its own when Equipment fails.')
   console.log('Today spray clock regression passed')
 } finally {
   await act(async () => { root.unmount() }); container.remove(); win.close(); Date.now = realNow; globalThis.setInterval = realSetInterval

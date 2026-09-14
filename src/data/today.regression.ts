@@ -139,7 +139,8 @@ assert.ok(todayNextUp({ profile: worker, today, equipment: null, notifications: 
 const combined = todayNextUp({ profile: owner, today, equipment: workspace, notifications, inventory })
 assert.ok(combined.findIndex((item) => item.kind === 'low_inventory') > combined.findIndex((item) => item.urgency === 'overdue'), 'Low inventory sorts after overdue work.')
 assert.deepEqual(todayNextUp({ profile: owner, today: '2026-07-12', equipment: workspace, notifications: [] }).map((item) => item.kind), ['service', 'service'], 'Tasks are due only from their due date on.')
-assert.deepEqual(todayNextUp({ profile: worker, today, equipment: null, notifications }).map((item) => item.kind), ['program'], 'A worker without financial access handed only alerts sees the selected farm\'s pass alert and nothing from another farm.')
+assert.deepEqual(todayNextUp({ profile: worker, today, equipment: null, notifications }), [], 'Without the tasks snapshot a pass alert\'s state (applied, rescheduled) is unknown, so a worker handed only alerts sees no pass row; the section error explains the gap.')
+assert.deepEqual(todayNextUp({ profile: owner, today, equipment: null, notifications }).map((item) => item.kind), ['grain_alert'], 'Grain alerts do not depend on task state and still list when tasks could not load.')
 
 // Spray card: cached forecasts only, freshness-gated, no writes.
 class MemoryStorage { private readonly values = new Map<string, string>(); writes = 0; getItem(key: string) { return this.values.get(key) ?? null }; setItem(key: string, value: string) { this.writes += 1; this.values.set(key, value) } }

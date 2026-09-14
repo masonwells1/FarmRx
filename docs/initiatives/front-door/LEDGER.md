@@ -129,3 +129,11 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Trigger:** Codex reviewed `2dfe826` on pull request #46 and returned one P2 finding, verified against the code and repaired in the next commit.
 - **Finding (rescheduled passes):** `reschedule_program_pass` moves a pass and its generated task to the new date but leaves the old reminder unread, so Today kept listing the pass as due from that alert. An unread pass alert whose generated task is now due on a later date is treated as a past reminder and is not listed; when that date arrives the pass is listed again. Today still writes nothing; the alert stays unread on the alerts page exactly as before. Proved by regression (rescheduled pass absent today, present on the new date).
 - **Proof:** recorded on the pull request with the repair commit.
+
+## FD-013 — Ninth Codex round on FD-1 (two findings)
+
+- **Date/time:** 2026-09-14 11:03 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `e3709f9` on pull request #46 and returned two P2 findings on the per-section failure paths. Both were verified against the code and are repaired in the next commit.
+- **Finding 1 (pass alerts without task state):** whether a pass is applied or rescheduled is read from its generated task; when the Equipment and Tasks snapshot failed but Alerts loaded, both checks ran against an empty task list and an already-applied or rescheduled pass came back as "Program pass due". Pass state is now treated as unknown when that snapshot is absent and no pass alert is listed; the section's own error explains the gap, and grain alerts, which do not depend on task state, still list. Regression cases updated and added.
+- **Finding 2 (Fields tied to Equipment):** for members who can open Equipment, Fields was derived only from the Equipment workspace, so an Equipment-specific failure also reported Fields as failed and removed the spray card. When Equipment fails, Fields is now read on its own through its pure snapshot. Proved by a case in the Today render regression (failing Equipment, Fields still ready).
+- **Proof:** recorded on the pull request with the repair commit.

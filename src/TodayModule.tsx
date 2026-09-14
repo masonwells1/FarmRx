@@ -22,9 +22,14 @@ const ready = <T,>(data: T): Section<T> => ({ status: 'ready', data })
 const failed = <T,>(error: unknown, action: string): Section<T> => ({ status: 'failed', message: farmerError(error, action) })
 const dataOf = <T,>(section: Section<T>): T | null => section.status === 'ready' ? section.data : null
 
+async function standaloneFields(fieldsRepository: FieldsRepository, context: LoadedFarmAccessProfile['operationContext']): Promise<Section<Field[]>> {
+  if (!fieldsRepository.getSnapshot) return failed(new Error('Fields does not expose a side-effect-free snapshot.'), 'load your fields')
+  try { return ready((await fieldsRepository.getSnapshot(context)).data.fields) } catch (error) { return failed(error, 'load your fields') }
+}
+
 function localStorageOrNull(): Pick<Storage, 'getItem'> | null { try { return typeof localStorage === 'undefined' ? null : localStorage } catch { return null } }
 
-async function loadTodaySnapshots(profile: LoadedFarmAccessProfile, repositories: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository }): Promise<TodaySnapshots> {
+export async function loadTodaySnapshots(profile: LoadedFarmAccessProfile, repositories: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository }): Promise<TodaySnapshots> {
   const context = profile.operationContext
   const wantsEquipment = canAccessFarmModule(profile, 'equipment') || canAccessFarmModule(profile, 'tasks')
   const wantsNotifications = canAccessFarmModule(profile, 'notifications')
@@ -37,8 +42,10 @@ async function loadTodaySnapshots(profile: LoadedFarmAccessProfile, repositories
     wantsInventory ? (repositories.inventoryRepository.getSnapshot ? repositories.inventoryRepository.getSnapshot(context).then((snapshot) => snapshot.data) : Promise.reject(new Error('Inventory does not expose a side-effect-free snapshot.'))) : Promise.resolve(null),
   ])
   const equipmentSection: Section<EquipmentTasksWorkspace | null> = equipment.status === 'fulfilled' ? ready(equipment.value) : failed(equipment.reason, 'check equipment and tasks')
+  // Fields rides along with the Equipment workspace when that loads; when Equipment fails for its own reasons, Fields is read on
+  // its own so the spray card does not disappear with it.
   const fieldsSection: Section<Field[]> = wantsEquipment
-    ? equipment.status === 'fulfilled' ? ready(equipment.value?.fields.fields ?? []) : failed(equipment.reason, 'load your fields')
+    ? equipment.status === 'fulfilled' ? ready(equipment.value?.fields.fields ?? []) : await standaloneFields(repositories.fieldsRepository, context)
     : fields.status === 'fulfilled' ? ready(fields.value ?? []) : failed(fields.reason, 'load your fields')
   const notificationsSection: Section<Notification[] | null> = notifications.status === 'fulfilled' ? ready(notifications.value) : failed(notifications.reason, 'check your alerts')
   const inventorySection: Section<InventoryWorkspace | null> = inventory.status === 'fulfilled' ? ready(inventory.value) : failed(inventory.reason, 'check your inventory')

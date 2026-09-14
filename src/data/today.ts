@@ -54,7 +54,8 @@ const passIdOf = (link: string) => programPassLink.exec(link)?.[1]?.toLowerCase(
  * service interval and for a due program pass; when the service-due row or the pass alert is already shown, that generated task
  * is the same work and is not listed twice. Applying a pass closes its generated task but leaves the alert unread, so an unread
  * pass alert whose generated task is already done is finished work and is not listed, and one whose task was rescheduled to a
- * later date is a past reminder and is not listed until that date. Low inventory is the Inventory shelf's own
+ * later date is a past reminder and is not listed until that date; when the tasks could not be loaded at all, pass state is
+ * unknown and no pass alert is listed. Low inventory is the Inventory shelf's own
  * low-on-hand rule applied to the same on-hand view. A source the screen could not load is simply absent. */
 export function todayNextUp(input: { profile: FarmAccessProfile; today: string; equipment: EquipmentTasksWorkspace | null; notifications: readonly Notification[] | null; inventory?: InventoryWorkspace | null }): TodayNextUpItem[] {
   const { profile, today, equipment, notifications } = input
@@ -66,7 +67,10 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
   // Rescheduling a pass moves its generated task to the new date but leaves the old alert unread; an alert whose task is now due
   // in the future is a past reminder, not work for today, and the task itself returns to Next up when its new date arrives.
   const rescheduledPassIds = new Set((equipment?.tasks ?? []).filter((task) => task.source === 'program' && task.status !== 'done' && task.program_assigned_pass_id !== null && task.due_on !== null && task.due_on > today).map((task) => task.program_assigned_pass_id!.toLowerCase()))
-  const passAlertIsOpen = (link: string) => { const passId = passIdOf(link); return passId === null || (!appliedPassIds.has(passId) && !rescheduledPassIds.has(passId)) }
+  // Whether a pass is applied or rescheduled is read from its generated task, so without the Equipment and Tasks snapshot the
+  // state of every pass alert is unknown and none is listed (the section's own error is shown instead).
+  const passStateKnown = equipment !== null
+  const passAlertIsOpen = (link: string) => { const passId = passIdOf(link); return passId === null || (passStateKnown && !appliedPassIds.has(passId) && !rescheduledPassIds.has(passId)) }
   const shownPassIds = new Set(canAccessFarmModule(profile, 'programs') ? unread.filter((notification) => passAlertIsOpen(notification.link!)).map((notification) => passIdOf(notification.link!)).filter((id): id is string => id !== null) : [])
   const shownServiceIntervalIds = new Set<string>()
   if (equipment && canAccessFarmModule(profile, 'equipment')) {
