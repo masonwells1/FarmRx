@@ -53,7 +53,8 @@ const passIdOf = (link: string) => programPassLink.exec(link)?.[1]?.toLowerCase(
  * sees a grain line. Alerts belong to the selected farm only. The due-generation functions also write a task for an overdue
  * service interval and for a due program pass; when the service-due row or the pass alert is already shown, that generated task
  * is the same work and is not listed twice. Applying a pass closes its generated task but leaves the alert unread, so an unread
- * pass alert whose generated task is already done is finished work and is not listed. Low inventory is the Inventory shelf's own
+ * pass alert whose generated task is already done is finished work and is not listed, and one whose task was rescheduled to a
+ * later date is a past reminder and is not listed until that date. Low inventory is the Inventory shelf's own
  * low-on-hand rule applied to the same on-hand view. A source the screen could not load is simply absent. */
 export function todayNextUp(input: { profile: FarmAccessProfile; today: string; equipment: EquipmentTasksWorkspace | null; notifications: readonly Notification[] | null; inventory?: InventoryWorkspace | null }): TodayNextUpItem[] {
   const { profile, today, equipment, notifications } = input
@@ -62,7 +63,10 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
   const farmNotifications = (notifications ?? []).filter((notification) => notification.farm_id === profile.farmId)
   const unread = farmNotifications.filter((notification) => notification.read_at === null && notification.link !== null).sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
   const appliedPassIds = new Set((equipment?.tasks ?? []).filter((task) => task.source === 'program' && task.status === 'done' && task.program_assigned_pass_id !== null).map((task) => task.program_assigned_pass_id!.toLowerCase()))
-  const passAlertIsOpen = (link: string) => { const passId = passIdOf(link); return passId === null || !appliedPassIds.has(passId) }
+  // Rescheduling a pass moves its generated task to the new date but leaves the old alert unread; an alert whose task is now due
+  // in the future is a past reminder, not work for today, and the task itself returns to Next up when its new date arrives.
+  const rescheduledPassIds = new Set((equipment?.tasks ?? []).filter((task) => task.source === 'program' && task.status !== 'done' && task.program_assigned_pass_id !== null && task.due_on !== null && task.due_on > today).map((task) => task.program_assigned_pass_id!.toLowerCase()))
+  const passAlertIsOpen = (link: string) => { const passId = passIdOf(link); return passId === null || (!appliedPassIds.has(passId) && !rescheduledPassIds.has(passId)) }
   const shownPassIds = new Set(canAccessFarmModule(profile, 'programs') ? unread.filter((notification) => passAlertIsOpen(notification.link!)).map((notification) => passIdOf(notification.link!)).filter((id): id is string => id !== null) : [])
   const shownServiceIntervalIds = new Set<string>()
   if (equipment && canAccessFarmModule(profile, 'equipment')) {
@@ -94,8 +98,13 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
     }
   }
   if (notifications) {
+    // A pass rescheduled and reached again can carry two unread reminders (the dedupe key includes the date); one row per pass.
+    const listedPassIds = new Set<string>()
     for (const notification of unread) {
       const link = notification.link!
+      const passId = passIdOf(link)
+      if (link.startsWith('/programs') && passId !== null && listedPassIds.has(passId)) continue
+      if (passId !== null) listedPassIds.add(passId)
       if (link.startsWith('/programs') && canAccessFarmModule(profile, 'programs') && passAlertIsOpen(link)) items.push({ id: `program:${notification.id}`, kind: 'program', title: 'Program pass due', detail: notification.title, badge: null, urgency: 'due', to: link })
       else if (link.startsWith('/grain') && canAccessFarmModule(profile, 'grain')) items.push({ id: `grain_alert:${notification.id}`, kind: 'grain_alert', title: 'Grain alert', detail: notification.title, badge: null, urgency: 'info', to: link })
     }
