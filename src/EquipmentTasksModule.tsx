@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { confirmDialog } from "./components/ConfirmDialog";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
+import { parseTodayRecordIntent } from "./data/todayIntents";
 import type {
   Equipment,
   EquipmentCategory,
@@ -774,8 +775,10 @@ export function TasksPage({
   repository: EquipmentTasksRepository;
 }) {
   const { workspace, error, loading, reload, attentionQueueKey } = useWorkspace(repository);
+  const location = useLocation();
   const [filter, setFilter] = useState<TaskBoardFilter>(null);
-  const [adding, setAdding] = useState(false);
+  // A Today "Task" tile arrives with a record intent: open the new-task form at once, exactly as the Add task button would.
+  const [adding, setAdding] = useState(() => parseTodayRecordIntent(location.state)?.record === "task");
   const [editing, setEditing] = useState<FarmTask | null>(null);
   const [lastReceiptId, setLastReceiptId] = useState<string | null>(null);
   const receipt = useSaveReceipt(lastReceiptId);

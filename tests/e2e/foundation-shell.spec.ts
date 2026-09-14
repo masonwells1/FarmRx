@@ -119,6 +119,35 @@ function exactQuery(url: URL, expected: Record<string, string>) {
   return JSON.stringify(actual) === JSON.stringify(wanted)
 }
 
+// Exact read shapes for the Equipment & Tasks workspace and the Field Log (FD-1: Today reads them through the pure snapshot path).
+const equipmentReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
+  equipment: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc' }),
+  equipment_meter_readings: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'read_on.asc,id.asc' }),
+  equipment_service_intervals: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc' }),
+  equipment_service_log: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'service_date.desc,id.asc' }),
+  equipment_service_due: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'equipment_id.asc' }),
+  farm_member_names: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'display_name.asc' }),
+  farm_tasks: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'due_on.asc,id.asc' }),
+  field_log_entries: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'observed_on.desc,created_at.desc,id.asc' }),
+}
+const equipmentA = '00000000-0000-4000-8000-000000000201'
+const intervalA = '00000000-0000-4000-8000-000000000301'
+const taskA = '00000000-0000-4000-8000-000000000401'
+const passA = '00000000-0000-4000-8000-000000000601'
+function todayRows(farm: FarmFixture): Readonly<Partial<Record<string, unknown[]>>> {
+  return {
+    equipment: [{ id: equipmentA, farm_id: farm.id, name: 'John Deere 8R 340', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null, created_by: userId, created_at: now, updated_at: now }],
+    equipment_service_intervals: [{ id: intervalA, farm_id: farm.id, equipment_id: equipmentA, name: 'Engine oil', every_meter: 250, every_months: null, last_done_on: null, last_done_reading: 0, is_active: true, created_by: userId, created_at: now, updated_at: now }],
+    equipment_service_due: [{ farm_id: farm.id, equipment_id: equipmentA, interval_id: intervalA, reason: 'meter', overdue_amount: 12 }],
+    farm_tasks: [{ id: taskA, farm_id: farm.id, title: 'Fix the planter', details: null, status: 'todo', priority: 'normal', assigned_to: null, due_on: '2026-07-13', field_id: null, equipment_id: null, source: 'manual', interval_id: null, interval_cycle_key: null, program_assigned_pass_id: null, program_cycle_key: null, completed_by: null, completed_at: null, created_by: userId, created_at: now, updated_at: now }],
+  }
+}
+function todayNotifications(farm: FarmFixture, recipient = userId) {
+  return [
+    { id: '00000000-0000-4000-8000-000000000501', farm_id: farm.id, user_id: recipient, category: 'task', title: 'Corn pass 2 is due', body: null, link: `/programs?pass=${passA}`, dedupe_key: null, read_at: null, created_by: recipient, created_at: now },
+    { id: '00000000-0000-4000-8000-000000000502', farm_id: farm.id, user_id: recipient, category: 'general', title: 'Corn hit your $4.60 target', body: null, link: '/grain', dedupe_key: null, read_at: null, created_by: recipient, created_at: '2026-07-15T11:00:00.000Z' },
+  ]
+}
 const fieldsReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
   entities: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc' }),
   fields: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc' }),
@@ -166,7 +195,7 @@ function bearerUserId(request: Request): string | null {
   try { const payload = JSON.parse(Buffer.from(bearer[2]!, 'base64url').toString('utf8')) as { sub?: unknown; aud?: unknown }; return payload.aud === 'authenticated' && typeof payload.sub === 'string' ? payload.sub : null } catch { return null }
 }
 
-async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1, profile = ownerProfile, activeUser: string | (() => string) = userId, removedFarmEpochs: Readonly<Record<string, Readonly<Record<string, number>>>> = {}) {
+async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1, profile = ownerProfile, activeUser: string | (() => string) = userId, removedFarmEpochs: Readonly<Record<string, Readonly<Record<string, number>>>> = {}, moduleRows: Readonly<Partial<Record<string, unknown[]>>> = {}) {
   const unexpected: string[] = []
   await page.route('https://*.supabase.co/**', async (route) => {
     const url = new URL(route.request().url())
@@ -179,9 +208,11 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
       else { if (!exactQuery(url, { select: '*', order: 'name.asc,id.asc' })) { await rejectShape('farms list query'); return }; await fulfillJson(route, accessible.map((farm) => farmRow(farm, profile.namedRep))) }
       return
     }
+    if (rest === 'farm_memberships' && url.searchParams.get('select') === 'role') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'role', farm_id: `eq.${farm.id}`, user_id: `eq.${activeUserId}` })) { await rejectShape('farm_memberships viewer query'); return }; await fulfillJson(route, profile.memberRole === null ? null : { role: profile.memberRole }); return }
     if (rest === 'farm_memberships') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,user_id,role,status,can_view_financials', farm_id: `eq.${farm.id}`, user_id: `eq.${activeUserId}` })) { await rejectShape('farm_memberships query'); return }; await fulfillJson(route, membershipRow(farm, activeUserId, profile)); return }
     if (rest === 'farm_rep_access') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,rep_user_id,enabled,revoked_at', farm_id: `eq.${farm.id}`, rep_user_id: `eq.${activeUserId}` })) { await rejectShape('farm_rep_access query'); return }; await fulfillJson(route, profile.namedRep ? { farm_id: farm.id, rep_user_id: activeUserId, enabled: true, revoked_at: null } : null); return }
     if (rest && Object.hasOwn(fieldsReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, fieldsReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, rowsFor(rest, farm)); return }
+    if (rest && Object.hasOwn(equipmentReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, equipmentReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, moduleRows[rest] ?? []); return }
     if (rest === 'notifications') { if (route.request().method() !== 'GET' || !exactQuery(url, { select: '*', order: 'created_at.desc,id.desc' })) { await rejectShape('notifications query'); return }; await fulfillJson(route, notifications); return }
     if (url.pathname === '/rest/v1/rpc/get_current_farm_access_epochs') {
       let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
@@ -436,7 +467,7 @@ test('a forged recovery-completion URL cannot clear an ordinary canonical sessio
   })
 
   await page.goto('/login?recoveryComplete=1')
-  await expect(page).toHaveURL('http://127.0.0.1:4173/fields')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
   await expect(page.getByRole('heading', { name: 'Choose a farm' })).toBeVisible()
   expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null')?.user?.id, authSessionKey)).toBe(userId)
   expect(unexpected).toEqual([])
@@ -462,7 +493,7 @@ test('an older recovery request cannot clear a newer accepted same-user session'
   })
 
   await page.goto('/login?recoveryComplete=1')
-  await expect(page).toHaveURL('http://127.0.0.1:4173/fields')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
   await expect(page.getByRole('heading', { name: 'Choose a farm' })).toBeVisible()
   const storedLineage = await page.evaluate((key) => {
     const token = JSON.parse(localStorage.getItem(key) ?? 'null')?.access_token as string | undefined
@@ -489,7 +520,7 @@ test('cancelling recovery preserves an older canonical session', async ({ page }
 
   await mockRecoveryAuth(page)
   await page.getByRole('button', { name: 'Cancel and return to sign in' }).click()
-  await expect(page).toHaveURL('http://127.0.0.1:4173/fields')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
   expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null')?.user?.id, authSessionKey)).toBe(userId)
 })
 
@@ -784,18 +815,18 @@ test('a named rep receives only proven rep-safe navigation and direct routes', a
   await expect(page.getByText('North Forty')).toBeVisible()
   const navigation = testInfo.project.name === 'chromium-phone' ? page.getByRole('navigation', { name: 'Farm Rx navigation' }) : page.locator('.sidebar')
   if (testInfo.project.name === 'chromium-phone') {
-    for (const label of ['Fields', 'Grain']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
+    for (const label of ['Today', 'Fields', 'Grain']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
     await navigation.getByRole('button', { name: 'More' }).click()
     const more = page.getByRole('region', { name: 'More Farm Rx destinations' })
     for (const label of ['Inventory', 'Profitability', 'Alerts']) await expect(more.getByRole('link', { name: label })).toBeVisible()
     for (const label of ['Equipment', 'Tasks', 'Weather', 'Field Log', 'Scouting', 'Harvest', 'Programs']) await expect(more.getByRole('link', { name: label })).toHaveCount(0)
   } else {
-    for (const label of ['Fields', 'Grain', 'Inventory', 'Profitability', 'Alerts']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
+    for (const label of ['Today', 'Fields', 'Grain', 'Inventory', 'Profitability', 'Alerts']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
     for (const label of ['Equipment', 'Tasks', 'Weather', 'Field Log', 'Scouting', 'Harvest', 'Programs']) await expect(navigation.getByRole('link', { name: label })).toHaveCount(0)
   }
   await page.goto('/tasks')
-  await expect(page).toHaveURL(/\/fields$/)
-  await expect(page.getByText('North Forty')).toBeVisible()
+  await expect(page).toHaveURL(/\/today$/)
+  await expect(page.getByRole('heading', { name: 'Your farm today' })).toBeVisible()
   const pending = await page.evaluate((keys) => keys.map((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { entries?: unknown[] }).map((value) => value.entries?.length ?? 0), [pendingKeys.fieldsKey, pendingKeys.equipmentKey])
   expect(pending).toEqual([1, 1])
   expect(unexpected).toEqual([])
@@ -821,8 +852,8 @@ test('a read-only member can view member modules but cannot enter edit routes or
     await expect(navigation.getByRole('link', { name: 'Grain' })).toHaveCount(0)
   }
   await page.goto('/fields/new')
-  await expect(page).toHaveURL(/\/fields$/)
-  await expect(page.getByText('North Forty')).toBeVisible()
+  await expect(page).toHaveURL(/\/today$/)
+  await expect(page.getByRole('heading', { name: 'Your farm today' })).toBeVisible()
   const pending = await page.evaluate((keys) => keys.map((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { entries?: unknown[] }).map((value) => value.entries?.length ?? 0), [pendingKeys.fieldsKey, pendingKeys.equipmentKey])
   expect(pending).toEqual([1, 1])
   expect(unexpected).toEqual([])
@@ -1223,8 +1254,8 @@ test('mobile navigation keeps five non-overlapping targets and exposes every des
     const nav = page.getByRole('navigation', { name: 'Farm Rx navigation' })
     const targets = nav.locator('.nav-link')
     await expect(targets).toHaveCount(5)
+    await expect(nav.getByText('Today', { exact: true })).toBeVisible()
     await expect(nav.getByText('Fields', { exact: true })).toBeVisible()
-    await expect(nav.getByText('Grain', { exact: true })).toBeVisible()
     await expect(nav.getByText('Tasks', { exact: true })).toBeVisible()
     await expect(nav.getByText('Weather', { exact: true })).toBeVisible()
     await expect(nav.getByRole('button', { name: 'More' })).toBeVisible()
@@ -1234,9 +1265,84 @@ test('mobile navigation keeps five non-overlapping targets and exposes every des
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
     await nav.getByRole('button', { name: 'More' }).click()
     const more = page.getByRole('region', { name: 'More Farm Rx destinations' })
-    for (const label of ['Inventory', 'Profitability', 'Equipment', 'Field Log', 'Scouting', 'Harvest', 'Programs', 'Alerts']) await expect(more.getByRole('link', { name: label })).toBeVisible()
+    for (const label of ['Grain', 'Inventory', 'Profitability', 'Equipment', 'Field Log', 'Scouting', 'Harvest', 'Programs', 'Alerts']) await expect(more.getByRole('link', { name: label })).toBeVisible()
     await more.getByRole('button', { name: 'Close more navigation' }).click()
     await expect(more).toBeHidden()
   }
+  expect(unexpected).toEqual([])
+})
+
+// FD-1: Today is the front door. These journeys prove the role matrix through the built shell; src/data/today.regression.ts proves
+// the projection and scripts/sql/fd-today-role-assertions.sql proves the row-level side on a disposable database.
+test('Today opens by default with record tiles and Next up, and hands the Rain and Task tiles to the owning forms', async ({ page, context }, testInfo) => {
+  await seedSession(context)
+  const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), false, 1, ownerProfile, userId, {}, todayRows(farms[0]))
+  await page.goto('/')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
+  await expect(page.getByRole('heading', { name: 'What are you recording?' })).toBeVisible()
+  const tiles = page.getByRole('list', { name: 'Record' }).getByRole('button')
+  await expect(tiles).toHaveText(['Rain', 'Scouting note', 'Spray record', 'Task', 'Harvest', 'Grain delivery'])
+  const boxes = await tiles.evaluateAll((items) => items.map((item) => { const box = item.getBoundingClientRect(); return { width: box.width, height: box.height } }))
+  expect(boxes.every((box) => box.width >= 48 && box.height >= 48)).toBeTruthy()
+  const nextUp = page.getByRole('region', { name: 'Next up' })
+  const rows = nextUp.getByRole('link')
+  await expect(rows).toHaveCount(4)
+  await expect(rows.nth(0)).toContainText('Service overdue')
+  await expect(rows.nth(0)).toContainText('John Deere 8R 340 · Engine oil')
+  await expect(rows.nth(0)).toContainText('12 hours over')
+  await expect(rows.nth(0)).toHaveAttribute('href', '/equipment')
+  await expect(rows.nth(1)).toContainText('Task overdue')
+  await expect(rows.nth(1)).toContainText('Fix the planter')
+  await expect(rows.nth(2)).toContainText('Program pass due')
+  await expect(rows.nth(2)).toHaveAttribute('href', `/programs?pass=${passA}`)
+  await expect(rows.nth(3)).toContainText('Grain alert')
+  await expect(rows.nth(3)).toContainText('Corn hit your $4.60 target')
+  await expect(page.getByRole('link', { name: /Check the spray window/ })).toHaveAttribute('href', '/weather')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
+  await page.screenshot({ path: testInfo.outputPath('today-owner.png'), fullPage: true })
+  await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Rain', exact: true }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/field-log')
+  await expect(page.getByRole('heading', { name: 'Add rain' })).toBeVisible()
+  await page.goto('/today')
+  await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Task' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/tasks')
+  await expect(page.getByRole('heading', { name: 'Add task' })).toBeVisible()
+  expect(unexpected).toEqual([])
+})
+
+test('Today shows a worker without financial access no grain tile and no grain line, and reads no grain table', async ({ page, context }) => {
+  await seedSession(context)
+  const reads: string[] = []
+  page.on('request', (request) => { const url = new URL(request.url()); if (url.pathname.startsWith('/rest/v1/')) reads.push(url.pathname) })
+  const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), false, 1, { memberRole: 'worker', canViewFinancials: false, namedRep: false }, userId, {}, todayRows(farms[0]))
+  await page.goto('/today')
+  await expect(page.getByRole('heading', { name: 'What are you recording?' })).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Record' }).getByRole('button')).toHaveText(['Rain', 'Scouting note', 'Spray record', 'Task', 'Harvest'])
+  const nextUp = page.getByRole('region', { name: 'Next up' })
+  await expect(nextUp.getByRole('link')).toHaveCount(3)
+  await expect(nextUp.getByText('Service overdue')).toBeVisible()
+  await expect(nextUp.getByText('Task overdue')).toBeVisible()
+  await expect(nextUp.getByText('Program pass due')).toBeVisible()
+  await expect(page.getByText('Grain alert')).toHaveCount(0)
+  await expect(page.getByText('$4.60')).toHaveCount(0)
+  expect(reads.filter((path) => /grain|production_estimates|marketing_plan|insurance_units|budget|cost_lines/.test(path))).toEqual([])
+  expect(unexpected).toEqual([])
+})
+
+test('Today gives a named rep a view-only front door with grain alerts and no equipment or task reads', async ({ page, context }) => {
+  await seedSession(context)
+  const reads: string[] = []
+  page.on('request', (request) => { const url = new URL(request.url()); if (url.pathname.startsWith('/rest/v1/')) reads.push(url.pathname) })
+  const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), false, 1, { memberRole: null, canViewFinancials: false, namedRep: true }, userId, {}, todayRows(farms[0]))
+  await page.goto('/today')
+  await expect(page.getByRole('heading', { name: 'Your farm today' })).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Record' })).toHaveCount(0)
+  const nextUp = page.getByRole('region', { name: 'Next up' })
+  await expect(nextUp.getByRole('link')).toHaveCount(1)
+  await expect(nextUp.getByText('Grain alert')).toBeVisible()
+  await expect(page.getByText('Service overdue')).toHaveCount(0)
+  await expect(page.getByText('Program pass due')).toHaveCount(0)
+  await expect(page.getByRole('link', { name: /spray window|Weather & Spray/ })).toHaveCount(0)
+  expect(reads.filter((path) => /equipment|farm_tasks|farm_member_names/.test(path))).toEqual([])
   expect(unexpected).toEqual([])
 })

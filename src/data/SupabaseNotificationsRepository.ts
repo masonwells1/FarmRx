@@ -22,7 +22,15 @@ function validateRaise(input: { farmId: string; recipientId: string; category: N
 function validateIds(ids: string[]) { if (!Array.isArray(ids) || !ids.length || ids.some((value) => !uuid.test(value))) fail() }
 
 export class SupabaseNotificationsRepository implements NotificationsRepository {
-  constructor(private readonly d: { gateway: NotificationsDataGateway; getUserId: () => Promise<string>; getOperationContext: () => Promise<FarmOperationContext>; verifyOperationContext: (expected: FarmOperationContext) => Promise<void> }) {}
+  constructor(private readonly d: { gateway: NotificationsDataGateway; getUserId: () => Promise<string>; getOperationContext: () => Promise<FarmOperationContext>; verifyOperationContext: (expected: FarmOperationContext) => Promise<void>; verifySnapshotContext?: (expected: FarmOperationContext) => void; clock?: () => string }) {}
+  /** Pure read for Today: the recipient is the context's account, the fence is checked before and after the one read, nothing is written. */
+  async getSnapshot(context: FarmOperationContext) {
+    this.d.verifySnapshotContext?.(context)
+    const rows = await this.d.gateway.loadNotifications()
+    this.d.verifySnapshotContext?.(context)
+    const notifications = rows.map((row) => mapNotification(row, { recipientId: context.userId }))
+    return { data: { notifications, unreadCount: notifications.filter((notification) => notification.read_at === null).length }, source: 'live' as const, capturedAt: this.d.clock?.() ?? new Date().toISOString() }
+  }
   async getData(): Promise<NotificationsData> { const userId = await this.d.getUserId(); const notifications = (await this.d.gateway.loadNotifications()).map((row) => mapNotification(row, { recipientId: userId })); return { notifications, unreadCount: notifications.filter((notification) => notification.read_at === null).length } }
   async markRead(ids: string[]): Promise<MarkReadResult> { return this.markReadOperation(ids, await this.d.getOperationContext()) }
   async markReadOperation(ids: string[], context: FarmOperationContext) { validateIds(ids); await this.d.verifyOperationContext(context); const receipt = obj(await this.d.gateway.markRead(ids, context)); await this.d.verifyOperationContext(context); const count = receipt.updated_count; if (typeof count !== 'number' || !Number.isInteger(count) || count < 0 || count > ids.length) fail(); return { kind: 'confirmed' as const, updatedCount: Number(count) } }

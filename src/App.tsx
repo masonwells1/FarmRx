@@ -71,6 +71,7 @@ import { getWorkspaceCacheNotices, subscribeWorkspaceCacheNotices } from "./data
 import { farmerError } from "./lib/farmerErrors";
 import { recoverLazyRoute } from "./lib/lazyRouteRecovery";
 
+const TodayPage = lazy(() => recoverLazyRoute("today", () => import("./TodayModule")).then((module) => ({ default: module.TodayPage })));
 const FieldDetailPage = lazy(() => recoverLazyRoute("field-detail", () => import("./FieldsModule")).then((module) => ({ default: module.FieldDetailPage })));
 const FieldFormPage = lazy(() => recoverLazyRoute("field-form", () => import("./FieldsModule")).then((module) => ({ default: module.FieldFormPage })));
 const FieldsPage = lazy(() => recoverLazyRoute("fields", () => import("./FieldsModule")).then((module) => ({ default: module.FieldsPage })));
@@ -105,6 +106,12 @@ function NavGlyph({ d }: { d: string }) {
 
 type NavigationItem = { label: string; path: string; icon: ReactNode; module: FarmAppModule };
 const navigation: NavigationItem[] = [
+  {
+    label: "Today",
+    path: "/today",
+    module: "fields",
+    icon: <NavGlyph d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4M8 12a4 4 0 1 0 8 0 4 4 0 1 0-8 0" />,
+  },
   {
     label: "Soil Rx",
     path: "/soil-rx",
@@ -205,11 +212,14 @@ const navigation: NavigationItem[] = [
   },
 ];
 
-const mobilePrimaryPaths = new Set(["/fields", "/grain", "/tasks", "/weather"]);
+// The phone bar holds four destinations plus More (FD-1 selected visual option). Each member sees the first four they may open,
+// in this order, so a farm owner gets Today · Fields · Tasks · Weather and a named rep gets Today · Fields · Grain.
+const mobilePrimaryOrder = ["/today", "/fields", "/tasks", "/weather", "/grain"];
+const mobilePrimaryCount = 4;
 
 function CapabilityRoute({ module, editOnly = false, lockWrites = false, children }: { module: FarmAppModule; editOnly?: boolean; lockWrites?: boolean; children: ReactNode }) {
   const { profile } = useFarmAccess();
-  if (!canAccessFarmModule(profile, module) || editOnly && !canEditFarmModule(profile, module)) return <Navigate to="/fields" replace />;
+  if (!canAccessFarmModule(profile, module) || editOnly && !canEditFarmModule(profile, module)) return <Navigate to="/today" replace />;
   if (lockWrites && !canEditFarmModule(profile, module)) return <fieldset disabled aria-label="Read-only farm data" style={{ border: 0, margin: 0, minInlineSize: 0, padding: 0 }}>{children}</fieldset>;
   return children;
 }
@@ -318,6 +328,7 @@ function AppLayout() {
           <LazyRouteErrorBoundary key={location.pathname}>
             <Suspense fallback={<p className="loading-state" role="status">Opening this page…</p>}>
             <Routes>
+            <Route path="/today" element={<CapabilityRoute module="fields"><TodayPage fieldsRepository={fieldsRepository} equipmentTasksRepository={equipmentTasksRepository} notificationsRepository={notificationsRepository} /></CapabilityRoute>} />
             <Route path="/fields" element={<CapabilityRoute module="fields" lockWrites><FieldsPage /></CapabilityRoute>} />
             <Route path="/fields/new" element={<CapabilityRoute module="fields" editOnly><FieldFormPage /></CapabilityRoute>} />
             <Route path="/fields/:id" element={<CapabilityRoute module="fields" lockWrites><FieldDetailPage /></CapabilityRoute>} />
@@ -380,7 +391,7 @@ function AppLayout() {
             />
             <Route path="/soil-rx" element={<CapabilityRoute module="soil_rx"><SoilRxPage repository={soilRxRepository} fieldsRepository={fieldsRepository} /></CapabilityRoute>} />
             <Route path="/privacy" element={<FarmPrivacyPage repository={farmSharingRepository} />} />
-            <Route path="*" element={<Navigate to="/fields" replace />} />
+            <Route path="*" element={<Navigate to="/today" replace />} />
             </Routes>
             </Suspense>
           </LazyRouteErrorBoundary>
@@ -776,7 +787,7 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
   if (state === "setup")
     return <InitialFarmSetup onComplete={completeInitialFarmSetup} />;
   if (state === "choose" && access?.userId === user.id)
-    return <main className="login-page"><section className="login-panel farm-choice" aria-labelledby="farm-choice-title"><h1 id="farm-choice-title">Choose a farm</h1><p>Your records and saved offline work stay separated by farm.</p><div className="farm-choice-list">{access.farms.map((farm) => <button className="primary-action" type="button" key={farm.id} onClick={() => { void selectFarm(user.id, farm.id).then(() => window.location.assign('/fields')).catch((error) => { setMessage(farmerError(error, 'open this farm')); setState('blocked') }) }}>{farm.name}</button>)}</div><RevokedFarmRecovery userId={user.id} /></section></main>;
+    return <main className="login-page"><section className="login-panel farm-choice" aria-labelledby="farm-choice-title"><h1 id="farm-choice-title">Choose a farm</h1><p>Your records and saved offline work stay separated by farm.</p><div className="farm-choice-list">{access.farms.map((farm) => <button className="primary-action" type="button" key={farm.id} onClick={() => { void selectFarm(user.id, farm.id).then(() => window.location.assign('/today')).catch((error) => { setMessage(farmerError(error, 'open this farm')); setState('blocked') }) }}>{farm.name}</button>)}</div><RevokedFarmRecovery userId={user.id} /></section></main>;
   if (state === "blocked")
     return (
       <main className="login-page">
@@ -828,7 +839,7 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
       }
       throw error;
     }
-    window.location.assign('/fields');
+    window.location.assign('/today');
   };
   const checkSignal = async () => {
     const revalidate = liveRevalidationRef.current;
@@ -933,8 +944,8 @@ function MobileNavigation() {
   const location = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
   const allowed = navigation.filter((item) => canAccessFarmModule(profile, item.module));
-  const mobilePrimaryNavigation = allowed.filter((item) => mobilePrimaryPaths.has(item.path));
-  const mobileMoreNavigation = allowed.filter((item) => !mobilePrimaryPaths.has(item.path));
+  const mobilePrimaryNavigation = mobilePrimaryOrder.flatMap((path) => allowed.filter((item) => item.path === path)).slice(0, mobilePrimaryCount);
+  const mobileMoreNavigation = allowed.filter((item) => !mobilePrimaryNavigation.includes(item));
   const moreActive = mobileMoreNavigation.some((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`));
   // A route change means the view that asked a question is gone; drop the question with it.
   useEffect(() => { setMoreOpen(false); cancelPendingDialogs(); }, [location.pathname]);
@@ -1020,7 +1031,7 @@ function LoginPage() {
     const from = (location.state as { from?: string } | null)?.from;
     return (
       <Navigate
-        to={from?.startsWith("/") && !from.startsWith("//") ? from : "/fields"}
+        to={from?.startsWith("/") && !from.startsWith("//") ? from : "/today"}
         replace
       />
     );
@@ -1039,7 +1050,7 @@ function LoginPage() {
       );
       const from = (location.state as { from?: string } | null)?.from;
       navigate(
-        from?.startsWith("/") && !from.startsWith("//") ? from : "/fields",
+        from?.startsWith("/") && !from.startsWith("//") ? from : "/today",
         { replace: true },
       );
     } catch (caught) {

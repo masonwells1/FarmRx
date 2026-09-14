@@ -98,6 +98,12 @@ export function createWeatherService(deps: Deps) {
 }
 export const weatherService = typeof window === 'undefined' ? null : createWeatherService({ fetch: window.fetch.bind(window), clock: () => new Date(), storage: window.localStorage })
 
+/** The forecast this browser last cached for a location, or null when there is none or it cannot be read. A pure read for
+ * projections such as Today: nothing is fetched or written, and the caller decides freshness with `isActionablyFresh`. */
+export function readCachedForecast(storage: Pick<Storage, 'getItem'>, lat: number, lon: number): ForecastBundle | null {
+  try { const raw = storage.getItem(weatherCacheKey(lat, lon)); if (!raw) return null; const envelope = parseCache(raw); return { ...validateBundle(envelope.bundle, envelope.fetched_at), stale: false } } catch { return null }
+}
+
 function daylight(time: string, sunrise: string | null, sunset: string | null) { if (!sunrise || !sunset) return false; const value = at(time); const start = at(sunrise); const end = at(sunset); return Number.isFinite(value) && Number.isFinite(start) && Number.isFinite(end) && value >= start && value <= end }
 function inversionLikely(sample: WeatherSample, ctx: SprayContext) { if (sample.wind_speed_mph >= 3) return false; if (!ctx.sunrise || !ctx.sunset) return false; const hour = at(sample.time); return hour < at(ctx.sunrise) || hour > at(ctx.sunset) || hour <= at(ctx.sunrise) + 2 * 60 * 60 * 1000 }
 function rainSoon(sample: WeatherSample, ctx: SprayContext) { const now = at(sample.time); return ctx.hourly.filter((hour) => at(hour.time) > now && at(hour.time) <= now + 4 * 60 * 60 * 1000).find((hour) => hour.precipitation_in > 0 || (hour.precipitation_probability ?? 0) >= 50) ?? null }

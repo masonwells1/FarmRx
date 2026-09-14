@@ -1,3 +1,5 @@
+import type { FarmOperationContext } from './farmOperationContext'
+import type { ReadOnlySnapshot } from './fields'
 export type NotificationCategory = 'spray' | 'rain' | 'scouting' | 'harvest' | 'service' | 'task' | 'general'
 
 export interface Notification {
@@ -19,6 +21,8 @@ export type MarkReadResult = { kind: 'confirmed'; updatedCount: number } | { kin
 
 export interface NotificationsRepository {
   getData(): Promise<NotificationsData>
+  /** Pure read for projections such as Today. The caller supplies the already-published, fenced context; the repository must never resolve access, replay, generate, or write a cache. */
+  getSnapshot?(context: FarmOperationContext): Promise<ReadOnlySnapshot<NotificationsData>>
   markRead(ids: string[]): Promise<MarkReadResult>
   raiseNotification(farmId: string, recipientId: string, category: NotificationCategory, title: string, body: string, link: string, dedupeKey: string | null): Promise<Notification>
   savePushSubscription(subscription: { endpoint: string; p256dh: string; auth: string; userAgent: string }): Promise<void>
