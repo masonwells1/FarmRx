@@ -11,6 +11,7 @@ import type { InventoryDataGateway } from './InventoryDataGateway'
 import type { FieldsRepository } from './fields'
 import { parseTodayRecordIntent, todayRecordIntent } from './todayIntents'
 import { readCachedForecast, weatherCacheKey } from './weatherService'
+import { farmCalendarDate, farmLocalCalendarDate } from './farmDates'
 
 // FD-1 proof (GOAL.md, Initiative FD-1): the Today screen is a pure projection, so its role matrix and its sources are proved
 // here without a browser. The e2e lane proves the same rules through the built shell; the disposable database lane proves the
@@ -166,6 +167,19 @@ storage.setItem(weatherCacheKey(41.5, -93.6), JSON.stringify({ version: 1, fetch
 const windowPassed = todaySprayWindow(fieldsData.fields, readForecast, nowMs)
 assert.ok(windowPassed && windowPassed.level !== 'good' && !windowPassed.headline.startsWith('Good spray window'), `A forecast fetched at 9:30 read at 10:00 must not offer the window that closed at 10 (saw ${windowPassed?.level} · ${windowPassed?.headline}).`)
 assert.equal(windowPassed.details[0], 'Wind 16 mph SW', 'Conditions come from the hourly sample at the field\'s wall clock now, not the fetched current sample.')
+// A fresh current observation between hourly rows outranks the older hourly row before it.
+const gusty = { ...hour('2026-07-15T10:45'), wind_speed_mph: 20, wind_gusts_mph: 28 }
+storage.setItem(weatherCacheKey(41.5, -93.6), JSON.stringify({ version: 1, fetched_at: new Date(nowMs - 5 * 60_000).toISOString(), bundle: { current: gusty, hourly: ['06:00', '07:00', '08:00', '09:00', '10:00', '11:00', '12:00'].map((clock) => hour(`2026-07-15T${clock}`)), daily: [{ date: '2026-07-15', precipitation_sum_in: 0, precipitation_probability_max: 10, temperature_max_f: 84, temperature_min_f: 61, sunrise: '2026-07-15T05:58', sunset: '2026-07-15T20:47' }], fetched_at: new Date(nowMs - 5 * 60_000).toISOString() } })); storage.writes = 0
+const freshGust = todaySprayWindow(fieldsData.fields, readForecast, nowMs)
+assert.ok(freshGust && freshGust.level !== 'good' && freshGust.details[0] === 'Wind 20 mph SW', `A 10:45 observation of 20 mph must outrank the calm 10:00 hourly row (saw ${freshGust?.level} · ${freshGust?.details[0]}).`)
+const gustThenCalmHour = todaySprayWindow(fieldsData.fields, readForecast, nowMs + 20 * 60_000)
+assert.ok(gustThenCalmHour && gustThenCalmHour.details[0] === 'Wind 6 mph SW', `Once the 11:00 hourly row is newer than the observation it takes over (saw ${gustThenCalmHour?.details[0]}).`)
+// The farm's calendar day comes from its stored time zone; the device's day only when the zone is unknown or unusable.
+const lateEvening = new Date('2026-07-16T03:30:00.000Z')
+assert.equal(farmCalendarDate(lateEvening, 'America/Chicago'), '2026-07-15', 'At 10:30 PM Central the farm\'s day is still the 15th.')
+assert.equal(farmCalendarDate(lateEvening, 'Asia/Tokyo'), '2026-07-16', 'A device in Tokyo does not change the farm\'s day; the farm\'s zone does.')
+assert.equal(farmCalendarDate(lateEvening, null), farmLocalCalendarDate(lateEvening), 'Without a stored zone the device\'s day is used.')
+assert.equal(farmCalendarDate(lateEvening, 'Not/AZone'), farmLocalCalendarDate(lateEvening), 'An unusable zone falls back to the device\'s day rather than failing.')
 storage.setItem(weatherCacheKey(41.5, -93.6), cachedBundle(new Date(nowMs - 30 * 60_000).toISOString())); storage.writes = 0
 storage.setItem(weatherCacheKey(41.5, -93.6), cachedBundle(new Date(nowMs - 3 * 60 * 60_000).toISOString())); storage.writes = 0
 assert.equal(todaySprayWindow(fieldsData.fields, readForecast, nowMs), null, 'A forecast too old to act on is skipped, so Today never shows a green verdict from stale weather.')

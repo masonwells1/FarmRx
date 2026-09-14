@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router'
 import { canAccessFarmModule, type LoadedFarmAccessProfile } from './auth/farmContext'
 import { useFarmAccess } from './auth/FarmAccessContext'
 import type { EquipmentTasksRepository, EquipmentTasksWorkspace } from './data/equipmentTasks'
-import { farmLocalCalendarDate } from './data/farmDates'
+import { farmCalendarDate } from './data/farmDates'
 import type { Field, FieldsRepository } from './data/fields'
 import type { InventoryRepository, InventoryWorkspace } from './data/inventory'
 import type { Notification, NotificationsRepository } from './data/notifications'
@@ -78,7 +78,8 @@ export function TodayPage({ fieldsRepository, equipmentTasksRepository, notifica
   const storage = localStorageOrNull()
   const fields = dataOf(snapshots.fields)
   const sprayCard = showWeather && fields && storage ? todaySprayWindow(fields, (latitude, longitude) => readCachedForecast(storage, latitude, longitude), nowMs) : null
-  const nextUp = todayNextUp({ profile, today: farmLocalCalendarDate(), equipment: dataOf(snapshots.equipment), notifications: dataOf(snapshots.notifications), inventory: dataOf(snapshots.inventory) })
+  // "Today" is the farm's calendar day in its stored time zone (the database's own due-generation authority), re-read on every tick.
+  const nextUp = todayNextUp({ profile, today: farmCalendarDate(new Date(nowMs), activeFarm.time_zone), equipment: dataOf(snapshots.equipment), notifications: dataOf(snapshots.notifications), inventory: dataOf(snapshots.inventory) })
   const stillLoading = snapshots.equipment.status === 'loading' || snapshots.notifications.status === 'loading' || snapshots.fields.status === 'loading' || snapshots.inventory.status === 'loading'
   const sectionErrors = [snapshots.fields, snapshots.equipment, snapshots.notifications, snapshots.inventory].flatMap((section) => section.status === 'failed' ? [section.message] : [])
 

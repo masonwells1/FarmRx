@@ -145,11 +145,12 @@ export function todaySprayWindow(fields: readonly Field[], readForecast: (latitu
     if (!field.is_active || field.latitude === null || field.longitude === null) continue
     const bundle = readForecast(field.latitude, field.longitude)
     if (!bundle || !isActionablyFresh(bundle, nowMs)) continue
-    // Judge the window from the field's wall clock now, not from the moment the forecast was fetched: the conditions are the
-    // hourly sample at or before now (the fetched current sample only when none is), and hours already passed never count.
+    // Judge the window from the field's wall clock now, not from the moment the forecast was fetched. The conditions are the
+    // fetched current observation until an hourly sample newer than it has arrived (an hourly row at or before now but after the
+    // observation), and hours already passed never count.
     const now = shiftWallClock(bundle.current.time, Math.max(0, nowMs - Date.parse(bundle.fetched_at)))
-    const nowAt = wallClockMs(now)
-    const sample = [...bundle.hourly].filter((hourly) => wallClockMs(hourly.time) <= nowAt).sort((a, b) => wallClockMs(b.time) - wallClockMs(a.time))[0] ?? bundle.current
+    const nowAt = wallClockMs(now); const observedAt = wallClockMs(bundle.current.time)
+    const sample = [...bundle.hourly].filter((hourly) => wallClockMs(hourly.time) <= nowAt && wallClockMs(hourly.time) > observedAt).sort((a, b) => wallClockMs(b.time) - wallClockMs(a.time))[0] ?? bundle.current
     const day = dailyFor(bundle, now)
     const ctx = { now, hourly: bundle.hourly, sunrise: day?.sunrise ?? null, sunset: day?.sunset ?? null }
     const verdict = evaluateSprayWindow(sample, ctx)

@@ -7,6 +7,8 @@ export interface Farm {
   id: string
   name: string
   share_with_rep: boolean
+  /** The farm's IANA time zone (farms.time_zone, server authority for the farm's calendar day). Absent on rows cached before the client read it. */
+  time_zone?: string | null
   created_by: string
   created_at: string
   updated_at: string
