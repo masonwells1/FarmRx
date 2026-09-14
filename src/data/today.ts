@@ -92,11 +92,17 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
     type Due = EquipmentTasksWorkspace['service_due'][number]
     // Service recorded on this device but not yet synced sits in the service log ahead of the interval's last-done values (the
     // server resets those when the entry lands). A log entry for the interval dated after its last service means the interval
-    // has been reset since the due rows were computed, so that interval is not listed; once synced the dates agree again.
+    // has been reset since the due rows were computed, so that interval is not listed; once synced the dates agree again. The
+    // server advances the last-done date from any entry but the last-done reading only from an entry that carries a meter
+    // reading, so a meter row is reset only by a newer entry with a reading; a calendar candidate counts from any newer entry.
     const latestServiceOn = new Map<string, string>()
-    for (const entry of equipment.service_log) if (entry.interval_id !== null && (latestServiceOn.get(entry.interval_id) ?? '') < entry.service_date) latestServiceOn.set(entry.interval_id, entry.service_date)
-    const servicedSince = (interval: EquipmentTasksWorkspace['intervals'][number], since: string) => (latestServiceOn.get(interval.id) ?? '') > since
-    const meterRows = equipment.service_due.filter((due) => due.reason === 'meter').filter((due) => { const interval = intervals.get(due.interval_id); return !interval || !servicedSince(interval, interval.last_done_on ?? '') }).map((due) => ({ due, amount: due.overdue_amount }))
+    const latestReadingOn = new Map<string, string>()
+    for (const entry of equipment.service_log) {
+      if (entry.interval_id === null) continue
+      if ((latestServiceOn.get(entry.interval_id) ?? '') < entry.service_date) latestServiceOn.set(entry.interval_id, entry.service_date)
+      if (entry.meter_reading !== null && (latestReadingOn.get(entry.interval_id) ?? '') < entry.service_date) latestReadingOn.set(entry.interval_id, entry.service_date)
+    }
+    const meterRows = equipment.service_due.filter((due) => due.reason === 'meter').filter((due) => { const interval = intervals.get(due.interval_id); return !interval || !((latestReadingOn.get(interval.id) ?? '') > (interval.last_done_on ?? '')) }).map((due) => ({ due, amount: due.overdue_amount }))
     const calendarRows = equipment.intervals.flatMap((interval): Array<{ due: Due; amount: number }> => {
       const machine = machines.get(interval.equipment_id)
       if (!interval.is_active || interval.every_months === null || !machine || machine.status !== 'active') return []
