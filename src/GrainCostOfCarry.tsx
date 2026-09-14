@@ -166,8 +166,11 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
         // Confirmed by the server or the durable queue: the browser draft is no longer needed unless a newer draft exists (the farmer
         // typed more, or a successor edit already flushed and is queued behind this save), in which case the newer draft is rewritten
         // on top of the saved version so a reload cannot mistake this save for an outside change.
+        const newer = settingsDirty.current || JSON.stringify(settingsRef.current) !== JSON.stringify(snapshot)
+        // Nothing newer was typed: the screen adopts the row as saved (rates rounded to the column's four decimals), so the figures
+        // on screen are the figures the farm holds. The resync effect cannot do this, since the save's own version is already the base.
+        if (!newer && saved) { const adopted = settingsFromRow(saved); settingsRef.current = adopted; setSettings(adopted) }
         if (scope) {
-          const newer = settingsDirty.current || JSON.stringify(settingsRef.current) !== JSON.stringify(snapshot)
           if (!newer) { const revision = draftRevisions.current.settings; if (revision) clearSettingsDraft(scope, 'carry-settings', revision); draftRevisions.current.settings = null }
           else draftRevisions.current.settings = keepDraft('carry-settings', { draft: settingsRef.current, base: baseVersions.current.settings, sent: sentRows.current.settings } satisfies CarrySettingsDraft, resendSettings)
         }
@@ -194,9 +197,11 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
           const saved = await active.saveGrid(carryToGrid(snapshot, { id, farm_id: current.fields.farm.id, production_estimate_id: estimateId, updated_at: baseVersions.current.grids[estimateId] ?? existing?.updated_at ?? new Date().toISOString() }))
           if (saved) { baseVersions.current.grids[estimateId] = saved.updated_at; sentRows.current.grids[estimateId] = saved }
           failedGrids.current.delete(estimateId)
+          const latest = byEstimateRef.current[estimateId]
+          const newer = gridsDirty.current.has(estimateId) || JSON.stringify(latest) !== JSON.stringify(snapshot)
+          // Nothing newer was typed in this grid: the screen adopts the rows as saved (prices and bases rounded to four decimals).
+          if (!newer && saved) { const adopted = carryFromGrid(saved); byEstimateRef.current = { ...byEstimateRef.current, [estimateId]: adopted }; setByEstimate((current) => ({ ...current, [estimateId]: adopted })) }
           if (scope) {
-            const latest = byEstimateRef.current[estimateId]
-            const newer = gridsDirty.current.has(estimateId) || JSON.stringify(latest) !== JSON.stringify(snapshot)
             if (!newer) { const revision = draftRevisions.current.grids[estimateId]; if (revision) clearSettingsDraft(scope, `carry-grid:${estimateId}`, revision); draftRevisions.current.grids[estimateId] = null }
             else if (latest) draftRevisions.current.grids[estimateId] = keepDraft(`carry-grid:${estimateId}`, { estimateId, draft: latest, base: baseVersions.current.grids[estimateId] ?? null, sent: sentRows.current.grids[estimateId] ?? null } satisfies CarryGridDraft, resendGrid(estimateId))
           }
