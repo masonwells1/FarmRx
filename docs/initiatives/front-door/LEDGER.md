@@ -36,3 +36,11 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Browser proof:** the owner Today journey captures a full-page screenshot (`today-owner.png` in the Playwright output) on desktop and phone; both were inspected. Desktop matches the selected visual option's structure. The phone layout was corrected once (badge and chevron wrapped onto their own lines) before this commit.
 - **Remaining risk:** the spray card with a usable forecast is proved by the regression only; the e2e fixtures have no field coordinates, so the browser shows the "Check the spray window" link. A fresh-context review of the exact commit is still required; Codex reviews the pull request automatically.
 - **Next:** push the branch, open a draft pull request, and stop at `READY FOR APPROVAL`. Merge is Mason's decision.
+
+## FD-002 — Foundation repair: second route manifest and Router-less Field Log regressions
+
+- **Date/time:** 2026-09-14 08:22 -05:00 (`America/Chicago`).
+- **Trigger:** Foundation failed on `b9ab496` (pull request #46) in the fast regression suite: `src/data/queuedOperationContext.regression.ts` pins the ordered route manifest a second time (the first copy is in `scripts/foundation-static-guards.mjs`, updated in FD-001) and did not yet list `/today`. Running the whole chain locally then surfaced a second break the focused runs had missed: two Field Log regressions render `FieldLogPage` outside a router, and FD-1's `useLocation()` call in that page requires one.
+- **Repair:** `/today` added first in the regression's manifest; `FieldLogModule.legacyRecovery.regression.tsx` and `FieldLogModule.deleteDoubleTap.regression.tsx` now render inside a `MemoryRouter`, the same wrapper the Equipment quick-action regression already uses. No product code changed.
+- **Lesson recorded:** the route manifest is pinned in two places; a route change must update both, and the full `npm run regression` chain (not only focused runs) is part of the pre-push proof. This container has no PowerShell, so the four `pwsh` steps and the CW-2 diagnostic self-test cannot run here; every other step in the chain was run locally, and Foundation covers the rest.
+- **Proof:** recorded on the pull request with the repair commit.
