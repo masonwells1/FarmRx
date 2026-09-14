@@ -1,7 +1,7 @@
 import { Window } from 'happy-dom'
 import React, { createElement, useState } from 'react'
 import { act } from 'react'
-import { Bins, ContractActions, ContractEntry, FirstEstimate, PositionCard } from './GrainModule'
+import { Bins, ContractActions, ContractEntry, deliveryDefaultEstimate, FirstEstimate, PositionCard } from './GrainModule'
 import { SaveReceipt } from './components/SaveReceipt'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
@@ -187,3 +187,11 @@ assert(binsContainer.textContent?.includes('25,800') && !binsContainer.textConte
 assert(idIndex === idOrder.length && Number(contractWrites) === 1 && Number(deliveryWrites) === 4 && Number(binWrites) === 1 && Number(movementWrites) === 5 && novemberWorkspace.bin_transactions.length === 2, 'November flows must use the ten intended draft IDs, one invocation per rapid-submit action, and only canonical rows.')
 await act(async () => { binsRoot.unmount() }); binsContainer.remove(); win.close()
 console.log('Grain receipt UI regression passed')
+
+// FD-1 (FD-009): a Today grain-delivery intent lands on the newest crop year's contracts, not the oldest estimate the repository lists first.
+{
+  const estimates = [{ id: 'a', crop_year: 2024 }, { id: 'b', crop_year: 2026 }, { id: 'c', crop_year: 2026 }, { id: 'd', crop_year: 2025 }]
+  assert(deliveryDefaultEstimate(estimates)?.id === 'b', 'Delivery mode must default to the newest crop year, keeping the first estimate of that year.')
+  assert(deliveryDefaultEstimate([]) === undefined, 'No estimates, no default.')
+  console.log('Grain delivery default-estimate regression passed')
+}

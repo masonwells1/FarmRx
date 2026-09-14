@@ -250,6 +250,11 @@ function activeProduction(estimate: ProductionEstimate) {
 function scopeRows<T extends PositionScope>(rows: T[], scope: PositionScope) {
   return rows.filter((row) => sameScope(row, scope));
 }
+/** A Today grain-delivery intent lands on the newest crop year's contracts (the repository sorts estimates oldest first, which
+ * is right for planning but wrong for a delivery being recorded now); between estimates of the same year the first stays. */
+export function deliveryDefaultEstimate<T extends { crop_year: number }>(estimates: readonly T[]): T | undefined {
+  return estimates.reduce<T | undefined>((newest, estimate) => (!newest || estimate.crop_year > newest.crop_year ? estimate : newest), undefined);
+}
 function scopeLabel(workspace: GrainWorkspace, scope: PositionScope) {
   const commodity =
     workspace.fields.commodities.find((item) => item.id === scope.commodity_id)
@@ -604,7 +609,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const selectedEstimate =
     workspace.production_estimates.find(
       (estimate) => estimate.id === selectedEstimateId,
-    ) ?? workspace.production_estimates[0];
+    ) ?? (deliveryIntent ? deliveryDefaultEstimate(workspace.production_estimates) : undefined) ?? workspace.production_estimates[0];
   if (!selectedEstimate)
     return (
       <FirstEstimate
@@ -909,7 +914,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
             </div>
             <SaveReceipt state={receipt} />
           </div>
-          {deliveryIntent ? <div className="grain-delivery-intent" role="status"><div><strong>Recording a grain delivery</strong><p>Pick the contract below and enter the delivered bushels. Nothing is written until you tap Record delivery.</p></div><button className="secondary-action" type="button" onClick={() => setDeliveryIntent(false)}>Record a sale instead</button></div> : <ContractEntry
+          {deliveryIntent ? <div className="grain-delivery-intent" role="status"><div><strong>Recording a grain delivery</strong><p>Pick the crop and year, then the contract below, and enter the delivered bushels. Nothing is written until you tap Record delivery.</p><label className="commodity-picker"><span>Crop and year</span><select value={selectedEstimate.id} onChange={(event) => setSelectedEstimateId(event.target.value)}>{workspace.production_estimates.map((estimate) => <option key={estimate.id} value={estimate.id}>{scopeLabel(workspace, estimate)}</option>)}</select></label></div><button className="secondary-action" type="button" onClick={() => setDeliveryIntent(false)}>Record a sale instead</button></div> : <ContractEntry
             workspace={workspace}
             scope={selectedScope}
             services={services}

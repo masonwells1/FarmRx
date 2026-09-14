@@ -26,7 +26,8 @@ export function HarvestPage({ harvestRepository }: { harvestRepository: HarvestR
   const [loading, setLoading] = useState(true)
   const reload = async () => { setLoading(true); try { const next = await harvestRepository.getData(); setData(next); setError(null) } catch (caught) { setError(farmerError(caught, 'open harvest records')) } finally { setLoading(false) } }
   useEffect(() => { void reload() }, [])
-  const years = useMemo(() => data ? [...new Set(data.fieldsData.crop_assignments.map((item) => item.crop_year))].sort((a, b) => b - a) : [], [data])
+  // Years come from crops on active fields only: a retired field's newer crop must not become the year the page opens on.
+  const years = useMemo(() => { if (!data) return []; const active = new Set(data.fieldsData.fields.filter((field) => field.is_active).map((field) => field.id)); return [...new Set(data.fieldsData.crop_assignments.filter((item) => active.has(item.field_id)).map((item) => item.crop_year))].sort((a, b) => b - a) }, [data])
   // The newest year with crops is the effective year from the first render, so a Today harvest intent opens a real crop even
   // when nothing is assigned for the browser's calendar year; the effect only settles the picker's stored value to match.
   const effectiveYear = years.length && !years.includes(selectedYear) ? years[0] : selectedYear

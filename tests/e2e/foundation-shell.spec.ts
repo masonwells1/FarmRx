@@ -1360,6 +1360,8 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Grain delivery' }).click()
   await expect(page).toHaveURL('http://127.0.0.1:4173/grain/contracts')
   await expect(page.getByRole('status').filter({ hasText: 'Recording a grain delivery' })).toBeVisible()
+  await expect(page.getByLabel('Crop and year')).toHaveValue('00000000-0000-4000-8000-000000000051')
+  await expect(page.getByLabel('Crop and year').locator('option:checked')).toHaveText(/^2026 Corn/)
   await expect(page.getByRole('button', { name: 'Add contract' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Record a sale instead' }).click()
   await expect(page.getByRole('button', { name: 'Add contract' })).toBeVisible()
