@@ -35,6 +35,14 @@ export type TodayNextUpItem = { id: string; kind: TodayNextUpKind; title: string
 
 const urgencyOrder: Record<TodayNextUpUrgency, number> = { overdue: 0, due: 1, info: 2 }
 const wholeNumber = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
+/** Postgres `date + make_interval(months => n)`: the same day n months on, clamped to the end of a shorter month. */
+export function addMonthsClamped(isoDate: string, months: number): string {
+  const [year, month, day] = isoDate.slice(0, 10).split('-').map(Number)
+  const target = new Date(Date.UTC(year, month - 1 + months, 1))
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate()
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${target.getUTCFullYear()}-${pad(target.getUTCMonth() + 1)}-${pad(Math.min(day, lastDay))}`
+}
 function daysBetween(earlier: string, later: string): number { return Math.max(0, Math.round((Date.parse(`${later}T00:00:00Z`) - Date.parse(`${earlier}T00:00:00Z`)) / 86_400_000)) }
 const plural = (count: number, unit: string) => `${wholeNumber.format(count)} ${unit}${count === 1 ? '' : 's'}`
 const quantity = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
@@ -76,19 +84,31 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
   if (equipment && canAccessFarmModule(profile, 'equipment')) {
     const machines = new Map(equipment.equipment.map((machine) => [machine.id, machine]))
     const intervals = new Map(equipment.intervals.map((interval) => [interval.id, interval]))
+    // The view judges calendar rows against the database's own date. Today judges them against the farm's day, the same day the
+    // tasks use, by recomputing the interval's due date (last service, or the machine's first day, plus the interval's months, as
+    // the view does) and counting days from there; a calendar row not yet due on the farm's day is not listed. Meter rows carry
+    // no date and are taken as the view reports them.
+    type Due = EquipmentTasksWorkspace['service_due'][number]
+    const judged = equipment.service_due.flatMap((due): Array<{ due: Due; amount: number }> => {
+      if (due.reason !== 'calendar') return [{ due, amount: due.overdue_amount }]
+      const machine = machines.get(due.equipment_id); const interval = intervals.get(due.interval_id)
+      if (!machine || !interval || interval.every_months === null) return [{ due, amount: due.overdue_amount }]
+      const dueOn = addMonthsClamped(interval.last_done_on ?? machine.created_at.slice(0, 10), interval.every_months)
+      return dueOn > today ? [] : [{ due, amount: daysBetween(dueOn, today) }]
+    })
     // One card per interval: an interval with both a meter and a calendar rule can be due on both, and recording the service
     // resets the one interval. The overdue row represents it; between equals the meter row does, as the due-generation SQL orders.
-    const representative = new Map<string, EquipmentTasksWorkspace['service_due'][number]>()
-    const rank = (due: EquipmentTasksWorkspace['service_due'][number]) => (due.overdue_amount > 0 ? 0 : 2) + (due.reason === 'meter' ? 0 : 1)
-    for (const due of equipment.service_due) { const current = representative.get(due.interval_id); if (!current || rank(due) < rank(current)) representative.set(due.interval_id, due) }
-    for (const due of representative.values()) {
+    const representative = new Map<string, { due: Due; amount: number }>()
+    const rank = (entry: { due: Due; amount: number }) => (entry.amount > 0 ? 0 : 2) + (entry.due.reason === 'meter' ? 0 : 1)
+    for (const entry of judged) { const current = representative.get(entry.due.interval_id); if (!current || rank(entry) < rank(current)) representative.set(entry.due.interval_id, entry) }
+    for (const { due, amount } of representative.values()) {
       const machine = machines.get(due.equipment_id); const interval = intervals.get(due.interval_id)
       if (!machine || !interval) continue
-      // The view lists an interval the moment it is reached (amount 0): that service is due now, not late. Any positive amount is
-      // late, however small; rounding is for display only.
-      const overdue = due.overdue_amount > 0
+      // An interval reached exactly (amount 0) is due now, not late. Any positive amount is late, however small; rounding is for
+      // display only.
+      const overdue = amount > 0
       const unit = due.reason === 'meter' ? (machine.meter_unit === 'miles' ? 'mile' : 'hour') : 'day'
-      const badge = !overdue ? 'Due now' : due.overdue_amount < 1 ? `Less than 1 ${unit} over` : `${plural(Math.round(due.overdue_amount), unit)} over`
+      const badge = !overdue ? 'Due now' : amount < 1 ? `Less than 1 ${unit} over` : `${plural(Math.round(amount), unit)} over`
       items.push({ id: `service:${due.interval_id}`, kind: 'service', title: overdue ? 'Service overdue' : 'Service due', detail: `${machine.name} · ${interval.name}`, badge, urgency: overdue ? 'overdue' : 'due', to: '/equipment' })
       shownServiceIntervalIds.add(due.interval_id)
     }

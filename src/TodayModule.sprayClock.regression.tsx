@@ -44,7 +44,8 @@ const memberEvidence = { membership: { farm_id: farmA, user_id: userA, role: 'ow
 const profile: LoadedFarmAccessProfile = { ...deriveFarmAccessProfile(userA, farmA, 1, new Date(loadedAt).toISOString(), memberEvidence), operationContext: { projectRef: 'test', userId: userA, farmId: farmA, generation: 1, token: '00000000-0000-4000-8000-000000000900', serverEpoch: 1 } }
 const snapshot = <T,>(data: T) => async () => ({ data, source: 'live' as const, capturedAt: new Date(clock).toISOString() })
 const fieldsRepository = { getData: async () => fieldsData, getSnapshot: snapshot(fieldsData) } as unknown as FieldsRepository
-const equipmentTasksRepository = { getWorkspace: async () => workspace, getSnapshot: snapshot(workspace) } as unknown as EquipmentTasksRepository
+let equipmentReads = 0
+const equipmentTasksRepository = { getWorkspace: async () => workspace, getSnapshot: async () => { equipmentReads += 1; return snapshot(workspace)() } } as unknown as EquipmentTasksRepository
 const notificationsRepository = { getData: async () => ({ notifications: [], unreadCount: 0 }), getSnapshot: snapshot({ notifications: [], unreadCount: 0 }) } as unknown as NotificationsRepository
 const inventory = { fields: fieldsData, products: [], receipts: [], receipt_lines: [], adjustments: [], applications: [], application_products: [], program_application_products: [], rup_completeness: [], on_hand: [] }
 const inventoryRepository = { getWorkspace: async () => inventory, getSnapshot: snapshot(inventory) } as unknown as InventoryRepository
@@ -66,6 +67,13 @@ try {
   await act(async () => { tickAll(); await flush() })
   assert(!cardText().includes('Good spray'), `A stale forecast kept showing a spray verdict after the ceiling (saw: ${cardText()}).`)
   assert(cardText().includes('Check the spray window'), `The stale card did not fall back to the Weather link (saw: ${cardText()}).`)
+  // FD-015: the snapshots are re-read when the farm's day turns over while Today stays open, and when the app comes back into view.
+  const readsBeforeMidnight = equipmentReads
+  clock = loadedAt + 13 * 60 * 60_000
+  await act(async () => { tickAll(); await flush(); await flush() })
+  assert(equipmentReads === readsBeforeMidnight + 1, `Crossing the farm's midnight must re-read the snapshots once (reads ${readsBeforeMidnight} -> ${equipmentReads}).`)
+  await act(async () => { document.dispatchEvent(new Event('visibilitychange')); await flush(); await flush() })
+  assert(equipmentReads === readsBeforeMidnight + 2, `Coming back into view must re-read the snapshots (reads ${equipmentReads}).`)
   // FD-013: when Equipment fails for its own reasons, Fields is read on its own so the spray card does not vanish with it.
   const failingEquipment = { getWorkspace: async () => { throw new Error('boom') }, getSnapshot: async () => { throw new Error('Equipment and Tasks found invalid data.') } } as unknown as EquipmentTasksRepository
   const sections = await loadTodaySnapshots(profile, { fieldsRepository, equipmentTasksRepository: failingEquipment, notificationsRepository, inventoryRepository })

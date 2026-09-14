@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { canAccessFarmModule, type LoadedFarmAccessProfile } from './auth/farmContext'
 import { useFarmAccess } from './auth/FarmAccessContext'
@@ -59,18 +59,26 @@ export function TodayPage({ fieldsRepository, equipmentTasksRepository, notifica
   const [nowMs, setNowMs] = useState(() => Date.now())
   // The spray card's freshness gate is judged against the clock, not the load time: a phone left open on Today past the two-hour
   // ceiling must drop a stale verdict on its own, so the clock ticks every minute and whenever the app comes back into view.
+  // Snapshots are re-read (still pure reads) when the app comes back into view and when the farm's day turns over, so a service
+  // interval or task that becomes due on the new day appears without a reload.
+  const [reloadKey, setReloadKey] = useState(0)
   useEffect(() => {
     const tick = () => setNowMs(Date.now())
+    const onVisibility = () => { tick(); if (document.visibilityState === 'visible') setReloadKey((key) => key + 1) }
     const timer = setInterval(tick, 60_000)
-    document.addEventListener('visibilitychange', tick)
-    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick) }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisibility) }
   }, [])
+  // "Today" is the farm's calendar day in its stored time zone (the database's own due-generation authority), re-read on every tick.
+  const today = farmCalendarDate(new Date(nowMs), activeFarm.time_zone)
+  const loadedDay = useRef(today)
+  useEffect(() => { if (loadedDay.current !== today) { loadedDay.current = today; setReloadKey((key) => key + 1) } }, [today])
   useEffect(() => {
     let cancelled = false
-    setSnapshots({ fields: loading, equipment: loading, notifications: loading, inventory: loading })
+    if (reloadKey === 0) setSnapshots({ fields: loading, equipment: loading, notifications: loading, inventory: loading })
     void loadTodaySnapshots(profile, { fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository }).then((next) => { if (!cancelled) { setSnapshots(next); setNowMs(Date.now()) } })
     return () => { cancelled = true }
-  }, [profile, fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository])
+  }, [profile, fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, reloadKey])
 
   const tiles = todayRecordTiles(profile)
   const canEdit = profile.capabilities.canEditOperational
@@ -78,8 +86,7 @@ export function TodayPage({ fieldsRepository, equipmentTasksRepository, notifica
   const storage = localStorageOrNull()
   const fields = dataOf(snapshots.fields)
   const sprayCard = showWeather && fields && storage ? todaySprayWindow(fields, (latitude, longitude) => readCachedForecast(storage, latitude, longitude), nowMs) : null
-  // "Today" is the farm's calendar day in its stored time zone (the database's own due-generation authority), re-read on every tick.
-  const nextUp = todayNextUp({ profile, today: farmCalendarDate(new Date(nowMs), activeFarm.time_zone), equipment: dataOf(snapshots.equipment), notifications: dataOf(snapshots.notifications), inventory: dataOf(snapshots.inventory) })
+  const nextUp = todayNextUp({ profile, today, equipment: dataOf(snapshots.equipment), notifications: dataOf(snapshots.notifications), inventory: dataOf(snapshots.inventory) })
   const stillLoading = snapshots.equipment.status === 'loading' || snapshots.notifications.status === 'loading' || snapshots.fields.status === 'loading' || snapshots.inventory.status === 'loading'
   const sectionErrors = [snapshots.fields, snapshots.equipment, snapshots.notifications, snapshots.inventory].flatMap((section) => section.status === 'failed' ? [section.message] : [])
 
