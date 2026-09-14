@@ -4,7 +4,7 @@ import type { InventoryUnit, InventoryWorkspace } from './inventory'
 import type { Field } from './fields'
 import type { Notification } from './notifications'
 import type { ForecastBundle, SprayLevel } from './weather'
-import { bestWindowToday, compassLabel, evaluateSprayWindow, formatHour, formatMph, isActionablyFresh } from './weatherService'
+import { bestWindowToday, compassLabel, evaluateSprayWindow, fieldWallClockDate, formatHour, formatMph, isActionablyFresh } from './weatherService'
 import { manualSprayRecordIntent } from './weatherSprayHandoff'
 import { todayRecordIntent } from './todayIntents'
 
@@ -111,6 +111,16 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
 export type TodaySprayCard = { level: SprayLevel; headline: string; details: string[]; fieldName: string }
 
 const dailyFor = (bundle: ForecastBundle, time: string) => bundle.daily.find((day) => day.date === time.slice(0, 10)) ?? bundle.daily[0]
+const naiveWallClock = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
+/** A forecast's times are the field's wall clock at fetch time. Moving that clock forward by the cache age gives the field's wall
+ * clock now, in the same notation, so hours already gone are never offered as a window. */
+export function shiftWallClock(time: string, byMs: number): string {
+  if (!naiveWallClock.test(time)) return new Date(Date.parse(time) + byMs).toISOString()
+  const date = new Date(fieldWallClockDate(time).getTime() + byMs)
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`
+}
+const wallClockMs = (time: string) => naiveWallClock.test(time) ? fieldWallClockDate(time).getTime() : Date.parse(time)
 const levelOrder: Record<SprayLevel, number> = { good: 0, caution: 1, poor: 2 }
 
 /** The spray-window card from forecasts this browser already holds (the Weather page fetched and cached them). A forecast that is
@@ -122,13 +132,18 @@ export function todaySprayWindow(fields: readonly Field[], readForecast: (latitu
     if (!field.is_active || field.latitude === null || field.longitude === null) continue
     const bundle = readForecast(field.latitude, field.longitude)
     if (!bundle || !isActionablyFresh(bundle, nowMs)) continue
-    const day = dailyFor(bundle, bundle.current.time)
-    const ctx = { now: bundle.current.time, hourly: bundle.hourly, sunrise: day?.sunrise ?? null, sunset: day?.sunset ?? null }
-    const verdict = evaluateSprayWindow(bundle.current, ctx)
+    // Judge the window from the field's wall clock now, not from the moment the forecast was fetched: the conditions are the
+    // hourly sample at or before now (the fetched current sample only when none is), and hours already passed never count.
+    const now = shiftWallClock(bundle.current.time, Math.max(0, nowMs - Date.parse(bundle.fetched_at)))
+    const nowAt = wallClockMs(now)
+    const sample = [...bundle.hourly].filter((hourly) => wallClockMs(hourly.time) <= nowAt).sort((a, b) => wallClockMs(b.time) - wallClockMs(a.time))[0] ?? bundle.current
+    const day = dailyFor(bundle, now)
+    const ctx = { now, hourly: bundle.hourly, sunrise: day?.sunrise ?? null, sunset: day?.sunset ?? null }
+    const verdict = evaluateSprayWindow(sample, ctx)
     const window = bestWindowToday(bundle.hourly, ctx)
     const headline = verdict.level === 'good' ? (window ? `Good spray window until ${formatHour(window.end)}` : 'Good spray conditions right now') : window ? `Spray window opens at ${formatHour(window.start)}` : verdict.level === 'caution' ? 'Use caution spraying today' : 'No good spray window today'
     const rainChance = day?.precipitation_probability_max ?? null
-    const details = [`Wind ${formatMph(bundle.current.wind_speed_mph)} ${compassLabel(bundle.current.wind_direction_degrees)}`, rainChance === null ? 'Rain chance unknown' : rainChance < 30 ? 'No rain expected' : `${Math.round(rainChance)}% rain chance`]
+    const details = [`Wind ${formatMph(sample.wind_speed_mph)} ${compassLabel(sample.wind_direction_degrees)}`, rainChance === null ? 'Rain chance unknown' : rainChance < 30 ? 'No rain expected' : `${Math.round(rainChance)}% rain chance`]
     const card: TodaySprayCard = { level: verdict.level, headline, details, fieldName: field.name }
     if (!best || levelOrder[card.level] < levelOrder[best.level]) best = card
   }

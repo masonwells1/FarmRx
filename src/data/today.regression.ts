@@ -4,7 +4,11 @@ import type { EquipmentTasksWorkspace, Equipment, FarmTask, ServiceInterval } fr
 import type { InventoryProduct, InventoryWorkspace } from './inventory'
 import type { Field, FieldsData } from './fields'
 import type { Notification } from './notifications'
-import { todayNextUp, todayRecordTiles, todaySprayWindow } from './today'
+import { shiftWallClock, todayNextUp, todayRecordTiles, todaySprayWindow } from './today'
+import { isTransportFailure } from './QueuedFieldsRepository'
+import { SupabaseInventoryRepository } from './SupabaseInventoryRepository'
+import type { InventoryDataGateway } from './InventoryDataGateway'
+import type { FieldsRepository } from './fields'
 import { parseTodayRecordIntent, todayRecordIntent } from './todayIntents'
 import { readCachedForecast, weatherCacheKey } from './weatherService'
 
@@ -146,6 +150,16 @@ assert.equal(card.level, 'good'); assert.equal(card.fieldName, 'North Forty')
 assert.match(card.headline, /^Good spray window until 10 AM$/, `Headline was ${card.headline}`)
 assert.deepEqual(card.details, ['Wind 6 mph SW', 'No rain expected'])
 assert.equal(storage.writes, 0, 'Reading the spray card wrote nothing.')
+// The window is judged from the field's wall clock now, not the fetch moment: the same cache read later offers fewer hours.
+assert.equal(shiftWallClock('2026-07-15T07:00', 95 * 60_000), '2026-07-15T08:35', 'Naive wall-clock times shift in place without a zone change.')
+assert.equal(shiftWallClock('2026-07-15T12:00:00.000Z', 30 * 60_000), '2026-07-15T12:30:00.000Z', 'Offset-bearing times shift as instants.')
+const laterButFresh = todaySprayWindow(fieldsData.fields, readForecast, nowMs + 80 * 60_000)
+assert.ok(laterButFresh && laterButFresh.headline === 'Good spray window until 10 AM', `At 8:50, with the cache 110 minutes old and still inside the ceiling, the window still runs to 10 AM (saw ${laterButFresh?.headline}).`)
+storage.setItem(weatherCacheKey(41.5, -93.6), JSON.stringify({ version: 1, fetched_at: new Date(nowMs - 30 * 60_000).toISOString(), bundle: { current: hour('2026-07-15T09:30'), hourly: hours, daily: [{ date: '2026-07-15', precipitation_sum_in: 0, precipitation_probability_max: 10, temperature_max_f: 84, temperature_min_f: 61, sunrise: '2026-07-15T05:58', sunset: '2026-07-15T20:47' }], fetched_at: new Date(nowMs - 30 * 60_000).toISOString() } })); storage.writes = 0
+const windowPassed = todaySprayWindow(fieldsData.fields, readForecast, nowMs)
+assert.ok(windowPassed && windowPassed.level !== 'good' && !windowPassed.headline.startsWith('Good spray window'), `A forecast fetched at 9:30 read at 10:00 must not offer the window that closed at 10 (saw ${windowPassed?.level} · ${windowPassed?.headline}).`)
+assert.equal(windowPassed.details[0], 'Wind 16 mph SW', 'Conditions come from the hourly sample at the field\'s wall clock now, not the fetched current sample.')
+storage.setItem(weatherCacheKey(41.5, -93.6), cachedBundle(new Date(nowMs - 30 * 60_000).toISOString())); storage.writes = 0
 storage.setItem(weatherCacheKey(41.5, -93.6), cachedBundle(new Date(nowMs - 3 * 60 * 60_000).toISOString())); storage.writes = 0
 assert.equal(todaySprayWindow(fieldsData.fields, readForecast, nowMs), null, 'A forecast too old to act on is skipped, so Today never shows a green verdict from stale weather.')
 assert.equal(todaySprayWindow([field('00000000-0000-4000-8000-000000000103', 'No pin', null, null)], readForecast, nowMs), null, 'A field without a location has no spray card.')
@@ -154,4 +168,14 @@ storage.setItem(weatherCacheKey(41.5, -93.6), '{not json'); assert.equal(readCac
 assert.equal(readCachedForecast(storage, 40, -90), null, 'A missing cache reads as no forecast.')
 assert.equal(storage.writes, 1, 'Nothing beyond the fixture write touched storage.')
 
-console.log('Today regressions passed (role matrix, next-up sources, spray card, intents).')
+// Offline inventory: a Fields snapshot answered from its cache is a network failure the queued layer must recognize, so it can
+// answer Today from the complete cached Inventory workspace instead of surfacing a validation error.
+{
+  const gateway = { loadWorkspace: async () => ({ products: [], receipts: [], receipt_lines: [], adjustments: [], applications: [], application_products: [], program_application_products: [], on_hand: [], rup_completeness: [] }) } as unknown as InventoryDataGateway
+  const offlineFields = { getData: async () => fieldsData, getSnapshot: async () => ({ data: fieldsData, source: 'offline' as const, capturedAt: now }) } as unknown as FieldsRepository
+  const repository = new SupabaseInventoryRepository({ gateway, fieldsRepository: offlineFields, getFarmId: async () => farmA, getOperationContext: async () => { throw new Error('not used') }, verifyOperationContext: async () => {}, verifySnapshotContext: () => {}, createId: () => '00000000-0000-4000-8000-000000000999', clock: () => now })
+  let caught: unknown = null
+  try { await repository.getSnapshot({ projectRef: 'test', userId: userA, farmId: farmA, generation: 1, token: '00000000-0000-4000-8000-000000000900', serverEpoch: 1 }) } catch (error) { caught = error }
+  assert.ok(caught instanceof Error && isTransportFailure(caught, false), `An offline Fields snapshot under the pure Inventory read must surface as a transport failure (saw ${caught instanceof Error ? caught.message : String(caught)}).`)
+}
+console.log('Today regressions passed (role matrix, next-up sources, spray card, intents, offline inventory).')

@@ -73,7 +73,9 @@ export class SupabaseInventoryRepository implements InventoryRepository, Invento
     const fieldsRepository = this.dependencies.fieldsRepository
     if (!fieldsRepository.getSnapshot) fail('Inventory requires a side-effect-free Fields snapshot.')
     const [fields, data] = await Promise.all([fieldsRepository.getSnapshot!(context), this.raw(context.farmId)]); verify()
-    if (fields.source !== 'live') fail('Inventory could not load a current Fields snapshot.')
+    // A Fields snapshot served from its cache means the network failed under it; say so in the words the queued layer's transport
+    // check recognizes, so it can answer from the complete Inventory cache instead of surfacing a validation error.
+    if (fields.source !== 'live') fail('Inventory could not fetch a current Fields snapshot because the network is unavailable.')
     return { data: this.assemble(data, fields.data, context.farmId), source: 'live' as const, capturedAt: this.dependencies.clock() }
   }
   async saveProduct(value: InventoryProduct) { await this.saveProductOperation(value, await this.dependencies.getOperationContext()) }
