@@ -88,6 +88,16 @@ as $$
         when not (e ? 'market_price') or not (e ? 'basis') then true
         when jsonb_typeof(e -> 'market_price') not in ('number', 'null') then true
         when jsonb_typeof(e -> 'basis') not in ('number', 'null') then true
+        -- Each number must fit the numeric(10, 4) contract of a stored price
+        -- (magnitude below 1,000,000, at most four decimals), so a client
+        -- that skips the screen's rounding cannot store a value the rest of
+        -- the app refuses.
+        when jsonb_typeof(e -> 'market_price') = 'number'
+          and (abs((e ->> 'market_price')::numeric) >= 1000000
+               or scale((e ->> 'market_price')::numeric) > 4) then true
+        when jsonb_typeof(e -> 'basis') = 'number'
+          and (abs((e ->> 'basis')::numeric) >= 1000000
+               or scale((e ->> 'basis')::numeric) > 4) then true
         else false
       end
     )

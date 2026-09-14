@@ -137,6 +137,25 @@ begin
   v_ok := false;
   begin update public.grain_carry_grids set rows = (select jsonb_agg(g) from generate_series(1,13) g) where id = '00000000-0000-4000-8000-000000000031'; v_ok := true; exception when check_violation then null; end;
   if v_ok then raise exception 'array of scalars accepted as carry grid'; end if;
+  -- Every grid number must fit numeric(10, 4): magnitude below 1,000,000 and at most four decimals, for prices and bases alike.
+  v_ok := false;
+  begin update public.grain_carry_grids set rows = (select jsonb_agg(jsonb_build_object('market_price',1000000,'basis',0)) from generate_series(1,13)) where id = '00000000-0000-4000-8000-000000000031'; v_ok := true; exception when check_violation then null; end;
+  if v_ok then raise exception 'market price of 1,000,000 accepted in carry grid'; end if;
+  v_ok := false;
+  begin update public.grain_carry_grids set rows = (select jsonb_agg(jsonb_build_object('market_price',4.1,'basis',-1000000)) from generate_series(1,13)) where id = '00000000-0000-4000-8000-000000000031'; v_ok := true; exception when check_violation then null; end;
+  if v_ok then raise exception 'basis of -1,000,000 accepted in carry grid'; end if;
+  v_ok := false;
+  begin update public.grain_carry_grids set rows = (select jsonb_agg(jsonb_build_object('market_price',4.12345,'basis',0)) from generate_series(1,13)) where id = '00000000-0000-4000-8000-000000000031'; v_ok := true; exception when check_violation then null; end;
+  if v_ok then raise exception 'market price with five decimals accepted in carry grid'; end if;
+  v_ok := false;
+  begin update public.grain_carry_grids set rows = (select jsonb_agg(jsonb_build_object('market_price',null,'basis',-0.30005)) from generate_series(1,13)) where id = '00000000-0000-4000-8000-000000000031'; v_ok := true; exception when check_violation then null; end;
+  if v_ok then raise exception 'basis with five decimals accepted in carry grid'; end if;
+  v_ok := false;
+  begin update public.grain_carry_grids set rows = '[{"market_price":1e400,"basis":0},{"market_price":null,"basis":0},{"market_price":null,"basis":0},{"market_price":null,"basis":0},{"market_price":null,"basis":0},{"market_price":null,"basis":0},{"market_price":null,"basis":0},{"market_price":null,"basis":0},{"market_price":null,"basis":0},{"market_price":null,"basis":0},{"market_price":null,"basis":0},{"market_price":null,"basis":0},{"market_price":null,"basis":0}]'::jsonb where id = '00000000-0000-4000-8000-000000000031'; v_ok := true; exception when check_violation then null; end;
+  if v_ok then raise exception 'market price of 1e400 accepted in carry grid'; end if;
+  update public.grain_carry_grids set rows = (select jsonb_agg(jsonb_build_object('market_price',999999.9999,'basis',-999999.9999)) from generate_series(1,13)) where id = '00000000-0000-4000-8000-000000000031';
+  update public.grain_carry_grids set rows = (select jsonb_agg(jsonb_build_object('market_price',4.1235,'basis',-0.3)) from generate_series(1,13)) where id = '00000000-0000-4000-8000-000000000031';
+  if (select rows -> 0 ->> 'market_price' from public.grain_carry_grids where id = '00000000-0000-4000-8000-000000000031') <> '4.1235' then raise exception 'in-range carry grid numbers not stored'; end if;
 
   -- A row can never move to another farm.
   v_ok := false;
