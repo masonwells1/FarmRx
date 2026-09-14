@@ -5,7 +5,7 @@ import type { Field } from './fields'
 import type { Notification } from './notifications'
 import type { PendingPassOutcome } from './programs'
 import type { ForecastBundle, SprayLevel } from './weather'
-import { bestWindowToday, compassLabel, evaluateSprayWindow, fieldWallClockDate, formatHour, formatMph, isActionablyFresh } from './weatherService'
+import { bestWindowToday, compassLabel, daylight, evaluateSprayWindow, fieldWallClockDate, formatHour, formatMph, isActionablyFresh } from './weatherService'
 import { manualSprayRecordIntent } from './weatherSprayHandoff'
 import { todayRecordIntent } from './todayIntents'
 
@@ -204,12 +204,23 @@ export type TodaySprayCard = { level: SprayLevel; headline: string; details: str
 
 const dailyFor = (bundle: ForecastBundle, time: string) => bundle.daily.find((day) => day.date === time.slice(0, 10)) ?? bundle.daily[0]
 const naiveWallClock = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
-/** The field's wall clock at an instant, in the forecast's own notation (a naive local time), from the UTC offset the provider
- * reported with the forecast. The forecast's observation time is not used as a clock: the provider stamps its current conditions
- * at the last observation interval, which can sit up to a quarter hour behind the moment they were fetched. */
-export function fieldWallClockNow(nowMs: number, utcOffsetSeconds: number): string {
-  const date = new Date(nowMs + utcOffsetSeconds * 1000)
+/** The field's wall clock at an instant, in the forecast's own notation (a naive local time). The provider's IANA zone decides
+ * when it is usable, so a daylight-saving change inside the cache's lifetime moves the clock as the field's own clocks move; the
+ * UTC offset the provider reported at fetch time stands in only when the zone name cannot be resolved. Neither known, no clock.
+ * The forecast's observation time is never used as a clock: the provider stamps its current conditions at the last observation
+ * interval, which can sit up to a quarter hour behind the moment they were fetched. */
+export function fieldWallClockNow(nowMs: number, timeZone: string | undefined, utcOffsetSeconds: number | undefined): string | null {
   const pad = (part: number) => String(part).padStart(2, '0')
+  if (timeZone) {
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(nowMs))
+      const part = (type: string) => parts.find((item) => item.type === type)?.value
+      const year = part('year'); const month = part('month'); const day = part('day'); const hour = part('hour'); const minute = part('minute')
+      if (year && month && day && hour && minute) return `${year}-${month}-${day}T${hour === '24' ? '00' : hour}:${minute}`
+    } catch { /* An unknown zone name falls through to the offset. */ }
+  }
+  if (typeof utcOffsetSeconds !== 'number' || !Number.isFinite(utcOffsetSeconds)) return null
+  const date = new Date(nowMs + utcOffsetSeconds * 1000)
   return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`
 }
 const wallClockMs = (time: string) => naiveWallClock.test(time) ? fieldWallClockDate(time).getTime() : Date.parse(time)
@@ -223,14 +234,14 @@ export function todaySprayWindow(fields: readonly Field[], readForecast: (latitu
   for (const field of fields) {
     if (!field.is_active || field.latitude === null || field.longitude === null) continue
     const bundle = readForecast(field.latitude, field.longitude)
-    // A forecast saved before the field's UTC offset was recorded cannot place the field's clock now and is not judged; the
-    // caller's Weather link stands in until the Weather page saves a current one.
-    if (!bundle || typeof bundle.utc_offset_seconds !== 'number' || !isActionablyFresh(bundle, nowMs)) continue
-    // Judge the window from the field's wall clock now, placed from this instant and the field's offset, not from the moment the
-    // forecast was fetched or the observation's own stamp. The conditions are the fetched current observation until an hourly
-    // sample newer than it has arrived (an hourly row at or before now but after the observation), and hours already passed
-    // never count.
-    const now = fieldWallClockNow(nowMs, bundle.utc_offset_seconds)
+    if (!bundle || !isActionablyFresh(bundle, nowMs)) continue
+    // Judge the window from the field's wall clock now, placed from this instant and the field's zone (or its offset), not from
+    // the moment the forecast was fetched or the observation's own stamp. A forecast saved before the zone and offset were
+    // recorded cannot place the clock and is not judged; the caller's Weather link stands in until the Weather page saves a
+    // current one. The conditions are the fetched current observation until an hourly sample newer than it has arrived (an
+    // hourly row at or before now but after the observation), and hours already passed never count.
+    const now = fieldWallClockNow(nowMs, bundle.timezone, bundle.utc_offset_seconds)
+    if (now === null) continue
     const nowAt = wallClockMs(now); const observedAt = wallClockMs(bundle.current.time)
     const sample = [...bundle.hourly].filter((hourly) => wallClockMs(hourly.time) <= nowAt && wallClockMs(hourly.time) > observedAt).sort((a, b) => wallClockMs(b.time) - wallClockMs(a.time))[0] ?? bundle.current
     const day = dailyFor(bundle, now)
@@ -241,11 +252,18 @@ export function todaySprayWindow(fields: readonly Field[], readForecast: (latitu
     // Good conditions now with an unsafe hour before a later good run are reported as good now, with the later opening named
     // separately, so the gap is never presented as sprayable.
     const windowIsNow = window !== null && wallClockMs(window.start) - nowAt <= 3_600_000
-    const headline = verdict.level === 'good' ? (window && windowIsNow ? `Good spray window until ${formatHour(window.end)}` : 'Good spray conditions right now') : window ? `Spray window opens at ${formatHour(window.start)}` : verdict.level === 'caution' ? 'Use caution spraying today' : 'No good spray window today'
+    // Conditions are only "good now" in daylight: the same sunrise-to-sunset bounds that shape the day's windows gate the current
+    // verdict, so calm air before dawn or after dusk is never shown green. In the dark the card names the next daylight opening,
+    // or says the day's daylight is spent, at the caution level.
+    const dark = !daylight(now, ctx.sunrise, ctx.sunset)
+    const level: SprayLevel = verdict.level === 'good' && dark ? 'caution' : verdict.level
+    const headline = verdict.level === 'good'
+      ? dark ? (window ? `Spray window opens at ${formatHour(window.start)}` : 'No daylight left to spray today') : window && windowIsNow ? `Good spray window until ${formatHour(window.end)}` : 'Good spray conditions right now'
+      : window ? `Spray window opens at ${formatHour(window.start)}` : verdict.level === 'caution' ? 'Use caution spraying today' : 'No good spray window today'
     const rainChance = day?.precipitation_probability_max ?? null
     const details = [`Wind ${formatMph(sample.wind_speed_mph)} ${compassLabel(sample.wind_direction_degrees)}`, rainChance === null ? 'Rain chance unknown' : rainChance < 30 ? 'No rain expected' : `${Math.round(rainChance)}% rain chance`]
-    if (verdict.level === 'good' && window && !windowIsNow) details.push(`Next window opens at ${formatHour(window.start)}`)
-    const card: TodaySprayCard = { level: verdict.level, headline, details, fieldName: field.name }
+    if (verdict.level === 'good' && !dark && window && !windowIsNow) details.push(`Next window opens at ${formatHour(window.start)}`)
+    const card: TodaySprayCard = { level, headline, details, fieldName: field.name }
     if (!best || levelOrder[card.level] < levelOrder[best.level]) best = card
   }
   return best

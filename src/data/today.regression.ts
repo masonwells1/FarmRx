@@ -233,13 +233,14 @@ assert.deepEqual(todayNextUp({ profile: owner, today, equipment: null, notificat
 class MemoryStorage { private readonly values = new Map<string, string>(); writes = 0; getItem(key: string) { return this.values.get(key) ?? null }; setItem(key: string, value: string) { this.writes += 1; this.values.set(key, value) } }
 const storage = new MemoryStorage()
 const centralDaylight = -5 * 3600
+const central = { timezone: 'America/Chicago', utc_offset_seconds: centralDaylight }
 const wall = (clock: string) => Date.parse(`2026-07-15T${clock}:00.000Z`) - centralDaylight * 1000
 const hour = (time: string, wind = 6, precipitation_probability = 5): Record<string, unknown> => ({ time, temperature_f: 72, relative_humidity: 60, precipitation_in: 0, precipitation_probability, wind_speed_mph: wind, wind_direction_degrees: 225, wind_gusts_mph: wind + 3, cloud_cover: 30 })
 const hours = ['06:00', '07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00'].map((clock, index) => hour(`2026-07-15T${clock}`, index >= 4 ? 16 : 6))
 const daily = [{ date: '2026-07-15', precipitation_sum_in: 0, precipitation_probability_max: 10, temperature_max_f: 84, temperature_min_f: 61, sunrise: '2026-07-15T05:58', sunset: '2026-07-15T20:47' }]
-const forecast = (fetched_at: string, current: Record<string, unknown>, hourly: Record<string, unknown>[] = hours, utc_offset_seconds: number | null = centralDaylight) => JSON.stringify({ version: 1, fetched_at, bundle: { current, hourly, daily, fetched_at, ...(utc_offset_seconds === null ? {} : { utc_offset_seconds }) } })
+const forecast = (fetched_at: string, current: Record<string, unknown>, hourly: Record<string, unknown>[] = hours, placement: { timezone?: string; utc_offset_seconds?: number } | null = central) => JSON.stringify({ version: 1, fetched_at, bundle: { current, hourly, daily, fetched_at, ...(placement ?? {}) } })
 const cachedBundle = (fetched_at: string) => forecast(fetched_at, hour('2026-07-15T07:00'))
-const seedForecast = (fetchClock: string, current: Record<string, unknown>, hourly: Record<string, unknown>[] = hours, utc_offset_seconds: number | null = centralDaylight) => { storage.setItem(weatherCacheKey(41.5, -93.6), forecast(new Date(wall(fetchClock)).toISOString(), current, hourly, utc_offset_seconds)); storage.writes = 0 }
+const seedForecast = (fetchClock: string, current: Record<string, unknown>, hourly: Record<string, unknown>[] = hours, placement: { timezone?: string; utc_offset_seconds?: number } | null = central) => { storage.setItem(weatherCacheKey(41.5, -93.6), forecast(new Date(wall(fetchClock)).toISOString(), current, hourly, placement)); storage.writes = 0 }
 const nowMs = wall('07:00')
 assert.equal(nowMs, Date.parse(now), 'The fixture clock reads 7:00 at the field when the regression\'s instant is noon UTC.')
 seedForecast('07:00', hour('2026-07-15T07:00'))
@@ -250,10 +251,16 @@ assert.equal(card.level, 'good'); assert.equal(card.fieldName, 'North Forty')
 assert.match(card.headline, /^Good spray window until 10 AM$/, `Headline was ${card.headline}`)
 assert.deepEqual(card.details, ['Wind 6 mph SW', 'No rain expected'])
 assert.equal(storage.writes, 0, 'Reading the spray card wrote nothing.')
-// The field's wall clock now is placed from the instant and the provider's offset, never from the observation's own stamp.
-assert.equal(fieldWallClockNow(Date.parse('2026-07-15T12:00:00.000Z'), centralDaylight), '2026-07-15T07:00', 'Noon UTC is 7:00 at a Central Daylight field.')
-assert.equal(fieldWallClockNow(Date.parse('2026-07-15T12:00:00.000Z'), 19800), '2026-07-15T17:30', 'A half-hour offset is honoured.')
-assert.equal(fieldWallClockNow(Date.parse('2026-07-16T03:30:00.000Z'), centralDaylight), '2026-07-15T22:30', 'The field\'s date follows its clock, not the device\'s.')
+// The field's wall clock now is placed from the instant and the provider's zone (its offset when the zone is unknown), never from
+// the observation's own stamp; the zone's own rules carry the clock across a daylight-saving change inside the cache's lifetime.
+assert.equal(fieldWallClockNow(Date.parse('2026-07-15T12:00:00.000Z'), 'America/Chicago', centralDaylight), '2026-07-15T07:00', 'Noon UTC is 7:00 at a Central Daylight field.')
+assert.equal(fieldWallClockNow(Date.parse('2026-07-15T12:00:00.000Z'), 'Asia/Kolkata', 19800), '2026-07-15T17:30', 'A half-hour zone is honoured.')
+assert.equal(fieldWallClockNow(Date.parse('2026-07-16T03:30:00.000Z'), 'America/Chicago', centralDaylight), '2026-07-15T22:30', 'The field\'s date follows its clock, not the device\'s.')
+assert.equal(fieldWallClockNow(Date.parse('2026-07-16T05:00:00.000Z'), 'America/Chicago', centralDaylight), '2026-07-16T00:00', 'Midnight is written as 00, never 24.')
+assert.equal(fieldWallClockNow(Date.parse('2026-11-01T06:30:00.000Z'), 'America/Chicago', centralDaylight), '2026-11-01T01:30', 'Before the autumn change the field is on daylight time.')
+assert.equal(fieldWallClockNow(Date.parse('2026-11-01T08:30:00.000Z'), 'America/Chicago', centralDaylight), '2026-11-01T02:30', 'After the autumn change the zone\'s rules place the clock an hour behind the offset captured at fetch (which would say 03:30).')
+assert.equal(fieldWallClockNow(Date.parse('2026-11-01T08:30:00.000Z'), 'Not/AZone', centralDaylight), '2026-11-01T03:30', 'An unusable zone name falls back to the offset the provider reported.')
+assert.equal(fieldWallClockNow(Date.parse('2026-11-01T08:30:00.000Z'), undefined, undefined), null, 'With neither zone nor offset the clock cannot be placed.')
 const laterButFresh = todaySprayWindow(fieldsData.fields, readForecast, wall('08:20'))
 assert.ok(laterButFresh && laterButFresh.headline === 'Good spray window until 10 AM', `At 8:20, with the cache 80 minutes old and still inside the ceiling, the window still runs to 10 AM (saw ${laterButFresh?.headline}).`)
 seedForecast('09:30', hour('2026-07-15T09:30'))
@@ -275,7 +282,17 @@ seedForecast('10:59', hour('2026-07-15T10:45'))
 const laggedObservation = todaySprayWindow(fieldsData.fields, readForecast, wall('11:05'))
 assert.ok(laggedObservation && laggedObservation.level !== 'good' && laggedObservation.details[0] === 'Wind 16 mph SW', `At 11:05 the 11:00 hourly row decides even though the observation fetched at 10:59 was stamped 10:45 (saw ${laggedObservation?.level} · ${laggedObservation?.details[0]}).`)
 seedForecast('10:59', hour('2026-07-15T10:45'), hours, null)
-assert.equal(todaySprayWindow(fieldsData.fields, readForecast, wall('11:05')), null, 'A forecast saved before the field\'s offset was recorded cannot place the field\'s clock and is not judged; the Weather link stands in.')
+assert.equal(todaySprayWindow(fieldsData.fields, readForecast, wall('11:05')), null, 'A forecast saved before the field\'s zone and offset were recorded cannot place the field\'s clock and is not judged; the Weather link stands in.')
+seedForecast('10:59', hour('2026-07-15T10:45'), hours, { utc_offset_seconds: centralDaylight })
+assert.ok(todaySprayWindow(fieldsData.fields, readForecast, wall('11:05'))?.details[0] === 'Wind 16 mph SW', 'A forecast carrying only the offset is still placed by it.')
+// Conditions are never "good now" in the dark: calm air after sunset (20:47) or before sunrise (05:58) is judged at the caution
+// level and the card names the next daylight opening, or says the day's daylight is spent.
+seedForecast('21:15', hour('2026-07-15T21:15'))
+const afterDusk = todaySprayWindow(fieldsData.fields, readForecast, wall('21:30'))
+assert.deepEqual([afterDusk?.level, afterDusk?.headline], ['caution', 'No daylight left to spray today'], `Calm air after sunset is not a green verdict (saw ${afterDusk?.level} · ${afterDusk?.headline}).`)
+seedForecast('05:20', hour('2026-07-15T05:15'), calmHours)
+const beforeDawn = todaySprayWindow(fieldsData.fields, readForecast, wall('05:30'))
+assert.deepEqual([beforeDawn?.level, beforeDawn?.headline, beforeDawn?.details.some((detail) => detail.startsWith('Next window'))], ['caution', 'Spray window opens at 6 AM', false], `Calm air before sunrise names the daylight opening instead of a green verdict (saw ${beforeDawn?.level} · ${beforeDawn?.headline}).`)
 // Good now, an unsafe hour next, then a later good run: never "until 2 PM" across the gap.
 const gapHours = [['10:00', 6], ['11:00', 16], ['12:00', 6], ['13:00', 6], ['14:00', 6], ['15:00', 16]].map(([clock, wind]) => ({ ...hour(`2026-07-15T${clock}`), wind_speed_mph: wind as number, wind_gusts_mph: (wind as number) + 3 }))
 seedForecast('10:45', hour('2026-07-15T10:45'), gapHours)
