@@ -129,6 +129,8 @@ const equipmentReadQueries: Record<string, (farm: FarmFixture) => Record<string,
   farm_member_names: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'display_name.asc' }),
   farm_tasks: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'due_on.asc,id.asc' }),
   field_log_entries: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'observed_on.desc,created_at.desc,id.asc' }),
+  scouting_notes: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'observed_on.desc,created_at.desc,id.asc' }),
+  scouting_photos: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'created_at.asc,id.asc' }),
 }
 const equipmentA = '00000000-0000-4000-8000-000000000201'
 const intervalA = '00000000-0000-4000-8000-000000000301'
@@ -139,13 +141,18 @@ function todayRows(farm: FarmFixture): Readonly<Partial<Record<string, unknown[]
     equipment: [{ id: equipmentA, farm_id: farm.id, name: 'John Deere 8R 340', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null, created_by: userId, created_at: now, updated_at: now }],
     equipment_service_intervals: [{ id: intervalA, farm_id: farm.id, equipment_id: equipmentA, name: 'Engine oil', every_meter: 250, every_months: null, last_done_on: null, last_done_reading: 0, is_active: true, created_by: userId, created_at: now, updated_at: now }],
     equipment_service_due: [{ farm_id: farm.id, equipment_id: equipmentA, interval_id: intervalA, reason: 'meter', overdue_amount: 12 }],
-    farm_tasks: [{ id: taskA, farm_id: farm.id, title: 'Fix the planter', details: null, status: 'todo', priority: 'normal', assigned_to: null, due_on: '2026-07-13', field_id: null, equipment_id: null, source: 'manual', interval_id: null, interval_cycle_key: null, program_assigned_pass_id: null, program_cycle_key: null, completed_by: null, completed_at: null, created_by: userId, created_at: now, updated_at: now }],
+    farm_tasks: [
+      { id: taskA, farm_id: farm.id, title: 'Fix the planter', details: null, status: 'todo', priority: 'normal', assigned_to: null, due_on: '2026-07-13', field_id: null, equipment_id: null, source: 'manual', interval_id: null, interval_cycle_key: null, program_assigned_pass_id: null, program_cycle_key: null, completed_by: null, completed_at: null, created_by: userId, created_at: now, updated_at: now },
+      // The due-generation function's own task for the overdue interval: the same work as the service-due row, never listed twice.
+      { id: '00000000-0000-4000-8000-000000000402', farm_id: farm.id, title: 'Engine oil · John Deere 8R 340', details: null, status: 'todo', priority: 'normal', assigned_to: null, due_on: '2026-07-14', field_id: null, equipment_id: equipmentA, source: 'service_interval', interval_id: intervalA, interval_cycle_key: 'meter:1', program_assigned_pass_id: null, program_cycle_key: null, completed_by: null, completed_at: null, created_by: userId, created_at: now, updated_at: now },
+    ],
   }
 }
 function todayNotifications(farm: FarmFixture, recipient = userId) {
   return [
     { id: '00000000-0000-4000-8000-000000000501', farm_id: farm.id, user_id: recipient, category: 'task', title: 'Corn pass 2 is due', body: null, link: `/programs?pass=${passA}`, dedupe_key: null, read_at: null, created_by: recipient, created_at: now },
     { id: '00000000-0000-4000-8000-000000000502', farm_id: farm.id, user_id: recipient, category: 'general', title: 'Corn hit your $4.60 target', body: null, link: '/grain', dedupe_key: null, read_at: null, created_by: recipient, created_at: '2026-07-15T11:00:00.000Z' },
+    { id: '00000000-0000-4000-8000-000000000503', farm_id: farmB, user_id: recipient, category: 'general', title: 'River Bend corn hit $4.80', body: null, link: '/grain', dedupe_key: null, read_at: null, created_by: recipient, created_at: '2026-07-15T11:30:00.000Z' },
   ]
 }
 const fieldsReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
@@ -1290,7 +1297,7 @@ test('mobile navigation keeps five non-overlapping targets and exposes every des
 // the projection and scripts/sql/fd-today-role-assertions.sql proves the row-level side on a disposable database.
 test('Today opens by default with record tiles and Next up, and hands the Rain and Task tiles to the owning forms', async ({ page, context }, testInfo) => {
   await seedSession(context)
-  const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), false, 1, ownerProfile, userId, {}, todayRows(farms[0]))
+  const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), true, 1, ownerProfile, userId, {}, todayRows(farms[0]))
   await page.goto('/')
   await expect(page).toHaveURL('http://127.0.0.1:4173/today')
   await expect(page.getByRole('heading', { name: 'What are you recording?' })).toBeVisible()
@@ -1311,6 +1318,9 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   await expect(rows.nth(2)).toHaveAttribute('href', `/programs?pass=${passA}`)
   await expect(rows.nth(3)).toContainText('Grain alert')
   await expect(rows.nth(3)).toContainText('Corn hit your $4.60 target')
+  await expect(page.getByText('River Bend corn hit $4.80')).toHaveCount(0)
+  // The due-generation function's own task for the overdue interval is the same work as the service-due row and is not listed twice.
+  await expect(page.getByText('Engine oil · John Deere 8R 340')).toHaveCount(0)
   await expect(page.getByRole('link', { name: /Check the spray window/ })).toHaveAttribute('href', '/weather')
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
   await page.screenshot({ path: testInfo.outputPath('today-owner.png'), fullPage: true })
@@ -1321,6 +1331,21 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Task' }).click()
   await expect(page).toHaveURL('http://127.0.0.1:4173/tasks')
   await expect(page.getByRole('heading', { name: 'Add task' })).toBeVisible()
+  await page.goto('/today')
+  await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Scouting note' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/scouting')
+  await expect(page.getByRole('heading', { name: 'New scouting note' })).toBeVisible()
+  await page.goto('/today')
+  await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Harvest' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/harvest')
+  await expect(page.getByRole('heading', { name: 'Enter harvest' })).toBeVisible()
+  await page.goto('/today')
+  await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Grain delivery' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/grain/contracts')
+  await expect(page.getByRole('status').filter({ hasText: 'Recording a grain delivery' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add contract' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Record a sale instead' }).click()
+  await expect(page.getByRole('button', { name: 'Add contract' })).toBeVisible()
   expect(unexpected).toEqual([])
 })
 

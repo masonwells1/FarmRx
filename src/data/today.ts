@@ -15,11 +15,11 @@ export type TodayRecordTile = { kind: TodayRecordKind; label: string; module: Fa
 
 const recordTiles: readonly TodayRecordTile[] = [
   { kind: 'rain', label: 'Rain', module: 'field_log', to: '/field-log', state: todayRecordIntent('rainfall') },
-  { kind: 'scouting', label: 'Scouting note', module: 'scouting', to: '/scouting', state: null },
+  { kind: 'scouting', label: 'Scouting note', module: 'scouting', to: '/scouting', state: todayRecordIntent('scouting') },
   { kind: 'spray', label: 'Spray record', module: 'inventory', to: '/inventory', state: manualSprayRecordIntent },
   { kind: 'task', label: 'Task', module: 'tasks', to: '/tasks', state: todayRecordIntent('task') },
-  { kind: 'harvest', label: 'Harvest', module: 'harvest', to: '/harvest', state: null },
-  { kind: 'grain_delivery', label: 'Grain delivery', module: 'grain', to: '/grain/contracts', state: null },
+  { kind: 'harvest', label: 'Harvest', module: 'harvest', to: '/harvest', state: todayRecordIntent('harvest') },
+  { kind: 'grain_delivery', label: 'Grain delivery', module: 'grain', to: '/grain/contracts', state: todayRecordIntent('grain_delivery') },
 ]
 
 /** The record tiles this member may both reach and complete: a read-only member sees none, and a member without financial access
@@ -37,13 +37,22 @@ const wholeNumber = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
 function daysBetween(earlier: string, later: string): number { return Math.max(0, Math.round((Date.parse(`${later}T00:00:00Z`) - Date.parse(`${earlier}T00:00:00Z`)) / 86_400_000)) }
 const plural = (count: number, unit: string) => `${wholeNumber.format(count)} ${unit}${count === 1 ? '' : 's'}`
 
+const programPassLink = /^\/programs\?pass=([0-9a-f-]{36})$/i
+const passIdOf = (link: string) => programPassLink.exec(link)?.[1]?.toLowerCase() ?? null
+
 /** Next up, from existing records only: overdue service (the equipment service-due view), tasks due or overdue, program passes due
  * and fired grain alerts (both already written to the alerts table by the modules that own them). Each source is included only
  * when this member may open the module it points to, and grain alerts only with financial access, so a member without it never
- * sees a grain line. A source the screen could not load is simply absent. */
+ * sees a grain line. Alerts belong to the selected farm only. The due-generation functions also write a task for an overdue
+ * service interval and for a due program pass; when the service-due row or the pass alert is already shown, that generated task
+ * is the same work and is not listed twice. A source the screen could not load is simply absent. */
 export function todayNextUp(input: { profile: FarmAccessProfile; today: string; equipment: EquipmentTasksWorkspace | null; notifications: readonly Notification[] | null }): TodayNextUpItem[] {
   const { profile, today, equipment, notifications } = input
   const items: TodayNextUpItem[] = []
+  const farmNotifications = (notifications ?? []).filter((notification) => notification.farm_id === profile.farmId)
+  const unread = farmNotifications.filter((notification) => notification.read_at === null && notification.link !== null).sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
+  const shownPassIds = new Set(canAccessFarmModule(profile, 'programs') ? unread.map((notification) => passIdOf(notification.link!)).filter((id): id is string => id !== null) : [])
+  const shownServiceIntervalIds = new Set<string>()
   if (equipment && canAccessFarmModule(profile, 'equipment')) {
     const machines = new Map(equipment.equipment.map((machine) => [machine.id, machine]))
     const intervals = new Map(equipment.intervals.map((interval) => [interval.id, interval]))
@@ -53,17 +62,18 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
       const amount = Math.max(0, Math.round(due.overdue_amount))
       const badge = due.reason === 'meter' ? `${plural(amount, machine.meter_unit === 'miles' ? 'mile' : 'hour')} over` : `${plural(amount, 'day')} over`
       items.push({ id: `service:${due.interval_id}:${due.reason}`, kind: 'service', title: 'Service overdue', detail: `${machine.name} · ${interval.name}`, badge, urgency: 'overdue', to: '/equipment' })
+      shownServiceIntervalIds.add(due.interval_id)
     }
   }
   if (equipment && canAccessFarmModule(profile, 'tasks')) {
-    const due = equipment.tasks.filter((task) => task.status !== 'done' && task.due_on !== null && task.due_on <= today).sort((a, b) => (a.due_on ?? '').localeCompare(b.due_on ?? '') || a.title.localeCompare(b.title))
+    const generatedElsewhere = (task: EquipmentTasksWorkspace['tasks'][number]) => (task.source === 'service_interval' && task.interval_id !== null && shownServiceIntervalIds.has(task.interval_id)) || (task.source === 'program' && task.program_assigned_pass_id !== null && shownPassIds.has(task.program_assigned_pass_id.toLowerCase()))
+    const due = equipment.tasks.filter((task) => task.status !== 'done' && task.due_on !== null && task.due_on <= today && !generatedElsewhere(task)).sort((a, b) => (a.due_on ?? '').localeCompare(b.due_on ?? '') || a.title.localeCompare(b.title))
     for (const task of due) {
       const overdue = (task.due_on ?? today) < today
       items.push({ id: `task:${task.id}`, kind: 'task', title: overdue ? 'Task overdue' : 'Task due today', detail: task.title, badge: overdue ? `${plural(daysBetween(task.due_on!, today), 'day')} late` : null, urgency: overdue ? 'overdue' : 'due', to: '/tasks' })
     }
   }
   if (notifications) {
-    const unread = notifications.filter((notification) => notification.read_at === null && notification.link !== null).sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
     for (const notification of unread) {
       const link = notification.link!
       if (link.startsWith('/programs') && canAccessFarmModule(profile, 'programs')) items.push({ id: `program:${notification.id}`, kind: 'program', title: 'Program pass due', detail: notification.title, badge: null, urgency: 'due', to: link })

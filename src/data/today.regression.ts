@@ -41,11 +41,16 @@ const ownerTiles = todayRecordTiles(owner)
 assert.deepEqual(ownerTiles.find((tile) => tile.kind === 'rain')?.state, todayRecordIntent('rainfall'), 'The Rain tile carries the rainfall intent.')
 assert.deepEqual(ownerTiles.find((tile) => tile.kind === 'task')?.state, todayRecordIntent('task'), 'The Task tile carries the task intent.')
 assert.equal(ownerTiles.find((tile) => tile.kind === 'spray')?.to, '/inventory', 'The Spray tile opens the Inventory spray record.')
+assert.deepEqual(ownerTiles.find((tile) => tile.kind === 'scouting')?.state, todayRecordIntent('scouting'), 'The Scouting note tile carries the scouting intent.')
+assert.deepEqual(ownerTiles.find((tile) => tile.kind === 'harvest')?.state, todayRecordIntent('harvest'), 'The Harvest tile carries the harvest intent.')
+assert.deepEqual(ownerTiles.find((tile) => tile.kind === 'grain_delivery')?.state, todayRecordIntent('grain_delivery'), 'The Grain delivery tile carries the delivery intent, so Grain opens in delivery mode rather than on the new-sale form.')
+assert.ok(ownerTiles.every((tile) => tile.kind === 'spray' || tile.state !== null), 'Every record tile that opens a form carries an intent.')
 assert.equal(ownerTiles.find((tile) => tile.kind === 'grain_delivery')?.to, '/grain/contracts', 'The Grain delivery tile opens grain contracts.')
 
 // Intents: only the exact shape opens a form; anything else is ignored.
 assert.deepEqual(parseTodayRecordIntent(todayRecordIntent('rainfall')), todayRecordIntent('rainfall'))
 assert.deepEqual(parseTodayRecordIntent(JSON.parse(JSON.stringify(todayRecordIntent('task')))), todayRecordIntent('task'))
+for (const record of ['scouting', 'harvest', 'grain_delivery'] as const) assert.deepEqual(parseTodayRecordIntent(todayRecordIntent(record)), todayRecordIntent(record))
 for (const bad of [null, undefined, 'today-record', 7, {}, { kind: 'today-record' }, { kind: 'today-record', version: 2, record: 'task' }, { kind: 'today-record', version: 1, record: 'spray' }, { kind: 'weather-spray-record', version: 1, record: 'task' }]) assert.equal(parseTodayRecordIntent(bad), null, `Rejected ${JSON.stringify(bad)}`)
 
 // Next up: from existing records only, gated by module access.
@@ -60,7 +65,7 @@ const oil = interval('00000000-0000-4000-8000-000000000301', tractor.id, 'Engine
 const workspace: EquipmentTasksWorkspace = {
   fields: fieldsData, viewer: { user_id: userA, role: 'owner' }, equipment: [tractor, truck], meter_readings: [], intervals: [oil, tires], service_log: [],
   service_due: [{ farm_id: farmA, equipment_id: tractor.id, interval_id: oil.id, reason: 'meter', overdue_amount: 12.4 }, { farm_id: farmA, equipment_id: truck.id, interval_id: tires.id, reason: 'calendar', overdue_amount: 3 }, { farm_id: farmA, equipment_id: '00000000-0000-4000-8000-000000000299', interval_id: oil.id, reason: 'meter', overdue_amount: 1 }],
-  members: [], tasks: [task('00000000-0000-4000-8000-000000000401', 'Fix the planter', '2026-07-13'), task('00000000-0000-4000-8000-000000000402', 'Walk beans', '2026-07-15'), task('00000000-0000-4000-8000-000000000403', 'Spray corn', '2026-07-16'), task('00000000-0000-4000-8000-000000000404', 'Done job', '2026-07-01', 'done'), task('00000000-0000-4000-8000-000000000405', 'No date', null)],
+  members: [], tasks: [task('00000000-0000-4000-8000-000000000401', 'Fix the planter', '2026-07-13'), task('00000000-0000-4000-8000-000000000402', 'Walk beans', '2026-07-15'), task('00000000-0000-4000-8000-000000000403', 'Spray corn', '2026-07-16'), task('00000000-0000-4000-8000-000000000404', 'Done job', '2026-07-01', 'done'), task('00000000-0000-4000-8000-000000000405', 'No date', null), { ...task('00000000-0000-4000-8000-000000000406', 'Engine oil · John Deere 8R 340', '2026-07-14'), source: 'service_interval', interval_id: oil.id, equipment_id: tractor.id }, { ...task('00000000-0000-4000-8000-000000000407', 'Corn pass 2', '2026-07-15'), source: 'program', program_assigned_pass_id: '00000000-0000-4000-8000-000000000601' }],
 }
 const notification = (id: string, title: string, link: string | null, read_at: string | null, created_at: string): Notification => ({ id, farm_id: farmA, user_id: userA, category: 'general', title, body: null, link, dedupe_key: null, read_at, created_by: userA, created_at })
 const notifications: Notification[] = [
@@ -69,6 +74,8 @@ const notifications: Notification[] = [
   notification('00000000-0000-4000-8000-000000000503', 'Already read grain alert', '/grain', '2026-07-15T08:00:00.000Z', '2026-07-14T07:00:00.000Z'),
   notification('00000000-0000-4000-8000-000000000504', 'A note with nowhere to go', null, null, '2026-07-15T09:00:00.000Z'),
   notification('00000000-0000-4000-8000-000000000505', 'Service reminder written as an alert', '/equipment', null, '2026-07-15T10:00:00.000Z'),
+  { ...notification('00000000-0000-4000-8000-000000000506', 'River Bend corn hit $4.80', '/grain', null, '2026-07-15T11:00:00.000Z'), farm_id: '00000000-0000-4000-8000-000000000020' },
+  { ...notification('00000000-0000-4000-8000-000000000507', 'River Bend pass due', '/programs?pass=00000000-0000-4000-8000-000000000602', null, '2026-07-15T11:30:00.000Z'), farm_id: '00000000-0000-4000-8000-000000000020' },
 ]
 const today = '2026-07-15'
 const ownerNextUp = todayNextUp({ profile: owner, today, equipment: workspace, notifications })
@@ -79,16 +86,23 @@ assert.deepEqual(ownerNextUp.map((item) => [item.kind, item.title, item.detail, 
   ['task', 'Task due today', 'Walk beans', null, 'due', '/tasks'],
   ['program', 'Program pass due', 'Corn pass 2 is due', null, 'due', '/programs?pass=00000000-0000-4000-8000-000000000601'],
   ['grain_alert', 'Grain alert', 'Corn hit your $4.60 target', null, 'info', '/grain'],
-], 'An owner sees overdue service, overdue and due tasks, program passes due, and unread grain alerts, overdue first; future, done, undated, read, unlinked and unknown-link rows are absent.')
+], 'An owner sees overdue service, overdue and due tasks, program passes due, and unread grain alerts, overdue first; future, done, undated, read, unlinked and unknown-link rows are absent; another farm\'s alerts are absent; the generated service task and program task are not listed beside the service-due row and the pass alert they duplicate.')
+assert.ok(!ownerNextUp.some((item) => item.detail.includes('River Bend')), 'No alert from another farm reaches the selected farm\'s Today.')
+const withoutPassAlert = todayNextUp({ profile: owner, today, equipment: workspace, notifications: notifications.filter((notification) => notification.id !== '00000000-0000-4000-8000-000000000501') })
+assert.deepEqual(withoutPassAlert.filter((item) => item.kind === 'task').map((item) => item.detail), ['Fix the planter', 'Corn pass 2', 'Walk beans'], 'Once the pass alert is read, the generated program task is the only representation of that pass and is listed.')
+assert.ok(!withoutPassAlert.some((item) => item.kind === 'program'), 'No pass alert, no program row.')
+const withoutServiceDue = todayNextUp({ profile: owner, today, equipment: { ...workspace, service_due: [] }, notifications })
+assert.ok(withoutServiceDue.some((item) => item.kind === 'task' && item.detail === 'Engine oil · John Deere 8R 340'), 'Without a service-due row the generated service task is listed on its own.')
 assert.equal(new Set(ownerNextUp.map((item) => item.id)).size, ownerNextUp.length, 'Next up ids are unique.')
 const workerNextUp = todayNextUp({ profile: worker, today, equipment: workspace, notifications })
 assert.ok(workerNextUp.some((item) => item.kind === 'service') && workerNextUp.some((item) => item.kind === 'task') && workerNextUp.some((item) => item.kind === 'program'), 'A worker without financial access still sees service, tasks and program passes.')
 assert.ok(!workerNextUp.some((item) => item.kind === 'grain_alert' || item.to.startsWith('/grain') || item.detail.includes('$4.60')), 'A worker without financial access sees no grain line on Today.')
 assert.ok(todayNextUp({ profile: financialWorker, today, equipment: workspace, notifications }).some((item) => item.kind === 'grain_alert'), 'A worker with financial access sees the grain alert.')
 const repNextUp = todayNextUp({ profile: namedRep, today, equipment: workspace, notifications })
-assert.deepEqual(repNextUp.map((item) => item.kind), ['grain_alert'], 'A named rep sees only grain alerts, never service, tasks or program passes, even when handed the rows.')
+assert.deepEqual(repNextUp.map((item) => [item.kind, item.detail]), [['grain_alert', 'Corn hit your $4.60 target']], 'A named rep sees only the selected farm\'s grain alerts, never service, tasks or program passes, even when handed the rows.')
 assert.deepEqual(todayNextUp({ profile: owner, today, equipment: null, notifications: null }), [], 'Sources the screen could not load are simply absent.')
 assert.deepEqual(todayNextUp({ profile: owner, today: '2026-07-12', equipment: workspace, notifications: [] }).map((item) => item.kind), ['service', 'service'], 'Tasks are due only from their due date on.')
+assert.deepEqual(todayNextUp({ profile: worker, today, equipment: null, notifications }).map((item) => item.kind), ['program'], 'A worker without financial access handed only alerts sees the selected farm\'s pass alert and nothing from another farm.')
 
 // Spray card: cached forecasts only, freshness-gated, no writes.
 class MemoryStorage { private readonly values = new Map<string, string>(); writes = 0; getItem(key: string) { return this.values.get(key) ?? null }; setItem(key: string, value: string) { this.writes += 1; this.values.set(key, value) } }

@@ -28,7 +28,8 @@ export class SupabaseNotificationsRepository implements NotificationsRepository 
     this.d.verifySnapshotContext?.(context)
     const rows = await this.d.gateway.loadNotifications()
     this.d.verifySnapshotContext?.(context)
-    const notifications = rows.map((row) => mapNotification(row, { recipientId: context.userId }))
+    // Row Level Security returns this member's alerts for every farm they can open; a pure snapshot is for one selected farm only.
+    const notifications = rows.map((row) => mapNotification(row, { recipientId: context.userId })).filter((notification) => notification.farm_id === context.farmId)
     return { data: { notifications, unreadCount: notifications.filter((notification) => notification.read_at === null).length }, source: 'live' as const, capturedAt: this.d.clock?.() ?? new Date().toISOString() }
   }
   async getData(): Promise<NotificationsData> { const userId = await this.d.getUserId(); const notifications = (await this.d.gateway.loadNotifications()).map((row) => mapNotification(row, { recipientId: userId })); return { notifications, unreadCount: notifications.filter((notification) => notification.read_at === null).length } }
