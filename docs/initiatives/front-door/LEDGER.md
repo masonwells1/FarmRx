@@ -160,3 +160,10 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Trigger:** Codex reviewed `108695b` on pull request #46 and returned one P1 finding, verified against the code and repaired in the next commit.
 - **Finding (a later window read as the current one):** when conditions were good now, the next hour unsafe, and a later run good, the card said "Good spray window until <end of the later run>", presenting the unsafe gap as sprayable. "Until" is now used only when the best window begins by the next hourly mark (the farmer is standing in it); otherwise good conditions now are reported as "Good spray conditions right now" with "Next window opens at <time>" named separately. Regression cases cover the gapped case and the continuous case.
 - **Proof:** recorded on the pull request with the repair commit.
+
+## FD-017 — Thirteenth Codex round on FD-1 (one finding)
+
+- **Date/time:** 2026-09-14 11:45 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `24603b4` on pull request #46 and returned one P2 finding, the inverse of FD-015's: when the farm's day runs ahead of the database's (just after midnight on an eastern farm), the service-due view has not yet returned a calendar interval that is already due on the farm's day, so re-judging the view's rows could not surface it. Verified and repaired in the next commit.
+- **Repair:** calendar candidates now come from the loaded intervals and machines themselves, using the view's own rule (an active interval with a months rule on an active machine; due from the last service, or the machine's first day, plus the interval's months, clamped to a shorter month), judged against the farm's day; a calendar row the view returned is ignored in favour of that. Meter rows carry no date and are still taken as the view reports them. Regression cases cover the farm-ahead day, an inactive interval and a sold machine, alongside the earlier database-ahead cases.
+- **Proof:** recorded on the pull request with the repair commit.

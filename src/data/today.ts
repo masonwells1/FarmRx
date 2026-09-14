@@ -84,18 +84,22 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
   if (equipment && canAccessFarmModule(profile, 'equipment')) {
     const machines = new Map(equipment.equipment.map((machine) => [machine.id, machine]))
     const intervals = new Map(equipment.intervals.map((interval) => [interval.id, interval]))
-    // The view judges calendar rows against the database's own date. Today judges them against the farm's day, the same day the
-    // tasks use, by recomputing the interval's due date (last service, or the machine's first day, plus the interval's months, as
-    // the view does) and counting days from there; a calendar row not yet due on the farm's day is not listed. Meter rows carry
-    // no date and are taken as the view reports them.
+    // The view judges calendar intervals against the database's own date, which can sit a day either side of the farm's day.
+    // Today therefore derives calendar candidates itself from the loaded intervals and machines, exactly as the view does (an
+    // active interval with a months rule on an active machine; due from the last service, or the machine's first day, plus the
+    // interval's months), and judges them against the farm's day, the same day the tasks use. A calendar row the view returned
+    // is ignored in favour of that; meter rows carry no date and are taken as the view reports them.
     type Due = EquipmentTasksWorkspace['service_due'][number]
-    const judged = equipment.service_due.flatMap((due): Array<{ due: Due; amount: number }> => {
-      if (due.reason !== 'calendar') return [{ due, amount: due.overdue_amount }]
-      const machine = machines.get(due.equipment_id); const interval = intervals.get(due.interval_id)
-      if (!machine || !interval || interval.every_months === null) return [{ due, amount: due.overdue_amount }]
+    const meterRows = equipment.service_due.filter((due) => due.reason === 'meter').map((due) => ({ due, amount: due.overdue_amount }))
+    const calendarRows = equipment.intervals.flatMap((interval): Array<{ due: Due; amount: number }> => {
+      const machine = machines.get(interval.equipment_id)
+      if (!interval.is_active || interval.every_months === null || !machine || machine.status !== 'active') return []
       const dueOn = addMonthsClamped(interval.last_done_on ?? machine.created_at.slice(0, 10), interval.every_months)
-      return dueOn > today ? [] : [{ due, amount: daysBetween(dueOn, today) }]
+      if (dueOn > today) return []
+      const amount = daysBetween(dueOn, today)
+      return [{ due: { farm_id: interval.farm_id, equipment_id: interval.equipment_id, interval_id: interval.id, reason: 'calendar', overdue_amount: amount }, amount }]
     })
+    const judged = [...meterRows, ...calendarRows]
     // One card per interval: an interval with both a meter and a calendar rule can be due on both, and recording the service
     // resets the one interval. The overdue row represents it; between equals the meter row does, as the due-generation SQL orders.
     const representative = new Map<string, { due: Due; amount: number }>()
