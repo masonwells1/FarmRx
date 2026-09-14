@@ -424,7 +424,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
       setSelectedEstimateId((current) =>
         data.production_estimates.some((estimate) => estimate.id === current)
           ? current
-          : (data.production_estimates[0]?.id ?? ""),
+          : ((deliveryIntent ? deliveryDefaultEstimate(data.production_estimates)?.id : undefined) ?? data.production_estimates[0]?.id ?? ""),
       );
     } catch (caught) {
       const message =

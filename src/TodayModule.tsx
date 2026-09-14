@@ -50,6 +50,14 @@ export function TodayPage({ fieldsRepository, equipmentTasksRepository, notifica
   const navigate = useNavigate()
   const [snapshots, setSnapshots] = useState<TodaySnapshots>({ fields: loading, equipment: loading, notifications: loading, inventory: loading })
   const [nowMs, setNowMs] = useState(() => Date.now())
+  // The spray card's freshness gate is judged against the clock, not the load time: a phone left open on Today past the two-hour
+  // ceiling must drop a stale verdict on its own, so the clock ticks every minute and whenever the app comes back into view.
+  useEffect(() => {
+    const tick = () => setNowMs(Date.now())
+    const timer = setInterval(tick, 60_000)
+    document.addEventListener('visibilitychange', tick)
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick) }
+  }, [])
   useEffect(() => {
     let cancelled = false
     setSnapshots({ fields: loading, equipment: loading, notifications: loading, inventory: loading })
