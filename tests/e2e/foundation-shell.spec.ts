@@ -149,6 +149,7 @@ const productA = '00000000-0000-4000-8000-000000000701'
 function todayRows(farm: FarmFixture): Readonly<Partial<Record<string, unknown[]>>> {
   return {
     equipment: [{ id: equipmentA, farm_id: farm.id, name: 'John Deere 8R 340', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null, created_by: userId, created_at: now, updated_at: now }],
+    equipment_meter_readings: [{ id: '00000000-0000-4000-8000-000000000901', farm_id: farm.id, equipment_id: equipmentA, reading: 262, read_on: '2026-07-14', source: 'manual', notes: null, created_by: userId, created_at: now, updated_at: now }],
     equipment_service_intervals: [{ id: intervalA, farm_id: farm.id, equipment_id: equipmentA, name: 'Engine oil', every_meter: 250, every_months: null, last_done_on: null, last_done_reading: 0, is_active: true, created_by: userId, created_at: now, updated_at: now }],
     equipment_service_due: [{ farm_id: farm.id, equipment_id: equipmentA, interval_id: intervalA, reason: 'meter', overdue_amount: 12 }],
     farm_tasks: [

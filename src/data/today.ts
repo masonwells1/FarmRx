@@ -84,29 +84,48 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
   if (equipment && canAccessFarmModule(profile, 'equipment')) {
     const machines = new Map(equipment.equipment.map((machine) => [machine.id, machine]))
     const intervals = new Map(equipment.intervals.map((interval) => [interval.id, interval]))
-    // The view judges calendar intervals against the database's own date, which can sit a day either side of the farm's day.
-    // Today therefore derives calendar candidates itself from the loaded intervals and machines, exactly as the view does (an
-    // active interval with a months rule on an active machine; due from the last service, or the machine's first day, plus the
-    // interval's months), and judges them against the farm's day, the same day the tasks use. A calendar row the view returned
-    // is ignored in favour of that; meter rows carry no date and are taken as the view reports them.
+    // The view judges calendar intervals against the database's own date, which can sit a day either side of the farm's day,
+    // and its meter rows are only as current as the last sync. Today therefore derives both kinds of candidate itself from the
+    // loaded intervals, machines and readings, exactly as the view does, and ignores the view's rows. Calendar: an active
+    // interval with a months rule on an active machine, due from the last service, or the machine's first day, plus the
+    // interval's months, judged against the farm's day, the same day the tasks use. Meter: an active interval with a meter rule
+    // on an active machine that has a reading; the machine's latest reading (by date, then entry time, then id, as the view
+    // orders) less the interval's last-done reading, or zero, less the interval's length, due at zero or more. A reading recorded
+    // on this device but not yet synced is already among the loaded readings, so a machine carried past an interval offline is
+    // listed before the view knows. Amounts are rounded to the columns' two decimals so a float remainder is never called late.
     type Due = EquipmentTasksWorkspace['service_due'][number]
+    type Reading = EquipmentTasksWorkspace['meter_readings'][number]
+    type LogEntry = EquipmentTasksWorkspace['service_log'][number]
+    const newerReading = (a: Reading, b: Reading) => a.read_on.localeCompare(b.read_on) || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)
+    const latestReading = new Map<string, Reading>()
+    for (const reading of equipment.meter_readings) { const current = latestReading.get(reading.equipment_id); if (!current || newerReading(reading, current) > 0) latestReading.set(reading.equipment_id, reading) }
     // Service recorded on this device but not yet synced sits in the service log ahead of the interval's last-done values (the
     // server resets those when the entry lands). A log entry for the interval dated after its last service means the interval
-    // has been reset since the due rows were computed, so that interval is not listed; once synced the dates agree again. The
-    // server advances the last-done date from any entry but the last-done reading only from an entry that carries a meter
-    // reading, so a meter row is reset only by a newer entry with a reading; a calendar candidate counts from any newer entry.
-    const latestServiceOn = new Map<string, string>()
-    const latestReadingOn = new Map<string, string>()
+    // has been reset since, so its calendar rule counts from that entry; once synced the dates agree again. The server advances
+    // the last-done date from any entry but the last-done reading only from an entry that carries a meter reading, so the
+    // meter rule takes its last-done reading from the newest such entry dated after the last service, else from the interval.
+    const newerEntry = (a: LogEntry, b: LogEntry) => a.service_date.localeCompare(b.service_date) || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)
+    const latestEntry = new Map<string, LogEntry>()
+    const latestReadingEntry = new Map<string, LogEntry>()
     for (const entry of equipment.service_log) {
       if (entry.interval_id === null) continue
-      if ((latestServiceOn.get(entry.interval_id) ?? '') < entry.service_date) latestServiceOn.set(entry.interval_id, entry.service_date)
-      if (entry.meter_reading !== null && (latestReadingOn.get(entry.interval_id) ?? '') < entry.service_date) latestReadingOn.set(entry.interval_id, entry.service_date)
+      const current = latestEntry.get(entry.interval_id); if (!current || newerEntry(entry, current) > 0) latestEntry.set(entry.interval_id, entry)
+      if (entry.meter_reading !== null) { const read = latestReadingEntry.get(entry.interval_id); if (!read || newerEntry(entry, read) > 0) latestReadingEntry.set(entry.interval_id, entry) }
     }
-    const meterRows = equipment.service_due.filter((due) => due.reason === 'meter').filter((due) => { const interval = intervals.get(due.interval_id); return !interval || !((latestReadingOn.get(interval.id) ?? '') > (interval.last_done_on ?? '')) }).map((due) => ({ due, amount: due.overdue_amount }))
+    const meterRows = equipment.intervals.flatMap((interval): Array<{ due: Due; amount: number }> => {
+      const machine = machines.get(interval.equipment_id); const reading = latestReading.get(interval.equipment_id)
+      if (!interval.is_active || interval.every_meter === null || !machine || machine.status !== 'active' || !reading) return []
+      const unsynced = latestReadingEntry.get(interval.id)
+      const lastDoneReading = unsynced && unsynced.service_date > (interval.last_done_on ?? '') ? unsynced.meter_reading! : interval.last_done_reading
+      const amount = Math.round((reading.reading - (lastDoneReading ?? 0) - interval.every_meter) * 100) / 100
+      if (amount < 0) return []
+      return [{ due: { farm_id: interval.farm_id, equipment_id: interval.equipment_id, interval_id: interval.id, reason: 'meter', overdue_amount: amount }, amount }]
+    })
     const calendarRows = equipment.intervals.flatMap((interval): Array<{ due: Due; amount: number }> => {
       const machine = machines.get(interval.equipment_id)
       if (!interval.is_active || interval.every_months === null || !machine || machine.status !== 'active') return []
-      const lastServiceOn = [interval.last_done_on ?? machine.created_at.slice(0, 10), latestServiceOn.get(interval.id) ?? ''].sort()[1]
+      const unsynced = latestEntry.get(interval.id)
+      const lastServiceOn = [interval.last_done_on ?? machine.created_at.slice(0, 10), unsynced?.service_date ?? ''].sort()[1]
       const dueOn = addMonthsClamped(lastServiceOn, interval.every_months)
       if (dueOn > today) return []
       const amount = daysBetween(dueOn, today)

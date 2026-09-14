@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { deriveFarmAccessProfile } from '../auth/farmContext'
-import type { EquipmentTasksWorkspace, Equipment, FarmTask, ServiceInterval } from './equipmentTasks'
+import type { EquipmentTasksWorkspace, Equipment, FarmTask, MeterReading, ServiceInterval } from './equipmentTasks'
 import type { InventoryProduct, InventoryWorkspace } from './inventory'
 import type { Field, FieldsData } from './fields'
 import type { Notification } from './notifications'
@@ -67,9 +67,11 @@ const machine = (id: string, name: string, meter_unit: Equipment['meter_unit']):
 const interval = (id: string, equipment_id: string, name: string, calendar: { every_months: number; last_done_on: string | null } | null = null): ServiceInterval => ({ id, farm_id: farmA, equipment_id, name, every_meter: calendar ? null : 250, every_months: calendar?.every_months ?? null, last_done_on: calendar?.last_done_on ?? null, last_done_reading: null, is_active: true, created_by: userA, created_at: now, updated_at: now })
 const task = (id: string, title: string, due_on: string | null, status: FarmTask['status'] = 'todo'): FarmTask => ({ id, farm_id: farmA, title, details: null, status, priority: 'normal', assigned_to: null, due_on, field_id: null, equipment_id: null, source: 'manual', interval_id: null, interval_cycle_key: null, program_assigned_pass_id: null, program_cycle_key: null, completed_by: null, completed_at: null, created_by: userA, created_at: now, updated_at: now } as FarmTask)
 const tractor = machine('00000000-0000-4000-8000-000000000201', 'John Deere 8R 340', 'hours'); const truck = machine('00000000-0000-4000-8000-000000000202', 'Grain truck', 'miles')
+const reading = (id: string, equipment_id: string, value: number, read_on: string, created_at = now, source: MeterReading['source'] = 'manual'): MeterReading => ({ id, farm_id: farmA, equipment_id, reading: value, read_on, source, notes: null, created_by: userA, created_at, updated_at: created_at })
+const hours262 = reading('00000000-0000-4000-8000-000000000901', tractor.id, 262.4, '2026-07-14')
 const oil = interval('00000000-0000-4000-8000-000000000301', tractor.id, 'Engine oil'); const tires = interval('00000000-0000-4000-8000-000000000302', truck.id, 'Tire rotation', { every_months: 6, last_done_on: '2026-01-12' })
 const workspace: EquipmentTasksWorkspace = {
-  fields: fieldsData, viewer: { user_id: userA, role: 'owner' }, equipment: [tractor, truck], meter_readings: [], intervals: [oil, tires], service_log: [],
+  fields: fieldsData, viewer: { user_id: userA, role: 'owner' }, equipment: [tractor, truck], meter_readings: [hours262], intervals: [oil, tires], service_log: [],
   service_due: [{ farm_id: farmA, equipment_id: tractor.id, interval_id: oil.id, reason: 'meter', overdue_amount: 12.4 }, { farm_id: farmA, equipment_id: truck.id, interval_id: tires.id, reason: 'calendar', overdue_amount: 3 }, { farm_id: farmA, equipment_id: '00000000-0000-4000-8000-000000000299', interval_id: oil.id, reason: 'meter', overdue_amount: 1 }],
   members: [], tasks: [task('00000000-0000-4000-8000-000000000401', 'Fix the planter', '2026-07-13'), task('00000000-0000-4000-8000-000000000402', 'Walk beans', '2026-07-15'), task('00000000-0000-4000-8000-000000000403', 'Spray corn', '2026-07-16'), task('00000000-0000-4000-8000-000000000404', 'Done job', '2026-07-01', 'done'), task('00000000-0000-4000-8000-000000000405', 'No date', null), { ...task('00000000-0000-4000-8000-000000000406', 'Engine oil · John Deere 8R 340', '2026-07-14'), source: 'service_interval', interval_id: oil.id, equipment_id: tractor.id }, { ...task('00000000-0000-4000-8000-000000000407', 'Corn pass 2', '2026-07-15'), source: 'program', program_assigned_pass_id: '00000000-0000-4000-8000-000000000601' }],
 }
@@ -106,8 +108,9 @@ const rescheduledArrived = todayNextUp({ profile: owner, today: '2026-07-20', eq
 assert.ok(rescheduledArrived.some((item) => item.kind === 'program'), 'When the rescheduled date arrives the pass is listed again (through its still-unread alert).')
 const twoReminders = todayNextUp({ profile: owner, today, equipment: workspace, notifications: [...notifications, notification('00000000-0000-4000-8000-000000000508', 'Corn pass 2 is due (again)', '/programs?pass=00000000-0000-4000-8000-000000000601', null, '2026-07-15T11:45:00.000Z')] })
 assert.equal(twoReminders.filter((item) => item.kind === 'program').length, 1, 'Two unread reminders for one pass are one row.')
-const withoutServiceDue = todayNextUp({ profile: owner, today, equipment: { ...workspace, service_due: [] }, notifications })
-assert.ok(withoutServiceDue.some((item) => item.kind === 'task' && item.detail === 'Engine oil · John Deere 8R 340'), 'Without a service-due row the generated service task is listed on its own.')
+const withoutReading = todayNextUp({ profile: owner, today, equipment: { ...workspace, meter_readings: [] }, notifications })
+assert.ok(!withoutReading.some((item) => item.id === 'service:' + oil.id), 'A machine without a reading has no meter row, whatever the view returned.')
+assert.ok(withoutReading.some((item) => item.kind === 'task' && item.detail === 'Engine oil · John Deere 8R 340'), 'Without a service row the generated service task is listed on its own.')
 assert.equal(new Set(ownerNextUp.map((item) => item.id)).size, ownerNextUp.length, 'Next up ids are unique.')
 const workerNextUp = todayNextUp({ profile: worker, today, equipment: workspace, notifications })
 assert.ok(workerNextUp.some((item) => item.kind === 'service') && workerNextUp.some((item) => item.kind === 'task') && workerNextUp.some((item) => item.kind === 'program'), 'A worker without financial access still sees service, tasks and program passes.')
@@ -117,31 +120,34 @@ const repNextUp = todayNextUp({ profile: namedRep, today, equipment: workspace, 
 assert.deepEqual(repNextUp.map((item) => [item.kind, item.detail]), [['grain_alert', 'Corn hit your $4.60 target']], 'A named rep sees only the selected farm\'s grain alerts, never service, tasks or program passes, even when handed the rows.')
 assert.deepEqual(todayNextUp({ profile: owner, today, equipment: null, notifications: null }), [], 'Sources the screen could not load are simply absent.')
 // On-time service is due, not late.
-// Calendar candidates now come from the intervals themselves, so meter-only cases carry only the meter interval.
-const dueNow = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [oil], service_due: [{ farm_id: farmA, equipment_id: tractor.id, interval_id: oil.id, reason: 'meter', overdue_amount: 0 }], tasks: [] }, notifications: [] })
+// Service candidates come from the intervals and readings themselves, so meter-only cases carry only the meter interval and the
+// view's rows are not needed.
+const reached = (value: number) => [reading('00000000-0000-4000-8000-000000000902', tractor.id, value, '2026-07-15')]
+const dueNow = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [oil], meter_readings: reached(250), service_due: [], tasks: [] }, notifications: [] })
 assert.deepEqual(dueNow.map((item) => [item.title, item.badge, item.urgency]), [['Service due', 'Due now', 'due']], 'An interval reached exactly is listed as due now, never as overdue by zero.')
-const slightlyOver = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [oil], service_due: [{ farm_id: farmA, equipment_id: tractor.id, interval_id: oil.id, reason: 'meter', overdue_amount: 0.25 }], tasks: [] }, notifications: [] })
+const slightlyOver = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [oil], meter_readings: reached(250.25), service_due: [], tasks: [] }, notifications: [] })
 assert.deepEqual(slightlyOver.map((item) => [item.title, item.badge, item.urgency]), [['Service overdue', 'Less than 1 hour over', 'overdue']], 'A quarter hour past the interval is late, not due now; the amount is rounded only for display.')
-const bothRules = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [{ ...oil, every_months: 6, last_done_on: '2026-01-12' }], service_due: [{ farm_id: farmA, equipment_id: tractor.id, interval_id: oil.id, reason: 'meter', overdue_amount: 12 }], tasks: [] }, notifications: [] })
+const bothRules = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [{ ...oil, every_months: 6, last_done_on: '2026-01-12' }], meter_readings: reached(262), service_due: [], tasks: [] }, notifications: [] })
 assert.deepEqual(bothRules.map((item) => [item.id, item.badge]), [['service:' + oil.id, '12 hours over']], 'An interval due on both its meter and calendar rules is one card, represented by the overdue meter row as the due-generation SQL orders.')
-const calendarOnlyLate = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [{ ...oil, every_months: 6, last_done_on: '2026-01-13' }], service_due: [{ farm_id: farmA, equipment_id: tractor.id, interval_id: oil.id, reason: 'meter', overdue_amount: 0 }], tasks: [] }, notifications: [] })
+const calendarOnlyLate = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [{ ...oil, every_months: 6, last_done_on: '2026-01-13' }], meter_readings: reached(250), service_due: [], tasks: [] }, notifications: [] })
 assert.deepEqual(calendarOnlyLate.map((item) => [item.title, item.badge]), [['Service overdue', '2 days over']], 'When only the calendar rule is late, the late row represents the interval.')
 // Calendar rows are judged against the farm's day, not the database's: the view's amount is recomputed from the interval's dates.
 assert.equal(addMonthsClamped('2026-01-31', 1), '2026-02-28', 'Month arithmetic clamps to the shorter month, as Postgres does.')
 assert.equal(addMonthsClamped('2026-11-15', 3), '2027-02-15', 'Month arithmetic crosses the year.')
-const dbAheadOfFarm = todayNextUp({ profile: owner, today: '2026-07-11', equipment: { ...workspace, service_due: [{ farm_id: farmA, equipment_id: truck.id, interval_id: tires.id, reason: 'calendar', overdue_amount: 0 }], tasks: [] }, notifications: [] })
+const calendarOnly: EquipmentTasksWorkspace = { ...workspace, meter_readings: [], tasks: [] }
+const dbAheadOfFarm = todayNextUp({ profile: owner, today: '2026-07-11', equipment: { ...calendarOnly, service_due: [{ farm_id: farmA, equipment_id: truck.id, interval_id: tires.id, reason: 'calendar', overdue_amount: 0 }], tasks: [] }, notifications: [] })
 assert.deepEqual(dbAheadOfFarm, [], 'A calendar interval the database already calls due (its day has turned) is not listed while the farm\'s day is still the day before.')
-const farmDay = todayNextUp({ profile: owner, today: '2026-07-12', equipment: { ...workspace, service_due: [{ farm_id: farmA, equipment_id: truck.id, interval_id: tires.id, reason: 'calendar', overdue_amount: 1 }], tasks: [] }, notifications: [] })
+const farmDay = todayNextUp({ profile: owner, today: '2026-07-12', equipment: { ...calendarOnly, service_due: [{ farm_id: farmA, equipment_id: truck.id, interval_id: tires.id, reason: 'calendar', overdue_amount: 1 }], tasks: [] }, notifications: [] })
 assert.deepEqual(farmDay.map((item) => [item.title, item.badge]), [['Service due', 'Due now']], 'On the farm\'s due day the interval is due now, whatever the database session counted.')
-const firstDay = todayNextUp({ profile: owner, today: '2026-07-15', equipment: { ...workspace, intervals: [oil, { ...tires, last_done_on: null }], equipment: [tractor, { ...truck, created_at: '2026-01-15T03:00:00.000Z' }], service_due: [{ farm_id: farmA, equipment_id: truck.id, interval_id: tires.id, reason: 'calendar', overdue_amount: 9 }], tasks: [] }, notifications: [] })
+const firstDay = todayNextUp({ profile: owner, today: '2026-07-15', equipment: { ...calendarOnly, intervals: [oil, { ...tires, last_done_on: null }], equipment: [tractor, { ...truck, created_at: '2026-01-15T03:00:00.000Z' }], service_due: [{ farm_id: farmA, equipment_id: truck.id, interval_id: tires.id, reason: 'calendar', overdue_amount: 9 }], tasks: [] }, notifications: [] })
 assert.deepEqual(firstDay.map((item) => item.badge), ['Due now'], 'Without a last service the machine\'s first day starts the interval, as the view does.')
 // The farm's day can also run ahead of the database's: a calendar interval due on the farm's day is listed even when the view has
 // not yet returned it, because calendar candidates come from the loaded intervals, not from the view.
-const farmAhead = todayNextUp({ profile: owner, today: '2026-07-12', equipment: { ...workspace, service_due: [], tasks: [] }, notifications: [] })
+const farmAhead = todayNextUp({ profile: owner, today: '2026-07-12', equipment: { ...calendarOnly, service_due: [] }, notifications: [] })
 assert.deepEqual(farmAhead.map((item) => [item.title, item.detail, item.badge]), [['Service due', 'Grain truck · Tire rotation', 'Due now']], 'A calendar interval due on the farm\'s day is listed even before the database\'s day turns.')
-const retiredOrSold = todayNextUp({ profile: owner, today: '2026-07-15', equipment: { ...workspace, service_due: [], intervals: [oil, { ...tires, is_active: false }], tasks: [] }, notifications: [] })
+const retiredOrSold = todayNextUp({ profile: owner, today: '2026-07-15', equipment: { ...calendarOnly, service_due: [], intervals: [oil, { ...tires, is_active: false }] }, notifications: [] })
 assert.deepEqual(retiredOrSold, [], 'An inactive interval is never a calendar candidate.')
-const soldMachine = todayNextUp({ profile: owner, today: '2026-07-15', equipment: { ...workspace, service_due: [], equipment: [tractor, { ...truck, status: 'sold' }], tasks: [] }, notifications: [] })
+const soldMachine = todayNextUp({ profile: owner, today: '2026-07-15', equipment: { ...calendarOnly, service_due: [], equipment: [tractor, { ...truck, status: 'sold' }] }, notifications: [] })
 assert.deepEqual(soldMachine, [], 'A sold machine\'s intervals are never calendar candidates, as the view excludes them.')
 // Service recorded on this device but not yet synced resets the interval on Today.
 const logEntry = (id: string, interval_id: string, equipment_id: string, service_date: string, meter_reading: number | null) => ({ id, farm_id: farmA, equipment_id, service_date, work_performed: 'Serviced', parts: null, vendor: null, cost: null, meter_reading, interval_id, created_by: userA, created_at: now, updated_at: now })
@@ -155,12 +161,24 @@ assert.equal(olderLog.length, 2, 'A log entry older than the interval\'s last se
 // leaves a meter reminder due (the server would return it after sync); a calendar rule still counts from the entry's date.
 const noReading = todayNextUp({ profile: owner, today, equipment: { ...workspace, tasks: [], service_log: [logEntry('00000000-0000-4000-8000-000000000804', oil.id, tractor.id, '2026-07-15', null), logEntry('00000000-0000-4000-8000-000000000805', tires.id, truck.id, '2026-07-14', null)] }, notifications: [] })
 assert.deepEqual(noReading.map((item) => item.detail), ['John Deere 8R 340 · Engine oil'], 'A service entry without a meter reading does not reset a meter interval on Today; the calendar interval it also covers is reset by the date.')
-const hydraulics: ServiceInterval = { ...interval('00000000-0000-4000-8000-000000000303', tractor.id, 'Hydraulic fluid', { every_months: 6, last_done_on: '2026-01-12' }), every_meter: 500 }
-const dualRuleWorkspace: EquipmentTasksWorkspace = { ...workspace, tasks: [], intervals: [oil, tires, hydraulics], service_due: [{ farm_id: farmA, equipment_id: tractor.id, interval_id: hydraulics.id, reason: 'meter', overdue_amount: 0 }] }
+const hydraulics: ServiceInterval = { ...interval('00000000-0000-4000-8000-000000000303', tractor.id, 'Hydraulic fluid', { every_months: 6, last_done_on: '2026-01-12' }), every_meter: 100, last_done_reading: 162.4 }
+const dualRuleWorkspace: EquipmentTasksWorkspace = { ...workspace, tasks: [], intervals: [tires, hydraulics], service_due: [] }
 const dualNoReading = todayNextUp({ profile: owner, today, equipment: { ...dualRuleWorkspace, service_log: [logEntry('00000000-0000-4000-8000-000000000806', hydraulics.id, tractor.id, '2026-07-15', null), logEntry('00000000-0000-4000-8000-000000000807', tires.id, truck.id, '2026-07-14', null)] }, notifications: [] })
 assert.deepEqual(dualNoReading.map((item) => [item.detail, item.badge]), [['John Deere 8R 340 · Hydraulic fluid', 'Due now']], 'On an interval with both rules, an entry without a reading resets the calendar rule but leaves the meter row due.')
-const dualWithReading = todayNextUp({ profile: owner, today, equipment: { ...dualRuleWorkspace, service_log: [logEntry('00000000-0000-4000-8000-000000000806', hydraulics.id, tractor.id, '2026-07-15', 3100), logEntry('00000000-0000-4000-8000-000000000807', tires.id, truck.id, '2026-07-14', null)] }, notifications: [] })
+const dualWithReading = todayNextUp({ profile: owner, today, equipment: { ...dualRuleWorkspace, service_log: [logEntry('00000000-0000-4000-8000-000000000806', hydraulics.id, tractor.id, '2026-07-15', 262.4), logEntry('00000000-0000-4000-8000-000000000807', tires.id, truck.id, '2026-07-14', null)] }, notifications: [] })
 assert.deepEqual(dualWithReading, [], 'The same entry with a reading resets both rules.')
+// Meter candidates come from the loaded readings, so a reading recorded on this device (the queue overlays it) that carries the
+// machine past an interval is listed before the view has been re-read, and the view's stale rows never decide.
+const crossedOffline = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [oil], tasks: [], service_due: [], meter_readings: [reading('00000000-0000-4000-8000-000000000903', tractor.id, 249, '2026-07-13'), reading('00000000-0000-4000-8000-000000000904', tractor.id, 250, '2026-07-15', '2026-07-15T13:00:00.000Z')] }, notifications: [] })
+assert.deepEqual(crossedOffline.map((item) => [item.title, item.detail, item.badge]), [['Service due', 'John Deere 8R 340 · Engine oil', 'Due now']], 'A reading recorded offline that reaches the interval lists the service even though the view returned no row.')
+const notYet = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [oil], tasks: [], meter_readings: [reading('00000000-0000-4000-8000-000000000903', tractor.id, 249, '2026-07-13')] }, notifications: [] })
+assert.deepEqual(notYet, [], 'A stale view row is ignored when the readings do not reach the interval.')
+const sameDay = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [oil], tasks: [], service_due: [], meter_readings: [reading('00000000-0000-4000-8000-000000000905', tractor.id, 251, '2026-07-15', '2026-07-15T08:00:00.000Z'), reading('00000000-0000-4000-8000-000000000906', tractor.id, 249.5, '2026-07-15', '2026-07-15T09:00:00.000Z')] }, notifications: [] })
+assert.deepEqual(sameDay, [], 'The latest reading is chosen as the view orders it (date, then entry time), not by its value; a corrected later reading below the interval clears it.')
+const sinceLastDone = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [{ ...oil, last_done_reading: 12.4 }], tasks: [], service_due: [] }, notifications: [] })
+assert.deepEqual(sinceLastDone.map((item) => item.badge), ['Due now'], 'Hours since the last-done reading decide, and a float remainder is rounded to the columns\' two decimals rather than called late.')
+const serviceReading = todayNextUp({ profile: owner, today, equipment: { ...workspace, intervals: [oil], tasks: [], service_due: [], meter_readings: [hours262, reading('00000000-0000-4000-8000-000000000907', tractor.id, 262.4, '2026-07-15', now, 'service')], service_log: [logEntry('00000000-0000-4000-8000-000000000808', oil.id, tractor.id, '2026-07-15', 262.4)] }, notifications: [] })
+assert.deepEqual(serviceReading, [], 'An unsynced service entry with a reading, and the reading the queue writes beside it, reset the meter rule on Today.')
 // Low inventory: the Inventory shelf's own rule (zero through five units on hand), only for members who can open Inventory.
 const product = (id: string, name: string, inventory_unit: InventoryProduct['inventory_unit'], is_active = true): InventoryProduct => ({ id, farm_id: farmA, product_kind: 'chemical', name, inventory_unit, epa_registration_number: null, is_restricted_use: false, signal_word: null, restricted_entry_interval_hours: null, preharvest_interval_hours: null, max_label_rate: null, max_label_rate_unit: null, max_label_rate_basis: null, commodity_id: null, variety_name: null, fertilizer_analysis: null, manufacturer: null, is_active, created_at: now, updated_at: now })
 const atrazine = product('00000000-0000-4000-8000-000000000701', 'Atrazine 4L', 'gal'); const roundup = product('00000000-0000-4000-8000-000000000702', 'Roundup PowerMax', 'gal'); const seed = product('00000000-0000-4000-8000-000000000703', 'DKC 62-08', 'seed_unit'); const retired = product('00000000-0000-4000-8000-000000000704', 'Old blend', 'gal', false); const shortfall = product('00000000-0000-4000-8000-000000000705', 'Miscounted', 'lb'); const never = product('00000000-0000-4000-8000-000000000706', 'Never received', 'qt')
