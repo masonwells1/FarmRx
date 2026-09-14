@@ -1,6 +1,7 @@
 import { Window } from 'happy-dom'
 import React, { createElement } from 'react'
 import { act } from 'react'
+import { MemoryRouter } from 'react-router'
 import { createRoot } from 'react-dom/client'
 import { HarvestPage } from './HarvestModule'
 import type { CropAssignment, FieldsData } from './data/fields'
@@ -42,7 +43,7 @@ const container = document.createElement('div'); document.body.append(container)
 let initialUnmounted = false
 let errorContainer: HTMLDivElement | null = null; let errorRoot: ReturnType<typeof createRoot> | null = null
 try {
-  await act(async () => { root.render(createElement(HarvestPage, { harvestRepository: repository })); await flush() })
+  await act(async () => { root.render(createElement(MemoryRouter, null, createElement(HarvestPage, { harvestRepository: repository }))); await flush() })
   const enter = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Enter harvest')
   assert(enter, 'Harvest did not render its Enter harvest action.')
   await act(async () => { enter.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve() })
@@ -67,7 +68,7 @@ try {
   await act(async () => { root.unmount() }); initialUnmounted = true; container.remove()
   errorContainer = document.createElement('div'); document.body.append(errorContainer); errorRoot = createRoot(errorContainer)
   const failingRepository: HarvestRepository = { getData: async () => data([crop(cropId)]), saveHarvest: async (value) => { setSaveReceipt(value.crop_assignment_id, 'needs attention'); throw new Error('terminal harvest validation failure') } }
-  await act(async () => { errorRoot!.render(createElement(HarvestPage, { harvestRepository: failingRepository })); await flush() })
+  await act(async () => { errorRoot!.render(createElement(MemoryRouter, null, createElement(HarvestPage, { harvestRepository: failingRepository }))); await flush() })
   const errorEnter = [...errorContainer.querySelectorAll('button')].find((button) => button.textContent === 'Enter harvest')
   assert(errorEnter, 'The error harness did not render Enter harvest.')
   await act(async () => { errorEnter.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve() })

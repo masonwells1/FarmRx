@@ -64,3 +64,11 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Finding 3 (P1, tile hand-offs):** Scouting note and Harvest opened module lists, and Grain delivery opened the contracts tab whose first control is the new-sale form, so the tile most tied to money could produce the wrong record. Every tile that opens a form now carries an intent: Scouting opens the new-note form on the first field; Harvest opens the harvest entry for the first crop of the first field; Grain delivery opens the contracts tab in delivery mode, with the new-sale form set aside behind a "Record a sale instead" button, a plain notice that nothing is written until Record delivery is tapped, and focus on the first contract's delivered bushels. Each form is the module's own; no new write path. Proved by the owner browser journey, which now taps all six tiles and asserts each labeled form, and asserts that the "Add contract" button is absent in delivery mode until the farmer asks for it.
 - **Not changed:** the alerts page itself still lists every farm's alerts as before; FD-1 changed only Today's pure snapshot. If Mason wants the alerts page scoped the same way, that is a separate decision.
 - **Proof:** recorded on the pull request with the repair commit.
+
+## FD-005 — Foundation repair: Harvest regression rendered outside a router
+
+- **Date/time:** 2026-09-14 09:16 -05:00 (`America/Chicago`).
+- **Trigger:** Foundation failed on `1842d51` (pull request #46) in the fast regression suite: `HarvestModule.receipt.regression.tsx` renders `HarvestPage` without a router, and FD-004's harvest intent gave that page a `useLocation()` call. The same class as FD-002.
+- **Repair:** both renders in that regression now sit inside a `MemoryRouter`, matching the Field Log and Equipment regressions. No product code changed.
+- **Lesson recorded (and this time applied before pushing):** FD-002 already said the whole `npm run regression` chain is part of the pre-push proof; FD-004 ran only the focused regressions. Every step of the chain that can run without PowerShell was run locally before this commit, and any module page that gains a router hook must be checked against every regression that renders it.
+- **Proof:** recorded on the pull request with the repair commit.
