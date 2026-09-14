@@ -90,11 +90,18 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
     // interval's months), and judges them against the farm's day, the same day the tasks use. A calendar row the view returned
     // is ignored in favour of that; meter rows carry no date and are taken as the view reports them.
     type Due = EquipmentTasksWorkspace['service_due'][number]
-    const meterRows = equipment.service_due.filter((due) => due.reason === 'meter').map((due) => ({ due, amount: due.overdue_amount }))
+    // Service recorded on this device but not yet synced sits in the service log ahead of the interval's last-done values (the
+    // server resets those when the entry lands). A log entry for the interval dated after its last service means the interval
+    // has been reset since the due rows were computed, so that interval is not listed; once synced the dates agree again.
+    const latestServiceOn = new Map<string, string>()
+    for (const entry of equipment.service_log) if (entry.interval_id !== null && (latestServiceOn.get(entry.interval_id) ?? '') < entry.service_date) latestServiceOn.set(entry.interval_id, entry.service_date)
+    const servicedSince = (interval: EquipmentTasksWorkspace['intervals'][number], since: string) => (latestServiceOn.get(interval.id) ?? '') > since
+    const meterRows = equipment.service_due.filter((due) => due.reason === 'meter').filter((due) => { const interval = intervals.get(due.interval_id); return !interval || !servicedSince(interval, interval.last_done_on ?? '') }).map((due) => ({ due, amount: due.overdue_amount }))
     const calendarRows = equipment.intervals.flatMap((interval): Array<{ due: Due; amount: number }> => {
       const machine = machines.get(interval.equipment_id)
       if (!interval.is_active || interval.every_months === null || !machine || machine.status !== 'active') return []
-      const dueOn = addMonthsClamped(interval.last_done_on ?? machine.created_at.slice(0, 10), interval.every_months)
+      const lastServiceOn = [interval.last_done_on ?? machine.created_at.slice(0, 10), latestServiceOn.get(interval.id) ?? ''].sort()[1]
+      const dueOn = addMonthsClamped(lastServiceOn, interval.every_months)
       if (dueOn > today) return []
       const amount = daysBetween(dueOn, today)
       return [{ due: { farm_id: interval.farm_id, equipment_id: interval.equipment_id, interval_id: interval.id, reason: 'calendar', overdue_amount: amount }, amount }]
