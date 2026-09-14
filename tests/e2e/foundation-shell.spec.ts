@@ -219,6 +219,8 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, session(activeUserId).user); return }
     if (url.pathname === '/auth/v1/logout') { await fulfillJson(route, {}); return }
     if (emptyUnknownReads && rest && Object.hasOwn(grainReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, grainReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, grainRows(rest, farm)); return }
+    // The profitability workspace load probes for the U of I badge column when the farm has no cost lines (an undefined column answers 42703 live); the mock's schema has it.
+    if (emptyUnknownReads && rest === 'budget_cost_lines' && route.request().method() === 'GET' && exactQuery(url, { select: 'university_default_amount', farm_id: `eq.${requestedFarm(url).id}`, limit: '1' })) { await fulfillJson(route, []); return }
     if (emptyUnknownReads && rest && Object.hasOwn(profitabilityReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, profitabilityReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, []); return }
     unexpected.push(`${route.request().method()} ${url.pathname}`)
     await route.abort('blockedbyclient')
