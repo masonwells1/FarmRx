@@ -116,7 +116,9 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
       const machine = machines.get(interval.equipment_id); const reading = latestReading.get(interval.equipment_id)
       if (!interval.is_active || interval.every_meter === null || !machine || machine.status !== 'active' || !reading) return []
       const unsynced = latestReadingEntry.get(interval.id)
-      const lastDoneReading = unsynced && unsynced.service_date > (interval.last_done_on ?? '') ? unsynced.meter_reading! : interval.last_done_reading
+      // On or after the last service day: the server picks the newest reading-bearing entry by date, then entry time, then id,
+      // so a second service later the same day is that entry, and on the synced day the entry's reading is the interval's own.
+      const lastDoneReading = unsynced && unsynced.service_date >= (interval.last_done_on ?? '') ? unsynced.meter_reading! : interval.last_done_reading
       const amount = Math.round((reading.reading - (lastDoneReading ?? 0) - interval.every_meter) * 100) / 100
       if (amount < 0) return []
       return [{ due: { farm_id: interval.farm_id, equipment_id: interval.equipment_id, interval_id: interval.id, reason: 'meter', overdue_amount: amount }, amount }]
@@ -181,11 +183,11 @@ export type TodaySprayCard = { level: SprayLevel; headline: string; details: str
 
 const dailyFor = (bundle: ForecastBundle, time: string) => bundle.daily.find((day) => day.date === time.slice(0, 10)) ?? bundle.daily[0]
 const naiveWallClock = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
-/** A forecast's times are the field's wall clock at fetch time. Moving that clock forward by the cache age gives the field's wall
- * clock now, in the same notation, so hours already gone are never offered as a window. */
-export function shiftWallClock(time: string, byMs: number): string {
-  if (!naiveWallClock.test(time)) return new Date(Date.parse(time) + byMs).toISOString()
-  const date = new Date(fieldWallClockDate(time).getTime() + byMs)
+/** The field's wall clock at an instant, in the forecast's own notation (a naive local time), from the UTC offset the provider
+ * reported with the forecast. The forecast's observation time is not used as a clock: the provider stamps its current conditions
+ * at the last observation interval, which can sit up to a quarter hour behind the moment they were fetched. */
+export function fieldWallClockNow(nowMs: number, utcOffsetSeconds: number): string {
+  const date = new Date(nowMs + utcOffsetSeconds * 1000)
   const pad = (part: number) => String(part).padStart(2, '0')
   return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`
 }
@@ -200,11 +202,14 @@ export function todaySprayWindow(fields: readonly Field[], readForecast: (latitu
   for (const field of fields) {
     if (!field.is_active || field.latitude === null || field.longitude === null) continue
     const bundle = readForecast(field.latitude, field.longitude)
-    if (!bundle || !isActionablyFresh(bundle, nowMs)) continue
-    // Judge the window from the field's wall clock now, not from the moment the forecast was fetched. The conditions are the
-    // fetched current observation until an hourly sample newer than it has arrived (an hourly row at or before now but after the
-    // observation), and hours already passed never count.
-    const now = shiftWallClock(bundle.current.time, Math.max(0, nowMs - Date.parse(bundle.fetched_at)))
+    // A forecast saved before the field's UTC offset was recorded cannot place the field's clock now and is not judged; the
+    // caller's Weather link stands in until the Weather page saves a current one.
+    if (!bundle || typeof bundle.utc_offset_seconds !== 'number' || !isActionablyFresh(bundle, nowMs)) continue
+    // Judge the window from the field's wall clock now, placed from this instant and the field's offset, not from the moment the
+    // forecast was fetched or the observation's own stamp. The conditions are the fetched current observation until an hourly
+    // sample newer than it has arrived (an hourly row at or before now but after the observation), and hours already passed
+    // never count.
+    const now = fieldWallClockNow(nowMs, bundle.utc_offset_seconds)
     const nowAt = wallClockMs(now); const observedAt = wallClockMs(bundle.current.time)
     const sample = [...bundle.hourly].filter((hourly) => wallClockMs(hourly.time) <= nowAt && wallClockMs(hourly.time) > observedAt).sort((a, b) => wallClockMs(b.time) - wallClockMs(a.time))[0] ?? bundle.current
     const day = dailyFor(bundle, now)
