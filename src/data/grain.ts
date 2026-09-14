@@ -60,7 +60,7 @@ export interface GrainContract extends PositionScope {
   updated_at: string
 }
 export interface GrainContractDelivery { id: string; farm_id: string; grain_contract_id: string; bushels: number; delivered_on: string; note: string | null; created_at: string; allow_overdelivery?: boolean }
-export interface GrainCapabilities { bin_movements: boolean; contract_price_finalization: boolean; contract_deliveries: boolean }
+export interface GrainCapabilities { bin_movements: boolean; contract_price_finalization: boolean; contract_deliveries: boolean; /** False until the slice-3 tables exist on the live database; the screens then keep their session-only behavior. */ persisted_settings?: boolean }
 
 export interface MarketingPlanTarget extends PositionScope {
   id: string
@@ -96,13 +96,20 @@ export interface MarketingAlertRule extends PositionScope { id: string; rule_typ
 export interface FirmOffer extends PositionScope { id: string; buyer: string; offer_type: FirmOfferType; bushels: number; price: number | null; basis: number | null; contract_month: string | null; expires_on: string | null; delivery_location: string | null; notes: string | null; status: FirmOfferStatus; filled_contract_id: string | null; created_at: string; updated_at: string }
 export interface FirmOfferFill { contract: GrainContract; offer: FirmOffer }
 export interface GrainAlertSettings { farm_id: string; alert_emails: string[]; updated_at: string }
+/** The farmer's own planning limit for one crop-year position; null means no limit set. Never an insurance guarantee. */
+export interface GrainSaleLimit extends PositionScope { id: string; sale_limit_bushels: number | null; created_at: string; updated_at: string }
+export type GrainCarryMode = 'monthly' | 'flat'
+export interface GrainCarrySettings { farm_id: string; mode: GrainCarryMode; monthly_rate_cents_per_bu_month: number; flat_rate_per_bu: number; interest_rate_pct: number; trucking_per_bu: number; updated_at: string }
+export interface GrainCarryGridRow { market_price: number | null; basis: number | null }
+/** Thirteen delivery-month rows (harvest plus twelve stored months) for one production estimate. */
+export interface GrainCarryGrid { id: string; farm_id: string; production_estimate_id: string; harvest_month: number; default_basis: number; rows: GrainCarryGridRow[]; updated_at: string }
 
 /** Mirrors public.usda_report_dates in 20260711222703_module2_grain.sql. */
 export interface UsdaReportDate { id: string; report_name: string; report_date: string; release_at: string | null; source_url: string | null; notes: string | null; created_at: string; updated_at: string }
 
 export interface FuturesQuote { symbol: 'ZC' | 'ZS' | 'ZW'; contract: string; label: string; price: number; crop_year: number; new_crop: boolean; delayed: true; as_of: string }
 export interface MarketDataService { getQuotes(): Promise<FuturesQuote[]> }
-export interface GrainData { production_estimates: ProductionEstimate[]; grain_contracts: GrainContract[]; grain_contract_deliveries: GrainContractDelivery[]; marketing_plan_targets: MarketingPlanTarget[]; insurance_units: InsuranceUnit[]; grain_bins: GrainBin[]; bin_inventory: BinInventory[]; bin_transactions: BinTransaction[]; cash_bids: CashBid[]; usda_report_dates: UsdaReportDate[]; marketing_alert_rules: MarketingAlertRule[]; firm_offers: FirmOffer[]; grain_alert_settings: GrainAlertSettings | null; capabilities?: GrainCapabilities }
+export interface GrainData { production_estimates: ProductionEstimate[]; grain_contracts: GrainContract[]; grain_contract_deliveries: GrainContractDelivery[]; marketing_plan_targets: MarketingPlanTarget[]; insurance_units: InsuranceUnit[]; grain_bins: GrainBin[]; bin_inventory: BinInventory[]; bin_transactions: BinTransaction[]; cash_bids: CashBid[]; usda_report_dates: UsdaReportDate[]; marketing_alert_rules: MarketingAlertRule[]; firm_offers: FirmOffer[]; grain_alert_settings: GrainAlertSettings | null; grain_sale_limits: GrainSaleLimit[]; grain_carry_settings: GrainCarrySettings | null; grain_carry_grids: GrainCarryGrid[]; capabilities?: GrainCapabilities }
 export interface GrainWorkspace extends GrainData { fields: FieldsData }
 export interface GrainRepository {
   getData(): Promise<GrainWorkspace>
@@ -123,6 +130,10 @@ export interface GrainRepository {
   upsertGrainBin(bin: GrainBin): Promise<void>
   appendBinTransaction(transaction: BinTransaction): Promise<void>
   saveGrainAlertSettings(settings: GrainAlertSettings): Promise<void>
+  /** These three return the saved row so the screen can adopt the server's updated_at without a full workspace reload. */
+  saveGrainSaleLimit(limit: GrainSaleLimit): Promise<GrainSaleLimit>
+  saveGrainCarrySettings(settings: GrainCarrySettings): Promise<GrainCarrySettings>
+  saveGrainCarryGrid(grid: GrainCarryGrid): Promise<GrainCarryGrid>
 }
 export interface GrainServices { grainRepository: GrainRepository; marketDataService: MarketDataService; profitabilityRepository: ProfitabilityRepository; createGrainId: () => string }
 export interface GrainContext { commodity: Commodity; data: GrainWorkspace }

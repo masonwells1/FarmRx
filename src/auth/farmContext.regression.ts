@@ -52,6 +52,29 @@ const farm = (id: string, userId: string, name: string, shareWithRep = false) =>
   Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
 }
 
+// Settings saves in flight (or waiting behind one) are not in a durable queue yet;
+// the farm switcher must warn until they finish, and only for that farm.
+;{
+  const { beginPendingSettingsWork } = await import('../data/pendingSettingsWork')
+  const done = beginPendingSettingsWork({ userId: userA, farmId: farmA })
+  assert.equal(hasPendingFarmWork(userA, farmA), true, 'Farm switching ignored an in-flight settings save.')
+  assert.equal(hasPendingFarmWork(userA, farmB), false, 'In-flight settings work on one farm blocked a switch to another.')
+  assert.equal(hasPendingFarmWork(userB, farmA), false, 'Another account on the same farm was blocked by the first account\'s in-flight settings save.')
+  done()
+  assert.equal(hasPendingFarmWork(userA, farmA), false, 'Finished settings work still blocked the farm switch.')
+}
+
+// A settings draft this browser keeps for an account and farm is work waiting for that farm; other accounts and farms are unaffected.
+;{
+  const { settingsDraftKey } = await import('../data/settingsDrafts')
+  storage.setItem(settingsDraftKey({ projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA }, 'carry-settings', 'r1'), JSON.stringify({ version: 1, entries: [{ key: 'carry-settings', payload: {}, savedAt: '2026-09-13T00:00:00.000Z', revision: 'r1' }] }))
+  assert.equal(hasPendingFarmWork(userA, farmA), true, 'A kept settings draft did not count as pending farm work.')
+  assert.equal(hasPendingFarmWork(userB, farmA), false, 'Another account saw the first account\'s settings draft as its own pending work.')
+  assert.equal(hasPendingFarmWork(userA, farmB), false, 'A settings draft for one farm blocked a switch to another.')
+  storage.removeItem(settingsDraftKey({ projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA }, 'carry-settings', 'r1'))
+  assert.equal(hasPendingFarmWork(userA, farmA), false, 'A cleared settings draft still counted as pending farm work.')
+}
+
 let currentUser = userA
 let currentToken = 'session-user-a'
 let releaseA!: (value: { data: ReturnType<typeof farm>[]; error: null }) => void

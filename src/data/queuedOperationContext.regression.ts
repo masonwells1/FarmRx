@@ -289,7 +289,7 @@ const grainAFinalLockStarted = new Promise<void>((resolve) => { sawGrainAFinalLo
 const grainAFinalLockRelease = new Promise<void>((resolve) => { releaseGrainAFinalLock = resolve })
 const grainWorkspaceFor = (userId: string) => ({
   production_estimates: [], grain_contracts: [{ id: userId, buyer: userId === userA ? 'User A grain' : 'User B grain' }], grain_contract_deliveries: [], marketing_plan_targets: [], insurance_units: [],
-  grain_bins: [], bin_inventory: [], bin_transactions: [], cash_bids: [], usda_report_dates: [], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null, capabilities: {}, fields: { farm: { id: farmA } },
+  grain_bins: [], bin_inventory: [], bin_transactions: [], cash_bids: [], usda_report_dates: [], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null, grain_sale_limits: [], grain_carry_settings: null, grain_carry_grids: [], capabilities: {}, fields: { farm: { id: farmA } },
 })
 const grainFinalRace = new QueuedGrainRepository({ async getData() { return grainWorkspaceFor(activeGrainUser) } } as never, { getContext: async () => ({ userId: activeGrainUser, farmId: farmA }), projectRef: `${projectRef}-grain-final-lock`, storage: memory(), createId: () => id(31), clock: () => stamp, isOffline: () => false })
 const grainFinalRaceInternal = grainFinalRace as unknown as { locked: (queue: GrainWriteQueue, task: (verify: () => void) => Promise<unknown>) => Promise<unknown>; workspace: { grain_contracts: Array<{ buyer: string }> } | null }

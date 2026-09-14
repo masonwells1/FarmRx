@@ -26,6 +26,9 @@ function aggregate(): SyncState {
 // recompute the aggregate only when a module's state is set.
 let snapshot: SyncState = aggregate()
 export function getSyncStatus() { return snapshot }
+export type SyncModule = Module
+/** One module's own state, for a screen that must refetch once its offline queue has replayed (rows' versions move on the server). */
+export function getModuleSyncStatus(module: SyncModule): SyncState { return states[module] }
 export function subscribeSyncStatus(listener: () => void) { listeners.add(listener); return () => listeners.delete(listener) }
 export function setModuleSyncStatus(module: Module, next: SyncState) { states[module] = next; snapshot = aggregate(); listeners.forEach((listener) => listener()) }
 export function setModuleSyncRetryAction(module: Module, action: (() => void | Promise<unknown>) | null) { if (action) retries[module] = action; else delete retries[module] }

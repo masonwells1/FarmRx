@@ -1,11 +1,13 @@
 import { strict as assert } from 'node:assert'
-import { dismissRevokedFarmRecovery, quarantineRevokedFarmWork, readRevokedFarmRecovery, revokedFarmRecoveryKey } from './revokedFarmRecovery'
+import { dismissRevokedFarmRecovery, quarantineRevokedFarmWork, quarantineTiedSettingsDrafts, readRevokedFarmRecovery, revokedFarmRecoveryKey } from './revokedFarmRecovery'
 import { legacyScoutingCleanupOutboxKey, scoutingCleanupOutboxKey, unownedScoutingCleanupRecoveryKey } from './scoutingCleanupOutbox'
 import { captureFarmRevocationFence, resetFarmGrantFromLive, resetFarmRevokedFromLive } from './farmRevocationFence'
 import { farmerError } from '../lib/farmerErrors'
 import { beginSoilRxAttachmentCustody, confirmSoilRxAttachmentRemoval, isSoilRxStoredCleanupEntry, readSoilRxCleanupOutbox, soilRxCleanupOutboxKey } from './soilRxCleanupOutbox'
 import { soilMeasurementKeys } from './soilRx'
 import { createSoilRxQueueEntry } from './soilRxWriteQueue'
+import { settingsDraftKey } from './settingsDrafts'
+import { universityDefaultKey } from './universityDefaultProvenance'
 
 class MemoryStorage {
   values = new Map<string, string>(); failWrites = false
@@ -80,3 +82,42 @@ const soilEntry = createSoilRxQueueEntry({ version: 1, module: 'soilRx', kind: '
 { const storage = new MemoryStorage(); storage.setItem(key('farm-rx-write-queue'), envelope()); quarantineRevokedFarmWork(storage, { projectRef: project, userId: user, farmId: farm }, stamp); assert.equal(readRevokedFarmRecovery(storage, project, 'user-b').length, 0); assert.equal(readRevokedFarmRecovery(storage, 'other-project', user).length, 0); assert.equal(storage.getItem(key('farm-rx-write-queue')), null) }
 
 console.log('revokedFarmRecovery regression passed')
+
+// Unsaved Grain settings drafts (private financial values kept in the browser per account and farm, one storage key per draft) leave
+// active storage with the rest of a revoked farm's work: each captured into the recovery vault and removed from its key, other farms
+// untouched; an empty key is simply removed; an unreadable one stops the quarantine before anything is cleared.
+{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }
+  const carryKey = settingsDraftKey(scope, 'carry-settings', 'r1'); const limitKey = settingsDraftKey(scope, 'sale-limit:x|2026|corn||', 'r2'); const otherKey = settingsDraftKey({ ...scope, farmId: otherFarm }, 'carry-settings', 'r1')
+  const carry = { version: 1, entries: [{ key: 'carry-settings', payload: { draft: { mode: 'flat', flatRatePerBu: 0.33 }, base: null }, savedAt: stamp, revision: 'r1' }] }
+  const limit = { version: 1, entries: [{ key: 'sale-limit:x|2026|corn||', payload: { key: 'x|2026|corn||', value: 50000, base: null }, savedAt: stamp, revision: 'r2' }] }
+  storage.setItem(carryKey, JSON.stringify(carry)); storage.setItem(limitKey, JSON.stringify(limit)); storage.setItem(otherKey, JSON.stringify(carry))
+  assert.equal(quarantineRevokedFarmWork(storage, scope, stamp), 2)
+  const saved = readRevokedFarmRecovery(storage, project, user); assert.equal(saved.length, 2); assert(saved.every((record) => record.kind === 'settings_drafts')); assert.deepEqual(saved.map((record) => record.originalKey).sort(), [carryKey, limitKey].sort())
+  assert.equal(JSON.stringify(saved.find((record) => record.originalKey === limitKey)?.payload), JSON.stringify(limit))
+  assert.equal(storage.getItem(carryKey), null); assert.equal(storage.getItem(limitKey), null); assert.equal(storage.getItem(otherKey), JSON.stringify(carry))
+  assert.equal(quarantineRevokedFarmWork(storage, scope, stamp), 0) }
+{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const key = settingsDraftKey(scope, 'carry-settings', 'r9'); storage.setItem(key, JSON.stringify({ version: 1, entries: [] })); assert.equal(quarantineRevokedFarmWork(storage, scope, stamp), 0); assert.equal(storage.getItem(key), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }
+// Two tabs wrote the same Grain settings draft at the same moment: the write not restored is captured into the vault under its own
+// key with the reason `simultaneous_edit`, then removed from active storage; the restored write and other drafts are untouched; the
+// same write captured again adds nothing; a vault that cannot be written leaves the key in place.
+{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }
+  const loser = { key: 'carry-settings', payload: { draft: { mode: 'flat', flatRatePerBu: 0.41 }, base: null }, savedAt: stamp, revision: `${stamp}#77#aaaaaaaa` }
+  const loserKey = settingsDraftKey(scope, 'carry-settings', loser.revision); const winnerKey = settingsDraftKey(scope, 'carry-settings', `${stamp}#77#bbbbbbbb`); const otherKey = settingsDraftKey(scope, 'carry-grid:x', 'r3')
+  storage.setItem(loserKey, JSON.stringify({ version: 1, entries: [loser] })); storage.setItem(winnerKey, JSON.stringify({ version: 1, entries: [{ ...loser, payload: { draft: { mode: 'flat', flatRatePerBu: 0.42 }, base: null }, revision: `${stamp}#77#bbbbbbbb` }] })); storage.setItem(otherKey, JSON.stringify({ version: 1, entries: [{ key: 'carry-grid:x', payload: { estimateId: 'x' }, savedAt: stamp, revision: 'r3' }] }))
+  assert.equal(quarantineTiedSettingsDrafts(storage, scope, [loser], stamp), 1)
+  const saved = readRevokedFarmRecovery(storage, project, user); assert.equal(saved.length, 1); assert.equal(saved[0]?.kind, 'settings_drafts'); assert.equal(saved[0]?.reason, 'simultaneous_edit'); assert.equal(saved[0]?.originalKey, loserKey); assert.equal(saved[0]?.capturedAt, stamp); assert.equal(JSON.stringify(saved[0]?.payload), JSON.stringify({ version: 1, entries: [loser] }))
+  assert.equal(storage.getItem(loserKey), null); assert.notEqual(storage.getItem(winnerKey), null); assert.notEqual(storage.getItem(otherKey), null)
+  storage.setItem(loserKey, JSON.stringify({ version: 1, entries: [loser] })); assert.equal(quarantineTiedSettingsDrafts(storage, scope, [loser], stamp), 0); assert.equal(storage.getItem(loserKey), null); assert.equal(readRevokedFarmRecovery(storage, project, user).length, 1)
+  dismissRevokedFarmRecovery(storage, project, user, saved[0]!.id); assert.equal(readRevokedFarmRecovery(storage, project, user).length, 0)
+  const blocked = new MemoryStorage(); blocked.setItem(loserKey, JSON.stringify({ version: 1, entries: [loser] })); blocked.failWrites = true
+  assert.throws(() => quarantineTiedSettingsDrafts(blocked, scope, [loser], stamp)); assert.notEqual(blocked.getItem(loserKey), null); assert.equal(blocked.getItem(revokedFarmRecoveryKey(project, user)), null)
+  assert.equal(quarantineTiedSettingsDrafts(storage, scope, [], stamp), 0) }
+{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const key = settingsDraftKey(scope, 'carry-settings', 'r9'); storage.setItem(key, '{"version":1,"entries":[{"key":1}]}'); assert.throws(() => quarantineRevokedFarmWork(storage, scope, stamp)); assert.notEqual(storage.getItem(key), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }
+
+// A seeded U of I amount kept for a budget line while the badge column is missing is captured into custody with the farm's
+// other work and removed from active storage; another farm's entry stays; an unreadable one stops the capture.
+{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const mine = universityDefaultKey(scope, '00000000-0000-4000-8000-000000000501'); const other = universityDefaultKey({ ...scope, farmId: otherFarm }, '00000000-0000-4000-8000-000000000502'); storage.setItem(mine, JSON.stringify({ version: 1, amount: 120 })); storage.setItem(other, JSON.stringify({ version: 1, amount: 130 }))
+  assert.equal(quarantineRevokedFarmWork(storage, scope, stamp), 1); assert.equal(storage.getItem(mine), null); assert.notEqual(storage.getItem(other), null)
+  const saved = readRevokedFarmRecovery(storage, project, user); assert.equal(saved.length, 1); assert.equal(saved[0]!.kind, 'university_defaults'); assert.equal(saved[0]!.originalKey, mine); assert.deepEqual(saved[0]!.payload, { version: 1, amount: 120 })
+  assert.equal(quarantineRevokedFarmWork(storage, scope, stamp), 0) }
+{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const key = universityDefaultKey(scope, '00000000-0000-4000-8000-000000000503'); storage.setItem(key, '{"version":1,"amount":"x"}'); assert.throws(() => quarantineRevokedFarmWork(storage, scope, stamp)); assert.notEqual(storage.getItem(key), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }

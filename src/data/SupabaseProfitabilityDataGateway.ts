@@ -4,10 +4,24 @@ import type { BudgetFieldAllocation, CropBudget, EquipmentCostSnapshotRequest, I
 import { DELETE_PERMISSION_MESSAGE, SAVE_DURABILITY_UPDATE_MESSAGE } from './saveDurability'
 import { optimisticSave } from './optimisticSave'
 import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
+import { BADGE_PROVENANCE_NOT_KEPT, rememberLegacyDefault } from './universityDefaultProvenance'
+import { supabaseConfig } from '../lib/supabaseConfig'
 
 function rows(data: unknown, error: { message: string } | null): unknown[] { if (error) throw error; if (!Array.isArray(data)) throw new Error('Farm Rx could not load the complete profitability workspace.'); return data }
 function row(data: unknown, error: { message: string } | null): unknown { if (error) throw error; if (!data || typeof data !== 'object') throw new Error('Farm Rx could not confirm the profitability save. Please try again.'); return data }
 function budgetColumns(value: CropBudget & { farm_id: string }) { const { id, farm_id, crop_year, commodity_id, operating_entity_id, enterprise_label, name, expected_yield_per_acre, expected_price_per_bushel, rp_coverage_pct, rp_aph_yield, rp_projected_price, rp_premium_per_acre, copied_from_budget_id } = value; return { id, farm_id, crop_year, commodity_id, operating_entity_id, enterprise_label, name, expected_yield_per_acre, expected_price_per_bushel, rp_coverage_pct, rp_aph_yield, rp_projected_price, rp_premium_per_acre, copied_from_budget_id, notes: null } }
+export { BADGE_PROVENANCE_NOT_KEPT }
+/** PGRST204 means the badge column is not on the live database yet (slice-3 migration pending): keep the seeded amount in this browser
+ * first (`retain`, keyed by project, account, and farm, so the badge is written into the column once it exists), then save the line
+ * without the column. If the browser refuses to keep it, nothing is written and the save fails closed with `BADGE_PROVENANCE_NOT_KEPT`. */
+export async function saveCostLineWithBadgeFallback<T>(attempt: (columns: Record<string, unknown>) => Promise<T>, columns: Record<string, unknown>, universityDefaultAmount: number | null, retain: (lineId: string, amount: number) => boolean): Promise<T> {
+  try { return await attempt({ ...columns, university_default_amount: universityDefaultAmount }) }
+  catch (error) {
+    if ((error as { code?: string } | null)?.code !== 'PGRST204') throw error
+    if (universityDefaultAmount !== null && typeof columns.id === 'string' && !retain(columns.id, universityDefaultAmount)) throw new Error(BADGE_PROVENANCE_NOT_KEPT)
+    return attempt(columns)
+  }
+}
 function costLineColumns(value: BudgetCostLineWrite & { farm_id: string }) { const { id, farm_id, budget_id, category, name, amount_per_acre, sort_order } = value; return { id, farm_id, budget_id, category, label: name, amount_per_acre, source_kind: 'manual' as const, source_record_id: null, sort_order, notes: null } }
 function allocationColumns(value: BudgetFieldAllocation & { farm_id: string }) { const { id, farm_id, budget_id, crop_assignment_id, allocated_acres, expected_yield_override, expected_price_override } = value; return { id, farm_id, budget_id, crop_assignment_id, allocated_acres, expected_yield_override, expected_price_override, notes: null } }
 const insuranceKeys = ['rp_coverage_pct', 'rp_aph_yield', 'rp_projected_price', 'rp_premium_per_acre'] as const
@@ -52,11 +66,24 @@ export class SupabaseProfitabilityDataGateway implements ProfitabilityDataGatewa
     ])
     if (permission.error) throw permission.error
     if (permission.data !== true) throw new Error('PROFITABILITY_PRIVATE_ACCESS_DENIED')
-    return { budgets: rows(budgets.data, budgets.error), cost_lines: rows(cost_lines.data, cost_lines.error), matrix_steps: rows(matrix_steps.data, matrix_steps.error), allocations: rows(allocations.data, allocations.error), equipment: rows(equipment.data, equipment.error) }
+    const lines = rows(cost_lines.data, cost_lines.error)
+    return { budgets: rows(budgets.data, budgets.error), cost_lines: lines, matrix_steps: rows(matrix_steps.data, matrix_steps.error), allocations: rows(allocations.data, allocations.error), equipment: rows(equipment.data, equipment.error), capabilities: { university_default_amount: await this.badgeColumnPresent(farmId, lines) } }
+  }
+  /** Whether the badge column exists: read off a loaded line when there is one, otherwise a one-column probe (an undefined column answers 42703). */
+  private async badgeColumnPresent(farmId: string, lines: unknown[]): Promise<boolean | null> {
+    const sample = lines.find((row) => !!row && typeof row === 'object')
+    if (sample) return Object.hasOwn(sample, 'university_default_amount')
+    const probe = await supabase.from('budget_cost_lines').select('university_default_amount').eq('farm_id', farmId).limit(1)
+    if (!probe.error) return true
+    const code = (probe.error as { code?: string }).code
+    return code === '42703' || /university_default_amount/.test(probe.error.message ?? '') ? false : null
   }
   async upsertBudget(farmId: string, value: CropBudget, context: FarmOperationContext) { return optimisticSave('crop_budgets', farmId, value.id, budgetColumns({ ...value, farm_id: farmId }), value.updated_at, context) }
   async patchBudgetInsurance(farmId: string, budgetId: string, patch: InsuranceBudgetPatch, expectedUpdatedAt: string | null | undefined, context: FarmOperationContext) { return optimisticSave('crop_budgets', farmId, budgetId, insuranceColumns(patch), expectedUpdatedAt, context) }
-  async upsertCostLine(farmId: string, value: BudgetCostLineWrite, context: FarmOperationContext) { return optimisticSave('budget_cost_lines', farmId, value.id, costLineColumns({ ...value, farm_id: farmId }), value.updated_at, context) }
+  async upsertCostLine(farmId: string, value: BudgetCostLineWrite, context: FarmOperationContext) {
+    const columns = costLineColumns({ ...value, farm_id: farmId })
+    return saveCostLineWithBadgeFallback((attempt) => optimisticSave('budget_cost_lines', farmId, value.id, attempt, value.updated_at, context), columns, value.university_default_amount ?? null, (lineId, amount) => rememberLegacyDefault({ projectRef: supabaseConfig.projectRef, userId: context.userId, farmId }, lineId, amount))
+  }
   async deleteCostLine(farmId: string, id: string, context: FarmOperationContext) { return confirmDelete('budget_cost_lines', farmId, id, context) }
   async equipmentCostSnapshot(farmId: string, request: EquipmentCostSnapshotRequest, action: 'preview' | 'insert' | 'replace', context: FarmOperationContext) {
     const { data, error } = await bindFarmOperationRequest(supabase.rpc('upsert_equipment_cost_snapshot', {

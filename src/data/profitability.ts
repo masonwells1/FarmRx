@@ -33,6 +33,8 @@ export interface BudgetCostLine {
   source_kind?: CostLineSourceKind
   source_record_id?: string | null
   equipment_snapshot?: EquipmentCostSnapshotProvenance | null
+  /** The U of I budget amount this line was seeded with. The badge shows while amount_per_acre still equals it; null or missing for hand-entered lines. */
+  university_default_amount?: number | null
   created_at: string
   updated_at: string
 }
@@ -115,6 +117,8 @@ export interface ProfitabilityData {
   cost_lines: BudgetCostLine[]
   matrix_steps: ProfitabilityMatrixStep[]
   allocations: BudgetFieldAllocation[]
+  /** Whether the live database stores the U of I badge (`budget_cost_lines.university_default_amount`); null when not known (an older cached copy). */
+  capabilities?: { university_default_amount: boolean | null }
 }
 
 export interface ProfitabilityWorkspace extends ProfitabilityData { fields: FieldsData; equipment: ProfitabilityEquipment[] }

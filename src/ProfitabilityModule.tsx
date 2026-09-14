@@ -17,6 +17,8 @@ import type {
   ProfitabilityWorkspace,
 } from "./data/profitability";
 import { farmerError } from "./lib/farmerErrors";
+import { useOptionalFarmAccess } from "./auth/FarmAccessContext";
+import { canEditFarmModule } from "./auth/farmContext";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import { SaveReceipt } from "./components/SaveReceipt";
 import { NeedsAttentionList } from "./components/NeedsAttentionList";
@@ -53,6 +55,8 @@ import {
 import type { Commodity } from "./data/fields";
 import type { ProgramsData } from "./data/programs";
 import { SAVE_DURABILITY_UPDATE_MESSAGE } from "./data/saveDurability";
+import { forgetLegacyDefaults, readLegacyDefaults, retainSeededDefaults } from "./data/universityDefaultProvenance";
+import { supabaseConfig } from "./lib/supabaseConfig";
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -99,28 +103,9 @@ const sortedSteps = (
     .sort((a, b) => a.sort_order - b.sort_order);
 
 /** Lines seeded from the U of I budget keep a "university default" badge until the farmer
- * overwrites the amount — stored locally so a default never masquerades as their number. */
-const DEFAULTS_KEY = "farm-rx.profitability.university-defaults";
+ * overwrites the amount. The seeded amount travels with the line (university_default_amount)
+ * so the badge follows the farm, not one browser. */
 const COACH_KEY = "farm-rx.profitability.coach-dismissed";
-function readDefaultsMap(): Record<string, number> {
-  try {
-    return JSON.parse(
-      window.localStorage.getItem(DEFAULTS_KEY) ?? "{}",
-    ) as Record<string, number>;
-  } catch {
-    return {};
-  }
-}
-function recordDefaults(entries: Record<string, number>) {
-  try {
-    window.localStorage.setItem(
-      DEFAULTS_KEY,
-      JSON.stringify({ ...readDefaultsMap(), ...entries }),
-    );
-  } catch {
-    /* private mode: badges just won't show */
-  }
-}
 function readCoachDismissed(): string[] {
   try {
     return JSON.parse(
@@ -163,12 +148,10 @@ function universityBudget(
     category: line.category,
     name: line.name,
     amount_per_acre: line.amount_per_acre,
+    university_default_amount: line.amount_per_acre,
     created_at: at,
     updated_at: at,
   }));
-  recordDefaults(
-    Object.fromEntries(lines.map((line) => [line.id, line.amount_per_acre])),
-  );
   return { budget, lines };
 }
 
@@ -213,7 +196,14 @@ function stepsFromRange(
   }));
 }
 
+/** Before the column existed, the "U of I default" badge was remembered per line in this browser only. Once the column is live,
+ * each remembered amount is written into its line once (for a member who may edit) and dropped from the browser when the row
+ * confirms it, so existing badges survive the release instead of vanishing. Entries for lines this farm does not show stay for the
+ * farm that owns them. */
+
 export function ProfitabilityPage() {
+  const farmAccess = useOptionalFarmAccess();
+  const canEditProfitability = farmAccess ? canEditFarmModule(farmAccess.profile, "profitability") : false;
   const [workspace, setWorkspace] = useState<ProfitabilityWorkspace | null>(
     null,
   );
@@ -304,6 +294,30 @@ export function ProfitabilityPage() {
         : (years[0] ?? null),
     );
   }, [workspace]);
+  // Badge provenance kept in this browser (see src/data/universityDefaultProvenance.ts) for lines the live database could not
+  // store it for yet: shown as the badge meanwhile, forgotten once the rows carry it, and written into their lines once.
+  const legacyBadgeAttempts = useRef(new Set<string>());
+  const [browserBadges, setBrowserBadges] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (!workspace) return;
+    // The entries are kept per account and farm; a screen rendered outside the farm-access provider (regression harnesses) has neither and reads none.
+    if (!farmAccess) return;
+    const scope = { projectRef: supabaseConfig.projectRef, userId: farmAccess.profile.userId, farmId: workspace.fields.farm.id };
+    const legacy = readLegacyDefaults(scope);
+    const ids = Object.keys(legacy);
+    setBrowserBadges(Object.fromEntries(Object.entries(legacy).filter(([id]) => workspace.cost_lines.some((line) => line.id === id && line.university_default_amount == null))));
+    if (ids.length === 0) return;
+    const confirmed = workspace.cost_lines.filter((line) => legacy[line.id] !== undefined && line.university_default_amount === legacy[line.id]).map((line) => line.id);
+    if (confirmed.length) forgetLegacyDefaults(scope, confirmed);
+    if (!canEditProfitability) return;
+    const pending = workspace.cost_lines.filter((line) => legacy[line.id] !== undefined && line.university_default_amount == null && !legacyBadgeAttempts.current.has(line.id));
+    if (pending.length === 0) return;
+    for (const line of pending) legacyBadgeAttempts.current.add(line.id);
+    void (async () => {
+      try { for (const line of pending) await profitabilityRepository.saveCostLine({ ...line, university_default_amount: legacy[line.id] }); } catch { /* the entries stay in the browser and are retried on the next visit */ }
+      await refresh().catch(() => undefined);
+    })();
+  }, [workspace, canEditProfitability, farmAccess]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = async (key: string, work: () => Promise<void | "saved" | "queued offline">): Promise<boolean> => {
     const writeLock = writeLocks.current.get(key);
     if (!writeLock.acquire()) return false;
@@ -340,6 +354,13 @@ export function ProfitabilityPage() {
       </section>
     );
   const budget = workspace.budgets.find((item) => item.id === selectedId);
+  // Declared before the empty-state return below, which also seeds a budget. While the live database has no badge column (or an
+  // older cached copy cannot say), every seeded line's badge amount is kept in this browser before any row is written, all or
+  // nothing, so a browser that refuses leaves no budget shell or partial batch behind.
+  const retainSeededBadges = (lines: BudgetCostLine[]) => {
+    if (workspace.capabilities?.university_default_amount === true || !farmAccess) return;
+    retainSeededDefaults({ projectRef: supabaseConfig.projectRef, userId: farmAccess.profile.userId, farmId: workspace.fields.farm.id }, lines);
+  };
   if (!budget) {
     const commodity = workspace.fields.commodities[0];
     return (
@@ -408,6 +429,7 @@ export function ProfitabilityPage() {
                   new Date().getFullYear(),
                 );
                 void save(created.budget.id, async () => {
+                  retainSeededBadges(created.lines);
                   await profitabilityRepository.createBudget(created.budget);
                   for (const line of created.lines)
                     await profitabilityRepository.saveCostLine(line);
@@ -423,7 +445,7 @@ export function ProfitabilityPage() {
   }
   const costs = workspace.cost_lines.filter(
     (line) => line.budget_id === budget.id,
-  );
+  ).map((line) => line.university_default_amount == null && browserBadges[line.id] !== undefined ? { ...line, university_default_amount: browserBadges[line.id] } : line);
   const costsPerAcre = totalCostPerAcre(costs);
   const prices = sortedSteps(workspace, budget.id, "price");
   const yields = sortedSteps(workspace, budget.id, "yield");
@@ -446,7 +468,6 @@ export function ProfitabilityPage() {
   const cropKind = farmdocCropKind(
     commodity?.crop_family ?? commodity?.name ?? "",
   );
-  const defaultsMap = readDefaultsMap();
   const overviewYears = [
     ...new Set(workspace.budgets.map((item) => item.crop_year)),
   ].sort((left, right) => right - left);
@@ -467,6 +488,7 @@ export function ProfitabilityPage() {
       cropYear,
     );
     void save(created.budget.id, async () => {
+      retainSeededBadges(created.lines);
       await profitabilityRepository.createBudget(created.budget);
       for (const line of created.lines)
         await profitabilityRepository.saveCostLine(line);
@@ -751,7 +773,6 @@ export function ProfitabilityPage() {
                 <CostLineGroups
                   costs={costs}
                   price={budget.expected_price_per_bushel}
-                  defaultsMap={defaultsMap}
                   collapsed={collapsedCategories}
                   onToggle={(category) =>
                     setCollapsedCategories((current) => {
@@ -847,7 +868,7 @@ export function ProfitabilityPage() {
               <span>Total cost / acre</span>
               <strong>{money.format(costsPerAcre)}</strong>
             </div>
-            {costs.some((line) => defaultsMap[line.id] !== undefined) && (
+            {costs.some((line) => line.university_default_amount != null) && (
               <p className="university-note">{FARMDOC_SOURCE_NOTE}</p>
             )}
             <CoachNudge
@@ -856,6 +877,7 @@ export function ProfitabilityPage() {
               cropKind={cropKind}
               onAdd={(lines) =>
                 save(budget.id, async () => {
+                  retainSeededBadges(lines);
                   for (const line of lines)
                     await profitabilityRepository.saveCostLine(line);
                 })
@@ -1304,7 +1326,6 @@ function OverviewBudgetCard({
 function CostLineGroups({
   costs,
   price,
-  defaultsMap,
   collapsed,
   onToggle,
   onSave,
@@ -1312,7 +1333,6 @@ function CostLineGroups({
 }: {
   costs: BudgetCostLine[];
   price: number;
-  defaultsMap: Record<string, number>;
   collapsed: Set<CostCategory>;
   onToggle: (category: CostCategory) => void;
   onSave: (line: BudgetCostLine) => void;
@@ -1360,7 +1380,7 @@ function CostLineGroups({
                   key={line.id}
                   line={line}
                   price={price}
-                  defaultAmount={defaultsMap[line.id]}
+                  defaultAmount={line.university_default_amount ?? undefined}
                   onSave={onSave}
                   onRemove={() => onRemove(line.id)}
                 />
@@ -2800,14 +2820,10 @@ function CoachNudge({
                 category: line.category,
                 name: line.name,
                 amount_per_acre: line.amount_per_acre,
+                university_default_amount: line.amount_per_acre,
                 created_at: at,
                 updated_at: at,
               }));
-              recordDefaults(
-                Object.fromEntries(
-                  lines.map((line) => [line.id, line.amount_per_acre]),
-                ),
-              );
               onAdd(lines);
             }}
           >

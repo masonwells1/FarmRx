@@ -11,6 +11,8 @@ export interface ProfitabilityRowBundle {
   matrix_steps: unknown[]
   allocations: unknown[]
   equipment: unknown[]
+  /** Whether `budget_cost_lines.university_default_amount` exists on the live database; null when the probe could not tell. */
+  capabilities?: { university_default_amount: boolean | null }
 }
 
 export interface ReplaceMatrixStepsInput { farmId: string; budgetId: string; steps: ProfitabilityMatrixStep[]; expectedSteps?: ProfitabilityMatrixStep[] | null; context: FarmOperationContext }

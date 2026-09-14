@@ -162,7 +162,8 @@ export class QueuedProfitabilityRepository implements ProfitabilityRepository {
     // The farmer can import current service costs into the new budget explicitly.
     const costLines: BudgetCostLineWrite[] = workspace.cost_lines
       .filter((line) => line.budget_id === sourceBudgetId && line.source_kind !== 'equipment')
-      .map((line, index) => manualCostLineWrite({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id, sort_order: index }))
+      // A copied line is the farmer's own figure in the new budget: it does not inherit the source line's U of I provenance.
+      .map((line, index) => manualCostLineWrite({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id, sort_order: index, university_default_amount: null }))
     const matrixSteps: ProfitabilityMatrixStep[] = workspace.matrix_steps.filter((step) => step.budget_id === sourceBudgetId).map((step) => ({ ...structuredClone(step), id: this.dependencies.createId(), budget_id: copy.id }))
     const normalizedCopy: CropBudget = { ...copy, farm_id: context.farmId, copied_from_budget_id: sourceBudgetId }
     this.validateInsurance(normalizedCopy)

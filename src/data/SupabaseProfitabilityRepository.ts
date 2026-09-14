@@ -59,7 +59,9 @@ function mapCostLine(value: unknown): BudgetCostLineWrite {
     }
   } else if (equipmentValues.some((item) => item !== null)) fail('Farm Rx found equipment snapshot details on a different cost source.')
   const result: BudgetCostLineWrite = { id: id(required(row, 'id')), budget_id: id(required(row, 'budget_id')), category: category as BudgetCostLine['category'], name: text(required(row, 'label'), 160), amount_per_acre: number(required(row, 'amount_per_acre')), source_kind, source_record_id: source_record_id === null ? null : id(source_record_id), equipment_snapshot, sort_order: integer(required(row, 'sort_order'), 0, 32_767), created_at: stamp(required(row, 'created_at')), updated_at: stamp(required(row, 'updated_at')) }
-  if (!result.name.trim() || result.amount_per_acre < 0) fail('Farm Rx found an invalid cost line.')
+  // Additive column from the slice-3 migration; rows read before it is applied simply have no badge.
+  result.university_default_amount = Object.hasOwn(row, 'university_default_amount') && row.university_default_amount !== null ? number(row.university_default_amount) : null
+  if (!result.name.trim() || result.amount_per_acre < 0 || (result.university_default_amount !== null && result.university_default_amount < 0)) fail('Farm Rx found an invalid cost line.')
   return result
 }
 function mapEquipment(value: unknown): ProfitabilityEquipment {
@@ -109,7 +111,7 @@ function mintCostLine(value: BudgetCostLine, siblings: BudgetCostLineWrite[]): B
 /** Write shape for the offline queue and gateway: exactly the manual-entry columns (audit P2-14). */
 export function manualCostLineWrite(line: BudgetCostLineWrite): BudgetCostLineWrite {
   const { id, budget_id, category, name, amount_per_acre, sort_order, created_at, updated_at } = line
-  return { id, budget_id, category, name, amount_per_acre, sort_order, created_at, updated_at }
+  return { id, budget_id, category, name, amount_per_acre, sort_order, created_at, updated_at, university_default_amount: line.university_default_amount ?? null }
 }
 
 /** numeric(precision, scale) column contracts from migrations 0006 and 0030 (audit P2-04).
@@ -139,7 +141,7 @@ export function normalizeMatrixStepDecimals(step: ProfitabilityMatrixStep): Prof
   return { ...step, value: boundedDecimal(step.value, { precision: 14, scale: 6, label: 'a matrix step' }) }
 }
 export function normalizeCostLineDecimals(line: BudgetCostLineWrite): BudgetCostLineWrite {
-  return { ...line, amount_per_acre: boundedDecimal(line.amount_per_acre, { precision: 14, scale: 4, label: 'the cost per acre' }) }
+  return { ...line, amount_per_acre: boundedDecimal(line.amount_per_acre, { precision: 14, scale: 4, label: 'the cost per acre' }), ...(line.university_default_amount == null ? {} : { university_default_amount: boundedDecimal(line.university_default_amount, { precision: 14, scale: 4, label: 'the university default' }) }) }
 }
 export function normalizeAllocationDecimals(value: BudgetFieldAllocation): BudgetFieldAllocation {
   return {
@@ -185,7 +187,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     let bundle: ProfitabilityRowBundle
     try { bundle = await this.dependencies.gateway.loadWorkspace(farmId) }
     catch (error) { if (error instanceof Error && error.message === 'PROFITABILITY_PRIVATE_ACCESS_DENIED') fail(PRIVACY_DENIED); throw error }
-    return { budgets: bundle.budgets.map(mapBudget), cost_lines: bundle.cost_lines.map(mapCostLine), matrix_steps: bundle.matrix_steps.map(mapMatrixStep), allocations: bundle.allocations.map(mapAllocation), equipment: bundle.equipment.map(mapEquipment) }
+    return { budgets: bundle.budgets.map(mapBudget), cost_lines: bundle.cost_lines.map(mapCostLine), matrix_steps: bundle.matrix_steps.map(mapMatrixStep), allocations: bundle.allocations.map(mapAllocation), equipment: bundle.equipment.map(mapEquipment), capabilities: bundle.capabilities ?? { university_default_amount: null } }
   }
   private validateBudget(value: CropBudget, farmId: string, fields: FieldsData) {
     if (value.farm_id !== farmId) fail('Farm Rx could not verify the farm for this budget.')
@@ -245,7 +247,7 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     const matrix_steps = [...raw.matrix_steps].sort((left, right) => left.budget_id.localeCompare(right.budget_id) || left.axis.localeCompare(right.axis) || left.sort_order - right.sort_order)
     const allocations = [...raw.allocations].sort((left, right) => left.budget_id.localeCompare(right.budget_id) || left.crop_assignment_id.localeCompare(right.crop_assignment_id))
     const equipment = [...raw.equipment].sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
-    return { budgets, cost_lines, matrix_steps, allocations, fields, equipment }
+    return { budgets, cost_lines, matrix_steps, allocations, fields, equipment, capabilities: raw.capabilities }
   }
 
   async createBudget(value: CropBudget) {
@@ -408,7 +410,8 @@ export class SupabaseProfitabilityRepository implements ProfitabilityRepository,
     // service costs look hand-entered. The copied budget can import a fresh snapshot.
     const costLines: BudgetCostLineWrite[] = raw.cost_lines
       .filter((line) => line.budget_id === sourceBudgetId && line.source_kind !== 'equipment')
-      .map((line, index) => manualCostLineWrite({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id, sort_order: index }))
+      // A copied line is the farmer's own figure in the new budget: it does not inherit the source line's U of I provenance.
+      .map((line, index) => manualCostLineWrite({ ...structuredClone(line), id: this.dependencies.createId(), budget_id: copy.id, sort_order: index, university_default_amount: null }))
     const matrixSteps: ProfitabilityMatrixStep[] = raw.matrix_steps.filter((step) => step.budget_id === sourceBudgetId).map((step) => ({ ...structuredClone(step), id: this.dependencies.createId(), budget_id: copy.id }))
     await this.copyBudgetOperation(sourceBudgetId, { ...copy, copied_from_budget_id: sourceBudgetId }, costLines, matrixSteps, context)
   }

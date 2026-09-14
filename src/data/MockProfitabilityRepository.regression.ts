@@ -36,8 +36,10 @@ async function regression_roundTripCopyAndBytes() {
   await repo.saveBudget({ ...corn, rp_coverage_pct: 80, rp_aph_yield: 180, rp_projected_price: 4.62, rp_premium_per_acre: 28 })
   const insuranceSaved = (await repo.getWorkspace()).budgets.find((budget) => budget.id === corn.id)!; assert(insuranceSaved.rp_coverage_pct === 80 && insuranceSaved.rp_aph_yield === 180 && insuranceSaved.rp_projected_price === 4.62 && insuranceSaved.rp_premium_per_acre === 28, 'Profitability insurance columns did not round-trip.')
   const copy: CropBudget = { ...corn, id: 'copied-budget', name: 'Corn copy', copied_from_budget_id: corn.id, created_at: '', updated_at: '' }
+  await repo.saveCostLine({ ...seed, amount_per_acre: 121, university_default_amount: 121 })
   await repo.copyBudget(corn.id, copy)
   const copied = await repo.getWorkspace(); const copiedSeed = copied.cost_lines.find((line) => line.budget_id === copy.id && line.category === 'seed')!; assert(copiedSeed && copiedSeed.id !== seed.id && copiedSeed.amount_per_acre === 121, 'Copy from budget did not deep-copy cost lines.')
+  assert(copiedSeed.university_default_amount == null && copied.cost_lines.find((line) => line.id === seed.id)?.university_default_amount === 121, 'A copied cost line must not carry the U of I default badge; the source keeps it.')
   await repo.saveCostLine({ ...seed, amount_per_acre: 130 })
   assert((await repo.getWorkspace()).cost_lines.find((line) => line.id === copiedSeed.id)?.amount_per_acre === 121, 'Copied budget shares a cost-line reference with its source.')
   assert(storage.getItem('farm-rx-local-data') === fieldsBytes, 'Profitability save changed the Fields envelope bytes.')
