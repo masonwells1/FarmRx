@@ -226,7 +226,9 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   useEffect(() => { if (!persisted || !settingsDirty.current) return; const timer = setTimeout(flushSettings, SAVE_DELAY_MS); return () => clearTimeout(timer) }, [settings, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!persisted || gridsDirty.current.size === 0) return; const timer = setTimeout(flushGrids, SAVE_DELAY_MS); return () => clearTimeout(timer) }, [byEstimate, persisted]) // eslint-disable-line react-hooks/exhaustive-deps
   // Leaving the screen sends whatever is still unflushed; a save that fails after that leaves the browser draft for the next visit.
-  useEffect(() => () => { mounted.current = false; flushSettings(); flushGrids() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // The flag is set on every setup, not only at first render: React's development StrictMode runs setup, cleanup, setup once, and a flag
+  // left false after that would make every later failed save skip its retry bookkeeping while the screen is still on.
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; flushSettings(); flushGrids() } }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // A confirmed farm switch sends unflushed edits through here and then waits for the chain before the farm changes.
   // A member who may not write has nothing to send (the reset effect above settled the registry and left the drafts in storage).
   useEffect(() => persisted && draftScope && persistence?.writable !== false ? registerPendingSettingsFlush({ userId: draftScope.userId, farmId }, () => { flushSettings(); flushGrids() }) : undefined, [farmId, persisted, draftScope?.userId, persistence?.writable]) // eslint-disable-line react-hooks/exhaustive-deps

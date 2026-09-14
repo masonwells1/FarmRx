@@ -451,7 +451,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const markSaleLimitUnflushed = (key: string, farmId = workspaceRef.current?.fields.farm.id) => { const scope = pendingScopeFor(farmId); if (scope && !unflushedSaleLimits.current.has(key)) unflushedSaleLimits.current.set(key, beginPendingSettingsWork(scope)); };
   // This page instance is gone once the route changes (the route boundary remounts per path); saves that fail after that retain their draft instead.
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // Set on every setup (development StrictMode runs setup, cleanup, setup once), so the flag is true while the page is on.
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
   // A save queued offline returns the client row with its old version; replay later advances the version on the server. Once the
   // grain queue has drained, refetch so the rows carry their replayed versions and the next edit does not conflict with its own save.
   useEffect(() => {

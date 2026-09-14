@@ -386,3 +386,11 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Repair:** the mock accepts exactly that probe (GET, that select, the farm filter, limit 1) and answers an empty list, as the live schema with the column would; every other `budget_cost_lines` shape is still rejected.
 - **Proof:** `npx tsc -b --force` exit 0; the failing test passes locally on both projects with the local built-browser configuration (retries 0); the whole `foundation-shell` suite passes locally on the desktop project (30 passed, 3 intentional skips); `git diff --check` clean.
 - **Lesson recorded:** a new read query shape must be added to the built-browser mock in the same commit; the FS-043 proof ran the unit lanes but not the built-browser suite, which is the lane that pins query shapes.
+
+## FS-046 — Codex finding on `b807999`: the mounted flags are set on every effect setup
+
+- **Date/time:** 2026-09-13 19:11 -05:00 (`America/Chicago`).
+- **Finding (Codex, on `b807999`, P2):** the calculator's and the Grain page's "still mounted" flags were set false in an effect cleanup and never set true in the setup; React's development StrictMode runs setup, cleanup, setup once, so under `npm run dev` the flag stayed false while the screen was on, and a failed carry save then skipped its retry bookkeeping (dirty, failed, pending). Production builds, the browser harness (a production build), and the built-browser lane never see the double cycle, which is why no lane caught it.
+- **Repair:** both effects set the flag true in their setup and false in their cleanup, so it reflects the screen's real state after the development double cycle as well.
+- **Proof:** `npx tsc -b --force` exit 0; cost-of-carry regression passed; `npm run build` exit 0; static guards PASS; `git diff --check` clean; browser harness at both sizes keeps every fact of the previous run (compared field by field, wait times excluded).
+- **Also recorded:** Foundation on `b807999` failed as expected in the built-browser lane (the same probe shape FS-045 fixed in `d3a130e`); the run on `d3a130e` is the re-check.
