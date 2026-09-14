@@ -4,7 +4,9 @@ import { setModuleSyncStatus } from './syncStatus'
 import type { MarkReadResult, NotificationsData, NotificationsRepository } from './notifications'
 import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
 import type { SupabaseNotificationsRepository } from './SupabaseNotificationsRepository'
-import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, writeWorkspaceCache } from './workspaceCache'
+import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, readWorkspaceCachePure, WorkspaceCacheExpiredError, writeWorkspaceCache } from './workspaceCache'
+import { captureFarmOperationContext, verifyFarmOperationContext, type FarmOperationContext } from './farmOperationContext'
+import type { ReadOnlySnapshot } from './fields'
 import { queueTransaction } from './queueTransaction'
 import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 
@@ -31,6 +33,35 @@ export class QueuedNotificationsRepository implements NotificationsRepository {
       for (const entry of queue.read().entries) { const ids = new Set(entry.ids); data.notifications = data.notifications.map((row) => ids.has(row.id) ? { ...row, read_at: row.read_at ?? entry.enqueuedAt } : row) }
       data.unreadCount = data.notifications.filter((row) => row.read_at === null).length
       await verifyRead(); return data
+    }
+  }
+  private verifySnapshotContext(expected: FarmOperationContext) { const current = captureFarmOperationContext(this.d.storage, this.d.projectRef, { userId: expected.userId, farmId: expected.farmId }); verifyFarmOperationContext(this.d.storage, expected, current) }
+  private overlayMarkRead(data: NotificationsData, entries: NotificationsQueueEntryV1[]): NotificationsData {
+    const next = structuredClone(data)
+    for (const entry of entries) { const ids = new Set(entry.ids); next.notifications = next.notifications.map((row) => ids.has(row.id) ? { ...row, read_at: row.read_at ?? entry.enqueuedAt } : row) }
+    next.unreadCount = next.notifications.filter((row) => row.read_at === null).length
+    return next
+  }
+  /** Pure read for projections such as Today: the caller's published context is verified around every boundary, the live snapshot
+   * (or, offline, the read-only cache) is overlaid with this device's queued mark-read entries, and nothing is replayed or written. */
+  async getSnapshot(operationContext: FarmOperationContext): Promise<ReadOnlySnapshot<NotificationsData>> {
+    const context = { userId: operationContext.userId, farmId: operationContext.farmId }
+    const verifyRead = () => this.verifySnapshotContext(operationContext)
+    verifyRead()
+    const queue = new NotificationsWriteQueue(this.d.storage, notificationsWriteQueueKey(this.d.projectRef, context.userId, context.farmId))
+    const entries = () => { const values = queue.read().entries; if (values.some((entry) => entry.userId !== context.userId || entry.farmId !== context.farmId)) throw new Error(blocked); return values }
+    try {
+      const snapshot = await this.live.getSnapshot(operationContext); verifyRead()
+      if (snapshot.source !== 'live') throw new WorkspaceCacheExpiredError()
+      const data = this.overlayMarkRead(snapshot.data, entries()); verifyRead()
+      return { data, source: 'live', capturedAt: snapshot.capturedAt }
+    } catch (error) {
+      verifyRead()
+      if (!isTransportFailure(error, this.d.isOffline())) throw error
+      const cached = await readWorkspaceCachePure<NotificationsData>({ projectRef: this.d.projectRef, ...context, module: 'notifications' }, operationContext, operationalCacheMaxAgeMs, this.d.storage); verifyRead()
+      if (!cached) throw error
+      const data = this.overlayMarkRead(cached.data, entries()); verifyRead()
+      return { data, source: 'offline', capturedAt: cached.capturedAt }
     }
   }
   async markRead(ids: string[]): Promise<MarkReadResult> { const { context, operationContext, queue } = await this.source(); const entry: NotificationsQueueEntryV1 = { version: 1, module: 'notifications', kind: 'markRead', operationId: this.d.createId(), userId: context.userId, farmId: context.farmId, enqueuedAt: this.d.clock(), ids: [...new Set(ids)] }; if (!entry.ids.length) throw new Error(blocked); const result = await this.locked(queue, async (verify): Promise<MarkReadResult> => { const verifyOperation = async () => { verify(); await verifyQueuedOperationContext(this.d, operationContext, entry) }; await verifyOperation(); const enqueue = async () => { await verifyOperation(); const next = queue.append(entry); setModuleSyncStatus('notifications', { kind: 'pending', pending: next.entries.length }); return { kind: 'pending' as const } }; if (this.d.isOffline() || queue.read().entries.length) return enqueue(); try { const saved = await this.live.markReadOperation(entry.ids, operationContext); await verifyOperation(); setModuleSyncStatus('notifications', { kind: 'synced', pending: 0 }); return saved } catch (error) { await verifyQueuedOperationContext(this.d, operationContext, entry); if (!isTransportFailure(error, this.d.isOffline())) throw error; return enqueue() } }); if (result.kind === 'pending') launchReplayInBackground(() => this.inspectAndReplay()); return result }

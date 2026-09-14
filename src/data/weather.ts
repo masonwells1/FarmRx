@@ -28,6 +28,14 @@ export interface ForecastBundle {
   hourly: HourlyForecast[]
   daily: DailyForecast[]
   fetched_at: string
+  /** The field's offset from UTC in seconds as the provider reported it at fetch time (Open-Meteo `utc_offset_seconds`), so the
+   * field's wall clock at any later instant can be recovered from that instant alone. Absent from forecasts saved before it was
+   * recorded; a reader that needs the field's clock now must skip those. */
+  utc_offset_seconds?: number
+  /** The field's IANA time zone as the provider reported it (Open-Meteo `timezone`), so the field's wall clock at a later instant
+   * follows the zone's own rules, including a daylight-saving change inside the cache's lifetime; the offset above is the fallback
+   * when the zone name cannot be resolved. Absent from forecasts saved before it was recorded. */
+  timezone?: string
   /** True only when an older cache is shown because the live request could not finish. */
   stale: boolean
 }

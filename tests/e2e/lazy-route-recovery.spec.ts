@@ -132,7 +132,10 @@ test("a persistent lazy route failure stops reloading and offers a retry", async
   expect(chunkAttempts).toBe(2);
   expect(documentLoads).toBe(2);
   expect(await page.evaluate((key) => sessionStorage.getItem(key), routeReloadMarker)).toBe("1");
-  await page.getByRole("link", { name: "Grain", exact: true }).click();
+  // On phones Grain lives in the More menu (FD-1 phone bar: Today · Fields · Tasks · Weather · More).
+  const grainLink = page.getByRole("link", { name: "Grain", exact: true });
+  if (!(await grainLink.isVisible())) await page.getByRole("button", { name: "More" }).click();
+  await grainLink.click();
   await expect(page).toHaveURL(/\/grain$/);
   await expect(page.getByText("Add a crop assignment in Fields to begin your grain position.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "This page could not open." })).toBeHidden();

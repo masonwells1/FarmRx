@@ -39,10 +39,12 @@ try {
 
   # The assertions live in one SQL file shared with scripts/verify-fs-persist-disposable.sh (Linux twin).
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/fs-persist-disposable-assertions.sql')) 'FS_PERSIST_DISPOSABLE_PASS' 'Friction Sweep persistence assertions failed.'
+  # Initiative FD-1 (Today) reads only existing rows; this asserts the row-level rules Today depends on, in the same database.
+  Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/fd-today-role-assertions.sql')) 'FD_TODAY_DISPOSABLE_PASS' 'Today role assertions failed.'
 
   $passed = $true
 } finally {
   docker rm -f $name 2>$null | Out-Null
 }
 
-if ($passed) { Write-Output 'PROBE Friction Sweep persistence (grain sale limits, carry settings, carry grids, cost-line badge): PASS' }
+if ($passed) { Write-Output 'PROBE Friction Sweep persistence (grain sale limits, carry settings, carry grids, cost-line badge) and Today role rules: PASS' }

@@ -96,7 +96,7 @@ async function seedPendingWriteQueues(context: BrowserContext) {
 
 type AccessProfileFixture = { memberRole: 'owner' | 'manager' | 'worker' | 'read_only' | null; canViewFinancials: boolean; namedRep: boolean }
 const ownerProfile: AccessProfileFixture = { memberRole: 'owner', canViewFinancials: false, namedRep: false }
-function farmRow(farm: FarmFixture, shareWithRep = false) { return { id: farm.id, name: farm.name, share_with_rep: shareWithRep, created_by: userId, created_at: now, updated_at: now } }
+function farmRow(farm: FarmFixture, shareWithRep = false) { return { id: farm.id, name: farm.name, share_with_rep: shareWithRep, time_zone: 'America/Chicago', created_by: userId, created_at: now, updated_at: now } }
 function membershipRow(farm: FarmFixture, memberId = userId, profile = ownerProfile) { return profile.memberRole === null ? null : { farm_id: farm.id, user_id: memberId, role: profile.memberRole, status: 'active', can_view_financials: profile.canViewFinancials } }
 function rowsFor(table: string, farm: FarmFixture) {
   if (table === 'entities') return [{ id: farm.entityId, farm_id: farm.id, name: `${farm.name} LLC`, entity_type: 'llc', is_active: true, created_at: now, updated_at: now }]
@@ -119,6 +119,56 @@ function exactQuery(url: URL, expected: Record<string, string>) {
   return JSON.stringify(actual) === JSON.stringify(wanted)
 }
 
+// Exact read shapes for the Equipment & Tasks workspace and the Field Log (FD-1: Today reads them through the pure snapshot path).
+const equipmentReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
+  equipment: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc' }),
+  equipment_meter_readings: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'read_on.asc,id.asc' }),
+  equipment_service_intervals: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc' }),
+  equipment_service_log: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'service_date.desc,id.asc' }),
+  equipment_service_due: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'equipment_id.asc' }),
+  farm_member_names: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'display_name.asc' }),
+  farm_tasks: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'due_on.asc,id.asc' }),
+  field_log_entries: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'observed_on.desc,created_at.desc,id.asc' }),
+  scouting_notes: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'observed_on.desc,created_at.desc,id.asc' }),
+  scouting_photos: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'created_at.asc,id.asc' }),
+  inventory_products: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' }),
+  inventory_receipts: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'created_at.asc,id.asc' }),
+  inventory_receipt_lines: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'receipt_id.asc,id.asc' }),
+  inventory_adjustments: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'adjusted_at.asc,id.asc' }),
+  application_records: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'application_date.asc,id.asc' }),
+  application_products: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'application_id.asc,id.asc' }),
+  program_application_products: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'application_record_id.asc,sequence.asc' }),
+  inventory_on_hand: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'product_id.asc' }),
+  rup_application_completeness: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'application_id.asc,application_product_id.asc' }),
+}
+const equipmentA = '00000000-0000-4000-8000-000000000201'
+const intervalA = '00000000-0000-4000-8000-000000000301'
+const taskA = '00000000-0000-4000-8000-000000000401'
+const passA = '00000000-0000-4000-8000-000000000601'
+const productA = '00000000-0000-4000-8000-000000000701'
+function todayRows(farm: FarmFixture): Readonly<Partial<Record<string, unknown[]>>> {
+  return {
+    equipment: [{ id: equipmentA, farm_id: farm.id, name: 'John Deere 8R 340', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null, created_by: userId, created_at: now, updated_at: now }],
+    equipment_meter_readings: [{ id: '00000000-0000-4000-8000-000000000901', farm_id: farm.id, equipment_id: equipmentA, reading: 262, read_on: '2026-07-14', source: 'manual', notes: null, created_by: userId, created_at: now, updated_at: now }],
+    equipment_service_intervals: [{ id: intervalA, farm_id: farm.id, equipment_id: equipmentA, name: 'Engine oil', every_meter: 250, every_months: null, last_done_on: null, last_done_reading: 0, is_active: true, created_by: userId, created_at: now, updated_at: now }],
+    equipment_service_due: [{ farm_id: farm.id, equipment_id: equipmentA, interval_id: intervalA, reason: 'meter', overdue_amount: 12 }],
+    farm_tasks: [
+      { id: taskA, farm_id: farm.id, title: 'Fix the planter', details: null, status: 'todo', priority: 'normal', assigned_to: null, due_on: '2026-07-13', field_id: null, equipment_id: null, source: 'manual', interval_id: null, interval_cycle_key: null, program_assigned_pass_id: null, program_cycle_key: null, completed_by: null, completed_at: null, created_by: userId, created_at: now, updated_at: now },
+      // The due-generation function's own task for the overdue interval: the same work as the service-due row, never listed twice.
+      { id: '00000000-0000-4000-8000-000000000402', farm_id: farm.id, title: 'Engine oil · John Deere 8R 340', details: null, status: 'todo', priority: 'normal', assigned_to: null, due_on: '2026-07-14', field_id: null, equipment_id: equipmentA, source: 'service_interval', interval_id: intervalA, interval_cycle_key: 'meter:1', program_assigned_pass_id: null, program_cycle_key: null, completed_by: null, completed_at: null, created_by: userId, created_at: now, updated_at: now },
+    ],
+    // The Inventory shelf's own low-on-hand rule (five units or fewer) is what Today lists as Low inventory.
+    inventory_products: [{ id: productA, farm_id: farm.id, product_kind: 'chemical', name: 'Atrazine 4L', inventory_unit: 'gal', epa_registration_number: null, is_restricted_use: false, signal_word: null, restricted_entry_interval_hours: null, preharvest_interval_hours: null, max_label_rate: null, max_label_rate_unit: null, max_label_rate_basis: null, commodity_id: null, variety_name: null, fertilizer_analysis: null, manufacturer: null, is_active: true, created_at: now, updated_at: now }],
+    inventory_on_hand: [{ farm_id: farm.id, product_id: productA, product_kind: 'chemical', inventory_unit: 'gal', received_quantity: 4, adjusted_quantity: 0, used_quantity: 0, on_hand_quantity: 4, weighted_known_receipt_cost_per_inventory_unit: null }],
+  }
+}
+function todayNotifications(farm: FarmFixture, recipient = userId) {
+  return [
+    { id: '00000000-0000-4000-8000-000000000501', farm_id: farm.id, user_id: recipient, category: 'task', title: 'Corn pass 2 is due', body: null, link: `/programs?pass=${passA}`, dedupe_key: null, read_at: null, created_by: recipient, created_at: now },
+    { id: '00000000-0000-4000-8000-000000000502', farm_id: farm.id, user_id: recipient, category: 'general', title: 'Corn hit your $4.60 target', body: null, link: '/grain', dedupe_key: null, read_at: null, created_by: recipient, created_at: '2026-07-15T11:00:00.000Z' },
+    { id: '00000000-0000-4000-8000-000000000503', farm_id: farmB, user_id: recipient, category: 'general', title: 'River Bend corn hit $4.80', body: null, link: '/grain', dedupe_key: null, read_at: null, created_by: recipient, created_at: '2026-07-15T11:30:00.000Z' },
+  ]
+}
 const fieldsReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
   entities: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc' }),
   fields: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc' }),
@@ -166,7 +216,7 @@ function bearerUserId(request: Request): string | null {
   try { const payload = JSON.parse(Buffer.from(bearer[2]!, 'base64url').toString('utf8')) as { sub?: unknown; aud?: unknown }; return payload.aud === 'authenticated' && typeof payload.sub === 'string' ? payload.sub : null } catch { return null }
 }
 
-async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1, profile = ownerProfile, activeUser: string | (() => string) = userId, removedFarmEpochs: Readonly<Record<string, Readonly<Record<string, number>>>> = {}) {
+async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1, profile = ownerProfile, activeUser: string | (() => string) = userId, removedFarmEpochs: Readonly<Record<string, Readonly<Record<string, number>>>> = {}, moduleRows: Readonly<Partial<Record<string, unknown[]>>> = {}) {
   const unexpected: string[] = []
   await page.route('https://*.supabase.co/**', async (route) => {
     const url = new URL(route.request().url())
@@ -179,9 +229,17 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
       else { if (!exactQuery(url, { select: '*', order: 'name.asc,id.asc' })) { await rejectShape('farms list query'); return }; await fulfillJson(route, accessible.map((farm) => farmRow(farm, profile.namedRep))) }
       return
     }
+    if (rest === 'farm_memberships' && url.searchParams.get('select') === 'role') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'role', farm_id: `eq.${farm.id}`, user_id: `eq.${activeUserId}` })) { await rejectShape('farm_memberships viewer query'); return }; await fulfillJson(route, profile.memberRole === null ? null : { role: profile.memberRole }); return }
     if (rest === 'farm_memberships') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,user_id,role,status,can_view_financials', farm_id: `eq.${farm.id}`, user_id: `eq.${activeUserId}` })) { await rejectShape('farm_memberships query'); return }; await fulfillJson(route, membershipRow(farm, activeUserId, profile)); return }
     if (rest === 'farm_rep_access') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,rep_user_id,enabled,revoked_at', farm_id: `eq.${farm.id}`, rep_user_id: `eq.${activeUserId}` })) { await rejectShape('farm_rep_access query'); return }; await fulfillJson(route, profile.namedRep ? { farm_id: farm.id, rep_user_id: activeUserId, enabled: true, revoked_at: null } : null); return }
     if (rest && Object.hasOwn(fieldsReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, fieldsReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, rowsFor(rest, farm)); return }
+    if (rest && Object.hasOwn(equipmentReadQueries, rest)) {
+      const farm = requestedFarm(url)
+      // Profitability reads equipment names through a narrower exact shape than the Equipment workspace.
+      const profitabilityEquipment = rest === 'equipment' && exactQuery(url, { select: 'id,farm_id,name,status', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' })
+      if (route.request().method() !== 'GET' || !(profitabilityEquipment || exactQuery(url, equipmentReadQueries[rest]!(farm)))) { await rejectShape(`${rest} query`); return }
+      await fulfillJson(route, moduleRows[rest] ?? []); return
+    }
     if (rest === 'notifications') { if (route.request().method() !== 'GET' || !exactQuery(url, { select: '*', order: 'created_at.desc,id.desc' })) { await rejectShape('notifications query'); return }; await fulfillJson(route, notifications); return }
     if (url.pathname === '/rest/v1/rpc/get_current_farm_access_epochs') {
       let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
@@ -436,7 +494,7 @@ test('a forged recovery-completion URL cannot clear an ordinary canonical sessio
   })
 
   await page.goto('/login?recoveryComplete=1')
-  await expect(page).toHaveURL('http://127.0.0.1:4173/fields')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
   await expect(page.getByRole('heading', { name: 'Choose a farm' })).toBeVisible()
   expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null')?.user?.id, authSessionKey)).toBe(userId)
   expect(unexpected).toEqual([])
@@ -462,7 +520,7 @@ test('an older recovery request cannot clear a newer accepted same-user session'
   })
 
   await page.goto('/login?recoveryComplete=1')
-  await expect(page).toHaveURL('http://127.0.0.1:4173/fields')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
   await expect(page.getByRole('heading', { name: 'Choose a farm' })).toBeVisible()
   const storedLineage = await page.evaluate((key) => {
     const token = JSON.parse(localStorage.getItem(key) ?? 'null')?.access_token as string | undefined
@@ -489,7 +547,7 @@ test('cancelling recovery preserves an older canonical session', async ({ page }
 
   await mockRecoveryAuth(page)
   await page.getByRole('button', { name: 'Cancel and return to sign in' }).click()
-  await expect(page).toHaveURL('http://127.0.0.1:4173/fields')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
   expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null')?.user?.id, authSessionKey)).toBe(userId)
 })
 
@@ -641,8 +699,8 @@ test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks a
 
   releaseAuthoritativeRequest()
   await Promise.all([
-    expect(page.getByText('North Forty')).toBeVisible(),
-    expect(olderTab.getByText('North Forty')).toBeVisible(),
+    expect(page.getByRole('heading', { name: 'What are you recording?' })).toBeVisible(),
+    expect(olderTab.getByRole('heading', { name: 'What are you recording?' })).toBeVisible(),
   ])
   const finalState = await page.evaluate(({ sessionKey, intentKey, leaseKey }) => ({
     session: JSON.parse(localStorage.getItem(sessionKey) ?? 'null') as { user?: { id?: string }; access_token?: string },
@@ -709,9 +767,15 @@ test('multi-farm access requires an explicit choice and keeps both farms usable'
   await expect(page.getByRole('button', { name: 'Prairie View' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'River Bend' })).toBeVisible()
   await page.getByRole('button', { name: 'Prairie View' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
+  await expect(page.getByRole('heading', { name: 'What are you recording?' })).toBeVisible()
+  await page.goto('/fields')
   await expect(page.getByText('North Forty')).toBeVisible()
   await expect(page.getByLabel('Active farm')).toHaveValue(farmA)
   await page.getByLabel('Active farm').selectOption(farmB)
+  // Switching farms reopens the app on Today for the new farm; the field names live on Fields.
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
+  await page.goto('/fields')
   await expect(page.getByText('South Bottom')).toBeVisible()
   await expect(page.getByLabel('Active farm')).toHaveValue(farmB)
   const cacheKeys = await page.evaluate(async (name) => {
@@ -733,6 +797,8 @@ test('a long valid farm name keeps the phone farm switcher inside its summary', 
   const unexpected = await mockSupabase(page, [farms[0], longFarm])
   await page.goto('/fields')
   await page.getByRole('button', { name: 'Prairie View' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
+  await page.goto('/fields')
   await expect(page.getByText('North Forty')).toBeVisible()
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready
@@ -784,18 +850,18 @@ test('a named rep receives only proven rep-safe navigation and direct routes', a
   await expect(page.getByText('North Forty')).toBeVisible()
   const navigation = testInfo.project.name === 'chromium-phone' ? page.getByRole('navigation', { name: 'Farm Rx navigation' }) : page.locator('.sidebar')
   if (testInfo.project.name === 'chromium-phone') {
-    for (const label of ['Fields', 'Grain']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
+    for (const label of ['Today', 'Fields', 'Grain']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
     await navigation.getByRole('button', { name: 'More' }).click()
     const more = page.getByRole('region', { name: 'More Farm Rx destinations' })
     for (const label of ['Inventory', 'Profitability', 'Alerts']) await expect(more.getByRole('link', { name: label })).toBeVisible()
     for (const label of ['Equipment', 'Tasks', 'Weather', 'Field Log', 'Scouting', 'Harvest', 'Programs']) await expect(more.getByRole('link', { name: label })).toHaveCount(0)
   } else {
-    for (const label of ['Fields', 'Grain', 'Inventory', 'Profitability', 'Alerts']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
+    for (const label of ['Today', 'Fields', 'Grain', 'Inventory', 'Profitability', 'Alerts']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
     for (const label of ['Equipment', 'Tasks', 'Weather', 'Field Log', 'Scouting', 'Harvest', 'Programs']) await expect(navigation.getByRole('link', { name: label })).toHaveCount(0)
   }
   await page.goto('/tasks')
-  await expect(page).toHaveURL(/\/fields$/)
-  await expect(page.getByText('North Forty')).toBeVisible()
+  await expect(page).toHaveURL(/\/today$/)
+  await expect(page.getByRole('heading', { name: 'Your farm today' })).toBeVisible()
   const pending = await page.evaluate((keys) => keys.map((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { entries?: unknown[] }).map((value) => value.entries?.length ?? 0), [pendingKeys.fieldsKey, pendingKeys.equipmentKey])
   expect(pending).toEqual([1, 1])
   expect(unexpected).toEqual([])
@@ -821,8 +887,8 @@ test('a read-only member can view member modules but cannot enter edit routes or
     await expect(navigation.getByRole('link', { name: 'Grain' })).toHaveCount(0)
   }
   await page.goto('/fields/new')
-  await expect(page).toHaveURL(/\/fields$/)
-  await expect(page.getByText('North Forty')).toBeVisible()
+  await expect(page).toHaveURL(/\/today$/)
+  await expect(page.getByRole('heading', { name: 'Your farm today' })).toBeVisible()
   const pending = await page.evaluate((keys) => keys.map((key) => JSON.parse(localStorage.getItem(key) ?? '{}') as { entries?: unknown[] }).map((value) => value.entries?.length ?? 0), [pendingKeys.fieldsKey, pendingKeys.equipmentKey])
   expect(pending).toEqual([1, 1])
   expect(unexpected).toEqual([])
@@ -1223,8 +1289,8 @@ test('mobile navigation keeps five non-overlapping targets and exposes every des
     const nav = page.getByRole('navigation', { name: 'Farm Rx navigation' })
     const targets = nav.locator('.nav-link')
     await expect(targets).toHaveCount(5)
+    await expect(nav.getByText('Today', { exact: true })).toBeVisible()
     await expect(nav.getByText('Fields', { exact: true })).toBeVisible()
-    await expect(nav.getByText('Grain', { exact: true })).toBeVisible()
     await expect(nav.getByText('Tasks', { exact: true })).toBeVisible()
     await expect(nav.getByText('Weather', { exact: true })).toBeVisible()
     await expect(nav.getByRole('button', { name: 'More' })).toBeVisible()
@@ -1234,9 +1300,148 @@ test('mobile navigation keeps five non-overlapping targets and exposes every des
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
     await nav.getByRole('button', { name: 'More' }).click()
     const more = page.getByRole('region', { name: 'More Farm Rx destinations' })
-    for (const label of ['Inventory', 'Profitability', 'Equipment', 'Field Log', 'Scouting', 'Harvest', 'Programs', 'Alerts']) await expect(more.getByRole('link', { name: label })).toBeVisible()
+    for (const label of ['Grain', 'Inventory', 'Profitability', 'Equipment', 'Field Log', 'Scouting', 'Harvest', 'Programs', 'Alerts']) await expect(more.getByRole('link', { name: label })).toBeVisible()
     await more.getByRole('button', { name: 'Close more navigation' }).click()
     await expect(more).toBeHidden()
   }
+  expect(unexpected).toEqual([])
+})
+
+// FD-1: Today is the front door. These journeys prove the role matrix through the built shell; src/data/today.regression.ts proves
+// the projection and scripts/sql/fd-today-role-assertions.sql proves the row-level side on a disposable database.
+test('Today opens by default with record tiles and Next up, and hands the Rain and Task tiles to the owning forms', async ({ page, context }, testInfo) => {
+  await seedSession(context)
+  const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), true, 1, ownerProfile, userId, {}, todayRows(farms[0]))
+  await page.goto('/')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
+  await expect(page.getByRole('heading', { name: 'What are you recording?' })).toBeVisible()
+  const tiles = page.getByRole('list', { name: 'Record' }).getByRole('button')
+  await expect(tiles).toHaveText(['Rain', 'Scouting note', 'Spray record', 'Task', 'Harvest', 'Grain delivery'])
+  const boxes = await tiles.evaluateAll((items) => items.map((item) => { const box = item.getBoundingClientRect(); return { width: box.width, height: box.height } }))
+  expect(boxes.every((box) => box.width >= 48 && box.height >= 48)).toBeTruthy()
+  const nextUp = page.getByRole('region', { name: 'Next up' })
+  const rows = nextUp.getByRole('link')
+  await expect(rows).toHaveCount(5)
+  await expect(rows.nth(0)).toContainText('Service overdue')
+  await expect(rows.nth(0)).toContainText('John Deere 8R 340 · Engine oil')
+  await expect(rows.nth(0)).toContainText('12 hours over')
+  await expect(rows.nth(0)).toHaveAttribute('href', '/equipment')
+  await expect(rows.nth(1)).toContainText('Task overdue')
+  await expect(rows.nth(1)).toContainText('Fix the planter')
+  await expect(rows.nth(2)).toContainText('Program pass due')
+  await expect(rows.nth(2)).toHaveAttribute('href', `/programs?pass=${passA}`)
+  await expect(rows.nth(3)).toContainText('Low inventory')
+  await expect(rows.nth(3)).toContainText('Atrazine 4L')
+  await expect(rows.nth(3)).toContainText('4 gal left')
+  await expect(rows.nth(3)).toHaveAttribute('href', '/inventory')
+  await expect(rows.nth(4)).toContainText('Grain alert')
+  await expect(rows.nth(4)).toContainText('Corn hit your $4.60 target')
+  await expect(page.getByText('River Bend corn hit $4.80')).toHaveCount(0)
+  // The due-generation function's own task for the overdue interval is the same work as the service-due row and is not listed twice.
+  await expect(page.getByText('Engine oil · John Deere 8R 340')).toHaveCount(0)
+  await expect(page.getByRole('link', { name: /Check the spray window/ })).toHaveAttribute('href', '/weather')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
+  await page.screenshot({ path: testInfo.outputPath('today-owner.png'), fullPage: true })
+  await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Rain', exact: true }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/field-log')
+  await expect(page.getByRole('heading', { name: 'Add rain' })).toBeVisible()
+  await page.goto('/today')
+  await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Task' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/tasks')
+  await expect(page.getByRole('heading', { name: 'Add task' })).toBeVisible()
+  await page.goto('/today')
+  await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Scouting note' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/scouting')
+  await expect(page.getByRole('heading', { name: 'New scouting note' })).toBeVisible()
+  await page.goto('/today')
+  await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Harvest' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/harvest')
+  await expect(page.getByRole('heading', { name: 'Enter harvest' })).toBeVisible()
+  await page.goto('/today')
+  await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Grain delivery' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/grain/contracts')
+  await expect(page.getByRole('status').filter({ hasText: 'Recording a grain delivery' })).toBeVisible()
+  await expect(page.getByLabel('Crop and year')).toHaveValue('00000000-0000-4000-8000-000000000051')
+  await expect(page.getByLabel('Crop and year').locator('option:checked')).toHaveText(/^2026 Corn/)
+  await expect(page.getByRole('button', { name: 'Add contract' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Record a sale instead' }).click()
+  await expect(page.getByRole('button', { name: 'Add contract' })).toBeVisible()
+  expect(unexpected).toEqual([])
+})
+
+test('Today shows a worker without financial access no grain tile and no grain line, and reads no grain table', async ({ page, context }) => {
+  await seedSession(context)
+  const reads: string[] = []
+  page.on('request', (request) => { const url = new URL(request.url()); if (url.pathname.startsWith('/rest/v1/')) reads.push(url.pathname) })
+  const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), false, 1, { memberRole: 'worker', canViewFinancials: false, namedRep: false }, userId, {}, todayRows(farms[0]))
+  await page.goto('/today')
+  await expect(page.getByRole('heading', { name: 'What are you recording?' })).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Record' }).getByRole('button')).toHaveText(['Rain', 'Scouting note', 'Spray record', 'Task', 'Harvest'])
+  const nextUp = page.getByRole('region', { name: 'Next up' })
+  await expect(nextUp.getByRole('link')).toHaveCount(4)
+  await expect(nextUp.getByText('Service overdue')).toBeVisible()
+  await expect(nextUp.getByText('Task overdue')).toBeVisible()
+  await expect(nextUp.getByText('Program pass due')).toBeVisible()
+  await expect(nextUp.getByText('Low inventory')).toBeVisible()
+  await expect(page.getByText('Grain alert')).toHaveCount(0)
+  await expect(page.getByText('$4.60')).toHaveCount(0)
+  expect(reads.filter((path) => /grain|production_estimates|marketing_plan|insurance_units|budget|cost_lines/.test(path))).toEqual([])
+  expect(unexpected).toEqual([])
+})
+
+test('Today hides a pass skipped on this device before it syncs, reading the queue as it stands', async ({ page, context }) => {
+  await seedSession(context)
+  const queueKey = `farm-rx-programs-write-queue:v1:${projectRef}:${userId}:${farmA}`
+  // A device holding queued work also holds the grant records the app wrote when it opened the farm; the gate verifies pending
+  // work against them, so they are seeded as the app would have left them (epoch 1, not revoked).
+  await context.addInitScript(({ accessKey, access, queueKey: targetQueue, queue, fenceKey, generationKey, epochKey, changedAt, targetUserId, targetFarmId }) => {
+    localStorage.setItem(accessKey, JSON.stringify(access))
+    localStorage.setItem(targetQueue, JSON.stringify(queue))
+    const fence = { version: 2, generation: 1, token: '00000000-0000-4000-8000-000000000099', serverEpoch: 1, revoked: false, changedAt }
+    localStorage.setItem(fenceKey, JSON.stringify(fence))
+    localStorage.setItem(generationKey, JSON.stringify({ version: fence.version, generation: fence.generation, token: fence.token, serverEpoch: fence.serverEpoch, changedAt: fence.changedAt }))
+    localStorage.setItem(epochKey, JSON.stringify({ version: 1, userId: targetUserId, epochs: { [targetFarmId]: 1 }, validatedAt: changedAt }))
+  }, {
+    accessKey: `farm-rx-access:v1:${projectRef}:${userId}`,
+    access: { version: 1, userId, farms: [farmRow(farms[0])], selectedFarmId: farmA, validatedAt: now },
+    queueKey,
+    queue: { version: 1, entries: [{ version: 1, module: 'programs', operationId: '00000000-0000-4000-8000-000000000a51', userId, farmId: farmA, enqueuedAt: '2026-07-15T11:00:00.000Z', kind: 'skip_program_pass', assignedPassId: passA, skippedOn: '2026-07-15', reason: 'Too wet to spray' }] },
+    fenceKey: `farm-rx-revocation-fence:v1:${projectRef}:${userId}:${farmA}`,
+    generationKey: `farm-rx-revocation-generation:v1:${projectRef}:${userId}:${farmA}`,
+    epochKey: `farm-rx-server-access-epochs:v1:${projectRef}:${userId}`,
+    changedAt: now,
+    targetUserId: userId,
+    targetFarmId: farmA,
+  })
+  const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), true, 1, ownerProfile, userId, {}, todayRows(farms[0]))
+  // The startup replay of that entry fails the way a dead network does, so the entry stays queued; Today reads the queue as it stands.
+  await page.route('**/rest/v1/rpc/skip_program_pass', async (route) => { await route.abort('internetdisconnected') })
+  await page.goto('/today')
+  const nextUp = page.getByRole('region', { name: 'Next up' })
+  await expect(nextUp.getByRole('link')).toHaveCount(4)
+  await expect(page.getByText('Program pass due')).toHaveCount(0)
+  await expect(page.getByText('Corn pass 2 is due')).toHaveCount(0)
+  await expect(nextUp.getByText('Fix the planter')).toBeVisible()
+  await expect(nextUp.getByText('Grain alert')).toBeVisible()
+  expect(await page.evaluate((key) => (JSON.parse(localStorage.getItem(key) ?? '{"entries":[]}') as { entries: unknown[] }).entries.length, queueKey)).toBe(1)
+  expect(unexpected).toEqual([])
+})
+
+test('Today gives a named rep a view-only front door with grain alerts and no equipment or task reads', async ({ page, context }) => {
+  await seedSession(context)
+  const reads: string[] = []
+  page.on('request', (request) => { const url = new URL(request.url()); if (url.pathname.startsWith('/rest/v1/')) reads.push(url.pathname) })
+  const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), false, 1, { memberRole: null, canViewFinancials: false, namedRep: true }, userId, {}, todayRows(farms[0]))
+  await page.goto('/today')
+  await expect(page.getByRole('heading', { name: 'Your farm today' })).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Record' })).toHaveCount(0)
+  const nextUp = page.getByRole('region', { name: 'Next up' })
+  await expect(nextUp.getByRole('link')).toHaveCount(2)
+  await expect(nextUp.getByText('Low inventory')).toBeVisible()
+  await expect(nextUp.getByText('Grain alert')).toBeVisible()
+  await expect(page.getByText('Service overdue')).toHaveCount(0)
+  await expect(page.getByText('Program pass due')).toHaveCount(0)
+  await expect(page.getByRole('link', { name: /spray window|Weather & Spray/ })).toHaveCount(0)
+  expect(reads.filter((path) => /equipment|farm_tasks|farm_member_names/.test(path))).toEqual([])
   expect(unexpected).toEqual([])
 })

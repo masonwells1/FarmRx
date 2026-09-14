@@ -1,6 +1,7 @@
 import { Window } from 'happy-dom'
 import React, { createElement } from 'react'
 import { act } from 'react'
+import { MemoryRouter } from 'react-router'
 import { createRoot } from 'react-dom/client'
 import { HarvestPage } from './HarvestModule'
 import type { CropAssignment, FieldsData } from './data/fields'
@@ -22,8 +23,10 @@ const flush = async () => { await Promise.resolve(); await new Promise<void>((re
 function crop(id: string, overrides: Partial<CropAssignment> = {}): CropAssignment {
   return { id, farm_id: farmId, field_id: fieldId, crop_year: 2026, commodity_id: commodityId, planting_sequence: 1, planted_acres: 10, variety: null, planting_date: '2026-04-20', harvest_date: null, harvested_bushels: null, expected_yield_per_acre: 120, expected_price_per_bu: 4.25, actual_price_per_bu: null, notes: null, created_at: stamp, updated_at: stamp, ...overrides }
 }
-function data(assignments: CropAssignment[]): HarvestData {
-  const fieldsData: FieldsData = { farm: { id: farmId, name: 'Receipt Farm', share_with_rep: false, created_by: farmId, created_at: stamp, updated_at: stamp }, entities: [], fields: [{ id: fieldId, farm_id: farmId, operating_entity_id: farmId, name: 'North 40', legal_description: null, county: null, state: null, total_acres: 10, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: null, longitude: null, location_source: null, is_active: true, created_at: stamp, updated_at: stamp }], crop_assignments: assignments, arrangements: [], commodities: [{ id: commodityId, name: 'Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: stamp, updated_at: stamp }] }
+const emptyFieldId = '00000000-0000-4000-8000-000000000006'
+const retiredFieldId = '00000000-0000-4000-8000-000000000007'
+function data(assignments: CropAssignment[], leadingEmptyField = false, trailingRetiredField = false): HarvestData {
+  const fieldsData: FieldsData = { farm: { id: farmId, name: 'Receipt Farm', share_with_rep: false, created_by: farmId, created_at: stamp, updated_at: stamp }, entities: [], fields: [...(leadingEmptyField ? [{ id: emptyFieldId, farm_id: farmId, operating_entity_id: farmId, name: 'Bare 10', legal_description: null, county: null, state: null, total_acres: 10, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: null, longitude: null, location_source: null, is_active: true, created_at: stamp, updated_at: stamp }] : []), { id: fieldId, farm_id: farmId, operating_entity_id: farmId, name: 'North 40', legal_description: null, county: null, state: null, total_acres: 10, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: null, longitude: null, location_source: null, is_active: true, created_at: stamp, updated_at: stamp }, ...(trailingRetiredField ? [{ id: retiredFieldId, farm_id: farmId, operating_entity_id: farmId, name: 'Sold 80', legal_description: null, county: null, state: null, total_acres: 80, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: null, longitude: null, location_source: null, is_active: false, created_at: stamp, updated_at: stamp }] : [])].map((field) => ({ ...field })), crop_assignments: assignments, arrangements: [], commodities: [{ id: commodityId, name: 'Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: stamp, updated_at: stamp }] }
   return { fieldsData, viewer: { user_id: farmId, role: 'owner' } }
 }
 function record(value: HarvestDraft): HarvestRecord { return { ...value, id: value.crop_assignment_id, farm_id: farmId, updated_at: stamp } }
@@ -42,7 +45,7 @@ const container = document.createElement('div'); document.body.append(container)
 let initialUnmounted = false
 let errorContainer: HTMLDivElement | null = null; let errorRoot: ReturnType<typeof createRoot> | null = null
 try {
-  await act(async () => { root.render(createElement(HarvestPage, { harvestRepository: repository })); await flush() })
+  await act(async () => { root.render(createElement(MemoryRouter, null, createElement(HarvestPage, { harvestRepository: repository }))); await flush() })
   const enter = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Enter harvest')
   assert(enter, 'Harvest did not render its Enter harvest action.')
   await act(async () => { enter.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve() })
@@ -67,7 +70,7 @@ try {
   await act(async () => { root.unmount() }); initialUnmounted = true; container.remove()
   errorContainer = document.createElement('div'); document.body.append(errorContainer); errorRoot = createRoot(errorContainer)
   const failingRepository: HarvestRepository = { getData: async () => data([crop(cropId)]), saveHarvest: async (value) => { setSaveReceipt(value.crop_assignment_id, 'needs attention'); throw new Error('terminal harvest validation failure') } }
-  await act(async () => { errorRoot!.render(createElement(HarvestPage, { harvestRepository: failingRepository })); await flush() })
+  await act(async () => { errorRoot!.render(createElement(MemoryRouter, null, createElement(HarvestPage, { harvestRepository: failingRepository }))); await flush() })
   const errorEnter = [...errorContainer.querySelectorAll('button')].find((button) => button.textContent === 'Enter harvest')
   assert(errorEnter, 'The error harness did not render Enter harvest.')
   await act(async () => { errorEnter.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve() })
@@ -81,5 +84,29 @@ try {
   assert(retainedErrorForm === errorForm && (retainedErrorForm.elements.namedItem('bushels') as HTMLInputElement).value === '1300' && (retainedErrorForm.elements.namedItem('harvestDate') as HTMLInputElement).value === '2026-07-11' && (retainedErrorForm.elements.namedItem('actualPrice') as HTMLInputElement).value === '5' && errorContainer.querySelector('.form-error') && errorContainer.textContent?.includes('Needs attention'), 'A terminal error must retain the same harvest form, all entered values, the farmer-safe error, and Needs attention.')
 } finally {
   await act(async () => { if (!initialUnmounted) root.unmount(); errorRoot?.unmount() }); container.remove(); errorContainer?.remove(); win.close()
+}
+
+// FD-1 (FD-006): a Today harvest intent opens the entry form for the newest year with crops, even when nothing is assigned for
+// the browser's calendar year, so the effective year must be known on the first render rather than settled by a later effect.
+{
+  const { todayRecordIntent } = await import('./data/todayIntents')
+  const intentContainer = document.createElement('div'); document.body.append(intentContainer); const intentRoot = createRoot(intentContainer)
+  try {
+    // The first active field has no crop at all, and a retired field carries a newer crop; the intent must open the entry on the
+    // first active field that has a crop, in the newest year that has crops on active fields.
+    const priorYearRepository: HarvestRepository = { getData: async () => data([crop(cropId, { crop_year: 2025, planting_date: '2025-04-20' }), crop('00000000-0000-4000-8000-000000000008', { field_id: retiredFieldId, crop_year: 2026 })], true, true), saveHarvest: async () => { throw new Error('not exercised') } }
+    await act(async () => { intentRoot.render(createElement(MemoryRouter, { initialEntries: [{ pathname: '/harvest', state: todayRecordIntent('harvest') }] }, createElement(HarvestPage, { harvestRepository: priorYearRepository }))); await flush() })
+    const yearPicker = intentContainer.querySelector('select') as HTMLSelectElement | null
+    assert(yearPicker && yearPicker.value === '2025', `The year picker did not settle on the newest year with crops on active fields (saw ${yearPicker?.value ?? 'none'}).`)
+    assert(![...yearPicker.options].some((option) => option.value === '2026'), 'A retired field\'s crop year was offered in the picker.')
+    const intentForm = intentContainer.querySelector('form.harvest-form')
+    assert(intentForm, 'A Today harvest intent did not open the harvest entry when the only crops belong to a prior year.')
+    const openCard = intentForm.closest('article.harvest-card')
+    assert(openCard?.querySelector('h2')?.textContent === 'North 40', 'The harvest entry opened on a field without a crop instead of the first field that has one.')
+    const closeButton = [...intentContainer.querySelectorAll('button')].find((button) => button.textContent === 'Close')
+    assert(closeButton, 'The opened harvest entry did not offer Close.')
+  } finally {
+    await act(async () => { intentRoot.unmount() }); intentContainer.remove()
+  }
 }
 console.log('Harvest receipt regression passed')

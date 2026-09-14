@@ -1,6 +1,7 @@
 import { Window } from 'happy-dom'
 import React, { createElement } from 'react'
 import { act } from 'react'
+import { MemoryRouter } from 'react-router'
 import { createRoot } from 'react-dom/client'
 import { FieldLogPage } from './FieldLogModule'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
@@ -31,7 +32,7 @@ const fieldLogRepository = { getData: async () => ({ entries, viewer: { user_id:
 const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
 const deleteButton = () => { const found = [...container.querySelectorAll('button')].find((item) => item.textContent === 'Delete') as HTMLButtonElement | undefined; assert(found, 'The entry Delete button did not render.'); return found }
 try {
-  await act(async () => { root.render(createElement(React.Fragment, null, createElement(FieldLogPage, { fieldLogRepository, fieldsRepository }), createElement(ConfirmDialogHost))); await flush() })
+  await act(async () => { root.render(createElement(MemoryRouter, null, createElement(FieldLogPage, { fieldLogRepository, fieldsRepository }), createElement(ConfirmDialogHost))); await flush() })
   // Two taps before the farmer answers: one question, zero writes.
   await act(async () => { const button = deleteButton(); button.click(); button.click(); await flush() })
   assert(openDialogs().length === 1 && openDialogs()[0]?.textContent?.includes('Delete this field log entry?'), 'A double tap must show exactly one delete question.')

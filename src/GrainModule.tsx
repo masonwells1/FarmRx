@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "react-router";
+import { parseTodayRecordIntent } from "./data/todayIntents";
 import { NeedsAttentionList } from "./components/NeedsAttentionList";
 import { SaveReceipt } from "./components/SaveReceipt";
 import { MarketQuoteSection, quoteCropYear } from "./components/MarketQuote";
@@ -249,6 +250,11 @@ function activeProduction(estimate: ProductionEstimate) {
 function scopeRows<T extends PositionScope>(rows: T[], scope: PositionScope) {
   return rows.filter((row) => sameScope(row, scope));
 }
+/** A Today grain-delivery intent lands on the newest crop year's contracts (the repository sorts estimates oldest first, which
+ * is right for planning but wrong for a delivery being recorded now); between estimates of the same year the first stays. */
+export function deliveryDefaultEstimate<T extends { crop_year: number }>(estimates: readonly T[]): T | undefined {
+  return estimates.reduce<T | undefined>((newest, estimate) => (!newest || estimate.crop_year > newest.crop_year ? estimate : newest), undefined);
+}
 function scopeLabel(workspace: GrainWorkspace, scope: PositionScope) {
   const commodity =
     workspace.fields.commodities.find((item) => item.id === scope.commodity_id)
@@ -299,7 +305,11 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const [saleLimits, setSaleLimits] = useState<Record<string, number | null>>({});
   const refreshWriteLock = useRef(createSubmitLock());
   const planLock = useRef(createSubmitLock());
-  const rawTab = useLocation().pathname.split("/")[2] ?? "";
+  const location = useLocation();
+  const rawTab = location.pathname.split("/")[2] ?? "";
+  // A Today "Grain delivery" tile arrives with a record intent: the contracts tab opens in delivery mode, with the new-sale form
+  // set aside so the only entry offered is the delivered bushels on an existing contract.
+  const [deliveryIntent, setDeliveryIntent] = useState(() => parseTodayRecordIntent(location.state)?.record === "grain_delivery");
   const tabPath = [
     "plan",
     "alerts",
@@ -414,7 +424,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
       setSelectedEstimateId((current) =>
         data.production_estimates.some((estimate) => estimate.id === current)
           ? current
-          : (data.production_estimates[0]?.id ?? ""),
+          : ((deliveryIntent ? deliveryDefaultEstimate(data.production_estimates)?.id : undefined) ?? data.production_estimates[0]?.id ?? ""),
       );
     } catch (caught) {
       const message =
@@ -599,7 +609,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const selectedEstimate =
     workspace.production_estimates.find(
       (estimate) => estimate.id === selectedEstimateId,
-    ) ?? workspace.production_estimates[0];
+    ) ?? (deliveryIntent ? deliveryDefaultEstimate(workspace.production_estimates) : undefined) ?? workspace.production_estimates[0];
   if (!selectedEstimate)
     return (
       <FirstEstimate
@@ -900,11 +910,11 @@ export function GrainPage({ services }: { services: GrainServices }) {
             <div>
               <span className="eyebrow">15-second entry</span>
               <h2>Contracts</h2>
-              <p>Record a sale; the position updates from it.</p>
+              <p>{deliveryIntent ? "Record the bushels delivered on a contract." : "Record a sale; the position updates from it."}</p>
             </div>
             <SaveReceipt state={receipt} />
           </div>
-          <ContractEntry
+          {deliveryIntent ? <div className="grain-delivery-intent" role="status"><div><strong>Recording a grain delivery</strong><p>Pick the crop and year, then the contract below, and enter the delivered bushels. Nothing is written until you tap Record delivery.</p><label className="commodity-picker"><span>Crop and year</span><select value={selectedEstimate.id} onChange={(event) => setSelectedEstimateId(event.target.value)}>{workspace.production_estimates.map((estimate) => <option key={estimate.id} value={estimate.id}>{scopeLabel(workspace, estimate)}</option>)}</select></label></div><button className="secondary-action" type="button" onClick={() => setDeliveryIntent(false)}>Record a sale instead</button></div> : <ContractEntry
             workspace={workspace}
             scope={selectedScope}
             services={services}
@@ -914,7 +924,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
               await refresh();
             }}
             onReceipt={setLastReceiptId}
-          />
+          />}
           <div className="table-scroll">
             <table>
               <thead>
@@ -930,7 +940,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
               </thead>
               <tbody>
                 {scopeRows(workspace.grain_contracts, selectedScope).map(
-                  (contract) => {
+                  (contract, contractIndex) => {
                     const delivered = workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((sum, item) => sum + item.bushels, 0);
                     const remaining = contract.bushels - delivered;
                     return (
@@ -964,7 +974,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
                         {contract.delivery_start?.slice(5).replace("-", "/") ??
                           "—"}
                       </td>
-                      <td className="align-right numeric">{workspace.capabilities?.contract_deliveries ? <><strong>{preciseBushels.format(delivered)} / {preciseBushels.format(Math.max(0, remaining))} bu</strong>{remaining < 0 && <small className="negative-text">Over-delivered by {preciseBushels.format(-remaining)} bu</small>}</> : <strong>Tracking arrives with the next database update</strong>}<ContractActions contract={contract} workspace={workspace} services={services} onSaved={async () => { whisper(); await refresh(); }} onDeliverySaved={async () => { await refresh(true); whisper(); }} onReceipt={setLastReceiptId} /></td>
+                      <td className="align-right numeric">{workspace.capabilities?.contract_deliveries ? <><strong>{preciseBushels.format(delivered)} / {preciseBushels.format(Math.max(0, remaining))} bu</strong>{remaining < 0 && <small className="negative-text">Over-delivered by {preciseBushels.format(-remaining)} bu</small>}</> : <strong>Tracking arrives with the next database update</strong>}<ContractActions contract={contract} workspace={workspace} services={services} autoFocusDelivery={deliveryIntent && contractIndex === 0} onSaved={async () => { whisper(); await refresh(); }} onDeliverySaved={async () => { await refresh(true); whisper(); }} onReceipt={setLastReceiptId} /></td>
                     </tr>
                     );
                   },
@@ -3034,7 +3044,7 @@ export function ContractEntry({
   );
 }
 
-export function ContractActions({ contract, workspace, services, onSaved, onDeliverySaved, onReceipt }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; onSaved: () => Promise<void>; onDeliverySaved: () => Promise<void>; onReceipt: (id: string) => void }) {
+export function ContractActions({ contract, workspace, services, autoFocusDelivery = false, onSaved, onDeliverySaved, onReceipt }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; autoFocusDelivery?: boolean; onSaved: () => Promise<void>; onDeliverySaved: () => Promise<void>; onReceipt: (id: string) => void }) {
   const [price, setPrice] = useState(""); const [delivery, setDelivery] = useState(""); const [message, setMessage] = useState(""); const [saving, setSaving] = useState(false); const [deliveryUnconfirmed, setDeliveryUnconfirmed] = useState(false); const lock = useRef(createSubmitLock()); const deliveryDraft = useRef<GrainContractDelivery | null>(null);
   const missingLeg = contract.contract_type === "basis" ? "futures_price" : contract.contract_type === "hta" ? "basis" : null;
   const finalize = async () => { if (!missingLeg || !lock.current.acquire()) return; setSaving(true); try { if (price.trim() === "") throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const value = Number(price); if (!Number.isFinite(value) || (missingLeg === "futures_price" && value <= 0)) throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const shown = `${missingLeg === "basis" && value < 0 ? "-" : ""}$${Math.abs(value).toFixed(2)}/bu`; if (!(await confirmDialog({ title: `Set ${missingLeg === "basis" ? "basis" : "futures price"} to ${shown}?`, body: "This cannot be changed afterward. Add a contract note for any correction.", confirmLabel: "Set price", destructive: true }))) return; await services.grainRepository.finalizeContractPriceLeg(contract.id, missingLeg, value); setMessage("Price leg set. Add a contract note for any correction."); await onSaved() } catch (error) { setMessage(farmerError(error, "set this price")) } finally { lock.current.release(); setSaving(false) } };
@@ -3073,7 +3083,7 @@ export function ContractActions({ contract, workspace, services, onSaved, onDeli
       setSaving(false);
     }
   };
-  return <div className="contract-actions">{missingLeg && contract[missingLeg] === null && <label>{missingLeg === "basis" ? "Set basis $/bu" : "Set futures price $/bu"}<input type="number" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_price_finalization} onClick={() => void finalize()}>{missingLeg === "basis" ? "Set basis" : "Set futures price"}</button>{!workspace.capabilities?.contract_price_finalization && <small>Price finalization arrives with the next database update. Reload the app after the update.</small>}</label>}<label>Delivered bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={delivery} disabled={deliveryUnconfirmed} onChange={(event) => setDelivery(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_deliveries} onClick={() => void record()}>{deliveryUnconfirmed ? "Retry delivery" : "Record delivery"}</button><small>Recording a delivery does not remove grain from a bin.</small>{!workspace.capabilities?.contract_deliveries && <small>Tracking arrives with the next database update. Reload the app after the update.</small>}</label>{message && <small>{message}</small>}</div>
+  return <div className="contract-actions">{missingLeg && contract[missingLeg] === null && <label>{missingLeg === "basis" ? "Set basis $/bu" : "Set futures price $/bu"}<input type="number" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_price_finalization} onClick={() => void finalize()}>{missingLeg === "basis" ? "Set basis" : "Set futures price"}</button>{!workspace.capabilities?.contract_price_finalization && <small>Price finalization arrives with the next database update. Reload the app after the update.</small>}</label>}<label>Delivered bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={delivery} disabled={deliveryUnconfirmed} autoFocus={autoFocusDelivery} onChange={(event) => setDelivery(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_deliveries} onClick={() => void record()}>{deliveryUnconfirmed ? "Retry delivery" : "Record delivery"}</button><small>Recording a delivery does not remove grain from a bin.</small>{!workspace.capabilities?.contract_deliveries && <small>Tracking arrives with the next database update. Reload the app after the update.</small>}</label>{message && <small>{message}</small>}</div>
 }
 
 export function Bins({

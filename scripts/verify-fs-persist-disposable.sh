@@ -26,3 +26,6 @@ for migration in $(ls "$root"/supabase/migrations/*.sql | sort); do
 done
 psql_ -d farmrx_disposable -f "$root/scripts/sql/fs-persist-disposable-assertions.sql" | grep -q FS_PERSIST_DISPOSABLE_PASS
 echo FS_PERSIST_DISPOSABLE_PASS
+# Initiative FD-1 (Today) reads only existing rows; this asserts the row-level rules Today depends on, in the same database.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/fd-today-role-assertions.sql" | grep -q FD_TODAY_DISPOSABLE_PASS
+echo FD_TODAY_DISPOSABLE_PASS

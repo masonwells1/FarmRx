@@ -1861,7 +1861,7 @@ try {
 const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8')
 const farmContextSource = readFileSync(new URL('../auth/farmContext.ts', import.meta.url), 'utf8')
 const dataIndexSource = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
-const expectedRoutes = ['/fields', '/fields/new', '/fields/:id', '/fields/:id/edit', '/grain/*', '/inventory', '/profitability/*', '/equipment', '/tasks', '/weather', '/field-log', '/scouting', '/harvest', '/programs', '/notifications', '/soil-rx', '/privacy', '*', '/login', '/update-password', '/*']
+const expectedRoutes = ['/today', '/fields', '/fields/new', '/fields/:id', '/fields/:id/edit', '/grain/*', '/inventory', '/profitability/*', '/equipment', '/tasks', '/weather', '/field-log', '/scouting', '/harvest', '/programs', '/notifications', '/soil-rx', '/privacy', '*', '/login', '/update-password', '/*']
 const actualRoutes = [...appSource.matchAll(/<Route\b[^>]*?\bpath="([^"]+)"/g)].map((match) => match[1])
 assert(actualRoutes.length === expectedRoutes.length && actualRoutes.every((route, index) => route === expectedRoutes[index]), `The ordered route manifest changed. Expected ${expectedRoutes.join(',')}; received ${actualRoutes.join(',')}.`)
 assert(dataIndexSource.includes('const fieldsGetContext = currentFarmContext') && dataIndexSource.includes('getContext: currentFarmContext'), 'Fields or field-location production wiring still assembles user and farm identity in separate asynchronous lookups.')

@@ -1,5 +1,6 @@
 import { normalizeProgramProductDraft, uuid, validAssignmentIdentityPlans, validDate, validateActualProgramProducts, validateProgramDraft, validateProgramPassDraft, validateProgramProductDraft, type ActualProgramProduct, type AssignmentIdentityPlan, type ProgramApplicationLink, type ProgramDraft, type ProgramPassDraft, type ProgramProductDraft } from './programs'
 import type { StorageLike } from './writeQueue'
+import type { PendingPassOutcome, ProgramsData } from './programs'
 type Base = {
   version: 1
   module: 'programs'
@@ -154,4 +155,53 @@ export class ProgramsWriteQueue {
     return next
   }
 }
+export const unresolvedAssignmentMessage = 'A program change saved on this device could not be checked against your programs.'
+/** What the assignment-level projection needs from a read-only Programs snapshot: the assignments with their passes and planting
+ * dates, and the programs with their template passes. */
+export type ProgramsSnapshotView = Pick<ProgramsData, 'assignments' | 'programs'>
+const addDays = (date: string, days: number) => { const value = new Date(`${date}T00:00:00.000Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10) }
+/** The outcome each assigned pass carries in this device's queue, projected the way the server will land each entry, in order:
+ * applied and skipped close the pass; a reschedule moves its due date; unassigning or reassigning a program cancels every planned
+ * pass of the assignment; taking program updates (refresh) cancels a planned, non-overridden pass whose template pass is gone,
+ * gives the others the template's date (a target date, else planting date plus offset, else none), and leaves a pass unscheduled
+ * when that date went away. Assignment-level entries name only the assignment, so the caller supplies a read-only Programs
+ * snapshot; when it cannot, or the snapshot lacks the assignment or its program, the outcomes are unknowable and this throws
+ * rather than guess. When a projector is given, each assignment-level entry is resolved against the snapshot with the entries
+ * before it overlaid, so template edits queued ahead of a refresh shape it and ones queued after it do not. A pass already given
+ * a closing outcome earlier in the queue is not planned on the server by the time a later entry lands, and one rescheduled earlier
+ * in the queue is a field override there, so both are left as they are. A later entry for the same pass otherwise overrides an
+ * earlier one, as replay applies them in order. Pure over the entries, snapshot and projector. */
+export function pendingPassOutcomes<Snapshot extends ProgramsSnapshotView>(entries: readonly ProgramsQueueEntryV1[], base: Snapshot | null, project?: (base: Snapshot, prior: readonly ProgramsQueueEntryV1[]) => Snapshot): Map<string, PendingPassOutcome> {
+  const outcomes = new Map<string, PendingPassOutcome>()
+  // Server replay applies the queue in order, so an assignment-level entry sees the template and assignment state left by the
+  // entries before it (a template pass edited or deleted offline, an earlier reschedule); the snapshot is projected that far.
+  let snapshot: Snapshot | null = base
+  const assignmentOf = (assignmentId: string) => { const assignment = snapshot?.assignments.find((item) => item.assignment_id.toLowerCase() === assignmentId.toLowerCase()); if (!assignment) throw new Error(unresolvedAssignmentMessage); return assignment }
+  const settled = (passId: string) => { const current = outcomes.get(passId.toLowerCase()); return current !== undefined && current.kind !== 'rescheduled' }
+  const overridden = (passId: string) => outcomes.get(passId.toLowerCase())?.kind === 'rescheduled'
+  for (const [index, entry] of entries.entries()) {
+    if (base && project && (entry.kind === 'unassign_program' || entry.kind === 'reassign_program_assignment' || entry.kind === 'refresh_program_assignment')) snapshot = project(base, entries.slice(0, index))
+    if (entry.kind === 'mark_program_pass_applied') outcomes.set(entry.assignedPassId.toLowerCase(), { kind: 'applied' })
+    else if (entry.kind === 'skip_program_pass') outcomes.set(entry.assignedPassId.toLowerCase(), { kind: 'skipped' })
+    else if (entry.kind === 'reschedule_program_pass') outcomes.set(entry.assignedPassId.toLowerCase(), { kind: 'rescheduled', dueOn: entry.dueOn })
+    else if (entry.kind === 'unassign_program' || entry.kind === 'reassign_program_assignment') {
+      for (const pass of assignmentOf(entry.assignmentId).passes) if (pass.status === 'planned' && !settled(pass.id)) outcomes.set(pass.id.toLowerCase(), { kind: 'cancelled' })
+    } else if (entry.kind === 'refresh_program_assignment') {
+      const assignment = assignmentOf(entry.assignmentId)
+      const program = snapshot?.programs.find((item) => item.id.toLowerCase() === assignment.program_id.toLowerCase())
+      if (!program) throw new Error(unresolvedAssignmentMessage)
+      for (const pass of assignment.passes) {
+        if (pass.status !== 'planned' || pass.is_field_override || settled(pass.id) || overridden(pass.id)) continue
+        const template = pass.source_program_pass_id === null ? undefined : program.passes.find((item) => item.id.toLowerCase() === pass.source_program_pass_id!.toLowerCase() && !item.is_archived)
+        if (!template) { outcomes.set(pass.id.toLowerCase(), { kind: 'cancelled' }); continue }
+        const dueOn = template.target_date ?? (template.planting_offset_days !== null && assignment.planting_date ? addDays(assignment.planting_date, template.planting_offset_days) : null)
+        if (dueOn === pass.due_on) continue
+        outcomes.set(pass.id.toLowerCase(), dueOn === null ? { kind: 'unscheduled' } : { kind: 'rescheduled', dueOn })
+      }
+    }
+  }
+  return outcomes
+}
+/** Whether the queue holds an entry whose pass outcomes need the Programs snapshot to resolve. */
+export function needsAssignmentResolution(entries: readonly ProgramsQueueEntryV1[]) { return entries.some((entry) => entry.kind === 'unassign_program' || entry.kind === 'reassign_program_assignment' || entry.kind === 'refresh_program_assignment') }
 export const programsWriteQueueKey = (projectRef: string, userId: string, farmId: string) => `farm-rx-programs-write-queue:v1:${projectRef}:${userId}:${farmId}`

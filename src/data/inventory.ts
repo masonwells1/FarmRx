@@ -1,4 +1,5 @@
-import type { FieldsData, FieldsRepository } from './fields'
+import type { FieldsData, FieldsRepository, ReadOnlySnapshot } from './fields'
+import type { FarmOperationContext } from './farmOperationContext'
 
 export const INVENTORY_STORAGE_KEY = 'farm-rx-inventory-mock:v1'
 export type InventoryProductKind = 'chemical' | 'seed' | 'fertilizer' | 'biological' | 'adjuvant' | 'other'
@@ -24,7 +25,7 @@ export type ApplicationSaveDisposition =
   | { kind: 'confirmed'; applicationId: string }
   | { kind: 'queued'; applicationId: string; operationId: string }
   | { kind: 'needs-attention'; applicationId: string; operationId: string }
-export interface InventoryRepository { getWorkspace(): Promise<InventoryWorkspace>; getNeedsAttentionQueueKey?(): Promise<string>; saveProduct(product: InventoryProduct): Promise<void>; receiveReceipt(input: ReceiptInput): Promise<void>; editReceipt(receiptId: string, patch: Partial<ReceiptInput>): Promise<void>; cancelReceipt(receiptId: string, reason: string): Promise<void>; addAdjustment(input: AdjustmentInput): Promise<void>; saveApplication(input: ApplicationInput): Promise<ApplicationSaveDisposition> }
+export interface InventoryRepository { getWorkspace(): Promise<InventoryWorkspace>; /** Pure read: consumes an already-published context and performs no access resolution, queue replay, cache write, or mutation. */ getSnapshot?(context: FarmOperationContext): Promise<ReadOnlySnapshot<InventoryWorkspace>>; getNeedsAttentionQueueKey?(): Promise<string>; saveProduct(product: InventoryProduct): Promise<void>; receiveReceipt(input: ReceiptInput): Promise<void>; editReceipt(receiptId: string, patch: Partial<ReceiptInput>): Promise<void>; cancelReceipt(receiptId: string, reason: string): Promise<void>; addAdjustment(input: AdjustmentInput): Promise<void>; saveApplication(input: ApplicationInput): Promise<ApplicationSaveDisposition> }
 export interface ReceiptInput { id: string; product_id: string; quantity: number; unit: InventoryUnit; package_factor?: number | null; unit_cost?: number | null; date: string; status: 'draft' | 'received'; vendor_name?: string | null; source?: InventoryReceipt['source'] }
 export interface AdjustmentInput { id: string; product_id: string; quantity: number; reason: AdjustmentReason; notes: string; adjusted_at: string }
 export interface ApplicationInput { id: string; field_id: string; crop_assignment_id: string; status: 'draft' | 'completed'; application_date: string; start_time?: string | null; applied_acres: number; target_pest?: string | null; applicator_name?: string | null; applicator_license_number?: string | null; wind_speed_mph?: number | null; wind_direction?: string | null; temperature_f?: number | null; relative_humidity_pct?: number | null; products: Array<{ id: string; product_id: string; rate: number; rate_unit: InventoryUnit; rate_basis: RateBasis; total_quantity: number; total_unit: InventoryUnit; package_factor?: number | null }> }

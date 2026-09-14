@@ -1,6 +1,7 @@
 import { Window } from 'happy-dom'
 import React, { createElement } from 'react'
 import { act } from 'react'
+import { MemoryRouter } from 'react-router'
 import { createRoot } from 'react-dom/client'
 import { FieldLogPage } from './FieldLogModule'
 import type { FieldLogRepository } from './data/fieldLog'
@@ -23,7 +24,7 @@ const fieldsRepository = { getData: async () => fieldsData, saveField: async () 
 const fieldLogRepository = { getData: async () => ({ entries: [], viewer: { user_id: user, role: 'worker' as const } }), getNeedsAttentionQueueKey: async () => queueKey, saveEntry: async () => { mutationCalls += 1; throw new Error('unexpected Field Log save') }, deleteEntry: async () => { mutationCalls += 1; throw new Error('unexpected Field Log delete') } } satisfies FieldLogRepository
 const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
 try {
-  await act(async () => { root.render(createElement(FieldLogPage, { fieldLogRepository, fieldsRepository })); await new Promise((resolve) => setTimeout(resolve, 0)) })
+  await act(async () => { root.render(createElement(MemoryRouter, null, createElement(FieldLogPage, { fieldLogRepository, fieldsRepository }))); await new Promise((resolve) => setTimeout(resolve, 0)) })
   const text = container.textContent ?? ''
   for (const expected of ['Saved changes that need attention', 'Field log entry', '2027-08-04 · Synthetic legacy note', '2027-08-05 · 0 in', 'cannot be sent automatically', 'Re-enter this change manually if needed, then dismiss it.', 'Review only', 'Dismiss']) assert(text.includes(expected), `Missing legacy recovery detail: ${expected}`)
   const recoveryRows = [...container.querySelectorAll('[aria-label="Saves that need attention"] article')].map((row) => row.textContent ?? '')
