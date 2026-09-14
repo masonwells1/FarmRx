@@ -739,6 +739,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
                 onSaleLimitCommit={() => void commitSaleLimit(estimate)}
                 onSaleLimitChange={(limit) => {
                   const key = scopeKey(scopeOf(estimate));
+                  // A limit too large for its column could never be saved: it is refused here with the reason, neither kept nor queued.
+                  try { normalizeGrainSaleLimit({ id: "", ...scopeOf(estimate), sale_limit_bushels: limit, created_at: "", updated_at: "" }); }
+                  catch (caught) { const message = caught instanceof Error ? caught.message : "That sale limit cannot be saved."; setSettingsNotice(message.charAt(0).toUpperCase() + message.slice(1)); return; }
                   dirtySaleLimits.current.add(key);
                   failedSaleLimits.current.delete(key);
                   // Written to the browser at once, so a reload or a save that fails after leaving the page keeps what was typed.

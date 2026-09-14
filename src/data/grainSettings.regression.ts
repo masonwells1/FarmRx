@@ -158,7 +158,7 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
 // cleared only after a confirmed save, invisible to other accounts, keyed in the offline-queue shape so the farm switcher's scan and
 // the revocation scope discovery find them.
 {
-  const store = new Map<string, string>(); const storedCount = () => store.size
+  const store = new Map<string, string>(); const sequenceKey = 'farm-rx-draft-sequence:v1'; const storedCount = () => [...store.keys()].filter((key) => key !== sequenceKey).length
   const fakeStorage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, value) }, removeItem: (key: string) => { store.delete(key) }, key: (index: number) => [...store.keys()][index] ?? null, get length() { return store.size }, clear: () => store.clear() }
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: fakeStorage })
   const scopeA = { projectRef: 'proj', userId: uid(1), farmId: farm }; const scopeB = { ...scopeA, userId: uid(2) }
@@ -190,6 +190,28 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
   assert(readSettingsDrafts(scopeA).length === 1 && readSettingsDrafts(scopeA)[0].key === 'carry-grid:x', 'Clearing one draft leaves the others.')
   clearSettingsDraft(scopeA, 'carry-grid:x')
   assert(storedCount() === 0, 'Clearing the last draft leaves no key, so the farm no longer looks pending.')
+  assert(!store.has(`farm-rx-settings-draft-${sequenceKey}`) && /^\d+$/.test(store.get(sequenceKey) ?? '') && settingsDraftKeyOf(sequenceKey, scopeA) === null, 'The shared sequence lives under its own key, which is not a draft and names no farm.')
+  // Two tabs writing the same draft in the same millisecond: the order of the writes decides, through the sequence number every tab
+  // shares in storage, never the random tail of a revision. A sequence number compares as a number (10 after 9), and two writes that
+  // tie on both time and sequence (two tabs drew the same number at once) are both kept until a later write supersedes them.
+  const first = writeSettingsDraft(scopeA, 'sale-limit:t', { value: 1 }, stamp); const second = writeSettingsDraft(scopeA, 'sale-limit:t', { value: 2 }, stamp)
+  assert(first !== null && second !== null && (readSettingsDrafts(scopeA, 'sale-limit:t')[0]?.payload as { value: number })?.value === 2 && !store.has(settingsDraftKey(scopeA, 'sale-limit:t', first)), 'Of two same-millisecond writes the later one is read back and the earlier one is removed.')
+  store.set(sequenceKey, '9')
+  store.set(settingsDraftKey(scopeA, 'sale-limit:t', `${stamp}#9#zzzzzzzz`), JSON.stringify({ version: 1, entries: [{ key: 'sale-limit:t', payload: { value: 9 }, savedAt: stamp, revision: `${stamp}#9#zzzzzzzz` }] }))
+  const tenth = writeSettingsDraft(scopeA, 'sale-limit:t', { value: 10 }, stamp)
+  assert(tenth !== null && tenth.split('#')[1] === String(Math.max(10, Number(second.split('#')[1]) + 1)) && (readSettingsDrafts(scopeA, 'sale-limit:t')[0]?.payload as { value: number })?.value === 10 && !store.has(settingsDraftKey(scopeA, 'sale-limit:t', `${stamp}#9#zzzzzzzz`)), 'The sequence continues above the stored value and compares as a number: the tenth write supersedes the ninth in the same millisecond.')
+  clearSettingsDraft(scopeA, 'sale-limit:t')
+  const tiedA = `${stamp}#77#aaaaaaaa`; const tiedB = `${stamp}#77#bbbbbbbb`
+  for (const [revision, value] of [[tiedA, 'A'], [tiedB, 'B']] as const) store.set(settingsDraftKey(scopeA, 'sale-limit:t', revision), JSON.stringify({ version: 1, entries: [{ key: 'sale-limit:t', payload: { value }, savedAt: stamp, revision }] }))
+  const tiedRead = readSettingsDrafts(scopeA, 'sale-limit:t')
+  assert(tiedRead.length === 1 && tiedRead[0]?.revision === tiedB && store.has(settingsDraftKey(scopeA, 'sale-limit:t', tiedA)) && store.has(settingsDraftKey(scopeA, 'sale-limit:t', tiedB)), 'Two writes tied on time and sequence are both kept; one of them is read back, the same one every time.')
+  clearSettingsDraft(scopeA, 'sale-limit:t', tiedB)
+  assert((readSettingsDrafts(scopeA, 'sale-limit:t')[0]?.payload as { value: string })?.value === 'A', 'After the read-back tied write is cleared by its save, the other tab\'s tied write is still there to be read.')
+  store.set(settingsDraftKey(scopeA, 'sale-limit:t', tiedB), JSON.stringify({ version: 1, entries: [{ key: 'sale-limit:t', payload: { value: 'B' }, savedAt: stamp, revision: tiedB }] }))
+  const later = writeSettingsDraft(scopeA, 'sale-limit:t', { value: 'C' }, '2026-09-13T12:00:00.001Z')
+  assert(later !== null && readSettingsDrafts(scopeA, 'sale-limit:t').length === 1 && storedCount() === 1, 'A later write supersedes both tied writes, which are removed.')
+  clearSettingsDraft(scopeA, 'sale-limit:t')
+  assert(storedCount() === 0, 'No draft is left.')
   // A browser that refuses the write reports it, so the screen saves at once instead of believing the edit is kept.
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { ...fakeStorage, setItem: () => { throw new Error('QuotaExceededError') } } })
   assert(writeSettingsDraft(scopeA, 'carry-settings', { draft: 'S3' }, stamp) === null, 'A refused write must return null.')

@@ -8,13 +8,28 @@
  * the offline queues (`farm-rx-<name>:v1:<project>:<user>:<farm>`) and the value has a non-empty `entries` array, so the
  * farm switcher's existing scan (`hasPendingFarmWork`) counts it as work waiting for that farm and that account only,
  * and the revoked-farm quarantine finds it. A read returns the newest revision of each draft and removes the older ones,
- * which a newer write has superseded. */
+ * which a newer write has superseded. "Newer" is decided by the time of the write and then by a sequence number every tab of this
+ * browser shares through storage, never by the random tail of a revision; two writes that tie on both (two tabs drew the same
+ * number in the same millisecond) are both kept until a later write supersedes them. */
 export type SettingsDraftScope = { projectRef: string; userId: string; farmId: string }
 /** `revision` identifies one write; a save clears the entry only when the revision it covered is still the stored one,
  * so a tab finishing an older save never removes a newer draft another tab wrote under the same key. */
 export type SettingsDraftEntry = { key: string; payload: unknown; savedAt: string; revision: string }
-let revisionCounter = 0
-function nextRevision(now: string): string { revisionCounter += 1; return `${now}#${revisionCounter}#${Math.random().toString(36).slice(2, 10)}` }
+/** The sequence number of the last draft write in this browser, shared by every tab through storage so writes from different tabs
+ * order by the order they happened, not by chance; the tab-local copy keeps it moving forward when storage refuses the update. */
+const sequenceKey = 'farm-rx-draft-sequence:v1'
+let lastSequence = 0
+function nextSequence(target: EnumeratedStorage): number {
+  let stored = 0
+  try { stored = Number(target.getItem(sequenceKey) ?? 0) } catch { stored = 0 }
+  const next = Math.max(Number.isSafeInteger(stored) && stored > 0 ? stored : 0, lastSequence) + 1
+  lastSequence = next
+  try { target.setItem(sequenceKey, String(next)) } catch { /* the tab-local sequence still moves forward */ }
+  return next
+}
+/** `<savedAt>#<sequence>#<random>`: the random tail only keeps two tied writes under different keys, it never decides recency. */
+function nextRevision(now: string, sequence: number): string { return `${now}#${sequence}#${Math.random().toString(36).slice(2, 10)}` }
+function sequenceOf(revision: string): number { const parsed = Number(revision.split('#')[1]); return Number.isFinite(parsed) ? parsed : 0 }
 
 const keyPrefix = 'farm-rx-settings-draft-'
 function scopeSuffix(scope: SettingsDraftScope): string { return `:v1:${scope.projectRef}:${scope.userId}:${scope.farmId}` }
@@ -46,8 +61,11 @@ function readOne(target: EnumeratedStorage, storageKey: string, expected: { key:
     return validEntry(entry) && entry.key === expected.key && entry.revision === expected.revision ? entry : null
   } catch { return null }
 }
-/** Later write first: by the time it was saved, then by revision (the counter and random tail break same-millisecond ties). */
-const newerFirst = (a: SettingsDraftEntry, b: SettingsDraftEntry) => b.savedAt.localeCompare(a.savedAt) || b.revision.localeCompare(a.revision)
+/** Later write first: by the time it was saved, then by the shared sequence number. Zero means the writes tie (the same millisecond
+ * and the same sequence number, which two tabs can draw at once); a tie never counts as one write superseding the other. */
+const newerFirst = (a: SettingsDraftEntry, b: SettingsDraftEntry) => b.savedAt.localeCompare(a.savedAt) || sequenceOf(b.revision) - sequenceOf(a.revision)
+/** The order a group is scanned in: newest first, tied writes in a fixed order by revision so every read of the same storage agrees. */
+const scanOrder = (a: SettingsDraftEntry, b: SettingsDraftEntry) => newerFirst(a, b) || b.revision.localeCompare(a.revision)
 function remove(target: EnumeratedStorage, storageKey: string) { try { target.removeItem(storageKey) } catch { /* it is skipped or removed again on the next read */ } }
 /** Every stored write of the scope's drafts whose key starts with `prefix`, grouped by draft key, newest first. */
 function scan(target: EnumeratedStorage, scope: SettingsDraftScope, prefix: string): Map<string, Array<{ storageKey: string; entry: SettingsDraftEntry }>> {
@@ -58,31 +76,34 @@ function scan(target: EnumeratedStorage, scope: SettingsDraftScope, prefix: stri
     const entry = readOne(target, storageKey, parsed); if (!entry) continue
     const group = groups.get(parsed.key) ?? []; group.push({ storageKey, entry }); groups.set(parsed.key, group)
   }
-  for (const group of groups.values()) group.sort((a, b) => newerFirst(a.entry, b.entry))
+  for (const group of groups.values()) group.sort((a, b) => scanOrder(a.entry, b.entry))
   return groups
 }
 
-/** The newest write of each of the scope's drafts whose key starts with `prefix`; older writes of the same draft are removed, since a
- * newer one supersedes them. With `isPayload`, an entry whose payload the screen cannot use (a malformed or older shape) is removed
- * from storage and skipped, so a bad local record never reaches the screen. */
+/** The newest write of each of the scope's drafts whose key starts with `prefix`; writes strictly older than it are removed, since it
+ * supersedes them, while writes tied with it stay (they may be another tab's simultaneous edit; the one read back is fixed by
+ * `scanOrder`). With `isPayload`, an entry whose payload the screen cannot use (a malformed or older shape) is removed from storage
+ * and skipped, so a bad local record never reaches the screen. */
 export function readSettingsDrafts(scope: SettingsDraftScope, prefix = '', isPayload?: (key: string, payload: unknown) => boolean): SettingsDraftEntry[] {
   const target = storage(); if (!target) return []
   const found: SettingsDraftEntry[] = []
   for (const [key, group] of scan(target, scope, prefix)) {
-    const [newest, ...older] = group
-    for (const item of older) remove(target, item.storageKey)
-    if (!newest) continue
-    if (isPayload && !isPayload(key, newest.entry.payload)) { remove(target, newest.storageKey); continue }
-    found.push(newest.entry)
+    const newest = group[0]; if (!newest) continue
+    for (const item of group) {
+      if (newerFirst(newest.entry, item.entry) < 0) { remove(target, item.storageKey); continue }
+      if (isPayload && !isPayload(key, item.entry.payload)) { remove(target, item.storageKey); continue }
+      if (found.length === 0 || found[found.length - 1]?.key !== key) found.push(item.entry)
+    }
   }
   return found
 }
 
-/** Writes the draft under a new revision key, then removes this scope's older writes of the same draft (superseded), and returns the
- * revision, or null when the browser refused the write: the caller must then not treat the edit as kept and should save it at once. */
+/** Writes the draft under a new revision key, then removes this scope's strictly older writes of the same draft (superseded; a write
+ * tied with this one stays), and returns the revision, or null when the browser refused the write: the caller must then not treat
+ * the edit as kept and should save it at once. */
 export function writeSettingsDraft(scope: SettingsDraftScope, key: string, payload: unknown, now = new Date().toISOString()): string | null {
   const target = storage(); if (!target) return null
-  const revision = nextRevision(now)
+  const revision = nextRevision(now, nextSequence(target))
   const entry: SettingsDraftEntry = { key, payload, savedAt: now, revision }
   try { target.setItem(settingsDraftKey(scope, key, revision), JSON.stringify({ version: 1, entries: [entry] })) } catch { return null }
   for (const item of scan(target, scope, key).get(key) ?? []) if (item.entry.key === key && item.entry.revision !== revision && newerFirst(entry, item.entry) < 0) remove(target, item.storageKey)

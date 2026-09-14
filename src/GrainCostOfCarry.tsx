@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { bestMonth, carryRow, verdict, type CarryRow, type CarrySettings } from './data/costOfCarry'
 import type { GrainCarryGrid, GrainCarrySettings, GrainWorkspace, ProductionEstimate } from './data/grain'
-import { CARRY_GRID_ROWS, validateGrainCarrySettings } from './data/grainSettings'
+import { CARRY_GRID_ROWS, normalizeGrainCarrySettings, validateGrainCarrySettings } from './data/grainSettings'
 import { beginPendingSettingsWork, registerPendingSettingsFlush } from './data/pendingSettingsWork'
 import { clearSettingsDraft, readSettingsDrafts, writeSettingsDraft, type SettingsDraftScope } from './data/settingsDrafts'
 
@@ -61,6 +61,15 @@ function settingsFromRow(row: GrainCarrySettings): CarrySettings { return { mode
 function settingsToRow(farmId: string, settings: CarrySettings, updatedAt: string): GrainCarrySettings { return { farm_id: farmId, mode: settings.mode, monthly_rate_cents_per_bu_month: settings.monthlyRateCentsPerBuMonth, flat_rate_per_bu: settings.flatRatePerBu, interest_rate_pct: settings.interestRatePct, trucking_per_bu: settings.truckingPerBu, updated_at: updatedAt } }
 function freshCommodityCarry(): CommodityCarry { return { harvestMonth: 9, defaultBasis: '0', rows: Array.from({ length: CARRY_GRID_ROWS }, () => ({ marketPrice: '', basis: '0' })) } }
 function toNumber(value: string): number | null { const parsed = Number(value); return value.trim() !== '' && Number.isFinite(parsed) ? parsed : null }
+type RateKey = Exclude<keyof CarrySettings, 'mode'>
+/** Why the farm's table would refuse this rate, in the farmer's words, or null when it can be saved. Checked before the edit is kept
+ * or queued, so a value no save could ever land (an interest rate above 100 %, a rate too large for its column) never becomes a
+ * pending draft that every flush retries and a confirmed farm switch refuses. */
+function rateProblem(farmId: string, current: CarrySettings, key: RateKey, value: number): string | null {
+  const row = settingsToRow(farmId, { ...current, [key]: value }, new Date().toISOString())
+  const [error] = validateGrainCarrySettings(row); if (error) return error
+  try { normalizeGrainCarrySettings(row); return null } catch (caught) { const message = caught instanceof Error ? caught.message : 'That rate cannot be saved.'; return message.charAt(0).toUpperCase() + message.slice(1) }
+}
 function carryFromGrid(grid: GrainCarryGrid): CommodityCarry {
   const rows = grid.rows.slice(0, CARRY_GRID_ROWS).map((row) => ({ marketPrice: row.market_price === null ? '' : String(row.market_price), basis: row.basis === null ? '' : String(row.basis) }))
   while (rows.length < CARRY_GRID_ROWS) rows.push({ marketPrice: '', basis: String(grid.default_basis) })
@@ -110,6 +119,9 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   const failedSettings = useRef(false)
   const failedGrids = useRef(new Set<string>())
   const mounted = useRef(true)
+  // A rate the farm's table would refuse stays in its field with the reason while it is typed and is neither kept nor queued; leaving
+  // the field puts the last accepted rate back and keeps the reason on screen until a rate that can be saved is typed.
+  const [refusedRate, setRefusedRate] = useState<{ key: RateKey; text: string | null; message: string } | null>(null)
   const newGridIds = useRef<Record<string, string>>({})
   // Every queued save (and any unflushed edit) keeps the farm marked pending for the farm switcher until it has run.
   // A save that fails before reaching the server or the durable queue marks its token failed, so a confirmed farm switch stops instead of discarding the edit.
@@ -267,7 +279,15 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   const bestDate = best ? displayMonth(selectedEstimate.crop_year, carry.harvestMonth, best.monthsStored) : null
   const verdictDate = decision?.month === undefined ? null : displayMonth(selectedEstimate.crop_year, carry.harvestMonth, decision.month)
   const footer = harvestCash === null || !decision ? 'Enter your harvest and delivery prices to compare storage against harvest delivery.' : decision.kind === 'harvest' ? `Harvest delivery wins — no stored month beats ${money.format(harvestCash)}/bu after storage, interest, and trucking.` : `Storing until ${verdictDate} nets ${signedMoney(decision.netPerBu)}/bu over harvest delivery.`
-  const setRate = (key: Exclude<keyof CarrySettings, 'mode'>, value: string) => { const parsed = Number(value); changeSettings((current) => ({ ...current, [key]: Number.isFinite(parsed) && parsed >= 0 ? parsed : 0 })) }
+  const setRate = (key: RateKey, value: string) => {
+    const parsed = Number(value); const next = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+    const problem = rateProblem(workspaceRef.current.fields.farm.id, settingsRef.current, key, next)
+    if (problem) { setRefusedRate({ key, text: value, message: problem }); return }
+    setRefusedRate(null)
+    changeSettings((current) => ({ ...current, [key]: next }))
+  }
+  const leaveRate = (key: RateKey) => { setRefusedRate((current) => current && current.key === key ? { ...current, text: null, message: `${current.message} The field went back to ${settingsRef.current[key]}.` } : current); flushSettings() }
+  const rateField = (key: RateKey, label: string, step: string, ariaLabel?: string) => <label>{label}<input aria-label={ariaLabel} aria-invalid={refusedRate?.key === key && refusedRate.text !== null ? true : undefined} aria-describedby={refusedRate?.key === key ? 'carry-rate-refused' : undefined} type="number" min="0" step={step} inputMode="decimal" value={refusedRate?.key === key && refusedRate.text !== null ? refusedRate.text : settings[key]} onChange={(event) => setRate(key, event.target.value)} onBlur={() => leaveRate(key)} /></label>
   const updateRow = (index: number, key: keyof PriceRow, value: string) => updateCarry((current) => ({ ...current, rows: current.rows.map((row, rowIndex) => rowIndex === index ? { ...row, [key]: value } : row) }))
   const changeDefaultBasis = (value: string) => updateCarry((current) => ({ ...current, defaultBasis: value, rows: current.rows.map((row) => row.basis === current.defaultBasis ? { ...row, basis: value } : row) }))
   const storageNote = persisted ? 'Your rates and prices are saved for this farm on every device as you type.' : 'Your rates and prices stay on this device until the farm settings update is live.'
@@ -275,7 +295,7 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
   return <>
     <section className="grain-section carry-settings-card" aria-labelledby="carry-settings-title">
       <div className="section-heading"><div><span className="eyebrow">Carry costs</span><h2 id="carry-settings-title">How do you pay for storage?</h2><p>Monthly rate accumulates — the longer you store, the higher the cost. {storageNote}</p></div></div>
-      <div className="carry-settings"><div className="carry-toggle" role="group" aria-label="Storage payment method"><button type="button" className={settings.mode === 'monthly' ? 'active' : ''} onClick={() => chooseMode('monthly')}>Option A — Monthly</button><button type="button" className={settings.mode === 'flat' ? 'active' : ''} onClick={() => chooseMode('flat')}>Option B — Flat rate</button></div>{settings.mode === 'monthly' ? <label>Monthly storage rate ¢/bu/mo<input aria-label="Monthly storage rate cents per bushel per month" type="number" min="0" step="0.1" inputMode="decimal" value={settings.monthlyRateCentsPerBuMonth} onChange={(event) => setRate('monthlyRateCentsPerBuMonth', event.target.value)} onBlur={flushSettings} /></label> : <label>Flat storage rate $/bu<input aria-label="Flat storage rate dollars per bushel" type="number" min="0" step="0.01" inputMode="decimal" value={settings.flatRatePerBu} onChange={(event) => setRate('flatRatePerBu', event.target.value)} onBlur={flushSettings} /></label>}<label>Interest rate %<input type="number" min="0" step="0.1" inputMode="decimal" value={settings.interestRatePct} onChange={(event) => setRate('interestRatePct', event.target.value)} onBlur={flushSettings} /></label><label>2nd-haul trucking $/bu<input type="number" min="0" step="0.01" inputMode="decimal" value={settings.truckingPerBu} onChange={(event) => setRate('truckingPerBu', event.target.value)} onBlur={flushSettings} /></label></div>
+      <div className="carry-settings"><div className="carry-toggle" role="group" aria-label="Storage payment method"><button type="button" className={settings.mode === 'monthly' ? 'active' : ''} onClick={() => chooseMode('monthly')}>Option A — Monthly</button><button type="button" className={settings.mode === 'flat' ? 'active' : ''} onClick={() => chooseMode('flat')}>Option B — Flat rate</button></div>{settings.mode === 'monthly' ? rateField('monthlyRateCentsPerBuMonth', 'Monthly storage rate ¢/bu/mo', '0.1', 'Monthly storage rate cents per bushel per month') : rateField('flatRatePerBu', 'Flat storage rate $/bu', '0.01', 'Flat storage rate dollars per bushel')}{rateField('interestRatePct', 'Interest rate %', '0.1')}{rateField('truckingPerBu', '2nd-haul trucking $/bu', '0.01')}{refusedRate && <p className="carry-rate-refused" id="carry-rate-refused" role="alert">{refusedRate.message}</p>}</div>
     </section>
     <section className="grain-section carry-calculator" aria-labelledby="carry-title">
       <div className="section-heading"><div><span className="eyebrow">Your numbers</span><h2 id="carry-title">Store or deliver at harvest</h2><p>Type the prices you can get. These manual prices run the math; delayed market quotes do not.</p></div><label className="commodity-picker"><span>Commodity</span><select value={selectedEstimateId} onChange={(event) => onSelectEstimate(event.target.value)}>{workspace.production_estimates.map((estimate) => <option key={estimate.id} value={estimate.id}>{workspace.fields.commodities.find((commodity) => commodity.id === estimate.commodity_id)?.name ?? estimate.commodity_id}</option>)}</select></label></div>
