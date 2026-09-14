@@ -45,13 +45,17 @@ const passIdOf = (link: string) => programPassLink.exec(link)?.[1]?.toLowerCase(
  * when this member may open the module it points to, and grain alerts only with financial access, so a member without it never
  * sees a grain line. Alerts belong to the selected farm only. The due-generation functions also write a task for an overdue
  * service interval and for a due program pass; when the service-due row or the pass alert is already shown, that generated task
- * is the same work and is not listed twice. A source the screen could not load is simply absent. */
+ * is the same work and is not listed twice. Applying a pass closes its generated task but leaves the alert unread, so an unread
+ * pass alert whose generated task is already done is finished work and is not listed. A source the screen could not load is
+ * simply absent. */
 export function todayNextUp(input: { profile: FarmAccessProfile; today: string; equipment: EquipmentTasksWorkspace | null; notifications: readonly Notification[] | null }): TodayNextUpItem[] {
   const { profile, today, equipment, notifications } = input
   const items: TodayNextUpItem[] = []
   const farmNotifications = (notifications ?? []).filter((notification) => notification.farm_id === profile.farmId)
   const unread = farmNotifications.filter((notification) => notification.read_at === null && notification.link !== null).sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
-  const shownPassIds = new Set(canAccessFarmModule(profile, 'programs') ? unread.map((notification) => passIdOf(notification.link!)).filter((id): id is string => id !== null) : [])
+  const appliedPassIds = new Set((equipment?.tasks ?? []).filter((task) => task.source === 'program' && task.status === 'done' && task.program_assigned_pass_id !== null).map((task) => task.program_assigned_pass_id!.toLowerCase()))
+  const passAlertIsOpen = (link: string) => { const passId = passIdOf(link); return passId === null || !appliedPassIds.has(passId) }
+  const shownPassIds = new Set(canAccessFarmModule(profile, 'programs') ? unread.filter((notification) => passAlertIsOpen(notification.link!)).map((notification) => passIdOf(notification.link!)).filter((id): id is string => id !== null) : [])
   const shownServiceIntervalIds = new Set<string>()
   if (equipment && canAccessFarmModule(profile, 'equipment')) {
     const machines = new Map(equipment.equipment.map((machine) => [machine.id, machine]))
@@ -76,7 +80,7 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
   if (notifications) {
     for (const notification of unread) {
       const link = notification.link!
-      if (link.startsWith('/programs') && canAccessFarmModule(profile, 'programs')) items.push({ id: `program:${notification.id}`, kind: 'program', title: 'Program pass due', detail: notification.title, badge: null, urgency: 'due', to: link })
+      if (link.startsWith('/programs') && canAccessFarmModule(profile, 'programs') && passAlertIsOpen(link)) items.push({ id: `program:${notification.id}`, kind: 'program', title: 'Program pass due', detail: notification.title, badge: null, urgency: 'due', to: link })
       else if (link.startsWith('/grain') && canAccessFarmModule(profile, 'grain')) items.push({ id: `grain_alert:${notification.id}`, kind: 'grain_alert', title: 'Grain alert', detail: notification.title, badge: null, urgency: 'info', to: link })
     }
   }

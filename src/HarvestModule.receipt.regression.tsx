@@ -83,4 +83,23 @@ try {
 } finally {
   await act(async () => { if (!initialUnmounted) root.unmount(); errorRoot?.unmount() }); container.remove(); errorContainer?.remove(); win.close()
 }
+
+// FD-1 (FD-006): a Today harvest intent opens the entry form for the newest year with crops, even when nothing is assigned for
+// the browser's calendar year, so the effective year must be known on the first render rather than settled by a later effect.
+{
+  const { todayRecordIntent } = await import('./data/todayIntents')
+  const intentContainer = document.createElement('div'); document.body.append(intentContainer); const intentRoot = createRoot(intentContainer)
+  try {
+    const priorYearRepository: HarvestRepository = { getData: async () => data([crop(cropId, { crop_year: 2025, planting_date: '2025-04-20' })]), saveHarvest: async () => { throw new Error('not exercised') } }
+    await act(async () => { intentRoot.render(createElement(MemoryRouter, { initialEntries: [{ pathname: '/harvest', state: todayRecordIntent('harvest') }] }, createElement(HarvestPage, { harvestRepository: priorYearRepository }))); await flush() })
+    const yearPicker = intentContainer.querySelector('select') as HTMLSelectElement | null
+    assert(yearPicker && yearPicker.value === '2025', `The year picker did not settle on the newest year with crops (saw ${yearPicker?.value ?? 'none'}).`)
+    const intentForm = intentContainer.querySelector('form.harvest-form')
+    assert(intentForm, 'A Today harvest intent did not open the harvest entry when the only crops belong to a prior year.')
+    const closeButton = [...intentContainer.querySelectorAll('button')].find((button) => button.textContent === 'Close')
+    assert(closeButton, 'The opened harvest entry did not offer Close.')
+  } finally {
+    await act(async () => { intentRoot.unmount() }); intentContainer.remove()
+  }
+}
 console.log('Harvest receipt regression passed')
