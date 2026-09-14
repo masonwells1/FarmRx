@@ -81,19 +81,26 @@ function scan(target: EnumeratedStorage, scope: SettingsDraftScope, prefix: stri
 }
 
 /** The newest write of each of the scope's drafts whose key starts with `prefix`; writes strictly older than it are removed, since it
- * supersedes them, while writes tied with it stay (they may be another tab's simultaneous edit; the one read back is fixed by
- * `scanOrder`). With `isPayload`, an entry whose payload the screen cannot use (a malformed or older shape) is removed from storage
- * and skipped, so a bad local record never reaches the screen. */
-export function readSettingsDrafts(scope: SettingsDraftScope, prefix = '', isPayload?: (key: string, payload: unknown) => boolean): SettingsDraftEntry[] {
+ * supersedes them. Writes tied with it (two tabs wrote the same draft in the same millisecond and drew the same sequence number, so
+ * which came last is unknowable) are neither read back nor removed here: the one in `scanOrder` is read back and the others are
+ * handed to `onTie`, which must put them where the farmer can review them (the recovery vault) and only then remove them; without a
+ * handler, or when it fails, they stay in storage and are reported again on the next read. With `isPayload`, an entry whose payload
+ * the screen cannot use (a malformed or older shape) is removed from storage and skipped, so a bad local record never reaches the
+ * screen. */
+export function readSettingsDrafts(scope: SettingsDraftScope, prefix = '', isPayload?: (key: string, payload: unknown) => boolean, onTie?: (kept: SettingsDraftEntry, tied: SettingsDraftEntry[]) => void): SettingsDraftEntry[] {
   const target = storage(); if (!target) return []
   const found: SettingsDraftEntry[] = []
   for (const [key, group] of scan(target, scope, prefix)) {
     const newest = group[0]; if (!newest) continue
+    const usable: SettingsDraftEntry[] = []
     for (const item of group) {
-      if (newerFirst(newest.entry, item.entry) < 0) { remove(target, item.storageKey); continue }
-      if (isPayload && !isPayload(key, item.entry.payload)) { remove(target, item.storageKey); continue }
-      if (found.length === 0 || found[found.length - 1]?.key !== key) found.push(item.entry)
+      if (newerFirst(newest.entry, item.entry) < 0 || (isPayload && !isPayload(key, item.entry.payload))) { remove(target, item.storageKey); continue }
+      usable.push(item.entry)
     }
+    const [kept, ...tied] = usable
+    if (!kept) continue
+    found.push(kept)
+    if (tied.length && onTie) onTie(kept, tied)
   }
   return found
 }

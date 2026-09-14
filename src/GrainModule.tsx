@@ -9,6 +9,7 @@ import { farmerError } from "./lib/farmerErrors";
 import { currentFarmContext } from "./auth/farmContext";
 import { beginPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_CONTEXT_CHANGED } from "./data/pendingSettingsWork";
 import { clearSettingsDraft, readSettingsDrafts, writeSettingsDraft, type SettingsDraftScope } from "./data/settingsDrafts";
+import { quarantineTiedSettingsDrafts } from "./data/revokedFarmRecovery";
 import { supabaseConfig } from "./lib/supabaseConfig";
 import { getModuleSyncStatus, subscribeSyncStatus } from "./data/syncStatus";
 import { useOptionalFarmAccess } from "./auth/FarmAccessContext";
@@ -348,7 +349,10 @@ export function GrainPage({ services }: { services: GrainServices }) {
         // A member who may read but not write leaves every kept draft in storage, untouched and unsent, until edit access returns
         // (the refresh below on that change adopts it then); nothing is saved on their behalf.
         const scope = canWriteSettingsRef.current ? draftScopeFor(data.fields.farm.id) : null;
-        if (scope) for (const entry of readSettingsDrafts(scope, "sale-limit:", isSaleLimitDraft)) {
+        // Two tabs that wrote the same draft at the same moment: the write read back is adopted below; the other goes to the recovery
+        // vault for the farmer to check (it stays in storage, reported again next time, if the vault cannot be written).
+        const toVault = (_kept: unknown, tied: Parameters<typeof quarantineTiedSettingsDrafts>[2]) => { if (scope) try { quarantineTiedSettingsDrafts(window.localStorage, scope, tied); } catch { /* the tied writes stay in storage */ } };
+        if (scope) for (const entry of readSettingsDrafts(scope, "sale-limit:", isSaleLimitDraft, toVault)) {
           const kept = entry.payload as SaleLimitDraft;
           const row = data.grain_sale_limits.find((limit) => scopeKey(scopeOf(limit)) === kept.key);
           const typing = dirtySaleLimits.current.has(kept.key);

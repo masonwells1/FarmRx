@@ -203,8 +203,11 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
   clearSettingsDraft(scopeA, 'sale-limit:t')
   const tiedA = `${stamp}#77#aaaaaaaa`; const tiedB = `${stamp}#77#bbbbbbbb`
   for (const [revision, value] of [[tiedA, 'A'], [tiedB, 'B']] as const) store.set(settingsDraftKey(scopeA, 'sale-limit:t', revision), JSON.stringify({ version: 1, entries: [{ key: 'sale-limit:t', payload: { value }, savedAt: stamp, revision }] }))
-  const tiedRead = readSettingsDrafts(scopeA, 'sale-limit:t')
+  const reported: Array<{ kept: string; tied: string[] }> = []
+  const tiedRead = readSettingsDrafts(scopeA, 'sale-limit:t', undefined, (kept, tied) => reported.push({ kept: kept.revision, tied: tied.map((entry) => entry.revision) }))
   assert(tiedRead.length === 1 && tiedRead[0]?.revision === tiedB && store.has(settingsDraftKey(scopeA, 'sale-limit:t', tiedA)) && store.has(settingsDraftKey(scopeA, 'sale-limit:t', tiedB)), 'Two writes tied on time and sequence are both kept; one of them is read back, the same one every time.')
+  assert(JSON.stringify(reported) === JSON.stringify([{ kept: tiedB, tied: [tiedA] }]), 'The tied write that is not read back is reported to the caller, which must put it where the farmer can review it.')
+  assert(readSettingsDrafts(scopeA, 'sale-limit:t').length === 1 && store.has(settingsDraftKey(scopeA, 'sale-limit:t', tiedA)), 'Without a handler the tied write stays in storage and is reported again on the next read.')
   clearSettingsDraft(scopeA, 'sale-limit:t', tiedB)
   assert((readSettingsDrafts(scopeA, 'sale-limit:t')[0]?.payload as { value: string })?.value === 'A', 'After the read-back tied write is cleared by its save, the other tab\'s tied write is still there to be read.')
   store.set(settingsDraftKey(scopeA, 'sale-limit:t', tiedB), JSON.stringify({ version: 1, entries: [{ key: 'sale-limit:t', payload: { value: 'B' }, savedAt: stamp, revision: tiedB }] }))
