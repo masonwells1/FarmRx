@@ -1,6 +1,6 @@
 import { normalizeProgramProductDraft, uuid, validAssignmentIdentityPlans, validDate, validateActualProgramProducts, validateProgramDraft, validateProgramPassDraft, validateProgramProductDraft, type ActualProgramProduct, type AssignmentIdentityPlan, type ProgramApplicationLink, type ProgramDraft, type ProgramPassDraft, type ProgramProductDraft } from './programs'
 import type { StorageLike } from './writeQueue'
-import type { PendingPassOutcome } from './programs'
+import type { PendingPassOutcome, ProgramsData } from './programs'
 type Base = {
   version: 1
   module: 'programs'
@@ -155,15 +155,34 @@ export class ProgramsWriteQueue {
     return next
   }
 }
+export const unresolvedAssignmentMessage = 'A program change saved on this device could not be checked against your programs.'
 /** The outcome each assigned pass carries in this device's queue: applied and skipped close the pass, a reschedule moves its due
- * date. A later entry for the same pass overrides an earlier one, as replay applies them in order. Pure over the entries given. */
-export function pendingPassOutcomes(entries: readonly ProgramsQueueEntryV1[]): Map<string, PendingPassOutcome> {
+ * date, and unassigning or reassigning a program cancels every planned pass of the assignment (the server cancels them and closes
+ * their generated tasks when the entry lands). Assignment-level entries name only the assignment, so the caller supplies the
+ * planned pass ids of an assignment (from a read-only Programs snapshot); when it cannot, the outcomes are unknowable and this
+ * throws rather than guess. A later entry for the same pass overrides an earlier one, as replay applies them in order. Pure over
+ * the entries and resolver given. */
+export function pendingPassOutcomes(entries: readonly ProgramsQueueEntryV1[], plannedPassIdsOf: (assignmentId: string) => readonly string[] | null): Map<string, PendingPassOutcome> {
   const outcomes = new Map<string, PendingPassOutcome>()
   for (const entry of entries) {
     if (entry.kind === 'mark_program_pass_applied') outcomes.set(entry.assignedPassId.toLowerCase(), { kind: 'applied' })
     else if (entry.kind === 'skip_program_pass') outcomes.set(entry.assignedPassId.toLowerCase(), { kind: 'skipped' })
     else if (entry.kind === 'reschedule_program_pass') outcomes.set(entry.assignedPassId.toLowerCase(), { kind: 'rescheduled', dueOn: entry.dueOn })
+    else if (entry.kind === 'unassign_program' || entry.kind === 'reassign_program_assignment') {
+      const passIds = plannedPassIdsOf(entry.assignmentId)
+      if (passIds === null) throw new Error(unresolvedAssignmentMessage)
+      for (const passId of passIds) outcomes.set(passId.toLowerCase(), { kind: 'cancelled' })
+    }
   }
   return outcomes
+}
+/** Whether the queue holds an entry whose pass outcomes need the Programs snapshot to resolve. */
+export function needsAssignmentResolution(entries: readonly ProgramsQueueEntryV1[]) { return entries.some((entry) => entry.kind === 'unassign_program' || entry.kind === 'reassign_program_assignment') }
+/** The resolver `pendingPassOutcomes` needs, from a Programs snapshot: an assignment's planned passes, matched by assignment id
+ * case-insensitively; null for an assignment the snapshot does not hold. */
+export function plannedPassIdsByAssignment(data: Pick<ProgramsData, 'assignments'>): (assignmentId: string) => readonly string[] | null {
+  const planned = new Map<string, string[]>()
+  for (const assignment of data.assignments) planned.set(assignment.assignment_id.toLowerCase(), assignment.passes.filter((pass) => pass.status === 'planned').map((pass) => pass.id))
+  return (assignmentId) => planned.get(assignmentId.toLowerCase()) ?? null
 }
 export const programsWriteQueueKey = (projectRef: string, userId: string, farmId: string) => `farm-rx-programs-write-queue:v1:${projectRef}:${userId}:${farmId}`
