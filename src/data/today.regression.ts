@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict'
 import { deriveFarmAccessProfile } from '../auth/farmContext'
 import type { EquipmentTasksWorkspace, Equipment, FarmTask, MeterReading, ServiceInterval } from './equipmentTasks'
-import { pendingPassOutcomes, plannedPassIdsByAssignment, unresolvedAssignmentMessage, type ProgramsQueueEntryV1 } from './programsWriteQueue'
-import type { ProgramsData } from './programs'
+import { pendingPassOutcomes, unresolvedAssignmentMessage, type ProgramsQueueEntryV1, type ProgramsSnapshotView } from './programsWriteQueue'
 import type { InventoryProduct, InventoryWorkspace } from './inventory'
 import type { Field, FieldsData } from './fields'
 import type { Notification } from './notifications'
@@ -112,7 +111,7 @@ const twoReminders = todayNextUp({ profile: owner, today, equipment: workspace, 
 assert.equal(twoReminders.filter((item) => item.kind === 'program').length, 1, 'Two unread reminders for one pass are one row.')
 // Work queued on this device for a pass but not yet synced is projected the way the server will land it.
 const passA = '00000000-0000-4000-8000-000000000601'
-const noAssignments = () => null
+const noAssignments = null
 const queuedBase = { version: 1 as const, module: 'programs' as const, operationId: '00000000-0000-4000-8000-000000000a01', userId: userA, farmId: farmA, enqueuedAt: now }
 const queuedSkip: ProgramsQueueEntryV1 = { ...queuedBase, kind: 'skip_program_pass', assignedPassId: passA.toUpperCase(), skippedOn: today, reason: 'Too wet' }
 const queuedApply: ProgramsQueueEntryV1 = { ...queuedBase, operationId: '00000000-0000-4000-8000-000000000a02', kind: 'mark_program_pass_applied', assignedPassId: passA, appliedOn: today, appliedAcres: 80, actualProducts: [], applicationLink: { kind: 'none' } }
@@ -132,23 +131,45 @@ const rescheduledOfflineArrived = todayNextUp({ profile: owner, today: '2026-07-
 assert.ok(rescheduledOfflineArrived.some((item) => item.kind === 'program'), 'On the queued date the pass is listed again.')
 const movedEarlierOffline = todayNextUp({ profile: owner, today, equipment: { ...workspace, tasks: workspace.tasks.map((task) => task.id === '00000000-0000-4000-8000-000000000407' ? { ...task, due_on: '2026-07-20' } : task) }, notifications: notifications.filter((notification) => notification.id !== '00000000-0000-4000-8000-000000000501'), pendingPasses: pendingPassOutcomes([{ ...queuedReschedule, dueOn: '2026-07-14' }], noAssignments) })
 assert.deepEqual(movedEarlierOffline.filter((item) => item.detail === 'Corn pass 2').map((item) => [item.kind, item.title, item.badge]), [['task', 'Task overdue', '1 day late']], 'A pass moved earlier on this device shows its generated task on the queued date, not the task\'s stale later one.')
-// Unassigning or reassigning a program offline cancels the assignment's planned passes on the server; the queue names only the
-// assignment, so the planned passes come from the read-only Programs snapshot, and without one the outcomes are unknowable.
-const assignmentA = '00000000-0000-4000-8000-000000000b01'
-const assignedPass = (id: string, status: 'planned' | 'applied' | 'skipped' | 'cancelled') => ({ id, assignment_id: assignmentA, source_program_pass_id: null, source_revision: 1, sequence: 1, name: 'Pass', pass_type: 'post', activity_type: 'spray', timing_label: null, target_date: null, planting_offset_days: null, reminder_lead_days: 0, notes: null, due_on: today, due_source: 'manual', is_field_override: false, status, applied_on: null, applied_acres: null, skipped_on: null, skip_reason: null, cancelled_at: null, cancel_reason: null, application_record_id: null, products: [] }) as ProgramsData['assignments'][number]['passes'][number]
-const programsSnapshot = { assignments: [{ assignment_id: assignmentA.toUpperCase(), passes: [assignedPass(passA, 'planned'), assignedPass('00000000-0000-4000-8000-000000000602', 'applied'), assignedPass('00000000-0000-4000-8000-000000000603', 'planned')] } as unknown as ProgramsData['assignments'][number]] }
-const plannedOf = plannedPassIdsByAssignment(programsSnapshot)
-assert.deepEqual(plannedOf(assignmentA), [passA, '00000000-0000-4000-8000-000000000603'], 'The resolver yields the assignment\'s planned passes only, matched case-insensitively.')
-assert.equal(plannedOf('00000000-0000-4000-8000-000000000b99'), null, 'An assignment the snapshot does not hold cannot be resolved.')
+// Unassigning or reassigning a program offline cancels the assignment's planned passes on the server, and taking program updates
+// cancels a planned pass the template dropped or moves it to the template's date; the queue names only the assignment, so the
+// passes and templates come from the read-only Programs snapshot, and without one the outcomes are unknowable.
+const assignmentA = '00000000-0000-4000-8000-000000000b01'; const programA = '00000000-0000-4000-8000-000000000c01'
+const templatePass = (id: string, target_date: string | null, planting_offset_days: number | null = null, is_archived = false) => ({ id, farm_id: farmA, program_id: programA, sequence: 1, is_archived, products: [], name: 'Pass', pass_type: 'post', activity_type: 'spray', timing_label: null, target_date, planting_offset_days, reminder_lead_days: 0, notes: null }) as ProgramsSnapshotView['programs'][number]['passes'][number]
+const assignedPass = (id: string, status: 'planned' | 'applied' | 'skipped' | 'cancelled', source_program_pass_id: string | null = null, due_on: string | null = today, is_field_override = false) => ({ id, assignment_id: assignmentA, source_program_pass_id, source_revision: 1, sequence: 1, name: 'Pass', pass_type: 'post', activity_type: 'spray', timing_label: null, target_date: null, planting_offset_days: null, reminder_lead_days: 0, notes: null, due_on, due_source: 'manual', is_field_override, status, applied_on: null, applied_acres: null, skipped_on: null, skip_reason: null, cancelled_at: null, cancel_reason: null, application_record_id: null, products: [] }) as ProgramsSnapshotView['assignments'][number]['passes'][number]
+const t1 = '00000000-0000-4000-8000-000000000d01'; const t2 = '00000000-0000-4000-8000-000000000d02'; const t3 = '00000000-0000-4000-8000-000000000d03'; const t4 = '00000000-0000-4000-8000-000000000d04'
+const p603 = '00000000-0000-4000-8000-000000000603'; const p604 = '00000000-0000-4000-8000-000000000604'; const p605 = '00000000-0000-4000-8000-000000000605'; const p606 = '00000000-0000-4000-8000-000000000606'; const p607 = '00000000-0000-4000-8000-000000000607'
+const programsSnapshot: ProgramsSnapshotView = {
+  programs: [{ id: programA, farm_id: farmA, name: 'Corn program', program_kind: 'chemical', commodity_id: null, crop_year: 2026, notes: null, revision: 3, is_archived: false, passes: [templatePass(t1, '2026-07-22'), templatePass(t2, null, 10), templatePass(t3, null, null, true), templatePass(t4, null)] }],
+  assignments: [{ assignment_id: assignmentA.toUpperCase(), program_id: programA, planting_date: '2026-05-01', passes: [
+    assignedPass(passA, 'planned', t1),                               // template date moved from today to 07-22
+    assignedPass('00000000-0000-4000-8000-000000000602', 'applied', t1), // not planned: preserved
+    assignedPass(p603, 'planned', t2, '2026-05-15'),                  // offset 10 from planting 05-01 gives 05-11
+    assignedPass(p604, 'planned', t3),                                // template archived: cancelled
+    assignedPass(p605, 'planned', null),                              // no template: cancelled
+    assignedPass(p606, 'planned', t1, today, true),                   // field override: preserved
+    assignedPass(p607, 'planned', t4),                                // template date removed: unscheduled
+  ] } as unknown as ProgramsSnapshotView['assignments'][number]],
+}
 const queuedUnassign: ProgramsQueueEntryV1 = { ...queuedBase, operationId: '00000000-0000-4000-8000-000000000a04', kind: 'unassign_program', assignmentId: assignmentA, reason: 'Switching programs' }
-const queuedReassign: ProgramsQueueEntryV1 = { ...queuedBase, operationId: '00000000-0000-4000-8000-000000000a05', kind: 'reassign_program_assignment', assignmentId: assignmentA, newProgramId: '00000000-0000-4000-8000-000000000c01', reason: 'Switching programs' }
-assert.deepEqual([...pendingPassOutcomes([queuedUnassign], plannedOf).entries()], [[passA, { kind: 'cancelled' }], ['00000000-0000-4000-8000-000000000603', { kind: 'cancelled' }]], 'A queued unassign cancels every planned pass of the assignment and leaves applied ones alone.')
-assert.deepEqual(pendingPassOutcomes([queuedReassign], plannedOf).get(passA), { kind: 'cancelled' }, 'A queued reassign cancels the planned passes too.')
+const queuedReassign: ProgramsQueueEntryV1 = { ...queuedBase, operationId: '00000000-0000-4000-8000-000000000a05', kind: 'reassign_program_assignment', assignmentId: assignmentA, newProgramId: '00000000-0000-4000-8000-000000000c02', reason: 'Switching programs' }
+const queuedRefresh: ProgramsQueueEntryV1 = { ...queuedBase, operationId: '00000000-0000-4000-8000-000000000a06', kind: 'refresh_program_assignment', assignmentId: assignmentA }
+assert.deepEqual([...pendingPassOutcomes([queuedUnassign], programsSnapshot).keys()], [passA, p603, p604, p605, p606, p607], 'A queued unassign cancels every planned pass of the assignment (matched case-insensitively) and leaves applied ones alone.')
+assert.ok([...pendingPassOutcomes([queuedUnassign], programsSnapshot).values()].every((outcome) => outcome.kind === 'cancelled'), 'Unassign outcomes are cancellations.')
+assert.deepEqual(pendingPassOutcomes([queuedReassign], programsSnapshot).get(passA), { kind: 'cancelled' }, 'A queued reassign cancels the planned passes too.')
+assert.deepEqual([...pendingPassOutcomes([queuedRefresh], programsSnapshot).entries()], [[passA, { kind: 'rescheduled', dueOn: '2026-07-22' }], [p603, { kind: 'rescheduled', dueOn: '2026-05-11' }], [p604, { kind: 'cancelled' }], [p605, { kind: 'cancelled' }], [p607, { kind: 'unscheduled' }]], 'Taking program updates moves a pass to the template date or planting offset, cancels one whose template is archived or missing, unschedules one whose template date went away, and preserves applied and field-override passes.')
+assert.deepEqual(pendingPassOutcomes([{ ...queuedReschedule, dueOn: '2026-07-18' }, queuedRefresh], programsSnapshot).get(passA), { kind: 'rescheduled', dueOn: '2026-07-18' }, 'A pass rescheduled earlier in the queue is a field override by the time the refresh lands, so the refresh leaves it.')
+assert.deepEqual(pendingPassOutcomes([queuedApply, queuedUnassign], programsSnapshot).get(passA), { kind: 'applied' }, 'A pass applied earlier in the queue is not planned when the unassign lands, so it stays applied.')
 assert.throws(() => pendingPassOutcomes([queuedUnassign], noAssignments), new Error(unresolvedAssignmentMessage), 'Without the Programs snapshot an assignment-level entry cannot be projected, and the read says so rather than guessing.')
+assert.throws(() => pendingPassOutcomes([queuedRefresh], { ...programsSnapshot, programs: [] }), new Error(unresolvedAssignmentMessage), 'A refresh whose program the snapshot does not hold cannot be projected either.')
 assert.equal(pendingPassOutcomes([queuedSkip], noAssignments).size, 1, 'Pass-level entries never need the snapshot.')
-const unassignedOffline = todayNextUp({ profile: owner, today, equipment: workspace, notifications, pendingPasses: pendingPassOutcomes([queuedUnassign], plannedOf) })
+const unassignedOffline = todayNextUp({ profile: owner, today, equipment: workspace, notifications, pendingPasses: pendingPassOutcomes([queuedUnassign], programsSnapshot) })
 assert.ok(!unassignedOffline.some((item) => item.kind === 'program' || item.detail === 'Corn pass 2'), 'A pass whose program was unassigned on this device before sync is neither listed from its alert nor as its generated task.')
 assert.ok(unassignedOffline.some((item) => item.kind === 'grain_alert') && unassignedOffline.some((item) => item.detail === 'Fix the planter'), 'Other rows are unaffected by the queued unassign.')
+const refreshedOffline = todayNextUp({ profile: owner, today, equipment: workspace, notifications, pendingPasses: pendingPassOutcomes([queuedRefresh], programsSnapshot) })
+assert.ok(!refreshedOffline.some((item) => item.kind === 'program' || item.detail === 'Corn pass 2'), 'A pass moved to a later template date by program updates taken on this device is not listed until that date.')
+const refreshedArrived = todayNextUp({ profile: owner, today: '2026-07-22', equipment: workspace, notifications, pendingPasses: pendingPassOutcomes([queuedRefresh], programsSnapshot) })
+assert.ok(refreshedArrived.some((item) => item.kind === 'program'), 'On the template date the pass is listed again.')
 const outcomesUnknown = todayNextUp({ profile: owner, today, equipment: workspace, notifications, pendingPasses: null })
 assert.ok(!outcomesUnknown.some((item) => item.kind === 'program'), 'When the queued outcomes could not be read, pass state is unknown and no pass alert is listed.')
 const withoutReading = todayNextUp({ profile: owner, today, equipment: { ...workspace, meter_readings: [] }, notifications })

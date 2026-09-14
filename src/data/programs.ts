@@ -4,10 +4,12 @@ export type ProgramKind = 'chemical' | 'fertility' | 'fungicide' | 'other'
 export type ProgramPassType = 'pre' | 'post' | 'fungicide' | 'planter_fertility' | 'custom'
 export type ProgramActivityType = 'spray' | 'fertility' | 'other'
 export type AssignedPassStatus = 'planned' | 'applied' | 'skipped' | 'cancelled'
-/** The outcome this device has queued for an assigned pass but not yet synced: applying or skipping closes the pass, unassigning
- * or reassigning its program cancels every planned pass of the assignment (the server also closes their generated tasks when the
- * entry lands); a reschedule moves its due date. Keys are lower-case pass ids. */
-export type PendingPassOutcome = { kind: 'applied' | 'skipped' | 'cancelled' } | { kind: 'rescheduled'; dueOn: string }
+/** The outcome this device has queued for an assigned pass but not yet synced: applying or skipping closes the pass; unassigning
+ * or reassigning its program cancels every planned pass of the assignment; taking program updates cancels a planned pass the
+ * template no longer has, moves one whose template date changed, or leaves one unscheduled when the template date went away
+ * (the server also closes or moves their generated tasks when the entry lands); a reschedule moves its due date. Keys are
+ * lower-case pass ids. */
+export type PendingPassOutcome = { kind: 'applied' | 'skipped' | 'cancelled' | 'unscheduled' } | { kind: 'rescheduled'; dueOn: string }
 export type ProgramInventoryUnit = 'gal' | 'qt' | 'pt' | 'fl_oz' | 'l' | 'ml' | 'lb' | 'oz' | 'ton' | 'kg' | 'g' | 'each' | 'bag' | 'case' | 'tote' | 'seed_unit' | 'bulk_unit'
 export const PROGRAM_INVENTORY_QUANTITY_MAX = 10_000_000
 const PROGRAM_INVENTORY_QUANTITY_SCALE = 100_000_000

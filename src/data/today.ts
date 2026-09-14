@@ -65,9 +65,9 @@ const passIdOf = (link: string) => programPassLink.exec(link)?.[1]?.toLowerCase(
  * pass alert whose generated task is already done is finished work and is not listed, and one whose task was rescheduled to a
  * later date is a past reminder and is not listed until that date; when the tasks could not be loaded at all, pass state is
  * unknown and no pass alert is listed. Work this device has queued for a pass but not yet synced (applied, skipped, rescheduled,
- * or cancelled with its program's assignment) is projected the way the server will land it, closing the pass and its generated
- * task or moving that task's date; when those queued outcomes could not be read, pass state is likewise unknown. Low inventory is
- * the Inventory shelf's own
+ * or cancelled, moved or left unscheduled with its program's assignment) is projected the way the server will land it, closing the
+ * pass and its generated task or moving that task's date; when those queued outcomes could not be read, pass state is likewise
+ * unknown. Low inventory is the Inventory shelf's own
  * low-on-hand rule applied to the same on-hand view. A source the screen could not load is simply absent. */
 export function todayNextUp(input: { profile: FarmAccessProfile; today: string; equipment: EquipmentTasksWorkspace | null; notifications: readonly Notification[] | null; inventory?: InventoryWorkspace | null; pendingPasses?: ReadonlyMap<string, PendingPassOutcome> | null }): TodayNextUpItem[] {
   const { profile, today, equipment, notifications } = input
@@ -79,10 +79,10 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
   // Rescheduling a pass moves its generated task to the new date but leaves the old alert unread; an alert whose task is now due
   // in the future is a past reminder, not work for today, and the task itself returns to Next up when its new date arrives.
   const rescheduledPassIds = new Set((equipment?.tasks ?? []).filter((task) => task.source === 'program' && task.status !== 'done' && task.program_assigned_pass_id !== null && task.due_on !== null && task.due_on > today).map((task) => task.program_assigned_pass_id!.toLowerCase()))
-  // Work queued on this device for a pass and not yet synced overrides what its generated task says: applying, skipping, or
-  // cancelling it with its program's assignment closes the pass (the server closes the task when the entry lands); a reschedule
-  // moves it, so a queued later date hides it until then and a queued earlier date brings it back. `undefined` means no queue was
-  // consulted (none applies); `null` means the queue could not be read.
+  // Work queued on this device for a pass and not yet synced overrides what its generated task says: applying or skipping it, or
+  // cancelling or unscheduling it through its program's assignment, closes the pass (the server closes the task when the entry
+  // lands); a reschedule moves it, so a queued later date hides it until then and a queued earlier date brings it back.
+  // `undefined` means no queue was consulted (none applies); `null` means the queue could not be read.
   const pending: ReadonlyMap<string, PendingPassOutcome> | null = input.pendingPasses === undefined ? new Map() : input.pendingPasses
   for (const [passId, outcome] of pending ?? []) {
     if (outcome.kind !== 'rescheduled') appliedPassIds.add(passId)
@@ -169,8 +169,8 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
   if (equipment && canAccessFarmModule(profile, 'tasks')) {
     type Task = EquipmentTasksWorkspace['tasks'][number]
     const generatedElsewhere = (task: Task) => (task.source === 'service_interval' && task.interval_id !== null && shownServiceIntervalIds.has(task.interval_id)) || (task.source === 'program' && task.program_assigned_pass_id !== null && shownPassIds.has(task.program_assigned_pass_id.toLowerCase()))
-    // A pass's generated task follows the pass's queued outcome until the sync lands: closed with an applied, skipped or
-    // cancelled pass, dated by a queued reschedule.
+    // A pass's generated task follows the pass's queued outcome until the sync lands: closed with an applied, skipped, cancelled
+    // or unscheduled pass, dated by a queued reschedule.
     const queuedOutcome = (task: Task) => (task.source === 'program' && task.program_assigned_pass_id !== null ? pending?.get(task.program_assigned_pass_id.toLowerCase()) : undefined) ?? null
     const closedOffline = (task: Task) => { const outcome = queuedOutcome(task); return outcome !== null && outcome.kind !== 'rescheduled' }
     const dueOnOf = (task: Task) => { const outcome = queuedOutcome(task); return outcome?.kind === 'rescheduled' ? outcome.dueOn : task.due_on }

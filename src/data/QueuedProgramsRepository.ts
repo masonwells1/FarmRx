@@ -1,5 +1,5 @@
 import { isTransportFailure } from './QueuedFieldsRepository'
-import { ProgramsWriteQueue, needsAssignmentResolution, pendingPassOutcomes, plannedPassIdsByAssignment, programsWriteQueueKey, type ProgramsQueueEntryV1 } from './programsWriteQueue'
+import { ProgramsWriteQueue, needsAssignmentResolution, pendingPassOutcomes, programsWriteQueueKey, type ProgramsQueueEntryV1 } from './programsWriteQueue'
 import type { PendingPassOutcome } from './programs'
 import { setModuleSyncStatus } from './syncStatus'
 import { normalizeProgramProductDraft, validAssignmentIdentityPlans, validateActualProgramProducts, validateProgramDraft, validateProgramPassDraft, validateProgramProductDraft, type ActualProgramProduct, type AssignedProgramPass, type AssignmentIdentityPlan, type Program, type ProgramAssignment, type ProgramDraft, type ProgramPass, type ProgramPassDraft, type ProgramProductDraft, type ProgramsData, type ProgramsRepository } from './programs'
@@ -385,24 +385,24 @@ export class QueuedProgramsRepository implements ProgramsRepository {
     }
   }
   /** Pure read for projections such as Today: the outcomes this device has queued for assigned passes (applied, skipped,
-   * rescheduled, or cancelled by unassigning or reassigning their program) but not yet synced. The caller's published context is
-   * verified around the read, entries for another member or farm block it, and nothing is fetched, replayed or written; the queue
-   * is read as it stands. An assignment-level entry names only its assignment, so its planned passes are resolved from the
-   * read-only Programs cache this device already holds (the Programs page wrote it before such an entry could be queued); without
-   * that cache the outcomes are unknowable and the read fails rather than guess. */
+   * rescheduled, cancelled or moved by unassigning, reassigning or refreshing their program's assignment) but not yet synced. The
+   * caller's published context is verified around the read, entries for another member or farm block it, and nothing is fetched,
+   * replayed or written; the queue is read as it stands. An assignment-level entry names only its assignment, so its passes are
+   * resolved from the read-only Programs cache this device already holds (the Programs page wrote it before such an entry could be
+   * queued); without that cache the outcomes are unknowable and the read fails rather than guess. */
   async getPendingPassOutcomes(operationContext: FarmOperationContext): Promise<ReadonlyMap<string, PendingPassOutcome>> {
     const context = { userId: operationContext.userId, farmId: operationContext.farmId }
     const verifyRead = () => verifyFarmOperationContext(this.d.storage, operationContext, captureFarmOperationContext(this.d.storage, this.d.projectRef, context))
     verifyRead()
     const entries = new ProgramsWriteQueue(this.d.storage, programsWriteQueueKey(this.d.projectRef, context.userId, context.farmId)).read().entries
     if (entries.some((entry) => entry.userId !== context.userId || entry.farmId !== context.farmId)) throw new Error(blocked)
-    let plannedPassIdsOf: (assignmentId: string) => readonly string[] | null = () => null
+    let snapshot: ProgramsData | null = null
     if (needsAssignmentResolution(entries)) {
       const cached = await readWorkspaceCachePure<ProgramsData>({ projectRef: this.d.projectRef, ...context, module: 'programs' }, operationContext, operationalCacheMaxAgeMs, this.d.storage)
       verifyRead()
-      if (cached) plannedPassIdsOf = plannedPassIdsByAssignment(decodeProgramsDataCache(cached.data, context))
+      if (cached) snapshot = decodeProgramsDataCache(cached.data, context)
     }
-    const outcomes = pendingPassOutcomes(entries, plannedPassIdsOf)
+    const outcomes = pendingPassOutcomes(entries, snapshot)
     verifyRead()
     return outcomes
   }
