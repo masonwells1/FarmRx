@@ -7,6 +7,7 @@ import { farmCalendarDate } from './data/farmDates'
 import type { Field, FieldsRepository } from './data/fields'
 import type { InventoryRepository, InventoryWorkspace } from './data/inventory'
 import type { Notification, NotificationsRepository } from './data/notifications'
+import type { PendingPassOutcome, ProgramsRepository } from './data/programs'
 import { todayNextUp, todayRecordTiles, todaySprayWindow, type TodayNextUpItem, type TodayRecordKind, type TodaySprayCard } from './data/today'
 import { readCachedForecast } from './data/weatherService'
 import { farmerError } from './lib/farmerErrors'
@@ -16,7 +17,7 @@ import { farmerError } from './lib/farmerErrors'
 // generates due items, refreshes a forecast, or writes a cache. Every tile and row hands off to the module that owns the record.
 
 type Section<T> = { status: 'loading' } | { status: 'ready'; data: T } | { status: 'failed'; message: string }
-type TodaySnapshots = { fields: Section<Field[]>; equipment: Section<EquipmentTasksWorkspace | null>; notifications: Section<Notification[] | null>; inventory: Section<InventoryWorkspace | null> }
+type TodaySnapshots = { fields: Section<Field[]>; equipment: Section<EquipmentTasksWorkspace | null>; notifications: Section<Notification[] | null>; inventory: Section<InventoryWorkspace | null>; programs: Section<ReadonlyMap<string, PendingPassOutcome> | null> }
 const loading = { status: 'loading' } as const
 const ready = <T,>(data: T): Section<T> => ({ status: 'ready', data })
 const failed = <T,>(error: unknown, action: string): Section<T> => ({ status: 'failed', message: farmerError(error, action) })
@@ -29,17 +30,20 @@ async function standaloneFields(fieldsRepository: FieldsRepository, context: Loa
 
 function localStorageOrNull(): Pick<Storage, 'getItem'> | null { try { return typeof localStorage === 'undefined' ? null : localStorage } catch { return null } }
 
-export async function loadTodaySnapshots(profile: LoadedFarmAccessProfile, repositories: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository }): Promise<TodaySnapshots> {
+export async function loadTodaySnapshots(profile: LoadedFarmAccessProfile, repositories: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository; programsRepository: ProgramsRepository }): Promise<TodaySnapshots> {
   const context = profile.operationContext
   const wantsEquipment = canAccessFarmModule(profile, 'equipment') || canAccessFarmModule(profile, 'tasks')
   const wantsNotifications = canAccessFarmModule(profile, 'notifications')
   const wantsInventory = canAccessFarmModule(profile, 'inventory')
+  // Pass alerts are judged against the work this device has queued for passes but not yet synced (a pure read of the queue).
+  const wantsPrograms = canAccessFarmModule(profile, 'programs')
   // The equipment workspace already carries a current Fields snapshot, so members who can open Equipment load fields once.
-  const [equipment, fields, notifications, inventory] = await Promise.allSettled([
+  const [equipment, fields, notifications, inventory, programs] = await Promise.allSettled([
     wantsEquipment ? (repositories.equipmentTasksRepository.getSnapshot ? repositories.equipmentTasksRepository.getSnapshot(context).then((snapshot) => snapshot.data) : Promise.reject(new Error('Equipment and Tasks does not expose a side-effect-free snapshot.'))) : Promise.resolve(null),
     wantsEquipment ? Promise.resolve(null) : repositories.fieldsRepository.getSnapshot ? repositories.fieldsRepository.getSnapshot(context).then((snapshot) => snapshot.data.fields) : Promise.reject(new Error('Fields does not expose a side-effect-free snapshot.')),
     wantsNotifications ? (repositories.notificationsRepository.getSnapshot ? repositories.notificationsRepository.getSnapshot(context).then((snapshot) => snapshot.data.notifications) : Promise.reject(new Error('Alerts does not expose a side-effect-free snapshot.'))) : Promise.resolve(null),
     wantsInventory ? (repositories.inventoryRepository.getSnapshot ? repositories.inventoryRepository.getSnapshot(context).then((snapshot) => snapshot.data) : Promise.reject(new Error('Inventory does not expose a side-effect-free snapshot.'))) : Promise.resolve(null),
+    wantsPrograms ? (repositories.programsRepository.getPendingPassOutcomes ? repositories.programsRepository.getPendingPassOutcomes(context) : Promise.reject(new Error('Programs does not expose a side-effect-free read of its queued pass outcomes.'))) : Promise.resolve(null),
   ])
   const equipmentSection: Section<EquipmentTasksWorkspace | null> = equipment.status === 'fulfilled' ? ready(equipment.value) : failed(equipment.reason, 'check equipment and tasks')
   // Fields rides along with the Equipment workspace when that loads; when Equipment fails for its own reasons, Fields is read on
@@ -49,13 +53,14 @@ export async function loadTodaySnapshots(profile: LoadedFarmAccessProfile, repos
     : fields.status === 'fulfilled' ? ready(fields.value ?? []) : failed(fields.reason, 'load your fields')
   const notificationsSection: Section<Notification[] | null> = notifications.status === 'fulfilled' ? ready(notifications.value) : failed(notifications.reason, 'check your alerts')
   const inventorySection: Section<InventoryWorkspace | null> = inventory.status === 'fulfilled' ? ready(inventory.value) : failed(inventory.reason, 'check your inventory')
-  return { fields: fieldsSection, equipment: equipmentSection, notifications: notificationsSection, inventory: inventorySection }
+  const programsSection: Section<ReadonlyMap<string, PendingPassOutcome> | null> = programs.status === 'fulfilled' ? ready(programs.value) : failed(programs.reason, 'check your programs')
+  return { fields: fieldsSection, equipment: equipmentSection, notifications: notificationsSection, inventory: inventorySection, programs: programsSection }
 }
 
-export function TodayPage({ fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository }: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository }) {
+export function TodayPage({ fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, programsRepository }: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository; programsRepository: ProgramsRepository }) {
   const { profile, activeFarm } = useFarmAccess()
   const navigate = useNavigate()
-  const [snapshots, setSnapshots] = useState<TodaySnapshots>({ fields: loading, equipment: loading, notifications: loading, inventory: loading })
+  const [snapshots, setSnapshots] = useState<TodaySnapshots>({ fields: loading, equipment: loading, notifications: loading, inventory: loading, programs: loading })
   const [nowMs, setNowMs] = useState(() => Date.now())
   // The spray card's freshness gate is judged against the clock, not the load time: a phone left open on Today past the two-hour
   // ceiling must drop a stale verdict on its own, so the clock ticks every minute and whenever the app comes back into view.
@@ -75,8 +80,8 @@ export function TodayPage({ fieldsRepository, equipmentTasksRepository, notifica
   useEffect(() => { if (loadedDay.current !== today) { loadedDay.current = today; setReloadKey((key) => key + 1) } }, [today])
   useEffect(() => {
     let cancelled = false
-    if (reloadKey === 0) setSnapshots({ fields: loading, equipment: loading, notifications: loading, inventory: loading })
-    void loadTodaySnapshots(profile, { fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository }).then((next) => { if (!cancelled) { setSnapshots(next); setNowMs(Date.now()) } })
+    if (reloadKey === 0) setSnapshots({ fields: loading, equipment: loading, notifications: loading, inventory: loading, programs: loading })
+    void loadTodaySnapshots(profile, { fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, programsRepository }).then((next) => { if (!cancelled) { setSnapshots(next); setNowMs(Date.now()) } })
     return () => { cancelled = true }
   }, [profile, fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, reloadKey])
 
@@ -86,9 +91,9 @@ export function TodayPage({ fieldsRepository, equipmentTasksRepository, notifica
   const storage = localStorageOrNull()
   const fields = dataOf(snapshots.fields)
   const sprayCard = showWeather && fields && storage ? todaySprayWindow(fields, (latitude, longitude) => readCachedForecast(storage, latitude, longitude), nowMs) : null
-  const nextUp = todayNextUp({ profile, today, equipment: dataOf(snapshots.equipment), notifications: dataOf(snapshots.notifications), inventory: dataOf(snapshots.inventory) })
+  const nextUp = todayNextUp({ profile, today, equipment: dataOf(snapshots.equipment), notifications: dataOf(snapshots.notifications), inventory: dataOf(snapshots.inventory), pendingPasses: dataOf(snapshots.programs) })
   const stillLoading = snapshots.equipment.status === 'loading' || snapshots.notifications.status === 'loading' || snapshots.fields.status === 'loading' || snapshots.inventory.status === 'loading'
-  const sectionErrors = [snapshots.fields, snapshots.equipment, snapshots.notifications, snapshots.inventory].flatMap((section) => section.status === 'failed' ? [section.message] : [])
+  const sectionErrors = [snapshots.fields, snapshots.equipment, snapshots.notifications, snapshots.inventory, snapshots.programs].flatMap((section) => section.status === 'failed' ? [section.message] : [])
 
   return <section className="page today-page" aria-labelledby="today-title">
     <header className="page-heading today-heading"><div><p className="eyebrow">{activeFarm.name}</p><h1 id="today-title">{canEdit ? 'What are you recording?' : 'Your farm today'}</h1><p>{canEdit ? 'Tap an option to get started.' : 'You can view records here. Adding records is turned off for your access.'}</p></div></header>

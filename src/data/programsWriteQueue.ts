@@ -1,5 +1,6 @@
 import { normalizeProgramProductDraft, uuid, validAssignmentIdentityPlans, validDate, validateActualProgramProducts, validateProgramDraft, validateProgramPassDraft, validateProgramProductDraft, type ActualProgramProduct, type AssignmentIdentityPlan, type ProgramApplicationLink, type ProgramDraft, type ProgramPassDraft, type ProgramProductDraft } from './programs'
 import type { StorageLike } from './writeQueue'
+import type { PendingPassOutcome } from './programs'
 type Base = {
   version: 1
   module: 'programs'
@@ -153,5 +154,16 @@ export class ProgramsWriteQueue {
     this.persist(next)
     return next
   }
+}
+/** The outcome each assigned pass carries in this device's queue: applied and skipped close the pass, a reschedule moves its due
+ * date. A later entry for the same pass overrides an earlier one, as replay applies them in order. Pure over the entries given. */
+export function pendingPassOutcomes(entries: readonly ProgramsQueueEntryV1[]): Map<string, PendingPassOutcome> {
+  const outcomes = new Map<string, PendingPassOutcome>()
+  for (const entry of entries) {
+    if (entry.kind === 'mark_program_pass_applied') outcomes.set(entry.assignedPassId.toLowerCase(), { kind: 'applied' })
+    else if (entry.kind === 'skip_program_pass') outcomes.set(entry.assignedPassId.toLowerCase(), { kind: 'skipped' })
+    else if (entry.kind === 'reschedule_program_pass') outcomes.set(entry.assignedPassId.toLowerCase(), { kind: 'rescheduled', dueOn: entry.dueOn })
+  }
+  return outcomes
 }
 export const programsWriteQueueKey = (projectRef: string, userId: string, farmId: string) => `farm-rx-programs-write-queue:v1:${projectRef}:${userId}:${farmId}`

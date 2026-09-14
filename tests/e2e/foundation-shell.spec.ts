@@ -1389,6 +1389,44 @@ test('Today shows a worker without financial access no grain tile and no grain l
   expect(unexpected).toEqual([])
 })
 
+test('Today hides a pass skipped on this device before it syncs, reading the queue as it stands', async ({ page, context }) => {
+  await seedSession(context)
+  const queueKey = `farm-rx-programs-write-queue:v1:${projectRef}:${userId}:${farmA}`
+  // A device holding queued work also holds the grant records the app wrote when it opened the farm; the gate verifies pending
+  // work against them, so they are seeded as the app would have left them (epoch 1, not revoked).
+  await context.addInitScript(({ accessKey, access, queueKey: targetQueue, queue, fenceKey, generationKey, epochKey, changedAt, targetUserId, targetFarmId }) => {
+    localStorage.setItem(accessKey, JSON.stringify(access))
+    localStorage.setItem(targetQueue, JSON.stringify(queue))
+    const fence = { version: 2, generation: 1, token: '00000000-0000-4000-8000-000000000099', serverEpoch: 1, revoked: false, changedAt }
+    localStorage.setItem(fenceKey, JSON.stringify(fence))
+    localStorage.setItem(generationKey, JSON.stringify({ version: fence.version, generation: fence.generation, token: fence.token, serverEpoch: fence.serverEpoch, changedAt: fence.changedAt }))
+    localStorage.setItem(epochKey, JSON.stringify({ version: 1, userId: targetUserId, epochs: { [targetFarmId]: 1 }, validatedAt: changedAt }))
+  }, {
+    accessKey: `farm-rx-access:v1:${projectRef}:${userId}`,
+    access: { version: 1, userId, farms: [farmRow(farms[0])], selectedFarmId: farmA, validatedAt: now },
+    queueKey,
+    queue: { version: 1, entries: [{ version: 1, module: 'programs', operationId: '00000000-0000-4000-8000-000000000a51', userId, farmId: farmA, enqueuedAt: '2026-07-15T11:00:00.000Z', kind: 'skip_program_pass', assignedPassId: passA, skippedOn: '2026-07-15', reason: 'Too wet to spray' }] },
+    fenceKey: `farm-rx-revocation-fence:v1:${projectRef}:${userId}:${farmA}`,
+    generationKey: `farm-rx-revocation-generation:v1:${projectRef}:${userId}:${farmA}`,
+    epochKey: `farm-rx-server-access-epochs:v1:${projectRef}:${userId}`,
+    changedAt: now,
+    targetUserId: userId,
+    targetFarmId: farmA,
+  })
+  const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), true, 1, ownerProfile, userId, {}, todayRows(farms[0]))
+  // The startup replay of that entry fails the way a dead network does, so the entry stays queued; Today reads the queue as it stands.
+  await page.route('**/rest/v1/rpc/skip_program_pass', async (route) => { await route.abort('internetdisconnected') })
+  await page.goto('/today')
+  const nextUp = page.getByRole('region', { name: 'Next up' })
+  await expect(nextUp.getByRole('link')).toHaveCount(4)
+  await expect(page.getByText('Program pass due')).toHaveCount(0)
+  await expect(page.getByText('Corn pass 2 is due')).toHaveCount(0)
+  await expect(nextUp.getByText('Fix the planter')).toBeVisible()
+  await expect(nextUp.getByText('Grain alert')).toBeVisible()
+  expect(await page.evaluate((key) => (JSON.parse(localStorage.getItem(key) ?? '{"entries":[]}') as { entries: unknown[] }).entries.length, queueKey)).toBe(1)
+  expect(unexpected).toEqual([])
+})
+
 test('Today gives a named rep a view-only front door with grain alerts and no equipment or task reads', async ({ page, context }) => {
   await seedSession(context)
   const reads: string[] = []

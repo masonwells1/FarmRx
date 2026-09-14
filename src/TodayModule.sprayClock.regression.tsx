@@ -8,6 +8,7 @@ import { deriveFarmAccessProfile, type LoadedFarmAccessProfile } from './auth/fa
 import type { EquipmentTasksRepository, EquipmentTasksWorkspace } from './data/equipmentTasks'
 import type { Field, FieldsData, FieldsRepository } from './data/fields'
 import type { InventoryRepository } from './data/inventory'
+import type { ProgramsRepository } from './data/programs'
 import type { NotificationsRepository } from './data/notifications'
 import { weatherCacheKey } from './data/weatherService'
 import { loadTodaySnapshots, TodayPage } from './TodayModule'
@@ -49,11 +50,12 @@ const equipmentTasksRepository = { getWorkspace: async () => workspace, getSnaps
 const notificationsRepository = { getData: async () => ({ notifications: [], unreadCount: 0 }), getSnapshot: snapshot({ notifications: [], unreadCount: 0 }) } as unknown as NotificationsRepository
 const inventory = { fields: fieldsData, products: [], receipts: [], receipt_lines: [], adjustments: [], applications: [], application_products: [], program_application_products: [], rup_completeness: [], on_hand: [] }
 const inventoryRepository = { getWorkspace: async () => inventory, getSnapshot: snapshot(inventory) } as unknown as InventoryRepository
+const programsRepository = { getPendingPassOutcomes: async () => new Map() } as unknown as ProgramsRepository
 
 const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
 try {
   const access = { farms: [farm], activeFarm: farm, profile, source: 'live' as const, chooseFarm: async () => {}, checkSignal: async () => {} }
-  await act(async () => { root.render(createElement(MemoryRouter, { initialEntries: ['/today'] }, createElement(FarmAccessProvider, { value: access, children: createElement(TodayPage, { fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository }) }))); await flush(); await flush() })
+  await act(async () => { root.render(createElement(MemoryRouter, { initialEntries: ['/today'] }, createElement(FarmAccessProvider, { value: access, children: createElement(TodayPage, { fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, programsRepository }) }))); await flush(); await flush() })
   const cardText = () => container.querySelector('.today-spray-card')?.textContent ?? ''
   assert(cardText().includes('Good spray window until'), `A fresh cached forecast did not render a spray verdict (saw: ${cardText()}).`)
   assert(intervals.length === 1, `Today did not start exactly one clock (saw ${intervals.length}).`)
@@ -76,7 +78,7 @@ try {
   assert(equipmentReads === readsBeforeMidnight + 2, `Coming back into view must re-read the snapshots (reads ${equipmentReads}).`)
   // FD-013: when Equipment fails for its own reasons, Fields is read on its own so the spray card does not vanish with it.
   const failingEquipment = { getWorkspace: async () => { throw new Error('boom') }, getSnapshot: async () => { throw new Error('Equipment and Tasks found invalid data.') } } as unknown as EquipmentTasksRepository
-  const sections = await loadTodaySnapshots(profile, { fieldsRepository, equipmentTasksRepository: failingEquipment, notificationsRepository, inventoryRepository })
+  const sections = await loadTodaySnapshots(profile, { fieldsRepository, equipmentTasksRepository: failingEquipment, notificationsRepository, inventoryRepository, programsRepository })
   assert(sections.equipment.status === 'failed', 'The failing Equipment snapshot must report as failed.')
   assert(sections.fields.status === 'ready' && sections.fields.data.length === 1 && sections.fields.data[0].name === 'North Forty', 'Fields must still load on its own when Equipment fails.')
   console.log('Today spray clock regression passed')

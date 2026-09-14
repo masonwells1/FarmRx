@@ -3,6 +3,7 @@ import type { EquipmentTasksWorkspace } from './equipmentTasks'
 import type { InventoryUnit, InventoryWorkspace } from './inventory'
 import type { Field } from './fields'
 import type { Notification } from './notifications'
+import type { PendingPassOutcome } from './programs'
 import type { ForecastBundle, SprayLevel } from './weather'
 import { bestWindowToday, compassLabel, evaluateSprayWindow, fieldWallClockDate, formatHour, formatMph, isActionablyFresh } from './weatherService'
 import { manualSprayRecordIntent } from './weatherSprayHandoff'
@@ -63,9 +64,11 @@ const passIdOf = (link: string) => programPassLink.exec(link)?.[1]?.toLowerCase(
  * is the same work and is not listed twice. Applying a pass closes its generated task but leaves the alert unread, so an unread
  * pass alert whose generated task is already done is finished work and is not listed, and one whose task was rescheduled to a
  * later date is a past reminder and is not listed until that date; when the tasks could not be loaded at all, pass state is
- * unknown and no pass alert is listed. Low inventory is the Inventory shelf's own
+ * unknown and no pass alert is listed. Work this device has queued for a pass but not yet synced (applied, skipped, rescheduled)
+ * is projected the way the server will land it, closing the pass and its generated task or moving that task's date; when those
+ * queued outcomes could not be read, pass state is likewise unknown. Low inventory is the Inventory shelf's own
  * low-on-hand rule applied to the same on-hand view. A source the screen could not load is simply absent. */
-export function todayNextUp(input: { profile: FarmAccessProfile; today: string; equipment: EquipmentTasksWorkspace | null; notifications: readonly Notification[] | null; inventory?: InventoryWorkspace | null }): TodayNextUpItem[] {
+export function todayNextUp(input: { profile: FarmAccessProfile; today: string; equipment: EquipmentTasksWorkspace | null; notifications: readonly Notification[] | null; inventory?: InventoryWorkspace | null; pendingPasses?: ReadonlyMap<string, PendingPassOutcome> | null }): TodayNextUpItem[] {
   const { profile, today, equipment, notifications } = input
   const inventory = input.inventory ?? null
   const items: TodayNextUpItem[] = []
@@ -75,9 +78,20 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
   // Rescheduling a pass moves its generated task to the new date but leaves the old alert unread; an alert whose task is now due
   // in the future is a past reminder, not work for today, and the task itself returns to Next up when its new date arrives.
   const rescheduledPassIds = new Set((equipment?.tasks ?? []).filter((task) => task.source === 'program' && task.status !== 'done' && task.program_assigned_pass_id !== null && task.due_on !== null && task.due_on > today).map((task) => task.program_assigned_pass_id!.toLowerCase()))
-  // Whether a pass is applied or rescheduled is read from its generated task, so without the Equipment and Tasks snapshot the
-  // state of every pass alert is unknown and none is listed (the section's own error is shown instead).
-  const passStateKnown = equipment !== null
+  // Work queued on this device for a pass and not yet synced overrides what its generated task says: applying or skipping closes
+  // the pass (the server closes the task when the entry lands); a reschedule moves it, so a queued later date hides it until then
+  // and a queued earlier date brings it back. `undefined` means no queue was consulted (none applies); `null` means the queue
+  // could not be read.
+  const pending: ReadonlyMap<string, PendingPassOutcome> | null = input.pendingPasses === undefined ? new Map() : input.pendingPasses
+  for (const [passId, outcome] of pending ?? []) {
+    if (outcome.kind !== 'rescheduled') appliedPassIds.add(passId)
+    else if (outcome.dueOn > today) rescheduledPassIds.add(passId)
+    else rescheduledPassIds.delete(passId)
+  }
+  // Whether a pass is applied or rescheduled is read from its generated task and this device's queue, so without the Equipment
+  // and Tasks snapshot, or without the queue, the state of every pass alert is unknown and none is listed (the section's own
+  // error is shown instead).
+  const passStateKnown = equipment !== null && pending !== null
   const passAlertIsOpen = (link: string) => { const passId = passIdOf(link); return passId === null || (passStateKnown && !appliedPassIds.has(passId) && !rescheduledPassIds.has(passId)) }
   const shownPassIds = new Set(canAccessFarmModule(profile, 'programs') ? unread.filter((notification) => passAlertIsOpen(notification.link!)).map((notification) => passIdOf(notification.link!)).filter((id): id is string => id !== null) : [])
   const shownServiceIntervalIds = new Set<string>()
@@ -152,11 +166,18 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
     }
   }
   if (equipment && canAccessFarmModule(profile, 'tasks')) {
-    const generatedElsewhere = (task: EquipmentTasksWorkspace['tasks'][number]) => (task.source === 'service_interval' && task.interval_id !== null && shownServiceIntervalIds.has(task.interval_id)) || (task.source === 'program' && task.program_assigned_pass_id !== null && shownPassIds.has(task.program_assigned_pass_id.toLowerCase()))
-    const due = equipment.tasks.filter((task) => task.status !== 'done' && task.due_on !== null && task.due_on <= today && !generatedElsewhere(task)).sort((a, b) => (a.due_on ?? '').localeCompare(b.due_on ?? '') || a.title.localeCompare(b.title))
+    type Task = EquipmentTasksWorkspace['tasks'][number]
+    const generatedElsewhere = (task: Task) => (task.source === 'service_interval' && task.interval_id !== null && shownServiceIntervalIds.has(task.interval_id)) || (task.source === 'program' && task.program_assigned_pass_id !== null && shownPassIds.has(task.program_assigned_pass_id.toLowerCase()))
+    // A pass's generated task follows the pass's queued outcome until the sync lands: closed with an applied or skipped pass,
+    // dated by a queued reschedule.
+    const queuedOutcome = (task: Task) => (task.source === 'program' && task.program_assigned_pass_id !== null ? pending?.get(task.program_assigned_pass_id.toLowerCase()) : undefined) ?? null
+    const closedOffline = (task: Task) => { const outcome = queuedOutcome(task); return outcome !== null && outcome.kind !== 'rescheduled' }
+    const dueOnOf = (task: Task) => { const outcome = queuedOutcome(task); return outcome?.kind === 'rescheduled' ? outcome.dueOn : task.due_on }
+    const due = equipment.tasks.filter((task) => task.status !== 'done' && !closedOffline(task) && dueOnOf(task) !== null && dueOnOf(task)! <= today && !generatedElsewhere(task)).sort((a, b) => (dueOnOf(a) ?? '').localeCompare(dueOnOf(b) ?? '') || a.title.localeCompare(b.title))
     for (const task of due) {
-      const overdue = (task.due_on ?? today) < today
-      items.push({ id: `task:${task.id}`, kind: 'task', title: overdue ? 'Task overdue' : 'Task due today', detail: task.title, badge: overdue ? `${plural(daysBetween(task.due_on!, today), 'day')} late` : null, urgency: overdue ? 'overdue' : 'due', to: '/tasks' })
+      const dueOn = dueOnOf(task)!
+      const overdue = dueOn < today
+      items.push({ id: `task:${task.id}`, kind: 'task', title: overdue ? 'Task overdue' : 'Task due today', detail: task.title, badge: overdue ? `${plural(daysBetween(dueOn, today), 'day')} late` : null, urgency: overdue ? 'overdue' : 'due', to: '/tasks' })
     }
   }
   if (notifications) {

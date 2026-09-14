@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { deriveFarmAccessProfile } from '../auth/farmContext'
 import type { EquipmentTasksWorkspace, Equipment, FarmTask, MeterReading, ServiceInterval } from './equipmentTasks'
+import { pendingPassOutcomes, type ProgramsQueueEntryV1 } from './programsWriteQueue'
 import type { InventoryProduct, InventoryWorkspace } from './inventory'
 import type { Field, FieldsData } from './fields'
 import type { Notification } from './notifications'
@@ -108,6 +109,29 @@ const rescheduledArrived = todayNextUp({ profile: owner, today: '2026-07-20', eq
 assert.ok(rescheduledArrived.some((item) => item.kind === 'program'), 'When the rescheduled date arrives the pass is listed again (through its still-unread alert).')
 const twoReminders = todayNextUp({ profile: owner, today, equipment: workspace, notifications: [...notifications, notification('00000000-0000-4000-8000-000000000508', 'Corn pass 2 is due (again)', '/programs?pass=00000000-0000-4000-8000-000000000601', null, '2026-07-15T11:45:00.000Z')] })
 assert.equal(twoReminders.filter((item) => item.kind === 'program').length, 1, 'Two unread reminders for one pass are one row.')
+// Work queued on this device for a pass but not yet synced is projected the way the server will land it.
+const passA = '00000000-0000-4000-8000-000000000601'
+const queuedBase = { version: 1 as const, module: 'programs' as const, operationId: '00000000-0000-4000-8000-000000000a01', userId: userA, farmId: farmA, enqueuedAt: now }
+const queuedSkip: ProgramsQueueEntryV1 = { ...queuedBase, kind: 'skip_program_pass', assignedPassId: passA.toUpperCase(), skippedOn: today, reason: 'Too wet' }
+const queuedApply: ProgramsQueueEntryV1 = { ...queuedBase, operationId: '00000000-0000-4000-8000-000000000a02', kind: 'mark_program_pass_applied', assignedPassId: passA, appliedOn: today, appliedAcres: 80, actualProducts: [], applicationLink: { kind: 'none' } }
+const queuedReschedule: ProgramsQueueEntryV1 = { ...queuedBase, operationId: '00000000-0000-4000-8000-000000000a03', kind: 'reschedule_program_pass', assignedPassId: passA, dueOn: '2026-07-20', timingLabel: null }
+assert.deepEqual([...pendingPassOutcomes([queuedSkip]).entries()], [[passA, { kind: 'skipped' }]], 'A queued skip closes the pass; ids are matched case-insensitively.')
+assert.deepEqual(pendingPassOutcomes([queuedReschedule, queuedApply]).get(passA), { kind: 'applied' }, 'The later queued outcome for a pass wins, as replay applies them in order.')
+assert.deepEqual(pendingPassOutcomes([queuedApply, queuedReschedule]).get(passA), { kind: 'rescheduled', dueOn: '2026-07-20' }, 'A reschedule queued after an apply is the later word.')
+assert.equal(pendingPassOutcomes([{ ...queuedBase, kind: 'delete_program', programId: passA }]).size, 0, 'Other queued work carries no pass outcome.')
+const skippedOffline = todayNextUp({ profile: owner, today, equipment: workspace, notifications, pendingPasses: pendingPassOutcomes([queuedSkip]) })
+assert.ok(!skippedOffline.some((item) => item.kind === 'program' || item.detail === 'Corn pass 2'), 'A pass skipped on this device before sync is neither listed from its unread alert nor as its still-open generated task.')
+assert.ok(skippedOffline.some((item) => item.kind === 'grain_alert') && skippedOffline.some((item) => item.detail === 'Fix the planter') && skippedOffline.some((item) => item.kind === 'service'), 'Other rows are unaffected by the queued skip.')
+const appliedOffline = todayNextUp({ profile: owner, today, equipment: workspace, notifications, pendingPasses: pendingPassOutcomes([queuedApply]) })
+assert.ok(!appliedOffline.some((item) => item.kind === 'program' || item.detail === 'Corn pass 2'), 'A pass applied on this device before sync is finished work.')
+const rescheduledOffline = todayNextUp({ profile: owner, today, equipment: workspace, notifications, pendingPasses: pendingPassOutcomes([queuedReschedule]) })
+assert.ok(!rescheduledOffline.some((item) => item.kind === 'program' || item.detail === 'Corn pass 2'), 'A pass rescheduled on this device to a later date is not listed until then, from neither its alert nor its task.')
+const rescheduledOfflineArrived = todayNextUp({ profile: owner, today: '2026-07-20', equipment: workspace, notifications, pendingPasses: pendingPassOutcomes([queuedReschedule]) })
+assert.ok(rescheduledOfflineArrived.some((item) => item.kind === 'program'), 'On the queued date the pass is listed again.')
+const movedEarlierOffline = todayNextUp({ profile: owner, today, equipment: { ...workspace, tasks: workspace.tasks.map((task) => task.id === '00000000-0000-4000-8000-000000000407' ? { ...task, due_on: '2026-07-20' } : task) }, notifications: notifications.filter((notification) => notification.id !== '00000000-0000-4000-8000-000000000501'), pendingPasses: pendingPassOutcomes([{ ...queuedReschedule, dueOn: '2026-07-14' }]) })
+assert.deepEqual(movedEarlierOffline.filter((item) => item.detail === 'Corn pass 2').map((item) => [item.kind, item.title, item.badge]), [['task', 'Task overdue', '1 day late']], 'A pass moved earlier on this device shows its generated task on the queued date, not the task\'s stale later one.')
+const outcomesUnknown = todayNextUp({ profile: owner, today, equipment: workspace, notifications, pendingPasses: null })
+assert.ok(!outcomesUnknown.some((item) => item.kind === 'program'), 'When the queued outcomes could not be read, pass state is unknown and no pass alert is listed.')
 const withoutReading = todayNextUp({ profile: owner, today, equipment: { ...workspace, meter_readings: [] }, notifications })
 assert.ok(!withoutReading.some((item) => item.id === 'service:' + oil.id), 'A machine without a reading has no meter row, whatever the view returned.')
 assert.ok(withoutReading.some((item) => item.kind === 'task' && item.detail === 'Engine oil · John Deere 8R 340'), 'Without a service row the generated service task is listed on its own.')
