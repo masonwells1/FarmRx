@@ -212,7 +212,13 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
     if (rest === 'farm_memberships') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,user_id,role,status,can_view_financials', farm_id: `eq.${farm.id}`, user_id: `eq.${activeUserId}` })) { await rejectShape('farm_memberships query'); return }; await fulfillJson(route, membershipRow(farm, activeUserId, profile)); return }
     if (rest === 'farm_rep_access') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,rep_user_id,enabled,revoked_at', farm_id: `eq.${farm.id}`, rep_user_id: `eq.${activeUserId}` })) { await rejectShape('farm_rep_access query'); return }; await fulfillJson(route, profile.namedRep ? { farm_id: farm.id, rep_user_id: activeUserId, enabled: true, revoked_at: null } : null); return }
     if (rest && Object.hasOwn(fieldsReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, fieldsReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, rowsFor(rest, farm)); return }
-    if (rest && Object.hasOwn(equipmentReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, equipmentReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, moduleRows[rest] ?? []); return }
+    if (rest && Object.hasOwn(equipmentReadQueries, rest)) {
+      const farm = requestedFarm(url)
+      // Profitability reads equipment names through a narrower exact shape than the Equipment workspace.
+      const profitabilityEquipment = rest === 'equipment' && exactQuery(url, { select: 'id,farm_id,name,status', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' })
+      if (route.request().method() !== 'GET' || !(profitabilityEquipment || exactQuery(url, equipmentReadQueries[rest]!(farm)))) { await rejectShape(`${rest} query`); return }
+      await fulfillJson(route, moduleRows[rest] ?? []); return
+    }
     if (rest === 'notifications') { if (route.request().method() !== 'GET' || !exactQuery(url, { select: '*', order: 'created_at.desc,id.desc' })) { await rejectShape('notifications query'); return }; await fulfillJson(route, notifications); return }
     if (url.pathname === '/rest/v1/rpc/get_current_farm_access_epochs') {
       let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
@@ -672,8 +678,8 @@ test('two-tab sign-in falls back to a fail-closed storage lease when Web Locks a
 
   releaseAuthoritativeRequest()
   await Promise.all([
-    expect(page.getByText('North Forty')).toBeVisible(),
-    expect(olderTab.getByText('North Forty')).toBeVisible(),
+    expect(page.getByRole('heading', { name: 'What are you recording?' })).toBeVisible(),
+    expect(olderTab.getByRole('heading', { name: 'What are you recording?' })).toBeVisible(),
   ])
   const finalState = await page.evaluate(({ sessionKey, intentKey, leaseKey }) => ({
     session: JSON.parse(localStorage.getItem(sessionKey) ?? 'null') as { user?: { id?: string }; access_token?: string },
@@ -740,9 +746,15 @@ test('multi-farm access requires an explicit choice and keeps both farms usable'
   await expect(page.getByRole('button', { name: 'Prairie View' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'River Bend' })).toBeVisible()
   await page.getByRole('button', { name: 'Prairie View' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
+  await expect(page.getByRole('heading', { name: 'What are you recording?' })).toBeVisible()
+  await page.goto('/fields')
   await expect(page.getByText('North Forty')).toBeVisible()
   await expect(page.getByLabel('Active farm')).toHaveValue(farmA)
   await page.getByLabel('Active farm').selectOption(farmB)
+  // Switching farms reopens the app on Today for the new farm; the field names live on Fields.
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
+  await page.goto('/fields')
   await expect(page.getByText('South Bottom')).toBeVisible()
   await expect(page.getByLabel('Active farm')).toHaveValue(farmB)
   const cacheKeys = await page.evaluate(async (name) => {
@@ -764,6 +776,8 @@ test('a long valid farm name keeps the phone farm switcher inside its summary', 
   const unexpected = await mockSupabase(page, [farms[0], longFarm])
   await page.goto('/fields')
   await page.getByRole('button', { name: 'Prairie View' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/today')
+  await page.goto('/fields')
   await expect(page.getByText('North Forty')).toBeVisible()
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready

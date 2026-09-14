@@ -44,3 +44,13 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Repair:** `/today` added first in the regression's manifest; `FieldLogModule.legacyRecovery.regression.tsx` and `FieldLogModule.deleteDoubleTap.regression.tsx` now render inside a `MemoryRouter`, the same wrapper the Equipment quick-action regression already uses. No product code changed.
 - **Lesson recorded:** the route manifest is pinned in two places; a route change must update both, and the full `npm run regression` chain (not only focused runs) is part of the pre-push proof. This container has no PowerShell, so the four `pwsh` steps and the CW-2 diagnostic self-test cannot run here; every other step in the chain was run locally, and Foundation covers the rest.
 - **Proof:** recorded on the pull request with the repair commit.
+
+## FD-003 — Foundation repair: browser journeys that assumed Fields was the landing page
+
+- **Date/time:** 2026-09-14 08:39 -05:00 (`America/Chicago`).
+- **Trigger:** Foundation failed on `f9d0ecd` (pull request #46) in the built-browser lane: seven journeys FD-001's focused local run had not covered (97 passed). All seven reproduced locally and share two causes.
+- **Cause 1 (five journeys):** the two-tab sign-in, multi-farm choice, long-farm-name, and lazy-route-recovery journeys asserted the Fields page (the field name "North Forty", or the Grain link on the phone bar) right after sign-in or farm choice. FD-1 lands on Today instead, and Grain now sits in More on phones for members who can open Tasks and Weather. Each journey now asserts the Today landing, then opens Fields (or More, then Grain) before its original checks. Switching farms from the shell's farm picker also reopens the app on Today for the new farm (it reopened on Fields before), so the multi-farm journey opens Fields again after the switch before checking the second farm's field. The offline farm-switcher proof and the two-farm cache proof still run on Fields exactly as before.
+- **Cause 2 (two journeys):** the Grain page's Profitability gateway reads `equipment` through a narrower exact shape (`id,farm_id,name,status`, ordered by name then id). FD-001's mock served `equipment` only in the Equipment workspace shape and rejected the narrower read, which earlier fell through to the empty-unknown-read path. The mock now accepts both exact shapes; unknown shapes are still rejected.
+- **Repair scope:** test and mock files only. No product code changed.
+- **Lesson recorded:** a default-landing change touches every journey that starts from sign-in or farm choice; before pushing, run the entire local Playwright suite (all spec files, both projects), not a grep-selected subset.
+- **Proof:** recorded on the pull request with the repair commit.
