@@ -183,6 +183,14 @@ const freshGust = todaySprayWindow(fieldsData.fields, readForecast, nowMs)
 assert.ok(freshGust && freshGust.level !== 'good' && freshGust.details[0] === 'Wind 20 mph SW', `A 10:45 observation of 20 mph must outrank the calm 10:00 hourly row (saw ${freshGust?.level} · ${freshGust?.details[0]}).`)
 const gustThenCalmHour = todaySprayWindow(fieldsData.fields, readForecast, nowMs + 20 * 60_000)
 assert.ok(gustThenCalmHour && gustThenCalmHour.details[0] === 'Wind 6 mph SW', `Once the 11:00 hourly row is newer than the observation it takes over (saw ${gustThenCalmHour?.details[0]}).`)
+// Good now, an unsafe hour next, then a later good run: never "until 2 PM" across the gap.
+const gapHours = [['10:00', 6], ['11:00', 16], ['12:00', 6], ['13:00', 6], ['14:00', 6], ['15:00', 16]].map(([clock, wind]) => ({ ...hour(`2026-07-15T${clock}`), wind_speed_mph: wind as number, wind_gusts_mph: (wind as number) + 3 }))
+storage.setItem(weatherCacheKey(41.5, -93.6), JSON.stringify({ version: 1, fetched_at: new Date(nowMs - 5 * 60_000).toISOString(), bundle: { current: hour('2026-07-15T10:45'), hourly: gapHours, daily: [{ date: '2026-07-15', precipitation_sum_in: 0, precipitation_probability_max: 10, temperature_max_f: 84, temperature_min_f: 61, sunrise: '2026-07-15T05:58', sunset: '2026-07-15T20:47' }], fetched_at: new Date(nowMs - 5 * 60_000).toISOString() } })); storage.writes = 0
+const gapped = todaySprayWindow(fieldsData.fields, readForecast, nowMs)
+assert.ok(gapped && gapped.level === 'good' && gapped.headline === 'Good spray conditions right now', `Good now with an unsafe 11:00 must not claim a window through 2 PM (saw ${gapped?.headline}).`)
+assert.ok(gapped.details.includes('Next window opens at 12 PM'), `The later opening is named separately (saw ${gapped.details.join(' | ')}).`)
+const continuous = todaySprayWindow(fieldsData.fields, readForecast, nowMs + 80 * 60_000)
+assert.ok(continuous && continuous.headline === 'Good spray window until 3 PM' && !continuous.details.some((detail) => detail.startsWith('Next window')), `At 12:05, standing in the good run, "until 3 PM" is right (saw ${continuous?.headline} | ${continuous?.details.join(' | ')}).`)
 // The farm's calendar day comes from its stored time zone; the device's day only when the zone is unknown or unusable.
 const lateEvening = new Date('2026-07-16T03:30:00.000Z')
 assert.equal(farmCalendarDate(lateEvening, 'America/Chicago'), '2026-07-15', 'At 10:30 PM Central the farm\'s day is still the 15th.')

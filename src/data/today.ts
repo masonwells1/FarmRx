@@ -175,9 +175,14 @@ export function todaySprayWindow(fields: readonly Field[], readForecast: (latitu
     const ctx = { now, hourly: bundle.hourly, sunrise: day?.sunrise ?? null, sunset: day?.sunset ?? null }
     const verdict = evaluateSprayWindow(sample, ctx)
     const window = bestWindowToday(bundle.hourly, ctx)
-    const headline = verdict.level === 'good' ? (window ? `Good spray window until ${formatHour(window.end)}` : 'Good spray conditions right now') : window ? `Spray window opens at ${formatHour(window.start)}` : verdict.level === 'caution' ? 'Use caution spraying today' : 'No good spray window today'
+    // "Until" is only honest when the best window is the one the farmer is standing in: it must begin by the next hourly mark.
+    // Good conditions now with an unsafe hour before a later good run are reported as good now, with the later opening named
+    // separately, so the gap is never presented as sprayable.
+    const windowIsNow = window !== null && wallClockMs(window.start) - nowAt <= 3_600_000
+    const headline = verdict.level === 'good' ? (window && windowIsNow ? `Good spray window until ${formatHour(window.end)}` : 'Good spray conditions right now') : window ? `Spray window opens at ${formatHour(window.start)}` : verdict.level === 'caution' ? 'Use caution spraying today' : 'No good spray window today'
     const rainChance = day?.precipitation_probability_max ?? null
     const details = [`Wind ${formatMph(sample.wind_speed_mph)} ${compassLabel(sample.wind_direction_degrees)}`, rainChance === null ? 'Rain chance unknown' : rainChance < 30 ? 'No rain expected' : `${Math.round(rainChance)}% rain chance`]
+    if (verdict.level === 'good' && window && !windowIsNow) details.push(`Next window opens at ${formatHour(window.start)}`)
     const card: TodaySprayCard = { level: verdict.level, headline, details, fieldName: field.name }
     if (!best || levelOrder[card.level] < levelOrder[best.level]) best = card
   }
