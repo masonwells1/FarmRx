@@ -5,6 +5,7 @@ import { useFarmAccess } from './auth/FarmAccessContext'
 import type { EquipmentTasksRepository, EquipmentTasksWorkspace } from './data/equipmentTasks'
 import { farmLocalCalendarDate } from './data/farmDates'
 import type { Field, FieldsRepository } from './data/fields'
+import type { InventoryRepository, InventoryWorkspace } from './data/inventory'
 import type { Notification, NotificationsRepository } from './data/notifications'
 import { todayNextUp, todayRecordTiles, todaySprayWindow, type TodayNextUpItem, type TodayRecordKind, type TodaySprayCard } from './data/today'
 import { readCachedForecast } from './data/weatherService'
@@ -15,7 +16,7 @@ import { farmerError } from './lib/farmerErrors'
 // generates due items, refreshes a forecast, or writes a cache. Every tile and row hands off to the module that owns the record.
 
 type Section<T> = { status: 'loading' } | { status: 'ready'; data: T } | { status: 'failed'; message: string }
-type TodaySnapshots = { fields: Section<Field[]>; equipment: Section<EquipmentTasksWorkspace | null>; notifications: Section<Notification[] | null> }
+type TodaySnapshots = { fields: Section<Field[]>; equipment: Section<EquipmentTasksWorkspace | null>; notifications: Section<Notification[] | null>; inventory: Section<InventoryWorkspace | null> }
 const loading = { status: 'loading' } as const
 const ready = <T,>(data: T): Section<T> => ({ status: 'ready', data })
 const failed = <T,>(error: unknown, action: string): Section<T> => ({ status: 'failed', message: farmerError(error, action) })
@@ -23,35 +24,38 @@ const dataOf = <T,>(section: Section<T>): T | null => section.status === 'ready'
 
 function localStorageOrNull(): Pick<Storage, 'getItem'> | null { try { return typeof localStorage === 'undefined' ? null : localStorage } catch { return null } }
 
-async function loadTodaySnapshots(profile: LoadedFarmAccessProfile, repositories: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository }): Promise<TodaySnapshots> {
+async function loadTodaySnapshots(profile: LoadedFarmAccessProfile, repositories: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository }): Promise<TodaySnapshots> {
   const context = profile.operationContext
   const wantsEquipment = canAccessFarmModule(profile, 'equipment') || canAccessFarmModule(profile, 'tasks')
   const wantsNotifications = canAccessFarmModule(profile, 'notifications')
+  const wantsInventory = canAccessFarmModule(profile, 'inventory')
   // The equipment workspace already carries a current Fields snapshot, so members who can open Equipment load fields once.
-  const [equipment, fields, notifications] = await Promise.allSettled([
+  const [equipment, fields, notifications, inventory] = await Promise.allSettled([
     wantsEquipment ? (repositories.equipmentTasksRepository.getSnapshot ? repositories.equipmentTasksRepository.getSnapshot(context).then((snapshot) => snapshot.data) : Promise.reject(new Error('Equipment and Tasks does not expose a side-effect-free snapshot.'))) : Promise.resolve(null),
     wantsEquipment ? Promise.resolve(null) : repositories.fieldsRepository.getSnapshot ? repositories.fieldsRepository.getSnapshot(context).then((snapshot) => snapshot.data.fields) : Promise.reject(new Error('Fields does not expose a side-effect-free snapshot.')),
     wantsNotifications ? (repositories.notificationsRepository.getSnapshot ? repositories.notificationsRepository.getSnapshot(context).then((snapshot) => snapshot.data.notifications) : Promise.reject(new Error('Alerts does not expose a side-effect-free snapshot.'))) : Promise.resolve(null),
+    wantsInventory ? (repositories.inventoryRepository.getSnapshot ? repositories.inventoryRepository.getSnapshot(context).then((snapshot) => snapshot.data) : Promise.reject(new Error('Inventory does not expose a side-effect-free snapshot.'))) : Promise.resolve(null),
   ])
   const equipmentSection: Section<EquipmentTasksWorkspace | null> = equipment.status === 'fulfilled' ? ready(equipment.value) : failed(equipment.reason, 'check equipment and tasks')
   const fieldsSection: Section<Field[]> = wantsEquipment
     ? equipment.status === 'fulfilled' ? ready(equipment.value?.fields.fields ?? []) : failed(equipment.reason, 'load your fields')
     : fields.status === 'fulfilled' ? ready(fields.value ?? []) : failed(fields.reason, 'load your fields')
   const notificationsSection: Section<Notification[] | null> = notifications.status === 'fulfilled' ? ready(notifications.value) : failed(notifications.reason, 'check your alerts')
-  return { fields: fieldsSection, equipment: equipmentSection, notifications: notificationsSection }
+  const inventorySection: Section<InventoryWorkspace | null> = inventory.status === 'fulfilled' ? ready(inventory.value) : failed(inventory.reason, 'check your inventory')
+  return { fields: fieldsSection, equipment: equipmentSection, notifications: notificationsSection, inventory: inventorySection }
 }
 
-export function TodayPage({ fieldsRepository, equipmentTasksRepository, notificationsRepository }: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository }) {
+export function TodayPage({ fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository }: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository }) {
   const { profile, activeFarm } = useFarmAccess()
   const navigate = useNavigate()
-  const [snapshots, setSnapshots] = useState<TodaySnapshots>({ fields: loading, equipment: loading, notifications: loading })
+  const [snapshots, setSnapshots] = useState<TodaySnapshots>({ fields: loading, equipment: loading, notifications: loading, inventory: loading })
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
     let cancelled = false
-    setSnapshots({ fields: loading, equipment: loading, notifications: loading })
-    void loadTodaySnapshots(profile, { fieldsRepository, equipmentTasksRepository, notificationsRepository }).then((next) => { if (!cancelled) { setSnapshots(next); setNowMs(Date.now()) } })
+    setSnapshots({ fields: loading, equipment: loading, notifications: loading, inventory: loading })
+    void loadTodaySnapshots(profile, { fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository }).then((next) => { if (!cancelled) { setSnapshots(next); setNowMs(Date.now()) } })
     return () => { cancelled = true }
-  }, [profile, fieldsRepository, equipmentTasksRepository, notificationsRepository])
+  }, [profile, fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository])
 
   const tiles = todayRecordTiles(profile)
   const canEdit = profile.capabilities.canEditOperational
@@ -59,9 +63,9 @@ export function TodayPage({ fieldsRepository, equipmentTasksRepository, notifica
   const storage = localStorageOrNull()
   const fields = dataOf(snapshots.fields)
   const sprayCard = showWeather && fields && storage ? todaySprayWindow(fields, (latitude, longitude) => readCachedForecast(storage, latitude, longitude), nowMs) : null
-  const nextUp = todayNextUp({ profile, today: farmLocalCalendarDate(), equipment: dataOf(snapshots.equipment), notifications: dataOf(snapshots.notifications) })
-  const stillLoading = snapshots.equipment.status === 'loading' || snapshots.notifications.status === 'loading' || snapshots.fields.status === 'loading'
-  const sectionErrors = [snapshots.fields, snapshots.equipment, snapshots.notifications].flatMap((section) => section.status === 'failed' ? [section.message] : [])
+  const nextUp = todayNextUp({ profile, today: farmLocalCalendarDate(), equipment: dataOf(snapshots.equipment), notifications: dataOf(snapshots.notifications), inventory: dataOf(snapshots.inventory) })
+  const stillLoading = snapshots.equipment.status === 'loading' || snapshots.notifications.status === 'loading' || snapshots.fields.status === 'loading' || snapshots.inventory.status === 'loading'
+  const sectionErrors = [snapshots.fields, snapshots.equipment, snapshots.notifications, snapshots.inventory].flatMap((section) => section.status === 'failed' ? [section.message] : [])
 
   return <section className="page today-page" aria-labelledby="today-title">
     <header className="page-heading today-heading"><div><p className="eyebrow">{activeFarm.name}</p><h1 id="today-title">{canEdit ? 'What are you recording?' : 'Your farm today'}</h1><p>{canEdit ? 'Tap an option to get started.' : 'You can view records here. Adding records is turned off for your access.'}</p></div></header>
@@ -98,5 +102,6 @@ function nextUpGlyph(item: TodayNextUpItem): ReactNode {
   if (item.kind === 'service') return glyph('M14 7a4 4 0 0 0 5 5l-8 8-2-2 8-8a4 4 0 0 0-5-5zM5 19l2 2')
   if (item.kind === 'task') return glyph('M5 5h14v14H5zM8 12l3 3 5-6')
   if (item.kind === 'program') return glyph('M4 4h16v16H4zM4 10h16M9 4v6')
+  if (item.kind === 'low_inventory') return glyph('M9 3h6v4H9zM7 7h10l1 14H6zM8 15h8')
   return glyph('M3 20h18M6 20V8l6-4 6 4v12')
 }

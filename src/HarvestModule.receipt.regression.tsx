@@ -23,8 +23,9 @@ const flush = async () => { await Promise.resolve(); await new Promise<void>((re
 function crop(id: string, overrides: Partial<CropAssignment> = {}): CropAssignment {
   return { id, farm_id: farmId, field_id: fieldId, crop_year: 2026, commodity_id: commodityId, planting_sequence: 1, planted_acres: 10, variety: null, planting_date: '2026-04-20', harvest_date: null, harvested_bushels: null, expected_yield_per_acre: 120, expected_price_per_bu: 4.25, actual_price_per_bu: null, notes: null, created_at: stamp, updated_at: stamp, ...overrides }
 }
-function data(assignments: CropAssignment[]): HarvestData {
-  const fieldsData: FieldsData = { farm: { id: farmId, name: 'Receipt Farm', share_with_rep: false, created_by: farmId, created_at: stamp, updated_at: stamp }, entities: [], fields: [{ id: fieldId, farm_id: farmId, operating_entity_id: farmId, name: 'North 40', legal_description: null, county: null, state: null, total_acres: 10, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: null, longitude: null, location_source: null, is_active: true, created_at: stamp, updated_at: stamp }], crop_assignments: assignments, arrangements: [], commodities: [{ id: commodityId, name: 'Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: stamp, updated_at: stamp }] }
+const emptyFieldId = '00000000-0000-4000-8000-000000000006'
+function data(assignments: CropAssignment[], leadingEmptyField = false): HarvestData {
+  const fieldsData: FieldsData = { farm: { id: farmId, name: 'Receipt Farm', share_with_rep: false, created_by: farmId, created_at: stamp, updated_at: stamp }, entities: [], fields: [...(leadingEmptyField ? [{ id: emptyFieldId, farm_id: farmId, operating_entity_id: farmId, name: 'Bare 10', legal_description: null, county: null, state: null, total_acres: 10, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: null, longitude: null, location_source: null, is_active: true, created_at: stamp, updated_at: stamp }] : []), { id: fieldId, farm_id: farmId, operating_entity_id: farmId, name: 'North 40', legal_description: null, county: null, state: null, total_acres: 10, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: null, longitude: null, location_source: null, is_active: true, created_at: stamp, updated_at: stamp }].map((field) => ({ ...field })), crop_assignments: assignments, arrangements: [], commodities: [{ id: commodityId, name: 'Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: stamp, updated_at: stamp }] }
   return { fieldsData, viewer: { user_id: farmId, role: 'owner' } }
 }
 function record(value: HarvestDraft): HarvestRecord { return { ...value, id: value.crop_assignment_id, farm_id: farmId, updated_at: stamp } }
@@ -90,12 +91,15 @@ try {
   const { todayRecordIntent } = await import('./data/todayIntents')
   const intentContainer = document.createElement('div'); document.body.append(intentContainer); const intentRoot = createRoot(intentContainer)
   try {
-    const priorYearRepository: HarvestRepository = { getData: async () => data([crop(cropId, { crop_year: 2025, planting_date: '2025-04-20' })]), saveHarvest: async () => { throw new Error('not exercised') } }
+    // The first active field has no crop at all; the intent must open the entry on the first field that does.
+    const priorYearRepository: HarvestRepository = { getData: async () => data([crop(cropId, { crop_year: 2025, planting_date: '2025-04-20' })], true), saveHarvest: async () => { throw new Error('not exercised') } }
     await act(async () => { intentRoot.render(createElement(MemoryRouter, { initialEntries: [{ pathname: '/harvest', state: todayRecordIntent('harvest') }] }, createElement(HarvestPage, { harvestRepository: priorYearRepository }))); await flush() })
     const yearPicker = intentContainer.querySelector('select') as HTMLSelectElement | null
     assert(yearPicker && yearPicker.value === '2025', `The year picker did not settle on the newest year with crops (saw ${yearPicker?.value ?? 'none'}).`)
     const intentForm = intentContainer.querySelector('form.harvest-form')
     assert(intentForm, 'A Today harvest intent did not open the harvest entry when the only crops belong to a prior year.')
+    const openCard = intentForm.closest('article.harvest-card')
+    assert(openCard?.querySelector('h2')?.textContent === 'North 40', 'The harvest entry opened on a field without a crop instead of the first field that has one.')
     const closeButton = [...intentContainer.querySelectorAll('button')].find((button) => button.textContent === 'Close')
     assert(closeButton, 'The opened harvest entry did not offer Close.')
   } finally {

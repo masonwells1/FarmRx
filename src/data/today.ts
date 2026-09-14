@@ -1,5 +1,6 @@
 import { canAccessFarmModule, canEditFarmModule, type FarmAccessProfile, type FarmAppModule } from '../auth/farmContext'
 import type { EquipmentTasksWorkspace } from './equipmentTasks'
+import type { InventoryUnit, InventoryWorkspace } from './inventory'
 import type { Field } from './fields'
 import type { Notification } from './notifications'
 import type { ForecastBundle, SprayLevel } from './weather'
@@ -28,7 +29,7 @@ export function todayRecordTiles(profile: FarmAccessProfile): TodayRecordTile[] 
   return recordTiles.filter((tile) => canAccessFarmModule(profile, tile.module) && canEditFarmModule(profile, tile.module))
 }
 
-export type TodayNextUpKind = 'service' | 'task' | 'program' | 'grain_alert'
+export type TodayNextUpKind = 'service' | 'task' | 'program' | 'grain_alert' | 'low_inventory'
 export type TodayNextUpUrgency = 'overdue' | 'due' | 'info'
 export type TodayNextUpItem = { id: string; kind: TodayNextUpKind; title: string; detail: string; badge: string | null; urgency: TodayNextUpUrgency; to: string }
 
@@ -36,6 +37,12 @@ const urgencyOrder: Record<TodayNextUpUrgency, number> = { overdue: 0, due: 1, i
 const wholeNumber = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
 function daysBetween(earlier: string, later: string): number { return Math.max(0, Math.round((Date.parse(`${later}T00:00:00Z`) - Date.parse(`${earlier}T00:00:00Z`)) / 86_400_000)) }
 const plural = (count: number, unit: string) => `${wholeNumber.format(count)} ${unit}${count === 1 ? '' : 's'}`
+const quantity = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
+const unitLabels: Partial<Record<InventoryUnit, string>> = { fl_oz: 'fl oz', l: 'L', ml: 'mL', bag: 'bags', case: 'cases', tote: 'totes', seed_unit: 'seed units', bulk_unit: 'bulk units' }
+/** The Inventory shelf's own low-on-hand rule: a confirmed count from zero through five inventory units. Negative counts are a
+ * different problem (more used than received) that the shelf explains itself, so they are not "low". */
+export const lowOnHandMaximum = 5
+export const isLowOnHand = (onHand: number) => onHand >= 0 && onHand <= lowOnHandMaximum
 
 const programPassLink = /^\/programs\?pass=([0-9a-f-]{36})$/i
 const passIdOf = (link: string) => programPassLink.exec(link)?.[1]?.toLowerCase() ?? null
@@ -46,10 +53,11 @@ const passIdOf = (link: string) => programPassLink.exec(link)?.[1]?.toLowerCase(
  * sees a grain line. Alerts belong to the selected farm only. The due-generation functions also write a task for an overdue
  * service interval and for a due program pass; when the service-due row or the pass alert is already shown, that generated task
  * is the same work and is not listed twice. Applying a pass closes its generated task but leaves the alert unread, so an unread
- * pass alert whose generated task is already done is finished work and is not listed. A source the screen could not load is
- * simply absent. */
-export function todayNextUp(input: { profile: FarmAccessProfile; today: string; equipment: EquipmentTasksWorkspace | null; notifications: readonly Notification[] | null }): TodayNextUpItem[] {
+ * pass alert whose generated task is already done is finished work and is not listed. Low inventory is the Inventory shelf's own
+ * low-on-hand rule applied to the same on-hand view. A source the screen could not load is simply absent. */
+export function todayNextUp(input: { profile: FarmAccessProfile; today: string; equipment: EquipmentTasksWorkspace | null; notifications: readonly Notification[] | null; inventory?: InventoryWorkspace | null }): TodayNextUpItem[] {
   const { profile, today, equipment, notifications } = input
+  const inventory = input.inventory ?? null
   const items: TodayNextUpItem[] = []
   const farmNotifications = (notifications ?? []).filter((notification) => notification.farm_id === profile.farmId)
   const unread = farmNotifications.filter((notification) => notification.read_at === null && notification.link !== null).sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
@@ -64,8 +72,10 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
       const machine = machines.get(due.equipment_id); const interval = intervals.get(due.interval_id)
       if (!machine || !interval) continue
       const amount = Math.max(0, Math.round(due.overdue_amount))
-      const badge = due.reason === 'meter' ? `${plural(amount, machine.meter_unit === 'miles' ? 'mile' : 'hour')} over` : `${plural(amount, 'day')} over`
-      items.push({ id: `service:${due.interval_id}:${due.reason}`, kind: 'service', title: 'Service overdue', detail: `${machine.name} · ${interval.name}`, badge, urgency: 'overdue', to: '/equipment' })
+      // The view lists an interval the moment it is reached (amount 0): that service is due now, not late.
+      const overdue = amount > 0
+      const badge = !overdue ? 'Due now' : due.reason === 'meter' ? `${plural(amount, machine.meter_unit === 'miles' ? 'mile' : 'hour')} over` : `${plural(amount, 'day')} over`
+      items.push({ id: `service:${due.interval_id}:${due.reason}`, kind: 'service', title: overdue ? 'Service overdue' : 'Service due', detail: `${machine.name} · ${interval.name}`, badge, urgency: overdue ? 'overdue' : 'due', to: '/equipment' })
       shownServiceIntervalIds.add(due.interval_id)
     }
   }
@@ -83,6 +93,11 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
       if (link.startsWith('/programs') && canAccessFarmModule(profile, 'programs') && passAlertIsOpen(link)) items.push({ id: `program:${notification.id}`, kind: 'program', title: 'Program pass due', detail: notification.title, badge: null, urgency: 'due', to: link })
       else if (link.startsWith('/grain') && canAccessFarmModule(profile, 'grain')) items.push({ id: `grain_alert:${notification.id}`, kind: 'grain_alert', title: 'Grain alert', detail: notification.title, badge: null, urgency: 'info', to: link })
     }
+  }
+  if (inventory && canAccessFarmModule(profile, 'inventory')) {
+    const onHand = new Map(inventory.on_hand.map((row) => [row.product_id, row.quantity]))
+    const low = inventory.products.filter((product) => product.is_active && isLowOnHand(onHand.get(product.id) ?? 0)).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+    for (const product of low) { const left = onHand.get(product.id) ?? 0; items.push({ id: `low_inventory:${product.id}`, kind: 'low_inventory', title: 'Low inventory', detail: product.name, badge: `${quantity.format(left)} ${unitLabels[product.inventory_unit] ?? product.inventory_unit} left`, urgency: 'due', to: '/inventory' }) }
   }
   return items.sort((a, b) => urgencyOrder[a.urgency] - urgencyOrder[b.urgency])
 }

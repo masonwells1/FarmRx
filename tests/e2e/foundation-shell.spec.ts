@@ -131,11 +131,21 @@ const equipmentReadQueries: Record<string, (farm: FarmFixture) => Record<string,
   field_log_entries: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'observed_on.desc,created_at.desc,id.asc' }),
   scouting_notes: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'observed_on.desc,created_at.desc,id.asc' }),
   scouting_photos: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'created_at.asc,id.asc' }),
+  inventory_products: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' }),
+  inventory_receipts: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'created_at.asc,id.asc' }),
+  inventory_receipt_lines: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'receipt_id.asc,id.asc' }),
+  inventory_adjustments: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'adjusted_at.asc,id.asc' }),
+  application_records: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'application_date.asc,id.asc' }),
+  application_products: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'application_id.asc,id.asc' }),
+  program_application_products: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'application_record_id.asc,sequence.asc' }),
+  inventory_on_hand: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'product_id.asc' }),
+  rup_application_completeness: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'application_id.asc,application_product_id.asc' }),
 }
 const equipmentA = '00000000-0000-4000-8000-000000000201'
 const intervalA = '00000000-0000-4000-8000-000000000301'
 const taskA = '00000000-0000-4000-8000-000000000401'
 const passA = '00000000-0000-4000-8000-000000000601'
+const productA = '00000000-0000-4000-8000-000000000701'
 function todayRows(farm: FarmFixture): Readonly<Partial<Record<string, unknown[]>>> {
   return {
     equipment: [{ id: equipmentA, farm_id: farm.id, name: 'John Deere 8R 340', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null, created_by: userId, created_at: now, updated_at: now }],
@@ -146,6 +156,9 @@ function todayRows(farm: FarmFixture): Readonly<Partial<Record<string, unknown[]
       // The due-generation function's own task for the overdue interval: the same work as the service-due row, never listed twice.
       { id: '00000000-0000-4000-8000-000000000402', farm_id: farm.id, title: 'Engine oil · John Deere 8R 340', details: null, status: 'todo', priority: 'normal', assigned_to: null, due_on: '2026-07-14', field_id: null, equipment_id: equipmentA, source: 'service_interval', interval_id: intervalA, interval_cycle_key: 'meter:1', program_assigned_pass_id: null, program_cycle_key: null, completed_by: null, completed_at: null, created_by: userId, created_at: now, updated_at: now },
     ],
+    // The Inventory shelf's own low-on-hand rule (five units or fewer) is what Today lists as Low inventory.
+    inventory_products: [{ id: productA, farm_id: farm.id, product_kind: 'chemical', name: 'Atrazine 4L', inventory_unit: 'gal', epa_registration_number: null, is_restricted_use: false, signal_word: null, restricted_entry_interval_hours: null, preharvest_interval_hours: null, max_label_rate: null, max_label_rate_unit: null, max_label_rate_basis: null, commodity_id: null, variety_name: null, fertilizer_analysis: null, manufacturer: null, is_active: true, created_at: now, updated_at: now }],
+    inventory_on_hand: [{ farm_id: farm.id, product_id: productA, product_kind: 'chemical', inventory_unit: 'gal', received_quantity: 4, adjusted_quantity: 0, used_quantity: 0, on_hand_quantity: 4, weighted_known_receipt_cost_per_inventory_unit: null }],
   }
 }
 function todayNotifications(farm: FarmFixture, recipient = userId) {
@@ -1307,7 +1320,7 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   expect(boxes.every((box) => box.width >= 48 && box.height >= 48)).toBeTruthy()
   const nextUp = page.getByRole('region', { name: 'Next up' })
   const rows = nextUp.getByRole('link')
-  await expect(rows).toHaveCount(4)
+  await expect(rows).toHaveCount(5)
   await expect(rows.nth(0)).toContainText('Service overdue')
   await expect(rows.nth(0)).toContainText('John Deere 8R 340 · Engine oil')
   await expect(rows.nth(0)).toContainText('12 hours over')
@@ -1316,8 +1329,12 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   await expect(rows.nth(1)).toContainText('Fix the planter')
   await expect(rows.nth(2)).toContainText('Program pass due')
   await expect(rows.nth(2)).toHaveAttribute('href', `/programs?pass=${passA}`)
-  await expect(rows.nth(3)).toContainText('Grain alert')
-  await expect(rows.nth(3)).toContainText('Corn hit your $4.60 target')
+  await expect(rows.nth(3)).toContainText('Low inventory')
+  await expect(rows.nth(3)).toContainText('Atrazine 4L')
+  await expect(rows.nth(3)).toContainText('4 gal left')
+  await expect(rows.nth(3)).toHaveAttribute('href', '/inventory')
+  await expect(rows.nth(4)).toContainText('Grain alert')
+  await expect(rows.nth(4)).toContainText('Corn hit your $4.60 target')
   await expect(page.getByText('River Bend corn hit $4.80')).toHaveCount(0)
   // The due-generation function's own task for the overdue interval is the same work as the service-due row and is not listed twice.
   await expect(page.getByText('Engine oil · John Deere 8R 340')).toHaveCount(0)
@@ -1358,10 +1375,11 @@ test('Today shows a worker without financial access no grain tile and no grain l
   await expect(page.getByRole('heading', { name: 'What are you recording?' })).toBeVisible()
   await expect(page.getByRole('list', { name: 'Record' }).getByRole('button')).toHaveText(['Rain', 'Scouting note', 'Spray record', 'Task', 'Harvest'])
   const nextUp = page.getByRole('region', { name: 'Next up' })
-  await expect(nextUp.getByRole('link')).toHaveCount(3)
+  await expect(nextUp.getByRole('link')).toHaveCount(4)
   await expect(nextUp.getByText('Service overdue')).toBeVisible()
   await expect(nextUp.getByText('Task overdue')).toBeVisible()
   await expect(nextUp.getByText('Program pass due')).toBeVisible()
+  await expect(nextUp.getByText('Low inventory')).toBeVisible()
   await expect(page.getByText('Grain alert')).toHaveCount(0)
   await expect(page.getByText('$4.60')).toHaveCount(0)
   expect(reads.filter((path) => /grain|production_estimates|marketing_plan|insurance_units|budget|cost_lines/.test(path))).toEqual([])
@@ -1377,7 +1395,8 @@ test('Today gives a named rep a view-only front door with grain alerts and no eq
   await expect(page.getByRole('heading', { name: 'Your farm today' })).toBeVisible()
   await expect(page.getByRole('list', { name: 'Record' })).toHaveCount(0)
   const nextUp = page.getByRole('region', { name: 'Next up' })
-  await expect(nextUp.getByRole('link')).toHaveCount(1)
+  await expect(nextUp.getByRole('link')).toHaveCount(2)
+  await expect(nextUp.getByText('Low inventory')).toBeVisible()
   await expect(nextUp.getByText('Grain alert')).toBeVisible()
   await expect(page.getByText('Service overdue')).toHaveCount(0)
   await expect(page.getByText('Program pass due')).toHaveCount(0)

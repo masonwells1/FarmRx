@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { deriveFarmAccessProfile } from '../auth/farmContext'
 import type { EquipmentTasksWorkspace, Equipment, FarmTask, ServiceInterval } from './equipmentTasks'
+import type { InventoryProduct, InventoryWorkspace } from './inventory'
 import type { Field, FieldsData } from './fields'
 import type { Notification } from './notifications'
 import { todayNextUp, todayRecordTiles, todaySprayWindow } from './today'
@@ -104,6 +105,23 @@ assert.ok(todayNextUp({ profile: financialWorker, today, equipment: workspace, n
 const repNextUp = todayNextUp({ profile: namedRep, today, equipment: workspace, notifications })
 assert.deepEqual(repNextUp.map((item) => [item.kind, item.detail]), [['grain_alert', 'Corn hit your $4.60 target']], 'A named rep sees only the selected farm\'s grain alerts, never service, tasks or program passes, even when handed the rows.')
 assert.deepEqual(todayNextUp({ profile: owner, today, equipment: null, notifications: null }), [], 'Sources the screen could not load are simply absent.')
+// On-time service is due, not late.
+const dueNow = todayNextUp({ profile: owner, today, equipment: { ...workspace, service_due: [{ farm_id: farmA, equipment_id: tractor.id, interval_id: oil.id, reason: 'meter', overdue_amount: 0 }], tasks: [] }, notifications: [] })
+assert.deepEqual(dueNow.map((item) => [item.title, item.badge, item.urgency]), [['Service due', 'Due now', 'due']], 'An interval reached exactly is listed as due now, never as overdue by zero.')
+// Low inventory: the Inventory shelf's own rule (zero through five units on hand), only for members who can open Inventory.
+const product = (id: string, name: string, inventory_unit: InventoryProduct['inventory_unit'], is_active = true): InventoryProduct => ({ id, farm_id: farmA, product_kind: 'chemical', name, inventory_unit, epa_registration_number: null, is_restricted_use: false, signal_word: null, restricted_entry_interval_hours: null, preharvest_interval_hours: null, max_label_rate: null, max_label_rate_unit: null, max_label_rate_basis: null, commodity_id: null, variety_name: null, fertilizer_analysis: null, manufacturer: null, is_active, created_at: now, updated_at: now })
+const atrazine = product('00000000-0000-4000-8000-000000000701', 'Atrazine 4L', 'gal'); const roundup = product('00000000-0000-4000-8000-000000000702', 'Roundup PowerMax', 'gal'); const seed = product('00000000-0000-4000-8000-000000000703', 'DKC 62-08', 'seed_unit'); const retired = product('00000000-0000-4000-8000-000000000704', 'Old blend', 'gal', false); const shortfall = product('00000000-0000-4000-8000-000000000705', 'Miscounted', 'lb'); const never = product('00000000-0000-4000-8000-000000000706', 'Never received', 'qt')
+const inventory: InventoryWorkspace = { fields: fieldsData, products: [roundup, atrazine, seed, retired, shortfall, never], receipts: [], receipt_lines: [], adjustments: [], applications: [], application_products: [], program_application_products: [], rup_completeness: [], on_hand: [{ product_id: atrazine.id, quantity: 4 }, { product_id: roundup.id, quantity: 120 }, { product_id: seed.id, quantity: 5 }, { product_id: retired.id, quantity: 1 }, { product_id: shortfall.id, quantity: -3 }] }
+const lowRows = todayNextUp({ profile: owner, today, equipment: null, notifications: null, inventory })
+assert.deepEqual(lowRows.map((item) => [item.kind, item.title, item.detail, item.badge, item.urgency, item.to]), [
+  ['low_inventory', 'Low inventory', 'Atrazine 4L', '4 gal left', 'due', '/inventory'],
+  ['low_inventory', 'Low inventory', 'DKC 62-08', '5 seed units left', 'due', '/inventory'],
+  ['low_inventory', 'Low inventory', 'Never received', '0 qt left', 'due', '/inventory'],
+], 'Low inventory lists active products at five units or fewer (a product with no on-hand row counts as zero, as on the shelf); plentiful, retired and over-used products are absent.')
+assert.ok(todayNextUp({ profile: namedRep, today, equipment: null, notifications: null, inventory }).some((item) => item.kind === 'low_inventory'), 'A named rep can open Inventory, so low inventory is listed for them too.')
+assert.ok(todayNextUp({ profile: worker, today, equipment: null, notifications: null, inventory }).some((item) => item.kind === 'low_inventory'), 'A worker without financial access sees low inventory.')
+const combined = todayNextUp({ profile: owner, today, equipment: workspace, notifications, inventory })
+assert.ok(combined.findIndex((item) => item.kind === 'low_inventory') > combined.findIndex((item) => item.urgency === 'overdue'), 'Low inventory sorts after overdue work.')
 assert.deepEqual(todayNextUp({ profile: owner, today: '2026-07-12', equipment: workspace, notifications: [] }).map((item) => item.kind), ['service', 'service'], 'Tasks are due only from their due date on.')
 assert.deepEqual(todayNextUp({ profile: worker, today, equipment: null, notifications }).map((item) => item.kind), ['program'], 'A worker without financial access handed only alerts sees the selected farm\'s pass alert and nothing from another farm.')
 

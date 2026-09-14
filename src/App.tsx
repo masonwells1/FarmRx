@@ -328,7 +328,7 @@ function AppLayout() {
           <LazyRouteErrorBoundary key={location.pathname}>
             <Suspense fallback={<p className="loading-state" role="status">Opening this page…</p>}>
             <Routes>
-            <Route path="/today" element={<CapabilityRoute module="fields"><TodayPage fieldsRepository={fieldsRepository} equipmentTasksRepository={equipmentTasksRepository} notificationsRepository={notificationsRepository} /></CapabilityRoute>} />
+            <Route path="/today" element={<CapabilityRoute module="fields"><TodayPage fieldsRepository={fieldsRepository} equipmentTasksRepository={equipmentTasksRepository} notificationsRepository={notificationsRepository} inventoryRepository={inventoryRepository} /></CapabilityRoute>} />
             <Route path="/fields" element={<CapabilityRoute module="fields" lockWrites><FieldsPage /></CapabilityRoute>} />
             <Route path="/fields/new" element={<CapabilityRoute module="fields" editOnly><FieldFormPage /></CapabilityRoute>} />
             <Route path="/fields/:id" element={<CapabilityRoute module="fields" lockWrites><FieldDetailPage /></CapabilityRoute>} />

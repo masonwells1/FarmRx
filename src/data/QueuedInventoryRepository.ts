@@ -6,9 +6,10 @@ import { setModuleSyncStatus } from './syncStatus'
 import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
 import { setSaveReceipt } from '../lib/saveReceipt'
 import { readNeedsAttention } from './needsAttentionStore'
-import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, WorkspaceMemoryScope, writeWorkspaceCache, type WorkspaceMemoryGuard } from './workspaceCache'
+import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, readWorkspaceCachePure, WorkspaceCacheExpiredError, WorkspaceMemoryScope, writeWorkspaceCache, type WorkspaceMemoryGuard } from './workspaceCache'
 import { queueTransaction } from './queueTransaction'
-import { verifyFarmOperationContext, type FarmOperationContext } from './farmOperationContext'
+import { captureFarmOperationContext, verifyFarmOperationContext, type FarmOperationContext } from './farmOperationContext'
+import type { ReadOnlySnapshot } from './fields'
 import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 
 type Context = { userId: string; farmId: string }
@@ -51,6 +52,29 @@ export class QueuedInventoryRepository implements InventoryRepository {
       next.applications = replace(next.applications, application); next.application_products = [...next.application_products.filter((row) => row.application_id !== applicationId), ...products]; if (application.status === 'completed') for (const line of products) adjustOnHand(line.product_id, -line.quantity_in_inventory_unit)
     }
     return next
+  }
+  /** Pure read for projections such as Today: the caller's published context is verified around every boundary, the live snapshot
+   * (or, offline, the read-only cache) is overlaid with this device's queued inventory work, and nothing is replayed or written. */
+  async getSnapshot(operationContext: FarmOperationContext): Promise<ReadOnlySnapshot<InventoryWorkspace>> {
+    const context = { userId: operationContext.userId, farmId: operationContext.farmId }
+    const verifyRead = () => verifyFarmOperationContext(this.dependencies.storage, operationContext, captureFarmOperationContext(this.dependencies.storage, this.dependencies.projectRef, context))
+    verifyRead()
+    if (!this.writer.getSnapshot) throw new Error('Inventory does not expose a side-effect-free snapshot.')
+    const queue = new InventoryWriteQueue(this.dependencies.storage, inventoryWriteQueueKey(this.dependencies.projectRef, context.userId, context.farmId))
+    const entries = () => { const values = queue.read().entries; if (values.some((entry) => entry.userId !== context.userId || entry.farmId !== context.farmId)) throw new Error(blocked); return values }
+    try {
+      const snapshot = await this.writer.getSnapshot(operationContext); verifyRead()
+      if (snapshot.source !== 'live') throw new WorkspaceCacheExpiredError()
+      const data = this.overlay(snapshot.data, entries()); verifyRead()
+      return { data, source: 'live', capturedAt: snapshot.capturedAt }
+    } catch (error) {
+      verifyRead()
+      if (!isTransportFailure(error, this.dependencies.isOffline())) throw error
+      const cached = await readWorkspaceCachePure<InventoryWorkspace>({ projectRef: this.dependencies.projectRef, ...context, module: 'inventory' }, operationContext, operationalCacheMaxAgeMs, this.dependencies.storage); verifyRead()
+      if (!cached) throw error
+      const data = this.overlay(cached.data, entries()); verifyRead()
+      return { data, source: 'offline', capturedAt: cached.capturedAt }
+    }
   }
   async getWorkspace() {
     const { context, operationContext, queue, memoryGuard } = await this.source(); const verifyRead = () => verifyQueuedReadContext(this.dependencies, operationContext); const cacheScope = { projectRef: this.dependencies.projectRef, ...context, module: 'inventory' }
