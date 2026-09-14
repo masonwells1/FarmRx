@@ -87,7 +87,7 @@ console.log('revokedFarmRecovery regression passed')
 // active storage with the rest of a revoked farm's work: each captured into the recovery vault and removed from its key, other farms
 // untouched; an empty key is simply removed; an unreadable one stops the quarantine before anything is cleared.
 { const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }
-  const carryKey = settingsDraftKey(scope, 'carry-settings'); const limitKey = settingsDraftKey(scope, 'sale-limit:x|2026|corn||'); const otherKey = settingsDraftKey({ ...scope, farmId: otherFarm }, 'carry-settings')
+  const carryKey = settingsDraftKey(scope, 'carry-settings', 'r1'); const limitKey = settingsDraftKey(scope, 'sale-limit:x|2026|corn||', 'r2'); const otherKey = settingsDraftKey({ ...scope, farmId: otherFarm }, 'carry-settings', 'r1')
   const carry = { version: 1, entries: [{ key: 'carry-settings', payload: { draft: { mode: 'flat', flatRatePerBu: 0.33 }, base: null }, savedAt: stamp, revision: 'r1' }] }
   const limit = { version: 1, entries: [{ key: 'sale-limit:x|2026|corn||', payload: { key: 'x|2026|corn||', value: 50000, base: null }, savedAt: stamp, revision: 'r2' }] }
   storage.setItem(carryKey, JSON.stringify(carry)); storage.setItem(limitKey, JSON.stringify(limit)); storage.setItem(otherKey, JSON.stringify(carry))
@@ -96,8 +96,8 @@ console.log('revokedFarmRecovery regression passed')
   assert.equal(JSON.stringify(saved.find((record) => record.originalKey === limitKey)?.payload), JSON.stringify(limit))
   assert.equal(storage.getItem(carryKey), null); assert.equal(storage.getItem(limitKey), null); assert.equal(storage.getItem(otherKey), JSON.stringify(carry))
   assert.equal(quarantineRevokedFarmWork(storage, scope, stamp), 0) }
-{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const key = settingsDraftKey(scope, 'carry-settings'); storage.setItem(key, JSON.stringify({ version: 1, entries: [] })); assert.equal(quarantineRevokedFarmWork(storage, scope, stamp), 0); assert.equal(storage.getItem(key), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }
-{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const key = settingsDraftKey(scope, 'carry-settings'); storage.setItem(key, '{"version":1,"entries":[{"key":1}]}'); assert.throws(() => quarantineRevokedFarmWork(storage, scope, stamp)); assert.notEqual(storage.getItem(key), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }
+{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const key = settingsDraftKey(scope, 'carry-settings', 'r9'); storage.setItem(key, JSON.stringify({ version: 1, entries: [] })); assert.equal(quarantineRevokedFarmWork(storage, scope, stamp), 0); assert.equal(storage.getItem(key), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }
+{ const storage = new MemoryStorage(); const scope = { projectRef: project, userId: user, farmId: farm }; const key = settingsDraftKey(scope, 'carry-settings', 'r9'); storage.setItem(key, '{"version":1,"entries":[{"key":1}]}'); assert.throws(() => quarantineRevokedFarmWork(storage, scope, stamp)); assert.notEqual(storage.getItem(key), null); assert.equal(storage.getItem(revokedFarmRecoveryKey(project, user)), null) }
 
 // A seeded U of I amount kept for a budget line while the badge column is missing is captured into custody with the farm's
 // other work and removed from active storage; another farm's entry stays; an unreadable one stops the capture.

@@ -67,11 +67,11 @@ const farm = (id: string, userId: string, name: string, shareWithRep = false) =>
 // A settings draft this browser keeps for an account and farm is work waiting for that farm; other accounts and farms are unaffected.
 ;{
   const { settingsDraftKey } = await import('../data/settingsDrafts')
-  storage.setItem(settingsDraftKey({ projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA }, 'carry-settings'), JSON.stringify({ version: 1, entries: [{ key: 'carry-settings', payload: {}, savedAt: '2026-09-13T00:00:00.000Z', revision: 'r1' }] }))
+  storage.setItem(settingsDraftKey({ projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA }, 'carry-settings', 'r1'), JSON.stringify({ version: 1, entries: [{ key: 'carry-settings', payload: {}, savedAt: '2026-09-13T00:00:00.000Z', revision: 'r1' }] }))
   assert.equal(hasPendingFarmWork(userA, farmA), true, 'A kept settings draft did not count as pending farm work.')
   assert.equal(hasPendingFarmWork(userB, farmA), false, 'Another account saw the first account\'s settings draft as its own pending work.')
   assert.equal(hasPendingFarmWork(userA, farmB), false, 'A settings draft for one farm blocked a switch to another.')
-  storage.removeItem(settingsDraftKey({ projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA }, 'carry-settings'))
+  storage.removeItem(settingsDraftKey({ projectRef: supabaseConfig.projectRef, userId: userA, farmId: farmA }, 'carry-settings', 'r1'))
   assert.equal(hasPendingFarmWork(userA, farmA), false, 'A cleared settings draft still counted as pending farm work.')
 }
 

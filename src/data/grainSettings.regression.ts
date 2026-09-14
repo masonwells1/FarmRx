@@ -154,30 +154,37 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
   open()
 }
 
-// Browser drafts: one storage key per draft, written per account and farm on every edit, cleared only after a confirmed save,
-// invisible to other accounts, keyed in the offline-queue shape so the farm switcher's scan and the revocation scope discovery find them.
+// Browser drafts: one storage key per write, named for the draft and its revision, written per account and farm on every edit,
+// cleared only after a confirmed save, invisible to other accounts, keyed in the offline-queue shape so the farm switcher's scan and
+// the revocation scope discovery find them.
 {
   const store = new Map<string, string>(); const storedCount = () => store.size
   const fakeStorage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, value) }, removeItem: (key: string) => { store.delete(key) }, key: (index: number) => [...store.keys()][index] ?? null, get length() { return store.size }, clear: () => store.clear() }
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: fakeStorage })
   const scopeA = { projectRef: 'proj', userId: uid(1), farmId: farm }; const scopeB = { ...scopeA, userId: uid(2) }
   assert(readSettingsDrafts(scopeA).length === 0, 'No drafts before any edit.')
-  writeSettingsDraft(scopeA, 'carry-settings', { draft: 'S1' }, stamp); writeSettingsDraft(scopeA, 'carry-grid:x', { draft: 'G' }, stamp); writeSettingsDraft(scopeA, 'carry-settings', { draft: 'S2' }, stamp)
-  const key = settingsDraftKey(scopeA, 'carry-settings')
-  assert(storedCount() === 2 && store.has(key) && store.has(settingsDraftKey(scopeA, 'carry-grid:x')), 'Each draft lives under its own storage key, so two tabs editing different drafts never overwrite each other.')
-  assert(key.includes('proj') && key.includes(uid(1)) && key.includes(farm) && !key.endsWith(':lease') && !key.includes('sale-limit:'), 'The key names the project, account, and farm; the draft key is encoded so it adds no colon.')
-  assert(JSON.stringify(queueFarmRevocationScope(settingsDraftKey(scopeA, 'sale-limit:a|2026|corn||'))) === JSON.stringify(scopeA), 'The key has the offline-queue shape, so the revocation scope discovery resolves it to the account and farm.')
-  assert(settingsDraftKeyOf(settingsDraftKey(scopeA, 'sale-limit:a|2026|corn||'), scopeA) === 'sale-limit:a|2026|corn||' && settingsDraftKeyOf(key, scopeB) === null && settingsDraftKeyOf('farm-rx-grain-write-queue:v1:proj:x:y', scopeA) === null, 'A storage key resolves back to its draft key for its own scope only.')
+  writeSettingsDraft(scopeA, 'carry-settings', { draft: 'S1' }, stamp); const gridRevision = writeSettingsDraft(scopeA, 'carry-grid:x', { draft: 'G' }, stamp); const settingsRevision = writeSettingsDraft(scopeA, 'carry-settings', { draft: 'S2' }, '2026-09-13T12:00:01.000Z')
+  assert(gridRevision !== null && settingsRevision !== null, 'Writes return their revision.')
+  const key = settingsDraftKey(scopeA, 'carry-settings', settingsRevision!)
+  assert(storedCount() === 2 && store.has(key) && store.has(settingsDraftKey(scopeA, 'carry-grid:x', gridRevision!)), 'Each draft lives under its own storage key, and a newer write of the same draft replaces this scope\'s older write.')
+  assert(key.includes('proj') && key.includes(uid(1)) && key.includes(farm) && !key.endsWith(':lease') && !key.includes('sale-limit:') && key.split(':').length === 5, 'The key names the project, account, and farm; the draft key and the revision are encoded so they add no colon.')
+  assert(JSON.stringify(queueFarmRevocationScope(settingsDraftKey(scopeA, 'sale-limit:a|2026|corn||', 'r1'))) === JSON.stringify(scopeA), 'The key has the offline-queue shape, so the revocation scope discovery resolves it to the account and farm.')
+  assert(settingsDraftKeyOf(settingsDraftKey(scopeA, 'sale-limit:a|2026|corn||', 'r1'), scopeA) === 'sale-limit:a|2026|corn||' && settingsDraftKeyOf(key, scopeB) === null && settingsDraftKeyOf('farm-rx-grain-write-queue:v1:proj:x:y', scopeA) === null && settingsDraftKeyOf(`farm-rx-settings-draft-carry-settings:v1:proj:${uid(1)}:${farm}`, scopeA) === null, 'A storage key resolves back to its draft key for its own scope only; a key without a revision segment is not a draft.')
   const stored = JSON.parse(store.get(key)!) as { entries: unknown[] }
-  assert(Array.isArray(stored.entries) && stored.entries.length === 1, 'The stored value carries a non-empty entries array, latest write winning.')
+  assert(Array.isArray(stored.entries) && stored.entries.length === 1, 'The stored value carries a non-empty entries array.')
   assert(readSettingsDrafts(scopeA, 'carry-').length === 2 && (readSettingsDrafts(scopeA, 'carry-settings')[0].payload as { draft: string }).draft === 'S2', 'Drafts read back by prefix with the latest payload.')
   assert(readSettingsDrafts(scopeB).length === 0, 'Another account on the same farm sees no drafts.')
-  // Two tabs on the same account and farm: a save that covered an older write must not clear a newer draft under the same key.
-  const older = writeSettingsDraft(scopeA, 'sale-limit:p', { value: 1 }, stamp); const newer = writeSettingsDraft(scopeA, 'sale-limit:p', { value: 2 }, stamp)
-  assert(older !== null && newer !== null && older !== newer, 'Every write has its own revision.')
-  clearSettingsDraft(scopeA, 'sale-limit:p', older)
-  assert((readSettingsDrafts(scopeA, 'sale-limit:p')[0]?.payload as { value: number })?.value === 2, 'Clearing with an older revision must leave the newer draft.')
-  clearSettingsDraft(scopeA, 'sale-limit:p', newer)
+  // Two tabs on the same account and farm: a save that covered an older write must not clear a newer draft under the same key. The
+  // newer tab's write lives under its own revision key, so the older tab's clear is one removal of its own key and can never race it.
+  const older = writeSettingsDraft(scopeA, 'sale-limit:p', { value: 1 }, stamp)
+  const olderKey = settingsDraftKey(scopeA, 'sale-limit:p', older!)
+  store.set(settingsDraftKey(scopeA, 'sale-limit:p', 'tab-b'), JSON.stringify({ version: 1, entries: [{ key: 'sale-limit:p', payload: { value: 2 }, savedAt: '2026-09-13T12:00:05.000Z', revision: 'tab-b' }] }))
+  assert(older !== null && store.has(olderKey), 'The older write has its own key.')
+  clearSettingsDraft(scopeA, 'sale-limit:p', older!)
+  assert(!store.has(olderKey) && (readSettingsDrafts(scopeA, 'sale-limit:p')[0]?.payload as { value: number })?.value === 2, 'Clearing with an older revision removes only that write and leaves the other tab\'s newer draft.')
+  const superseded = writeSettingsDraft(scopeA, 'sale-limit:p', { value: 3 }, '2026-09-13T12:00:09.000Z')
+  assert(readSettingsDrafts(scopeA, 'sale-limit:p').length === 1 && (readSettingsDrafts(scopeA, 'sale-limit:p')[0]?.payload as { value: number })?.value === 3 && !store.has(settingsDraftKey(scopeA, 'sale-limit:p', 'tab-b')), 'A newer write supersedes the other tab\'s older one, which is removed; the newest is read back.')
+  clearSettingsDraft(scopeA, 'sale-limit:p', superseded!)
   assert(readSettingsDrafts(scopeA, 'sale-limit:p').length === 0, 'Clearing with the current revision removes the draft.')
   clearSettingsDraft(scopeA, 'carry-settings')
   assert(readSettingsDrafts(scopeA).length === 1 && readSettingsDrafts(scopeA)[0].key === 'carry-grid:x', 'Clearing one draft leaves the others.')
@@ -254,7 +261,7 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
   assert(readSettingsDrafts(scope, 'carry-').length === 2, 'Without a guard every entry is returned.')
   const kept = readSettingsDrafts(scope, 'carry-', isGood)
   assert(kept.length === 1 && kept[0]?.key === 'carry-grid:e1', 'With a guard, an entry the screen cannot use is skipped.')
-  assert(store.has(settingsDraftKey(scope, 'carry-grid:e1')) && !store.has(settingsDraftKey(scope, 'carry-settings')), 'The unusable entry is removed from storage; the usable one stays.')
+  assert([...store.keys()].some((k) => settingsDraftKeyOf(k, scope) === 'carry-grid:e1') && ![...store.keys()].some((k) => settingsDraftKeyOf(k, scope) === 'carry-settings'), 'The unusable entry is removed from storage; the usable one stays.')
   Reflect.deleteProperty(globalThis, 'localStorage')
 }
 

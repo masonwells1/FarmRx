@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { bestMonth, carryRow, verdict, type CarryRow, type CarrySettings } from './data/costOfCarry'
 import type { GrainCarryGrid, GrainCarrySettings, GrainWorkspace, ProductionEstimate } from './data/grain'
-import { CARRY_GRID_ROWS } from './data/grainSettings'
+import { CARRY_GRID_ROWS, validateGrainCarrySettings } from './data/grainSettings'
 import { beginPendingSettingsWork, registerPendingSettingsFlush } from './data/pendingSettingsWork'
 import { clearSettingsDraft, readSettingsDrafts, writeSettingsDraft, type SettingsDraftScope } from './data/settingsDrafts'
 
@@ -26,7 +26,15 @@ function readSettings(farmId: string): CarrySettings {
 }
 /** The per-device rates a farm saved before its settings table was live, or null when this device never stored any. */
 function forgetStoredSettings(farmId: string) { try { window.localStorage.removeItem(settingsKey(farmId)) } catch { /* nothing to remove, or storage blocked: the key is retried on the next confirmed save */ } }
-function readStoredSettings(farmId: string): CarrySettings | null { try { return window.localStorage.getItem(settingsKey(farmId)) === null ? null : readSettings(farmId) } catch { return null } }
+function readStoredSettings(farmId: string): CarrySettings | null {
+  try {
+    if (window.localStorage.getItem(settingsKey(farmId)) === null) return null
+    const stored = readSettings(farmId)
+    // The old screen accepted any non-negative rate; the farm's table refuses, for one, an interest rate above 100 %. Such a value
+    // would leave the farm pending on a save that can never succeed, so it is not adopted (the caller then drops the key).
+    return validateGrainCarrySettings(settingsToRow(farmId, stored, new Date().toISOString())).length === 0 ? stored : null
+  } catch { return null }
+}
 // `sent` is the content of the last row this screen saved for the part, kept with the draft so a remount still recognises its own
 // write coming back (a queued save replayed with a newer version) and rebases the draft instead of replacing it.
 type CarrySettingsDraft = { draft: CarrySettings; base: string | null; sent?: GrainCarrySettings | null }
@@ -188,6 +196,8 @@ export function GrainCostOfCarry({ workspace, selectedEstimate, selectedEstimate
     // names neither the account nor the project, so the revocation quarantine cannot claim it, and nothing reads it again.
     if (workspace.grain_carry_settings) forgetStoredSettings(farmId)
     const legacy = workspace.grain_carry_settings || persistence?.writable === false ? null : readStoredSettings(farmId)
+    // A device value the farm's table would refuse cannot be migrated: it is dropped and the screen starts from the defaults.
+    if (!workspace.grain_carry_settings && persistence?.writable !== false && legacy === null) forgetStoredSettings(farmId)
     if (legacy) { settingsDirty.current = true; markUnflushed(); if (draftScope) draftRevisions.current.settings = keepDraft('carry-settings', { draft: legacy, base: null, sent: null } satisfies CarrySettingsDraft, resendSettings) }
     // Drafts this browser kept for this account and farm (an edit cut short by a reload, or a save that failed after the screen was
     // left) come back dirty and pending, marked like a failed draft so a newer row from elsewhere replaces them in the resync below.
