@@ -90,3 +90,11 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Finding 3 (on-time service):** the service-due view lists an interval the moment it is reached (amount 0); Today called that "Service overdue · 0 hours over". It is now "Service due · Due now" with due urgency; positive amounts remain overdue. Regression case added.
 - **Not changed:** no table, policy, view or function. The disposable database lane's role assertions are unchanged: inventory is not a private financial table, and its read rules are the module's own.
 - **Proof:** recorded on the pull request with the repair commit.
+
+## FD-008 — Fourth Codex round on FD-1 (two findings)
+
+- **Date/time:** 2026-09-14 09:57 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `4e38347` on pull request #46 and returned two P2 findings on the service rows. Both were verified against the code and are repaired in the next commit.
+- **Finding 1 (rounding before classifying):** FD-007 rounded the overdue amount and then tested it for zero, so a service a quarter hour past its interval read "Due now". Lateness is now decided on the raw amount (any positive amount is late) and rounding is for display only; an amount under one unit reads "Less than 1 hour over" (or mile, or day). Regression case added.
+- **Finding 2 (one card per interval):** an interval with both a meter rule and a calendar rule can appear twice in the service-due view, and Today listed it twice although recording the service resets the one interval. Today now shows one card per interval, represented by the overdue row, and between equals by the meter row, matching the order the due-generation SQL uses. Regression cases cover both orderings.
+- **Proof:** recorded on the pull request with the repair commit.

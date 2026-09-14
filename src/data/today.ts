@@ -68,14 +68,20 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
   if (equipment && canAccessFarmModule(profile, 'equipment')) {
     const machines = new Map(equipment.equipment.map((machine) => [machine.id, machine]))
     const intervals = new Map(equipment.intervals.map((interval) => [interval.id, interval]))
-    for (const due of equipment.service_due) {
+    // One card per interval: an interval with both a meter and a calendar rule can be due on both, and recording the service
+    // resets the one interval. The overdue row represents it; between equals the meter row does, as the due-generation SQL orders.
+    const representative = new Map<string, EquipmentTasksWorkspace['service_due'][number]>()
+    const rank = (due: EquipmentTasksWorkspace['service_due'][number]) => (due.overdue_amount > 0 ? 0 : 2) + (due.reason === 'meter' ? 0 : 1)
+    for (const due of equipment.service_due) { const current = representative.get(due.interval_id); if (!current || rank(due) < rank(current)) representative.set(due.interval_id, due) }
+    for (const due of representative.values()) {
       const machine = machines.get(due.equipment_id); const interval = intervals.get(due.interval_id)
       if (!machine || !interval) continue
-      const amount = Math.max(0, Math.round(due.overdue_amount))
-      // The view lists an interval the moment it is reached (amount 0): that service is due now, not late.
-      const overdue = amount > 0
-      const badge = !overdue ? 'Due now' : due.reason === 'meter' ? `${plural(amount, machine.meter_unit === 'miles' ? 'mile' : 'hour')} over` : `${plural(amount, 'day')} over`
-      items.push({ id: `service:${due.interval_id}:${due.reason}`, kind: 'service', title: overdue ? 'Service overdue' : 'Service due', detail: `${machine.name} · ${interval.name}`, badge, urgency: overdue ? 'overdue' : 'due', to: '/equipment' })
+      // The view lists an interval the moment it is reached (amount 0): that service is due now, not late. Any positive amount is
+      // late, however small; rounding is for display only.
+      const overdue = due.overdue_amount > 0
+      const unit = due.reason === 'meter' ? (machine.meter_unit === 'miles' ? 'mile' : 'hour') : 'day'
+      const badge = !overdue ? 'Due now' : due.overdue_amount < 1 ? `Less than 1 ${unit} over` : `${plural(Math.round(due.overdue_amount), unit)} over`
+      items.push({ id: `service:${due.interval_id}`, kind: 'service', title: overdue ? 'Service overdue' : 'Service due', detail: `${machine.name} · ${interval.name}`, badge, urgency: overdue ? 'overdue' : 'due', to: '/equipment' })
       shownServiceIntervalIds.add(due.interval_id)
     }
   }
