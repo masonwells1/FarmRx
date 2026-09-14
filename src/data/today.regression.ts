@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { deriveFarmAccessProfile } from '../auth/farmContext'
 import type { EquipmentTasksWorkspace, Equipment, FarmTask, MeterReading, ServiceInterval } from './equipmentTasks'
 import { pendingPassOutcomes, unresolvedAssignmentMessage, type ProgramsQueueEntryV1, type ProgramsSnapshotView } from './programsWriteQueue'
+import { projectProgramsQueue } from './QueuedProgramsRepository'
+import type { ProgramsData } from './programs'
 import type { InventoryProduct, InventoryWorkspace } from './inventory'
 import type { Field, FieldsData } from './fields'
 import type { Notification } from './notifications'
@@ -163,6 +165,18 @@ assert.deepEqual(pendingPassOutcomes([queuedApply, queuedUnassign], programsSnap
 assert.throws(() => pendingPassOutcomes([queuedUnassign], noAssignments), new Error(unresolvedAssignmentMessage), 'Without the Programs snapshot an assignment-level entry cannot be projected, and the read says so rather than guessing.')
 assert.throws(() => pendingPassOutcomes([queuedRefresh], { ...programsSnapshot, programs: [] }), new Error(unresolvedAssignmentMessage), 'A refresh whose program the snapshot does not hold cannot be projected either.')
 assert.equal(pendingPassOutcomes([queuedSkip], noAssignments).size, 1, 'Pass-level entries never need the snapshot.')
+// Server replay applies the queue in order, so a template pass edited or deleted offline before "Use program updates" is the
+// template the refresh sees, and one edited after it is not; each assignment-level entry is resolved against the cache with the
+// entries before it overlaid by the same projection the Programs page uses.
+const fullSnapshot = { ...programsSnapshot, cropAssignments: [], applicationRecords: [], assignmentCosts: [], cropCostRollups: [], inventoryProducts: [], inventoryMatches: [], viewer: { user_id: userA, role: 'owner' } } as unknown as ProgramsData
+const overlaid = (base: ProgramsData, prior: readonly ProgramsQueueEntryV1[]) => projectProgramsQueue(base, prior, true)
+const editT1: ProgramsQueueEntryV1 = { ...queuedBase, operationId: '00000000-0000-4000-8000-000000000a07', kind: 'save_program_pass', programId: programA, pass: { id: t1, name: 'Pass', pass_type: 'post', activity_type: 'spray', timing_label: null, target_date: '2026-07-25', planting_offset_days: null, reminder_lead_days: 0, notes: null }, products: [], placeAfterPassId: null }
+const deleteT1: ProgramsQueueEntryV1 = { ...queuedBase, operationId: '00000000-0000-4000-8000-000000000a08', kind: 'delete_program_pass', programId: programA, passId: t1 }
+assert.deepEqual(pendingPassOutcomes([editT1, queuedRefresh], fullSnapshot, overlaid).get(passA), { kind: 'rescheduled', dueOn: '2026-07-25' }, 'A template date edited offline before taking program updates is the date the refresh applies.')
+assert.deepEqual(pendingPassOutcomes([deleteT1, queuedRefresh], fullSnapshot, overlaid).get(passA), { kind: 'cancelled' }, 'A template pass deleted offline before taking program updates cancels the assigned pass.')
+assert.deepEqual(pendingPassOutcomes([queuedRefresh, editT1], fullSnapshot, overlaid).get(passA), { kind: 'rescheduled', dueOn: '2026-07-22' }, 'A template edit queued after the refresh does not shape it; the server applied the refresh first.')
+assert.deepEqual(pendingPassOutcomes([editT1, queuedRefresh], programsSnapshot).get(passA), { kind: 'rescheduled', dueOn: '2026-07-22' }, 'Without a projector the base snapshot stands (the projector is the repository\'s to supply).')
+assert.deepEqual(pendingPassOutcomes([queuedApply, queuedRefresh], fullSnapshot, overlaid).get(passA), { kind: 'applied' }, 'The overlaid snapshot shows an earlier queued apply, so the refresh preserves that pass.')
 const unassignedOffline = todayNextUp({ profile: owner, today, equipment: workspace, notifications, pendingPasses: pendingPassOutcomes([queuedUnassign], programsSnapshot) })
 assert.ok(!unassignedOffline.some((item) => item.kind === 'program' || item.detail === 'Corn pass 2'), 'A pass whose program was unassigned on this device before sync is neither listed from its alert nor as its generated task.')
 assert.ok(unassignedOffline.some((item) => item.kind === 'grain_alert') && unassignedOffline.some((item) => item.detail === 'Fix the planter'), 'Other rows are unaffected by the queued unassign.')

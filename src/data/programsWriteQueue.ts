@@ -166,15 +166,21 @@ const addDays = (date: string, days: number) => { const value = new Date(`${date
  * gives the others the template's date (a target date, else planting date plus offset, else none), and leaves a pass unscheduled
  * when that date went away. Assignment-level entries name only the assignment, so the caller supplies a read-only Programs
  * snapshot; when it cannot, or the snapshot lacks the assignment or its program, the outcomes are unknowable and this throws
- * rather than guess. A pass already given a closing outcome earlier in the queue is not planned on the server by the time a later
- * entry lands, and one rescheduled earlier in the queue is a field override there, so both are left as they are. A later entry
- * for the same pass otherwise overrides an earlier one, as replay applies them in order. Pure over the entries and snapshot. */
-export function pendingPassOutcomes(entries: readonly ProgramsQueueEntryV1[], snapshot: ProgramsSnapshotView | null): Map<string, PendingPassOutcome> {
+ * rather than guess. When a projector is given, each assignment-level entry is resolved against the snapshot with the entries
+ * before it overlaid, so template edits queued ahead of a refresh shape it and ones queued after it do not. A pass already given
+ * a closing outcome earlier in the queue is not planned on the server by the time a later entry lands, and one rescheduled earlier
+ * in the queue is a field override there, so both are left as they are. A later entry for the same pass otherwise overrides an
+ * earlier one, as replay applies them in order. Pure over the entries, snapshot and projector. */
+export function pendingPassOutcomes<Snapshot extends ProgramsSnapshotView>(entries: readonly ProgramsQueueEntryV1[], base: Snapshot | null, project?: (base: Snapshot, prior: readonly ProgramsQueueEntryV1[]) => Snapshot): Map<string, PendingPassOutcome> {
   const outcomes = new Map<string, PendingPassOutcome>()
+  // Server replay applies the queue in order, so an assignment-level entry sees the template and assignment state left by the
+  // entries before it (a template pass edited or deleted offline, an earlier reschedule); the snapshot is projected that far.
+  let snapshot: Snapshot | null = base
   const assignmentOf = (assignmentId: string) => { const assignment = snapshot?.assignments.find((item) => item.assignment_id.toLowerCase() === assignmentId.toLowerCase()); if (!assignment) throw new Error(unresolvedAssignmentMessage); return assignment }
   const settled = (passId: string) => { const current = outcomes.get(passId.toLowerCase()); return current !== undefined && current.kind !== 'rescheduled' }
   const overridden = (passId: string) => outcomes.get(passId.toLowerCase())?.kind === 'rescheduled'
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
+    if (base && project && (entry.kind === 'unassign_program' || entry.kind === 'reassign_program_assignment' || entry.kind === 'refresh_program_assignment')) snapshot = project(base, entries.slice(0, index))
     if (entry.kind === 'mark_program_pass_applied') outcomes.set(entry.assignedPassId.toLowerCase(), { kind: 'applied' })
     else if (entry.kind === 'skip_program_pass') outcomes.set(entry.assignedPassId.toLowerCase(), { kind: 'skipped' })
     else if (entry.kind === 'reschedule_program_pass') outcomes.set(entry.assignedPassId.toLowerCase(), { kind: 'rescheduled', dueOn: entry.dueOn })

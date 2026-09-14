@@ -43,6 +43,217 @@ function pendingPass(entry: Extract<ProgramsQueueEntryV1, { kind: 'save_program_
     pending: true,
   }
 }
+/** The queue overlaid on a Programs workspace, entry by entry in replay order, as the Programs page shows it and as a pure read
+ * for projections such as Today resolves assignment-level entries against the template and assignment state that will hold
+ * when each lands. Pure over the workspace and entries given (the workspace is cloned, never mutated). */
+export function projectProgramsQueue(workspace: ProgramsData, entries: readonly ProgramsQueueEntryV1[], includeArchived: boolean): ProgramsData {
+  const value = structuredClone(workspace)
+  for (const entry of entries) {
+    if (entry.kind === 'save_program') {
+      const index = value.programs.findIndex((program) => program.id === entry.draft.id)
+      const next = pendingProgram(entry, entry, index >= 0 ? value.programs[index] : undefined)
+      if (index >= 0) value.programs[index] = next
+      else value.programs.push(next)
+      continue
+    }
+    if (entry.kind === 'save_program_pass') {
+      const program = value.programs.find((item) => item.id === entry.programId)
+      if (!program) continue
+      const next = pendingPass(entry, entry)
+      const without = program.passes.filter((pass) => pass.id !== next.id)
+      const after = entry.placeAfterPassId === null ? -1 : without.findIndex((pass) => pass.id === entry.placeAfterPassId)
+      if (entry.placeAfterPassId !== null && after < 0) throw new Error(blocked)
+      program.passes = [...without.slice(0, after + 1), next, ...without.slice(after + 1)].map((pass, index) => ({ ...pass, sequence: index + 1 }))
+      continue
+    }
+    if (entry.kind === 'reorder_program_passes') {
+      const program = value.programs.find((item) => item.id === entry.programId)
+      if (!program) continue
+      const byId = new Map(program.passes.map((pass) => [pass.id, pass]))
+      if (entry.orderedPassIds.length !== byId.size || entry.orderedPassIds.some((id) => !byId.has(id))) throw new Error(blocked)
+      program.passes = entry.orderedPassIds.map((id, index) => ({
+        ...byId.get(id)!,
+        sequence: index + 1,
+        pending: true,
+      }))
+      continue
+    }
+    if (entry.kind === 'delete_program_pass') {
+      const program = value.programs.find((item) => item.id === entry.programId)
+      if (program)
+        program.passes = program.passes
+          .filter((pass) => pass.id !== entry.passId)
+          .map((pass, index) => ({
+            ...pass,
+            sequence: index + 1,
+            pending: true,
+          }))
+      continue
+    }
+    if (entry.kind === 'delete_program') {
+      value.programs.forEach((program) => {
+        if (program.id === entry.programId) {
+          program.is_archived = true
+          program.pending = true
+        }
+      })
+      continue
+    }
+    if (entry.kind === 'assign_program') {
+      const program = value.programs.find((item) => item.id === entry.programId)
+      if (!program) continue
+      if ('cropAssignmentIds' in entry) {
+        for (const cropId of entry.cropAssignmentIds) {
+          const crop = value.cropAssignments.find((item) => item.id === cropId)
+          if (crop)
+            value.assignments.push({
+              ...crop,
+              assignment_id: 'pending:' + entry.operationId + ':' + crop.id,
+              program_id: program.id,
+              program_name_snapshot: program.name,
+              program_kind_snapshot: program.program_kind,
+              assignment_status: 'active',
+              template_revision: program.revision,
+              current_template_revision: program.revision,
+              passes: [],
+              pending: true,
+            })
+        }
+        continue
+      }
+      for (const plan of entry.assignmentPlans) {
+        const crop = value.cropAssignments.find((item) => item.id === plan.crop_assignment_id)
+        if (!crop) continue
+        const passes = plan.passes.map((passPlan) => {
+          const source = program.passes.find((pass) => pass.id === passPlan.source_program_pass_id)!
+          return {
+            id: passPlan.assigned_pass_id,
+            assignment_id: plan.assignment_id,
+            source_program_pass_id: source.id,
+            source_revision: plan.expected_program_revision,
+            sequence: source.sequence,
+            name: source.name,
+            pass_type: source.pass_type,
+            activity_type: source.activity_type,
+            timing_label: source.timing_label,
+            target_date: source.target_date,
+            planting_offset_days: source.planting_offset_days,
+            reminder_lead_days: source.reminder_lead_days,
+            notes: source.notes,
+            due_on: source.target_date,
+            due_source: source.target_date ? ('template_date' as const) : source.planting_offset_days !== null && crop.planting_date ? ('planting_offset' as const) : ('unscheduled' as const),
+            is_field_override: false,
+            status: 'planned' as const,
+            applied_on: null,
+            applied_acres: null,
+            skipped_on: null,
+            skip_reason: null,
+            cancelled_at: null,
+            cancel_reason: null,
+            application_record_id: null,
+            products: passPlan.products.map((productPlan) => {
+              const product = source.products.find((item) => item.id === productPlan.source_program_pass_product_id)!
+              return {
+                id: productPlan.assigned_product_id,
+                farm_id: crop.farm_id,
+                assigned_pass_id: passPlan.assigned_pass_id,
+                source_program_pass_product_id: product.id,
+                sequence: product.sequence,
+                product_name: product.product_name,
+                rate_text: product.rate_text,
+                unit_text: product.unit_text,
+                estimated_cost_per_acre: product.estimated_cost_per_acre,
+                notes: product.notes,
+                actual_product_name: null,
+                actual_rate_text: null,
+                actual_unit_text: null,
+                actual_cost_per_acre: null,
+                inventory_match: null,
+              }
+            }),
+          }
+        })
+        value.assignments.push({
+          ...crop,
+          assignment_id: plan.assignment_id,
+          program_id: program.id,
+          program_name_snapshot: program.name,
+          program_kind_snapshot: program.program_kind,
+          assignment_status: 'active',
+          template_revision: plan.expected_program_revision,
+          current_template_revision: plan.expected_program_revision,
+          passes,
+          pending: true,
+        })
+      }
+      continue
+    }
+    const passId = 'assignedPassId' in entry ? entry.assignedPassId : null
+    const assignment = 'assignmentId' in entry ? value.assignments.find((item) => item.assignment_id === entry.assignmentId) : value.assignments.find((item) => passId !== null && item.passes.some((pass) => pass.id === passId))
+    if (!assignment) continue
+    assignment.pending = true
+    if (entry.kind === 'unassign_program') {
+      assignment.assignment_status = 'archived'
+      continue
+    }
+    if (entry.kind === 'reassign_program_assignment') {
+      const program = value.programs.find((item) => item.id === entry.newProgramId)
+      if (program)
+        value.assignments.push({
+          ...assignment,
+          assignment_id: 'pending:' + entry.operationId + ':' + assignment.id,
+          program_id: program.id,
+          program_name_snapshot: program.name,
+          program_kind_snapshot: program.program_kind,
+          assignment_status: 'active',
+          template_revision: program.revision,
+          current_template_revision: program.revision,
+          passes: [],
+          pending: true,
+        })
+      continue
+    }
+    const pass = assignment.passes.find((item) => item.id === passId)
+    if (!pass) continue
+    if (entry.kind === 'reschedule_program_pass')
+      Object.assign(pass, {
+        due_on: entry.dueOn,
+        timing_label: entry.timingLabel,
+        due_source: 'manual',
+        is_field_override: true,
+        pending: true,
+      })
+    if (entry.kind === 'skip_program_pass')
+      Object.assign(pass, {
+        status: 'skipped',
+        skipped_on: entry.skippedOn,
+        skip_reason: entry.reason,
+        pending: true,
+      })
+    if (entry.kind === 'mark_program_pass_applied') {
+      const link = entry.applicationLink
+      const linked = link.kind === 'link'
+      Object.assign(pass, {
+        status: 'applied',
+        applied_on: linked ? (link.canonicalAppliedOn ?? entry.appliedOn) : entry.appliedOn,
+        applied_acres: linked ? (link.canonicalAppliedAcres ?? entry.appliedAcres) : entry.appliedAcres,
+        application_record_id: link.kind === 'none' ? null : link.applicationRecordId,
+        pending: true,
+      })
+      pass.products = pass.products.map((product) => {
+        const actual = entry.actualProducts.find((item) => item.id === product.id)
+        if (!actual) return product
+        const { inventory_match: _unconfirmedInventoryMatch, ...actualFields } = actual
+        return { ...product, ...actualFields }
+      })
+    }
+  }
+  return {
+    ...value,
+    programs: value.programs.filter((program) => includeArchived || !program.is_archived).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+    assignments: value.assignments.filter((assignment) => includeArchived || assignment.assignment_status === 'active' || assignment.passes.some((pass) => pass.status !== 'planned')),
+  }
+}
 export class QueuedProgramsRepository implements ProgramsRepository {
   private workspace: ProgramsData | null = null
   private readonly memoryScope = new WorkspaceMemoryScope()
@@ -176,220 +387,14 @@ export class QueuedProgramsRepository implements ProgramsRepository {
       throw error
     }
   }
-  private project(workspace: ProgramsData, entries: ProgramsQueueEntryV1[], includeArchived: boolean): ProgramsData {
-    const value = structuredClone(workspace)
-    for (const entry of entries) {
-      if (entry.kind === 'save_program') {
-        const index = value.programs.findIndex((program) => program.id === entry.draft.id)
-        const next = pendingProgram(entry, entry, index >= 0 ? value.programs[index] : undefined)
-        if (index >= 0) value.programs[index] = next
-        else value.programs.push(next)
-        continue
-      }
-      if (entry.kind === 'save_program_pass') {
-        const program = value.programs.find((item) => item.id === entry.programId)
-        if (!program) continue
-        const next = pendingPass(entry, entry)
-        const without = program.passes.filter((pass) => pass.id !== next.id)
-        const after = entry.placeAfterPassId === null ? -1 : without.findIndex((pass) => pass.id === entry.placeAfterPassId)
-        if (entry.placeAfterPassId !== null && after < 0) throw new Error(blocked)
-        program.passes = [...without.slice(0, after + 1), next, ...without.slice(after + 1)].map((pass, index) => ({ ...pass, sequence: index + 1 }))
-        continue
-      }
-      if (entry.kind === 'reorder_program_passes') {
-        const program = value.programs.find((item) => item.id === entry.programId)
-        if (!program) continue
-        const byId = new Map(program.passes.map((pass) => [pass.id, pass]))
-        if (entry.orderedPassIds.length !== byId.size || entry.orderedPassIds.some((id) => !byId.has(id))) throw new Error(blocked)
-        program.passes = entry.orderedPassIds.map((id, index) => ({
-          ...byId.get(id)!,
-          sequence: index + 1,
-          pending: true,
-        }))
-        continue
-      }
-      if (entry.kind === 'delete_program_pass') {
-        const program = value.programs.find((item) => item.id === entry.programId)
-        if (program)
-          program.passes = program.passes
-            .filter((pass) => pass.id !== entry.passId)
-            .map((pass, index) => ({
-              ...pass,
-              sequence: index + 1,
-              pending: true,
-            }))
-        continue
-      }
-      if (entry.kind === 'delete_program') {
-        value.programs.forEach((program) => {
-          if (program.id === entry.programId) {
-            program.is_archived = true
-            program.pending = true
-          }
-        })
-        continue
-      }
-      if (entry.kind === 'assign_program') {
-        const program = value.programs.find((item) => item.id === entry.programId)
-        if (!program) continue
-        if ('cropAssignmentIds' in entry) {
-          for (const cropId of entry.cropAssignmentIds) {
-            const crop = value.cropAssignments.find((item) => item.id === cropId)
-            if (crop)
-              value.assignments.push({
-                ...crop,
-                assignment_id: 'pending:' + entry.operationId + ':' + crop.id,
-                program_id: program.id,
-                program_name_snapshot: program.name,
-                program_kind_snapshot: program.program_kind,
-                assignment_status: 'active',
-                template_revision: program.revision,
-                current_template_revision: program.revision,
-                passes: [],
-                pending: true,
-              })
-          }
-          continue
-        }
-        for (const plan of entry.assignmentPlans) {
-          const crop = value.cropAssignments.find((item) => item.id === plan.crop_assignment_id)
-          if (!crop) continue
-          const passes = plan.passes.map((passPlan) => {
-            const source = program.passes.find((pass) => pass.id === passPlan.source_program_pass_id)!
-            return {
-              id: passPlan.assigned_pass_id,
-              assignment_id: plan.assignment_id,
-              source_program_pass_id: source.id,
-              source_revision: plan.expected_program_revision,
-              sequence: source.sequence,
-              name: source.name,
-              pass_type: source.pass_type,
-              activity_type: source.activity_type,
-              timing_label: source.timing_label,
-              target_date: source.target_date,
-              planting_offset_days: source.planting_offset_days,
-              reminder_lead_days: source.reminder_lead_days,
-              notes: source.notes,
-              due_on: source.target_date,
-              due_source: source.target_date ? ('template_date' as const) : source.planting_offset_days !== null && crop.planting_date ? ('planting_offset' as const) : ('unscheduled' as const),
-              is_field_override: false,
-              status: 'planned' as const,
-              applied_on: null,
-              applied_acres: null,
-              skipped_on: null,
-              skip_reason: null,
-              cancelled_at: null,
-              cancel_reason: null,
-              application_record_id: null,
-              products: passPlan.products.map((productPlan) => {
-                const product = source.products.find((item) => item.id === productPlan.source_program_pass_product_id)!
-                return {
-                  id: productPlan.assigned_product_id,
-                  farm_id: crop.farm_id,
-                  assigned_pass_id: passPlan.assigned_pass_id,
-                  source_program_pass_product_id: product.id,
-                  sequence: product.sequence,
-                  product_name: product.product_name,
-                  rate_text: product.rate_text,
-                  unit_text: product.unit_text,
-                  estimated_cost_per_acre: product.estimated_cost_per_acre,
-                  notes: product.notes,
-                  actual_product_name: null,
-                  actual_rate_text: null,
-                  actual_unit_text: null,
-                  actual_cost_per_acre: null,
-                  inventory_match: null,
-                }
-              }),
-            }
-          })
-          value.assignments.push({
-            ...crop,
-            assignment_id: plan.assignment_id,
-            program_id: program.id,
-            program_name_snapshot: program.name,
-            program_kind_snapshot: program.program_kind,
-            assignment_status: 'active',
-            template_revision: plan.expected_program_revision,
-            current_template_revision: plan.expected_program_revision,
-            passes,
-            pending: true,
-          })
-        }
-        continue
-      }
-      const passId = 'assignedPassId' in entry ? entry.assignedPassId : null
-      const assignment = 'assignmentId' in entry ? value.assignments.find((item) => item.assignment_id === entry.assignmentId) : value.assignments.find((item) => passId !== null && item.passes.some((pass) => pass.id === passId))
-      if (!assignment) continue
-      assignment.pending = true
-      if (entry.kind === 'unassign_program') {
-        assignment.assignment_status = 'archived'
-        continue
-      }
-      if (entry.kind === 'reassign_program_assignment') {
-        const program = value.programs.find((item) => item.id === entry.newProgramId)
-        if (program)
-          value.assignments.push({
-            ...assignment,
-            assignment_id: 'pending:' + entry.operationId + ':' + assignment.id,
-            program_id: program.id,
-            program_name_snapshot: program.name,
-            program_kind_snapshot: program.program_kind,
-            assignment_status: 'active',
-            template_revision: program.revision,
-            current_template_revision: program.revision,
-            passes: [],
-            pending: true,
-          })
-        continue
-      }
-      const pass = assignment.passes.find((item) => item.id === passId)
-      if (!pass) continue
-      if (entry.kind === 'reschedule_program_pass')
-        Object.assign(pass, {
-          due_on: entry.dueOn,
-          timing_label: entry.timingLabel,
-          due_source: 'manual',
-          is_field_override: true,
-          pending: true,
-        })
-      if (entry.kind === 'skip_program_pass')
-        Object.assign(pass, {
-          status: 'skipped',
-          skipped_on: entry.skippedOn,
-          skip_reason: entry.reason,
-          pending: true,
-        })
-      if (entry.kind === 'mark_program_pass_applied') {
-        const link = entry.applicationLink
-        const linked = link.kind === 'link'
-        Object.assign(pass, {
-          status: 'applied',
-          applied_on: linked ? (link.canonicalAppliedOn ?? entry.appliedOn) : entry.appliedOn,
-          applied_acres: linked ? (link.canonicalAppliedAcres ?? entry.appliedAcres) : entry.appliedAcres,
-          application_record_id: link.kind === 'none' ? null : link.applicationRecordId,
-          pending: true,
-        })
-        pass.products = pass.products.map((product) => {
-          const actual = entry.actualProducts.find((item) => item.id === product.id)
-          if (!actual) return product
-          const { inventory_match: _unconfirmedInventoryMatch, ...actualFields } = actual
-          return { ...product, ...actualFields }
-        })
-      }
-    }
-    return {
-      ...value,
-      programs: value.programs.filter((program) => includeArchived || !program.is_archived).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
-      assignments: value.assignments.filter((assignment) => includeArchived || assignment.assignment_status === 'active' || assignment.passes.some((pass) => pass.status !== 'planned')),
-    }
-  }
+  private project(workspace: ProgramsData, entries: ProgramsQueueEntryV1[], includeArchived: boolean): ProgramsData { return projectProgramsQueue(workspace, entries, includeArchived) }
   /** Pure read for projections such as Today: the outcomes this device has queued for assigned passes (applied, skipped,
    * rescheduled, cancelled or moved by unassigning, reassigning or refreshing their program's assignment) but not yet synced. The
    * caller's published context is verified around the read, entries for another member or farm block it, and nothing is fetched,
    * replayed or written; the queue is read as it stands. An assignment-level entry names only its assignment, so its passes are
    * resolved from the read-only Programs cache this device already holds (the Programs page wrote it before such an entry could be
-   * queued); without that cache the outcomes are unknowable and the read fails rather than guess. */
+   * queued), with the entries queued before it overlaid in replay order; without that cache the outcomes are unknowable and the
+   * read fails rather than guess. */
   async getPendingPassOutcomes(operationContext: FarmOperationContext): Promise<ReadonlyMap<string, PendingPassOutcome>> {
     const context = { userId: operationContext.userId, farmId: operationContext.farmId }
     const verifyRead = () => verifyFarmOperationContext(this.d.storage, operationContext, captureFarmOperationContext(this.d.storage, this.d.projectRef, context))
@@ -402,7 +407,9 @@ export class QueuedProgramsRepository implements ProgramsRepository {
       verifyRead()
       if (cached) snapshot = decodeProgramsDataCache(cached.data, context)
     }
-    const outcomes = pendingPassOutcomes(entries, snapshot)
+    // Each assignment-level entry is resolved against the cache with the entries queued before it overlaid, so a template pass
+    // edited or deleted offline before "Use program updates" is the template the refresh sees, as it will be on the server.
+    const outcomes = pendingPassOutcomes(entries, snapshot, (base, prior) => projectProgramsQueue(base, prior, true))
     verifyRead()
     return outcomes
   }
