@@ -50,7 +50,7 @@ import type {
   GrainCarryGrid,
   GrainCarrySettings,
 } from "./data/grain";
-import { marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, plannedPercentThroughMonth } from "./data/grain";
+import { marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -2666,7 +2666,8 @@ function PlanStatus({
 }) {
   const scope = scopeOf(estimate);
   const production = activeProduction(estimate);
-  const month = new Date().getMonth() + 1;
+  // The farm's month, not the device's, so the figure matches Today's grain line across a month boundary.
+  const month = planMonthFor(new Date(), workspace.fields.farm.time_zone);
   const targets = scopeRows(workspace.marketing_plan_targets, scope);
   const targetPct = plannedPercentThroughMonth(targets, month);
   const contracted = scopeRows(workspace.grain_contracts, scope).reduce(

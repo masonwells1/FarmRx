@@ -1,3 +1,4 @@
+import { farmCalendarDate } from './farmDates'
 import type { Commodity, FieldsData, ReadOnlySnapshot } from './fields'
 import type { FarmOperationContext } from './farmOperationContext'
 import type { ProfitabilityRepository } from './profitability'
@@ -170,6 +171,13 @@ export function activeProductionForScope(workspace: GrainWorkspace, scope: Posit
  * of the same year the first stays. */
 export function deliveryDefaultEstimate<T extends { crop_year: number }>(estimates: readonly T[]): T | undefined {
   return estimates.reduce<T | undefined>((newest, estimate) => (!newest || estimate.crop_year > newest.crop_year ? estimate : newest), undefined)
+}
+
+/** The calendar month (1-12) the marketing plan is judged against: the farm's current day in its stored time zone, the same day
+ * Today places, so the Overview and the grain line count the same targets on either side of a month boundary wherever the
+ * device happens to be. */
+export function planMonthFor(now: Date, timeZone: string | null | undefined): number {
+  return Number(farmCalendarDate(now, timeZone).slice(5, 7))
 }
 
 /** The marketing plan's cumulative target through a calendar month (1-12), as the Overview's plan status accumulates it: every
