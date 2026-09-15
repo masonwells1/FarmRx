@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 184
+const expectedMutationCount = 190
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -19,6 +19,7 @@ const files = [
   'package.json', 'scripts/maple-july-db-clock-wiring.regression.ps1', 'scripts/harvest-ridge-db-clock.psm1', 'scripts/maple-season-db-clock-docker-adapter.psm1', 'scripts/maple-season-db-clock-docker-adapter.regression.ps1', 'scripts/maple-synthetic-docker-topology-plan.ps1', 'scripts/maple-synthetic-docker-topology-plan.regression.ps1', 'scripts/verify-maple-season-db-clock-spike.ps1', 'scripts/faketime-artifact-replacement-manifest.regression.ps1', 'docs/season-readiness/FAKETIME-ARTIFACT-EVIDENCE.md', 'docs/season-readiness/FROZEN-OFFLINE-BUILD-EVIDENCE.md', 'docs/season-readiness/FAKETIME-ARTIFACT-REPLACEMENT-MANIFEST.json', 'tests/season/frozen-postgres-clock-spike.Dockerfile',
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
+  'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -553,6 +554,25 @@ try {
   for (const mutation of artifactOmissionMutations) { reset(); mutation.apply(); detected(`artifact ${mutation.name}`, mutation.expected) }
   console.log('SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3')
   // SOIL_ARTIFACT_MUTATION_MATRIX_END
+  // GL-1: the USDA MARS feed fences.
+  reset()
+  mutate('supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', (source) => source.replace('revoke all on function public.ingest_usda_mars_observations(text, uuid, jsonb) from public, anon, authenticated;', 'grant execute on function public.ingest_usda_mars_observations(text, uuid, jsonb) to authenticated;'))
+  detected('MARS fan-out opened to signed-in users', 'mars-feed:fan-out-service-only')
+  reset()
+  mutate('supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', (source) => source.replace('with check (public.can_edit_farm(farm_id) and feed_source is null);', 'with check (public.can_edit_farm(farm_id));'))
+  detected('MARS client insert fence removed', 'mars-feed:client-cannot-create-feed-row')
+  reset()
+  mutate('supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', (source) => source.replace("  if v_report.verified_at is null then\n    return jsonb_build_object('status', 'skipped', 'reason', 'report_unverified', 'report_id', p_report_id);\n  end if;\n", ''))
+  detected('MARS unverified report accepted', 'mars-feed:unverified-report-refused')
+  reset()
+  mutate('supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', (source) => source.replace('create unique index cash_bids_feed_observation_per_farm', 'create index cash_bids_feed_observation_per_farm'))
+  detected('MARS per-farm observation uniqueness dropped', 'mars-feed:one-observation-per-farm')
+  reset()
+  mutate('src/data/basisMath.ts', (source) => source.replace("bid.feed_source === 'usda_mars' || marsNote.test(bid.notes ?? '')", "bid.notes?.startsWith('[USDA MARS 2850]') === true"))
+  detected('MARS browser fence narrowed to the pilot report', 'mars-feed:browser-fence-any-report')
+  reset()
+  mutate('scripts/verify-foundation.ps1', (source) => source.replace("  Invoke-FoundationLane { & deno check --no-config --lock=deno.lock --frozen --node-modules-dir=none supabase/functions/usda-mars-feed/index.ts } 'Frozen usda-mars-feed Deno check failed.'\n", ''))
+  detected('MARS feed Deno check lane removed', 'orchestrator:frozen-usda-mars-feed-deno-check')
   if (mutationCount !== expectedMutationCount) throw new Error(`Foundation mutation count drifted: expected ${expectedMutationCount}, observed ${mutationCount}.`)
   console.log(`Foundation mutation drill: PASS (${mutationCount}/${expectedMutationCount} controlled mutations turned the gate red)`)
 } finally {

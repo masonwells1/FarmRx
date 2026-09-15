@@ -74,7 +74,7 @@ import {
   validateBinTransaction,
   validateGrainBin,
 } from "./data/binLedger";
-import { isMarsBid, latestBasis } from "./data/basisMath";
+import { isMarsBid, latestBasis, marsBidLabel } from "./data/basisMath";
 import { GrainCostOfCarry } from "./GrainCostOfCarry";
 import {
   displayFirmOfferStatus,
@@ -3658,6 +3658,9 @@ function Basis({
         delivery_start: null,
         delivery_end: null,
         notes: null,
+        feed_source: null,
+        feed_report_id: null,
+        feed_geography: null,
         created_at: timestamp,
         updated_at: timestamp,
       });
@@ -3678,8 +3681,25 @@ function Basis({
     .sort((left, right) => left.bid_date.localeCompare(right.bid_date))
     .slice(-8);
   const max = Math.max(0.01, ...history.map((bid) => Math.abs(bid.basis)));
-  const mars = history.filter(isMarsBid);
+  // GL-1: the feed's presence and age are judged over every feed row for this commodity, whatever elevator the chart shows.
+  const mars = workspace.cash_bids
+    .filter((bid) => bid.commodity_id === commodity && isMarsBid(bid))
+    .sort((left, right) => left.bid_date.localeCompare(right.bid_date));
   const lastMars = mars.at(-1)?.bid_date;
+  // GL-1: the feed reaches a farm only through its explicit market region and a verified USDA report for that state.
+  const marketRegion = workspace.fields.farm.market_region ?? null;
+  const regionReports = workspace.usda_market_reports.filter(
+    (report) => report.geography === marketRegion,
+  );
+  const verifiedReports = regionReports.filter(
+    (report) => report.verified_at !== null,
+  );
+  const feedRegionSentence =
+    marketRegion === null
+      ? "Set your farm's market region in Farm settings to receive USDA cash bids for your state."
+      : verifiedReports.length === 0
+        ? `No verified USDA report covers ${marketRegion} yet, so no feed bids are written for this farm.`
+        : `USDA feed for ${marketRegion}: ${verifiedReports.map((report) => `${report.name} (${report.report_id})`).join(", ")}.`;
   const stale =
     !!lastMars &&
     Date.now() - new Date(`${lastMars}T23:59:59Z`).getTime() >
@@ -3693,7 +3713,7 @@ function Basis({
           <p>
             Recent basis by elevator and commodity.{" "}
             {mars.length
-              ? `USDA MARS 2850 Iowa pilot, display-only; last dated ${lastMars}.`
+              ? `${[...new Set(mars.map(marsBidLabel))].join(", ")}, display-only; last dated ${lastMars}.`
               : ""}
           </p>
           {stale && (
@@ -3701,6 +3721,7 @@ function Basis({
               Basis feed unavailable — last updated {lastMars}.
             </p>
           )}
+          <p className="basis-feed-region">{feedRegionSentence}</p>
         </div>
       </div>
       <form className="basis-entry" onSubmit={(event) => void submit(event)}>

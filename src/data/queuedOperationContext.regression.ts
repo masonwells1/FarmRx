@@ -1865,7 +1865,7 @@ const expectedRoutes = ['/today', '/fields', '/fields/new', '/fields/:id', '/fie
 const actualRoutes = [...appSource.matchAll(/<Route\b[^>]*?\bpath="([^"]+)"/g)].map((match) => match[1])
 assert(actualRoutes.length === expectedRoutes.length && actualRoutes.every((route, index) => route === expectedRoutes[index]), `The ordered route manifest changed. Expected ${expectedRoutes.join(',')}; received ${actualRoutes.join(',')}.`)
 assert(dataIndexSource.includes('const fieldsGetContext = currentFarmContext') && dataIndexSource.includes('getContext: currentFarmContext'), 'Fields or field-location production wiring still assembles user and farm identity in separate asynchronous lookups.')
-assert((dataIndexSource.match(/isOffline: farmReplayIsOffline/g) ?? []).length === 13, 'A production data lane still trusts only navigator.onLine instead of the exact offline replay grant.')
+assert((dataIndexSource.match(/isOffline: farmReplayIsOffline/g) ?? []).length === 14, 'A production data lane still trusts only navigator.onLine instead of the exact offline replay grant.')
 const durableFenceOrderAudit = [
   { file: './QueuedInventoryRepository.ts', verifier: 'verifyOperation' },
   { file: './QueuedEquipmentTasksRepository.ts', verifier: 'verifyOperation' },

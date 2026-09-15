@@ -9,7 +9,7 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import { getSyncStatus } from './syncStatus'
 import { getSaveReceipt } from '../lib/saveReceipt'
 import { readNeedsAttention } from './needsAttentionStore'
-import { isMarsBid, latestBasis } from './basisMath'
+import { isMarsBid, latestBasis, marsBidLabel } from './basisMath'
 import { farmerError } from '../lib/farmerErrors'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from './binLedger'
 import { deriveBinOnHand } from './binLedger'
@@ -52,7 +52,7 @@ function fixture() {
   const inventory = { id: uid(6), farm_id: farm, grain_bin_id: bin.id, crop_year: '2026', commodity_id: commodity, bushels: '600', committed_bushels: '100', measured_at: stamp, notes: null, created_at: stamp, updated_at: stamp }
   const bid = { id: uid(7), farm_id: farm, elevator: 'Iowa pilot [USDA MARS 2850]', commodity_id: commodity, bid_date: '2026-07-10', basis: '-0.2', cash_price: '4.3', delivery_start: null, delivery_end: null, notes: '[USDA MARS 2850]', created_at: stamp, updated_at: stamp }
   const report = { id: uid(8), report_name: 'WASDE', report_date: '2026-08-12', release_at: null, source_url: null, notes: null, created_at: stamp, updated_at: stamp }
-  return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], grain_contract_deliveries: [], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], bin_transactions: [] as unknown[], cash_bids: [bid], usda_report_dates: [report], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null, grain_sale_limits: [], grain_carry_settings: null, grain_carry_grids: [] } }
+  return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], grain_contract_deliveries: [], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], bin_transactions: [] as unknown[], cash_bids: [bid], usda_market_reports: [{ report_id: '2850', name: 'Iowa Daily Cash Grain Bids', geography: 'IA', geography_label: 'Iowa', verified_at: null, verification_note: 'confirm on the USDA listing', created_at: '2026-07-01T12:00:00.000Z', updated_at: '2026-07-01T12:00:00.000Z' }], usda_report_dates: [report], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null, grain_sale_limits: [], grain_carry_settings: null, grain_carry_grids: [] } }
 }
 /** Lets tests perturb what the "server" hands back, independent of what was sent, to prove the repository
  * confirms the canonical response rather than trusting its own request. Unset (null) by default so every
@@ -230,6 +230,13 @@ async function run() {
   const olderManualRow: CashBid = { ...data.cash_bids[0], id: uid(982), bid_date: '2026-07-05', basis: -0.3, notes: null }
   const basisWorkspace: GrainWorkspace = { ...data, cash_bids: [marsRow, manualRow, olderManualRow] }
   assert(isMarsBid(marsRow) && !isMarsBid(manualRow) && !isMarsBid(olderManualRow), 'isMarsBid must classify MARS-tagged and manual rows correctly.')
+  // GL-1: any MARS provenance is a feed row, not only the 2850 pilot note; the provenance columns count even without a note.
+  const columnOnly: CashBid = { ...manualRow, id: uid(983), notes: 'Ames', feed_source: 'usda_mars', feed_report_id: '3101', feed_geography: 'IL' }
+  const otherReportNote: CashBid = { ...manualRow, id: uid(984), notes: '[USDA MARS 3101 · Illinois] basis range -0.4 to -0.3' }
+  assert(isMarsBid(columnOnly) && isMarsBid(otherReportNote), 'A feed row is recognized by its provenance column or by any MARS note, whatever the report.')
+  assert(marsBidLabel(columnOnly) === 'USDA MARS 3101 · IL' && marsBidLabel(otherReportNote) === 'USDA MARS 3101 · Illinois' && marsBidLabel(marsRow) === 'USDA MARS 2850', `Labels read the row's own provenance: ${marsBidLabel(columnOnly)} / ${marsBidLabel(otherReportNote)} / ${marsBidLabel(marsRow)}`)
+  assert(latestBasis({ ...basisWorkspace, cash_bids: [{ ...columnOnly, bid_date: '2026-07-25' }, manualRow] }, gateway.state.scope) === manualRow.basis, 'A column-only feed row never supplies the basis.')
+  assert(data.usda_market_reports.length === 1 && data.usda_market_reports[0].verified_at === null && data.usda_market_reports[0].geography === 'IA', 'The report mapping maps through with its verification state.')
   assert(latestBasis(basisWorkspace, gateway.state.scope) === manualRow.basis, 'latestBasis must use the latest manual bid and exclude the MARS feed row even when MARS is newest.')
   // 21: firm offers use the same bound-farm save/delete gateway seam and reject an invalid DB-check shape first.
   const offer: FirmOffer = { ...gateway.state.scope, id: uid(990), buyer: 'Buyer', offer_type: 'cash', bushels: 1000, price: 4.5, basis: null, contract_month: null, expires_on: null, delivery_location: null, notes: null, status: 'open', filled_contract_id: null, created_at: stamp, updated_at: stamp }

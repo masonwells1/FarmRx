@@ -96,7 +96,9 @@ async function seedPendingWriteQueues(context: BrowserContext) {
 
 type AccessProfileFixture = { memberRole: 'owner' | 'manager' | 'worker' | 'read_only' | null; canViewFinancials: boolean; namedRep: boolean }
 const ownerProfile: AccessProfileFixture = { memberRole: 'owner', canViewFinancials: false, namedRep: false }
-function farmRow(farm: FarmFixture, shareWithRep = false) { return { id: farm.id, name: farm.name, share_with_rep: shareWithRep, time_zone: 'America/Chicago', created_by: userId, created_at: now, updated_at: now } }
+const farmPatches: Array<Record<string, unknown>> = []
+const farmRegions: Record<string, string | null> = {}
+function farmRow(farm: FarmFixture, shareWithRep = false, marketRegion: string | null = null) { return { id: farm.id, name: farm.name, share_with_rep: shareWithRep, time_zone: 'America/Chicago', market_region: marketRegion, created_by: userId, created_at: now, updated_at: now } }
 function membershipRow(farm: FarmFixture, memberId = userId, profile = ownerProfile) { return profile.memberRole === null ? null : { farm_id: farm.id, user_id: memberId, role: profile.memberRole, status: 'active', can_view_financials: profile.canViewFinancials } }
 function rowsFor(table: string, farm: FarmFixture) {
   if (table === 'entities') return [{ id: farm.entityId, farm_id: farm.id, name: `${farm.name} LLC`, entity_type: 'llc', is_active: true, created_at: now, updated_at: now }]
@@ -159,7 +161,7 @@ function todayRows(farm: FarmFixture): Readonly<Partial<Record<string, unknown[]
     cash_bids: [
       { id: '00000000-0000-4000-8000-000000000081', farm_id: farm.id, elevator: 'Cargill Olney', commodity_id: commodityId, bid_date: '2026-07-10', basis: -0.35, cash_price: 4.07, delivery_start: null, delivery_end: null, notes: null, created_at: now, updated_at: now },
       { id: '00000000-0000-4000-8000-000000000082', farm_id: farm.id, elevator: 'Cargill Olney', commodity_id: commodityId, bid_date: '2026-07-14', basis: -0.3, cash_price: 4.12, delivery_start: null, delivery_end: null, notes: null, created_at: now, updated_at: now },
-      { id: '00000000-0000-4000-8000-000000000083', farm_id: farm.id, elevator: 'USDA MARS 2850', commodity_id: commodityId, bid_date: '2026-07-15', basis: -0.1, cash_price: 4.5, delivery_start: null, delivery_end: null, notes: '[USDA MARS 2850] Iowa pilot', created_at: now, updated_at: now },
+      { id: '00000000-0000-4000-8000-000000000083', farm_id: farm.id, elevator: 'Cedar Rapids', commodity_id: commodityId, bid_date: '2026-07-15', basis: -0.1, cash_price: 4.5, delivery_start: null, delivery_end: null, notes: '[USDA MARS 2850 · Iowa] basis range -0.15 to -0.05', feed_source: 'usda_mars', feed_report_id: '2850', feed_geography: 'IA', created_at: now, updated_at: now },
     ],
     equipment: [{ id: equipmentA, farm_id: farm.id, name: 'John Deere 8R 340', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null, created_by: userId, created_at: now, updated_at: now }],
     equipment_meter_readings: [{ id: '00000000-0000-4000-8000-000000000901', farm_id: farm.id, equipment_id: equipmentA, reading: 262, read_on: '2026-07-14', source: 'manual', notes: null, created_by: userId, created_at: now, updated_at: now }],
@@ -216,6 +218,7 @@ const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, str
   bin_transactions: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'occurred_on.desc,created_at.desc,id.desc' }),
   cash_bids: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'bid_date.asc,id.asc' }),
   usda_report_dates: () => ({ select: '*', order: 'report_date.asc,id.asc' }),
+  usda_market_reports: () => ({ select: '*', order: 'report_id.asc' }),
   marketing_alert_rules: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,created_at.asc,id.asc' }),
   firm_offers: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,created_at.asc,id.asc' }),
   grain_alert_settings: (farm) => ({ select: '*', farm_id: `eq.${farm.id}` }),
@@ -247,15 +250,27 @@ function bearerUserId(request: Request): string | null {
 
 async function mockSupabase(page: Page, accessible = farms, notifications: unknown[] = [], emptyUnknownReads = false, accessEpoch = 1, profile = ownerProfile, activeUser: string | (() => string) = userId, removedFarmEpochs: Readonly<Record<string, Readonly<Record<string, number>>>> = {}, moduleRows: Readonly<Partial<Record<string, unknown[]>>> = {}) {
   const unexpected: string[] = []
+  // GL-1: a saved market region lives only for the test that saved it.
+  for (const key of Object.keys(farmRegions)) delete farmRegions[key]
+  farmPatches.length = 0
   await page.route('https://*.supabase.co/**', async (route) => {
     const url = new URL(route.request().url())
     const rest = url.pathname.match(/^\/rest\/v1\/([^/]+)$/)?.[1]
     const activeUserId = typeof activeUser === 'function' ? activeUser() : activeUser
     const rejectShape = async (label: string) => { unexpected.push(`INVALID ${label}`); await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ message: `Invalid mocked ${label}` }) }) }
     if (rest === 'farms') {
+      // GL-1: the Farm settings page saves the market region with an update fenced on the row's updated_at (like the privacy toggle).
+      if (route.request().method() === 'PATCH') {
+        const farm = requestedFarm(url); const body = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>
+        if (!exactQuery(url, { id: `eq.${farm.id}`, updated_at: `eq.${now}`, select: '*' }) || Object.keys(body).join() !== 'market_region' || !route.request().headers()['x-farm-rx-expected-user-id']) { await rejectShape('farms patch'); return }
+        farmPatches.push(body)
+        farmRegions[farm.id] = typeof body.market_region === 'string' ? body.market_region : null
+        await fulfillJson(route, { ...farmRow(farm, profile.namedRep, farmRegions[farm.id]), updated_at: '2026-07-15T12:30:00.000Z' })
+        return
+      }
       if (route.request().method() !== 'GET') { await rejectShape('farms method'); return }
-      if (url.searchParams.has('id')) { const farm = requestedFarm(url); if (!exactQuery(url, { select: '*', id: `eq.${farm.id}` })) { await rejectShape('farms selected query'); return }; await fulfillJson(route, farmRow(farm, profile.namedRep)) }
-      else { if (!exactQuery(url, { select: '*', order: 'name.asc,id.asc' })) { await rejectShape('farms list query'); return }; await fulfillJson(route, accessible.map((farm) => farmRow(farm, profile.namedRep))) }
+      if (url.searchParams.has('id')) { const farm = requestedFarm(url); if (!exactQuery(url, { select: '*', id: `eq.${farm.id}` })) { await rejectShape('farms selected query'); return }; await fulfillJson(route, farmRow(farm, profile.namedRep, farmRegions[farm.id] ?? null)) }
+      else { if (!exactQuery(url, { select: '*', order: 'name.asc,id.asc' })) { await rejectShape('farms list query'); return }; await fulfillJson(route, accessible.map((farm) => farmRow(farm, profile.namedRep, farmRegions[farm.id] ?? null))) }
       return
     }
     if (rest === 'farm_memberships' && url.searchParams.get('select') === 'role') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'role', farm_id: `eq.${farm.id}`, user_id: `eq.${activeUserId}` })) { await rejectShape('farm_memberships viewer query'); return }; await fulfillJson(route, profile.memberRole === null ? null : { role: profile.memberRole }); return }
@@ -906,6 +921,41 @@ test('a named rep receives only proven rep-safe navigation and direct routes', a
   expect(unexpected).toEqual([])
 })
 
+test('an owner sets the farm market region on Farm settings and a worker cannot', async ({ page, context }) => {
+  await seedSession(context)
+  farmPatches.length = 0
+  delete farmRegions[farmA]
+  const unexpected = await mockSupabase(page, [farms[0]], [], true)
+  await page.goto('/privacy')
+  await expect(page.getByRole('heading', { name: 'Farm settings' })).toBeVisible()
+  const card = page.getByRole('article', { name: 'Market region' })
+  await expect(card.locator('.privacy-status')).toHaveText('NOT SET')
+  await expect(card.getByText('Pick the state whose USDA cash-grain bids this farm should receive.', { exact: false })).toBeVisible()
+  const save = card.getByRole('button', { name: 'Save region' })
+  await expect(save).toBeDisabled()
+  await card.getByLabel('State for USDA cash bids').selectOption('IL')
+  await save.click()
+  // The shell re-reads the farm after the save, so the confirmed row, not a transient message, is the proof.
+  await expect(card.locator('.privacy-status')).toHaveText('IL')
+  await expect(card.getByText('This farm receives USDA cash-grain bids for Illinois', { exact: false })).toBeVisible()
+  await expect(card.getByRole('button', { name: 'Save region' })).toBeDisabled()
+  expect(farmPatches).toEqual([{ market_region: 'IL' }])
+  expect(unexpected).toEqual([])
+})
+
+test('a worker sees the market region but cannot change it', async ({ page, context }) => {
+  await seedSession(context)
+  farmPatches.length = 0
+  const unexpected = await mockSupabase(page, [farms[0]], [], true, 1, { memberRole: 'worker', canViewFinancials: false, namedRep: false })
+  await page.goto('/privacy')
+  await expect(page.getByRole('heading', { name: 'Farm settings' })).toBeVisible()
+  const card = page.getByRole('article', { name: 'Market region' })
+  await expect(card.getByText('Only a farm owner or manager can change this setting.')).toBeVisible()
+  await expect(card.getByRole('button', { name: 'Save region' })).toHaveCount(0)
+  expect(farmPatches).toEqual([])
+  expect(unexpected).toEqual([])
+})
+
 test('a read-only member can view member modules but cannot enter edit routes or replay writes', async ({ page, context }, testInfo) => {
   await seedSession(context)
   const pendingKeys = await seedPendingWriteQueues(context)
@@ -1430,6 +1480,10 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   await expect(page).toHaveURL('http://127.0.0.1:4173/grain')
   await expect(page.getByText('Already contracted')).toBeVisible()
   await expect(page.getByText('5,320 bu', { exact: true }).first()).toBeVisible()
+  // GL-1: on the storage tab the feed row is named for its report and geography, and a farm without a market region is told how to get bids.
+  await page.goto('/grain/storage')
+  await expect(page.getByText(/USDA MARS 2850 · Iowa, display-only; last dated 2026-07-15\./)).toBeVisible()
+  await expect(page.getByText("Set your farm's market region in Farm settings to receive USDA cash bids for your state.")).toBeVisible()
   await page.goto('/today')
   await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Grain delivery' }).click()
   await expect(page).toHaveURL('http://127.0.0.1:4173/grain/contracts')

@@ -1081,6 +1081,10 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .privacy-status { min-width: 72px; min-height: 48px; display: inline-grid; place-items: center; padding: 8px 14px; border-radius: 999px; background: var(--deep-green); color: var(--on-dark); font-size: 18px; font-weight: 900; letter-spacing: .05em; }
 .privacy-card.is-shared .privacy-status { background: #9b6a16; }
 .privacy-explanation { margin: 0; color: var(--charcoal); font-size: 19px; font-weight: 650; }
+.market-region-control { grid-template-columns: minmax(0, 1fr); }
+.market-region-control label { font-weight: 700; }
+.market-region-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.market-region-actions select { min-height: 48px; min-width: 220px; padding: 8px 12px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface); font-size: 18px; }
 .privacy-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; padding: 18px; border-radius: 12px; background: var(--light-green); }
 .privacy-control > span { font-size: 19px; font-weight: 800; }
 .privacy-switch { min-width: 112px; min-height: 56px; display: grid; grid-template-columns: 36px 1fr; gap: 7px; align-items: center; padding: 6px 12px 6px 7px; border: 2px solid var(--deep-green); border-radius: 999px; background: var(--surface); color: var(--deep-green); font-size: 18px; font-weight: 900; }
