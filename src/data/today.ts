@@ -4,7 +4,7 @@ import type { InventoryUnit, InventoryWorkspace } from './inventory'
 import type { Field } from './fields'
 import type { Notification } from './notifications'
 import type { PendingPassOutcome } from './programs'
-import { deliveryDefaultEstimate, marketedPercent, sameScope, scopeOf, type CashBid, type GrainWorkspace } from './grain'
+import { deliveryDefaultEstimate, marketedPercent, plannedPercentThroughMonth, sameScope, scopeOf, type CashBid, type GrainWorkspace } from './grain'
 import { isMarsBid } from './basisMath'
 import type { ForecastBundle, SprayLevel } from './weather'
 import { bestWindowToday, compassLabel, daylight, evaluateSprayWindow, fieldWallClockDate, formatHour, formatMph, isActionablyFresh } from './weatherService'
@@ -211,7 +211,7 @@ function latestLocalBids(workspace: GrainWorkspace, farmId: string, commodityId:
 /** One plain-English grain line for members who may open Grain (GOAL.md, FD-2): the newest crop year's position, the same estimate
  * the Grain delivery tile lands on. Percent sold is the shared marketed-percent rule (signed contract bushels over active
  * production, the number the plan and the alert rules use); the plan figure is the marketing plan's cumulative percent through
- * the farm's current month, as the Overview's "Actual vs. plan" table accumulates it; the bid is the latest farmer-entered cash
+ * the farm's current month by the Overview's own rule; the bid is the latest farmer-entered cash
  * bid for the commodity with its change since the previous bid at the same elevator. The line opens the Overview on that
  * estimate so the two screens agree. Absent data is said plainly; without a production estimate there is no line. */
 export function todayGrainLine(input: { profile: FarmAccessProfile; grain: GrainWorkspace | null; today: string }): TodayGrainLine | null {
@@ -226,7 +226,9 @@ export function todayGrainLine(input: { profile: FarmAccessProfile; grain: Grain
   const entity = scope.enterprise_label ?? (scope.operating_entity_id === null ? null : grain.fields.entities.find((item) => item.id === scope.operating_entity_id)?.name ?? 'one entity')
   const sold = Math.round(marketedPercent(grain, scope))
   const targets = grain.marketing_plan_targets.filter((target) => sameScope(target, scope))
-  const planThrough = targets.filter((target) => target.target_month.slice(0, 7) <= today.slice(0, 7)).reduce((sum, target) => sum + target.target_pct_of_production, 0)
+  // The Overview's own rule (month number through the current month, whatever year the target carries), so the plan figure here
+  // is the one the farmer sees after tapping through.
+  const planThrough = plannedPercentThroughMonth(targets, Number(today.slice(5, 7)))
   const plan = targets.length === 0 ? 'No plan yet' : `Plan says ${Math.round(planThrough)}% by now`
   const bids = latestLocalBids(grain, scope.farm_id, scope.commodity_id)
   let bid = 'No local bid yet'

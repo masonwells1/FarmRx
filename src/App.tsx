@@ -959,9 +959,13 @@ function MobileNavigation() {
   return (
     <>
       {recordOpen && canRecord && (
-        <Suspense fallback={<section className="mobile-more-menu mobile-record-menu" id="mobile-record-menu" aria-label="Record"><p className="loading-state" role="status">Opening Record…</p></section>}>
-          <RecordSheet repositories={{ fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, programsRepository, grainRepository: grainServices.grainRepository }} onClose={() => setRecordOpen(false)} />
-        </Suspense>
+        // The sheet's chunk loads outside the route boundary, so a persistent chunk failure is caught here and shown as the same
+        // retry screen in the sheet's own frame, never left to blank the shell. Closing and reopening the sheet resets it.
+        <LazyRouteErrorBoundary className="mobile-more-menu mobile-record-menu">
+          <Suspense fallback={<section className="mobile-more-menu mobile-record-menu" id="mobile-record-menu" aria-label="Record"><p className="loading-state" role="status">Opening Record…</p></section>}>
+            <RecordSheet repositories={{ fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, programsRepository, grainRepository: grainServices.grainRepository }} onClose={() => setRecordOpen(false)} />
+          </Suspense>
+        </LazyRouteErrorBoundary>
       )}
       {moreOpen && (
         <section className="mobile-more-menu" id="mobile-more-menu" aria-label="More Farm Rx destinations">

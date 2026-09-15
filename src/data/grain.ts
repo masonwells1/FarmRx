@@ -172,6 +172,13 @@ export function deliveryDefaultEstimate<T extends { crop_year: number }>(estimat
   return estimates.reduce<T | undefined>((newest, estimate) => (!newest || estimate.crop_year > newest.crop_year ? estimate : newest), undefined)
 }
 
+/** The marketing plan's cumulative target through a calendar month (1-12), as the Overview's plan status accumulates it: every
+ * target whose month number is at or before the given month counts, whatever year its date carries. Today's grain line and the
+ * Overview share this rule so the two screens report the same planned percent. */
+export function plannedPercentThroughMonth(targets: readonly { target_month: string; target_pct_of_production: number }[], month: number): number {
+  return targets.filter((target) => Number(target.target_month.slice(5, 7)) <= month).reduce((total, target) => total + target.target_pct_of_production, 0)
+}
+
 /** Shared by the marketing plan and alert rules: signed contract bushels / active production. */
 export function marketedPercent(workspace: GrainWorkspace, scope: PositionScope): number {
   const production = activeProductionForScope(workspace, scope)

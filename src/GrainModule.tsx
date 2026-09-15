@@ -50,7 +50,7 @@ import type {
   GrainCarryGrid,
   GrainCarrySettings,
 } from "./data/grain";
-import { marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate } from "./data/grain";
+import { marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, plannedPercentThroughMonth } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -2668,9 +2668,7 @@ function PlanStatus({
   const production = activeProduction(estimate);
   const month = new Date().getMonth() + 1;
   const targets = scopeRows(workspace.marketing_plan_targets, scope);
-  const targetPct = targets
-    .filter((target) => Number(target.target_month.slice(5, 7)) <= month)
-    .reduce((total, target) => total + target.target_pct_of_production, 0);
+  const targetPct = plannedPercentThroughMonth(targets, month);
   const contracted = scopeRows(workspace.grain_contracts, scope).reduce(
     (total, contract) => total + contract.bushels,
     0,
