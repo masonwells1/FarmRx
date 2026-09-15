@@ -132,7 +132,7 @@ test("a persistent lazy route failure stops reloading and offers a retry", async
   expect(chunkAttempts).toBe(2);
   expect(documentLoads).toBe(2);
   expect(await page.evaluate((key) => sessionStorage.getItem(key), routeReloadMarker)).toBe("1");
-  // On phones Grain lives in the More menu (FD-1 phone bar: Today · Fields · Tasks · Weather · More).
+  // On phones Grain sits on the bar (FD-2: Today · Grain · Fields · Record · More); the More fallback covers narrower shells.
   const grainLink = page.getByRole("link", { name: "Grain", exact: true });
   if (!(await grainLink.isVisible())) await page.getByRole("button", { name: "More" }).click();
   await grainLink.click();

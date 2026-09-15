@@ -70,8 +70,10 @@ import type { EntityType } from "./data/fields";
 import { getWorkspaceCacheNotices, subscribeWorkspaceCacheNotices } from "./data/workspaceCache";
 import { farmerError } from "./lib/farmerErrors";
 import { recoverLazyRoute } from "./lib/lazyRouteRecovery";
+import { todayRecordTiles } from "./data/todayTiles";
 
 const TodayPage = lazy(() => recoverLazyRoute("today", () => import("./TodayModule")).then((module) => ({ default: module.TodayPage })));
+const RecordSheet = lazy(() => recoverLazyRoute("today", () => import("./TodayModule")).then((module) => ({ default: module.RecordSheet })));
 const FieldDetailPage = lazy(() => recoverLazyRoute("field-detail", () => import("./FieldsModule")).then((module) => ({ default: module.FieldDetailPage })));
 const FieldFormPage = lazy(() => recoverLazyRoute("field-form", () => import("./FieldsModule")).then((module) => ({ default: module.FieldFormPage })));
 const FieldsPage = lazy(() => recoverLazyRoute("fields", () => import("./FieldsModule")).then((module) => ({ default: module.FieldsPage })));
@@ -212,10 +214,11 @@ const navigation: NavigationItem[] = [
   },
 ];
 
-// The phone bar holds four destinations plus More (FD-1 selected visual option). Each member sees the first four they may open,
-// in this order, so a farm owner gets Today · Fields · Tasks · Weather and a named rep gets Today · Fields · Grain.
-const mobilePrimaryOrder = ["/today", "/fields", "/tasks", "/weather", "/grain"];
-const mobilePrimaryCount = 4;
+// The phone bar holds three destinations, a Record button, and More (FD-2). Each member sees the destinations they may open, in
+// this order, so a farm owner gets Today · Grain · Fields · Record · More and a named rep gets Today · Grain · Fields · More; a
+// member with nothing to record (read-only) has no Record button. Every other allowed destination stays reachable from More.
+const mobilePrimaryOrder = ["/today", "/grain", "/fields"];
+const mobilePrimaryCount = 3;
 
 function CapabilityRoute({ module, editOnly = false, lockWrites = false, children }: { module: FarmAppModule; editOnly?: boolean; lockWrites?: boolean; children: ReactNode }) {
   const { profile } = useFarmAccess();
@@ -328,7 +331,7 @@ function AppLayout() {
           <LazyRouteErrorBoundary key={location.pathname}>
             <Suspense fallback={<p className="loading-state" role="status">Opening this page…</p>}>
             <Routes>
-            <Route path="/today" element={<CapabilityRoute module="fields"><TodayPage fieldsRepository={fieldsRepository} equipmentTasksRepository={equipmentTasksRepository} notificationsRepository={notificationsRepository} inventoryRepository={inventoryRepository} programsRepository={programsRepository} /></CapabilityRoute>} />
+            <Route path="/today" element={<CapabilityRoute module="fields"><TodayPage fieldsRepository={fieldsRepository} equipmentTasksRepository={equipmentTasksRepository} notificationsRepository={notificationsRepository} inventoryRepository={inventoryRepository} programsRepository={programsRepository} grainRepository={grainServices.grainRepository} /></CapabilityRoute>} />
             <Route path="/fields" element={<CapabilityRoute module="fields" lockWrites><FieldsPage /></CapabilityRoute>} />
             <Route path="/fields/new" element={<CapabilityRoute module="fields" editOnly><FieldFormPage /></CapabilityRoute>} />
             <Route path="/fields/:id" element={<CapabilityRoute module="fields" lockWrites><FieldDetailPage /></CapabilityRoute>} />
@@ -943,15 +946,23 @@ function MobileNavigation() {
   const { profile } = useFarmAccess();
   const location = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [recordOpen, setRecordOpen] = useState(false);
+  // Record opens the same tiles Today shows, loaded through the same pure reads; a member with no tiles has no button.
+  const canRecord = todayRecordTiles(profile).length > 0;
   const allowed = navigation.filter((item) => canAccessFarmModule(profile, item.module));
   const mobilePrimaryNavigation = mobilePrimaryOrder.flatMap((path) => allowed.filter((item) => item.path === path)).slice(0, mobilePrimaryCount);
   const mobileMoreNavigation = allowed.filter((item) => !mobilePrimaryNavigation.includes(item));
   const moreActive = mobileMoreNavigation.some((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`));
   // A route change means the view that asked a question is gone; drop the question with it.
-  useEffect(() => { setMoreOpen(false); cancelPendingDialogs(); }, [location.pathname]);
+  useEffect(() => { setMoreOpen(false); setRecordOpen(false); cancelPendingDialogs(); }, [location.pathname]);
   useEffect(() => () => cancelPendingDialogs(), []);
   return (
     <>
+      {recordOpen && canRecord && (
+        <Suspense fallback={<section className="mobile-more-menu mobile-record-menu" id="mobile-record-menu" aria-label="Record"><p className="loading-state" role="status">Opening Record…</p></section>}>
+          <RecordSheet repositories={{ fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, programsRepository, grainRepository: grainServices.grainRepository }} onClose={() => setRecordOpen(false)} />
+        </Suspense>
+      )}
       {moreOpen && (
         <section className="mobile-more-menu" id="mobile-more-menu" aria-label="More Farm Rx destinations">
           <header><strong>More</strong><button type="button" onClick={() => setMoreOpen(false)} aria-label="Close more navigation">Close</button></header>
@@ -966,7 +977,13 @@ function MobileNavigation() {
               <span>{item.label}</span>
             </NavLink>
           ))}
-          <button className={`nav-link mobile-more-toggle${moreActive ? " active" : ""}`} type="button" aria-expanded={moreOpen} aria-controls="mobile-more-menu" onClick={() => setMoreOpen((open) => !open)}>
+          {canRecord && (
+            <button className={`nav-link mobile-record-toggle${recordOpen ? " active" : ""}`} type="button" aria-expanded={recordOpen} aria-controls="mobile-record-menu" onClick={() => { setMoreOpen(false); setRecordOpen((open) => !open); }}>
+              <span className="nav-icon" aria-hidden="true"><NavGlyph d="M12 5v14M5 12h14" /></span>
+              <span>Record</span>
+            </button>
+          )}
+          <button className={`nav-link mobile-more-toggle${moreActive ? " active" : ""}`} type="button" aria-expanded={moreOpen} aria-controls="mobile-more-menu" onClick={() => { setRecordOpen(false); setMoreOpen((open) => !open); }}>
             <span className="nav-icon" aria-hidden="true"><NavGlyph d="M5 12h.01M12 12h.01M19 12h.01" /></span>
             <span>More</span>
           </button>

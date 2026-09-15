@@ -148,6 +148,15 @@ const passA = '00000000-0000-4000-8000-000000000601'
 const productA = '00000000-0000-4000-8000-000000000701'
 function todayRows(farm: FarmFixture): Readonly<Partial<Record<string, unknown[]>>> {
   return {
+    // FD-2 grain line: 5,320 of the 15,200 bu estimate signed (35%); a plan whose cumulative percent is 40% from March on; two
+    // farmer-entered Cargill bids (4.07 then 4.12) and a newer USDA feed row that must never count as a local bid.
+    grain_contracts: [{ id: '00000000-0000-4000-8000-000000000061', farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer: 'Cargill Olney', bushels: 5320, futures_price: null, basis: null, cash_price: 4.2, delivery_start: '2026-10-01', delivery_end: '2026-11-30', contract_number: null, premium_cents_per_bu: 0, notes: null, created_at: now, updated_at: now }],
+    marketing_plan_targets: [['00000000-0000-4000-8000-000000000071', '2026-01-01', 10], ['00000000-0000-4000-8000-000000000072', '2026-02-01', 15], ['00000000-0000-4000-8000-000000000073', '2026-03-01', 15]].map(([id, target_month, target_pct_of_production]) => ({ id, farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, target_month, target_pct_of_production, target_price: null, breakeven_relative_pct: null, deadline: null, notes: null, created_at: now, updated_at: now })),
+    cash_bids: [
+      { id: '00000000-0000-4000-8000-000000000081', farm_id: farm.id, elevator: 'Cargill Olney', commodity_id: commodityId, bid_date: '2026-07-10', basis: -0.35, cash_price: 4.07, delivery_start: null, delivery_end: null, notes: null, created_at: now, updated_at: now },
+      { id: '00000000-0000-4000-8000-000000000082', farm_id: farm.id, elevator: 'Cargill Olney', commodity_id: commodityId, bid_date: '2026-07-14', basis: -0.3, cash_price: 4.12, delivery_start: null, delivery_end: null, notes: null, created_at: now, updated_at: now },
+      { id: '00000000-0000-4000-8000-000000000083', farm_id: farm.id, elevator: 'USDA MARS 2850', commodity_id: commodityId, bid_date: '2026-07-15', basis: -0.1, cash_price: 4.5, delivery_start: null, delivery_end: null, notes: '[USDA MARS 2850] Iowa pilot', created_at: now, updated_at: now },
+    ],
     equipment: [{ id: equipmentA, farm_id: farm.id, name: 'John Deere 8R 340', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null, created_by: userId, created_at: now, updated_at: now }],
     equipment_meter_readings: [{ id: '00000000-0000-4000-8000-000000000901', farm_id: farm.id, equipment_id: equipmentA, reading: 262, read_on: '2026-07-14', source: 'manual', notes: null, created_by: userId, created_at: now, updated_at: now }],
     equipment_service_intervals: [{ id: intervalA, farm_id: farm.id, equipment_id: equipmentA, name: 'Engine oil', every_meter: 250, every_months: null, last_done_on: null, last_done_reading: 0, is_active: true, created_by: userId, created_at: now, updated_at: now }],
@@ -175,6 +184,21 @@ const fieldsReadQueries: Record<string, (farm: FarmFixture) => Record<string, st
   arrangements: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'effective_from.asc' }),
   crop_assignments: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,planting_sequence.asc' }),
   commodities: () => ({ select: '*', is_active: 'eq.true', order: 'name.asc' }),
+}
+// Exact read shapes for the Programs workspace (FD-2: the "Pass due today" tile lands on Programs). Passes and products are read
+// only when a program exists, so an empty farm never requests them. Three tables Programs shares with other modules are read
+// through a narrower select and are accepted by shape in their own branches below.
+const programsReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
+  programs: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' }),
+  program_assignment_tracker: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'field_name.asc,crop_year.asc,planting_sequence.asc,program_name_snapshot.asc' }),
+  program_assignment_costs: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'assignment_id.asc' }),
+  program_crop_cost_rollups: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_assignment_id.asc' }),
+  program_inventory_matches: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'assigned_product_id.asc,inventory_product_id.asc' }),
+}
+const programsSharedShapes: Record<string, (farm: FarmFixture) => Record<string, string>> = {
+  crop_assignments: (farm) => ({ select: 'id,farm_id,field_id,commodity_id,crop_year,planting_sequence,planting_date,planted_acres,fields!inner(name,latitude,longitude,is_active),commodities!inner(name)', farm_id: `eq.${farm.id}`, 'fields.is_active': 'eq.true', order: 'crop_year.asc,planting_sequence.asc' }),
+  application_records: (farm) => ({ select: 'id,farm_id,crop_assignment_id,application_date,applied_acres,status', farm_id: `eq.${farm.id}`, status: 'neq.voided', order: 'application_date.desc,id.asc' }),
+  inventory_products: (farm) => ({ select: 'id,farm_id,name,inventory_unit,is_active', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' }),
 }
 const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
   production_estimates: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
@@ -232,6 +256,8 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
     if (rest === 'farm_memberships' && url.searchParams.get('select') === 'role') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'role', farm_id: `eq.${farm.id}`, user_id: `eq.${activeUserId}` })) { await rejectShape('farm_memberships viewer query'); return }; await fulfillJson(route, profile.memberRole === null ? null : { role: profile.memberRole }); return }
     if (rest === 'farm_memberships') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,user_id,role,status,can_view_financials', farm_id: `eq.${farm.id}`, user_id: `eq.${activeUserId}` })) { await rejectShape('farm_memberships query'); return }; await fulfillJson(route, membershipRow(farm, activeUserId, profile)); return }
     if (rest === 'farm_rep_access') { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, { select: 'farm_id,rep_user_id,enabled,revoked_at', farm_id: `eq.${farm.id}`, rep_user_id: `eq.${activeUserId}` })) { await rejectShape('farm_rep_access query'); return }; await fulfillJson(route, profile.namedRep ? { farm_id: farm.id, rep_user_id: activeUserId, enabled: true, revoked_at: null } : null); return }
+    if (emptyUnknownReads && rest && Object.hasOwn(programsSharedShapes, rest) && route.request().method() === 'GET' && exactQuery(url, programsSharedShapes[rest]!(requestedFarm(url)))) { await fulfillJson(route, []); return }
+    if (emptyUnknownReads && rest && Object.hasOwn(programsReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, programsReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, moduleRows[rest] ?? []); return }
     if (rest && Object.hasOwn(fieldsReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, fieldsReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, rowsFor(rest, farm)); return }
     if (rest && Object.hasOwn(equipmentReadQueries, rest)) {
       const farm = requestedFarm(url)
@@ -276,7 +302,7 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks' || url.pathname === '/rest/v1/rpc/generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${url.pathname}`)
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, session(activeUserId).user); return }
     if (url.pathname === '/auth/v1/logout') { await fulfillJson(route, {}); return }
-    if (emptyUnknownReads && rest && Object.hasOwn(grainReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, grainReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, grainRows(rest, farm)); return }
+    if (rest && Object.hasOwn(grainReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, grainReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, moduleRows[rest] ?? grainRows(rest, farm)); return }
     // The profitability workspace load probes for the U of I badge column when the farm has no cost lines (an undefined column answers 42703 live); the mock's schema has it.
     if (emptyUnknownReads && rest === 'budget_cost_lines' && route.request().method() === 'GET' && exactQuery(url, { select: 'university_default_amount', farm_id: `eq.${requestedFarm(url).id}`, limit: '1' })) { await fulfillJson(route, []); return }
     if (emptyUnknownReads && rest && Object.hasOwn(profitabilityReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, profitabilityReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, []); return }
@@ -845,12 +871,14 @@ test('a long valid farm name keeps the phone farm switcher inside its summary', 
 test('a named rep receives only proven rep-safe navigation and direct routes', async ({ page, context }, testInfo) => {
   await seedSession(context)
   const pendingKeys = await seedPendingWriteQueues(context)
-  const unexpected = await mockSupabase(page, [farms[0]], [], false, 1, { memberRole: null, canViewFinancials: false, namedRep: true })
+  // The rep may open Grain, so the Today landing at the end reads the grain tables through the exact-shape mock.
+  const unexpected = await mockSupabase(page, [farms[0]], [], true, 1, { memberRole: null, canViewFinancials: false, namedRep: true })
   await page.goto('/fields')
   await expect(page.getByText('North Forty')).toBeVisible()
   const navigation = testInfo.project.name === 'chromium-phone' ? page.getByRole('navigation', { name: 'Farm Rx navigation' }) : page.locator('.sidebar')
   if (testInfo.project.name === 'chromium-phone') {
     for (const label of ['Today', 'Fields', 'Grain']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
+    await expect(navigation.getByRole('button', { name: 'Record' })).toHaveCount(0)
     await navigation.getByRole('button', { name: 'More' }).click()
     const more = page.getByRole('region', { name: 'More Farm Rx destinations' })
     for (const label of ['Inventory', 'Profitability', 'Alerts']) await expect(more.getByRole('link', { name: label })).toBeVisible()
@@ -881,6 +909,7 @@ test('a read-only member can view member modules but cannot enter edit routes or
     await expect(more.getByRole('link', { name: 'Programs' })).toBeVisible()
     await expect(navigation.getByRole('link', { name: 'Weather' })).toHaveCount(0)
     await expect(navigation.getByRole('link', { name: 'Grain' })).toHaveCount(0)
+    await expect(navigation.getByRole('button', { name: 'Record' })).toHaveCount(0)
   } else {
     await expect(navigation.getByRole('link', { name: 'Programs' })).toBeVisible()
     await expect(navigation.getByRole('link', { name: 'Weather' })).toHaveCount(0)
@@ -1290,17 +1319,23 @@ test('mobile navigation keeps five non-overlapping targets and exposes every des
     const targets = nav.locator('.nav-link')
     await expect(targets).toHaveCount(5)
     await expect(nav.getByText('Today', { exact: true })).toBeVisible()
+    await expect(nav.getByText('Grain', { exact: true })).toBeVisible()
     await expect(nav.getByText('Fields', { exact: true })).toBeVisible()
-    await expect(nav.getByText('Tasks', { exact: true })).toBeVisible()
-    await expect(nav.getByText('Weather', { exact: true })).toBeVisible()
+    await expect(nav.getByRole('button', { name: 'Record' })).toBeVisible()
     await expect(nav.getByRole('button', { name: 'More' })).toBeVisible()
     const boxes = await targets.evaluateAll((items) => items.map((item) => { const box = item.getBoundingClientRect(); return { left: box.left, right: box.right, width: box.width, height: box.height } }))
     expect(boxes.every((box) => box.width >= 48 && box.height >= 48)).toBeTruthy()
     expect(boxes.every((box, index) => index === 0 || box.left >= boxes[index - 1].right - 1)).toBeTruthy()
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
+    await nav.getByRole('button', { name: 'Record' }).click()
+    const sheet = page.getByRole('region', { name: 'Record' })
+    await expect(sheet.getByRole('list', { name: 'Record options' }).getByRole('button')).toHaveText(['Rain', 'Scouting note', 'Spray record', 'Task', 'Harvest', 'Grain delivery'])
+    await sheet.getByRole('button', { name: 'Close record options' }).click()
+    await expect(sheet).toHaveCount(0)
     await nav.getByRole('button', { name: 'More' }).click()
     const more = page.getByRole('region', { name: 'More Farm Rx destinations' })
-    for (const label of ['Grain', 'Inventory', 'Profitability', 'Equipment', 'Field Log', 'Scouting', 'Harvest', 'Programs', 'Alerts']) await expect(more.getByRole('link', { name: label })).toBeVisible()
+    for (const label of ['Tasks', 'Weather', 'Inventory', 'Profitability', 'Equipment', 'Field Log', 'Scouting', 'Harvest', 'Programs', 'Alerts']) await expect(more.getByRole('link', { name: label })).toBeVisible()
+    await expect(more.getByRole('link', { name: 'Grain' })).toHaveCount(0)
     await more.getByRole('button', { name: 'Close more navigation' }).click()
     await expect(more).toBeHidden()
   }
@@ -1316,7 +1351,10 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   await expect(page).toHaveURL('http://127.0.0.1:4173/today')
   await expect(page.getByRole('heading', { name: 'What are you recording?' })).toBeVisible()
   const tiles = page.getByRole('list', { name: 'Record' }).getByRole('button')
-  await expect(tiles).toHaveText(['Rain', 'Scouting note', 'Spray record', 'Task', 'Harvest', 'Grain delivery'])
+  await expect(tiles).toHaveText(['Rain', 'Scouting note', 'Spray record', 'Task', 'Harvest', 'Grain delivery', 'Pass due today'])
+  const grainLine = page.getByRole('link', { name: /^Grain: Corn 2026: 35% sold/ })
+  await expect(grainLine).toContainText('Corn 2026: 35% sold')
+  await expect(grainLine).toContainText('Plan says 40% by now · Cargill Olney $4.12, up 5¢ since Jul 10')
   const boxes = await tiles.evaluateAll((items) => items.map((item) => { const box = item.getBoundingClientRect(); return { width: box.width, height: box.height } }))
   expect(boxes.every((box) => box.width >= 48 && box.height >= 48)).toBeTruthy()
   const nextUp = page.getByRole('region', { name: 'Next up' })
@@ -1349,6 +1387,24 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Task' }).click()
   await expect(page).toHaveURL('http://127.0.0.1:4173/tasks')
   await expect(page.getByRole('heading', { name: 'Add task' })).toBeVisible()
+  // FD-2: the pass tile opens Programs on the pass the alert names.
+  await page.goto('/today')
+  await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Pass due today' }).click()
+  await expect(page).toHaveURL(`http://127.0.0.1:4173/programs?pass=${passA}`)
+  await expect(page.getByRole('heading', { name: 'Season progress' })).toBeVisible()
+  if (testInfo.project.name === 'chromium-phone') {
+    // FD-2: the bar's Record button offers the same tiles from any page, loaded through the same pure reads.
+    await page.goto('/fields')
+    await expect(page.getByText('North Forty')).toBeVisible()
+    const nav = page.getByRole('navigation', { name: 'Farm Rx navigation' })
+    await nav.getByRole('button', { name: 'Record' }).click()
+    const sheet = page.getByRole('region', { name: 'Record' })
+    await expect(sheet.getByText('What are you recording?')).toBeVisible()
+    await expect(sheet.getByRole('list', { name: 'Record options' }).getByRole('button')).toHaveText(['Rain', 'Scouting note', 'Spray record', 'Task', 'Harvest', 'Grain delivery', 'Pass due today'])
+    await sheet.getByRole('button', { name: 'Pass due today' }).click()
+    await expect(page).toHaveURL(`http://127.0.0.1:4173/programs?pass=${passA}`)
+    await expect(sheet).toHaveCount(0)
+  }
   await page.goto('/today')
   await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Scouting note' }).click()
   await expect(page).toHaveURL('http://127.0.0.1:4173/scouting')
@@ -1357,6 +1413,12 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Harvest' }).click()
   await expect(page).toHaveURL('http://127.0.0.1:4173/harvest')
   await expect(page.getByRole('heading', { name: 'Enter harvest' })).toBeVisible()
+  // The grain line opens the Overview on the same estimate, whose progress bar shows the same percent.
+  await page.goto('/today')
+  await page.getByRole('link', { name: /^Grain: Corn 2026: 35% sold/ }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/grain')
+  await expect(page.getByText('Already contracted')).toBeVisible()
+  await expect(page.getByText('5,320 bu', { exact: true }).first()).toBeVisible()
   await page.goto('/today')
   await page.getByRole('list', { name: 'Record' }).getByRole('button', { name: 'Grain delivery' }).click()
   await expect(page).toHaveURL('http://127.0.0.1:4173/grain/contracts')
@@ -1376,7 +1438,8 @@ test('Today shows a worker without financial access no grain tile and no grain l
   const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), false, 1, { memberRole: 'worker', canViewFinancials: false, namedRep: false }, userId, {}, todayRows(farms[0]))
   await page.goto('/today')
   await expect(page.getByRole('heading', { name: 'What are you recording?' })).toBeVisible()
-  await expect(page.getByRole('list', { name: 'Record' }).getByRole('button')).toHaveText(['Rain', 'Scouting note', 'Spray record', 'Task', 'Harvest'])
+  await expect(page.getByRole('list', { name: 'Record' }).getByRole('button')).toHaveText(['Rain', 'Scouting note', 'Spray record', 'Task', 'Harvest', 'Pass due today'])
+  await expect(page.getByRole('link', { name: /^Grain:/ })).toHaveCount(0)
   const nextUp = page.getByRole('region', { name: 'Next up' })
   await expect(nextUp.getByRole('link')).toHaveCount(4)
   await expect(nextUp.getByText('Service overdue')).toBeVisible()
@@ -1431,10 +1494,11 @@ test('Today gives a named rep a view-only front door with grain alerts and no eq
   await seedSession(context)
   const reads: string[] = []
   page.on('request', (request) => { const url = new URL(request.url()); if (url.pathname.startsWith('/rest/v1/')) reads.push(url.pathname) })
-  const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), false, 1, { memberRole: null, canViewFinancials: false, namedRep: true }, userId, {}, todayRows(farms[0]))
+  const unexpected = await mockSupabase(page, [farms[0]], todayNotifications(farms[0]), true, 1, { memberRole: null, canViewFinancials: false, namedRep: true }, userId, {}, todayRows(farms[0]))
   await page.goto('/today')
   await expect(page.getByRole('heading', { name: 'Your farm today' })).toBeVisible()
   await expect(page.getByRole('list', { name: 'Record' })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: /^Grain: Corn 2026: 35% sold/ })).toBeVisible()
   const nextUp = page.getByRole('region', { name: 'Next up' })
   await expect(nextUp.getByRole('link')).toHaveCount(2)
   await expect(nextUp.getByText('Low inventory')).toBeVisible()

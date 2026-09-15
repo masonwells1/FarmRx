@@ -8,6 +8,17 @@ const records: ReadonlySet<string> = new Set<TodayRecordKindIntent>(['rainfall',
 
 export function todayRecordIntent(record: TodayRecordIntent['record']): TodayRecordIntent { return Object.freeze({ kind: 'today-record', version: 1, record }) }
 
+/** Today's grain line opens the Grain Overview on the estimate the line summarized, so both screens show the same numbers. */
+export type TodayGrainLineIntent = Readonly<{ kind: 'today-grain-line'; version: 1; estimateId: string }>
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+export function todayGrainLineIntent(estimateId: string): TodayGrainLineIntent { return Object.freeze({ kind: 'today-grain-line', version: 1, estimateId }) }
+export function parseTodayGrainLineIntent(value: unknown): TodayGrainLineIntent | null {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as Record<string, unknown>
+  if (candidate.kind !== 'today-grain-line' || candidate.version !== 1) return null
+  return typeof candidate.estimateId === 'string' && uuid.test(candidate.estimateId) ? todayGrainLineIntent(candidate.estimateId) : null
+}
+
 export function parseTodayRecordIntent(value: unknown): TodayRecordIntent | null {
   if (!value || typeof value !== 'object') return null
   const candidate = value as Record<string, unknown>

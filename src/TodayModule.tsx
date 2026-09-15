@@ -8,7 +8,8 @@ import type { Field, FieldsRepository } from './data/fields'
 import type { InventoryRepository, InventoryWorkspace } from './data/inventory'
 import type { Notification, NotificationsRepository } from './data/notifications'
 import type { PendingPassOutcome, ProgramsRepository } from './data/programs'
-import { todayNextUp, todayRecordTiles, todaySprayWindow, type TodayNextUpItem, type TodayRecordKind, type TodaySprayCard } from './data/today'
+import type { GrainRepository, GrainWorkspace } from './data/grain'
+import { todayGrainLine, todayNextUp, todayRecordTiles, todaySprayWindow, type TodayGrainLine, type TodayNextUpItem, type TodayRecordKind, type TodaySprayCard } from './data/today'
 import { readCachedForecast } from './data/weatherService'
 import { farmerError } from './lib/farmerErrors'
 
@@ -17,7 +18,7 @@ import { farmerError } from './lib/farmerErrors'
 // generates due items, refreshes a forecast, or writes a cache. Every tile and row hands off to the module that owns the record.
 
 type Section<T> = { status: 'loading' } | { status: 'ready'; data: T } | { status: 'failed'; message: string }
-type TodaySnapshots = { fields: Section<Field[]>; equipment: Section<EquipmentTasksWorkspace | null>; notifications: Section<Notification[] | null>; inventory: Section<InventoryWorkspace | null>; programs: Section<ReadonlyMap<string, PendingPassOutcome> | null> }
+type TodaySnapshots = { fields: Section<Field[]>; equipment: Section<EquipmentTasksWorkspace | null>; notifications: Section<Notification[] | null>; inventory: Section<InventoryWorkspace | null>; programs: Section<ReadonlyMap<string, PendingPassOutcome> | null>; grain: Section<GrainWorkspace | null> }
 const loading = { status: 'loading' } as const
 const ready = <T,>(data: T): Section<T> => ({ status: 'ready', data })
 const failed = <T,>(error: unknown, action: string): Section<T> => ({ status: 'failed', message: farmerError(error, action) })
@@ -30,20 +31,23 @@ async function standaloneFields(fieldsRepository: FieldsRepository, context: Loa
 
 function localStorageOrNull(): Pick<Storage, 'getItem'> | null { try { return typeof localStorage === 'undefined' ? null : localStorage } catch { return null } }
 
-export async function loadTodaySnapshots(profile: LoadedFarmAccessProfile, repositories: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository; programsRepository: ProgramsRepository }): Promise<TodaySnapshots> {
+export async function loadTodaySnapshots(profile: LoadedFarmAccessProfile, repositories: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository; programsRepository: ProgramsRepository; grainRepository: GrainRepository }): Promise<TodaySnapshots> {
   const context = profile.operationContext
   const wantsEquipment = canAccessFarmModule(profile, 'equipment') || canAccessFarmModule(profile, 'tasks')
   const wantsNotifications = canAccessFarmModule(profile, 'notifications')
   const wantsInventory = canAccessFarmModule(profile, 'inventory')
   // Pass alerts are judged against the work this device has queued for passes but not yet synced (a pure read of the queue).
   const wantsPrograms = canAccessFarmModule(profile, 'programs')
+  // The grain line reads private financial rows, so only a member the same check lets into Grain loads them (FD-2).
+  const wantsGrain = canAccessFarmModule(profile, 'grain')
   // The equipment workspace already carries a current Fields snapshot, so members who can open Equipment load fields once.
-  const [equipment, fields, notifications, inventory, programs] = await Promise.allSettled([
+  const [equipment, fields, notifications, inventory, programs, grain] = await Promise.allSettled([
     wantsEquipment ? (repositories.equipmentTasksRepository.getSnapshot ? repositories.equipmentTasksRepository.getSnapshot(context).then((snapshot) => snapshot.data) : Promise.reject(new Error('Equipment and Tasks does not expose a side-effect-free snapshot.'))) : Promise.resolve(null),
     wantsEquipment ? Promise.resolve(null) : repositories.fieldsRepository.getSnapshot ? repositories.fieldsRepository.getSnapshot(context).then((snapshot) => snapshot.data.fields) : Promise.reject(new Error('Fields does not expose a side-effect-free snapshot.')),
     wantsNotifications ? (repositories.notificationsRepository.getSnapshot ? repositories.notificationsRepository.getSnapshot(context).then((snapshot) => snapshot.data.notifications) : Promise.reject(new Error('Alerts does not expose a side-effect-free snapshot.'))) : Promise.resolve(null),
     wantsInventory ? (repositories.inventoryRepository.getSnapshot ? repositories.inventoryRepository.getSnapshot(context).then((snapshot) => snapshot.data) : Promise.reject(new Error('Inventory does not expose a side-effect-free snapshot.'))) : Promise.resolve(null),
     wantsPrograms ? (repositories.programsRepository.getPendingPassOutcomes ? repositories.programsRepository.getPendingPassOutcomes(context) : Promise.reject(new Error('Programs does not expose a side-effect-free read of its queued pass outcomes.'))) : Promise.resolve(null),
+    wantsGrain ? (repositories.grainRepository.getSnapshot ? repositories.grainRepository.getSnapshot(context).then((snapshot) => snapshot.data) : Promise.reject(new Error('Grain does not expose a side-effect-free snapshot.'))) : Promise.resolve(null),
   ])
   const equipmentSection: Section<EquipmentTasksWorkspace | null> = equipment.status === 'fulfilled' ? ready(equipment.value) : failed(equipment.reason, 'check equipment and tasks')
   // Fields rides along with the Equipment workspace when that loads; when Equipment fails for its own reasons, Fields is read on
@@ -54,13 +58,14 @@ export async function loadTodaySnapshots(profile: LoadedFarmAccessProfile, repos
   const notificationsSection: Section<Notification[] | null> = notifications.status === 'fulfilled' ? ready(notifications.value) : failed(notifications.reason, 'check your alerts')
   const inventorySection: Section<InventoryWorkspace | null> = inventory.status === 'fulfilled' ? ready(inventory.value) : failed(inventory.reason, 'check your inventory')
   const programsSection: Section<ReadonlyMap<string, PendingPassOutcome> | null> = programs.status === 'fulfilled' ? ready(programs.value) : failed(programs.reason, 'check your programs')
-  return { fields: fieldsSection, equipment: equipmentSection, notifications: notificationsSection, inventory: inventorySection, programs: programsSection }
+  const grainSection: Section<GrainWorkspace | null> = grain.status === 'fulfilled' ? ready(grain.value) : failed(grain.reason, 'check your grain position')
+  return { fields: fieldsSection, equipment: equipmentSection, notifications: notificationsSection, inventory: inventorySection, programs: programsSection, grain: grainSection }
 }
 
-export function TodayPage({ fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, programsRepository }: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository; programsRepository: ProgramsRepository }) {
+export function TodayPage({ fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, programsRepository, grainRepository }: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository; programsRepository: ProgramsRepository; grainRepository: GrainRepository }) {
   const { profile, activeFarm } = useFarmAccess()
   const navigate = useNavigate()
-  const [snapshots, setSnapshots] = useState<TodaySnapshots>({ fields: loading, equipment: loading, notifications: loading, inventory: loading, programs: loading })
+  const [snapshots, setSnapshots] = useState<TodaySnapshots>({ fields: loading, equipment: loading, notifications: loading, inventory: loading, programs: loading, grain: loading })
   const [nowMs, setNowMs] = useState(() => Date.now())
   // The spray card's freshness gate is judged against the clock, not the load time: a phone left open on Today past the two-hour
   // ceiling must drop a stale verdict on its own, so the clock ticks every minute and whenever the app comes back into view.
@@ -80,25 +85,27 @@ export function TodayPage({ fieldsRepository, equipmentTasksRepository, notifica
   useEffect(() => { if (loadedDay.current !== today) { loadedDay.current = today; setReloadKey((key) => key + 1) } }, [today])
   useEffect(() => {
     let cancelled = false
-    if (reloadKey === 0) setSnapshots({ fields: loading, equipment: loading, notifications: loading, inventory: loading, programs: loading })
-    void loadTodaySnapshots(profile, { fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, programsRepository }).then((next) => { if (!cancelled) { setSnapshots(next); setNowMs(Date.now()) } })
+    if (reloadKey === 0) setSnapshots({ fields: loading, equipment: loading, notifications: loading, inventory: loading, programs: loading, grain: loading })
+    void loadTodaySnapshots(profile, { fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, programsRepository, grainRepository }).then((next) => { if (!cancelled) { setSnapshots(next); setNowMs(Date.now()) } })
     return () => { cancelled = true }
-  }, [profile, fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, reloadKey])
+  }, [profile, fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, programsRepository, grainRepository, reloadKey])
 
-  const tiles = todayRecordTiles(profile)
   const canEdit = profile.capabilities.canEditOperational
   const showWeather = canAccessFarmModule(profile, 'weather')
   const storage = localStorageOrNull()
   const fields = dataOf(snapshots.fields)
   const sprayCard = showWeather && fields && storage ? todaySprayWindow(fields, (latitude, longitude) => readCachedForecast(storage, latitude, longitude), nowMs) : null
   const nextUp = todayNextUp({ profile, today, equipment: dataOf(snapshots.equipment), notifications: dataOf(snapshots.notifications), inventory: dataOf(snapshots.inventory), pendingPasses: dataOf(snapshots.programs) })
+  const grainLine = todayGrainLine({ profile, grain: dataOf(snapshots.grain), today })
+  const tiles = todayRecordTiles(profile, nextUp)
   const stillLoading = snapshots.equipment.status === 'loading' || snapshots.notifications.status === 'loading' || snapshots.fields.status === 'loading' || snapshots.inventory.status === 'loading'
-  const sectionErrors = [snapshots.fields, snapshots.equipment, snapshots.notifications, snapshots.inventory, snapshots.programs].flatMap((section) => section.status === 'failed' ? [section.message] : [])
+  const sectionErrors = [snapshots.fields, snapshots.equipment, snapshots.notifications, snapshots.inventory, snapshots.programs, snapshots.grain].flatMap((section) => section.status === 'failed' ? [section.message] : [])
 
   return <section className="page today-page" aria-labelledby="today-title">
     <header className="page-heading today-heading"><div><p className="eyebrow">{activeFarm.name}</p><h1 id="today-title">{canEdit ? 'What are you recording?' : 'Your farm today'}</h1><p>{canEdit ? 'Tap an option to get started.' : 'You can view records here. Adding records is turned off for your access.'}</p></div></header>
     {canEdit && tiles.length > 0 && <ul className="today-record-grid" aria-label="Record">{tiles.map((tile) => <li key={tile.kind}><button type="button" className="today-record-tile" data-record={tile.kind} onClick={() => navigate(tile.to, { state: tile.state })}><span className="today-record-icon" aria-hidden="true">{tileGlyph(tile.kind)}</span><span className="today-record-label">{tile.label}</span></button></li>)}</ul>}
     {showWeather && <SprayCard card={sprayCard} fieldsLoaded={fields !== null} />}
+    {grainLine && <GrainLine line={grainLine} />}
     <section className="today-next-up" aria-labelledby="today-next-up-title">
       <h2 id="today-next-up-title">Next up</h2>
       {[...new Set(sectionErrors)].map((message) => <p className="form-error" key={message}>{message}</p>)}
@@ -107,6 +114,29 @@ export function TodayPage({ fieldsRepository, equipmentTasksRepository, notifica
   </section>
 }
 
+/** FD-2: the phone bar's Record button. The sheet shows the tiles Today shows, from the same pure reads: the six record tiles
+ * appear at once from the member's access, and the "Pass due today" tile joins them when the reads find a pass due. Nothing is
+ * fetched, replayed, generated, or written by opening it; a read that fails simply leaves the tiles that need no data. */
+export function RecordSheet({ repositories, onClose }: { repositories: { fieldsRepository: FieldsRepository; equipmentTasksRepository: EquipmentTasksRepository; notificationsRepository: NotificationsRepository; inventoryRepository: InventoryRepository; programsRepository: ProgramsRepository; grainRepository: GrainRepository }; onClose: () => void }) {
+  const { profile, activeFarm } = useFarmAccess()
+  const navigate = useNavigate()
+  const [nextUp, setNextUp] = useState<TodayNextUpItem[]>([])
+  const today = farmCalendarDate(new Date(), activeFarm.time_zone)
+  useEffect(() => {
+    let cancelled = false
+    void loadTodaySnapshots(profile, repositories).then((snapshots) => { if (!cancelled) setNextUp(todayNextUp({ profile, today, equipment: dataOf(snapshots.equipment), notifications: dataOf(snapshots.notifications), inventory: dataOf(snapshots.inventory), pendingPasses: dataOf(snapshots.programs) })) })
+    return () => { cancelled = true }
+  }, [profile, repositories, today])
+  const tiles = todayRecordTiles(profile, nextUp)
+  return <section className="mobile-more-menu mobile-record-menu" id="mobile-record-menu" aria-label="Record">
+    <header><strong>What are you recording?</strong><button type="button" onClick={onClose} aria-label="Close record options">Close</button></header>
+    <ul className="today-record-grid" aria-label="Record options">{tiles.map((tile) => <li key={tile.kind}><button type="button" className="today-record-tile" data-record={tile.kind} onClick={() => { onClose(); navigate(tile.to, { state: tile.state }) }}><span className="today-record-icon" aria-hidden="true">{tileGlyph(tile.kind)}</span><span className="today-record-label">{tile.label}</span></button></li>)}</ul>
+  </section>
+}
+/** FD-2: one plain-English grain line, a read-only pointer into the Grain Overview on the same estimate. */
+function GrainLine({ line }: { line: TodayGrainLine }) {
+  return <Link className="today-grain-line" to={line.to} state={line.state} aria-label={`Grain: ${line.headline}. ${line.detail}`}><span className="today-spray-icon" aria-hidden="true">{glyph('M12 3c-3 3-5 6-5 9a5 5 0 0 0 10 0c0-3-2-6-5-9zM12 21v-6')}</span><span className="today-spray-body"><strong>{line.headline}</strong><span>{line.detail}</span></span><span className="today-chevron" aria-hidden="true">›</span></Link>
+}
 function SprayCard({ card, fieldsLoaded }: { card: TodaySprayCard | null; fieldsLoaded: boolean }) {
   if (!card) return <Link className="today-spray-card is-unknown" to="/weather"><span className="today-spray-icon" aria-hidden="true">{glyph('M6 16a4 4 0 0 1 .5-8 6 6 0 0 1 11.5 1.5A3.5 3.5 0 0 1 17.5 16z')}</span><span className="today-spray-body"><strong>{fieldsLoaded ? 'Check the spray window' : 'Weather & Spray'}</strong><span>{fieldsLoaded ? 'Open Weather for a current forecast on your fields.' : 'Open Weather to see field conditions.'}</span></span><span className="today-chevron" aria-hidden="true">›</span></Link>
   return <Link className={`today-spray-card is-${card.level}`} to="/weather"><span className="today-spray-icon" aria-hidden="true">{glyph('M6 16a4 4 0 0 1 .5-8 6 6 0 0 1 11.5 1.5A3.5 3.5 0 0 1 17.5 16z')}</span><span className="today-spray-body"><strong>{card.headline}</strong><span>{card.details.join(' · ')} · {card.fieldName}</span></span><span className="today-chevron" aria-hidden="true">›</span></Link>
@@ -123,7 +153,7 @@ const tileGlyphs: Record<TodayRecordKind, string> = {
   spray: 'M9 3h6v4H9zM7 7h10l1 14H6zM12 11v6',
   task: 'M5 5h14v14H5zM8 12l3 3 5-6',
   harvest: 'M3 20h18M5 20V10l7-6 7 6v10M9 20v-6h6v6',
-  grain_delivery: 'M3 16V7h11v9M14 10h4l3 4v2M6 19a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0M16 19a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0',
+  grain_delivery: 'M3 16V7h11v9M14 10h4l3 4v2M6 19a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0M16 19a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0', program_pass: 'M4 4h16v16H4zM4 10h16M9 4v6'
 }
 function tileGlyph(kind: TodayRecordKind): ReactNode { return glyph(tileGlyphs[kind]) }
 function nextUpGlyph(item: TodayNextUpItem): ReactNode {

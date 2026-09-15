@@ -1,4 +1,5 @@
-import type { Commodity, FieldsData } from './fields'
+import type { Commodity, FieldsData, ReadOnlySnapshot } from './fields'
+import type { FarmOperationContext } from './farmOperationContext'
 import type { ProfitabilityRepository } from './profitability'
 
 export type ProductionMathBasis = 'projected' | 'actual'
@@ -113,6 +114,9 @@ export interface GrainData { production_estimates: ProductionEstimate[]; grain_c
 export interface GrainWorkspace extends GrainData { fields: FieldsData }
 export interface GrainRepository {
   getData(): Promise<GrainWorkspace>
+  /** Pure read for projections such as Today: consumes an already-published context and performs no access resolution, queue
+   * replay, due generation, or cache write; private financial rows behind `can_read_private_financials` as the database returns them. */
+  getSnapshot?(context: FarmOperationContext): Promise<ReadOnlySnapshot<GrainWorkspace>>
   getNeedsAttentionQueueKey?(): Promise<string>
   saveProductionEstimate(estimate: ProductionEstimate): Promise<void>
   reconcileHarvestActual(estimate: ProductionEstimate, harvestActual: number): Promise<void>
@@ -159,6 +163,13 @@ export function activeProductionForScope(workspace: GrainWorkspace, scope: Posit
   const estimate = workspace.production_estimates.find((item) => sameScope(item, scope))
   if (!estimate) return 0
   return estimate.drives_math === 'actual' && estimate.actual_bushels !== null ? estimate.actual_bushels : estimate.expected_bushels
+}
+
+/** The newest crop year's estimate: where a Today grain-delivery intent lands and the position Today's grain line summarizes (the
+ * repository sorts estimates oldest first, which is right for planning but wrong for work being recorded now); between estimates
+ * of the same year the first stays. */
+export function deliveryDefaultEstimate<T extends { crop_year: number }>(estimates: readonly T[]): T | undefined {
+  return estimates.reduce<T | undefined>((newest, estimate) => (!newest || estimate.crop_year > newest.crop_year ? estimate : newest), undefined)
 }
 
 /** Shared by the marketing plan and alert rules: signed contract bushels / active production. */

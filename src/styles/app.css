@@ -595,6 +595,9 @@ tbody tr:nth-child(even) td { background: var(--cream); }
   .mobile-more-menu header strong { color: var(--deep-green); font-family: var(--brand-font); font-size: 22px; }
   .mobile-more-menu header button { padding: 8px 12px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface); color: var(--deep-green); font-weight: 700; }
   .mobile-more-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .mobile-record-menu { max-height: calc(100dvh - 60px - env(safe-area-inset-bottom)); overflow-y: auto; }
+  .mobile-record-menu .today-record-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .mobile-record-menu .today-record-tile { min-height: 96px; }
   .mobile-more-grid .nav-link { min-width: 0; min-height: 56px; margin: 0; padding: 10px 12px; border: 1px solid var(--hairline); color: var(--charcoal); background: var(--cream); }
   .mobile-more-grid .nav-link:hover, .mobile-more-grid .nav-link.active { color: var(--deep-green); background: var(--light-green); }
   .mobile-more-grid .nav-link.active::before { display: none; }
@@ -1148,8 +1151,10 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .today-record-tile:hover, .today-record-tile:focus-visible { border-color: var(--crx-green); background: var(--light-green); }
 .today-record-icon { display: grid; width: 52px; height: 52px; place-items: center; border-radius: 50%; background: var(--light-green); color: var(--deep-green); }
 .today-record-label { text-align: center; }
-.today-spray-card, .today-next-up-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto auto; min-height: 64px; align-items: center; gap: 12px 14px; padding: 16px 18px; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); color: var(--charcoal); box-shadow: var(--shadow-card); text-decoration: none; font-size: 18px; line-height: 1.3; }
+.today-spray-card, .today-next-up-row, .today-grain-line { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto auto; min-height: 64px; align-items: center; gap: 12px 14px; padding: 16px 18px; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); color: var(--charcoal); box-shadow: var(--shadow-card); text-decoration: none; font-size: 18px; line-height: 1.3; }
 .today-spray-card { border-left: 6px solid var(--crx-green); }
+.today-grain-line { border-left: 6px solid var(--deep-green); }
+.today-grain-line .today-chevron { grid-column: 4; }
 .today-spray-card.is-caution { border-left-color: var(--amber); }
 .today-spray-card.is-poor { border-left-color: var(--warn-red); }
 .today-spray-card.is-unknown { border-left-color: var(--matte-gray); }
@@ -1171,4 +1176,4 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .grain-delivery-intent p { margin: 4px 0 0; color: var(--charcoal); }
 .grain-delivery-intent .commodity-picker { margin-top: 12px; }
 @media (max-width: 767px) { .grain-delivery-intent { flex-direction: column; align-items: stretch; }.grain-delivery-intent .secondary-action { width: 100%; } }
-@media (max-width: 767px) { .today-record-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }.today-record-tile { min-height: 112px; }.today-spray-card, .today-next-up-row { grid-template-columns: 44px minmax(0, 1fr) auto; padding: 14px 16px; }.today-spray-card .today-chevron { grid-column: 3; }.today-next-up-row.has-badge .today-badge { grid-row: 2; grid-column: 2; justify-self: start; }.today-next-up-row.has-badge .today-next-up-icon, .today-next-up-row.has-badge .today-chevron { grid-row: 1 / span 2; } }
+@media (max-width: 767px) { .today-record-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }.today-record-tile { min-height: 112px; }.today-spray-card, .today-next-up-row, .today-grain-line { grid-template-columns: 44px minmax(0, 1fr) auto; padding: 14px 16px; }.today-spray-card .today-chevron { grid-column: 3; }.today-next-up-row.has-badge .today-badge { grid-row: 2; grid-column: 2; justify-self: start; }.today-next-up-row.has-badge .today-next-up-icon, .today-next-up-row.has-badge .today-chevron { grid-row: 1 / span 2; } }

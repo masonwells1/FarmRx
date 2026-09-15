@@ -9,8 +9,9 @@
 -- them read. A worker without financial access receives the service-due view,
 -- the farm's tasks and their own alerts, and zero rows from every private
 -- grain table Today or the Grain module could read; the owner receives all of
--- them. Today adds no table, policy, or function, so this file asserts the
--- existing row-level rules Today depends on rather than new schema.
+-- them, including the contracts, marketing plan targets and cash bids the FD-2
+-- grain line reads. Today adds no table, policy, or function, so this file
+-- asserts the existing row-level rules Today depends on rather than new schema.
 
 \set ON_ERROR_STOP on
 \set O '''00000000-0000-4000-8000-000000000004'''
@@ -32,6 +33,10 @@ insert into public.farms(id,name,created_by) values (:FT,'Today Farm',:O);
 select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-000000000004','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000040',1)::text)::text,false);
 insert into public.entities(id,farm_id,name,entity_type) values (:ET,:FT,'Today Entity','individual');
 insert into public.production_estimates(id,farm_id,crop_year,commodity_id,aph_yield,expected_bushels) values (:PET,:FT,2026,'corn_yellow',200,100000);
+-- The FD-2 grain line's other sources: a signed contract, one plan month, one farmer-entered cash bid.
+insert into public.grain_contracts(farm_id,crop_year,commodity_id,contract_type,buyer,bushels,cash_price) values (:FT,2026,'corn_yellow','forward_cash','Cargill Olney',35000,4.20);
+insert into public.marketing_plan_targets(farm_id,crop_year,commodity_id,target_month,target_pct_of_production) values (:FT,2026,'corn_yellow',date_trunc('month',current_date)::date,40);
+insert into public.cash_bids(farm_id,elevator,commodity_id,bid_date,basis,cash_price) values (:FT,'Cargill Olney','corn_yellow',current_date,-0.30,4.12);
 insert into public.farm_memberships(farm_id,user_id,role,status,can_view_financials) values (:FT,:W,'worker','active',false);
 insert into public.equipment(id,farm_id,name,category,meter_unit,created_by) values (:EQ,:FT,'John Deere 8R 340','tractor','hours',:O);
 insert into public.equipment_service_intervals(id,farm_id,equipment_id,name,every_meter,last_done_reading,created_by) values (:IV,:FT,:EQ,'Engine oil',250,0,:O);
@@ -68,6 +73,7 @@ begin
   if (select count(*) from public.marketing_plan_targets) <> 0 then raise exception 'worker without financials can read marketing targets'; end if;
   if (select count(*) from public.grain_bins) <> 0 then raise exception 'worker without financials can read grain bins'; end if;
   if (select count(*) from public.grain_sale_limits) <> 0 then raise exception 'worker without financials can read sale limits'; end if;
+  if (select count(*) from public.cash_bids) <> 0 then raise exception 'worker without financials can read cash bids'; end if;
 end $$;
 
 -- --------------------------------------------------------------------- owner
@@ -85,6 +91,10 @@ begin
   if v_count <> 2 then raise exception 'owner alert rows: %, expected only their own 2', v_count; end if;
   if not exists (select 1 from public.notifications where link = '/grain') then raise exception 'owner did not receive the grain alert row'; end if;
   if (select count(*) from public.production_estimates where farm_id = '00000000-0000-4000-8000-000000000040') <> 1 then raise exception 'owner cannot read production estimates'; end if;
+  -- The grain line's sources (FD-2).
+  if (select count(*) from public.grain_contracts where farm_id = '00000000-0000-4000-8000-000000000040') <> 1 then raise exception 'owner cannot read grain contracts'; end if;
+  if (select count(*) from public.marketing_plan_targets where farm_id = '00000000-0000-4000-8000-000000000040') <> 1 then raise exception 'owner cannot read marketing plan targets'; end if;
+  if (select count(*) from public.cash_bids where farm_id = '00000000-0000-4000-8000-000000000040') <> 1 then raise exception 'owner cannot read cash bids'; end if;
 end $$;
 reset role;
 

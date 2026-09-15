@@ -145,8 +145,9 @@ export function foundationStaticGuard(root = process.cwd()) {
   const expectedRoutes = ['/today', '/fields', '/fields/new', '/fields/:id', '/fields/:id/edit', '/grain/*', '/inventory', '/profitability/*', '/equipment', '/tasks', '/weather', '/field-log', '/scouting', '/harvest', '/programs', '/notifications', '/soil-rx', '/privacy', '*', '/login', '/update-password', '/*']
   const actualRoutes = [...app.matchAll(/<Route\b[^>]*?\bpath="([^"]+)"/g)].map((match) => match[1])
   if (actualRoutes.length !== expectedRoutes.length || actualRoutes.some((route, index) => route !== expectedRoutes[index])) errors.push('routes:exact-ordered-manifest')
-  requireText(errors, app, 'mobilePrimaryOrder = ["/today", "/fields", "/tasks", "/weather", "/grain"]', 'mobile:primary-destinations')
-  requireText(errors, app, 'mobilePrimaryCount = 4', 'mobile:primary-destinations')
+  requireText(errors, app, 'mobilePrimaryOrder = ["/today", "/grain", "/fields"]', 'mobile:primary-destinations')
+  requireText(errors, app, 'mobilePrimaryCount = 3', 'mobile:primary-destinations')
+  requireText(errors, app, 'mobile-record-toggle', 'mobile:record-toggle')
   requireText(errors, app, 'mobileMoreNavigation', 'mobile:more-destinations')
   if (!/<FarmAccessGateForUser\b[^>]*\bkey=\{user\.id\}[^>]*\buser=\{user\}[^>]*>/.test(app)) errors.push('identity:keyed-farm-access-gate')
   requireText(errors, app, 'access?.userId !== user.id', 'identity:farm-access-render-fence')

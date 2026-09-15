@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "react-router";
-import { parseTodayRecordIntent } from "./data/todayIntents";
+import { parseTodayRecordIntent, parseTodayGrainLineIntent } from "./data/todayIntents";
 import { NeedsAttentionList } from "./components/NeedsAttentionList";
 import { SaveReceipt } from "./components/SaveReceipt";
 import { MarketQuoteSection, quoteCropYear } from "./components/MarketQuote";
@@ -50,7 +50,7 @@ import type {
   GrainCarryGrid,
   GrainCarrySettings,
 } from "./data/grain";
-import { marketedPercent, sameScope, scopeKey, scopeOf } from "./data/grain";
+import { marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -250,11 +250,7 @@ function activeProduction(estimate: ProductionEstimate) {
 function scopeRows<T extends PositionScope>(rows: T[], scope: PositionScope) {
   return rows.filter((row) => sameScope(row, scope));
 }
-/** A Today grain-delivery intent lands on the newest crop year's contracts (the repository sorts estimates oldest first, which
- * is right for planning but wrong for a delivery being recorded now); between estimates of the same year the first stays. */
-export function deliveryDefaultEstimate<T extends { crop_year: number }>(estimates: readonly T[]): T | undefined {
-  return estimates.reduce<T | undefined>((newest, estimate) => (!newest || estimate.crop_year > newest.crop_year ? estimate : newest), undefined);
-}
+export { deliveryDefaultEstimate } from "./data/grain";
 function scopeLabel(workspace: GrainWorkspace, scope: PositionScope) {
   const commodity =
     workspace.fields.commodities.find((item) => item.id === scope.commodity_id)
@@ -310,6 +306,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
   // A Today "Grain delivery" tile arrives with a record intent: the contracts tab opens in delivery mode, with the new-sale form
   // set aside so the only entry offered is the delivered bushels on an existing contract.
   const [deliveryIntent, setDeliveryIntent] = useState(() => parseTodayRecordIntent(location.state)?.record === "grain_delivery");
+  // Today's grain line arrives with the estimate it summarized, so the Overview opens on that estimate and shows the same numbers.
+  const [lineEstimateId] = useState(() => parseTodayGrainLineIntent(location.state)?.estimateId ?? null);
   const tabPath = [
     "plan",
     "alerts",
@@ -424,7 +422,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
       setSelectedEstimateId((current) =>
         data.production_estimates.some((estimate) => estimate.id === current)
           ? current
-          : ((deliveryIntent ? deliveryDefaultEstimate(data.production_estimates)?.id : undefined) ?? data.production_estimates[0]?.id ?? ""),
+          : ((lineEstimateId && data.production_estimates.some((estimate) => estimate.id === lineEstimateId) ? lineEstimateId : undefined) ?? (deliveryIntent ? deliveryDefaultEstimate(data.production_estimates)?.id : undefined) ?? data.production_estimates[0]?.id ?? ""),
       );
     } catch (caught) {
       const message =
@@ -609,7 +607,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const selectedEstimate =
     workspace.production_estimates.find(
       (estimate) => estimate.id === selectedEstimateId,
-    ) ?? (deliveryIntent ? deliveryDefaultEstimate(workspace.production_estimates) : undefined) ?? workspace.production_estimates[0];
+    ) ?? (lineEstimateId ? workspace.production_estimates.find((estimate) => estimate.id === lineEstimateId) : undefined) ?? (deliveryIntent ? deliveryDefaultEstimate(workspace.production_estimates) : undefined) ?? workspace.production_estimates[0];
   if (!selectedEstimate)
     return (
       <FirstEstimate

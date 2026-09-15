@@ -4,10 +4,12 @@ import type { EquipmentTasksWorkspace, Equipment, FarmTask, MeterReading, Servic
 import { pendingPassOutcomes, unresolvedAssignmentMessage, type ProgramsQueueEntryV1, type ProgramsSnapshotView } from './programsWriteQueue'
 import { projectProgramsQueue } from './QueuedProgramsRepository'
 import type { ProgramsData } from './programs'
+import type { CashBid, GrainContract, GrainWorkspace, MarketingPlanTarget, ProductionEstimate } from './grain'
+import { parseTodayGrainLineIntent, todayGrainLineIntent } from './todayIntents'
 import type { InventoryProduct, InventoryWorkspace } from './inventory'
 import type { Field, FieldsData } from './fields'
 import type { Notification } from './notifications'
-import { addMonthsClamped, fieldWallClockNow, todayNextUp, todayRecordTiles, todaySprayWindow } from './today'
+import { addMonthsClamped, fieldWallClockNow, todayGrainLine, todayNextUp, todayRecordTiles, todaySprayWindow } from './today'
 import { isTransportFailure } from './QueuedFieldsRepository'
 import { SupabaseInventoryRepository } from './SupabaseInventoryRepository'
 import type { InventoryDataGateway } from './InventoryDataGateway'
@@ -380,4 +382,53 @@ assert.equal(storage.writes, 1, 'Nothing beyond the fixture write touched storag
   try { await repository.getSnapshot({ projectRef: 'test', userId: userA, farmId: farmA, generation: 1, token: '00000000-0000-4000-8000-000000000900', serverEpoch: 1 }) } catch (error) { caught = error }
   assert.ok(caught instanceof Error && isTransportFailure(caught, false), `An offline Fields snapshot under the pure Inventory read must surface as a transport failure (saw ${caught instanceof Error ? caught.message : String(caught)}).`)
 }
-console.log('Today regressions passed (role matrix, next-up sources, spray card, intents, offline inventory).')
+
+// Pass due today tile (FD-2): when Next up holds a program pass due today, a member who may edit Programs gets a tile that opens
+// Programs on that pass through the alert's own link; without a due pass, or for a member who cannot edit Programs, no tile.
+const ownerWithPass = todayRecordTiles(owner, ownerNextUp)
+assert.deepEqual(ownerWithPass.map((tile) => tile.kind), ['rain', 'scouting', 'spray', 'task', 'harvest', 'grain_delivery', 'program_pass'], 'The pass tile follows the six record tiles.')
+assert.deepEqual(ownerWithPass.at(-1) && [ownerWithPass.at(-1)!.label, ownerWithPass.at(-1)!.module, ownerWithPass.at(-1)!.to], ['Pass due today', 'programs', '/programs?pass=00000000-0000-4000-8000-000000000601'], 'The tile opens Programs on the pass the alert names.')
+assert.ok(!todayRecordTiles(owner, ownerNextUp.filter((item) => item.kind !== 'program')).some((tile) => tile.kind === 'program_pass'), 'No pass due today, no tile.')
+assert.deepEqual(todayRecordTiles(owner), todayRecordTiles(owner, []), 'Without Next up the tiles are the six record tiles.')
+assert.ok(todayRecordTiles(worker, ownerNextUp).some((tile) => tile.kind === 'program_pass'), 'A worker may edit Programs and gets the tile.')
+assert.equal(todayRecordTiles(readOnly, ownerNextUp).length, 0, 'A read-only member gets no tiles, the pass tile included.')
+assert.ok(!todayRecordTiles(namedRep, ownerNextUp).some((tile) => tile.kind === 'program_pass'), 'A named rep cannot open Programs and gets no pass tile.')
+
+// Grain line (FD-2): one plain-English line for members who may open Grain, from the same numbers the Grain Overview shows.
+const grainScope = { farm_id: farmA, crop_year: 2026, commodity_id: 'corn_yellow', operating_entity_id: null, enterprise_label: null }
+const estimate = (id: string, crop_year: number, expected_bushels: number): ProductionEstimate => ({ ...grainScope, crop_year, id, planted_acres: 500, aph_yield: 200, expected_bushels, actual_bushels: null, drives_math: 'projected', notes: null, created_at: now, updated_at: now })
+const contract = (id: string, bushels: number, crop_year = 2026): GrainContract => ({ ...grainScope, crop_year, id, contract_type: 'forward_cash', buyer: 'Cargill Olney', bushels, futures_price: null, basis: null, cash_price: 4.2, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, created_at: now, updated_at: now })
+const target = (id: string, target_month: string, target_pct_of_production: number): MarketingPlanTarget => ({ ...grainScope, id, target_month, target_pct_of_production, target_price: null, breakeven_relative_pct: null, deadline: null, notes: null, created_at: now, updated_at: now })
+const bid = (id: string, elevator: string, bid_date: string, cash_price: number | null, basis: number, notes: string | null = null): CashBid => ({ id, farm_id: farmA, elevator, commodity_id: 'corn_yellow', bid_date, basis, cash_price, delivery_start: null, delivery_end: null, notes, created_at: now, updated_at: now })
+const corn2026 = estimate('00000000-0000-4000-8000-000000000e01', 2026, 100000)
+const grainWorkspace: GrainWorkspace = {
+  fields: { ...fieldsData, commodities: [{ id: 'corn_yellow', name: 'Corn', crop_family: 'corn' } as GrainWorkspace['fields']['commodities'][number]] },
+  production_estimates: [estimate('00000000-0000-4000-8000-000000000e00', 2025, 90000), corn2026],
+  grain_contracts: [contract('00000000-0000-4000-8000-000000000e11', 20000), contract('00000000-0000-4000-8000-000000000e12', 15400), contract('00000000-0000-4000-8000-000000000e13', 50000, 2025)],
+  grain_contract_deliveries: [], insurance_units: [], grain_bins: [], bin_inventory: [], bin_transactions: [], usda_report_dates: [], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null, grain_sale_limits: [], grain_carry_settings: null, grain_carry_grids: [],
+  marketing_plan_targets: [target('00000000-0000-4000-8000-000000000e21', '2026-03-01', 10), target('00000000-0000-4000-8000-000000000e22', '2026-05-01', 15), target('00000000-0000-4000-8000-000000000e23', '2026-07-01', 15), target('00000000-0000-4000-8000-000000000e24', '2026-09-01', 20)],
+  cash_bids: [bid('00000000-0000-4000-8000-000000000e31', 'Cargill Olney', '2026-07-10', 4.07, -0.35), bid('00000000-0000-4000-8000-000000000e32', 'Cargill Olney', '2026-07-14', 4.12, -0.3), bid('00000000-0000-4000-8000-000000000e33', 'ADM Decatur', '2026-07-08', 4.15, -0.27), bid('00000000-0000-4000-8000-000000000e34', 'USDA MARS 2850', '2026-07-15', 4.5, -0.1, '[USDA MARS 2850] Iowa pilot')],
+}
+const ownerLine = todayGrainLine({ profile: owner, grain: grainWorkspace, today })
+assert.deepEqual(ownerLine && [ownerLine.headline, ownerLine.detail, ownerLine.to, ownerLine.estimateId], ['Corn 2026: 35% sold', 'Plan says 40% by now · Cargill Olney $4.12, up 5¢ since Jul 10', '/grain', corn2026.id], `The line reads the newest crop year: signed contract bushels over expected production (35,400 of 100,000), the plan's cumulative percent through July, and the latest farmer-entered bid with its change since the previous bid at the same elevator; the newer USDA feed row never counts (saw ${JSON.stringify(ownerLine)}).`)
+assert.deepEqual(parseTodayGrainLineIntent(ownerLine!.state), todayGrainLineIntent(corn2026.id), 'The line carries the estimate it summarized, so the Overview opens on the same numbers.')
+assert.equal(parseTodayGrainLineIntent({ kind: 'today-grain-line', version: 1, estimateId: 'not-a-uuid' }), null, 'A malformed estimate id is rejected.')
+assert.equal(parseTodayGrainLineIntent(todayRecordIntent('task')), null, 'A record intent is not a grain-line intent.')
+assert.equal(todayGrainLine({ profile: worker, grain: grainWorkspace, today }), null, 'A worker without financial access never gets a grain line, even when handed the rows.')
+assert.ok(todayGrainLine({ profile: financialWorker, grain: grainWorkspace, today }) && todayGrainLine({ profile: namedRep, grain: grainWorkspace, today }), 'A worker with financial access and a named rep see the line.')
+assert.equal(todayGrainLine({ profile: owner, grain: null, today }), null, 'Without the grain snapshot there is no line.')
+assert.equal(todayGrainLine({ profile: owner, grain: { ...grainWorkspace, production_estimates: [] }, today }), null, 'Without a production estimate there is no line.')
+const sparse = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, marketing_plan_targets: [], cash_bids: [] }, today })
+assert.equal(sparse?.detail, 'No plan yet · No local bid yet', 'Absent plan and bids are said plainly.')
+const decemberLine = todayGrainLine({ profile: owner, grain: grainWorkspace, today: '2026-12-03' })
+assert.equal(decemberLine?.detail.split(' · ')[0], 'Plan says 60% by now', 'The plan figure accumulates every target month through the current month.')
+const basisOnly = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, cash_bids: [bid('00000000-0000-4000-8000-000000000e41', 'Cargill Olney', '2026-07-10', null, -0.35), bid('00000000-0000-4000-8000-000000000e42', 'Cargill Olney', '2026-07-14', null, -0.4)] }, today })
+assert.equal(basisOnly?.detail.split(' · ')[1], 'Cargill Olney basis −$0.40, down 5¢ since Jul 10', 'A bid entered as basis only is shown as basis with its change.')
+const firstBid = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, cash_bids: [bid('00000000-0000-4000-8000-000000000e51', 'ADM Decatur', '2026-07-14', 4.15, -0.27)] }, today })
+assert.equal(firstBid?.detail.split(' · ')[1], 'ADM Decatur $4.15', 'A first bid at an elevator has no change to report.')
+const otherElevatorLatest = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, cash_bids: [...grainWorkspace.cash_bids, bid('00000000-0000-4000-8000-000000000e61', 'ADM Decatur', '2026-07-15', 4.2, -0.22)] }, today })
+assert.equal(otherElevatorLatest?.detail.split(' · ')[1], 'ADM Decatur $4.20, up 5¢ since Jul 8', 'The change is measured against the previous bid at the same elevator, not another elevator\'s.')
+const actualDrives = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, production_estimates: [{ ...corn2026, drives_math: 'actual', actual_bushels: 88500 }] }, today })
+assert.equal(actualDrives?.headline, 'Corn 2026: 40% sold', 'When actual bushels drive the math the percent is over the actual, as the Overview\'s rule reads.')
+
+console.log('Today regressions passed (role matrix, next-up sources, spray card, grain line, intents, offline inventory).')
