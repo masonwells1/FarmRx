@@ -9,9 +9,10 @@ import { FarmReplayContextChangedError, isFarmReplayContextChangedError, launchR
 import { GrainWriteQueue, type GrainQueueEntryV1, grainWriteQueueKey } from './grainWriteQueue'
 import { setSaveReceipt } from '../lib/saveReceipt'
 import { readNeedsAttention } from './needsAttentionStore'
-import { captureWorkspaceCacheFence, financialCacheMaxAgeMs, readWorkspaceCache, WorkspaceMemoryScope, writeWorkspaceCache, type WorkspaceMemoryGuard } from './workspaceCache'
+import { captureWorkspaceCacheFence, financialCacheMaxAgeMs, readWorkspaceCache, readWorkspaceCachePure, WorkspaceCacheExpiredError, WorkspaceMemoryScope, writeWorkspaceCache, type WorkspaceMemoryGuard } from './workspaceCache'
 import { queueTransaction } from './queueTransaction'
-import { verifyFarmOperationContext, type FarmOperationContext } from './farmOperationContext'
+import { captureFarmOperationContext, verifyFarmOperationContext, type FarmOperationContext } from './farmOperationContext'
+import type { ReadOnlySnapshot } from './fields'
 import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 
 type Context = { userId: string; farmId: string }
@@ -22,6 +23,30 @@ export class QueuedGrainRepository implements GrainRepository {
   private workspace: GrainWorkspace | null = null
   private readonly memoryScope = new WorkspaceMemoryScope()
   constructor(private readonly writer: GrainRepository & GrainOperationWriter, private readonly dependencies: Dependencies) {}
+  /** Pure read for projections such as Today: the caller's published context is verified around every boundary, the live snapshot
+   * (or, only on a transport failure, the read-only financial cache) is overlaid with this device's queued grain entries, and
+   * nothing is resolved, replayed, or written. */
+  async getSnapshot(operationContext: FarmOperationContext): Promise<ReadOnlySnapshot<GrainWorkspace>> {
+    const context = { userId: operationContext.userId, farmId: operationContext.farmId }
+    const verifyRead = () => verifyFarmOperationContext(this.dependencies.storage, operationContext, captureFarmOperationContext(this.dependencies.storage, this.dependencies.projectRef, context))
+    verifyRead()
+    if (!this.writer.getSnapshot) throw new Error('Grain does not expose a side-effect-free snapshot.')
+    const queue = new GrainWriteQueue(this.dependencies.storage, grainWriteQueueKey(this.dependencies.projectRef, context.userId, context.farmId))
+    const entries = () => { const values = queue.read().entries; if (values.some((entry) => entry.userId !== context.userId || entry.farmId !== context.farmId)) throw new Error(blocked); return values }
+    try {
+      const snapshot = await this.writer.getSnapshot(operationContext); verifyRead()
+      if (snapshot.source !== 'live') throw new WorkspaceCacheExpiredError()
+      const data = this.overlay(snapshot.data, entries()); verifyRead()
+      return { data, source: 'live', capturedAt: snapshot.capturedAt }
+    } catch (error) {
+      verifyRead()
+      if (!isTransportFailure(error, this.dependencies.isOffline())) throw error
+      const cached = await readWorkspaceCachePure<GrainWorkspace>({ projectRef: this.dependencies.projectRef, ...context, module: 'grain' }, operationContext, financialCacheMaxAgeMs, this.dependencies.storage); verifyRead()
+      if (!cached) throw error
+      const data = this.overlay(cached.data, entries()); verifyRead()
+      return { data, source: 'offline', capturedAt: cached.capturedAt }
+    }
+  }
   private async contextAndQueue() { const operationContext = await captureQueuedOperationContext(this.dependencies); const context = { userId: operationContext.userId, farmId: operationContext.farmId }; const queue = new GrainWriteQueue(this.dependencies.storage, grainWriteQueueKey(this.dependencies.projectRef, context.userId, context.farmId)); const memoryGuard = this.memoryScope.enter(this.dependencies.storage, { projectRef: this.dependencies.projectRef, ...context, module: 'grain' }, () => { this.workspace = null }); return { context, operationContext, queue, memoryGuard } }
   async getNeedsAttentionQueueKey() { return (await this.contextAndQueue()).queue.key }
   private async locked<T>(queue: GrainWriteQueue, task: (verify: () => void) => Promise<T>) { return queueTransaction(queue.key, this.dependencies.storage, this.dependencies.createId, task) }

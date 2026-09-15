@@ -1,34 +1,19 @@
-import { canAccessFarmModule, canEditFarmModule, type FarmAccessProfile, type FarmAppModule } from '../auth/farmContext'
+import { canAccessFarmModule, type FarmAccessProfile } from '../auth/farmContext'
 import type { EquipmentTasksWorkspace } from './equipmentTasks'
 import type { InventoryUnit, InventoryWorkspace } from './inventory'
 import type { Field } from './fields'
 import type { Notification } from './notifications'
 import type { PendingPassOutcome } from './programs'
+import { deliveryDefaultEstimate, marketedPercent, plannedPercentThroughMonth, sameScope, scopeOf, type CashBid, type GrainWorkspace } from './grain'
+import { isMarsBid } from './basisMath'
 import type { ForecastBundle, SprayLevel } from './weather'
 import { bestWindowToday, compassLabel, daylight, evaluateSprayWindow, fieldWallClockDate, formatHour, formatMph, isActionablyFresh } from './weatherService'
-import { manualSprayRecordIntent } from './weatherSprayHandoff'
-import { todayRecordIntent } from './todayIntents'
+import { todayGrainLineIntent } from './todayIntents'
 
 // Today is a read-only projection of records the modules already produce (GOAL.md, Initiative FD-1). Everything here is a pure
 // function of data the screen was handed: nothing is fetched, replayed, generated, or cached in this file.
 
-export type TodayRecordKind = 'rain' | 'scouting' | 'spray' | 'task' | 'harvest' | 'grain_delivery'
-export type TodayRecordTile = { kind: TodayRecordKind; label: string; module: FarmAppModule; to: string; state: unknown }
-
-const recordTiles: readonly TodayRecordTile[] = [
-  { kind: 'rain', label: 'Rain', module: 'field_log', to: '/field-log', state: todayRecordIntent('rainfall') },
-  { kind: 'scouting', label: 'Scouting note', module: 'scouting', to: '/scouting', state: todayRecordIntent('scouting') },
-  { kind: 'spray', label: 'Spray record', module: 'inventory', to: '/inventory', state: manualSprayRecordIntent },
-  { kind: 'task', label: 'Task', module: 'tasks', to: '/tasks', state: todayRecordIntent('task') },
-  { kind: 'harvest', label: 'Harvest', module: 'harvest', to: '/harvest', state: todayRecordIntent('harvest') },
-  { kind: 'grain_delivery', label: 'Grain delivery', module: 'grain', to: '/grain/contracts', state: todayRecordIntent('grain_delivery') },
-]
-
-/** The record tiles this member may both reach and complete: a read-only member sees none, and a member without financial access
- * never sees Grain delivery, because the same checks that gate the module routes gate the tiles. */
-export function todayRecordTiles(profile: FarmAccessProfile): TodayRecordTile[] {
-  return recordTiles.filter((tile) => canAccessFarmModule(profile, tile.module) && canEditFarmModule(profile, tile.module))
-}
+export { todayRecordTiles, type TodayRecordKind, type TodayRecordTile } from './todayTiles'
 
 export type TodayNextUpKind = 'service' | 'task' | 'program' | 'grain_alert' | 'low_inventory'
 export type TodayNextUpUrgency = 'overdue' | 'due' | 'info'
@@ -94,6 +79,10 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
   // error is shown instead).
   const passStateKnown = equipment !== null && pending !== null
   const passAlertIsOpen = (link: string) => { const passId = passIdOf(link); return passId === null || (passStateKnown && !appliedPassIds.has(passId) && !rescheduledPassIds.has(passId)) }
+  // A pass alert stays unread after its day has gone by, so its due date is read from its generated task (or this device's queued
+  // reschedule) and a pass past that date is listed as overdue, never as due today.
+  const passDueOn = new Map((equipment?.tasks ?? []).filter((task) => task.source === 'program' && task.status !== 'done' && task.program_assigned_pass_id !== null).map((task) => [task.program_assigned_pass_id!.toLowerCase(), task.due_on] as const))
+  for (const [passId, outcome] of pending ?? []) if (outcome.kind === 'rescheduled') passDueOn.set(passId, outcome.dueOn)
   const shownPassIds = new Set(canAccessFarmModule(profile, 'programs') ? unread.filter((notification) => passAlertIsOpen(notification.link!)).map((notification) => passIdOf(notification.link!)).filter((id): id is string => id !== null) : [])
   const shownServiceIntervalIds = new Set<string>()
   if (equipment && canAccessFarmModule(profile, 'equipment')) {
@@ -189,7 +178,11 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
       const passId = passIdOf(link)
       if (link.startsWith('/programs') && passId !== null && listedPassIds.has(passId)) continue
       if (passId !== null) listedPassIds.add(passId)
-      if (link.startsWith('/programs') && canAccessFarmModule(profile, 'programs') && passAlertIsOpen(link)) items.push({ id: `program:${notification.id}`, kind: 'program', title: 'Program pass due', detail: notification.title, badge: null, urgency: 'due', to: link })
+      if (link.startsWith('/programs') && canAccessFarmModule(profile, 'programs') && passAlertIsOpen(link)) {
+        const dueOn = passId === null ? null : passDueOn.get(passId) ?? null
+        const overdue = dueOn !== null && dueOn < today
+        items.push({ id: `program:${notification.id}`, kind: 'program', title: overdue ? 'Program pass overdue' : 'Program pass due', detail: notification.title, badge: overdue ? `${plural(daysBetween(dueOn, today), 'day')} late` : null, urgency: overdue ? 'overdue' : 'due', to: link })
+      }
       else if (link.startsWith('/grain') && canAccessFarmModule(profile, 'grain')) items.push({ id: `grain_alert:${notification.id}`, kind: 'grain_alert', title: 'Grain alert', detail: notification.title, badge: null, urgency: 'info', to: link })
     }
   }
@@ -202,6 +195,55 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
 }
 
 export type TodaySprayCard = { level: SprayLevel; headline: string; details: string[]; fieldName: string }
+
+export type TodayGrainLine = { headline: string; detail: string; to: string; state: unknown; estimateId: string }
+const price = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const bidDay = (date: string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00.000Z`))
+const centsChange = (delta: number) => { const cents = Math.round(Math.abs(delta) * 100); return cents === 0 ? 'unchanged' : `${delta > 0 ? 'up' : 'down'} ${cents}¢` }
+/** The latest farmer-entered cash bid for a commodity and the one before it at the same elevator. USDA feed rows are history the
+ * Overview charts but never a local bid, so they never appear here (the same rule the position math follows). */
+function latestLocalBids(workspace: GrainWorkspace, farmId: string, commodityId: string): { latest: CashBid; previous: CashBid | null } | null {
+  const bids = workspace.cash_bids.filter((bid) => !isMarsBid(bid) && bid.farm_id === farmId && bid.commodity_id === commodityId).sort((a, b) => b.bid_date.localeCompare(a.bid_date) || b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
+  const latest = bids[0]
+  if (!latest) return null
+  return { latest, previous: bids.find((bid) => bid !== latest && bid.elevator === latest.elevator) ?? null }
+}
+/** One plain-English grain line for members who may open Grain (GOAL.md, FD-2): the newest crop year's position, the same estimate
+ * the Grain delivery tile lands on. Percent sold is the shared marketed-percent rule (signed contract bushels over active
+ * production, the number the plan and the alert rules use); the plan figure is the marketing plan's cumulative percent through
+ * the farm's current month by the Overview's own rule; the bid is the latest farmer-entered cash
+ * bid for the commodity with its change since the previous bid at the same elevator. The line opens the Overview on that
+ * estimate so the two screens agree. Absent data is said plainly; without a production estimate there is no line. */
+export function todayGrainLine(input: { profile: FarmAccessProfile; grain: GrainWorkspace | null; today: string }): TodayGrainLine | null {
+  const { profile, grain, today } = input
+  if (!grain || !canAccessFarmModule(profile, 'grain')) return null
+  const estimate = deliveryDefaultEstimate(grain.production_estimates)
+  if (!estimate) return null
+  const scope = scopeOf(estimate)
+  const commodity = grain.fields.commodities.find((item) => item.id === scope.commodity_id)?.name ?? scope.commodity_id
+  // An estimate kept for one operating entity or enterprise is that scope's position, not the farm's; the headline names it the
+  // way the Overview's own scope label does, so a farm with several 2026 corn positions is never read as one whole-farm figure.
+  const entity = scope.enterprise_label ?? (scope.operating_entity_id === null ? null : grain.fields.entities.find((item) => item.id === scope.operating_entity_id)?.name ?? 'one entity')
+  const sold = Math.round(marketedPercent(grain, scope))
+  const targets = grain.marketing_plan_targets.filter((target) => sameScope(target, scope))
+  // The Overview's own rule (month number through the current month, whatever year the target carries), so the plan figure here
+  // is the one the farmer sees after tapping through.
+  const planThrough = plannedPercentThroughMonth(targets, Number(today.slice(5, 7)))
+  const plan = targets.length === 0 ? 'No plan yet' : `Plan says ${Math.round(planThrough)}% by now`
+  const bids = latestLocalBids(grain, scope.farm_id, scope.commodity_id)
+  let bid = 'No local bid yet'
+  if (bids) {
+    const { latest, previous } = bids
+    if (latest.cash_price !== null) {
+      const change = previous?.cash_price != null ? `, ${centsChange(latest.cash_price - previous.cash_price)} since ${bidDay(previous.bid_date)}` : ''
+      bid = `${latest.elevator} ${price.format(latest.cash_price)}${change}`
+    } else {
+      const change = previous ? `, ${centsChange(latest.basis - previous.basis)} since ${bidDay(previous.bid_date)}` : ''
+      bid = `${latest.elevator} basis ${latest.basis >= 0 ? '+' : '−'}${price.format(Math.abs(latest.basis))}${change}`
+    }
+  }
+  return { headline: `${commodity} ${scope.crop_year}${entity === null ? '' : ` (${entity})`}: ${sold}% sold`, detail: `${plan} · ${bid}`, to: '/grain', state: todayGrainLineIntent(estimate.id), estimateId: estimate.id }
+}
 
 const dailyFor = (bundle: ForecastBundle, time: string) => bundle.daily.find((day) => day.date === time.slice(0, 10)) ?? bundle.daily[0]
 const naiveWallClock = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/

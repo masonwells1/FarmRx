@@ -1,4 +1,6 @@
-import type { Commodity, FieldsData } from './fields'
+import { farmCalendarDate } from './farmDates'
+import type { Commodity, FieldsData, ReadOnlySnapshot } from './fields'
+import type { FarmOperationContext } from './farmOperationContext'
 import type { ProfitabilityRepository } from './profitability'
 
 export type ProductionMathBasis = 'projected' | 'actual'
@@ -113,6 +115,9 @@ export interface GrainData { production_estimates: ProductionEstimate[]; grain_c
 export interface GrainWorkspace extends GrainData { fields: FieldsData }
 export interface GrainRepository {
   getData(): Promise<GrainWorkspace>
+  /** Pure read for projections such as Today: consumes an already-published context and performs no access resolution, queue
+   * replay, due generation, or cache write; private financial rows behind `can_read_private_financials` as the database returns them. */
+  getSnapshot?(context: FarmOperationContext): Promise<ReadOnlySnapshot<GrainWorkspace>>
   getNeedsAttentionQueueKey?(): Promise<string>
   saveProductionEstimate(estimate: ProductionEstimate): Promise<void>
   reconcileHarvestActual(estimate: ProductionEstimate, harvestActual: number): Promise<void>
@@ -159,6 +164,27 @@ export function activeProductionForScope(workspace: GrainWorkspace, scope: Posit
   const estimate = workspace.production_estimates.find((item) => sameScope(item, scope))
   if (!estimate) return 0
   return estimate.drives_math === 'actual' && estimate.actual_bushels !== null ? estimate.actual_bushels : estimate.expected_bushels
+}
+
+/** The newest crop year's estimate: where a Today grain-delivery intent lands and the position Today's grain line summarizes (the
+ * repository sorts estimates oldest first, which is right for planning but wrong for work being recorded now); between estimates
+ * of the same year the first stays. */
+export function deliveryDefaultEstimate<T extends { crop_year: number }>(estimates: readonly T[]): T | undefined {
+  return estimates.reduce<T | undefined>((newest, estimate) => (!newest || estimate.crop_year > newest.crop_year ? estimate : newest), undefined)
+}
+
+/** The calendar month (1-12) the marketing plan is judged against: the farm's current day in its stored time zone, the same day
+ * Today places, so the Overview and the grain line count the same targets on either side of a month boundary wherever the
+ * device happens to be. */
+export function planMonthFor(now: Date, timeZone: string | null | undefined): number {
+  return Number(farmCalendarDate(now, timeZone).slice(5, 7))
+}
+
+/** The marketing plan's cumulative target through a calendar month (1-12), as the Overview's plan status accumulates it: every
+ * target whose month number is at or before the given month counts, whatever year its date carries. Today's grain line and the
+ * Overview share this rule so the two screens report the same planned percent. */
+export function plannedPercentThroughMonth(targets: readonly { target_month: string; target_pct_of_production: number }[], month: number): number {
+  return targets.filter((target) => Number(target.target_month.slice(5, 7)) <= month).reduce((total, target) => total + target.target_pct_of_production, 0)
 }
 
 /** Shared by the marketing plan and alert rules: signed contract bushels / active production. */

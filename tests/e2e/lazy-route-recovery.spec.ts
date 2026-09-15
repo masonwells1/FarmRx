@@ -132,11 +132,42 @@ test("a persistent lazy route failure stops reloading and offers a retry", async
   expect(chunkAttempts).toBe(2);
   expect(documentLoads).toBe(2);
   expect(await page.evaluate((key) => sessionStorage.getItem(key), routeReloadMarker)).toBe("1");
-  // On phones Grain lives in the More menu (FD-1 phone bar: Today · Fields · Tasks · Weather · More).
+  // On phones Grain sits on the bar (FD-2: Today · Grain · Fields · Record · More); the More fallback covers narrower shells.
   const grainLink = page.getByRole("link", { name: "Grain", exact: true });
   if (!(await grainLink.isVisible())) await page.getByRole("button", { name: "More" }).click();
   await grainLink.click();
   await expect(page).toHaveURL(/\/grain$/);
   await expect(page.getByText("Add a crop assignment in Fields to begin your grain position.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "This page could not open." })).toBeHidden();
+});
+
+test("a persistent Record sheet chunk failure shows the retry screen in the sheet, not a blank shell", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-phone", "The Record button sits on the phone bar.");
+  // FD-2 (Codex round two): the sheet's chunk loads outside the route boundary, so its failure must be caught by its own boundary.
+  let chunkAttempts = 0;
+  let documentLoads = 0;
+  page.on("request", (request) => {
+    if (request.resourceType() === "document" && new URL(request.url()).pathname === "/fields") documentLoads += 1;
+  });
+  await page.route(/\/assets\/TodayModule-[^/]+\.js$/, async (route) => {
+    chunkAttempts += 1;
+    await route.abort("failed");
+  });
+
+  await page.goto("/fields");
+  await expect(page.getByRole("heading", { name: "Fields", exact: true })).toBeVisible();
+  const bar = page.getByRole("navigation", { name: "Farm Rx navigation" });
+  // The first failure reloads the page once, as any lazy route does; the sheet closes with the reload.
+  await bar.getByRole("button", { name: "Record" }).click();
+  await expect.poll(() => documentLoads).toBe(2);
+  await expect(page.getByRole("heading", { name: "Fields", exact: true })).toBeVisible();
+  expect(await page.evaluate((key) => sessionStorage.getItem(key), "farm-rx:lazy-route-reload:v1:today")).toBe("1");
+  // The second failure is shown as the retry screen inside the sheet's frame while the page underneath stays.
+  await bar.getByRole("button", { name: "Record" }).click();
+  const recovery = page.locator(".mobile-record-menu").getByRole("alert");
+  await expect(recovery.getByRole("heading", { name: "This page could not open." })).toBeVisible();
+  await expect(recovery.getByRole("button", { name: "Try again" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fields", exact: true })).toBeVisible();
+  expect(chunkAttempts).toBe(2);
+  expect(documentLoads).toBe(2);
 });

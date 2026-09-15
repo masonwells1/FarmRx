@@ -1,6 +1,8 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
-type LazyRouteErrorBoundaryProps = { children: ReactNode };
+/** `className` frames the retry screen where the failed content would have stood (a sheet above the phone bar, say); the default
+ * is the full-page frame the route content uses. */
+type LazyRouteErrorBoundaryProps = { children: ReactNode; className?: string };
 type LazyRouteErrorBoundaryState = { failed: boolean };
 
 export class LazyRouteErrorBoundary extends Component<LazyRouteErrorBoundaryProps, LazyRouteErrorBoundaryState> {
@@ -17,7 +19,7 @@ export class LazyRouteErrorBoundary extends Component<LazyRouteErrorBoundaryProp
   render() {
     if (!this.state.failed) return this.props.children;
     return (
-      <section className="empty-page">
+      <section className={this.props.className ?? "empty-page"}>
         <div className="empty-state" role="alert" aria-labelledby="page-recovery-title">
           <h1 id="page-recovery-title">This page could not open.</h1>
           <p>Your saved work is still safe. Check your signal, then try again.</p>
