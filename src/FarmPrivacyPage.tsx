@@ -118,7 +118,7 @@ export function FarmPrivacyPage({ repository, settingsRepository }: { repository
         <div>
           <p className="eyebrow">{confirmedFarm.name}</p>
           <h1 id="farm-privacy-title">Farm settings</h1>
-          <p>Who can see this farm's private data, and which state's USDA cash bids it receives.</p>
+          <p>Grain, financial, and Soil Rx information stays private unless you choose to share it. This page also sets which state's USDA cash bids the farm receives.</p>
         </div>
       </header>
 
