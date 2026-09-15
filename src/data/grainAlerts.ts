@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabaseClient'
 import type { GrainWorkspace } from './grain'
 import { evaluateMarketingAlertRules } from './marketingAlerts'
+import { isMarsBid } from './basisMath'
 import { getOperationalIntegrityCapability } from './operationalIntegrityCapability'
 import { farmLocalCalendarDate } from './farmDates'
 import { currentFarmContext } from '../auth/farmContext'
@@ -17,7 +18,7 @@ const observationFresh = (bidDate: string, now: Date) => businessDay(bidDate) &&
 export function evaluateGrainAlerts(workspace: GrainWorkspace, now = new Date()): GrainAlert[] {
   const today = farmLocalCalendarDate(now); const alerts: GrainAlert[] = []
   for (const target of workspace.marketing_plan_targets) {
-    if (target.target_price !== null) { const candidates = workspace.cash_bids.filter((bid) => bid.commodity_id === target.commodity_id && bid.cash_price !== null && observationFresh(bid.bid_date, now)); const highest = candidates.sort((left, right) => (right.cash_price! - left.cash_price!) || right.bid_date.localeCompare(left.bid_date))[0]; if (highest && highest.cash_price! >= target.target_price) alerts.push({ key: `price:${target.id}:${target.target_price}:${highest.id}`, kind: 'price_target', targetId: target.id, observationId: highest.id, message: `Cash price target reached for ${target.commodity_id}: ${highest.cash_price!.toFixed(2)}.` }) }
+    if (target.target_price !== null) { const candidates = workspace.cash_bids.filter((bid) => bid.commodity_id === target.commodity_id && bid.cash_price !== null && !isMarsBid(bid) && observationFresh(bid.bid_date, now)); const highest = candidates.sort((left, right) => (right.cash_price! - left.cash_price!) || right.bid_date.localeCompare(left.bid_date))[0]; if (highest && highest.cash_price! >= target.target_price) alerts.push({ key: `price:${target.id}:${target.target_price}:${highest.id}`, kind: 'price_target', targetId: target.id, observationId: highest.id, message: `Cash price target reached for ${target.commodity_id}: ${highest.cash_price!.toFixed(2)}.` }) }
     if (target.deadline && (target.deadline === today || target.deadline === addDays(today, 7))) { const window = target.deadline === today ? 'due' : 'seven-days'; alerts.push({ key: `deadline:${target.id}:${target.deadline}:${window}`, kind: 'target_deadline', targetId: target.id, message: target.deadline === today ? `Marketing target deadline is today (${target.deadline}).` : `Marketing target deadline is in seven days (${target.deadline}).` }) }
   }
   for (const report of workspace.usda_report_dates) if (report.report_date === today || report.report_date === addDays(today, 7)) { const window = report.report_date === today ? 'due' : 'seven-days'; alerts.push({ key: `report:${report.id}:${report.report_date}:${window}`, kind: 'usda_report', reportId: report.id, message: report.report_date === today ? `${report.report_name} is scheduled today.` : `${report.report_name} is scheduled in seven days.` }) }

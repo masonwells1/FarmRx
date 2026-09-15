@@ -9,6 +9,8 @@ export interface Farm {
   share_with_rep: boolean
   /** The farm's IANA time zone (farms.time_zone, server authority for the farm's calendar day). Absent on rows cached before the client read it. */
   time_zone?: string | null
+  /** The state whose USDA cash-grain-bid reports the farm receives (farms.market_region, GL-1). Null means no feed; absent on rows cached before the client read it. */
+  market_region?: string | null
   created_by: string
   created_at: string
   updated_at: string

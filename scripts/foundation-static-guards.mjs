@@ -245,7 +245,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh.exe')", 'orchestrator:windows-core-probe-shell')
   requireText(errors, foundationOrchestrator, "return (Join-Path $PSHOME 'pwsh')", 'orchestrator:unix-core-probe-shell')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & $probeShell -NoProfile -Command 'exit 23' } $expected", 'orchestrator:resolved-probe-shell')
-  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 27) errors.push('orchestrator:all-lanes-checked')
+  if ((foundationOrchestrator.match(/^\s*Invoke-FoundationLane\s/gm) ?? []).length !== 28) errors.push('orchestrator:all-lanes-checked')
   requireText(errors, foundationOrchestrator, ". (Join-Path $PSScriptRoot 'foundation-native-lane.ps1')", 'orchestrator:native-lane-import')
   requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'foundation-native-lane.regression.ps1') } 'Foundation native-lane regression failed.'", 'orchestrator:native-lane-regression')
   const nativeBrowserInvocation = "Invoke-FoundationNativeLane -Lane 'built-browser' -Executable $nativeNpm -Arguments @('run','test:e2e') -Failure 'Built-browser foundation suite failed.' | Out-Null"
@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 184')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 194')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -534,6 +534,38 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, scheduler, "current_setting('request.jwt.claim.role',true),'') <> 'service_role'", 'scheduler:service-role-check')
   requireText(errors, scheduler, 'b.bid_date between v_local_date-2 and v_local_date', 'scheduler:bid-freshness')
   requireText(errors, scheduler, 'is not distinct from v_rule.operating_entity_id', 'scheduler:entity-scope')
+
+  // GL-1: the USDA MARS feed can only enter cash_bids through the service-only fan-out, only for a verified report, only into
+  // farms whose region matches, and never through a signed-in client; the browser keeps every feed row out of position math.
+  const marsFeed = read(root, 'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql')
+  requireText(errors, marsFeed, 'revoke all on function public.ingest_usda_mars_observations(text, uuid, jsonb) from public, anon, authenticated;', 'mars-feed:fan-out-service-only')
+  requireText(errors, marsFeed, 'grant execute on function public.ingest_usda_mars_observations(text, uuid, jsonb) to service_role;', 'mars-feed:fan-out-service-grant')
+  if ((marsFeed.match(/set search_path = public, pg_temp/g) ?? []).length !== 1) errors.push('mars-feed:fan-out-fixed-search-path')
+  requireText(errors, marsFeed, "if v_report.verified_at is null then\n    return jsonb_build_object('status', 'skipped', 'reason', 'report_unverified', 'report_id', p_report_id);", 'mars-feed:unverified-report-refused')
+  requireText(errors, marsFeed, 'where market_region = v_report.geography;', 'mars-feed:region-match-only')
+  if ((marsFeed.match(/with check \(public\.can_edit_farm\(farm_id\) and feed_source is null\);/g) ?? []).length !== 2) errors.push('mars-feed:client-cannot-create-feed-row')
+  if ((marsFeed.match(/using \(public\.can_edit_farm\(farm_id\) and feed_source is null\)/g) ?? []).length !== 2) errors.push('mars-feed:client-cannot-alter-feed-row')
+  requireText(errors, marsFeed, 'create unique index cash_bids_feed_observation_per_farm\n  on public.cash_bids (farm_id, feed_observation_key)\n  where feed_observation_key is not null;', 'mars-feed:one-observation-per-farm')
+  requireText(errors, marsFeed, 'is distinct from (v_elevator, v_commodity, v_bid_date, v_basis, v_cash_price, v_delivery_start, v_delivery_end, v_note) then', 'mars-feed:unchanged-row-untouched')
+  requireText(errors, marsFeed, 'revoke all on table public.usda_market_report_runs from public, anon, authenticated;', 'mars-feed:run-log-service-only')
+  const basisMath = read(root, 'src/data/basisMath.ts')
+  requireText(errors, basisMath, "bid.feed_source === 'usda_mars' || marsNote.test(bid.notes ?? '')", 'mars-feed:browser-fence-any-report')
+  const grainGateway = read(root, 'src/data/SupabaseGrainDataGateway.ts')
+  if (/function bidColumns[^\n]*feed_/.test(grainGateway)) errors.push('mars-feed:manual-save-never-sends-provenance')
+  requireText(errors, foundationOrchestrator, "Invoke-FoundationLane { & deno check --no-config --lock=deno.lock --frozen --node-modules-dir=none supabase/functions/usda-mars-feed/index.ts }", 'orchestrator:frozen-usda-mars-feed-deno-check')
+  const marsWorkflow = read(root, '.github/workflows/usda-mars-feed.yml')
+  requireText(errors, marsWorkflow, '--header "x-scheduler-key: $SCHEDULER_KEY"', 'mars-feed:workflow-scheduler-key')
+  const marsFunction = read(root, 'supabase/functions/usda-mars-feed/index.ts')
+  requireText(errors, marsFunction, "if (!expected || !sameSecret(expected, supplied)) return json(401, { error: 'scheduler authorization failed' })", 'mars-feed:function-scheduler-auth')
+  if (/console\.(?:info|error|log)\([^\n]*marsKey/.test(marsFunction)) errors.push('mars-feed:key-never-logged')
+  // GL-004: a market day counts as done only through an ok run's report date, judged by the orchestrator; the feed never confirms a price alert.
+  requireText(errors, marsFunction, "await admin.from('usda_market_report_runs').select('report_date').eq('report_id', reportId).eq('market_date', marketDate).eq('status', 'ok').abortSignal(signal)", 'mars-feed:run-report-dates-read')
+  const marsOrchestrator = read(root, 'supabase/functions/_shared/marsFeedOrchestrator.ts')
+  requireText(errors, marsOrchestrator, 'if (priorReportDates.some((reportDate) => reportDate === null || reportDate >= marketDate)) {', 'mars-feed:stale-report-refetched')
+  const grainAlerts = read(root, 'src/data/grainAlerts.ts')
+  requireText(errors, grainAlerts, "bid.commodity_id === target.commodity_id && bid.cash_price !== null && !isMarsBid(bid) && observationFresh(bid.bid_date, now)", 'mars-feed:plan-target-ignores-feed')
+  const deliverGrainAlert = read(root, 'supabase/functions/deliver-grain-alert/index.ts')
+  if ((deliverGrainAlert.match(/\.is\('feed_source',null\)/g) ?? []).length !== 2) errors.push('mars-feed:alert-recheck-ignores-feed')
   return errors
 }
 

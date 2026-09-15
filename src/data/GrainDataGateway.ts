@@ -13,6 +13,7 @@ export interface GrainRowBundle {
   bin_transactions: unknown[]
   cash_bids: unknown[]
   usda_report_dates: unknown[]
+  usda_market_reports: unknown[]
   marketing_alert_rules: unknown[]
   firm_offers: unknown[]
   grain_alert_settings: unknown | null
