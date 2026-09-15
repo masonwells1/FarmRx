@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 190')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 194')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -558,6 +558,14 @@ export function foundationStaticGuard(root = process.cwd()) {
   const marsFunction = read(root, 'supabase/functions/usda-mars-feed/index.ts')
   requireText(errors, marsFunction, "if (!expected || !sameSecret(expected, supplied)) return json(401, { error: 'scheduler authorization failed' })", 'mars-feed:function-scheduler-auth')
   if (/console\.(?:info|error|log)\([^\n]*marsKey/.test(marsFunction)) errors.push('mars-feed:key-never-logged')
+  // GL-004: a market day counts as done only through an ok run's report date, judged by the orchestrator; the feed never confirms a price alert.
+  requireText(errors, marsFunction, "await admin.from('usda_market_report_runs').select('report_date').eq('report_id', reportId).eq('market_date', marketDate).eq('status', 'ok').abortSignal(signal)", 'mars-feed:run-report-dates-read')
+  const marsOrchestrator = read(root, 'supabase/functions/_shared/marsFeedOrchestrator.ts')
+  requireText(errors, marsOrchestrator, 'if (priorReportDates.some((reportDate) => reportDate === null || reportDate >= marketDate)) {', 'mars-feed:stale-report-refetched')
+  const grainAlerts = read(root, 'src/data/grainAlerts.ts')
+  requireText(errors, grainAlerts, "bid.commodity_id === target.commodity_id && bid.cash_price !== null && !isMarsBid(bid) && observationFresh(bid.bid_date, now)", 'mars-feed:plan-target-ignores-feed')
+  const deliverGrainAlert = read(root, 'supabase/functions/deliver-grain-alert/index.ts')
+  if ((deliverGrainAlert.match(/\.is\('feed_source',null\)/g) ?? []).length !== 2) errors.push('mars-feed:alert-recheck-ignores-feed')
   return errors
 }
 

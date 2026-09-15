@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 190
+const expectedMutationCount = 194
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -20,6 +20,7 @@ const files = [
   'supabase/migrations/20260711154325_module1_rls.sql', 'supabase/migrations/20260716122155_0037_scheduled_alert_foundation.sql', 'supabase/migrations/20260716122229_0041_unscoped_authenticated_write_fencing.sql',
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
+  'supabase/functions/_shared/marsFeedOrchestrator.ts', 'src/data/grainAlerts.ts', 'supabase/functions/deliver-grain-alert/index.ts',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -573,6 +574,19 @@ try {
   reset()
   mutate('scripts/verify-foundation.ps1', (source) => source.replace("  Invoke-FoundationLane { & deno check --no-config --lock=deno.lock --frozen --node-modules-dir=none supabase/functions/usda-mars-feed/index.ts } 'Frozen usda-mars-feed Deno check failed.'\n", ''))
   detected('MARS feed Deno check lane removed', 'orchestrator:frozen-usda-mars-feed-deno-check')
+  reset()
+  // GL-004: the once-per-day skip must be judged by report date, and the feed must never confirm a price alert.
+  mutate('supabase/functions/usda-mars-feed/index.ts', (source) => source.replace(".select('report_date').eq('report_id', reportId).eq('market_date', marketDate).eq('status', 'ok')", ".select('report_date').eq('report_id', reportId).eq('market_date', marketDate)"))
+  detected('MARS run-log read counts failed runs as done', 'mars-feed:run-report-dates-read')
+  reset()
+  mutate('supabase/functions/_shared/marsFeedOrchestrator.ts', (source) => source.replace('if (priorReportDates.some((reportDate) => reportDate === null || reportDate >= marketDate)) {', 'if (priorReportDates.length > 0) {'))
+  detected('MARS stale-report run treated as done for the day', 'mars-feed:stale-report-refetched')
+  reset()
+  mutate('src/data/grainAlerts.ts', (source) => source.replace(' && !isMarsBid(bid) && observationFresh(bid.bid_date, now)', ' && observationFresh(bid.bid_date, now)'))
+  detected('MARS feed row can reach a plan-target price alert', 'mars-feed:plan-target-ignores-feed')
+  reset()
+  mutate('supabase/functions/deliver-grain-alert/index.ts', (source) => source.replace(".eq('commodity_id',rule.commodity_id).is('feed_source',null)", ".eq('commodity_id',rule.commodity_id)"))
+  detected('MARS feed row can confirm a marketing price alert on the server', 'mars-feed:alert-recheck-ignores-feed')
   if (mutationCount !== expectedMutationCount) throw new Error(`Foundation mutation count drifted: expected ${expectedMutationCount}, observed ${mutationCount}.`)
   console.log(`Foundation mutation drill: PASS (${mutationCount}/${expectedMutationCount} controlled mutations turned the gate red)`)
 } finally {

@@ -15,12 +15,12 @@ const goodBody = { results: [
 
 type Calls = { begun: Array<{ reportId: string; marketDate: string }>; finished: MarsFeedRunRecord[]; ingested: Array<{ reportId: string; runId: string; observations: MarsObservation[] }>; fetched: string[] }
 
-function fakeDatabase(options: { reports: MarsFeedReport[]; successfulRuns?: string[]; ingestResult?: (input: { reportId: string; observations: MarsObservation[] }) => unknown; failBegin?: boolean }): { database: MarsFeedDatabase; calls: Calls } {
+function fakeDatabase(options: { reports: MarsFeedReport[]; successfulRuns?: Record<string, Array<string | null>>; ingestResult?: (input: { reportId: string; observations: MarsObservation[] }) => unknown; failBegin?: boolean }): { database: MarsFeedDatabase; calls: Calls } {
   const calls: Calls = { begun: [], finished: [], ingested: [], fetched: [] }
   let nextRun = 1
   const database: MarsFeedDatabase = {
     async listVerifiedReports() { return options.reports },
-    async hasSuccessfulRun(reportId, marketDate) { return (options.successfulRuns ?? []).includes(`${reportId}|${marketDate}`) },
+    async successfulRunReportDates(reportId, marketDate) { return (options.successfulRuns ?? {})[`${reportId}|${marketDate}`] ?? [] },
     async beginRun(input) { if (options.failBegin) throw new Error('run log unavailable'); calls.begun.push(input); return `run-${nextRun++}` },
     async finishRun(record) { calls.finished.push(record) },
     async ingest(input) {
@@ -46,10 +46,31 @@ function fakeDatabase(options: { reports: MarsFeedReport[]; successfulRuns?: str
 
 // 2. Once a market day has a successful run the report is not fetched again ("once per market day, cached server-side").
 {
-  const { database, calls } = fakeDatabase({ reports: [iowa], successfulRuns: ['2850|2026-07-15'] })
+  const { database, calls } = fakeDatabase({ reports: [iowa], successfulRuns: { '2850|2026-07-15': ['2026-07-15'] } })
   const result = await runMarsFeed({ now, database, fetchReport: async (reportId) => { calls.fetched.push(reportId); return goodBody } })
   assert(result.skipped === 1 && result.reports[0]!.reason === 'already_ingested_today' && calls.fetched.length === 0 && calls.begun.length === 0 && calls.ingested.length === 0, 'A completed market day skips the fetch, the run row, and the fan-out.')
   assert(!marsFeedRunHasFailures(result), 'A skip is not a failure.')
+}
+
+// 2b. GL-004: an earlier run today that fetched a report still dated yesterday (USDA had not published yet) does not
+// satisfy the market day. The later scheduled run fetches again, and once the day's report is dated today it is ingested.
+{
+  const { database, calls } = fakeDatabase({ reports: [iowa], successfulRuns: { '2850|2026-07-15': ['2026-07-14'] } })
+  const result = await runMarsFeed({ now, database, fetchReport: async (reportId) => { calls.fetched.push(reportId); return goodBody } })
+  assert(result.ok === 1 && result.skipped === 0 && calls.fetched.join() === '2850' && calls.begun.length === 1 && calls.ingested.length === 1, `A stale-report run must not block the day's later fetch: ${JSON.stringify(result)}`)
+  assert(calls.finished[0]!.status === 'ok' && calls.finished[0]!.reportDate === '2026-07-15', 'The re-fetched, current report is recorded ok with its own date.')
+}
+{
+  // An ok run whose report carried no date cannot be judged stale; the day stays satisfied as before.
+  const { database, calls } = fakeDatabase({ reports: [iowa], successfulRuns: { '2850|2026-07-15': [null] } })
+  const result = await runMarsFeed({ now, database, fetchReport: async (reportId) => { calls.fetched.push(reportId); return goodBody } })
+  assert(result.skipped === 1 && result.reports[0]!.reason === 'already_ingested_today' && calls.fetched.length === 0, 'An undated ok run still satisfies the market day.')
+}
+{
+  // A run from a different market day never satisfies today, whatever its report date.
+  const { database, calls } = fakeDatabase({ reports: [iowa], successfulRuns: { '2850|2026-07-14': ['2026-07-14', '2026-07-15'] } })
+  const result = await runMarsFeed({ now, database, fetchReport: async (reportId) => { calls.fetched.push(reportId); return goodBody } })
+  assert(result.ok === 1 && calls.fetched.length === 1, 'Yesterday\'s run must not satisfy today.')
 }
 
 // 3. The fan-out's own refusal (report unverified at the database) is recorded as a skipped run with the reason; nothing is treated as written.
@@ -99,4 +120,4 @@ function fakeDatabase(options: { reports: MarsFeedReport[]; successfulRuns?: str
   assert(threw, 'An invalid clock must not run the feed.')
 }
 
-console.log('MARS feed orchestrator regressions passed (clean run, daily skip, unverified skip, failures recorded without secrets, deadline, run log).')
+console.log('MARS feed orchestrator regressions passed (clean run, daily skip, stale-report re-fetch, unverified skip, failures recorded without secrets, deadline, run log).')

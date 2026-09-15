@@ -26,9 +26,10 @@ Deno.serve(async(request)=>{
     const {data:farm,error:farmError}=await admin.from('farms').select('time_zone').eq('id',farmId).maybeSingle(); if(farmError) throw farmError
     const today=localDate(farm?.time_zone??'America/Chicago'); const throttleKey=`${farmId}:${alertKey}`; if((delivered.get(throttleKey)??0)+hour>Date.now()) return json({delivered:false,throttled:true})
     let subject='Farm Rx grain reminder'; let message='A grain item needs your review.'
+    // GL-004: both cash-price re-checks read the farm's own elevator bids only; a USDA MARS feed row (feed_source set) is display-only and never confirms an alert.
     if(kind==='price_target'){
       const targetId=clean(body.targetId,36); const observationId=clean(body.observationId,36)
-      const [{data:target},{data:bid}]=await Promise.all([admin.from('marketing_plan_targets').select('id,target_price,commodity_id,farm_id').eq('id',targetId).eq('farm_id',farmId).maybeSingle(),admin.from('cash_bids').select('id,cash_price,commodity_id,farm_id,bid_date').eq('id',observationId).eq('farm_id',farmId).maybeSingle()])
+      const [{data:target},{data:bid}]=await Promise.all([admin.from('marketing_plan_targets').select('id,target_price,commodity_id,farm_id').eq('id',targetId).eq('farm_id',farmId).maybeSingle(),admin.from('cash_bids').select('id,cash_price,commodity_id,farm_id,bid_date').eq('id',observationId).eq('farm_id',farmId).is('feed_source',null).maybeSingle()])
       if(!target||!bid||bid.cash_price===null||bid.cash_price<target.target_price||bid.commodity_id!==target.commodity_id||bid.bid_date<dateDaysBefore(today,2)||bid.bid_date>today) return json({error:'Alert is no longer current.'},409)
       subject='Farm Rx price target reached'; message=`A saved cash-price target was reached for ${clean(target.commodity_id,80)}.`
     }
@@ -41,7 +42,7 @@ Deno.serve(async(request)=>{
       if(!rule||!state?.is_condition_true||!rule.active||rule.rule_type!==expectedType) return json({error:'Alert is no longer current.'},409)
       let current=false
       if(expectedType==='price_target'&&typeof rule.threshold==='number'&&['at_or_above','at_or_below'].includes(rule.direction??'')){
-        const {data:bid}=await admin.from('cash_bids').select('cash_price,bid_date').eq('farm_id',farmId).eq('commodity_id',rule.commodity_id).not('cash_price','is',null).gte('bid_date',dateDaysBefore(today,2)).lte('bid_date',today).order('bid_date',{ascending:false}).order('updated_at',{ascending:false}).limit(1).maybeSingle()
+        const {data:bid}=await admin.from('cash_bids').select('cash_price,bid_date').eq('farm_id',farmId).eq('commodity_id',rule.commodity_id).is('feed_source',null).not('cash_price','is',null).gte('bid_date',dateDaysBefore(today,2)).lte('bid_date',today).order('bid_date',{ascending:false}).order('updated_at',{ascending:false}).limit(1).maybeSingle()
         current=typeof bid?.cash_price==='number'&&(rule.direction==='at_or_above'?bid.cash_price>=rule.threshold:bid.cash_price<=rule.threshold)
       }else if(expectedType==='deadline'&&rule.remind_on){ const days=dayNumber(rule.remind_on)-dayNumber(today); current=days>=0&&days<=7 }
       else if(expectedType==='pct_marketed_goal'&&typeof rule.threshold==='number'){

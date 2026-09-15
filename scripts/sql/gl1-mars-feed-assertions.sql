@@ -73,6 +73,18 @@ begin
   if v->>'reason' <> 'report_unknown' then raise exception 'unknown report must be refused: %', v; end if;
 end $$;
 
+-- 1b. GL-004: the grant itself, exercised as the service role rather than the superuser. The fan-out is
+--     SECURITY DEFINER, so the role only needs execute; a missing grant fails here with permission denied.
+set role service_role;
+do $$
+declare v jsonb;
+begin
+  v := public.ingest_usda_mars_observations('2850','00000000-0000-4000-8000-000000000060','[]'::jsonb);
+  if v->>'status' <> 'skipped' or v->>'reason' <> 'report_unverified' then raise exception 'service role must reach the fan-out and be refused on the unverified report: %', v; end if;
+end $$;
+reset role;
+select set_config('request.jwt.claims','{"role":"service_role"}',false);
+
 -- Mason's live action, replayed here: the report is confirmed and stamped.
 update public.usda_market_reports set verified_at = now(), verification_note = 'disposable proof' where report_id = '2850';
 
@@ -93,6 +105,18 @@ begin
   select count(*) into v_count from public.cash_bids where farm_id in ('00000000-0000-4000-8000-000000000052','00000000-0000-4000-8000-000000000053'); if v_count <> 0 then raise exception 'an Illinois farm or a farm without a region received feed rows'; end if;
   if (select count(*) from public.cash_bids where feed_source='usda_mars' and (feed_report_id <> '2850' or feed_geography <> 'IA' or notes not like '[USDA MARS 2850 · Iowa]%')) <> 0 then raise exception 'feed rows must carry their true report id and geography'; end if;
   if (select notes from public.cash_bids where farm_id='00000000-0000-4000-8000-000000000050' and feed_observation_key='2850|k2') <> '[USDA MARS 2850 · Iowa] basis range -0.65 to -0.55' then raise exception 'the source note must follow the provenance marker'; end if;
+end $$;
+
+-- 2b. GL-004: an observation without a bid date is skipped with its own reason instead of aborting the whole run.
+do $$
+declare v jsonb; v_count integer;
+begin
+  v := public.ingest_usda_mars_observations('2850','00000000-0000-4000-8000-000000000060',
+    '[{"observation_key":"2850|k5","elevator":"Ames","commodity_id":"corn_yellow","bid_date":null,"basis":-0.10,"cash_price":null,"delivery_start":null,"delivery_end":null,"source_note":null},
+      {"observation_key":"2850|k6","elevator":"Ames","commodity_id":"corn_yellow","basis":-0.10,"cash_price":null,"delivery_start":null,"delivery_end":null,"source_note":null}]'::jsonb);
+  if v->>'status' <> 'ok' or (v->>'written_rows')::int <> 0 or (v->>'skipped_observations')::int <> 2 then raise exception 'undated observations must be skipped, not written or fatal: %', v; end if;
+  if (select count(*) from jsonb_array_elements(v->'skips') s where s->>'reason' = 'bad_date') <> 2 then raise exception 'undated observations must report bad_date: %', v; end if;
+  select count(*) into v_count from public.cash_bids where feed_source='usda_mars'; if v_count <> 4 then raise exception 'undated observations changed history: %', v_count; end if;
 end $$;
 
 -- 3. A retried identical run adds nothing and moves no updated_at; a changed value updates in place under the same id.

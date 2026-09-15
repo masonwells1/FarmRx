@@ -35,10 +35,10 @@ Deno.serve(async (request) => {
           if (error) throw error
           return (data ?? []) as MarsFeedReport[]
         },
-        async hasSuccessfulRun(reportId, marketDate, signal) {
-          const { data, error } = await admin.from('usda_market_report_runs').select('id').eq('report_id', reportId).eq('market_date', marketDate).eq('status', 'ok').limit(1).abortSignal(signal)
+        async successfulRunReportDates(reportId, marketDate, signal) {
+          const { data, error } = await admin.from('usda_market_report_runs').select('report_date').eq('report_id', reportId).eq('market_date', marketDate).eq('status', 'ok').abortSignal(signal)
           if (error) throw error
-          return (data ?? []).length > 0
+          return ((data ?? []) as Array<{ report_date: string | null }>).map((row) => (typeof row.report_date === 'string' ? row.report_date : null))
         },
         async beginRun(input, signal) {
           const { data, error } = await admin.from('usda_market_report_runs').insert({ report_id: input.reportId, market_date: input.marketDate, status: 'started' }).select('id').abortSignal(signal).single()

@@ -3729,11 +3729,16 @@ function Basis({
           value={elevator}
           onChange={(event) => setElevator(event.target.value)}
         >
-          {[...new Set(workspace.cash_bids.map((bid) => bid.elevator))].map(
-            (item) => (
-              <option key={item}>{item}</option>
+          {[
+            ...new Set(
+              // GL-004: feed rows are display-only; their USDA market locations are never offered as an elevator to save against.
+              workspace.cash_bids
+                .filter((bid) => !isMarsBid(bid))
+                .map((bid) => bid.elevator),
             ),
-          )}
+          ].map((item) => (
+            <option key={item}>{item}</option>
+          ))}
         </select>
         <select
           value={commodity}

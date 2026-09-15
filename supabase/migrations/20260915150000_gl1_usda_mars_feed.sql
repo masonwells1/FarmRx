@@ -222,7 +222,8 @@ begin
           v_cash_price := case when jsonb_typeof(v_row -> 'cash_price') = 'number' then (v_row ->> 'cash_price')::numeric else null end;
           v_delivery_start := (v_row ->> 'delivery_start')::date;
           v_delivery_end := (v_row ->> 'delivery_end')::date;
-          if v_cash_price is not null and v_cash_price < 0 then v_reason := 'negative_cash_price';
+          if v_bid_date is null then v_reason := 'bad_date';
+          elsif v_cash_price is not null and v_cash_price < 0 then v_reason := 'negative_cash_price';
           elsif v_delivery_start is not null and v_delivery_end is not null and v_delivery_end < v_delivery_start then v_reason := 'delivery_order';
           end if;
         end if;

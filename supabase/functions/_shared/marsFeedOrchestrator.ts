@@ -1,8 +1,10 @@
 // GL-1: the run of the USDA MARS basis feed, with every side effect behind an interface so
 // the run can be proved without a network, a database, or a clock.
 //
-// For each verified report: skip when this market day already has a successful run; fetch
-// with a deadline; parse (skip, never guess); hand the observations to the database's
+// For each verified report: skip when this market day already has a successful run whose
+// report was dated on or after the market day (an earlier-dated report means USDA had not
+// yet published the day's report when that run fetched it, so the later run tries again);
+// fetch with a deadline; parse (skip, never guess); hand the observations to the database's
 // service-only fan-out; record the run. A failure records a failed run and leaves the
 // stored history untouched. Nothing here ever sees or repeats a secret.
 
@@ -32,7 +34,8 @@ export interface MarsFeedRunRecord {
 
 export interface MarsFeedDatabase {
   listVerifiedReports(signal: AbortSignal): Promise<MarsFeedReport[]>
-  hasSuccessfulRun(reportId: string, marketDate: string, signal: AbortSignal): Promise<boolean>
+  /** The `report_date` of every `ok` run recorded for this report on this market day (null when the report carried no date). */
+  successfulRunReportDates(reportId: string, marketDate: string, signal: AbortSignal): Promise<Array<string | null>>
   beginRun(input: { reportId: string; marketDate: string }, signal: AbortSignal): Promise<string>
   finishRun(record: MarsFeedRunRecord, signal: AbortSignal): Promise<void>
   ingest(input: { reportId: string; runId: string; observations: MarsObservation[] }, signal: AbortSignal): Promise<unknown>
@@ -121,7 +124,11 @@ export async function runMarsFeed(dependencies: MarsFeedDependencies): Promise<M
         result.skipped += 1
         continue
       }
-      if (await dependencies.database.hasSuccessfulRun(report.report_id, marketDate, signal)) {
+      // A market day is satisfied only by an ok run whose report was dated on or after that day. An ok run that
+      // fetched an older report (USDA had not published yet) does not count, so the next scheduled run re-fetches.
+      // A run whose report carried no date cannot be judged and is taken as satisfying, as before.
+      const priorReportDates = await dependencies.database.successfulRunReportDates(report.report_id, marketDate, signal)
+      if (priorReportDates.some((reportDate) => reportDate === null || reportDate >= marketDate)) {
         result.reports.push({ reportId: report.report_id, status: 'skipped', reason: 'already_ingested_today', reportDate: null, fetchedRows: 0, validObservations: 0, writtenRows: 0, unchangedRows: 0, skippedRows: 0, farmsEligible: 0, columns: [] })
         result.skipped += 1
         continue

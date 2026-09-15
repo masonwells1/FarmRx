@@ -7,7 +7,9 @@ const marsNote = /^\[USDA MARS (\S+)(?: · ([^\]]+))?\]/
  * column existed and for cached rows. */
 export const isMarsBid = (bid: Pick<CashBid, 'notes'> & Partial<Pick<CashBid, 'feed_source'>>) => bid.feed_source === 'usda_mars' || marsNote.test(bid.notes ?? '')
 
-/** "USDA MARS 2850 · Iowa": the report and the geography it covers, read from the row's own provenance, never assumed. */
+/** "USDA MARS 2850 · Iowa": the report and the geography it covers, read from the row's own provenance, never assumed.
+ * The report id prefers the column (the note only ever repeats it); the geography prefers the note, because the note
+ * carries the human name ("Iowa") that the fan-out wrote while the column holds the state code ("IA"). */
 export function marsBidLabel(bid: Pick<CashBid, 'notes'> & Partial<Pick<CashBid, 'feed_report_id' | 'feed_geography'>>): string {
   const match = marsNote.exec(bid.notes ?? '')
   const report = bid.feed_report_id ?? match?.[1] ?? null
