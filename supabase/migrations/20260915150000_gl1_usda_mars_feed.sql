@@ -121,6 +121,10 @@ create unique index cash_bids_feed_observation_per_farm
   on public.cash_bids (farm_id, feed_observation_key)
   where feed_observation_key is not null;
 
+-- Every public foreign key carries a covering index (advisor hardening, proof 0043).
+create index cash_bids_feed_report_id_idx
+  on public.cash_bids (feed_report_id);
+
 comment on column public.cash_bids.feed_source is
   'Null for a farmer-entered bid. ''usda_mars'' for a row written by the GL-1 feed; such rows are display-and-history only and never enter position, revenue, or plan math.';
 
