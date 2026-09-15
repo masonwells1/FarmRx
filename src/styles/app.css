@@ -585,7 +585,8 @@ tbody tr:nth-child(even) td { background: var(--cream); }
   .yield-list span, .record-list span { text-align: left; }
   .inline-add-note { display: none; }
   .mobile-nav { position: fixed; z-index: 10; right: 0; bottom: 0; left: 0; display: block; padding-bottom: env(safe-area-inset-bottom); border-top: 1px solid var(--hairline); background: var(--surface); box-shadow: 0 -4px 12px rgb(46 46 46 / 8%); }
-  .mobile-nav-list { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  /* One equal column per rendered target: a member whose role hides Record or Grain still gets a full-width bar (FD-2). */
+  .mobile-nav-list { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
   .mobile-nav .nav-link { min-width: 0; min-height: 60px; width: 100%; flex-direction: column; justify-content: center; gap: 1px; margin: 0; padding: 6px 2px; border: 0; border-radius: 0; color: var(--matte-gray); background: var(--surface); font-size: 18px; line-height: 1.2; text-align: center; }
   .mobile-nav .nav-link.active { color: var(--deep-green); background: var(--light-green); }
   .mobile-nav .nav-link.active::before { display: none; }

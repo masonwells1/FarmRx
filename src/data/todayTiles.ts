@@ -20,11 +20,12 @@ const recordTiles: readonly TodayRecordTile[] = [
 
 /** The record tiles this member may both reach and complete: a read-only member sees none, and a member without financial access
  * never sees Grain delivery, because the same checks that gate the module routes gate the tiles. When Next up holds a program
- * pass due today and the member may edit Programs, a "Pass due today" tile opens Programs on that pass through the link the
- * alert already carries (GOAL.md, FD-2), so the common action no longer needs the More menu. */
+ * pass due today (not one already overdue) and the member may edit Programs, a "Pass due today" tile opens Programs on that pass
+ * through the link the alert already carries (GOAL.md, FD-2), so the common action no longer needs the More menu. */
 export function todayRecordTiles(profile: FarmAccessProfile, nextUp: readonly TodayNextUpItem[] = []): TodayRecordTile[] {
   const tiles = recordTiles.filter((tile) => canAccessFarmModule(profile, tile.module) && canEditFarmModule(profile, tile.module))
-  const pass = nextUp.find((item) => item.kind === 'program')
+  // Only a pass due on the farm's day earns the tile; an overdue pass stays in Next up under its own label.
+  const pass = nextUp.find((item) => item.kind === 'program' && item.urgency === 'due')
   if (pass && canAccessFarmModule(profile, 'programs') && canEditFarmModule(profile, 'programs')) tiles.push({ kind: 'program_pass', label: 'Pass due today', module: 'programs', to: pass.to, state: undefined })
   return tiles
 }

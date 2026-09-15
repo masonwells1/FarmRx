@@ -3,7 +3,7 @@ import { deriveFarmAccessProfile } from '../auth/farmContext'
 import type { EquipmentTasksWorkspace, Equipment, FarmTask, MeterReading, ServiceInterval } from './equipmentTasks'
 import { pendingPassOutcomes, unresolvedAssignmentMessage, type ProgramsQueueEntryV1, type ProgramsSnapshotView } from './programsWriteQueue'
 import { projectProgramsQueue } from './QueuedProgramsRepository'
-import type { ProgramsData } from './programs'
+import type { PendingPassOutcome, ProgramsData } from './programs'
 import type { CashBid, GrainContract, GrainWorkspace, MarketingPlanTarget, ProductionEstimate } from './grain'
 import { parseTodayGrainLineIntent, todayGrainLineIntent } from './todayIntents'
 import type { InventoryProduct, InventoryWorkspace } from './inventory'
@@ -393,6 +393,15 @@ assert.deepEqual(todayRecordTiles(owner), todayRecordTiles(owner, []), 'Without 
 assert.ok(todayRecordTiles(worker, ownerNextUp).some((tile) => tile.kind === 'program_pass'), 'A worker may edit Programs and gets the tile.')
 assert.equal(todayRecordTiles(readOnly, ownerNextUp).length, 0, 'A read-only member gets no tiles, the pass tile included.')
 assert.ok(!todayRecordTiles(namedRep, ownerNextUp).some((tile) => tile.kind === 'program_pass'), 'A named rep cannot open Programs and gets no pass tile.')
+// A pass alert stays unread after its day has gone by: its generated task's date (or this device's queued reschedule) decides,
+// and a pass past that date is listed as overdue with the days late, never as due today, so it earns no "Pass due today" tile.
+const overduePassTasks = workspace.tasks.map((item) => item.program_assigned_pass_id === '00000000-0000-4000-8000-000000000601' ? { ...item, due_on: '2026-07-13' } : item)
+const overduePass = todayNextUp({ profile: owner, today, equipment: { ...workspace, tasks: overduePassTasks }, notifications }).find((item) => item.kind === 'program')
+assert.deepEqual(overduePass && [overduePass.title, overduePass.badge, overduePass.urgency, overduePass.to], ['Program pass overdue', '2 days late', 'overdue', '/programs?pass=00000000-0000-4000-8000-000000000601'], 'A pass whose generated task is two days past is listed as overdue, with its link kept.')
+assert.ok(!todayRecordTiles(owner, todayNextUp({ profile: owner, today, equipment: { ...workspace, tasks: overduePassTasks }, notifications })).some((tile) => tile.kind === 'program_pass'), 'An overdue pass earns no "Pass due today" tile.')
+const rescheduledBackPass = todayNextUp({ profile: owner, today, equipment: workspace, notifications, pendingPasses: new Map([[passA, { kind: 'rescheduled', dueOn: '2026-07-14' } as PendingPassOutcome]]) }).find((item) => item.kind === 'program')
+assert.deepEqual(rescheduledBackPass && [rescheduledBackPass.title, rescheduledBackPass.badge], ['Program pass overdue', '1 day late'], 'A reschedule queued on this device to an earlier day decides the pass\'s date before the sync lands.')
+assert.equal(ownerNextUp.find((item) => item.kind === 'program')?.urgency, 'due', 'A pass whose generated task is due on the farm\'s day stays due today.')
 
 // Grain line (FD-2): one plain-English line for members who may open Grain, from the same numbers the Grain Overview shows.
 const grainScope = { farm_id: farmA, crop_year: 2026, commodity_id: 'corn_yellow', operating_entity_id: null, enterprise_label: null }
@@ -428,6 +437,15 @@ const firstBid = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, ca
 assert.equal(firstBid?.detail.split(' · ')[1], 'ADM Decatur $4.15', 'A first bid at an elevator has no change to report.')
 const otherElevatorLatest = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, cash_bids: [...grainWorkspace.cash_bids, bid('00000000-0000-4000-8000-000000000e61', 'ADM Decatur', '2026-07-15', 4.2, -0.22)] }, today })
 assert.equal(otherElevatorLatest?.detail.split(' · ')[1], 'ADM Decatur $4.20, up 5¢ since Jul 8', 'The change is measured against the previous bid at the same elevator, not another elevator\'s.')
+// An estimate kept for one operating entity or enterprise is that scope's position: the headline names the scope as the Overview's
+// own label does, and the contracts and plan of the whole-farm scope never count toward it.
+const entityId = '00000000-0000-4000-8000-000000000020'
+const entityScoped = { ...corn2026, id: '00000000-0000-4000-8000-000000000e02', operating_entity_id: entityId }
+const entityLine = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, fields: { ...grainWorkspace.fields, entities: [{ id: entityId, farm_id: farmA, name: 'Wells Farms LLC', entity_type: 'llc', is_active: true, created_at: now } as GrainWorkspace['fields']['entities'][number]] }, production_estimates: [entityScoped], grain_contracts: [{ ...contract('00000000-0000-4000-8000-000000000e14', 20000), operating_entity_id: entityId }, ...grainWorkspace.grain_contracts] }, today })
+assert.deepEqual(entityLine && [entityLine.headline, entityLine.detail.split(' · ')[0]], ['Corn 2026 (Wells Farms LLC): 20% sold', 'No plan yet'], 'An entity-scoped estimate is named for its entity and counts only that scope\'s contracts and plan.')
+const enterpriseLine = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, production_estimates: [{ ...corn2026, enterprise_label: 'Seed corn' }] }, today })
+assert.equal(enterpriseLine?.headline, 'Corn 2026 (Seed corn): 0% sold', 'An enterprise-labelled estimate is named for its enterprise.')
+assert.equal(todayGrainLine({ profile: owner, grain: { ...grainWorkspace, production_estimates: [entityScoped] }, today })?.headline, 'Corn 2026 (one entity): 0% sold', 'An entity the Fields snapshot no longer lists is still not called the whole farm.')
 const actualDrives = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, production_estimates: [{ ...corn2026, drives_math: 'actual', actual_bushels: 88500 }] }, today })
 assert.equal(actualDrives?.headline, 'Corn 2026: 40% sold', 'When actual bushels drive the math the percent is over the actual, as the Overview\'s rule reads.')
 

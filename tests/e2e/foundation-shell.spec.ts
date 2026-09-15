@@ -145,6 +145,10 @@ const equipmentA = '00000000-0000-4000-8000-000000000201'
 const intervalA = '00000000-0000-4000-8000-000000000301'
 const taskA = '00000000-0000-4000-8000-000000000401'
 const passA = '00000000-0000-4000-8000-000000000601'
+const passTaskA = '00000000-0000-4000-8000-000000000408'
+// The pass's generated task is dated on the farm's current day (the fixture farm keeps Chicago time), so the journeys prove the
+// due-today tile against the real clock; a task dated earlier would list the pass as overdue and earn no tile (FD-029).
+const farmToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 const productA = '00000000-0000-4000-8000-000000000701'
 function todayRows(farm: FarmFixture): Readonly<Partial<Record<string, unknown[]>>> {
   return {
@@ -165,6 +169,7 @@ function todayRows(farm: FarmFixture): Readonly<Partial<Record<string, unknown[]
       { id: taskA, farm_id: farm.id, title: 'Fix the planter', details: null, status: 'todo', priority: 'normal', assigned_to: null, due_on: '2026-07-13', field_id: null, equipment_id: null, source: 'manual', interval_id: null, interval_cycle_key: null, program_assigned_pass_id: null, program_cycle_key: null, completed_by: null, completed_at: null, created_by: userId, created_at: now, updated_at: now },
       // The due-generation function's own task for the overdue interval: the same work as the service-due row, never listed twice.
       { id: '00000000-0000-4000-8000-000000000402', farm_id: farm.id, title: 'Engine oil · John Deere 8R 340', details: null, status: 'todo', priority: 'normal', assigned_to: null, due_on: '2026-07-14', field_id: null, equipment_id: equipmentA, source: 'service_interval', interval_id: intervalA, interval_cycle_key: 'meter:1', program_assigned_pass_id: null, program_cycle_key: null, completed_by: null, completed_at: null, created_by: userId, created_at: now, updated_at: now },
+      { id: passTaskA, farm_id: farm.id, title: 'Corn pass 2', details: null, status: 'todo', priority: 'normal', assigned_to: null, due_on: farmToday(), field_id: null, equipment_id: null, source: 'program', interval_id: null, interval_cycle_key: null, program_assigned_pass_id: passA, program_cycle_key: 'corn-pass-2-cycle', completed_by: null, completed_at: null, created_by: userId, created_at: now, updated_at: now },
     ],
     // The Inventory shelf's own low-on-hand rule (five units or fewer) is what Today lists as Low inventory.
     inventory_products: [{ id: productA, farm_id: farm.id, product_kind: 'chemical', name: 'Atrazine 4L', inventory_unit: 'gal', epa_registration_number: null, is_restricted_use: false, signal_word: null, restricted_entry_interval_hours: null, preharvest_interval_hours: null, max_label_rate: null, max_label_rate_unit: null, max_label_rate_basis: null, commodity_id: null, variety_name: null, fertilizer_analysis: null, manufacturer: null, is_active: true, created_at: now, updated_at: now }],
@@ -879,6 +884,12 @@ test('a named rep receives only proven rep-safe navigation and direct routes', a
   if (testInfo.project.name === 'chromium-phone') {
     for (const label of ['Today', 'Fields', 'Grain']) await expect(navigation.getByRole('link', { name: label })).toBeVisible()
     await expect(navigation.getByRole('button', { name: 'Record' })).toHaveCount(0)
+    // FD-2: a bar with fewer targets still fills the width; the last target ends at the bar's right edge and all four share it.
+    const bar = (await navigation.boundingBox())!
+    const targets = await Promise.all((await navigation.locator('.nav-link').all()).map((target) => target.boundingBox()))
+    expect(targets).toHaveLength(4)
+    expect(Math.abs(targets.at(-1)!!.x + targets.at(-1)!!.width - (bar.x + bar.width))).toBeLessThanOrEqual(1)
+    for (const target of targets) expect(Math.abs(target!.width - bar.width / 4)).toBeLessThanOrEqual(1)
     await navigation.getByRole('button', { name: 'More' }).click()
     const more = page.getByRole('region', { name: 'More Farm Rx destinations' })
     for (const label of ['Inventory', 'Profitability', 'Alerts']) await expect(more.getByRole('link', { name: label })).toBeVisible()

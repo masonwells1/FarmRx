@@ -79,6 +79,10 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
   // error is shown instead).
   const passStateKnown = equipment !== null && pending !== null
   const passAlertIsOpen = (link: string) => { const passId = passIdOf(link); return passId === null || (passStateKnown && !appliedPassIds.has(passId) && !rescheduledPassIds.has(passId)) }
+  // A pass alert stays unread after its day has gone by, so its due date is read from its generated task (or this device's queued
+  // reschedule) and a pass past that date is listed as overdue, never as due today.
+  const passDueOn = new Map((equipment?.tasks ?? []).filter((task) => task.source === 'program' && task.status !== 'done' && task.program_assigned_pass_id !== null).map((task) => [task.program_assigned_pass_id!.toLowerCase(), task.due_on] as const))
+  for (const [passId, outcome] of pending ?? []) if (outcome.kind === 'rescheduled') passDueOn.set(passId, outcome.dueOn)
   const shownPassIds = new Set(canAccessFarmModule(profile, 'programs') ? unread.filter((notification) => passAlertIsOpen(notification.link!)).map((notification) => passIdOf(notification.link!)).filter((id): id is string => id !== null) : [])
   const shownServiceIntervalIds = new Set<string>()
   if (equipment && canAccessFarmModule(profile, 'equipment')) {
@@ -174,7 +178,11 @@ export function todayNextUp(input: { profile: FarmAccessProfile; today: string; 
       const passId = passIdOf(link)
       if (link.startsWith('/programs') && passId !== null && listedPassIds.has(passId)) continue
       if (passId !== null) listedPassIds.add(passId)
-      if (link.startsWith('/programs') && canAccessFarmModule(profile, 'programs') && passAlertIsOpen(link)) items.push({ id: `program:${notification.id}`, kind: 'program', title: 'Program pass due', detail: notification.title, badge: null, urgency: 'due', to: link })
+      if (link.startsWith('/programs') && canAccessFarmModule(profile, 'programs') && passAlertIsOpen(link)) {
+        const dueOn = passId === null ? null : passDueOn.get(passId) ?? null
+        const overdue = dueOn !== null && dueOn < today
+        items.push({ id: `program:${notification.id}`, kind: 'program', title: overdue ? 'Program pass overdue' : 'Program pass due', detail: notification.title, badge: overdue ? `${plural(daysBetween(dueOn, today), 'day')} late` : null, urgency: overdue ? 'overdue' : 'due', to: link })
+      }
       else if (link.startsWith('/grain') && canAccessFarmModule(profile, 'grain')) items.push({ id: `grain_alert:${notification.id}`, kind: 'grain_alert', title: 'Grain alert', detail: notification.title, badge: null, urgency: 'info', to: link })
     }
   }
@@ -213,6 +221,9 @@ export function todayGrainLine(input: { profile: FarmAccessProfile; grain: Grain
   if (!estimate) return null
   const scope = scopeOf(estimate)
   const commodity = grain.fields.commodities.find((item) => item.id === scope.commodity_id)?.name ?? scope.commodity_id
+  // An estimate kept for one operating entity or enterprise is that scope's position, not the farm's; the headline names it the
+  // way the Overview's own scope label does, so a farm with several 2026 corn positions is never read as one whole-farm figure.
+  const entity = scope.enterprise_label ?? (scope.operating_entity_id === null ? null : grain.fields.entities.find((item) => item.id === scope.operating_entity_id)?.name ?? 'one entity')
   const sold = Math.round(marketedPercent(grain, scope))
   const targets = grain.marketing_plan_targets.filter((target) => sameScope(target, scope))
   const planThrough = targets.filter((target) => target.target_month.slice(0, 7) <= today.slice(0, 7)).reduce((sum, target) => sum + target.target_pct_of_production, 0)
@@ -229,7 +240,7 @@ export function todayGrainLine(input: { profile: FarmAccessProfile; grain: Grain
       bid = `${latest.elevator} basis ${latest.basis >= 0 ? '+' : '−'}${price.format(Math.abs(latest.basis))}${change}`
     }
   }
-  return { headline: `${commodity} ${scope.crop_year}: ${sold}% sold`, detail: `${plan} · ${bid}`, to: '/grain', state: todayGrainLineIntent(estimate.id), estimateId: estimate.id }
+  return { headline: `${commodity} ${scope.crop_year}${entity === null ? '' : ` (${entity})`}: ${sold}% sold`, detail: `${plan} · ${bid}`, to: '/grain', state: todayGrainLineIntent(estimate.id), estimateId: estimate.id }
 }
 
 const dailyFor = (bundle: ForecastBundle, time: string) => bundle.daily.find((day) => day.date === time.slice(0, 10)) ?? bundle.daily[0]
