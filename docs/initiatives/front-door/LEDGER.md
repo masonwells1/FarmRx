@@ -291,3 +291,10 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Finding (two calendars for one month):** the plan rule was shared, but the Overview's plan status still supplied the device's calendar month while the grain line supplied the farm's; at 00:30 UTC on September 1 a Chicago farm's Today counted August's targets and Grain counted September's.
 - **Repair:** the month is now derived once, in the grain data module, from the farm's current day in its stored time zone (the same helper Today uses to place the farm's day), and the Overview's plan status uses it; without a stored zone the device's month stands, as before. No other Grain math changes. Regression cases cover the boundary (still August in Chicago at 00:30 UTC on September 1, September in Tokyo) and the zoneless fallback.
 - **Proof:** recorded on the pull request with the repair commit.
+
+## FD-032 — FD-2 merged
+
+- **Date/time:** 2026-09-15 09:30 -05:00 (`America/Chicago`).
+- **Outcome:** Mason approved the merge of pull request #47 in the working session ("Merge now") with Foundation green on `3f57059` and Codex's fourth round returning no findings; merged into `main` as `396a9e8` (merge commit, head pinned to `3f57059`). Four Codex rounds, six findings across three rounds, each repaired in its own commit with a regression that fails on the prior code (FD-029 through FD-031). All review threads resolved.
+- **Still Mason's:** production deploy confirmation on Vercel (the session's network policy cannot reach the site or the deployment listing); applying the FS grain-and-budget settings migration live; the USDA report dates (FS item 4); the alerts page's farm scoping; closing a pass alert on apply.
+- **Next in the owner amendment's order (FS → FD → GL → LD → CM → IP):** GL. Its plan is written in its own ledger before any code, and building it waits for Mason's go-ahead in the working session.

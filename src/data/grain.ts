@@ -93,7 +93,8 @@ export interface GrainBin { id: string; farm_id: string; name: string; capacity_
 export interface BinInventory { id: string; farm_id: string; grain_bin_id: string; crop_year: number; commodity_id: string; bushels: number; committed_bushels: number; measured_at: string; notes: string | null; created_at: string; updated_at: string }
 /** Immutable record. Fixes are represented by a new movement in the other direction. */
 export interface BinTransaction { id: string; farm_id: string; grain_bin_id: string; direction: BinTransactionDirection; bushels: number; commodity_id: string; occurred_on: string; note: string | null; source_kind: string | null; created_at: string }
-export interface CashBid { id: string; farm_id: string; elevator: string; commodity_id: string; bid_date: string; basis: number; cash_price: number | null; delivery_start: string | null; delivery_end: string | null; notes: string | null; created_at: string; updated_at: string }
+/** A farmer's bid keeps the three feed columns null; a GL-1 USDA MARS feed row sets them (display-and-history only, never position math). */
+export interface CashBid { id: string; farm_id: string; elevator: string; commodity_id: string; bid_date: string; basis: number; cash_price: number | null; delivery_start: string | null; delivery_end: string | null; notes: string | null; feed_source: string | null; feed_report_id: string | null; feed_geography: string | null; created_at: string; updated_at: string }
 export interface MarketingAlertRule extends PositionScope { id: string; rule_type: MarketingAlertRuleType; direction: MarketingAlertDirection | null; threshold: number | null; remind_on: string | null; message: string | null; active: boolean; last_triggered_at: string | null; created_at: string; updated_at: string }
 export interface FirmOffer extends PositionScope { id: string; buyer: string; offer_type: FirmOfferType; bushels: number; price: number | null; basis: number | null; contract_month: string | null; expires_on: string | null; delivery_location: string | null; notes: string | null; status: FirmOfferStatus; filled_contract_id: string | null; created_at: string; updated_at: string }
 export interface FirmOfferFill { contract: GrainContract; offer: FirmOffer }
@@ -106,12 +107,14 @@ export interface GrainCarryGridRow { market_price: number | null; basis: number 
 /** Thirteen delivery-month rows (harvest plus twelve stored months) for one production estimate. */
 export interface GrainCarryGrid { id: string; farm_id: string; production_estimate_id: string; harvest_month: number; default_basis: number; rows: GrainCarryGridRow[]; updated_at: string }
 
+/** Mirrors public.usda_market_reports (GL-1): the verified mapping from a USDA report id to the geography it covers; verified_at null means no row is written for it yet. */
+export interface UsdaMarketReport { report_id: string; name: string; geography: string; geography_label: string; verified_at: string | null; verification_note: string | null; created_at: string; updated_at: string }
 /** Mirrors public.usda_report_dates in 20260711222703_module2_grain.sql. */
 export interface UsdaReportDate { id: string; report_name: string; report_date: string; release_at: string | null; source_url: string | null; notes: string | null; created_at: string; updated_at: string }
 
 export interface FuturesQuote { symbol: 'ZC' | 'ZS' | 'ZW'; contract: string; label: string; price: number; crop_year: number; new_crop: boolean; delayed: true; as_of: string }
 export interface MarketDataService { getQuotes(): Promise<FuturesQuote[]> }
-export interface GrainData { production_estimates: ProductionEstimate[]; grain_contracts: GrainContract[]; grain_contract_deliveries: GrainContractDelivery[]; marketing_plan_targets: MarketingPlanTarget[]; insurance_units: InsuranceUnit[]; grain_bins: GrainBin[]; bin_inventory: BinInventory[]; bin_transactions: BinTransaction[]; cash_bids: CashBid[]; usda_report_dates: UsdaReportDate[]; marketing_alert_rules: MarketingAlertRule[]; firm_offers: FirmOffer[]; grain_alert_settings: GrainAlertSettings | null; grain_sale_limits: GrainSaleLimit[]; grain_carry_settings: GrainCarrySettings | null; grain_carry_grids: GrainCarryGrid[]; capabilities?: GrainCapabilities }
+export interface GrainData { production_estimates: ProductionEstimate[]; grain_contracts: GrainContract[]; grain_contract_deliveries: GrainContractDelivery[]; marketing_plan_targets: MarketingPlanTarget[]; insurance_units: InsuranceUnit[]; grain_bins: GrainBin[]; bin_inventory: BinInventory[]; bin_transactions: BinTransaction[]; cash_bids: CashBid[]; usda_report_dates: UsdaReportDate[]; usda_market_reports: UsdaMarketReport[]; marketing_alert_rules: MarketingAlertRule[]; firm_offers: FirmOffer[]; grain_alert_settings: GrainAlertSettings | null; grain_sale_limits: GrainSaleLimit[]; grain_carry_settings: GrainCarrySettings | null; grain_carry_grids: GrainCarryGrid[]; capabilities?: GrainCapabilities }
 export interface GrainWorkspace extends GrainData { fields: FieldsData }
 export interface GrainRepository {
   getData(): Promise<GrainWorkspace>

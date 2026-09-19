@@ -60,6 +60,7 @@ try {
   Invoke-FoundationLane { & npm run build } 'Production build failed.'
   Invoke-FoundationLane { & npm audit --audit-level=high } 'Dependency audit failed.'
   Invoke-FoundationLane { & deno check --no-config --lock=deno.lock --frozen --node-modules-dir=none supabase/functions/send-push/index.ts } 'Frozen send-push Deno check failed.'
+  Invoke-FoundationLane { & deno check --no-config --lock=deno.lock --frozen --node-modules-dir=none supabase/functions/usda-mars-feed/index.ts } 'Frozen usda-mars-feed Deno check failed.'
   Invoke-FoundationLane { & node scripts/foundation-static-guards.mjs } 'Foundation static guard failed.'
   Invoke-FoundationLane { & node scripts/verify-foundation-mutations.mjs } 'Foundation mutation drill failed.'
   Invoke-FoundationLane { & (Join-Path $PSScriptRoot 'verify-0033-disposable.ps1') } 'Disposable 0033 proof failed.'

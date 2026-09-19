@@ -41,6 +41,7 @@ try {
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/fs-persist-disposable-assertions.sql')) 'FS_PERSIST_DISPOSABLE_PASS' 'Friction Sweep persistence assertions failed.'
   # Initiative FD-1 (Today) reads only existing rows; this asserts the row-level rules Today depends on, in the same database.
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/fd-today-role-assertions.sql')) 'FD_TODAY_DISPOSABLE_PASS' 'Today role assertions failed.'
+  Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/gl1-mars-feed-assertions.sql')) 'GL1_MARS_FEED_DISPOSABLE_PASS' 'GL-1 MARS feed assertions failed.'
 
   $passed = $true
 } finally {

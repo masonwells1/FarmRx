@@ -34,6 +34,7 @@ import { NotificationsPage, NotificationBell } from "./NotificationsModule";
 import {
   equipmentTasksRepository,
   farmSharingRepository,
+  farmSettingsRepository,
   fieldLogRepository,
   fieldsRepository,
   generateDueEquipmentTasks,
@@ -133,7 +134,7 @@ const navigation: NavigationItem[] = [
     icon: <NavGlyph d="M3 20h18M6 20V8l6-4 6 4v12" />,
   },
   {
-    label: "Privacy",
+    label: "Farm settings",
     path: "/privacy",
     module: "fields",
     icon: <NavGlyph d="M12 3l8 4v5c0 5-3.4 8.2-8 9-4.6-.8-8-4-8-9V7l8-4zM9 12l2 2 4-4" />,
@@ -393,7 +394,7 @@ function AppLayout() {
               }
             />
             <Route path="/soil-rx" element={<CapabilityRoute module="soil_rx"><SoilRxPage repository={soilRxRepository} fieldsRepository={fieldsRepository} /></CapabilityRoute>} />
-            <Route path="/privacy" element={<FarmPrivacyPage repository={farmSharingRepository} />} />
+            <Route path="/privacy" element={<FarmPrivacyPage repository={farmSharingRepository} settingsRepository={farmSettingsRepository} />} />
             <Route path="*" element={<Navigate to="/today" replace />} />
             </Routes>
             </Suspense>

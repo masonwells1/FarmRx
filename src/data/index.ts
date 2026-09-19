@@ -20,6 +20,8 @@ import type { FieldsRepository } from './fields'
 import { captureFarmOperationContext, verifyFarmOperationContext } from './farmOperationContext'
 import { SupabaseFarmSharingGateway } from './SupabaseFarmSharingGateway'
 import { SupabaseFarmSharingRepository } from './SupabaseFarmSharingRepository'
+import { SupabaseFarmSettingsGateway } from './SupabaseFarmSettingsGateway'
+import { SupabaseFarmSettingsRepository } from './SupabaseFarmSettingsRepository'
 
 async function currentFarmId() {
   return (await currentFarmContext()).farmId
@@ -42,6 +44,8 @@ const queuedFields = new QueuedFieldsRepository(liveFields, {
 })
 export const fieldsRepository: FieldsRepository = queuedFields
 export const farmSharingRepository = new SupabaseFarmSharingRepository({ gateway: new SupabaseFarmSharingGateway(), getOperationContext: getFieldsOperationContext, verifyOperationContext: verifyFieldsOperationContext, isOffline: farmReplayIsOffline })
+/** GL-1: the farm's market region, written like the privacy toggle (online only, context verified, row confirmed). */
+export const farmSettingsRepository = new SupabaseFarmSettingsRepository({ gateway: new SupabaseFarmSettingsGateway(), getOperationContext: getFieldsOperationContext, verifyOperationContext: verifyFieldsOperationContext, isOffline: farmReplayIsOffline })
 /** Called once the signed-in user's sole farm has been resolved. */
 export const replayFieldsQueue = () => queuedFields.inspectAndReplay()
 export const fieldLocationClient = createFieldLocationClient({ gateway: new SupabaseFieldLocationGateway(), getContext: currentFarmContext, projectRef: supabaseConfig.projectRef, storage, createId: () => crypto.randomUUID(), clock: () => new Date().toISOString(), isOffline: farmReplayIsOffline })
