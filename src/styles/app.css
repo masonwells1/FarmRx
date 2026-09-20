@@ -1207,4 +1207,30 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .contract-repair-body input, .contract-repair-body textarea { min-height: 48px; font: inherit; font-weight: 400; }
 .contract-repair-buttons { display: flex; flex-wrap: wrap; gap: 12px; }
 .contract-repair-buttons .text-action { min-height: 48px; }
+
+/* LD-1: the load record. Farmer-text contract: 18px labels, 48px tap targets, one column on a phone. */
+.load-form { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.load-form > label { display: flex; flex-direction: column; gap: 4px; font-size: 18px; font-weight: 600; }
+.load-form input, .load-form select { min-height: 48px; font: inherit; font-weight: 400; }
+.load-form fieldset { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 10px; border: 1px solid var(--hairline, rgba(0, 0, 0, 0.16)); border-radius: 10px; }
+.load-form legend { font-size: 18px; font-weight: 600; padding: 0 4px; }
+.load-form fieldset label { display: flex; flex-direction: column; gap: 4px; font-size: 18px; font-weight: 600; }
+/* A radio and its words are one tap target, and the words sit beside the dot rather than under it. */
+.load-form fieldset > label:has(input[type="radio"]) { flex-direction: row; align-items: center; gap: 10px; min-height: 48px; font-weight: 400; }
+.load-form fieldset input[type="radio"] { width: 24px; height: 24px; }
+/* What the origin decided this load is. Never typed, so never styled as an input. */
+.load-lot { margin: 0; font-size: 18px; font-weight: 600; }
+.load-message { font-size: 18px; margin: 0; }
+.load-scope-note { font-size: 18px; margin: 16px 0 0; }
+.load-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 18px; }
+.load-table th, .load-table td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--hairline, rgba(0, 0, 0, 0.16)); }
+.load-table .text-action { min-height: 48px; }
+/* A voided ticket stays visible and stays legible: struck through would fail contrast on a phone in
+   sunlight, so it is marked in words instead. */
+.load-table tr.load-voided td { opacity: 0.72; }
+.load-void-reason { font-size: 18px; font-weight: 600; }
+@media (min-width: 720px) {
+  .load-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .load-form fieldset, .load-form > button, .load-form > .load-message { grid-column: 1 / -1; }
+}
 .contract-repair .destructive { color: var(--alert-red, #a4262c); }

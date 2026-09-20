@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 287')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 306')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -813,7 +813,11 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, gl3bMigration, 'if v_replay.grain_contract_id = p_contract_id\n       and v_replay.reason is not distinct from v_reason\n       and v_replay.requested_changes is not distinct from v_changes then', 'gl3b:a-retry-must-be-the-same-correction')
   requireText(errors, gl3bMigration, "raise exception using errcode = 'P0001', message = 'FARM_RX_CORRECTION_ALREADY_SAVED';", 'gl3b:a-retry-must-be-the-same-correction')
   requireText(errors, grainModule, 'const redraft = () => { operationId.current = null };', 'gl3b:a-retry-must-be-the-same-correction')
-  if ((grainModule.split('redraft();').length - 1) !== 7) errors.push('gl3b:a-retry-must-be-the-same-correction')
+  // Counted inside ContractRepair rather than across the file. LD-1's load form uses the same idiom
+  // for the same reason, and a file-wide count would have turned that into a GL-3b failure while also
+  // letting a GL-3b field lose its redraft() as long as some other component gained one.
+  const contractRepairBody = grainModule.slice(grainModule.indexOf('export function ContractRepair'), grainModule.indexOf('export function Bins'))
+  if ((contractRepairBody.split('redraft();').length - 1) !== 7) errors.push('gl3b:a-retry-must-be-the-same-correction')
   // ??=, not =: a retry must reuse the id its first attempt used, or the server cannot recognise it.
   requireText(errors, grainModule, 'operationId.current ??= services.createGrainId();', 'gl3b:correction-survives-a-lost-response')
   // Both paths mint lazily, correction and delete. A plain assignment in either would hand a retry a
@@ -828,6 +832,56 @@ export function foundationStaticGuard(root = process.cwd()) {
   // The totals row floors each contract's remaining exactly as its own row does, so one over-delivered
   // contract can never make the farm's remaining look smaller than it is.
   requireText(errors, grainModule, 'sum + Math.max(0, contract.bushels - workspace.grain_contract_deliveries', 'gl3:totals-never-net-over-delivery')
+
+  // ----- Initiative LD-1: the load record
+  const ld1Migration = read(root, 'supabase/migrations/20260920180000_ld1_grain_loads.sql')
+  const grainTypes = read(root, 'src/data/grain.ts')
+  // A load is written only through the RPC. The table granting INSERT would put every check below
+  // behind a browser that can simply not call it.
+  requireText(errors, ld1Migration, 'grant select on public.grain_loads to authenticated;', 'ld1:the-only-write-path-is-the-rpc')
+  if (/^grant\b[^;]*\b(insert|update|delete)\b[^;]*\bon public\.grain_loads/mi.test(ld1Migration)) errors.push('ld1:the-only-write-path-is-the-rpc')
+  // Both fences, on both RPCs. can_edit_farm alone admits a worker, and a scale ticket carries the
+  // farm's bushels and the buyer that bought them.
+  if ((ld1Migration.split('not public.can_read_private_financials(p_farm_id) then').length - 1) !== 2) errors.push('ld1:a-load-is-private-financial-data')
+  if ((ld1Migration.split('public.request_uses_service_role()').length - 1) !== 2) errors.push('ld1:a-load-is-private-financial-data')
+  // The origin decides the lot. Preferring the client's value, or the stored one, would be two
+  // evaluators of one fact -- the defect that cost GL-2 five rounds.
+  requireText(errors, ld1Migration, 'v_commodity := v_crop.commodity_id;\n    v_crop_year := v_crop.crop_year;', 'ld1:the-origin-decides-the-lot')
+  requireText(errors, ld1Migration, 'v_commodity := v_inventory.commodity_id;\n      v_crop_year := v_inventory.crop_year;', 'ld1:the-origin-decides-the-lot')
+  // Carry-over grain paying down a current-year contract is the defect this tranche exists to stop.
+  requireText(errors, ld1Migration, 'if v_contract.crop_year is distinct from v_crop_year then', 'ld1:a-contract-must-match-the-lot')
+  requireText(errors, ld1Migration, 'if v_contract.commodity_id is distinct from v_commodity then', 'ld1:a-contract-must-match-the-lot')
+  requireText(errors, grainTypes, 'contract.crop_year !== lot.crop_year', 'ld1:a-contract-must-match-the-lot')
+  // Append-only, and the epoch guard every farm-scoped table carries.
+  requireText(errors, ld1Migration, 'create trigger grain_loads_append_only\nbefore update on public.grain_loads\nfor each row execute function public.grain_loads_append_only();', 'ld1:a-saved-ticket-is-evidence')
+  requireText(errors, ld1Migration, "raise exception 'a load record cannot be edited; void it and record the correct one';", 'ld1:a-saved-ticket-is-evidence')
+  requireText(errors, ld1Migration, 'create trigger farm_access_epoch_guard\nbefore insert or update or delete on public.grain_loads\nfor each row execute function public.guard_row_farm_access_epoch();', 'ld1:a-load-is-epoch-fenced')
+  // A retry replays; it never writes a second ticket, and never silently means something else.
+  requireText(errors, ld1Migration, "raise exception using errcode = 'P0001', message = 'FARM_RX_LOAD_ID_REUSED';", 'ld1:a-lost-response-is-not-a-lost-ticket')
+  requireText(errors, ld1Migration, "raise exception using errcode = 'P0001', message = 'FARM_RX_LOAD_ALREADY_VOIDED';", 'ld1:a-lost-response-is-not-a-lost-ticket')
+  requireText(errors, grainModule, 'loadId.current ??= services.createGrainId();', 'ld1:a-lost-response-is-not-a-lost-ticket')
+  requireText(errors, grainModule, 'const redraft = () => { loadId.current = null };', 'ld1:a-lost-response-is-not-a-lost-ticket')
+  // Every field change drops the held ticket id: the same id standing for different content is the
+  // one thing the server refuses outright.
+  const loadsTabBody = grainModule.slice(grainModule.indexOf('export function LoadsTab'))
+  if ((loadsTabBody.split('update({').length - 1) < 12) errors.push('ld1:a-lost-response-is-not-a-lost-ticket')
+  // LD-1 stores the ticket and nothing else. Saying otherwise would have farmers stop recording
+  // bin-outs while their stored bushels quietly drift.
+  requireText(errors, grainModule, 'It does not yet move bushels out of a bin, count against a contract, or add to a field', 'ld1:the-scope-is-stated-to-the-farmer')
+  // The Loads tab hides itself until the migration is applied, rather than offering a form that cannot save.
+  requireText(errors, grainModule, "workspace.capabilities?.grain_loads !== false", 'ld1:the-tab-waits-for-the-migration')
+  requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), 'grain_loads: !loadsUnavailable', 'ld1:the-tab-waits-for-the-migration')
+  // Every tab in the header must be a tab the router will actually open. These are two lists that have
+  // to agree, and LD-1 added a tab to one of them: the header offered Loads and the route fell through
+  // to Overview. Pinning the pair means the next tab cannot repeat it.
+  {
+    const tabList = grainModule.slice(grainModule.indexOf('const GRAIN_TABS = ['), grainModule.indexOf('];', grainModule.indexOf('const GRAIN_TABS = [')))
+    const routerList = grainModule.slice(grainModule.indexOf('const tabPath = ['), grainModule.indexOf('].includes(rawTab)'))
+    const slugs = [...tabList.matchAll(/slug: "([^"]*)"/g)].map((match) => match[1]).filter((slug) => slug !== '')
+    if (slugs.length === 0 || slugs.some((slug) => !routerList.includes(`"${slug}"`))) errors.push('grain:every-tab-has-a-route')
+  }
+  // Bounded and newest-first, so a hauling season cannot push the current tickets past PostgREST's cap.
+  requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), ".limit(RECENT_GRAIN_LOAD_LIMIT)", 'ld1:the-newest-tickets-are-the-ones-loaded')
   return errors
 }
 

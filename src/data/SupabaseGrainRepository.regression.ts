@@ -1,5 +1,5 @@
 import type { GrainDataGateway, GrainRowBundle, ReplaceMarketingPlanInput } from './GrainDataGateway'
-import { columnMissing, functionMissing, MANUAL_CASH_BID_LIMIT, mergeCashBids, productionActualColumns, RECENT_CASH_BID_LIMIT, tableMissing } from './SupabaseGrainDataGateway'
+import { columnMissing, functionMissing, grainLoadPayload, MANUAL_CASH_BID_LIMIT, mergeCashBids, productionActualColumns, RECENT_CASH_BID_LIMIT, tableMissing } from './SupabaseGrainDataGateway'
 import { GrainWriteQueue, grainWriteQueueKey, parseGrainQueue, type GrainQueueEntryV1 } from './grainWriteQueue'
 import { QueuedGrainRepository } from './QueuedGrainRepository'
 import { fieldsSeedForRegression } from './MockFieldsRepository'
@@ -14,11 +14,11 @@ import { farmerError } from '../lib/farmerErrors'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from './binLedger'
 import { deriveBinOnHand } from './binLedger'
 import { FILLED_OFFER_DELETE_MESSAGE } from './firmOffers'
-import { CONTRACT_REPAIR_PENDING, contractCorrectionDiff, contractIsCorrectable, validateContractCorrectionReason } from './grain'
+import { CONTRACT_REPAIR_PENDING, contractCorrectionDiff, contractIsCorrectable, LOAD_RECORD_PENDING, validateContractCorrectionReason } from './grain'
 import { readFileSync } from 'node:fs'
 import type { FieldsRepository } from './fields'
 import type { FarmOperationContext } from './farmOperationContext'
-import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainSaleLimit, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, ProductionEstimate } from './grain'
+import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainLoadDraft, GrainSaleLimit, GrainWorkspace, MarketingAlertRule, MarketingPlanTarget, ProductionEstimate } from './grain'
 import type { StorageLike } from './writeQueue'
 import { resetFarmGrantFromLive } from './farmRevocationFence'
 
@@ -53,7 +53,7 @@ function fixture() {
   const inventory = { id: uid(6), farm_id: farm, grain_bin_id: bin.id, crop_year: '2026', commodity_id: commodity, bushels: '600', committed_bushels: '100', measured_at: stamp, notes: null, created_at: stamp, updated_at: stamp }
   const bid = { id: uid(7), farm_id: farm, elevator: 'Iowa pilot [USDA MARS 2850]', commodity_id: commodity, bid_date: '2026-07-10', basis: '-0.2', cash_price: '4.3', delivery_start: null, delivery_end: null, notes: '[USDA MARS 2850]', created_at: stamp, updated_at: stamp }
   const report = { id: uid(8), report_name: 'WASDE', report_date: '2026-08-12', release_at: null, source_url: null, notes: null, created_at: stamp, updated_at: stamp }
-  return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], grain_contract_deliveries: [], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], bin_transactions: [] as unknown[], cash_bids: [bid], usda_market_reports: [{ report_id: '2850', name: 'Iowa Daily Cash Grain Bids', geography: 'IA', geography_label: 'Iowa', verified_at: null, verification_note: 'confirm on the USDA listing', created_at: '2026-07-01T12:00:00.000Z', updated_at: '2026-07-01T12:00:00.000Z' }], usda_report_dates: [report], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null, grain_sale_limits: [], grain_carry_settings: null, grain_carry_grids: [] } }
+  return { fields, scope, bundle: { production_estimates: [production], grain_contracts: [contract], grain_contract_deliveries: [], grain_loads: [], marketing_plan_targets: [target], insurance_units: [insurance], grain_bins: [bin], bin_inventory: [inventory], bin_transactions: [] as unknown[], cash_bids: [bid], usda_market_reports: [{ report_id: '2850', name: 'Iowa Daily Cash Grain Bids', geography: 'IA', geography_label: 'Iowa', verified_at: null, verification_note: 'confirm on the USDA listing', created_at: '2026-07-01T12:00:00.000Z', updated_at: '2026-07-01T12:00:00.000Z' }], usda_report_dates: [report], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null, grain_sale_limits: [], grain_carry_settings: null, grain_carry_grids: [] } }
 }
 /** Lets tests perturb what the "server" hands back, independent of what was sent, to prove the repository
  * confirms the canonical response rather than trusting its own request. Unset (null) by default so every
@@ -84,6 +84,13 @@ class FakeGateway implements GrainDataGateway {
   deleteContractCalls: Array<{ contractId: string; reason: string; expectedUpdatedAt: string; operationId: string }> = []
   reopenedOnDelete: string | null = null
   async editContractRpc(_farm: string, contractId: string, reason: string, changes: Record<string, unknown>, expectedUpdatedAt: string, operationId: string) { this.guard(); this.editContractPayloads.push({ contractId, reason, changes: structuredClone(changes), expectedUpdatedAt, operationId }); const raw = this.state.bundle.grain_contracts.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId) as Record<string, unknown> | undefined; if (!raw) throw new Error('missing contract'); const saved = { ...raw, ...changes, updated_at: stamp }; this.state.bundle.grain_contracts = this.state.bundle.grain_contracts.map((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId ? saved : item); return structuredClone(saved) }
+  saveLoadCalls: Array<{ id: string; draft: GrainLoadDraft }> = []
+  voidLoadCalls: Array<{ loadId: string; reason: string }> = []
+  // Mirrors the server: the origin decides the lot, and one id means one ticket.
+  async saveGrainLoadRpc(farmId: string, id: string, draft: GrainLoadDraft) { this.guard(); this.saveLoadCalls.push({ id, draft: structuredClone(draft) }); const existing = this.state.bundle.grain_loads.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === id); if (existing) return structuredClone(existing); const saved = { id, farm_id: farmId, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id || null, truck_name: draft.truck_name.trim() || null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_kind === 'bin' ? draft.origin_grain_bin_id : null, origin_crop_assignment_id: draft.origin_kind === 'field' ? draft.origin_crop_assignment_id : null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_kind === 'buyer' ? draft.destination_buyer.trim() : null, destination_grain_contract_id: draft.destination_kind === 'contract' ? draft.destination_grain_contract_id : null, destination_grain_bin_id: draft.destination_kind === 'bin' ? draft.destination_grain_bin_id : null, commodity_id: this.loadLotCommodity, crop_year: this.loadLotCropYear, gross_lbs: null, tare_lbs: null, net_bushels: Number(draft.net_bushels), moisture_pct: null, ticket_number: draft.ticket_number.trim() || null, photo_path: null, notes: draft.notes.trim() || null, voided_at: null, void_reason: null, created_at: stamp, updated_at: stamp }; this.state.bundle.grain_loads = [...this.state.bundle.grain_loads, saved]; return structuredClone(saved) }
+  loadLotCommodity = 'corn_yellow'
+  loadLotCropYear = 2026
+  async voidGrainLoadRpc(_farm: string, loadId: string, reason: string) { this.guard(); this.voidLoadCalls.push({ loadId, reason }); const raw = this.state.bundle.grain_loads.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === loadId) as Record<string, unknown> | undefined; if (!raw) throw new Error('missing load'); const voided = { ...raw, voided_at: stamp, void_reason: reason, updated_at: stamp }; this.state.bundle.grain_loads = this.state.bundle.grain_loads.map((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === loadId ? voided : item); return { status: 'voided', load: structuredClone(voided), blocked_by: [] } }
   async deleteContractRpc(_farm: string, contractId: string, reason: string, expectedUpdatedAt: string, operationId: string) { this.guard(); this.deleteContractCalls.push({ contractId, reason, expectedUpdatedAt, operationId }); this.state.bundle.grain_contracts = this.state.bundle.grain_contracts.filter((item) => !(item && typeof item === 'object' && (item as { id?: unknown }).id === contractId)); return { deleted: true, reopened_firm_offer_id: this.reopenedOnDelete, already_deleted: false } }
   async upsertGrainAlertSettings(_farm: string, row: GrainAlertSettings) { this.guard(); return structuredClone(row) }
   async upsertGrainSaleLimit(_farm: string, row: GrainSaleLimit) { this.guard(); this.state.bundle.grain_sale_limits = [...(this.state.bundle.grain_sale_limits as GrainSaleLimit[]).filter((item) => item.id !== row.id), structuredClone(row)]; return structuredClone(row) }
@@ -548,6 +555,56 @@ async function run() {
     try { await preMigrationRepo.deleteContract(preMigrationData.grain_contracts[0].id, 'entered twice', preMigrationData.grain_contracts[0].updated_at, uid(82)) } catch (error) { pendingDelete = error instanceof Error ? error.message : '' }
     assert(pendingEdit === CONTRACT_REPAIR_PENDING && pendingDelete === CONTRACT_REPAIR_PENDING, `GL-3b: a pre-migration database must say so plainly (saw ${pendingEdit} / ${pendingDelete}).`)
   }
+
+  // 25. LD-1: the load record.
+  {
+    const loadGateway = new FakeGateway()
+    const loadRepo = repository(loadGateway)
+    const draft: GrainLoadDraft = { load_date: '2026-10-01', truck_equipment_id: '', truck_name: 'Red semi', origin_kind: 'bin', origin_grain_bin_id: uid(90), origin_crop_assignment_id: '', destination_kind: 'buyer', destination_buyer: '  Riverside Elevator  ', destination_grain_contract_id: '', destination_grain_bin_id: '', gross_lbs: '', tare_lbs: '', net_bushels: '910.5', moisture_pct: '', ticket_number: 'A-1001', notes: '' }
+    const ticketId = uid(91)
+    const saved = await loadRepo.saveLoad(ticketId, draft)
+    assert(saved.id === ticketId, 'LD-1: the saved ticket must be the one the caller named.')
+    assert(saved.net_bushels === 910.5, `LD-1: the ticket must carry the bushels the farmer typed (saw ${saved.net_bushels}).`)
+    // The lot comes back from the server, never from the draft. The draft never carried one.
+    assert(saved.crop_year === 2026 && saved.commodity_id === 'corn_yellow', 'LD-1: the lot on a saved ticket comes from the origin, decided server-side.')
+
+    // A retry after a lost response is the SAME ticket, not a second one. This is why the id belongs
+    // to the ticket rather than to the attempt.
+    const again = await loadRepo.saveLoad(ticketId, draft)
+    assert(again.id === saved.id && again.created_at === saved.created_at, 'LD-1: a retry must replay the saved ticket.')
+    assert(loadGateway.state.bundle.grain_loads.length === 1, `LD-1: a retry must not write a second ticket (saw ${loadGateway.state.bundle.grain_loads.length}).`)
+
+    // A blank field is omitted rather than sent as an empty string, so the server's own "absent means
+    // derive it" rules stay in force.
+    const payload = grainLoadPayload(ticketId, draft)
+    assert(!('truck_equipment_id' in payload), 'LD-1: an unpicked equipment truck must not be sent at all.')
+    assert(!('gross_lbs' in payload) && !('moisture_pct' in payload), 'LD-1: a weight or moisture nobody typed must not be sent as a number.')
+    assert(payload.destination_buyer === 'Riverside Elevator', 'LD-1: the buyer must be trimmed before it is sent.')
+    assert(!('commodity_id' in payload) && !('crop_year' in payload), 'LD-1: the browser must never send a lot; the origin decides it on the server.')
+
+    const voided = await loadRepo.voidLoad(ticketId, '  Weighed on a broken scale  ')
+    assert(voided.status === 'voided' && voided.load?.voided_at !== null, 'LD-1: a void must come back voided.')
+    assert(loadGateway.voidLoadCalls[0]?.reason === 'Weighed on a broken scale', 'LD-1: the reason must be trimmed before it is stored.')
+    assert(voided.blockedBy.length === 0, 'LD-1: an LD-1 load creates nothing else, so nothing can block its void.')
+    // The ticket survives its own void. That is the whole point of append-only.
+    assert(loadGateway.state.bundle.grain_loads.length === 1, 'LD-1: voiding must keep the ticket on the record.')
+
+    let shortReason = ''
+    try { await loadRepo.voidLoad(ticketId, 'no') } catch (error) { shortReason = error instanceof Error ? error.message : '' }
+    assert(shortReason === 'Say why this ticket is being voided.', `LD-1: a void with no real reason must say so plainly (saw ${shortReason}).`)
+
+    // The LD-1 migration is applied separately from the deploy that carries this client. Between the
+    // two the RPCs do not exist, and the farmer must read a schema-skew message, not a Postgres error.
+    const preLoadGateway = new FakeGateway()
+    Object.defineProperty(preLoadGateway, 'saveGrainLoadRpc', { value: undefined })
+    Object.defineProperty(preLoadGateway, 'voidGrainLoadRpc', { value: undefined })
+    const preLoadRepo = repository(preLoadGateway)
+    let pendingSave = ''; let pendingVoid = ''
+    try { await preLoadRepo.saveLoad(uid(92), draft) } catch (error) { pendingSave = error instanceof Error ? error.message : '' }
+    try { await preLoadRepo.voidLoad(uid(92), 'entered twice') } catch (error) { pendingVoid = error instanceof Error ? error.message : '' }
+    assert(pendingSave === LOAD_RECORD_PENDING && pendingVoid === LOAD_RECORD_PENDING, `LD-1: a pre-migration database must say so plainly (saw ${pendingSave} / ${pendingVoid}).`)
+  }
+
   console.log('SupabaseGrainRepository regressions passed.')
 }
 void run().catch((error: unknown) => { console.error(error); process.exitCode = 1 })

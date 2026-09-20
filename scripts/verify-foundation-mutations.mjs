@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 287
+const expectedMutationCount = 306
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -21,7 +21,7 @@ const files = [
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
   'supabase/functions/_shared/marsFeedOrchestrator.ts', 'src/data/grainAlerts.ts', 'supabase/functions/deliver-grain-alert/index.ts',
-  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
+  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'supabase/migrations/20260920180000_ld1_grain_loads.sql', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -56,7 +56,7 @@ const accepted = (label) => {
 
 try {
   reset()
-  if (foundationStaticGuard(temporary).length) throw new Error('Static guard baseline was not green before mutation drills.')
+  { const baseline = foundationStaticGuard(temporary); if (baseline.length) throw new Error('Static guard baseline was not green before mutation drills: ' + baseline.join(', ')) }
   mutate('src/App.tsx', (source) => source.replace('path="/grain/*"', 'path="/grain-broken/*"'))
   detected('ordered route manifest change', 'routes:exact-ordered-manifest')
   reset()
@@ -872,6 +872,65 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('sum + Math.max(0, contract.bushels - workspace.grain_contract_deliveries', 'sum + (contract.bushels - workspace.grain_contract_deliveries'))
   detected('one over-delivered contract shrinks the farm total remaining', 'gl3:totals-never-net-over-delivery')
+  reset()
+
+  // LD-1: the load record.
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('grant select on public.grain_loads to authenticated;', 'grant select, insert on public.grain_loads to authenticated;'))
+  detected('the browser can insert a load directly, skipping every check in the RPC', 'ld1:the-only-write-path-is-the-rpc')
+  reset()
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace("     or not public.can_read_private_financials(p_farm_id) then\n    raise exception 'you do not have permission to record a load for this farm';", "     then\n    raise exception 'you do not have permission to record a load for this farm';"))
+  detected('a worker with no financial access can record a load', 'ld1:a-load-is-private-financial-data')
+  reset()
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('     or public.request_uses_service_role()\n     or not public.can_edit_farm(p_farm_id)\n     or not public.can_read_private_financials(p_farm_id) then\n    raise exception \'you do not have permission to void a load for this farm\';', '     or not public.can_edit_farm(p_farm_id)\n     or not public.can_read_private_financials(p_farm_id) then\n    raise exception \'you do not have permission to void a load for this farm\';'))
+  detected('a scheduled job running as the service role can void a load', 'ld1:a-load-is-private-financial-data')
+  reset()
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('v_commodity := v_crop.commodity_id;\n    v_crop_year := v_crop.crop_year;', 'v_crop_year := coalesce(v_crop_year, v_crop.crop_year);'))
+  detected("the field crop stops deciding the load's lot", 'ld1:the-origin-decides-the-lot')
+  reset()
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('v_commodity := v_inventory.commodity_id;\n      v_crop_year := v_inventory.crop_year;', 'v_crop_year := coalesce(v_crop_year, v_inventory.crop_year);'))
+  detected("the bin lot stops deciding the load's crop year", 'ld1:the-origin-decides-the-lot')
+  reset()
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('if v_contract.crop_year is distinct from v_crop_year then', 'if false then'))
+  detected('carry-over grain can pay down a current-year contract', 'ld1:a-contract-must-match-the-lot')
+  reset()
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('if v_contract.commodity_id is distinct from v_commodity then', 'if false then'))
+  detected('a corn load can pay down a soybean contract', 'ld1:a-contract-must-match-the-lot')
+  reset()
+  mutate('src/data/grain.ts', (source) => source.replace('contract.crop_year !== lot.crop_year', 'false'))
+  detected('the form offers a contract from the wrong crop year', 'ld1:a-contract-must-match-the-lot')
+  reset()
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('create trigger grain_loads_append_only\nbefore update on public.grain_loads', 'create trigger grain_loads_append_only_unused\nbefore update on public.grain_load_nothing'))
+  detected('a saved scale ticket can be edited in place', 'ld1:a-saved-ticket-is-evidence')
+  reset()
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('create trigger farm_access_epoch_guard\nbefore insert or update or delete on public.grain_loads', 'create trigger farm_access_epoch_guard\nbefore insert or update or delete on public.grain_loads_nothing'))
+  detected('a revoked browser can still write a load', 'ld1:a-load-is-epoch-fenced')
+  reset()
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace("raise exception using errcode = 'P0001', message = 'FARM_RX_LOAD_ID_REUSED';", "return to_jsonb(v_existing);"))
+  detected('one ticket id silently stands for two different loads', 'ld1:a-lost-response-is-not-a-lost-ticket')
+  reset()
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace("raise exception using errcode = 'P0001', message = 'FARM_RX_LOAD_ALREADY_VOIDED';", "return jsonb_build_object('status', 'voided', 'load', to_jsonb(v_load), 'blocked_by', '[]'::jsonb);"))
+  detected('a second void reason quietly replaces the first', 'ld1:a-lost-response-is-not-a-lost-ticket')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('loadId.current ??= services.createGrainId();', 'loadId.current = services.createGrainId();'))
+  detected('a retried load takes a fresh id and writes a second ticket', 'ld1:a-lost-response-is-not-a-lost-ticket')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('const redraft = () => { loadId.current = null };', 'const redraft = () => { /* keep the id */ };'))
+  detected('editing the load form after a lost response reuses the previous ticket id', 'ld1:a-lost-response-is-not-a-lost-ticket')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('It does not yet move bushels out of a bin, count against a contract, or add to a field', 'It updates your bins, contracts and harvest'))
+  detected('the screen claims a load does more than it does', 'ld1:the-scope-is-stated-to-the-farmer')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('const available = workspace.capabilities?.grain_loads !== false;', 'const available = true;'))
+  detected('the Loads tab offers a form the database cannot save yet', 'ld1:the-tab-waits-for-the-migration')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('grain_loads: !loadsUnavailable', 'grain_loads: true'))
+  detected('the capability reports a loads table that is not there', 'ld1:the-tab-waits-for-the-migration')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('.limit(RECENT_GRAIN_LOAD_LIMIT)', ''))
+  detected('the loads read loses its bound and a hauling season pushes the current tickets past the cap', 'ld1:the-newest-tickets-are-the-ones-loaded')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('    "contracts",\n    "loads",\n    "storage",', '    "contracts",\n    "storage",'))
+  detected('a tab in the Grain header has no route and silently opens Overview', 'grain:every-tab-has-a-route')
   if (mutationCount !== expectedMutationCount) throw new Error(`Foundation mutation count drifted: expected ${expectedMutationCount}, observed ${mutationCount}.`)
   console.log(`Foundation mutation drill: PASS (${mutationCount}/${expectedMutationCount} controlled mutations turned the gate red)`)
 } finally {

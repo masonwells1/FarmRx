@@ -73,7 +73,11 @@ export interface GrainCapabilities { bin_movements: boolean; contract_price_fina
   /** GL-3b: false until the live database carries the contract-repair RPCs and their audit table.
    * The same merge-before-migration window as above: while this is false the Contracts tab offers no
    * Correct or Delete control at all, rather than offering one that fails on the farmer's first try. */
-  contract_edit_delete?: boolean }
+  contract_edit_delete?: boolean;
+  /** LD-1: false until the live database carries grain_loads and its two RPCs. Same merge-before-
+   * migration window: while this is false the Loads tab says the feature is arriving rather than
+   * offering a form whose save cannot land. */
+  grain_loads?: boolean }
 
 /** GL-3b: the fields a contract correction may change. An absent key keeps the stored value; an
  * explicit null clears a nullable one. Crop year, commodity, contract type and every pricing column
@@ -181,7 +185,178 @@ export interface UsdaReportDate { id: string; report_name: string; report_date: 
 
 export interface FuturesQuote { symbol: 'ZC' | 'ZS' | 'ZW'; contract: string; label: string; price: number; crop_year: number; new_crop: boolean; delayed: true; as_of: string }
 export interface MarketDataService { getQuotes(): Promise<FuturesQuote[]> }
-export interface GrainData { production_estimates: ProductionEstimate[]; grain_contracts: GrainContract[]; grain_contract_deliveries: GrainContractDelivery[]; marketing_plan_targets: MarketingPlanTarget[]; insurance_units: InsuranceUnit[]; grain_bins: GrainBin[]; bin_inventory: BinInventory[]; bin_transactions: BinTransaction[]; cash_bids: CashBid[]; usda_report_dates: UsdaReportDate[]; usda_market_reports: UsdaMarketReport[]; marketing_alert_rules: MarketingAlertRule[]; firm_offers: FirmOffer[]; grain_alert_settings: GrainAlertSettings | null; grain_sale_limits: GrainSaleLimit[]; grain_carry_settings: GrainCarrySettings | null; grain_carry_grids: GrainCarryGrid[]; capabilities?: GrainCapabilities }
+/** LD-1: where the grain on a truck came from. A field origin is grain coming off the combine or
+ * the cart; a bin origin is grain coming out of storage. */
+export type LoadOriginKind = 'bin' | 'field'
+/** LD-1: where it went. `buyer` is a free-text elevator with no contract behind it. */
+export type LoadDestinationKind = 'buyer' | 'contract' | 'bin'
+
+/** LD-1: the farm's trucks, from the Equipment module, so a ticket can name a real asset instead of
+ * a retyped string. Only the two fields the picker needs; Equipment owns everything else about them. */
+export interface LoadTruck { id: string; name: string }
+
+/** LD-1: a scale ticket, as the database stores it. Append-only: the only change a saved load ever
+ * accepts is the one-way move into voided. */
+export interface GrainLoad {
+  id: string
+  farm_id: string
+  load_date: string
+  truck_equipment_id: string | null
+  truck_name: string | null
+  origin_kind: LoadOriginKind
+  origin_grain_bin_id: string | null
+  origin_crop_assignment_id: string | null
+  destination_kind: LoadDestinationKind
+  destination_buyer: string | null
+  destination_grain_contract_id: string | null
+  destination_grain_bin_id: string | null
+  commodity_id: string
+  crop_year: number
+  gross_lbs: number | null
+  tare_lbs: number | null
+  net_bushels: number
+  moisture_pct: number | null
+  ticket_number: string | null
+  photo_path: string | null
+  notes: string | null
+  voided_at: string | null
+  void_reason: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** LD-1: the form's own shape. Every numeric field is the string the farmer typed, so a half-entered
+ * number is never silently read as zero. An empty string means the farmer left it blank. */
+export interface GrainLoadDraft {
+  load_date: string
+  truck_equipment_id: string
+  truck_name: string
+  origin_kind: LoadOriginKind
+  origin_grain_bin_id: string
+  origin_crop_assignment_id: string
+  destination_kind: LoadDestinationKind
+  destination_buyer: string
+  destination_grain_contract_id: string
+  destination_grain_bin_id: string
+  gross_lbs: string
+  tare_lbs: string
+  net_bushels: string
+  moisture_pct: string
+  ticket_number: string
+  notes: string
+}
+
+/** LD-1: what a void did. `blockedBy` is always empty for an LD-1 load, which creates nothing else;
+ * LD-2 fills it with the later movements that depend on the load and make the void impossible. */
+export interface LoadVoidResult { status: 'voided' | 'blocked'; load: GrainLoad | null; blockedBy: string[] }
+
+/** LD-1: the lot a load is carrying -- the commodity and the crop year together. Keeping them as one
+ * value is the point: a load that knew its commodity but guessed its crop year would let carry-over
+ * grain pay down a current-year contract, which is the defect this tranche exists to prevent. */
+export interface LoadLot { commodity_id: string; crop_year: number }
+
+export const LOAD_RECORD_PENDING = 'Recording a load arrives with the next database update.'
+
+/** LD-1: the browser's twin of the server's derivation. The origin decides the lot and nothing else
+ * may; this returns null when the origin cannot name one, and the form then refuses to save rather
+ * than sending a guess the server would have to reject. */
+export function loadLotFor(workspace: Pick<GrainWorkspace, 'bin_inventory' | 'fields'>, draft: Pick<GrainLoadDraft, 'origin_kind' | 'origin_grain_bin_id' | 'origin_crop_assignment_id'>): LoadLot | null {
+  if (draft.origin_kind === 'field') {
+    const crop = workspace.fields.crop_assignments.find((row) => row.id === draft.origin_crop_assignment_id)
+    return crop ? { commodity_id: crop.commodity_id, crop_year: crop.crop_year } : null
+  }
+  const lot = workspace.bin_inventory.find((row) => row.grain_bin_id === draft.origin_grain_bin_id)
+  return lot ? { commodity_id: lot.commodity_id, crop_year: lot.crop_year } : null
+}
+
+/** LD-1: a load that has been voided still shows on the ledger, and still must not count toward
+ * anything. Every figure derived from loads reads through this. */
+export function activeLoads(loads: readonly GrainLoad[]): GrainLoad[] {
+  return loads.filter((load) => load.voided_at === null)
+}
+
+/** LD-1: the same 3-to-2000-character rule the database applies to a void reason. */
+export function validateLoadVoidReason(reason: string): string | null {
+  const trimmed = reason.trim()
+  if (trimmed.length < 3) return 'Say why this ticket is being voided.'
+  if (trimmed.length > 2000) return 'That reason is too long.'
+  return null
+}
+
+/** LD-1: everything the form can tell the farmer before the network is involved. The server checks
+ * all of it again under a row lock -- this exists so a farmer in a truck with one bar of signal is
+ * told what is wrong immediately, not after a round trip. */
+export function validateGrainLoadShape(draft: GrainLoadDraft): string[] {
+  const problems: string[] = []
+  if (!draft.load_date) problems.push('Pick the date this load was hauled.')
+
+  const net = Number(draft.net_bushels)
+  if (!draft.net_bushels.trim() || !Number.isFinite(net) || net <= 0) problems.push('Net bushels must be more than zero.')
+
+  const gross = draft.gross_lbs.trim() ? Number(draft.gross_lbs) : null
+  const tare = draft.tare_lbs.trim() ? Number(draft.tare_lbs) : null
+  if (gross !== null && (!Number.isFinite(gross) || gross <= 0)) problems.push('Gross weight must be more than zero.')
+  if (tare !== null && (!Number.isFinite(tare) || tare <= 0)) problems.push('Tare weight must be more than zero.')
+  if (gross !== null && tare !== null && Number.isFinite(gross) && Number.isFinite(tare) && gross <= tare) {
+    problems.push('The loaded truck has to weigh more than the empty one.')
+  }
+
+  if (draft.moisture_pct.trim()) {
+    const moisture = Number(draft.moisture_pct)
+    if (!Number.isFinite(moisture) || moisture < 0 || moisture > 100) problems.push('Moisture must be between 0 and 100 percent.')
+  }
+
+  if (draft.truck_equipment_id && draft.truck_name.trim()) problems.push('Name the truck or pick one from equipment, not both.')
+
+  if (draft.origin_kind === 'field' && !draft.origin_crop_assignment_id) problems.push('Pick the field crop this load came from.')
+  if (draft.origin_kind === 'bin' && !draft.origin_grain_bin_id) problems.push('Pick the bin this load came from.')
+
+  if (draft.destination_kind === 'buyer' && !draft.destination_buyer.trim()) problems.push('Name the buyer or elevator this load went to.')
+  if (draft.destination_kind === 'bin' && !draft.destination_grain_bin_id) problems.push('Pick the bin this load went into.')
+  if (draft.destination_kind === 'contract' && !draft.destination_grain_contract_id) problems.push('Pick the contract this load went against.')
+
+  if (draft.origin_kind === 'bin' && draft.destination_kind === 'bin'
+      && draft.origin_grain_bin_id && draft.origin_grain_bin_id === draft.destination_grain_bin_id) {
+    problems.push('A load cannot go from a bin back into the same bin.')
+  }
+
+  return problems
+}
+
+/** LD-1: the shape rules plus everything the loaded workspace can settle -- which lot the origin
+ * names, and whether a chosen contract is for that lot. The screen calls this; the repository calls
+ * the shape half only, because it does not hold a workspace and the server settles the rest under a
+ * row lock anyway. */
+export function validateGrainLoad(draft: GrainLoadDraft, workspace: Pick<GrainWorkspace, 'bin_inventory' | 'fields' | 'grain_contracts'>): string[] {
+  const problems = validateGrainLoadShape(draft)
+
+  const lot = loadLotFor(workspace, draft)
+  if ((draft.origin_kind === 'field' && draft.origin_crop_assignment_id) || (draft.origin_kind === 'bin' && draft.origin_grain_bin_id)) {
+    if (!lot) {
+      problems.push(draft.origin_kind === 'bin'
+        ? 'That bin has no recorded crop yet, so Farm Rx cannot tell which crop year this load is. Set the bin inventory first.'
+        : 'That field crop is no longer on this farm.')
+    }
+  }
+
+  if (draft.destination_kind === 'contract') {
+    if (draft.destination_grain_contract_id && lot) {
+      const contract = workspace.grain_contracts.find((row) => row.id === draft.destination_grain_contract_id)
+      if (!contract) {
+        problems.push('That contract is no longer on this farm.')
+      } else if (contract.commodity_id !== lot.commodity_id) {
+        problems.push('That contract is for a different crop than this load.')
+      } else if (contract.crop_year !== lot.crop_year) {
+        // Carry-over grain paying down a current-year contract is the defect LD-1 exists to stop.
+        problems.push('That contract is for the ' + contract.crop_year + ' crop, and this load is the ' + lot.crop_year + ' crop.')
+      }
+    }
+  }
+
+  return problems
+}
+
+export interface GrainData { production_estimates: ProductionEstimate[]; grain_contracts: GrainContract[]; grain_contract_deliveries: GrainContractDelivery[]; grain_loads: GrainLoad[]; marketing_plan_targets: MarketingPlanTarget[]; insurance_units: InsuranceUnit[]; grain_bins: GrainBin[]; bin_inventory: BinInventory[]; bin_transactions: BinTransaction[]; cash_bids: CashBid[]; usda_report_dates: UsdaReportDate[]; usda_market_reports: UsdaMarketReport[]; marketing_alert_rules: MarketingAlertRule[]; firm_offers: FirmOffer[]; grain_alert_settings: GrainAlertSettings | null; grain_sale_limits: GrainSaleLimit[]; grain_carry_settings: GrainCarrySettings | null; grain_carry_grids: GrainCarryGrid[]; capabilities?: GrainCapabilities }
 export interface GrainWorkspace extends GrainData { fields: FieldsData }
 export interface GrainRepository {
   getData(): Promise<GrainWorkspace>
@@ -195,6 +370,14 @@ export interface GrainRepository {
   finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number): Promise<void>
   editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, operationId: string): Promise<GrainContract>
   deleteContract(contractId: string, reason: string, expectedUpdatedAt: string, operationId: string): Promise<ContractDeleteResult>
+  /** LD-1: one saved ticket per id. A retry after a lost response replays rather than writing a
+   * second load, so the caller keeps one id for one ticket across every attempt. */
+  /** LD-1: the farm's trucks, read only when the Loads form is open. Deliberately NOT part of the
+   * grain workspace: Today serves its front door from the same workspace load, and a named rep's
+   * Today must make no equipment read at all. */
+  listLoadTrucks(): Promise<LoadTruck[]>
+  saveLoad(id: string, draft: GrainLoadDraft): Promise<GrainLoad>
+  voidLoad(loadId: string, reason: string): Promise<LoadVoidResult>
   recordContractDelivery(delivery: GrainContractDelivery): Promise<void>
   saveMarketingPlanTarget(target: MarketingPlanTarget): Promise<void>
   replaceMarketingPlanTargets(scope: PositionScope, targets: MarketingPlanTarget[]): Promise<void>
