@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 229')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 230')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -656,6 +656,8 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, grainModule, 'className="position-more-toggle"', 'gl3:position-card-discloses')
   requireText(errors, grainModule, '{showMore ? "Hide details" : "More details"}', 'gl3:position-card-discloses')
   requireText(errors, grainModule, '<h2>Add another crop</h2>', 'gl3:second-crop-reachable')
+  // The compact card stays mounted between crops, so the yield must not carry from one to the next.
+  requireText(errors, grainModule, 'setAph("");\n      await onSaved();', 'gl3:yield-cleared-between-crops')
   // GL-3a made the crop and year picker permanent, so the sale form must not outlive a scope change:
   // a draft typed for one crop year would otherwise be saved under the next one.
   requireText(errors, grainModule, 'key={scopeKey(selectedScope)}', 'gl3:contract-form-resets-on-scope-change')

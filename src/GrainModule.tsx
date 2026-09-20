@@ -2276,6 +2276,11 @@ export function FirstEstimate({
         updated_at: now,
       });
       setError("");
+      // GL-3a: clear the yield after a successful save. The compact card stays mounted while any crop
+      // assignment still lacks an estimate, so without this the next crop is offered with the previous
+      // crop's yield already filled in -- 200 bu/ac corn leaving 200 ready to save for soybeans. A yield
+      // drives the whole position, so a carried-over number is a wrong number, not a convenience.
+      setAph("");
       await onSaved();
     } catch (caught) {
       setError(

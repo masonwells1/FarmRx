@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 229
+const expectedMutationCount = 230
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -690,6 +690,9 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('<h2>Add another crop</h2>', '<h2>Start your grain estimate</h2>'))
   detected('a second crop becomes unreachable again', 'gl3:second-crop-reachable')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('setAph("");\n      await onSaved();', 'await onSaved();'))
+  detected("the next crop inherits the previous crop's yield", 'gl3:yield-cleared-between-crops')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('<tfoot>', '<tfoot hidden>').replace('</tfoot>', '</tfoot>'))
   detected('the contracts totals row is removed', 'gl3:contract-totals-row')
