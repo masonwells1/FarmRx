@@ -597,9 +597,13 @@ export function foundationStaticGuard(root = process.cwd()) {
   const grainModule = read(root, 'src/GrainModule.tsx')
   requireText(errors, grainModule, 'checks these on the server about every', 'gl2:true-schedule-stated')
   if (/Check-on-open/.test(grainModule)) errors.push('gl2:true-schedule-stated')
-  // GL-2 (c) must not promise an email the scheduled path does not send: the only Resend call is in
-  // deliver-grain-alert, which the browser invokes.
-  requireText(errors, grainModule, 'The email goes out the next time the farm owner opens', 'gl2:email-promise-is-true')
+  // GL-2 (c) must not promise an email for a saved marketing alert. There are two reasons, and the
+  // second only showed up after the first repair: the scheduled path has no Resend call at all, and a
+  // rule the sweep already fired returns fired:false from record_marketing_alert_transition, so the
+  // browser filters it out before deliver-grain-alert is ever invoked. A server-fired marketing alert
+  // therefore never produces an email by any route.
+  requireText(errors, grainModule, 'checks these on the server about every fifteen minutes. You', 'gl2:email-promise-is-true')
+  if (/(emails the farm owner|The email goes out|their email goes out)/.test(grainModule)) errors.push('gl2:email-promise-is-true')
 
   // GL-3: the dead ends. Both counterparty fields accept free text with suggestions, no buyer or
   // elevator is hardcoded, the position card leads with a disclosure, and a second crop is reachable.

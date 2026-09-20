@@ -621,7 +621,7 @@ try {
   mutate('supabase/functions/deliver-grain-alert/index.ts', (source) => source.replace("admin.rpc('latest_eligible_cash_bid'", "admin.rpc('some_other_rpc'"))
   detected('the email re-check judges a rule by a different bid than the sweep', 'gl2:email-recheck-uses-shared-selection')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('The email goes out the next time the farm owner opens', 'We email you the moment it happens, even if you never open'))
+  mutate('src/GrainModule.tsx', (source) => source.replace('checks these on the server about every fifteen minutes. You', 'checks these and emails the farm owner. You'))
   detected('the page promises an email the scheduled path never sends', 'gl2:email-promise-is-true')
   reset()
   mutate('src/data/marketingAlerts.ts', (source) => source.replace(' || right.id.localeCompare(left.id))[0] ?? null', ')[0] ?? null'))
