@@ -250,5 +250,36 @@ begin
   if v_elevator is distinct from 'Legacy Feed Row' then raise exception 'the legacy feed row was lost instead of being classified as feed'; end if;
 end $$;
 
+-- ------------------------------------------------- 7. a manual bid usually has no note at all
+-- The browser's bounded manual slice is a PostgREST filter, and PostgREST filters are SQL. A bare
+-- `not (notes like '...')` is NULL for a row with no note, so it drops that row -- which is nearly
+-- every real manual bid, the exact rows the slice exists to protect. The filter must admit them.
+insert into public.cash_bids(farm_id,elevator,commodity_id,bid_date,basis,cash_price,notes)
+values ('00000000-0000-4000-8000-000000000071','No Note Manual Bid','corn_white','2026-10-16',-0.20,4.60,null);
+
+do $$
+declare v_count integer;
+begin
+  if (select not ('x'::text is not null and null::text like '[USDA MARS %')) is not null
+    then raise exception 'three-valued logic changed; this assertion no longer proves anything'; end if;
+
+  -- what a bare not.like would return: the note-less bid is gone
+  select count(*) into v_count from public.cash_bids b
+  where b.farm_id='00000000-0000-4000-8000-000000000071' and b.feed_source is null
+    and not (b.notes like '[USDA MARS %') and b.elevator='No Note Manual Bid';
+  if v_count <> 0 then raise exception 'the bare predicate no longer drops a note-less row; re-check the browser filter'; end if;
+
+  -- what the browser actually sends: the note-less bid survives, the legacy feed row still does not
+  select count(*) into v_count from public.cash_bids b
+  where b.farm_id='00000000-0000-4000-8000-000000000071' and b.feed_source is null
+    and (b.notes is null or not (b.notes like '[USDA MARS %')) and b.elevator='No Note Manual Bid';
+  if v_count <> 1 then raise exception 'the corrected predicate lost the note-less manual bid'; end if;
+
+  select count(*) into v_count from public.cash_bids b
+  where b.farm_id='00000000-0000-4000-8000-000000000071' and b.feed_source is null
+    and (b.notes is null or not (b.notes like '[USDA MARS %')) and b.elevator='Legacy Feed Row';
+  if v_count <> 0 then raise exception 'the corrected predicate let a legacy feed row back into the manual slice'; end if;
+end $$;
+
 select set_config('request.jwt.claims','',false);
 select 'GL2_ALERT_ELIGIBILITY_DISPOSABLE_PASS' as result;

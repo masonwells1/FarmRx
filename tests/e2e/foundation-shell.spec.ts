@@ -220,7 +220,7 @@ const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, str
   // survive however much USDA feed history sits in front of them.
   cash_bids: (farm) => [
     { select: '*', farm_id: `eq.${farm.id}`, order: 'bid_date.desc,id.desc', limit: '750' },
-    { select: '*', farm_id: `eq.${farm.id}`, feed_source: 'is.null', notes: 'not.like.[USDA MARS %', order: 'bid_date.desc,id.desc', limit: '250' },
+    { select: '*', farm_id: `eq.${farm.id}`, feed_source: 'is.null', or: '(notes.is.null,notes.not.like."[USDA MARS %")', order: 'bid_date.desc,id.desc', limit: '250' },
   ],
   // GL-3b capability probe: one indexed read of at most one row, whose contents are not used.
   grain_contract_audit: (farm) => ({ select: 'id', farm_id: `eq.${farm.id}`, limit: '1' }),

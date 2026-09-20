@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 248')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 249')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -615,7 +615,10 @@ export function foundationStaticGuard(root = process.cwd()) {
   const gl2Gateway = read(root, 'src/data/SupabaseGrainDataGateway.ts')
   const gl3BasisMath = read(root, 'src/data/basisMath.ts')
   requireText(errors, gl2Gateway, ".order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(RECENT_CASH_BID_LIMIT)", 'gl2:cash-bids-read-newest-first')
-  requireText(errors, gl2Gateway, ".is('feed_source', null).not('notes', 'like', '[USDA MARS %').order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)", 'gl2:cash-bids-keep-manual-history')
+  requireText(errors, gl2Gateway, `.is('feed_source', null).or('notes.is.null,notes.not.like."[USDA MARS %"').order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)`, 'gl2:cash-bids-keep-manual-history')
+  // A bare not.like is null for a row with no note, so it drops the ordinary manual bids this slice
+  // exists to keep. The null branch must stay.
+  if (/\.not\('notes', 'like'/.test(gl2Gateway)) errors.push('gl2:manual-slice-admits-null-notes')
   // That slice names feed_source, which GL-1's migration adds and which is applied separately from the
   // deploy. Its absence must be tolerated, or the first farm to load Grain after the merge loses the
   // whole workspace.

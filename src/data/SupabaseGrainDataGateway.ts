@@ -79,7 +79,11 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
       // A row written before GL-1 added feed_source carries its provenance in the note, and isMarsBid
       // honours both. Excluding only by column would let legacy feed rows fill this slice and crowd out
       // the farm's real manual bids, which is what the slice exists to protect.
-      supabase.from('cash_bids').select('*').eq('farm_id', farmId).is('feed_source', null).not('notes', 'like', '[USDA MARS %').order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT),
+      // The null branch is not optional. A manual bid normally stores no note at all, and in SQL
+      // `not (null like '...')` is null, not true -- so a bare not.like would have dropped every
+      // ordinary manual bid from the slice built to keep them, which is worse than the legacy rows it
+      // was added to exclude. Null notes are admitted explicitly.
+      supabase.from('cash_bids').select('*').eq('farm_id', farmId).is('feed_source', null).or('notes.is.null,notes.not.like."[USDA MARS %"').order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT),
       // A cap keeps the newest rows; it cannot promise the newest row FOR EACH COMMODITY, which is what
       // latestBasis, the counterparty suggestions and the Today grain line actually read. Those rows are
       // few and knowable, so they are fetched exactly. Tolerated as absent before the GL-2 migration is

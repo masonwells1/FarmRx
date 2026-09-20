@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 248
+const expectedMutationCount = 249
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -648,8 +648,11 @@ try {
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(".order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(RECENT_CASH_BID_LIMIT)", ".order('bid_date').order('id')"))
   detected('the browser reads the oldest cash bids once the feed fills the table', 'gl2:cash-bids-read-newest-first')
   reset()
-  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(".is('feed_source', null).not('notes', 'like', '[USDA MARS %').order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)", ".order('bid_date', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)"))
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(`.is('feed_source', null).or('notes.is.null,notes.not.like."[USDA MARS %"').order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)`, ".order('bid_date', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)"))
   detected("the farm's own older bids are lost behind feed volume", 'gl2:cash-bids-keep-manual-history')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(`.or('notes.is.null,notes.not.like."[USDA MARS %"')`, `.not('notes', 'like', '[USDA MARS %')`))
+  detected('every manual bid with no note falls out of the slice built to keep them', 'gl2:manual-slice-admits-null-notes')
   reset()
   // GL-2 repair: one feed test, both sides of the wire.
   mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace('create or replace function public.cash_bid_is_feed(', 'create or replace function public.cash_bid_is_feed_unused('))
