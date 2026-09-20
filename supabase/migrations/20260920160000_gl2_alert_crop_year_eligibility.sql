@@ -87,10 +87,47 @@ $fn$;
 comment on function public.cash_bid_eligible_for_crop_year(text, integer, date, date, date) is
   'GL-2: whether a cash bid may satisfy a rule for this crop year. Delivery window inside the marketing year, or a spot bid dated inside it. The sweep and src/data/marketingYear.ts must agree.';
 
--- The sweep, replaced whole from migration 20260716122213_0039 with exactly one change: the
--- price_target select now requires crop-year eligibility, so the newest ELIGIBLE bid decides the
--- rule instead of the newest bid of any delivery window. Feed rows are deliberately not excluded
--- (see the note at the top of this file).
+-- GL-2 repair (Codex P1 on 97ad961): the newest bid that may satisfy a rule, as ONE selection.
+-- The sweep and deliver-grain-alert's email re-check both call this. They must never disagree: the
+-- browser records the rule transition as true the moment its own evaluation says so, and if the email
+-- re-check then judges the rule by a different bid it returns 409 while alert_rule_states is already
+-- true -- so the next sweep sees no transition and the alert is lost with nothing sent.
+-- Feed rows are admitted here, exactly as in the sweep: that is GL-2's decision.
+create or replace function public.latest_eligible_cash_bid(
+  p_farm_id uuid,
+  p_commodity_id text,
+  p_crop_year integer,
+  p_as_of date,
+  p_max_age_days integer default 2
+)
+returns table (id uuid, cash_price numeric, bid_date date)
+language sql
+stable
+set search_path = pg_catalog
+as $fn$
+  select b.id, b.cash_price, b.bid_date
+  from public.cash_bids b
+  where b.farm_id = p_farm_id
+    and b.commodity_id = p_commodity_id
+    and b.cash_price is not null
+    and b.bid_date between p_as_of - p_max_age_days and p_as_of
+    and public.cash_bid_eligible_for_crop_year(p_commodity_id, p_crop_year, b.bid_date, b.delivery_start, b.delivery_end)
+  order by b.bid_date desc, b.updated_at desc, b.id desc
+  limit 1;
+$fn$;
+
+comment on function public.latest_eligible_cash_bid(uuid, text, integer, date, integer) is
+  'GL-2: the one selection of the bid that may satisfy a price-target rule. Used by run_scheduled_alert_sweep and by deliver-grain-alert, so the sweep and the email can never judge a rule by different bids.';
+
+-- Server-owned. It reads one farm's private bids by id, so it is not offered to a signed-in client.
+revoke all on function public.latest_eligible_cash_bid(uuid, text, integer, date, integer) from public, anon, authenticated;
+grant execute on function public.latest_eligible_cash_bid(uuid, text, integer, date, integer) to service_role;
+
+-- The sweep, replaced whole from migration 20260716122213_0039 with one change: its price_target
+-- select becomes a call to latest_eligible_cash_bid above, so the newest ELIGIBLE bid decides the rule
+-- instead of the newest bid of any delivery window, and the sweep and the email re-check read one
+-- expression rather than two that can drift. Feed rows are deliberately not excluded (see the note at
+-- the top of this file).
 create or replace function public.run_scheduled_alert_sweep(p_now timestamptz default now())
 returns jsonb
 language plpgsql
@@ -146,11 +183,8 @@ begin
           v_title:='Farm Rx marketing reminder';
           v_body:=coalesce(v_rule.message,'A saved grain item needs your review.');
           if v_rule.rule_type='price_target' then
-            select b.cash_price,b.bid_date into v_price,v_bid_date from public.cash_bids b
-            where b.farm_id=v_farm.id and b.commodity_id=v_rule.commodity_id and b.cash_price is not null
-              and b.bid_date between v_local_date-2 and v_local_date
-              and public.cash_bid_eligible_for_crop_year(v_rule.commodity_id,v_rule.crop_year,b.bid_date,b.delivery_start,b.delivery_end)
-            order by b.bid_date desc,b.updated_at desc,b.id desc limit 1;
+            select b.cash_price,b.bid_date into v_price,v_bid_date
+            from public.latest_eligible_cash_bid(v_farm.id,v_rule.commodity_id,v_rule.crop_year,v_local_date) b;
             v_condition:=v_price is not null and ((v_rule.direction='at_or_above' and v_price>=v_rule.threshold) or (v_rule.direction='at_or_below' and v_price<=v_rule.threshold));
             v_title:='Farm Rx price target reached';
             if v_condition then v_body:=v_rule.crop_year||' '||v_rule.commodity_id||' cash price is $'||trim(to_char(v_price,'FM999999990.00'))||' from the '||v_bid_date||' bid.'; end if;

@@ -171,5 +171,52 @@ begin
     then raise exception 'a next-crop-year bid left the 2026 rule condition true'; end if;
 end $$;
 
+-- ------------------------------------------------- 5. one selection, shared by the sweep and the email
+-- Codex P1 on 97ad961: the browser marks alert_rule_states true as soon as its own evaluation says so.
+-- If deliver-grain-alert then judged the rule by a different bid it would 409, and the next sweep,
+-- seeing no transition, would send nothing at all. Both now call latest_eligible_cash_bid.
+do $$
+declare
+  v_price numeric;
+  v_id uuid;
+begin
+  -- The MARS feed row is what the farm's rule is reached by, and the shared selection returns it.
+  select cash_price into v_price from public.latest_eligible_cash_bid('00000000-0000-4000-8000-000000000071','corn_yellow',2026,'2026-10-15'::date);
+  if v_price is distinct from 4.75 then raise exception 'the shared selection did not return the MARS bid (got %)', v_price; end if;
+
+  -- Section 4 moved both of F1's bids into the next marketing year, so nothing is eligible for 2026 and
+  -- the selection returns no row at all rather than falling back to the newest bid of any year.
+  if exists (select 1 from public.latest_eligible_cash_bid('00000000-0000-4000-8000-000000000070','corn_yellow',2026,'2026-10-15'::date))
+    then raise exception 'the shared selection returned a next-crop-year bid for a 2026 rule'; end if;
+
+  -- With an eligible bid put back, the older ELIGIBLE row wins over the newer ineligible one. This is
+  -- exactly the case where a re-check reading "newest manual bid" would disagree with the sweep, 409,
+  -- and leave alert_rule_states true with nothing sent.
+  insert into public.cash_bids(farm_id,elevator,commodity_id,bid_date,basis,cash_price,delivery_start,delivery_end)
+  values ('00000000-0000-4000-8000-000000000070','Older Eligible','corn_yellow','2026-10-14',-0.20,4.50,'2026-11-01','2026-11-30');
+  select id, cash_price into v_id, v_price from public.latest_eligible_cash_bid('00000000-0000-4000-8000-000000000070','corn_yellow',2026,'2026-10-15'::date);
+  if v_price is distinct from 4.50 then raise exception 'the shared selection did not return the older eligible bid (got %)', v_price; end if;
+  if (select elevator from public.cash_bids where id = v_id) <> 'Older Eligible' then raise exception 'the selection returned the wrong row'; end if;
+
+  -- Outside the freshness window it returns nothing rather than an old bid.
+  if exists (select 1 from public.latest_eligible_cash_bid('00000000-0000-4000-8000-000000000071','corn_yellow',2026,'2026-10-30'::date))
+    then raise exception 'the shared selection returned a bid past its freshness window'; end if;
+
+  -- A crop year the bids do not belong to yields nothing.
+  if exists (select 1 from public.latest_eligible_cash_bid('00000000-0000-4000-8000-000000000071','corn_yellow',2030,'2026-10-15'::date))
+    then raise exception 'the shared selection returned a bid for a crop year it cannot satisfy'; end if;
+end $$;
+
+-- It reads one farm's private bids by id, so it is server-owned and not offered to a signed-in client.
+do $$
+begin
+  if has_function_privilege('authenticated','public.latest_eligible_cash_bid(uuid,text,integer,date,integer)','execute')
+    then raise exception 'a signed-in client can call latest_eligible_cash_bid'; end if;
+  if has_function_privilege('anon','public.latest_eligible_cash_bid(uuid,text,integer,date,integer)','execute')
+    then raise exception 'an anonymous caller can call latest_eligible_cash_bid'; end if;
+  if not has_function_privilege('service_role','public.latest_eligible_cash_bid(uuid,text,integer,date,integer)','execute')
+    then raise exception 'the service role cannot call latest_eligible_cash_bid'; end if;
+end $$;
+
 select set_config('request.jwt.claims','',false);
 select 'GL2_ALERT_ELIGIBILITY_DISPOSABLE_PASS' as result;

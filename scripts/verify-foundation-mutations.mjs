@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 212
+const expectedMutationCount = 215
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -586,13 +586,10 @@ try {
   mutate('src/data/grainAlerts.ts', (source) => source.replace(' && !isMarsBid(bid) && observationFresh(bid.bid_date, now)', ' && observationFresh(bid.bid_date, now)'))
   detected('MARS feed row can reach a plan-target price alert', 'mars-feed:plan-target-ignores-feed')
   reset()
-  mutate('supabase/functions/deliver-grain-alert/index.ts', (source) => source.replace(".eq('commodity_id',rule.commodity_id).is('feed_source',null)", ".eq('commodity_id',rule.commodity_id)"))
-  detected('MARS feed row can confirm a marketing price alert on the server', 'mars-feed:alert-recheck-ignores-feed')
+  mutate('supabase/functions/deliver-grain-alert/index.ts', (source) => source.replace(".eq('farm_id',farmId).is('feed_source',null).maybeSingle()", ".eq('farm_id',farmId).maybeSingle()"))
+  detected('MARS feed row can confirm a plan-target alert on the server', 'mars-feed:alert-recheck-ignores-feed')
   reset()
   // GL-2: crop-year eligibility, its two mirrored copies, and the split between valuation and alerting.
-  mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace('              and public.cash_bid_eligible_for_crop_year(v_rule.commodity_id,v_rule.crop_year,b.bid_date,b.delivery_start,b.delivery_end)\n', ''))
-  detected('sweep takes the newest bid of any crop year again', 'gl2:sweep-requires-eligibility')
-  reset()
   mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace("where crop_family = 'wheat'", "where crop_family = 'barley'"))
   detected("wheat's June marketing year is never seeded", 'gl2:wheat-marketing-year-seeded')
   reset()
@@ -613,6 +610,19 @@ try {
   reset()
   mutate('.github/workflows/usda-mars-feed.yml', (source) => source.replace('Evaluate marketing alerts against the bids just ingested', 'Unrelated step'))
   detected('a fresh bid waits for the next quarter-hour cron', 'gl2:sweep-sequenced-after-feed')
+  reset()
+  // GL-2 repair: one selection, shared by the sweep and the email re-check, and honest copy.
+  mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace('create or replace function public.latest_eligible_cash_bid(', 'create or replace function public.latest_eligible_cash_bid_unused('))
+  detected('the shared eligible-bid selection disappears', 'gl2:one-eligible-bid-selection')
+  reset()
+  mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace('from public.latest_eligible_cash_bid(v_farm.id,v_rule.commodity_id,v_rule.crop_year,v_local_date) b;', 'from public.cash_bids b where b.farm_id=v_farm.id limit 1;'))
+  detected('the sweep stops using the shared selection', 'gl2:sweep-uses-shared-selection')
+  reset()
+  mutate('supabase/functions/deliver-grain-alert/index.ts', (source) => source.replace("admin.rpc('latest_eligible_cash_bid'", "admin.rpc('some_other_rpc'"))
+  detected('the email re-check judges a rule by a different bid than the sweep', 'gl2:email-recheck-uses-shared-selection')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('The email goes out the next time the farm owner opens', 'We email you the moment it happens, even if you never open'))
+  detected('the page promises an email the scheduled path never sends', 'gl2:email-promise-is-true')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('checks these on the server about every', 'checks these when you open Grain, about every'))
   detected('the page goes back to calling server-checked alerts check-on-open', 'gl2:true-schedule-stated')

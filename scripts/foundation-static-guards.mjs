@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 212')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 215')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -565,12 +565,13 @@ export function foundationStaticGuard(root = process.cwd()) {
   const grainAlerts = read(root, 'src/data/grainAlerts.ts')
   requireText(errors, grainAlerts, "bid.commodity_id === target.commodity_id && bid.cash_price !== null && !isMarsBid(bid) && observationFresh(bid.bid_date, now)", 'mars-feed:plan-target-ignores-feed')
   const deliverGrainAlert = read(root, 'supabase/functions/deliver-grain-alert/index.ts')
-  if ((deliverGrainAlert.match(/\.is\('feed_source',null\)/g) ?? []).length !== 2) errors.push('mars-feed:alert-recheck-ignores-feed')
+  // GL-2 narrowed GL-004 here: the plan-target confirm keeps its feed fence (exactly one), while the
+  // marketing-rule re-check deliberately admits feed rows through the shared selection below.
+  if ((deliverGrainAlert.match(/\.is\('feed_source',null\)/g) ?? []).length !== 1) errors.push('mars-feed:alert-recheck-ignores-feed')
 
   // GL-2: crop-year eligibility decides which bid may satisfy a rule, in SQL and in the browser, and
   // the two copies of the marketing-year start are pinned to each other here so neither moves alone.
   const gl2Migration = read(root, 'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql')
-  requireText(errors, gl2Migration, 'and public.cash_bid_eligible_for_crop_year(v_rule.commodity_id,v_rule.crop_year,b.bid_date,b.delivery_start,b.delivery_end)', 'gl2:sweep-requires-eligibility')
   requireText(errors, gl2Migration, "where crop_family = 'wheat'", 'gl2:wheat-marketing-year-seeded')
   requireText(errors, gl2Migration, "add column if not exists marketing_year_start_month smallint not null default 9", 'gl2:marketing-year-configured')
   const marketingYear = read(root, 'src/data/marketingYear.ts')
@@ -582,11 +583,20 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, marketingAlerts, "bid.commodity_id === commodityId && bid.cash_price !== null && !isMarsBid(bid)", 'gl2:valuation-still-excludes-feed')
   if (/latestAlertEligibleCashBid[\s\S]{0,600}?isMarsBid/.test(marketingAlerts)) errors.push('gl2:alert-reader-must-not-exclude-feed')
   requireText(errors, read(root, '.github/workflows/usda-mars-feed.yml'), 'Evaluate marketing alerts against the bids just ingested', 'gl2:sweep-sequenced-after-feed')
+  // GL-2 repair: one selection decides which bid may satisfy a rule. The sweep and the email re-check
+  // both call it, so a rule can never be judged true by one and 409'd by the other -- which would
+  // consume the transition in alert_rule_states and lose the alert with nothing sent.
+  requireText(errors, gl2Migration, 'create or replace function public.latest_eligible_cash_bid(', 'gl2:one-eligible-bid-selection')
+  requireText(errors, gl2Migration, 'from public.latest_eligible_cash_bid(v_farm.id,v_rule.commodity_id,v_rule.crop_year,v_local_date) b;', 'gl2:sweep-uses-shared-selection')
+  requireText(errors, deliverGrainAlert, "admin.rpc('latest_eligible_cash_bid'", 'gl2:email-recheck-uses-shared-selection')
   // GL-2 (c): the page states the real schedule. It must never go back to calling the server-checked
   // marketing alerts check-on-open.
   const grainModule = read(root, 'src/GrainModule.tsx')
   requireText(errors, grainModule, 'checks these on the server about every', 'gl2:true-schedule-stated')
   if (/Check-on-open/.test(grainModule)) errors.push('gl2:true-schedule-stated')
+  // GL-2 (c) must not promise an email the scheduled path does not send: the only Resend call is in
+  // deliver-grain-alert, which the browser invokes.
+  requireText(errors, grainModule, 'The email goes out the next time the farm owner opens', 'gl2:email-promise-is-true')
 
   // GL-3: the dead ends. Both counterparty fields accept free text with suggestions, no buyer or
   // elevator is hardcoded, the position card leads with a disclosure, and a second crop is reachable.

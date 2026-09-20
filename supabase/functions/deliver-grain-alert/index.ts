@@ -26,7 +26,9 @@ Deno.serve(async(request)=>{
     const {data:farm,error:farmError}=await admin.from('farms').select('time_zone').eq('id',farmId).maybeSingle(); if(farmError) throw farmError
     const today=localDate(farm?.time_zone??'America/Chicago'); const throttleKey=`${farmId}:${alertKey}`; if((delivered.get(throttleKey)??0)+hour>Date.now()) return json({delivered:false,throttled:true})
     let subject='Farm Rx grain reminder'; let message='A grain item needs your review.'
-    // GL-004: both cash-price re-checks read the farm's own elevator bids only; a USDA MARS feed row (feed_source set) is display-only and never confirms an alert.
+    // GL-004, narrowed by GL-2: the PLAN-TARGET confirm below still reads the farm's own bids only, because
+    // a plan target keeps its feed fence. The marketing-rule re-check does not: GL-2 decided a USDA MARS row
+    // may satisfy a saved rule, and that re-check goes through latest_eligible_cash_bid.
     if(kind==='price_target'){
       const targetId=clean(body.targetId,36); const observationId=clean(body.observationId,36)
       const [{data:target},{data:bid}]=await Promise.all([admin.from('marketing_plan_targets').select('id,target_price,commodity_id,farm_id').eq('id',targetId).eq('farm_id',farmId).maybeSingle(),admin.from('cash_bids').select('id,cash_price,commodity_id,farm_id,bid_date').eq('id',observationId).eq('farm_id',farmId).is('feed_source',null).maybeSingle()])
@@ -42,7 +44,13 @@ Deno.serve(async(request)=>{
       if(!rule||!state?.is_condition_true||!rule.active||rule.rule_type!==expectedType) return json({error:'Alert is no longer current.'},409)
       let current=false
       if(expectedType==='price_target'&&typeof rule.threshold==='number'&&['at_or_above','at_or_below'].includes(rule.direction??'')){
-        const {data:bid}=await admin.from('cash_bids').select('cash_price,bid_date').eq('farm_id',farmId).eq('commodity_id',rule.commodity_id).is('feed_source',null).not('cash_price','is',null).gte('bid_date',dateDaysBefore(today,2)).lte('bid_date',today).order('bid_date',{ascending:false}).order('updated_at',{ascending:false}).limit(1).maybeSingle()
+        // GL-2: the same selection the sweep uses, so this re-check can never judge the rule by a
+        // different bid than the one that fired it. The browser marks alert_rule_states true as soon as
+        // its own evaluation says so; a re-check that disagreed would 409 here and the next sweep, seeing
+        // no transition, would send nothing at all. Feed rows are admitted, and crop-year eligibility applies.
+        const {data:eligible,error:eligibleError}=await admin.rpc('latest_eligible_cash_bid',{p_farm_id:farmId,p_commodity_id:rule.commodity_id,p_crop_year:rule.crop_year,p_as_of:today})
+        if(eligibleError) throw eligibleError
+        const bid=Array.isArray(eligible)?eligible[0] as {cash_price:number|null}|undefined:null
         current=typeof bid?.cash_price==='number'&&(rule.direction==='at_or_above'?bid.cash_price>=rule.threshold:bid.cash_price<=rule.threshold)
       }else if(expectedType==='deadline'&&rule.remind_on){ const days=dayNumber(rule.remind_on)-dayNumber(today); current=days>=0&&days<=7 }
       else if(expectedType==='pct_marketed_goal'&&typeof rule.threshold==='number'){
