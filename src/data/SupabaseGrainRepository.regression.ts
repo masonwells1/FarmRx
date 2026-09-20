@@ -1,5 +1,5 @@
 import type { GrainDataGateway, GrainRowBundle, ReplaceMarketingPlanInput } from './GrainDataGateway'
-import { MANUAL_CASH_BID_LIMIT, mergeCashBids, productionActualColumns, RECENT_CASH_BID_LIMIT } from './SupabaseGrainDataGateway'
+import { columnMissing, functionMissing, MANUAL_CASH_BID_LIMIT, mergeCashBids, productionActualColumns, RECENT_CASH_BID_LIMIT, tableMissing } from './SupabaseGrainDataGateway'
 import { GrainWriteQueue, grainWriteQueueKey, parseGrainQueue, type GrainQueueEntryV1 } from './grainWriteQueue'
 import { QueuedGrainRepository } from './QueuedGrainRepository'
 import { fieldsSeedForRegression } from './MockFieldsRepository'
@@ -463,6 +463,16 @@ async function run() {
     assert(withPerCommodity.length === 3, `GL-2: the per-commodity slice must add only what the windows missed (saw ${withPerCommodity.length}).`)
     assert(withPerCommodity.some((item) => item.id === 'beans-latest'), "GL-2: a commodity's latest bid must survive even when newer bids for another commodity fill the cap.")
     assert(mergeCashBids([], [], []).length === 0, 'GL-2: an empty merge must stay empty, which is what a farm sees before the GL-2 migration is applied.')
+  }
+  // 23 (GL-2 repair): a read that names a not-yet-applied column or function must not fail the whole
+  // workspace. GL-1's feed columns and GL-2's function are each approved and applied separately from the
+  // deploy that references them, so between merge and migration the browser meets both absences. A farm
+  // that met one and lost Grain entirely would be every farm, on the day of the merge.
+  {
+    assert(columnMissing({ code: '42703' }) && columnMissing({ code: 'PGRST204' }), 'GL-2: an undefined column must be recognized as a not-yet-applied migration.')
+    assert(!columnMissing({ code: '42P01' }) && !columnMissing(null) && !columnMissing(undefined), 'GL-2: only an undefined-column error counts; a missing table or no error must not be swallowed.')
+    assert(!columnMissing({ code: '42883' }) && functionMissing({ code: '42883' }), 'GL-2: a missing function and a missing column must stay distinguishable.')
+    assert(tableMissing({ code: '42P01' }) && !tableMissing({ code: '42703' }), 'GL-2: the table and column probes must not overlap.')
   }
   console.log('SupabaseGrainRepository regressions passed.')
 }

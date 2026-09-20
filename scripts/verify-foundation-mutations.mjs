@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 228
+const expectedMutationCount = 229
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -650,6 +650,9 @@ try {
   reset()
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(".is('feed_source', null).order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)", ".order('bid_date', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)"))
   detected("the farm's own older bids are lost behind feed volume", 'gl2:cash-bids-keep-manual-history')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('columnMissing(manual_cash_bids.error) ? [] : rows(manual_cash_bids.data, manual_cash_bids.error)', 'rows(manual_cash_bids.data, manual_cash_bids.error)'))
+  detected('every farm loses Grain entirely until the GL-1 migration is applied', 'gl2:pre-gl1-workspace-still-loads')
   reset()
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace("supabase.rpc('latest_cash_bids_per_commodity', { p_farm_id: farmId })", "Promise.resolve({ data: [], error: null })"))
   detected("a commodity's latest bid can be lost behind another commodity's newer ones", 'gl2:cash-bids-complete-per-commodity')
