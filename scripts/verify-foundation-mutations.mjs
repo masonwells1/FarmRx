@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 215
+const expectedMutationCount = 217
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -623,6 +623,12 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('The email goes out the next time the farm owner opens', 'We email you the moment it happens, even if you never open'))
   detected('the page promises an email the scheduled path never sends', 'gl2:email-promise-is-true')
+  reset()
+  mutate('src/data/marketingAlerts.ts', (source) => source.replace(' || right.id.localeCompare(left.id))[0] ?? null', ')[0] ?? null'))
+  detected('the page breaks a bid tie the opposite way from the sweep', 'gl2:tie-breaker-matches-sweep')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('key={scopeKey(selectedScope)}', 'data-scope={scopeKey(selectedScope)}'))
+  detected('a contract draft survives a crop-year change and is saved under the new scope', 'gl3:contract-form-resets-on-scope-change')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('checks these on the server about every', 'checks these when you open Grain, about every'))
   detected('the page goes back to calling server-checked alerts check-on-open', 'gl2:true-schedule-stated')

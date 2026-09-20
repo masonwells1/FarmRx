@@ -85,6 +85,16 @@ assert(result.firedRuleIds.includes(price.id), 'GL-2: a USDA MARS feed row did n
 assert(latestManualCashBid({ ...workspace, cash_bids: [feedBid] } as GrainWorkspace, 'corn') === null, 'GL-2: the valuation reader admitted a feed row.')
 assert(latestAlertEligibleCashBid({ ...workspace, cash_bids: [feedBid] } as GrainWorkspace, price, '2026-07-13')?.id === feedBid.id, 'GL-2: the alerting reader rejected a feed row.')
 
+// GL-2 repair: the page and the sweep must break a tie the same way. One MARS run writes many rows for
+// the same commodity and bid date in one statement, so they can share updated_at exactly; the sweep
+// orders `id desc`, and without the same tie-breaker Array#sort's stability would leave the page on the
+// opposite row. Here the two tied rows sit either side of the target, so the two paths would disagree.
+const tiedLow = { ...eligibleBid, id: uid(7), cash_price: 4.9 }
+const tiedHigh = { ...eligibleBid, id: uid(8), cash_price: 4.6 }
+result = evaluateMarketingAlertRules({ ...workspace, cash_bids: [tiedLow, tiedHigh], marketing_alert_rules: [{ ...price, threshold: 4.75 }] }, now)
+assert(result.firedRuleIds.length === 0, 'GL-2: a tie on bid date and updated_at must break by descending id, as the sweep does; the page fired on the lower id instead.')
+assert(latestAlertEligibleCashBid({ ...workspace, cash_bids: [tiedLow, tiedHigh] } as GrainWorkspace, price, '2026-07-13')?.id === uid(8), 'GL-2: the alerting reader must pick the highest id when bid date and updated_at tie.')
+
 // The rule itself, directly.
 assert(cashBidEligibleForCropYear('corn', 2026, '2026-10-15', '2026-11-01', '2026-11-30'), 'GL-2: a November 2026 window is not eligible for corn 2026.')
 assert(!cashBidEligibleForCropYear('corn', 2026, '2026-10-15', '2027-09-01', '2027-09-01'), 'GL-2: the marketing-year end bound is inclusive; it must be exclusive.')

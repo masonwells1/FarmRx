@@ -939,6 +939,11 @@ export function GrainPage({ services }: { services: GrainServices }) {
             </label>
           )}
           {deliveryIntent ? <div className="grain-delivery-intent" role="status"><div><strong>Recording a grain delivery</strong><p>Pick the crop and year above, then the contract below, and enter the delivered bushels. Nothing is written until you tap Record delivery.</p></div><button className="secondary-action" type="button" onClick={() => setDeliveryIntent(false)}>Record a sale instead</button></div> : <ContractEntry
+            // GL-3a made the crop and year picker permanent on this tab, which introduced a way to save a
+            // contract under the wrong scope: React reused this form across a scope change, so a draft
+            // typed for 2026 kept its delivery window while the save spread the newly chosen 2027 scope.
+            // Keying by the scope remounts the form, so a draft never outlives the crop year it was for.
+            key={scopeKey(selectedScope)}
             workspace={workspace}
             scope={selectedScope}
             services={services}

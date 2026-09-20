@@ -41,7 +41,13 @@ export function latestAlertEligibleCashBid(workspace: GrainWorkspace, rule: Pick
     .filter((bid) => bid.commodity_id === rule.commodity_id && bid.cash_price !== null
       && dayDifference(today, bid.bid_date) >= 0 && dayDifference(today, bid.bid_date) <= maxAgeDays
       && cashBidEligibleForCropYear(family, rule.crop_year, bid.bid_date, bid.delivery_start, bid.delivery_end))
-    .sort((left, right) => right.bid_date.localeCompare(left.bid_date) || right.updated_at.localeCompare(left.updated_at))[0] ?? null
+    // The tie-breaker matters and must match `order by b.bid_date desc, b.updated_at desc, b.id desc`
+    // in latest_eligible_cash_bid. One MARS run writes many rows for the same commodity and bid date in
+    // one statement, so they can share updated_at to the microsecond; without the id, Array#sort's
+    // stability would leave the workspace's ascending-id order and the page would pick the opposite row
+    // from the sweep. Two rows tied on price either side of a target would then record opposite
+    // conditions in alert_rule_states.
+    .sort((left, right) => right.bid_date.localeCompare(left.bid_date) || right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id))[0] ?? null
 }
 
 function commodityName(workspace: GrainWorkspace, rule: MarketingAlertRule) { return workspace.fields.commodities.find((item) => item.id === rule.commodity_id)?.name ?? rule.commodity_id }
