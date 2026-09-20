@@ -45,6 +45,8 @@ try {
   # Initiative GL-2 (alert truth): crop-year eligibility and the feed's one permitted effect.
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/gl2-alert-eligibility-assertions.sql')) 'GL2_ALERT_ELIGIBILITY_DISPOSABLE_PASS' 'GL-2 alert eligibility assertions failed.'
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/gl3-contract-edit-delete-assertions.sql')) 'GL3_CONTRACT_EDIT_DELETE_DISPOSABLE_PASS' 'GL-3b contract edit/delete assertions failed.'
+  # Initiative LD-1 (the load record): the ticket, its one write path, and the void that keeps it.
+  Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/ld1-grain-loads-assertions.sql')) 'LD1_GRAIN_LOADS_DISPOSABLE_PASS' 'LD-1 grain loads assertions failed.'
 
   $passed = $true
 } finally {

@@ -38,3 +38,6 @@ echo GL2_ALERT_ELIGIBILITY_DISPOSABLE_PASS
 # Initiative GL-3b (contract repair): edit and delete with a reason, and the audit that outlives the row.
 psql_ -d farmrx_disposable -f "$root/scripts/sql/gl3-contract-edit-delete-assertions.sql" | grep -q GL3_CONTRACT_EDIT_DELETE_DISPOSABLE_PASS || { echo "GL-3b contract edit/delete assertions failed" >&2; exit 1; }
 echo GL3_CONTRACT_EDIT_DELETE_DISPOSABLE_PASS
+# Initiative LD-1 (the load record): the ticket, its one write path, and the void that keeps it.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/ld1-grain-loads-assertions.sql" | grep -q LD1_GRAIN_LOADS_DISPOSABLE_PASS || { echo "LD-1 grain loads assertions failed" >&2; exit 1; }
+echo LD1_GRAIN_LOADS_DISPOSABLE_PASS
