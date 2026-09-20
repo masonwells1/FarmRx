@@ -133,13 +133,18 @@ begin
   -- Deliberately before the compare-and-swap: a committed edit has already moved updated_at.
   select * into v_replay from public.grain_contract_audit a where a.farm_id = p_farm_id and a.operation_id = p_operation_id;
   if found then
-    -- Same id, same correction: answer with the contract as it stands.
-    if v_replay.reason is not distinct from v_reason and v_replay.requested_changes is not distinct from v_changes then
+    -- Same id, same correction, SAME CONTRACT: answer with the contract as it stands. The contract is
+    -- part of that identity, not context around it -- an id spent on contract A answering for
+    -- contract B would report "Contract corrected" for a row nothing ever touched.
+    if v_replay.grain_contract_id = p_contract_id
+       and v_replay.reason is not distinct from v_reason
+       and v_replay.requested_changes is not distinct from v_changes then
       return to_jsonb(v_before);
     end if;
     -- Same id, DIFFERENT correction. The farmer edited the draft after a lost response and pressed
-    -- Save again. Returning the earlier row here would report "Contract corrected" while dropping
-    -- what they just typed, so this says plainly that the earlier one landed and this one did not.
+    -- Save again, or the id was spent on another contract. Returning the earlier row here would
+    -- report "Contract corrected" while dropping what they just typed, so this says plainly that the
+    -- earlier one landed and this one did not.
     raise exception using errcode = 'P0001', message = 'FARM_RX_CORRECTION_ALREADY_SAVED';
   end if;
   -- Compare-and-swap, the same fence optimisticSave applies to every other mutable farm row. Two

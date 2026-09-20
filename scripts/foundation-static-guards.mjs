@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 270')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 271')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -768,7 +768,9 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, gl3bMigration, "raise exception 'a correction must change something';", 'gl3b:a-correction-must-correct-something')
   // Recognising a retry by id alone would answer a CHANGED draft with the earlier correction and
   // report success while dropping what the farmer just typed.
-  requireText(errors, gl3bMigration, 'if v_replay.reason is not distinct from v_reason and v_replay.requested_changes is not distinct from v_changes then', 'gl3b:a-retry-must-be-the-same-correction')
+  // The contract is part of the replay identity, not context around it: an id spent on contract A
+  // must not answer for contract B, however identical the reason and the requested change are.
+  requireText(errors, gl3bMigration, 'if v_replay.grain_contract_id = p_contract_id\n       and v_replay.reason is not distinct from v_reason\n       and v_replay.requested_changes is not distinct from v_changes then', 'gl3b:a-retry-must-be-the-same-correction')
   requireText(errors, gl3bMigration, "raise exception using errcode = 'P0001', message = 'FARM_RX_CORRECTION_ALREADY_SAVED';", 'gl3b:a-retry-must-be-the-same-correction')
   requireText(errors, grainModule, 'const redraft = () => { operationId.current = null };', 'gl3b:a-retry-must-be-the-same-correction')
   if ((grainModule.split('redraft();').length - 1) !== 7) errors.push('gl3b:a-retry-must-be-the-same-correction')

@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 270
+const expectedMutationCount = 271
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -810,8 +810,11 @@ try {
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("raise exception 'a correction must change something';", 'null;'))
   detected('a correction that changes nothing is recorded as a correction', 'gl3b:a-correction-must-correct-something')
   reset()
-  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('if v_replay.reason is not distinct from v_reason and v_replay.requested_changes is not distinct from v_changes then', 'if true then'))
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('if v_replay.grain_contract_id = p_contract_id\n       and v_replay.reason is not distinct from v_reason\n       and v_replay.requested_changes is not distinct from v_changes then', 'if true then'))
   detected("a changed draft reusing an id is answered with the earlier correction", 'gl3b:a-retry-must-be-the-same-correction')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('if v_replay.grain_contract_id = p_contract_id\n       and v_replay.reason', 'if v_replay.reason'))
+  detected('an operation id spent on one contract answers for another', 'gl3b:a-retry-must-be-the-same-correction')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('const redraft = () => { operationId.current = null };', 'const redraft = () => { /* kept */ };'))
   detected('editing a draft after a lost response reuses the previous attempt id', 'gl3b:a-retry-must-be-the-same-correction')

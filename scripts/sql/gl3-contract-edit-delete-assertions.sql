@@ -392,6 +392,17 @@ begin
   begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','a different reason this time','{"buyer":"Retry Buyer Fixed"}'::jsonb, v_state.stamp, v_state.operation);
   exception when others then v_failed := sqlerrm = 'FARM_RX_CORRECTION_ALREADY_SAVED'; end;
   if not v_failed then raise exception 'a changed REASON reusing an operation id was answered as a retry'; end if;
+
+  -- The contract is part of the identity too. An id spent on one contract must not answer for
+  -- another, even when the reason and the requested change are word for word the same.
+  insert into public.grain_contracts(id,farm_id,crop_year,commodity_id,contract_type,buyer,bushels,cash_price)
+  values ('00000000-0000-4000-8000-0000000000a2','00000000-0000-4000-8000-000000000072',2026,'corn_yellow','forward_cash','Other Contract',2000,4.5);
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a2','buyer typed wrong','{"buyer":"Retry Buyer Fixed"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-0000000000a2'), v_state.operation);
+  exception when others then v_failed := sqlerrm = 'FARM_RX_CORRECTION_ALREADY_SAVED'; end;
+  if not v_failed then raise exception 'an operation id spent on one contract answered for another'; end if;
+  if (select buyer from public.grain_contracts where id='00000000-0000-4000-8000-0000000000a2') <> 'Other Contract'
+    then raise exception 'the cross-contract replay changed the second contract'; end if;
 end $$;
 
 -- ------------------------------------------------- 12c. a correction has to correct something
