@@ -47,6 +47,11 @@ try {
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/gl3-contract-edit-delete-assertions.sql')) 'GL3_CONTRACT_EDIT_DELETE_DISPOSABLE_PASS' 'GL-3b contract edit/delete assertions failed.'
   # Initiative LD-1 (the load record): the ticket, its one write path, and the void that keeps it.
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/ld1-grain-loads-assertions.sql')) 'LD1_GRAIN_LOADS_DISPOSABLE_PASS' 'LD-1 grain loads assertions failed.'
+  # Migration 0040's rules, ported so a development machine checks them too. Running the same file
+  # here keeps CI enforcing the three rules the port added that verify-0040-disposable.ps1 lacks:
+  # the live storage guard (0040's own copy is dead code), the one client-updatable table whose
+  # farm_id is not blocked by prevent_farm_move, and the pin that it stays the only one.
+  Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/epoch-fencing-assertions.sql')) 'EPOCH_FENCING_DISPOSABLE_PASS' '0040 epoch fencing assertions failed.'
 
   $passed = $true
 } finally {

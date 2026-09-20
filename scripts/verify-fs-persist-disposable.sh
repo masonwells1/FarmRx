@@ -41,3 +41,8 @@ echo GL3_CONTRACT_EDIT_DELETE_DISPOSABLE_PASS
 # Initiative LD-1 (the load record): the ticket, its one write path, and the void that keeps it.
 psql_ -d farmrx_disposable -f "$root/scripts/sql/ld1-grain-loads-assertions.sql" | grep -q LD1_GRAIN_LOADS_DISPOSABLE_PASS || { echo "LD-1 grain loads assertions failed" >&2; exit 1; }
 echo LD1_GRAIN_LOADS_DISPOSABLE_PASS
+# Migration 0040 (farm access-epoch fencing), ported from the PowerShell-only lane so a development
+# machine checks it too: the catalog rules every new farm-scoped table must satisfy, and the four
+# write paths a stale epoch has to be refused on.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/epoch-fencing-assertions.sql" | grep -q EPOCH_FENCING_DISPOSABLE_PASS || { echo "0040 epoch fencing assertions failed" >&2; exit 1; }
+echo EPOCH_FENCING_DISPOSABLE_PASS
