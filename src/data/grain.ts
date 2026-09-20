@@ -69,7 +69,45 @@ export interface GrainCapabilities { bin_movements: boolean; contract_price_fina
    * bid by different rules, and both write alert_rule_states -- which re-fires or suppresses the same
    * alert over and over. While this is false the browser records no transition at all and leaves the
    * rule state entirely to the sweep, which is exactly what the pre-GL-2 sweep expects. */
-  gl2_alert_eligibility?: boolean }
+  gl2_alert_eligibility?: boolean;
+  /** GL-3b: false until the live database carries the contract-repair RPCs and their audit table.
+   * The same merge-before-migration window as above: while this is false the Contracts tab offers no
+   * Correct or Delete control at all, rather than offering one that fails on the farmer's first try. */
+  contract_edit_delete?: boolean }
+
+/** GL-3b: the fields a contract correction may change. An absent key keeps the stored value; an
+ * explicit null clears a nullable one. Crop year, commodity, contract type and every pricing column
+ * are absent by design -- they are the contract's identity and its math, and pricing on a basis or
+ * HTA contract belongs to the one-shot finalization rule. A farmer who got one of those wrong
+ * deletes the contract with a reason and enters it again. */
+export interface GrainContractCorrection {
+  buyer?: string
+  bushels?: number
+  delivery_start?: string | null
+  delivery_end?: string | null
+  contract_number?: string | null
+  notes?: string | null
+}
+
+/** The one message for "the GL-3b migration is not applied yet". The screens hide the controls when
+ * the capability is false, so a farmer should never see it; it exists for the window between that
+ * read and a click, and for a client that loaded before the capability was known. */
+export const CONTRACT_REPAIR_PENDING = 'Correcting a contract arrives with the next database update.'
+
+/** GL-3b: a contract with any delivery recorded against it is history, not a draft. The same test the
+ * server applies under a row lock, so the screen offers a control the database will honour. */
+export function contractIsCorrectable(workspace: Pick<GrainWorkspace, 'grain_contract_deliveries'>, contractId: string): boolean {
+  return !workspace.grain_contract_deliveries.some((delivery) => delivery.grain_contract_id === contractId)
+}
+
+/** The reason is the farmer's own record of why the number changed, so it is required and is stored
+ * verbatim. The bounds match the column's check constraint exactly. */
+export function validateContractCorrectionReason(reason: string): string | null {
+  const trimmed = reason.trim()
+  if (trimmed.length < 3) return 'Say why you are changing this contract, in at least three characters.'
+  if (trimmed.length > 2000) return 'Keep the reason to 2000 characters or fewer.'
+  return null
+}
 
 export interface MarketingPlanTarget extends PositionScope {
   id: string
@@ -133,6 +171,8 @@ export interface GrainRepository {
   reconcileHarvestActual(estimate: ProductionEstimate, harvestActual: number): Promise<void>
   saveContract(contract: GrainContract): Promise<void>
   finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number): Promise<void>
+  editContract(contractId: string, reason: string, changes: GrainContractCorrection): Promise<void>
+  deleteContract(contractId: string, reason: string): Promise<void>
   recordContractDelivery(delivery: GrainContractDelivery): Promise<void>
   saveMarketingPlanTarget(target: MarketingPlanTarget): Promise<void>
   replaceMarketingPlanTargets(scope: PositionScope, targets: MarketingPlanTarget[]): Promise<void>

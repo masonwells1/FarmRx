@@ -1198,3 +1198,13 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .grain-delivery-intent .commodity-picker { margin-top: 12px; }
 @media (max-width: 767px) { .grain-delivery-intent { flex-direction: column; align-items: stretch; }.grain-delivery-intent .secondary-action { width: 100%; } }
 @media (max-width: 767px) { .today-record-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }.today-record-tile { min-height: 112px; }.today-spray-card, .today-next-up-row, .today-grain-line { grid-template-columns: 44px minmax(0, 1fr) auto; padding: 14px 16px; }.today-spray-card .today-chevron { grid-column: 3; }.today-next-up-row.has-badge .today-badge { grid-row: 2; grid-column: 2; justify-self: start; }.today-next-up-row.has-badge .today-next-up-icon, .today-next-up-row.has-badge .today-chevron { grid-row: 1 / span 2; } }
+
+/* GL-3b: the way out of a contract typed wrong. Collapsed to one text action so the Contracts table
+   keeps its shape on a phone; open, the fields stack and every control keeps a 48px touch target. */
+.contract-repair { margin-top: 10px; text-align: left; }
+.contract-repair-body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding: 10px; border: 1px solid var(--hairline, rgba(0, 0, 0, 0.16)); border-radius: 10px; }
+.contract-repair-body label { display: flex; flex-direction: column; gap: 4px; font-size: 18px; font-weight: 600; }
+.contract-repair-body input, .contract-repair-body textarea { min-height: 48px; font: inherit; font-weight: 400; }
+.contract-repair-buttons { display: flex; flex-wrap: wrap; gap: 12px; }
+.contract-repair-buttons .text-action { min-height: 48px; }
+.contract-repair .destructive { color: var(--alert-red, #a4262c); }

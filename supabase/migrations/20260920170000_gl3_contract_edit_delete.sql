@@ -1,0 +1,183 @@
+-- DRAFT ONLY. Never applied by this repair; it is revalidated in disposable Postgres.
+--
+-- GL-3b: a contract entered wrong is a dead end today. There is no edit and no delete, so a
+-- typo in the buyer or the bushels stays in the farm's marketing position forever, and the
+-- only workaround is a second contract that makes the position wrong twice.
+--
+-- Both actions are server-owned RPCs rather than a direct table write, for three reasons the
+-- browser cannot be trusted with:
+--   * "no deliveries" has to be decided under a row lock, or a delivery recorded between the
+--     browser's read and its write is silently orphaned;
+--   * the reason is not optional, and an optional column with a browser-side check is optional;
+--   * the audit row and the change must be one transaction, or a correction can lose its record.
+--
+-- What an edit may change is deliberately narrow: buyer, bushels, the delivery window, the
+-- contract number and the notes. Crop year, commodity, contract type and every pricing column
+-- are NOT editable here. Those are the contract's identity and its math, and pricing on a
+-- basis or HTA contract is owned by the one-shot finalization rule in 0033, which this
+-- migration does not touch. A farmer who got one of those wrong deletes the contract with a
+-- reason and enters it again -- which is exactly what the delete below is for.
+
+create table public.grain_contract_audit (
+  id uuid primary key default gen_random_uuid(),
+  farm_id uuid not null references public.farms(id) on delete cascade,
+  -- Deliberately NOT a foreign key. A delete removes the contract; the record of that delete
+  -- has to outlive it, which is the whole point of this table.
+  grain_contract_id uuid not null,
+  action text not null check (action in ('edit', 'delete')),
+  reason text not null check (length(btrim(reason)) between 3 and 2000),
+  before_row jsonb not null,
+  after_row jsonb,
+  reopened_firm_offer_id uuid,
+  actor_id uuid,
+  created_at timestamptz not null default now(),
+  constraint grain_contract_audit_after_row_by_action check (
+    (action = 'edit' and after_row is not null) or (action = 'delete' and after_row is null)
+  )
+);
+create index grain_contract_audit_contract_idx
+  on public.grain_contract_audit (farm_id, grain_contract_id, created_at desc);
+
+alter table public.grain_contract_audit enable row level security;
+revoke all on public.grain_contract_audit from public, anon;
+grant select on public.grain_contract_audit to authenticated;
+-- Contract money is private financial data, and so is the reason someone changed it.
+create policy grain_contract_audit_select on public.grain_contract_audit
+  for select to authenticated using (public.can_read_private_financials(farm_id));
+-- No insert, update or delete grant: the only writer is the definer RPCs below.
+
+-- Append-only is enforced the way bin_transactions already enforces it: authenticated holds
+-- SELECT and nothing else, so no browser can rewrite a reason after the fact. The trigger adds
+-- a hard stop on rewriting a row in place even from an owner connection. It deliberately does
+-- NOT cover DELETE: farm_id cascades from farms, and a BEFORE DELETE trigger that raised would
+-- make deleting a farm impossible rather than making the audit safer.
+create or replace function public.grain_contract_audit_is_append_only()
+returns trigger language plpgsql set search_path = pg_catalog as $fn$
+begin
+  raise exception 'grain_contract_audit is append-only';
+end $fn$;
+create trigger grain_contract_audit_immutable
+  before update on public.grain_contract_audit
+  for each row execute function public.grain_contract_audit_is_append_only();
+
+-- One test of "this contract can still be corrected", used by both RPCs and by the assertions,
+-- so the edit path and the delete path can never disagree about which contracts are eligible.
+create or replace function public.grain_contract_has_deliveries(p_farm_id uuid, p_contract_id uuid)
+returns boolean language sql stable set search_path = pg_catalog as $fn$
+  select exists (
+    select 1 from public.grain_contract_deliveries d
+    where d.farm_id = p_farm_id and d.grain_contract_id = p_contract_id
+  );
+$fn$;
+
+comment on function public.grain_contract_has_deliveries(uuid, uuid) is
+  'GL-3b: whether a contract has delivered bushels against it. A contract with deliveries is history, not a draft, and is neither editable nor deletable.';
+
+create or replace function public.edit_grain_contract(p_farm_id uuid, p_contract_id uuid, p_reason text, p_changes jsonb)
+returns jsonb language plpgsql security definer set search_path = public, pg_temp as $fn$
+declare
+  v_before public.grain_contracts%rowtype;
+  v_after public.grain_contracts%rowtype;
+  v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
+  v_buyer text; v_bushels numeric; v_start date; v_end date; v_number text; v_notes text;
+begin
+  if auth.uid() is null or public.request_uses_service_role() or not public.can_edit_farm(p_farm_id) then
+    raise exception 'you do not have permission to change this contract';
+  end if;
+  if v_reason is null or length(v_reason) < 3 or length(v_reason) > 2000 then
+    raise exception 'a reason of 3 to 2000 characters is required to change a contract';
+  end if;
+
+  select * into v_before from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id for update;
+  if not found then raise exception 'contract does not belong to this farm'; end if;
+  if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then
+    raise exception 'this contract already has delivered bushels and can no longer be changed';
+  end if;
+
+  -- Absent keys keep the stored value; an explicit null clears a nullable column. That
+  -- distinction matters: clearing a delivery window is a real edit, not a no-op.
+  v_buyer   := case when p_changes ? 'buyer'           then nullif(btrim(p_changes->>'buyer'), '')          else v_before.buyer end;
+  v_bushels := case when p_changes ? 'bushels'         then (p_changes->>'bushels')::numeric               else v_before.bushels end;
+  v_start   := case when p_changes ? 'delivery_start'  then (p_changes->>'delivery_start')::date           else v_before.delivery_start end;
+  v_end     := case when p_changes ? 'delivery_end'    then (p_changes->>'delivery_end')::date             else v_before.delivery_end end;
+  v_number  := case when p_changes ? 'contract_number' then nullif(btrim(p_changes->>'contract_number'),'') else v_before.contract_number end;
+  v_notes   := case when p_changes ? 'notes'           then nullif(btrim(p_changes->>'notes'), '')          else v_before.notes end;
+
+  if v_buyer is null or length(v_buyer) > 200 then raise exception 'buyer is required and must be 200 characters or fewer'; end if;
+  if v_bushels is null or v_bushels::text in ('NaN', 'Infinity', '-Infinity') or v_bushels <= 0 then raise exception 'bushels must be greater than zero'; end if;
+  if v_start is not null and v_end is not null and v_end < v_start then raise exception 'delivery end must be on or after delivery start'; end if;
+
+  update public.grain_contracts
+     set buyer = v_buyer, bushels = v_bushels, delivery_start = v_start, delivery_end = v_end,
+         contract_number = v_number, notes = v_notes, updated_at = now()
+   where id = p_contract_id and farm_id = p_farm_id
+  returning * into v_after;
+
+  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, actor_id)
+  values (p_farm_id, p_contract_id, 'edit', v_reason, to_jsonb(v_before), to_jsonb(v_after), auth.uid());
+
+  return to_jsonb(v_after);
+end $fn$;
+revoke all on function public.edit_grain_contract(uuid, uuid, text, jsonb) from public, anon;
+grant execute on function public.edit_grain_contract(uuid, uuid, text, jsonb) to authenticated;
+
+comment on function public.edit_grain_contract(uuid, uuid, text, jsonb) is
+  'GL-3b: correct a contract that has no deliveries, with a required reason recorded in grain_contract_audit. Crop year, commodity, contract type and pricing are not editable here; 0033 owns pricing.';
+
+create or replace function public.delete_grain_contract(p_farm_id uuid, p_contract_id uuid, p_reason text)
+returns jsonb language plpgsql security definer set search_path = public, pg_temp as $fn$
+declare
+  v_before public.grain_contracts%rowtype;
+  v_offer public.firm_offers%rowtype;
+  v_reopened uuid := null;
+  v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
+begin
+  if auth.uid() is null or public.request_uses_service_role() or not public.can_edit_farm(p_farm_id) then
+    raise exception 'you do not have permission to delete this contract';
+  end if;
+  if v_reason is null or length(v_reason) < 3 or length(v_reason) > 2000 then
+    raise exception 'a reason of 3 to 2000 characters is required to delete a contract';
+  end if;
+
+  select * into v_before from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id for update;
+  if not found then
+    -- Idempotent on a retry after a lost response: the row is already gone and the audit row
+    -- for that delete already exists, so report the completed delete rather than an error the
+    -- farmer would read as "it failed" and try again.
+    if exists (select 1 from public.grain_contract_audit a where a.farm_id = p_farm_id and a.grain_contract_id = p_contract_id and a.action = 'delete') then
+      return jsonb_build_object('deleted', true, 'reopened_firm_offer_id', null, 'already_deleted', true);
+    end if;
+    raise exception 'contract does not belong to this farm';
+  end if;
+  if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then
+    raise exception 'this contract already has delivered bushels and can no longer be deleted';
+  end if;
+
+  -- A contract created from a firm offer IS the record that the offer was filled. Once it is
+  -- deleted with a reason, the offer demonstrably was not filled, and the foreign key would
+  -- otherwise leave it marked 'filled' pointing at nothing -- a state no screen can explain and
+  -- that blocks the offer from ever being filled again. It returns to 'open', or to 'expired'
+  -- if its own expiry has already passed, so the delete never resurrects a stale offer as live.
+  if v_before.firm_offer_id is not null then
+    select * into v_offer from public.firm_offers where id = v_before.firm_offer_id and farm_id = p_farm_id for update;
+    if found then
+      update public.firm_offers
+         set status = case when v_offer.expires_on is not null and v_offer.expires_on < current_date then 'expired'::public.firm_offer_status else 'open'::public.firm_offer_status end,
+             filled_contract_id = null, updated_at = now()
+       where id = v_offer.id and farm_id = p_farm_id;
+      v_reopened := v_offer.id;
+    end if;
+  end if;
+
+  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, actor_id)
+  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, auth.uid());
+
+  delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;
+
+  return jsonb_build_object('deleted', true, 'reopened_firm_offer_id', v_reopened, 'already_deleted', false);
+end $fn$;
+revoke all on function public.delete_grain_contract(uuid, uuid, text) from public, anon;
+grant execute on function public.delete_grain_contract(uuid, uuid, text) to authenticated;
+
+comment on function public.delete_grain_contract(uuid, uuid, text) is
+  'GL-3b: delete a contract that has no deliveries, with a required reason recorded in grain_contract_audit before the row is removed. A contract created from a firm offer returns that offer to open, or expired if its expiry has passed.';

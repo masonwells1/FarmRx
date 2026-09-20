@@ -1,0 +1,266 @@
+-- Disposable-backend assertions for Initiative GL-3b (contract edit and delete).
+-- Runs after every migration on a fresh database, in the same database and after the
+-- FS, FD, GL-1 and GL-2 assertion files, so every id here is distinct from theirs.
+-- Every failure raises; the last line prints GL3_CONTRACT_EDIT_DELETE_DISPOSABLE_PASS.
+--
+-- What is proved: a contract with deliveries can be neither edited nor deleted; a reason
+-- is required and is stored; an edit changes only the correctable fields and never the
+-- crop year, commodity, contract type or pricing; an absent key keeps the stored value
+-- while an explicit null clears a nullable one; an invalid edit changes nothing; a delete
+-- writes its audit row BEFORE removing the contract, so the record outlives the row; a
+-- repeated delete after a lost response reports the completed delete instead of failing;
+-- a contract created from a firm offer returns that offer to open, or to expired when its
+-- own expiry has passed; the audit is append-only and fenced to the farm that owns it; and
+-- neither RPC can be driven by the service role.
+
+\set ON_ERROR_STOP on
+\set O9  '''00000000-0000-4000-8000-00000000000d'''
+\set O10 '''00000000-0000-4000-8000-00000000000e'''
+\set F3  '''00000000-0000-4000-8000-000000000072'''
+\set F4  '''00000000-0000-4000-8000-000000000073'''
+\set C1  '''00000000-0000-4000-8000-000000000090'''
+\set C2  '''00000000-0000-4000-8000-000000000091'''
+\set C3  '''00000000-0000-4000-8000-000000000092'''
+\set C4  '''00000000-0000-4000-8000-000000000093'''
+\set FO1 '''00000000-0000-4000-8000-000000000094'''
+\set FO2 '''00000000-0000-4000-8000-000000000095'''
+\set D1  '''00000000-0000-4000-8000-000000000096'''
+
+-- ------------------------------------------------- fixtures
+insert into auth.users(id,email) values (:O9,'gl3-owner-a@example.test'),(:O10,'gl3-owner-b@example.test');
+
+select set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-00000000000d"}',false);
+insert into public.farms(id,name,created_by,time_zone) values (:F3,'Contract Repair Farm',:O9,'America/Chicago');
+
+select set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-00000000000e"}',false);
+insert into public.farms(id,name,created_by,time_zone) values (:F4,'Other Farm',:O10,'America/Chicago');
+
+select set_config('request.jwt.claims','{"role":"service_role"}',false);
+insert into public.firm_offers(id,farm_id,crop_year,commodity_id,buyer,offer_type,bushels,price,expires_on,status)
+values (:FO1,:F3,2026,'corn_yellow','Offer Buyer','cash',5000,4.90,'2027-12-31','filled'),
+       (:FO2,:F3,2026,'soybeans','Expired Offer Buyer','cash',3000,11.10,'2020-01-01','filled');
+insert into public.grain_contracts(id,farm_id,crop_year,commodity_id,contract_type,buyer,bushels,cash_price,delivery_start,delivery_end)
+values (:C1,:F3,2026,'corn_yellow','forward_cash','Buyer Typo',10000,4.75,'2026-11-01','2026-11-30'),
+       (:C2,:F3,2026,'soybeans','forward_cash','Delivered Buyer',8000,11.00,'2026-12-01','2026-12-31');
+insert into public.grain_contracts(id,farm_id,crop_year,commodity_id,contract_type,buyer,bushels,cash_price,firm_offer_id)
+values (:C3,:F3,2026,'corn_yellow','forward_cash','Offer Buyer',5000,4.90,:FO1),
+       (:C4,:F3,2026,'soybeans','forward_cash','Expired Offer Buyer',3000,11.10,:FO2);
+update public.firm_offers set filled_contract_id = :C3 where id = :FO1;
+update public.firm_offers set filled_contract_id = :C4 where id = :FO2;
+insert into public.grain_contract_deliveries(id,farm_id,grain_contract_id,bushels,delivered_on)
+values (:D1,:F3,:C2,1000,'2026-12-05');
+
+-- ------------------------------------------------- 1. the one eligibility test
+do $$
+begin
+  if public.grain_contract_has_deliveries('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090')
+    then raise exception 'a contract with no deliveries was reported as delivered against'; end if;
+  if not public.grain_contract_has_deliveries('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091')
+    then raise exception 'a contract with a delivery was reported as having none'; end if;
+end $$;
+
+-- ------------------------------------------------- 2. the service role cannot drive either RPC
+-- Exercised under the role as well as the claim, the way an edge function reaches the database.
+set role service_role;
+do $$
+declare v_failed boolean;
+begin
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','service role attempt','{"buyer":"Nope"}'::jsonb);
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'the service role edited a contract'; end if;
+
+  v_failed := false;
+  begin perform public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','service role attempt');
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'the service role deleted a contract'; end if;
+end $$;
+reset role;
+
+-- Everything from here to the append-only checks runs as the signed-in owner, under the
+-- authenticated role, so execute grants and can_edit_farm are exercised rather than assumed.
+select set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-00000000000d"}',false);
+-- The access-epoch fence applies to these writes exactly as it does to any other browser write,
+-- so the owner presents the snapshot a signed-in client would. A farm created in this file is at
+-- epoch 1.
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-00000000000d','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000072',1)::text)::text,false);
+set role authenticated;
+
+-- ------------------------------------------------- 3. a reason is not optional
+do $$
+declare v_failed boolean;
+begin
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090',null,'{"buyer":"Corrected Buyer"}'::jsonb);
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'a contract was edited with no reason'; end if;
+
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','   ','{"buyer":"Corrected Buyer"}'::jsonb);
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'whitespace passed as a reason'; end if;
+
+  v_failed := false;
+  begin perform public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','ab');
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'a two-character reason was accepted'; end if;
+end $$;
+
+-- ------------------------------------------------- 4. an invalid edit changes nothing
+do $$
+declare v_failed boolean; v_buyer text; v_bushels numeric;
+begin
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','zero bushels','{"bushels":0}'::jsonb);
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'bushels of zero were accepted'; end if;
+
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','blank buyer','{"buyer":"  "}'::jsonb);
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'a blank buyer was accepted'; end if;
+
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','backwards window','{"delivery_start":"2026-11-30","delivery_end":"2026-11-01"}'::jsonb);
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'a delivery window ending before it starts was accepted'; end if;
+
+  select buyer, bushels into v_buyer, v_bushels from public.grain_contracts where id='00000000-0000-4000-8000-000000000090';
+  if v_buyer <> 'Buyer Typo' or v_bushels <> 10000 then raise exception 'a rejected edit still changed the contract'; end if;
+  if exists (select 1 from public.grain_contract_audit where grain_contract_id='00000000-0000-4000-8000-000000000090')
+    then raise exception 'a rejected edit wrote an audit row'; end if;
+end $$;
+
+-- ------------------------------------------------- 5. a contract with deliveries is history, not a draft
+do $$
+declare v_failed boolean;
+begin
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','fix the buyer','{"buyer":"Too Late"}'::jsonb);
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'a contract with deliveries was edited'; end if;
+
+  v_failed := false;
+  begin perform public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','remove it');
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'a contract with deliveries was deleted'; end if;
+
+  if not exists (select 1 from public.grain_contracts where id='00000000-0000-4000-8000-000000000091')
+    then raise exception 'the delivered contract is gone'; end if;
+end $$;
+
+-- ------------------------------------------------- 6. a real edit, and only the correctable fields
+do $$
+declare v_row public.grain_contracts%rowtype; v_audit public.grain_contract_audit%rowtype;
+begin
+  perform public.edit_grain_contract(
+    '00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090',
+    'buyer was typed wrong and the bushels were off by a truckload',
+    '{"buyer":"Corrected Buyer","bushels":9250,"delivery_end":null,"contract_number":"CN-7781"}'::jsonb);
+
+  select * into v_row from public.grain_contracts where id='00000000-0000-4000-8000-000000000090';
+  if v_row.buyer <> 'Corrected Buyer' then raise exception 'the buyer was not corrected'; end if;
+  if v_row.bushels <> 9250 then raise exception 'the bushels were not corrected'; end if;
+  if v_row.contract_number is distinct from 'CN-7781' then raise exception 'the contract number was not recorded'; end if;
+  -- an explicit null clears; an absent key keeps
+  if v_row.delivery_end is not null then raise exception 'an explicit null did not clear the delivery end'; end if;
+  if v_row.delivery_start is distinct from date '2026-11-01' then raise exception 'an absent key did not keep the delivery start'; end if;
+  -- identity and math are untouched
+  if v_row.crop_year <> 2026 or v_row.commodity_id <> 'corn_yellow' or v_row.contract_type <> 'forward_cash'
+    then raise exception 'an edit changed the contract identity'; end if;
+  if v_row.cash_price <> 4.75 or v_row.premium_cents_per_bu <> 0
+    then raise exception 'an edit changed contract pricing'; end if;
+
+  select * into v_audit from public.grain_contract_audit where grain_contract_id='00000000-0000-4000-8000-000000000090';
+  if not found then raise exception 'the edit wrote no audit row'; end if;
+  if v_audit.action <> 'edit' then raise exception 'the audit row is not an edit'; end if;
+  if v_audit.reason <> 'buyer was typed wrong and the bushels were off by a truckload' then raise exception 'the reason was not stored verbatim'; end if;
+  if v_audit.before_row->>'buyer' <> 'Buyer Typo' then raise exception 'the audit row lost the value before the edit'; end if;
+  if v_audit.after_row->>'buyer' <> 'Corrected Buyer' then raise exception 'the audit row lost the value after the edit'; end if;
+  if v_audit.actor_id is distinct from '00000000-0000-4000-8000-00000000000d'::uuid then raise exception 'the audit row did not record who made the change'; end if;
+end $$;
+
+-- ------------------------------------------------- 7. the audit outlives the contract, and repeats are safe
+do $$
+declare v_result jsonb; v_audit public.grain_contract_audit%rowtype;
+begin
+  v_result := public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','entered twice by mistake');
+  if v_result->>'deleted' <> 'true' then raise exception 'the delete did not report success'; end if;
+  if (v_result->>'already_deleted')::boolean then raise exception 'a first delete reported itself as a repeat'; end if;
+  if exists (select 1 from public.grain_contracts where id='00000000-0000-4000-8000-000000000090')
+    then raise exception 'the contract is still there'; end if;
+
+  select * into v_audit from public.grain_contract_audit where grain_contract_id='00000000-0000-4000-8000-000000000090' and action='delete';
+  if not found then raise exception 'the delete left no record'; end if;
+  if v_audit.after_row is not null then raise exception 'a delete recorded an after state'; end if;
+  if v_audit.before_row->>'buyer' <> 'Corrected Buyer' then raise exception 'the delete record lost the contract it removed'; end if;
+  if (select count(*) from public.grain_contract_audit where grain_contract_id='00000000-0000-4000-8000-000000000090') <> 2
+    then raise exception 'the edit record did not survive the delete'; end if;
+
+  -- a retry after a lost response must not read as a failure the farmer tries again
+  v_result := public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','entered twice by mistake');
+  if not (v_result->>'already_deleted')::boolean then raise exception 'a repeated delete did not report the completed delete'; end if;
+  if (select count(*) from public.grain_contract_audit where grain_contract_id='00000000-0000-4000-8000-000000000090') <> 2
+    then raise exception 'a repeated delete wrote another audit row'; end if;
+end $$;
+
+-- ------------------------------------------------- 8. a filled offer is no longer filled
+do $$
+declare v_result jsonb; v_offer public.firm_offers%rowtype;
+begin
+  v_result := public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000092','the elevator never confirmed this fill');
+  if v_result->>'reopened_firm_offer_id' <> '00000000-0000-4000-8000-000000000094'
+    then raise exception 'the delete did not name the offer it reopened'; end if;
+  select * into v_offer from public.firm_offers where id='00000000-0000-4000-8000-000000000094';
+  if v_offer.status <> 'open' then raise exception 'an unexpired offer did not return to open, it is %', v_offer.status; end if;
+  if v_offer.filled_contract_id is not null then raise exception 'the offer still points at a contract that is gone'; end if;
+  if (select reopened_firm_offer_id from public.grain_contract_audit where grain_contract_id='00000000-0000-4000-8000-000000000092')
+     is distinct from '00000000-0000-4000-8000-000000000094'::uuid
+    then raise exception 'the audit row did not record the reopened offer'; end if;
+
+  -- and an offer whose own expiry has passed must not come back as live
+  perform public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000093','wrong offer filled');
+  select * into v_offer from public.firm_offers where id='00000000-0000-4000-8000-000000000095';
+  if v_offer.status <> 'expired' then raise exception 'an expired offer came back as %', v_offer.status; end if;
+  if v_offer.filled_contract_id is not null then raise exception 'the expired offer still points at a contract that is gone'; end if;
+end $$;
+
+-- ------------------------------------------------- 9. the audit is append-only and fenced
+-- Back to the owning role on purpose: as authenticated the update below would fail on the
+-- missing grant, which proves nothing about the trigger.
+reset role;
+do $$
+declare v_failed boolean;
+begin
+  v_failed := false;
+  begin update public.grain_contract_audit set reason='rewritten' where grain_contract_id='00000000-0000-4000-8000-000000000092';
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'an audit reason was rewritten after the fact'; end if;
+
+  if has_table_privilege('authenticated','public.grain_contract_audit','insert') then raise exception 'a signed-in client can insert its own audit rows'; end if;
+  if has_table_privilege('authenticated','public.grain_contract_audit','update') then raise exception 'a signed-in client can update audit rows'; end if;
+  if has_table_privilege('authenticated','public.grain_contract_audit','delete') then raise exception 'a signed-in client can delete audit rows'; end if;
+  if has_table_privilege('anon','public.grain_contract_audit','select') then raise exception 'an anonymous caller can read audit rows'; end if;
+  if has_function_privilege('anon','public.edit_grain_contract(uuid,uuid,text,jsonb)','execute') then raise exception 'an anonymous caller can edit a contract'; end if;
+  if has_function_privilege('anon','public.delete_grain_contract(uuid,uuid,text)','execute') then raise exception 'an anonymous caller can delete a contract'; end if;
+  if not (select relrowsecurity from pg_class where oid='public.grain_contract_audit'::regclass) then raise exception 'the audit table has no row-level security'; end if;
+end $$;
+
+-- ------------------------------------------------- 10. another farm's owner sees none of it
+select set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-00000000000e"}',false);
+set role authenticated;
+do $$
+declare v_failed boolean;
+begin
+  if (select count(*) from public.grain_contract_audit where farm_id='00000000-0000-4000-8000-000000000072') <> 0
+    then raise exception 'another farm''s owner can read these audit rows'; end if;
+  v_failed := false;
+  begin perform public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','not my farm');
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'another farm''s owner deleted a contract'; end if;
+end $$;
+
+reset role;
+select set_config('request.headers','',false);
+select set_config('request.jwt.claims','',false);
+select 'GL3_CONTRACT_EDIT_DELETE_DISPOSABLE_PASS' as result;

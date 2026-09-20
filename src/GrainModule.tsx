@@ -50,7 +50,7 @@ import type {
   GrainCarryGrid,
   GrainCarrySettings,
 } from "./data/grain";
-import { marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth } from "./data/grain";
+import { contractIsCorrectable, marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -3159,6 +3159,74 @@ export function ContractEntry({
   );
 }
 
+/** GL-3b: the way out of a contract typed wrong. A contract with any delivery recorded against it is
+ * history and offers neither control -- the same test the server applies under a row lock, so the
+ * screen never offers a button the database will refuse. The reason is required for both actions and
+ * is stored with the change, so next season the farm can see why a number moved.
+ *
+ * What is NOT offered here is deliberate: crop year, commodity, contract type and every price. Those
+ * are the contract's identity and its math, and a basis or HTA price belongs to the one-shot
+ * finalization rule. Getting one of those wrong is what Delete is for. */
+export function ContractRepair({ contract, workspace, services, onSaved }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; onSaved: () => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [buyer, setBuyer] = useState(contract.buyer);
+  const [contractBushels, setContractBushels] = useState(String(contract.bushels));
+  const [start, setStart] = useState(contract.delivery_start ?? "");
+  const [end, setEnd] = useState(contract.delivery_end ?? "");
+  const [number, setNumber] = useState(contract.contract_number ?? "");
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  const lock = useRef(createSubmitLock());
+  const available = workspace.capabilities?.contract_edit_delete !== false;
+  if (!available || !contractIsCorrectable(workspace, contract.id)) return null;
+  const correct = async () => {
+    if (!lock.current.acquire()) return;
+    try {
+      // These three speak to the farmer directly. Routing them through the error taxonomy would turn
+      // "say why" into "Farm Rx could not correct this contract right now", which is not what happened.
+      const problem = validateContractCorrectionReason(reason);
+      if (problem) { setMessage(problem); return }
+      const value = Number(contractBushels);
+      if (!Number.isFinite(value) || value <= 0) { setMessage("Bushels must be greater than zero."); return }
+      if (start && end && end < start) { setMessage("Delivery end must be on or after delivery start."); return }
+      setSaving(true);
+      await services.grainRepository.editContract(contract.id, reason, { buyer, bushels: value, delivery_start: start || null, delivery_end: end || null, contract_number: number || null });
+      setMessage("Contract corrected.");
+      setReason("");
+      await onSaved();
+    } catch (error) { setMessage(farmerError(error, "correct this contract")) } finally { lock.current.release(); setSaving(false) }
+  };
+  const remove = async () => {
+    if (!lock.current.acquire()) return;
+    try {
+      const problem = validateContractCorrectionReason(reason);
+      if (problem) { setMessage(problem); return }
+      if (!(await confirmDialog({ title: `Delete the ${contract.buyer} contract?`, body: "The contract is removed from your position. The reason you gave is kept. This cannot be undone.", confirmLabel: "Delete contract", destructive: true }))) return;
+      setSaving(true);
+      await services.grainRepository.deleteContract(contract.id, reason);
+      await onSaved();
+    } catch (error) { setMessage(farmerError(error, "delete this contract")) } finally { lock.current.release(); setSaving(false) }
+  };
+  return <div className="contract-repair">
+    <button className="text-action" type="button" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Cancel correction" : "Correct or delete"}</button>
+    {open && <div className="contract-repair-body">
+      <label>Buyer<input value={buyer} onChange={(event) => setBuyer(event.target.value)} /></label>
+      <label>Contract bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={contractBushels} onChange={(event) => setContractBushels(event.target.value)} /></label>
+      <label>Delivery start<input type="date" value={start} onChange={(event) => setStart(event.target.value)} /></label>
+      <label>Delivery end<input type="date" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
+      <label>Contract #<input value={number} onChange={(event) => setNumber(event.target.value)} /></label>
+      <label>Why are you changing this?<textarea value={reason} rows={2} onChange={(event) => setReason(event.target.value)} /></label>
+      <small>Crop year, commodity, type and price cannot be corrected here. Delete the contract and enter it again if one of those is wrong.</small>
+      <div className="contract-repair-buttons">
+        <button className="text-action" type="button" disabled={saving} onClick={() => void correct()}>Save correction</button>
+        <button className="text-action destructive" type="button" disabled={saving} onClick={() => void remove()}>Delete contract</button>
+      </div>
+      {message && <small>{message}</small>}
+    </div>}
+  </div>;
+}
+
 export function ContractActions({ contract, workspace, services, autoFocusDelivery = false, onSaved, onDeliverySaved, onReceipt }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; autoFocusDelivery?: boolean; onSaved: () => Promise<void>; onDeliverySaved: () => Promise<void>; onReceipt: (id: string) => void }) {
   const [price, setPrice] = useState(""); const [delivery, setDelivery] = useState(""); const [message, setMessage] = useState(""); const [saving, setSaving] = useState(false); const [deliveryUnconfirmed, setDeliveryUnconfirmed] = useState(false); const lock = useRef(createSubmitLock()); const deliveryDraft = useRef<GrainContractDelivery | null>(null);
   const missingLeg = contract.contract_type === "basis" ? "futures_price" : contract.contract_type === "hta" ? "basis" : null;
@@ -3198,7 +3266,7 @@ export function ContractActions({ contract, workspace, services, autoFocusDelive
       setSaving(false);
     }
   };
-  return <div className="contract-actions">{missingLeg && contract[missingLeg] === null && <label>{missingLeg === "basis" ? "Set basis $/bu" : "Set futures price $/bu"}<input type="number" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_price_finalization} onClick={() => void finalize()}>{missingLeg === "basis" ? "Set basis" : "Set futures price"}</button>{!workspace.capabilities?.contract_price_finalization && <small>Price finalization arrives with the next database update. Reload the app after the update.</small>}</label>}<label>Delivered bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={delivery} disabled={deliveryUnconfirmed} autoFocus={autoFocusDelivery} onChange={(event) => setDelivery(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_deliveries} onClick={() => void record()}>{deliveryUnconfirmed ? "Retry delivery" : "Record delivery"}</button><small>Recording a delivery does not remove grain from a bin.</small>{!workspace.capabilities?.contract_deliveries && <small>Tracking arrives with the next database update. Reload the app after the update.</small>}</label>{message && <small>{message}</small>}</div>
+  return <div className="contract-actions">{missingLeg && contract[missingLeg] === null && <label>{missingLeg === "basis" ? "Set basis $/bu" : "Set futures price $/bu"}<input type="number" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_price_finalization} onClick={() => void finalize()}>{missingLeg === "basis" ? "Set basis" : "Set futures price"}</button>{!workspace.capabilities?.contract_price_finalization && <small>Price finalization arrives with the next database update. Reload the app after the update.</small>}</label>}<label>Delivered bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={delivery} disabled={deliveryUnconfirmed} autoFocus={autoFocusDelivery} onChange={(event) => setDelivery(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_deliveries} onClick={() => void record()}>{deliveryUnconfirmed ? "Retry delivery" : "Record delivery"}</button><small>Recording a delivery does not remove grain from a bin.</small>{!workspace.capabilities?.contract_deliveries && <small>Tracking arrives with the next database update. Reload the app after the update.</small>}</label>{message && <small>{message}</small>}<ContractRepair contract={contract} workspace={workspace} services={services} onSaved={onSaved} /></div>
 }
 
 export function Bins({

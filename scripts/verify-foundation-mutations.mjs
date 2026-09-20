@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 235
+const expectedMutationCount = 248
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -21,7 +21,7 @@ const files = [
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
   'supabase/functions/_shared/marsFeedOrchestrator.ts', 'src/data/grainAlerts.ts', 'supabase/functions/deliver-grain-alert/index.ts',
-  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'src/data/marketingYear.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
+  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -709,6 +709,46 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('setAph("");\n      await onSaved();', 'await onSaved();'))
   detected("the next crop inherits the previous crop's yield", 'gl3:yield-cleared-between-crops')
+  reset()
+  // GL-3b: the way out of a contract typed wrong.
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('create or replace function public.edit_grain_contract(', 'create or replace function public.edit_grain_contract_unused('))
+  detected('the server-owned correction disappears', 'gl3b:repair-is-server-owned')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace("supabase.rpc('delete_grain_contract'", "supabase.from('grain_contracts').delete().eq('id'"))
+  detected('the browser deletes a contract directly instead of through the audited server action', 'gl3b:repair-is-server-owned')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then\n    raise exception 'this contract already has delivered bushels and can no longer be deleted';", "if false then\n    raise exception 'this contract already has delivered bushels and can no longer be deleted';"))
+  detected('a contract with delivered bushels can be deleted', 'gl3b:delivered-contract-is-history')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('if (!available || !contractIsCorrectable(workspace, contract.id)) return null;', 'if (!available) return null;'))
+  detected('the screen offers a correction the database will refuse', 'gl3b:delivered-contract-is-history')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('reason text not null check (length(btrim(reason)) between 3 and 2000)', 'reason text'))
+  detected('the reason for a contract change becomes optional', 'gl3b:reason-is-required')
+  reset()
+  mutate('src/data/grain.ts', (source) => source.replace('export function validateContractCorrectionReason(', 'export function validateContractCorrectionReasonUnused('))
+  detected('the browser stops requiring a reason', 'gl3b:reason-is-required')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('set buyer = v_buyer, bushels = v_bushels, delivery_start = v_start, delivery_end = v_end,\n         contract_number = v_number, notes = v_notes, updated_at = now()', 'set buyer = v_buyer, bushels = v_bushels, delivery_start = v_start, delivery_end = v_end,\n         contract_number = v_number, notes = v_notes, cash_price = 0, updated_at = now()'))
+  detected('a correction reaches past the one-shot finalization rule into contract pricing', 'gl3b:identity-and-math-not-editable')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, actor_id)\n  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, auth.uid());\n\n  delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;", "  delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;\n\n  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, actor_id)\n  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, auth.uid());"))
+  detected('the record of a delete is written after the row it describes is gone', 'gl3b:audit-outlives-the-contract')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('grant select on public.grain_contract_audit to authenticated;', 'grant select, insert, update on public.grain_contract_audit to authenticated;'))
+  detected('a signed-in client can write or rewrite its own audit rows', 'gl3b:audit-is-append-only')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('contract_edit_delete: !tableMissing(contract_audit_probe.error)', 'contract_edit_delete: true'))
+  detected('the repair controls are offered against a database that has no audit table', 'gl3b:capability-reports-schema')
+  reset()
+  mutate('src/data/QueuedGrainRepository.ts', (source) => source.replace("async deleteContract(contractId: string, reason: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before deleting a contract.');", "async deleteContract(contractId: string, reason: string) {"))
+  detected('a contract delete is attempted offline', 'gl3b:correction-needs-a-connection')
+  reset()
+  mutate('src/data/SupabaseGrainRepository.ts', (source) => source.replace('if (changes.delivery_start !== undefined) payload.delivery_start = changes.delivery_start || null', 'payload.delivery_start = changes.delivery_start || null'))
+  detected('a buyer correction silently clears the delivery window the farmer never opened', 'gl3b:absent-key-keeps-stored-value')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('filled_contract_id = null, updated_at = now()', 'updated_at = now()'))
+  detected('a deleted contract leaves its firm offer marked filled pointing at nothing', 'gl3b:filled-offer-does-not-dangle')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('<tfoot>', '<tfoot hidden>').replace('</tfoot>', '</tfoot>'))
   detected('the contracts totals row is removed', 'gl3:contract-totals-row')

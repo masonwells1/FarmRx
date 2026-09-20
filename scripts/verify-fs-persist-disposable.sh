@@ -35,3 +35,6 @@ echo GL1_MARS_FEED_DISPOSABLE_PASS
 # Initiative GL-2 (alert truth): crop-year eligibility and the feed's one permitted effect.
 psql_ -d farmrx_disposable -f "$root/scripts/sql/gl2-alert-eligibility-assertions.sql" | grep -q GL2_ALERT_ELIGIBILITY_DISPOSABLE_PASS || { echo "GL-2 alert eligibility assertions failed" >&2; exit 1; }
 echo GL2_ALERT_ELIGIBILITY_DISPOSABLE_PASS
+# Initiative GL-3b (contract repair): edit and delete with a reason, and the audit that outlives the row.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/gl3-contract-edit-delete-assertions.sql" | grep -q GL3_CONTRACT_EDIT_DELETE_DISPOSABLE_PASS || { echo "GL-3b contract edit/delete assertions failed" >&2; exit 1; }
+echo GL3_CONTRACT_EDIT_DELETE_DISPOSABLE_PASS

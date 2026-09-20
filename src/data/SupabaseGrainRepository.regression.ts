@@ -14,6 +14,7 @@ import { farmerError } from '../lib/farmerErrors'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from './binLedger'
 import { deriveBinOnHand } from './binLedger'
 import { FILLED_OFFER_DELETE_MESSAGE } from './firmOffers'
+import { CONTRACT_REPAIR_PENDING, contractIsCorrectable, validateContractCorrectionReason } from './grain'
 import { readFileSync } from 'node:fs'
 import type { FieldsRepository } from './fields'
 import type { FarmOperationContext } from './farmOperationContext'
@@ -79,6 +80,10 @@ class FakeGateway implements GrainDataGateway {
   async appendBinTransactionRpc(_farm: string, row: BinTransaction) { this.guard(); this.movementInputs.push(structuredClone(row)); await this.beforeMovement?.(); if (this.movementError) throw this.movementError; const existing = this.state.bundle.bin_transactions.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === row.id) as BinTransaction | undefined; if (existing) { if (existing.farm_id === row.farm_id && existing.grain_bin_id === row.grain_bin_id && existing.direction === row.direction && existing.bushels === row.bushels && existing.commodity_id === row.commodity_id && existing.occurred_on === row.occurred_on && existing.note === row.note && existing.source_kind === row.source_kind) { const response = structuredClone(existing); this.afterOnlineMutation?.(); return response } throw new Error('Movement id was already used with different content.') } this.state.bundle.bin_transactions = [...this.state.bundle.bin_transactions, structuredClone(row)]; if (this.throwAfterMovementPersist) { this.afterMovementPersist?.(); throw new TypeError('lost movement response') }; const response = structuredClone(row); this.afterOnlineMutation?.(); return response }
   async appendContractDeliveryRpc(_farm: string, row: { id: string; farm_id: string; grain_contract_id: string; bushels: number; delivered_on: string; note: string | null }, _allow: boolean) { this.guard(); await this.beforeDelivery?.(); const existing = this.state.bundle.grain_contract_deliveries.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === row.id) as typeof row | undefined; if (existing) { if (existing.farm_id === row.farm_id && existing.grain_contract_id === row.grain_contract_id && existing.bushels === row.bushels && existing.delivered_on === row.delivered_on && existing.note === row.note) { const response = structuredClone(existing); this.afterOnlineMutation?.(); return response } throw new Error('Delivery id was already used with different content.') } this.state.bundle.grain_contract_deliveries = [...this.state.bundle.grain_contract_deliveries, structuredClone(row)]; if (this.throwAfterDeliveryPersist) { this.afterDeliveryPersist?.(); throw new TypeError('lost delivery response') }; const response = structuredClone(row); this.afterOnlineMutation?.(); return response }
   async finalizeContractPriceLegRpc(_farm: string, contractId: string, leg: 'futures_price' | 'basis', value: number) { const raw = this.state.bundle.grain_contracts.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId) as Record<string, unknown> | undefined; if (!raw) throw new Error('missing contract'); if (raw[leg] !== null) throw new Error('already finalized'); const future = leg === 'futures_price' ? value : Number(raw.futures_price); const basis = leg === 'basis' ? value : Number(raw.basis); const saved = { ...raw, futures_price: future, basis, cash_price: future + basis + Number(raw.premium_cents_per_bu) / 100, updated_at: stamp }; this.state.bundle.grain_contracts = this.state.bundle.grain_contracts.map((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId ? saved : item); const response = structuredClone(saved); this.afterOnlineMutation?.(); return response }
+  editContractPayloads: Array<{ contractId: string; reason: string; changes: Record<string, unknown> }> = []
+  deleteContractCalls: Array<{ contractId: string; reason: string }> = []
+  async editContractRpc(_farm: string, contractId: string, reason: string, changes: Record<string, unknown>) { this.guard(); this.editContractPayloads.push({ contractId, reason, changes: structuredClone(changes) }); const raw = this.state.bundle.grain_contracts.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId) as Record<string, unknown> | undefined; if (!raw) throw new Error('missing contract'); const saved = { ...raw, ...changes, updated_at: stamp }; this.state.bundle.grain_contracts = this.state.bundle.grain_contracts.map((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId ? saved : item); return structuredClone(saved) }
+  async deleteContractRpc(_farm: string, contractId: string, reason: string) { this.guard(); this.deleteContractCalls.push({ contractId, reason }); this.state.bundle.grain_contracts = this.state.bundle.grain_contracts.filter((item) => !(item && typeof item === 'object' && (item as { id?: unknown }).id === contractId)); return { deleted: true, reopened_firm_offer_id: null, already_deleted: false } }
   async upsertGrainAlertSettings(_farm: string, row: GrainAlertSettings) { this.guard(); return structuredClone(row) }
   async upsertGrainSaleLimit(_farm: string, row: GrainSaleLimit) { this.guard(); this.state.bundle.grain_sale_limits = [...(this.state.bundle.grain_sale_limits as GrainSaleLimit[]).filter((item) => item.id !== row.id), structuredClone(row)]; return structuredClone(row) }
   async upsertGrainCarrySettings(_farm: string, row: GrainCarrySettings) { this.guard(); this.state.bundle.grain_carry_settings = structuredClone(row); return structuredClone(row) }
@@ -473,6 +478,52 @@ async function run() {
     assert(!columnMissing({ code: '42P01' }) && !columnMissing(null) && !columnMissing(undefined), 'GL-2: only an undefined-column error counts; a missing table or no error must not be swallowed.')
     assert(!columnMissing({ code: '42883' }) && functionMissing({ code: '42883' }), 'GL-2: a missing function and a missing column must stay distinguishable.')
     assert(tableMissing({ code: '42P01' }) && !tableMissing({ code: '42703' }), 'GL-2: the table and column probes must not overlap.')
+  }
+  // 24 (GL-3b): the way out of a contract typed wrong, and the fences around it.
+  {
+    assert(validateContractCorrectionReason('  ') !== null && validateContractCorrectionReason('ab') !== null, 'GL-3b: a reason shorter than three characters must be refused.')
+    assert(validateContractCorrectionReason('x'.repeat(2001)) !== null, "GL-3b: a reason longer than the column's check constraint must be refused before it reaches the database.")
+    assert(validateContractCorrectionReason('  wrong buyer  ') === null, 'GL-3b: a real reason must be accepted, trimmed.')
+    const deliveredWorkspace = { grain_contract_deliveries: [{ grain_contract_id: 'contract-a' }] } as unknown as Parameters<typeof contractIsCorrectable>[0]
+    assert(!contractIsCorrectable(deliveredWorkspace, 'contract-a'), 'GL-3b: a contract with a delivery is history, not a draft.')
+    assert(contractIsCorrectable(deliveredWorkspace, 'contract-b'), 'GL-3b: a contract with no delivery must stay correctable.')
+
+    const repairGateway = new FakeGateway()
+    const repairRepo = repository(repairGateway)
+    const repairData = await repairRepo.getData()
+    const target = repairData.grain_contracts[0]
+    // Only what the farmer touched is sent. A payload naming every column would read as an instruction
+    // to clear the delivery window and the notes the farmer never opened.
+    await repairRepo.editContract(target.id, '  buyer typed wrong  ', { buyer: '  Corrected Buyer  ', delivery_end: null })
+    const sent = repairGateway.editContractPayloads[0]
+    assert(sent?.reason === 'buyer typed wrong', 'GL-3b: the reason must reach the server trimmed.')
+    assert(sent.changes.buyer === 'Corrected Buyer', 'GL-3b: the buyer must reach the server trimmed.')
+    assert('delivery_end' in sent.changes && sent.changes.delivery_end === null, 'GL-3b: an explicit null must survive as a null, which is how a delivery window is cleared.')
+    assert(!('delivery_start' in sent.changes) && !('notes' in sent.changes) && !('bushels' in sent.changes), 'GL-3b: an untouched field must not be sent at all; the server reads an absent key as keep.')
+
+    let refusedReason = ''
+    try { await repairRepo.editContract(target.id, 'no', { buyer: 'X' }) } catch (error) { refusedReason = error instanceof Error ? error.message : '' }
+    assert(/three characters/.test(refusedReason), `GL-3b: a short reason must be refused before any write (saw ${refusedReason}).`)
+    assert(repairGateway.editContractPayloads.length === 1, 'GL-3b: a refused correction must reach the server not at all.')
+
+    let emptyEdit = ''
+    try { await repairRepo.editContract(target.id, 'nothing actually changed', {}) } catch (error) { emptyEdit = error instanceof Error ? error.message : '' }
+    assert(/Change something/.test(emptyEdit), `GL-3b: an empty correction must be refused rather than writing an audit row for nothing (saw ${emptyEdit}).`)
+
+    await repairRepo.deleteContract(target.id, 'entered twice')
+    assert(repairGateway.deleteContractCalls[0]?.contractId === target.id, 'GL-3b: the delete must name the contract.')
+
+    // The GL-3b migration is applied separately from the deploy that carries this client. Between the
+    // two the RPCs do not exist, and the farmer must read a schema-skew message, not a Postgres error.
+    const preMigrationGateway = new FakeGateway()
+    Object.defineProperty(preMigrationGateway, 'editContractRpc', { value: undefined })
+    Object.defineProperty(preMigrationGateway, 'deleteContractRpc', { value: undefined })
+    const preMigrationRepo = repository(preMigrationGateway)
+    const preMigrationData = await preMigrationRepo.getData()
+    let pendingEdit = ''; let pendingDelete = ''
+    try { await preMigrationRepo.editContract(preMigrationData.grain_contracts[0].id, 'buyer typed wrong', { buyer: 'X' }) } catch (error) { pendingEdit = error instanceof Error ? error.message : '' }
+    try { await preMigrationRepo.deleteContract(preMigrationData.grain_contracts[0].id, 'entered twice') } catch (error) { pendingDelete = error instanceof Error ? error.message : '' }
+    assert(pendingEdit === CONTRACT_REPAIR_PENDING && pendingDelete === CONTRACT_REPAIR_PENDING, `GL-3b: a pre-migration database must say so plainly (saw ${pendingEdit} / ${pendingDelete}).`)
   }
   console.log('SupabaseGrainRepository regressions passed.')
 }

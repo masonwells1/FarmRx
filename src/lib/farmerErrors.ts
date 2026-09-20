@@ -1,5 +1,6 @@
 import { FIRM_OFFER_FILL_PARTIAL_SUCCESS } from '../data/firmOfferFill'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from '../data/binLedger'
+import { CONTRACT_REPAIR_PENDING } from '../data/grain'
 
 export const firmOfferFillPartialSuccessMessage = 'Your sale was recorded as a contract. The offer could not be marked filled — reload the page. Do not enter this contract again.'
 
@@ -18,6 +19,12 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (/price finalization arrives with the next database update/.test(message)) return 'Price finalization arrives with the next database update.'
   if (/movement date must be after the latest bin baseline|dated on or before the bin's baseline/.test(message)) return PRE_BASELINE_BIN_MOVEMENT_MESSAGE
   if (/connect to the internet before recording a delivery/.test(message)) return 'Connect to the internet before recording a delivery.'
+  if (/correcting a contract arrives with the next database update/.test(message)) return CONTRACT_REPAIR_PENDING
+  if (/connect to the internet before correcting a contract/.test(message)) return 'Connect to the internet before correcting a contract.'
+  if (/connect to the internet before deleting a contract/.test(message)) return 'Connect to the internet before deleting a contract.'
+  // The server decides this under a row lock, so a screen that offered the control can still be told
+  // no -- a delivery recorded on another device between this page's read and this click.
+  if (/already has delivered bushels/.test(message)) return 'A delivery has been recorded against this contract, so it can no longer be changed. Reload to see it.'
   if (/connect to the internet before filling this offer|firm offer must be filled while connected/.test(message)) return 'Connect to the internet before filling this offer.'
   if (/offline copy is too old/.test(message)) return 'This offline copy is too old to show safely. Connect to update it.'
   if (/unreadable or mismatched saved work.*nothing was cleared/.test(message)) return 'Farm Rx found unreadable or mismatched saved work for a farm you can no longer open. Nothing was cleared.'
