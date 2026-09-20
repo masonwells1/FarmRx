@@ -589,7 +589,10 @@ export function foundationStaticGuard(root = process.cwd()) {
   // carries the eligibility rule the browser must not write alert_rule_states, or it and the old sweep
   // re-fire the same alert at each other.
   requireText(errors, read(root, 'src/data/grainAlerts.ts'), 'export function mayRecordAlertTransitions(', 'gl2:transitions-gated-on-schema')
-  requireText(errors, read(root, 'src/GrainModule.tsx'), 'void (mayRecordAlertTransitions(data.capabilities)', 'gl2:transitions-gated-on-schema')
+  // The holdback must WRAP the transition-and-delivery block. Falling through it into the pre-0035
+  // branch would stamp last_triggered_at and ask for a delivery the pre-GL-2 server refuses, which hides
+  // the alert for the rest of the day -- the very harm the gate exists to prevent.
+  requireText(errors, read(root, 'src/GrainModule.tsx'), 'if (mayRecordAlertTransitions(data.capabilities)) {', 'gl2:transitions-gated-on-schema')
   requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), 'gl2_alert_eligibility: !functionMissing(per_commodity_cash_bids.error)', 'gl2:capability-reports-schema')
   requireText(errors, marketingYear, 'return inside(low) && inside(high)', 'gl2:window-wholly-inside')
   const marketingAlerts = read(root, 'src/data/marketingAlerts.ts')

@@ -608,7 +608,7 @@ try {
   mutate('src/data/SupabaseFieldsRepository.ts', (source) => source.replace("const marketingMonth = optionalSmallInt(raw, 'marketing_year_start_month')", "const marketingMonth = optionalSmallInt(row, 'marketing_year_start_month')"))
   detected('a farm on the previous schema cannot load its fields at all', 'gl2:pre-migration-commodity-still-loads')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('void (mayRecordAlertTransitions(data.capabilities)', 'void (true'))
+  mutate('src/GrainModule.tsx', (source) => source.replace('if (mayRecordAlertTransitions(data.capabilities)) {', 'if (true) {'))
   detected('a new client writes rule state against a pre-GL-2 sweep', 'gl2:transitions-gated-on-schema')
   reset()
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('gl2_alert_eligibility: !functionMissing(per_commodity_cash_bids.error)', 'gl2_alert_eligibility: true'))

@@ -395,38 +395,41 @@ export function GrainPage({ services }: { services: GrainServices }) {
         }
       }
       setAlerts(nextAlerts);
-      // GL-2: do not write a rule's state until the live database carries the crop-year eligibility rule.
-      // A merge deploys this client on its own while applying the migration is a separate owner action,
-      // so a new client will run against the old sweep for a while. They judge a bid by different rules,
-      // and if both write alert_rule_states the same alert re-fires or stays suppressed indefinitely.
-      // Until the server agrees, the sweep owns the state alone -- which is what it did before GL-2.
-      void (mayRecordAlertTransitions(data.capabilities)
-        ? recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions, alertOperationContext)
-        : Promise.resolve(null)
-      ).then((transitioned) => {
-        if (transitioned !== null) return requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId || transitioned.has(alert.ruleId)), data.fields.farm.id, alertOperationContext);
-        // Pre-0035: retain current behavior, but one synchronous refresh lock
-        // prevents a refresh burst from double-writing the same rule state.
-        if (ruleEvaluation.firedRuleIds.length && refreshWriteLock.current.acquire()) {
-          const stamp = new Date().toISOString();
-          void Promise.all(ruleEvaluation.firedRuleIds.map((id) => {
-            const rule = data.marketing_alert_rules.find((item) => item.id === id);
-            return rule ? verifyGrainAlertOperationContext(alertOperationContext).then(() => services.grainRepository.saveMarketingAlertRule({ ...rule, last_triggered_at: stamp, updated_at: stamp })) : Promise.resolve();
-          })).finally(() => refreshWriteLock.current.release());
-        }
-        return requestOwnerAlertDelivery(nextAlerts, data.fields.farm.id, alertOperationContext);
-      }).then(
-        (failed) =>
+      // GL-2: until the live database carries the crop-year eligibility rule, this client writes NOTHING
+      // about a marketing rule and asks for no delivery. A merge deploys this client on its own while
+      // applying the migration is a separate owner action, so a new client runs against the old sweep for
+      // a while; the two judge a bid by different rules, and any write from here during that window ends
+      // up wrong. The holdback must skip the pre-0035 branch below rather than fall through it: that
+      // branch stamps last_triggered_at, which hides the alert from the page for the rest of the day, and
+      // then asks for a delivery the server refuses. The sweep owns rule state alone until the schemas
+      // agree. It is a wrapped block and not an early return, because the load-error reset and the
+      // selected-estimate fallback below still have to run.
+      if (mayRecordAlertTransitions(data.capabilities)) {
+        void recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions, alertOperationContext).then((transitioned) => {
+          if (transitioned !== null) return requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId || transitioned.has(alert.ruleId)), data.fields.farm.id, alertOperationContext);
+          // Pre-0035: retain current behavior, but one synchronous refresh lock
+          // prevents a refresh burst from double-writing the same rule state.
+          if (ruleEvaluation.firedRuleIds.length && refreshWriteLock.current.acquire()) {
+            const stamp = new Date().toISOString();
+            void Promise.all(ruleEvaluation.firedRuleIds.map((id) => {
+              const rule = data.marketing_alert_rules.find((item) => item.id === id);
+              return rule ? verifyGrainAlertOperationContext(alertOperationContext).then(() => services.grainRepository.saveMarketingAlertRule({ ...rule, last_triggered_at: stamp, updated_at: stamp })) : Promise.resolve();
+            })).finally(() => refreshWriteLock.current.release());
+          }
+          return requestOwnerAlertDelivery(nextAlerts, data.fields.farm.id, alertOperationContext);
+        }).then(
+          (failed) =>
+            setDeliveryNotice(
+              failed.length
+                ? "An email notice could not be sent. Your in-app alert is still here."
+                : "",
+            ),
+        ).catch(() =>
           setDeliveryNotice(
-            failed.length
-              ? "An email notice could not be sent. Your in-app alert is still here."
-              : "",
+            "An email notice could not be sent. Your in-app alert is still here.",
           ),
-      ).catch(() =>
-        setDeliveryNotice(
-          "An email notice could not be sent. Your in-app alert is still here.",
-        ),
-      );
+        );
+      }
       setLoadError("");
       setSelectedEstimateId((current) =>
         data.production_estimates.some((estimate) => estimate.id === current)
