@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 219
+const expectedMutationCount = 220
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -621,8 +621,11 @@ try {
   mutate('supabase/functions/deliver-grain-alert/index.ts', (source) => source.replace("admin.rpc('latest_eligible_cash_bid'", "admin.rpc('some_other_rpc'"))
   detected('the email re-check judges a rule by a different bid than the sweep', 'gl2:email-recheck-uses-shared-selection')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('checks these on the server about every fifteen minutes. You', 'checks these and emails the farm owner. You'))
+  mutate('src/GrainModule.tsx', (source) => source.replace('sends the alert to your phone, if you have turned notifications on', 'emails the farm owner'))
   detected('the page promises an email the scheduled path never sends', 'gl2:email-promise-is-true')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('already sent to your phone today is not', 'sent to your phone today is also'))
+  detected('the page stops saying a rule fired today is not repeated in the list', 'gl2:same-day-suppression-stated')
   reset()
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(".order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(RECENT_CASH_BID_LIMIT)", ".order('bid_date').order('id')"))
   detected('the browser reads the oldest cash bids once the feed fills the table', 'gl2:cash-bids-read-newest-first')

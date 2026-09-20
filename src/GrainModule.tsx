@@ -722,9 +722,10 @@ export function GrainPage({ services }: { services: GrainServices }) {
                   <h2>Items to review</h2>
                   <p>
                     Marketing alerts are checked on the server about every
-                    fifteen minutes and listed here. Plan-target and USDA report
-                    reminders in this list are checked when the owner opens
-                    Grain, and those are the ones Farm Rx emails.
+                    fifteen minutes; one already sent to your phone today is not
+                    repeated in this list. Plan-target and USDA report reminders
+                    are checked when the owner opens Grain, and those are the
+                    ones Farm Rx emails.
                   </p>
                 </div>
               </div>
@@ -1191,11 +1192,11 @@ function MarketingAlerts({
             <span className="eyebrow">Checked for you</span>
             <h2>Marketing alerts</h2>
             <p>
-              Farm Rx checks these on the server about every fifteen minutes. You
-              do not have to keep Grain open. When one is reached it is sent to
-              your phone, if you have turned notifications on, and it is listed
-              here. A USDA market price can reach a target; feed prices are never
-              used in your position or revenue numbers.
+              Farm Rx checks these on the server about every fifteen minutes and
+              sends the alert to your phone, if you have turned notifications on.
+              You do not have to keep Grain open. A USDA market price can reach a
+              target; feed prices are never used in your position or revenue
+              numbers.
             </p>
           </div>
           <label className="commodity-picker">

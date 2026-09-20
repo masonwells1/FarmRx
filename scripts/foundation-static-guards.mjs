@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 219')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 220')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -607,8 +607,13 @@ export function foundationStaticGuard(root = process.cwd()) {
   // rule the sweep already fired returns fired:false from record_marketing_alert_transition, so the
   // browser filters it out before deliver-grain-alert is ever invoked. A server-fired marketing alert
   // therefore never produces an email by any route.
-  requireText(errors, grainModule, 'checks these on the server about every fifteen minutes. You', 'gl2:email-promise-is-true')
-  if (/(emails the farm owner|The email goes out|their email goes out)/.test(grainModule)) errors.push('gl2:email-promise-is-true')
+  requireText(errors, grainModule, 'sends the alert to your phone, if you have turned notifications on', 'gl2:email-promise-is-true')
+  // Three rounds went on this one sentence. Every phrasing that claimed something the code does not do
+  // is rejected by name, so the fourth attempt cannot be another rewording that passes.
+  if (/(emails the farm owner|The email goes out|their email goes out|and it is listed\s+here|and listed here)/.test(grainModule)) errors.push('gl2:email-promise-is-true')
+  // A rule the sweep fired today is suppressed from the page's list by hasFiredToday, so the page must
+  // say so rather than imply the farmer will find it there.
+  requireText(errors, grainModule, 'already sent to your phone today is not', 'gl2:same-day-suppression-stated')
 
   // GL-3: the dead ends. Both counterparty fields accept free text with suggestions, no buyer or
   // elevator is hardcoded, the position card leads with a disclosure, and a second crop is reachable.
