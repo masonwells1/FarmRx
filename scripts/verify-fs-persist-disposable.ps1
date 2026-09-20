@@ -52,6 +52,8 @@ try {
   # the live storage guard (0040's own copy is dead code), the one client-updatable table whose
   # farm_id is not blocked by prevent_farm_move, and the pin that it stays the only one.
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/epoch-fencing-assertions.sql')) 'EPOCH_FENCING_DISPOSABLE_PASS' '0040 epoch fencing assertions failed.'
+  # Migration 0033's rules, ported the same way and for the same reason.
+  Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/bin-and-contract-truth-assertions.sql')) 'BIN_CONTRACT_TRUTH_DISPOSABLE_PASS' '0033 bin and contract truth assertions failed.'
 
   $passed = $true
 } finally {

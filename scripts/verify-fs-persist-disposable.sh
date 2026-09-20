@@ -46,3 +46,7 @@ echo LD1_GRAIN_LOADS_DISPOSABLE_PASS
 # write paths a stale epoch has to be refused on.
 psql_ -d farmrx_disposable -f "$root/scripts/sql/epoch-fencing-assertions.sql" | grep -q EPOCH_FENCING_DISPOSABLE_PASS || { echo "0040 epoch fencing assertions failed" >&2; exit 1; }
 echo EPOCH_FENCING_DISPOSABLE_PASS
+# Migration 0033 (bin and contract truth), ported from the other PowerShell-only lane: the rules
+# that decide whether the bushels Farm Rx shows a farmer are the bushels they actually have.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/bin-and-contract-truth-assertions.sql" | grep -q BIN_CONTRACT_TRUTH_DISPOSABLE_PASS || { echo "0033 bin and contract truth assertions failed" >&2; exit 1; }
+echo BIN_CONTRACT_TRUTH_DISPOSABLE_PASS

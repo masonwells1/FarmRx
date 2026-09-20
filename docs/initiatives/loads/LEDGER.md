@@ -136,3 +136,73 @@ The other two PowerShell-only lanes (`verify-0040-disposable.ps1`, `verify-0033-
 remain unrunnable here, and their rules have not been copied across the way 0043's covering-index
 rule now has been. That is the next instance of this defect waiting to happen, and it is worth a
 deliberate pass rather than another tranche discovering it in CI.
+
+## LD-003 — the two remaining PowerShell-only lanes, ported
+
+LD-002 closed the covering-index gap by moving one rule out of a lane that cannot run on a
+development machine. It also named the obvious next step: two more such lanes, `verify-0040-`
+and `verify-0033-disposable.ps1`, whose rules nothing runnable here checked. Both are now ported
+into the disposable database the bash lane already builds from every migration, and both run in
+CI too — the PowerShell twin `verify-fs-persist-disposable.ps1` invokes the same two files, so the
+rules the ports add are enforced where it matters rather than only locally.
+
+### What each port covers
+
+**`scripts/sql/epoch-fencing-assertions.sql` (0040, farm access-epoch fencing).** The catalog rules
+that need no fixture — no Data API access to `farm_access_epochs`, the epoch RPC's grant shape, the
+expected-user parser unreachable, **every farm-scoped table wearing the row guard**, every
+client-writable table farm-scoped, the storage guard present. Then the behaviour: epochs advancing
+monotonically across grant, revoke and the financial flag; the narrow first-farm bootstrap
+exception; a stale epoch refused on all four write paths (direct, missing header, `SECURITY DEFINER`
+RPC, storage) and the current epoch accepted on all four; the expected-user half of the header; both
+farms judged on a storage move; and the service-role exemption.
+
+**`scripts/sql/bin-and-contract-truth-assertions.sql` (0033, bin and contract truth).** The rules
+that decide whether the bushels Farm Rx shows a farmer are the bushels they have: a bin's capacity
+counts every crop in it and a refusal does not forget a lot; a bin holding a nonzero lot will not
+take another crop, but an emptied bin will; movements and deliveries replay on a lost response
+rather than double; the ledger and contract pricing each have one write path, with the privilege as
+the outer fence; a bin cannot go negative or overflow; a price leg finalizes once; and a contract
+cannot be overdelivered.
+
+### Two things found while proving the ports bite
+
+Neither came from reading the code. Both came from breaking it and watching what failed.
+
+1. **0040's `guard_storage_object_farm_access_epoch` is dead code.** `soil_rx_storage` does a
+   `create or replace` on the same name to add the soil-test bucket, so the later definition is the
+   only one installed. Deleting the old-farm epoch check from 0040's copy changed *nothing* — the
+   assertion stayed green, and it took a round of instrumented debugging to work out why. Anyone
+   hardening the storage boundary by editing 0040 would get the same silence. The installed body is
+   now pinned: it must still name all three buckets and still assert both farms on a move.
+2. **`soil_tests` is the one client-updatable table whose `farm_id` no `prevent_farm_move` trigger
+   protects.** It is not open — its own identity trigger refuses the move under a different name —
+   so the farm boundary holds, and the row guard's old-farm branch is defence in depth rather than
+   the thing standing in the way. Both halves are now asserted, plus a pin that `soil_tests` stays
+   the only one, so a future table resting entirely on that branch is a decision rather than a
+   migration nobody read.
+
+### Proof observed
+
+- Eight disposable suites pass together, the two new ones included.
+- **Nine negative proofs, each failing with its own message.** 0040: dropping the expected-user
+  comparison, removing the storage trigger, deleting the old-farm assert from the *live* storage
+  guard, and letting `soil_tests` change farms. 0033: removing the bin capacity check, the
+  one-crop-per-bin check, the negative-balance check, the overdelivery check, and the price-leg
+  compare-and-set.
+- `node scripts/foundation-static-guards.mjs`: PASS. `node scripts/verify-foundation-mutations.mjs`:
+  308/308. `git diff --check` clean.
+
+### Limits, stated rather than implied
+
+- **The ports are twins, not replacements.** `verify-0040-` and `verify-0033-disposable.ps1` still
+  run in CI and remain authoritative for their own containers; the ported files are a second copy
+  of the same rules in a lane a development machine can run. Two copies of a rule can drift, which
+  is the defect shape this whole exercise is about — the mitigation is that both now run in CI, so
+  a rule dropped from one is still enforced by the other rather than silently lost.
+- **The row guard's old-farm branch is still unproven at runtime.** No client-updatable table can
+  actually change `farm_id` today, so the branch is unreachable from a browser and there is nothing
+  to exercise. Section 11 fails the moment that stops being true.
+- **The third lane, 0043, is only partly ported.** LD-002 moved its covering-index rule and LD-001
+  its definer-allowlist essentials; its policy fingerprints and the rest of its catalog remain
+  PowerShell-only.
