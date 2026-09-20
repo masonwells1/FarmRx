@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 194
+const expectedMutationCount = 203
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -21,6 +21,7 @@ const files = [
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
   'supabase/functions/_shared/marsFeedOrchestrator.ts', 'src/data/grainAlerts.ts', 'supabase/functions/deliver-grain-alert/index.ts',
+  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'src/data/marketingYear.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -587,6 +588,34 @@ try {
   reset()
   mutate('supabase/functions/deliver-grain-alert/index.ts', (source) => source.replace(".eq('commodity_id',rule.commodity_id).is('feed_source',null)", ".eq('commodity_id',rule.commodity_id)"))
   detected('MARS feed row can confirm a marketing price alert on the server', 'mars-feed:alert-recheck-ignores-feed')
+  reset()
+  // GL-2: crop-year eligibility, its two mirrored copies, and the split between valuation and alerting.
+  mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace('              and public.cash_bid_eligible_for_crop_year(v_rule.commodity_id,v_rule.crop_year,b.bid_date,b.delivery_start,b.delivery_end)\n', ''))
+  detected('sweep takes the newest bid of any crop year again', 'gl2:sweep-requires-eligibility')
+  reset()
+  mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace("where crop_family = 'wheat'", "where crop_family = 'barley'"))
+  detected("wheat's June marketing year is never seeded", 'gl2:wheat-marketing-year-seeded')
+  reset()
+  mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace('add column if not exists marketing_year_start_month smallint not null default 9', 'add column if not exists marketing_year_start_month smallint'))
+  detected('marketing-year configuration becomes nullable and undefaulted', 'gl2:marketing-year-configured')
+  reset()
+  mutate('src/data/marketingYear.ts', (source) => source.replace('wheat: { month: 6, day: 1 },', 'wheat: { month: 9, day: 1 },'))
+  detected('browser marketing year drifts from the SQL configuration', 'gl2:browser-marketing-year-matches-sql')
+  reset()
+  mutate('src/data/marketingYear.ts', (source) => source.replace('return inside(low) && inside(high)', 'return inside(low) || inside(high)'))
+  detected('a delivery window straddling the year end counts as inside', 'gl2:window-wholly-inside')
+  reset()
+  mutate('src/data/marketingAlerts.ts', (source) => source.replace('cashBidEligibleForCropYear(family, rule.crop_year, bid.bid_date, bid.delivery_start, bid.delivery_end)', 'true'))
+  detected('the page stops applying crop-year eligibility', 'gl2:alert-reader-uses-eligibility')
+  reset()
+  mutate('src/data/marketingAlerts.ts', (source) => source.replace("bid.commodity_id === commodityId && bid.cash_price !== null && !isMarsBid(bid)", "bid.commodity_id === commodityId && bid.cash_price !== null"))
+  detected('a feed row reaches position and revenue valuation', 'gl2:valuation-still-excludes-feed')
+  reset()
+  mutate('.github/workflows/usda-mars-feed.yml', (source) => source.replace('Evaluate marketing alerts against the bids just ingested', 'Unrelated step'))
+  detected('a fresh bid waits for the next quarter-hour cron', 'gl2:sweep-sequenced-after-feed')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('checks these on the server about every', 'checks these when you open Grain, about every'))
+  detected('the page goes back to calling server-checked alerts check-on-open', 'gl2:true-schedule-stated')
   if (mutationCount !== expectedMutationCount) throw new Error(`Foundation mutation count drifted: expected ${expectedMutationCount}, observed ${mutationCount}.`)
   console.log(`Foundation mutation drill: PASS (${mutationCount}/${expectedMutationCount} controlled mutations turned the gate red)`)
 } finally {

@@ -32,3 +32,6 @@ echo FD_TODAY_DISPOSABLE_PASS
 # Initiative GL-1 (USDA MARS feed): the fan-out, its fences, and the market region, in the same database.
 psql_ -d farmrx_disposable -f "$root/scripts/sql/gl1-mars-feed-assertions.sql" | grep -q GL1_MARS_FEED_DISPOSABLE_PASS || { echo "GL-1 MARS feed assertions failed" >&2; exit 1; }
 echo GL1_MARS_FEED_DISPOSABLE_PASS
+# Initiative GL-2 (alert truth): crop-year eligibility and the feed's one permitted effect.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/gl2-alert-eligibility-assertions.sql" | grep -q GL2_ALERT_ELIGIBILITY_DISPOSABLE_PASS || { echo "GL-2 alert eligibility assertions failed" >&2; exit 1; }
+echo GL2_ALERT_ELIGIBILITY_DISPOSABLE_PASS

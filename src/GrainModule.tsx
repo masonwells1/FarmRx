@@ -718,11 +718,13 @@ export function GrainPage({ services }: { services: GrainServices }) {
             <section className="grain-section" aria-label="Grain alerts">
               <div className="section-heading">
                 <div>
-                  <span className="eyebrow">Check-on-open alerts</span>
+                  <span className="eyebrow">Grain alerts</span>
                   <h2>Items to review</h2>
                   <p>
-                    These are checked only when the farm owner opens Grain; they
-                    are not 24/7 monitoring.
+                    Marketing alerts are checked on the server about every
+                    fifteen minutes and emailed to the farm owner. Plan-target
+                    and USDA report reminders in this list are checked when the
+                    owner opens Grain.
                   </p>
                 </div>
               </div>
@@ -1013,8 +1015,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
         <strong>For your records.</strong> Farm Rx shows your numbers and your
         targets. It does not give marketing advice.{" "}
         <span>
-          Owner-only alerts are best-effort check-on-open notices, not 24/7
-          monitoring.
+          Plan-target alerts are best-effort notices checked when the owner
+          opens Grain. Saved marketing alerts are checked on the server.
         </span>
       </aside>
       {editingTarget && (
@@ -1135,11 +1137,13 @@ function MarketingAlerts({
       <section className="grain-section alerts-card">
         <div className="section-heading">
           <div>
-            <span className="eyebrow">Check-on-open alerts</span>
+            <span className="eyebrow">Checked for you</span>
             <h2>Marketing alerts</h2>
             <p>
-              Farm Rx checks these when you open Grain. They are not 24/7
-              monitoring.
+              Farm Rx checks these on the server about every fifteen minutes and
+              emails the farm owner. You do not have to keep Grain open. A USDA
+              market price can reach a target; feed prices are never used in your
+              position or revenue numbers.
             </p>
           </div>
           <label className="commodity-picker">

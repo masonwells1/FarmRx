@@ -1,4 +1,5 @@
 import { isMarsBid } from './basisMath'
+import { cashBidEligibleForCropYear, type CropFamily } from './marketingYear'
 import { farmLocalCalendarDate } from './farmDates'
 import { marketedPercent, sameScope, type CashBid, type GrainWorkspace, type MarketingAlertRule } from './grain'
 
@@ -26,18 +27,36 @@ export const MARKETING_BID_MAX_AGE_DAYS = 2
 export function freshManualCashBid(workspace: GrainWorkspace, commodityId: string, today: string, maxAgeDays = MARKETING_BID_MAX_AGE_DAYS): CashBid | null { const bid = latestManualCashBid(workspace, commodityId); return bid && dayDifference(today, bid.bid_date) >= 0 && dayDifference(today, bid.bid_date) <= maxAgeDays ? bid : null }
 export function latestManualCashPrice(workspace: GrainWorkspace, commodityId: string): number | null { return latestManualCashBid(workspace, commodityId)?.cash_price ?? null }
 
+/** GL-2: the alerting reader, as against the valuation readers above.
+ *
+ * The split is deliberate and is the whole of GL-2's (a): feed rows stay out of position and revenue
+ * VALUATION (`latestManualCashBid`, `basisMath.latestBasis`) and are admitted for ALERTING, because a
+ * USDA MARS bid is exactly the news a price target exists to catch. A feed row may cause the sweep's
+ * notification and rule state and nothing else; it never writes a contract, marketing target, manual
+ * bid, bin, or on-hand quantity. This function and `public.cash_bid_eligible_for_crop_year` must agree:
+ * the sweep is the monitor and this page reports the same rule for the same reason. */
+export function latestAlertEligibleCashBid(workspace: GrainWorkspace, rule: Pick<MarketingAlertRule, 'commodity_id' | 'crop_year'>, today: string, maxAgeDays = MARKETING_BID_MAX_AGE_DAYS): CashBid | null {
+  const family = workspace.fields.commodities.find((item) => item.id === rule.commodity_id)?.crop_family as CropFamily | undefined
+  return workspace.cash_bids
+    .filter((bid) => bid.commodity_id === rule.commodity_id && bid.cash_price !== null
+      && dayDifference(today, bid.bid_date) >= 0 && dayDifference(today, bid.bid_date) <= maxAgeDays
+      && cashBidEligibleForCropYear(family, rule.crop_year, bid.bid_date, bid.delivery_start, bid.delivery_end))
+    .sort((left, right) => right.bid_date.localeCompare(left.bid_date) || right.updated_at.localeCompare(left.updated_at))[0] ?? null
+}
+
 function commodityName(workspace: GrainWorkspace, rule: MarketingAlertRule) { return workspace.fields.commodities.find((item) => item.id === rule.commodity_id)?.name ?? rule.commodity_id }
 function hasFiredToday(rule: MarketingAlertRule, today: string) { return rule.last_triggered_at !== null && localCalendarDay(new Date(rule.last_triggered_at)) === today }
 function hasProductionEstimate(workspace: GrainWorkspace, rule: MarketingAlertRule) { return workspace.production_estimates.some((estimate) => sameScope(estimate, rule)) }
 
-/** Check-on-open evaluator only. It deliberately does not provide background monitoring. */
+/** The page's read of the same rules the server sweep evaluates every fifteen minutes. The sweep is
+ * the monitor and the authority; this evaluation exists so the page agrees with the email that arrives. */
 export function evaluateMarketingAlertRules(workspace: GrainWorkspace, now = new Date()): MarketingAlertEvaluation {
   const today = localCalendarDay(now); const alerts: MarketingAlertEvent[] = []; const firedRuleIds: string[] = []; const conditions: Array<{ ruleId: string; met: boolean }> = []
   for (const rule of workspace.marketing_alert_rules) {
     if (!rule.active || validateMarketingAlertRule(rule).length) continue
     const commodity = commodityName(workspace, rule); let message: string | null = null; let kind: MarketingAlertEvent['kind'] = 'marketing_price_target'
     if (rule.rule_type === 'price_target' && rule.threshold !== null && rule.direction !== null) {
-      const bid = freshManualCashBid(workspace, rule.commodity_id, today); const price = bid?.cash_price ?? null
+      const bid = latestAlertEligibleCashBid(workspace, rule, today); const price = bid?.cash_price ?? null
       const met = price !== null && (rule.direction === 'at_or_above' ? price >= rule.threshold : price <= rule.threshold)
       if (met && bid) { kind = 'marketing_price_target'; message = `${rule.crop_year} ${commodity} cash price is ${money(price)} (bid ${bidDate(bid.bid_date)}). You set ${rule.direction === 'at_or_above' ? 'at or above' : 'at or below'} ${money(rule.threshold)}.` }
     } else if (rule.rule_type === 'pct_marketed_goal' && rule.threshold !== null) {

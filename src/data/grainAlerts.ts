@@ -14,7 +14,9 @@ const addDays = (value: string, count: number) => { const date = new Date(`${val
 const businessDay = (value: string) => { const weekday = new Date(`${value}T00:00:00Z`).getUTCDay(); return weekday !== 0 && weekday !== 6 }
 const observationFresh = (bidDate: string, now: Date) => businessDay(bidDate) && now.getTime() - new Date(`${bidDate}T23:59:59Z`).getTime() <= 36 * 60 * 60 * 1000
 
-/** Client v1 is intentionally check-on-open, not background monitoring. */
+/** Plan targets and USDA report reminders are evaluated here, when the owner opens Grain. The saved
+ * marketing alert rules folded in below are the server sweep's (run_scheduled_alert_sweep, every
+ * fifteen minutes); this evaluation of them exists so the page agrees with the email that arrives. */
 export function evaluateGrainAlerts(workspace: GrainWorkspace, now = new Date()): GrainAlert[] {
   const today = farmLocalCalendarDate(now); const alerts: GrainAlert[] = []
   for (const target of workspace.marketing_plan_targets) {
