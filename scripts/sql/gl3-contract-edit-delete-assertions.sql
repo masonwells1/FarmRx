@@ -246,6 +246,16 @@ begin
   if v_result->>'reopened_firm_offer_status' <> 'expired'
     then raise exception 'an expired offer was reported as %', coalesce(v_result->>'reopened_firm_offer_status','nothing'); end if;
 
+  -- The retry must replay what THIS delete did, not what the offer looks like now. Another member
+  -- can refill, cancel or remove the reopened offer in between, and "what did my delete do" must not
+  -- become whatever they did afterwards.
+  update public.firm_offers set status = 'canceled', filled_contract_id = null
+  where id = '00000000-0000-4000-8000-000000000094';
+  v_result := public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000092','the elevator never confirmed this fill', null, '11111111-0000-4000-8000-0000000000d2');
+  if v_result->>'reopened_firm_offer_status' <> 'open'
+    then raise exception 'the retry reported the offer as % instead of what the delete set it to', coalesce(v_result->>'reopened_firm_offer_status','nothing'); end if;
+  update public.firm_offers set status = 'open' where id = '00000000-0000-4000-8000-000000000094';
+
   -- "A delete audit row exists" is not a retry. A different reason, or another member's delete,
   -- would otherwise be answered with success while the earlier reason stood as the record.
   v_failed := false;

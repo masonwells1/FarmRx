@@ -3281,11 +3281,15 @@ export function ContractRepair({ contract, workspace, services, onSaved, onDelet
       // An offer whose expiry had already passed comes back expired, not open. It cannot be filled
       // and is not counted as pending, so sending the farmer to refill it would be sending them after
       // something that is not there.
+      // Each state named explicitly. "Anything that is not open must be expired" was the looser half
+      // of the same mistake: it would announce an expiry that never happened for any other value.
       onDeleted?.(result.reopenedFirmOfferId === null
         ? "Contract deleted."
         : result.reopenedFirmOfferStatus === "open"
           ? "Contract deleted. It came from a firm offer, and that offer is open again \u2014 fill it from Firm offers rather than entering a new contract, or the offer stays counted as pending."
-          : "Contract deleted. It came from a firm offer whose expiry has passed, so that offer is marked expired rather than reopened \u2014 enter a new contract, or renew the offer first.");
+          : result.reopenedFirmOfferStatus === "expired"
+            ? "Contract deleted. It came from a firm offer whose expiry has passed, so that offer is marked expired rather than reopened \u2014 enter a new contract, or renew the offer first."
+            : "Contract deleted. It came from a firm offer \u2014 check that offer under Firm offers before entering a replacement contract.");
       await onSaved();
     } catch (error) { setMessage(farmerError(error, "delete this contract")) } finally { lock.current.release(); setSaving(false) }
   };

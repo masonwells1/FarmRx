@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 284
+const expectedMutationCount = 287
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -735,7 +735,7 @@ try {
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('set buyer = v_buyer, bushels = v_bushels, delivery_start = v_start, delivery_end = v_end,\n         contract_number = v_number, notes = v_notes, updated_at = now()', 'set buyer = v_buyer, bushels = v_bushels, delivery_start = v_start, delivery_end = v_end,\n         contract_number = v_number, notes = v_notes, cash_price = 0, updated_at = now()'))
   detected('a correction reaches past the one-shot finalization rule into contract pricing', 'gl3b:identity-and-math-not-editable')
   reset()
-  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, operation_id, actor_id)\n  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, p_operation_id, auth.uid());\n\n  delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;", "  delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;\n\n  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, operation_id, actor_id)\n  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, p_operation_id, auth.uid());"))
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, reopened_firm_offer_status, operation_id, actor_id)\n  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, v_reopened_status, p_operation_id, auth.uid());\n\n  delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;", "  delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;\n\n  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, reopened_firm_offer_status, operation_id, actor_id)\n  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, v_reopened_status, p_operation_id, auth.uid());"))
   detected('the record of a delete is written after the row it describes is gone', 'gl3b:audit-outlives-the-contract')
   reset()
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('grant select on public.grain_contract_audit to authenticated;', 'grant select, insert, update on public.grain_contract_audit to authenticated;'))
@@ -825,8 +825,17 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace('fill it from Firm offers rather than entering a new contract', 'enter the contract again'))
   detected('the farmer is told to enter a replacement contract and leave the offer pending', 'gl3b:a-reopened-offer-is-surfaced')
   reset()
-  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("'reopened_firm_offer_status', (select o.status::text from public.firm_offers o where o.id = v_reopened and o.farm_id = p_farm_id),\n", ""))
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("'reopened_firm_offer_status', v_reopened_status,\n", ""))
   detected('the delete stops reporting whether the offer actually reopened', 'gl3b:a-reopened-offer-is-surfaced')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("'reopened_firm_offer_status', v_replay.reopened_firm_offer_status,", "'reopened_firm_offer_status', (select o.status::text from public.firm_offers o where o.id = v_replay.reopened_firm_offer_id and o.farm_id = p_farm_id),"))
+  detected("a delete retry reports whatever another member did to the offer since", 'gl3b:a-reopened-offer-is-surfaced')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('  reopened_firm_offer_status text,\n', ''))
+  detected('the status the delete set is not kept at all', 'gl3b:a-reopened-offer-is-surfaced')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('result.reopenedFirmOfferStatus === "expired"', 'true'))
+  detected('an offer in any other state is announced to the farmer as expired', 'gl3b:a-reopened-offer-is-surfaced')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('result.reopenedFirmOfferStatus === "open"', 'true'))
   detected('an expired offer is reported to the farmer as open and fillable', 'gl3b:a-reopened-offer-is-surfaced')

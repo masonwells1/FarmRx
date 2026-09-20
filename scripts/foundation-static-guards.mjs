@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 284')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 287')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -719,7 +719,8 @@ export function foundationStaticGuard(root = process.cwd()) {
   // A contract created from a firm offer IS the record that the offer was filled. Deleting it must not
   // leave the offer marked filled pointing at nothing, which no screen can explain and which would
   // block that offer from ever being filled again.
-  requireText(errors, gl3bMigration, "set status = case when v_offer.expires_on is not null and v_offer.expires_on < v_local_date then 'expired'::public.firm_offer_status else 'open'::public.firm_offer_status end,", 'gl3b:filled-offer-does-not-dangle')
+  requireText(errors, gl3bMigration, "v_reopened_status := case when v_offer.expires_on is not null and v_offer.expires_on < v_local_date then 'expired' else 'open' end;", 'gl3b:filled-offer-does-not-dangle')
+  requireText(errors, gl3bMigration, 'set status = v_reopened_status::public.firm_offer_status,', 'gl3b:filled-offer-does-not-dangle')
   // Either association. A contract filled through the pre-RPC fallback never got firm_offer_id --
   // contractColumns does not carry it -- so for those the link lives only on the offer's side.
   requireText(errors, gl3bMigration, 'where farm_id = p_farm_id and (id = v_before.firm_offer_id or filled_contract_id = p_contract_id)', 'gl3b:filled-offer-does-not-dangle')
@@ -780,7 +781,14 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, grainModule, 'fill it from Firm offers rather than entering a new contract', 'gl3b:a-reopened-offer-is-surfaced')
   // An offer whose expiry had passed comes back 'expired', not 'open'. It cannot be filled and is not
   // counted as pending, so the id alone is not enough to know what to tell the farmer.
-  requireText(errors, gl3bMigration, "'reopened_firm_offer_status', (select o.status::text from public.firm_offers o where o.id = v_reopened and o.farm_id = p_farm_id)", 'gl3b:a-reopened-offer-is-surfaced')
+  // The status the delete SET, stored and replayed -- not the offer's state at some later moment,
+  // which by the time of a retry can be whatever another member did to it since.
+  requireText(errors, gl3bMigration, "  reopened_firm_offer_status text,", 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, gl3bMigration, "'reopened_firm_offer_status', v_reopened_status,", 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, gl3bMigration, "'reopened_firm_offer_status', v_replay.reopened_firm_offer_status,", 'gl3b:a-reopened-offer-is-surfaced')
+  if (/'reopened_firm_offer_status', \(select/.test(gl3bMigration)) errors.push('gl3b:a-reopened-offer-is-surfaced')
+  // Every state named. "Not open, therefore expired" announces an expiry that never happened.
+  requireText(errors, grainModule, 'result.reopenedFirmOfferStatus === "expired"', 'gl3b:a-reopened-offer-is-surfaced')
   requireText(errors, grainModule, 'result.reopenedFirmOfferStatus === "open"', 'gl3b:a-reopened-offer-is-surfaced')
   requireText(errors, grainModule, 'marked expired rather than reopened', 'gl3b:a-reopened-offer-is-surfaced')
   // A retry after a lost response owes the same answer, or that guidance is lost entirely.
