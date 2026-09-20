@@ -89,7 +89,15 @@ declare
   v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
   v_buyer text; v_bushels numeric; v_start date; v_end date; v_number text; v_notes text;
 begin
-  if auth.uid() is null or public.request_uses_service_role() or not public.can_edit_farm(p_farm_id) then
+  -- Both fences, not either. can_edit_farm admits a worker; Grain itself is behind
+  -- can_read_private_financials, and these functions are security definer, so a worker without
+  -- financial access who still had a contract's id from earlier access or a cached page could
+  -- otherwise reach past row-level security and rewrite it. Requiring both leaves exactly the people
+  -- who may already see the contract AND may change farm records: an owner, a manager, or a worker
+  -- the owner gave financial access to. A named rep passes the financial test and fails can_edit_farm,
+  -- which is right -- a rep reads, and does not correct.
+  if auth.uid() is null or public.request_uses_service_role()
+     or not public.can_edit_farm(p_farm_id) or not public.can_read_private_financials(p_farm_id) then
     raise exception 'you do not have permission to change this contract';
   end if;
   if v_reason is null or length(v_reason) < 3 or length(v_reason) > 2000 then
@@ -147,7 +155,8 @@ declare
   v_local_date date;
   v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
 begin
-  if auth.uid() is null or public.request_uses_service_role() or not public.can_edit_farm(p_farm_id) then
+  if auth.uid() is null or public.request_uses_service_role()
+     or not public.can_edit_farm(p_farm_id) or not public.can_read_private_financials(p_farm_id) then
     raise exception 'you do not have permission to delete this contract';
   end if;
   if v_reason is null or length(v_reason) < 3 or length(v_reason) > 2000 then
@@ -204,3 +213,17 @@ grant execute on function public.delete_grain_contract(uuid, uuid, text, timesta
 
 comment on function public.delete_grain_contract(uuid, uuid, text, timestamptz) is
   'GL-3b: delete a contract that has no deliveries, with a required reason recorded in grain_contract_audit before the row is removed. A contract created from a firm offer returns that offer to open, or expired if its expiry has passed.';
+
+-- The audited actions above are pointless while the old direct paths are still open. Module 2 granted
+-- authenticated UPDATE and DELETE on grain_contracts with matching row-level policies, so anyone who
+-- may edit the farm could change or remove a contract straight through PostgREST: no reason, no audit
+-- row, no deliveries check. A direct delete is worse still -- the foreign key clears the firm offer's
+-- filled_contract_id and leaves the offer marked 'filled' pointing at nothing, which is exactly the
+-- state delete_grain_contract exists to prevent.
+--
+-- INSERT stays: a new contract is created directly and has nothing to correct yet. Nothing in the app
+-- updates or deletes a contract row any other way -- price finalization (0033) and both functions
+-- above are security definer and unaffected by these grants.
+revoke update, delete on public.grain_contracts from authenticated;
+drop policy if exists grain_contracts_update on public.grain_contracts;
+drop policy if exists grain_contracts_delete on public.grain_contracts;

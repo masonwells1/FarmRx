@@ -355,3 +355,29 @@ The delete compared `expires_on` with `current_date`, which is the **database's*
 - **What changed so this cannot recur.** The same coverage query — every `public` table with a `farm_id`, minus `farm_access_epochs`, must carry the trigger — is now block 13 of `scripts/sql/gl3-contract-edit-delete-assertions.sql`, which the bash harness does run. It is deliberately **global, not about this table**: any future farm-scoped table anywhere in the project is now caught on this machine before a push. Proved by removing the trigger and re-running: the block reported `farm-scoped tables without the access epoch guard: grain_contract_audit`, the exact CI failure, in about a minute instead of twenty.
 - **The honest shape of it.** Ten tranches of this session added no farm-scoped table, so this gate never fired and I did not know it existed. That is not an excuse — it is the argument for making the local harness a superset of CI wherever a check is cheap to port, which this one was.
 - **Proof observed on the repair:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 254/254; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**. CI remains the authority until it reports green on this commit.
+
+## GL-027 — Twentieth and twenty-first findings, on `ee6f7ac`: both P1, both security, both mine
+
+- **Date/time:** 2026-09-20 11:20 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `ee6f7ac` and returned two P1s on GL-3b. Both verified against the migrations before acting; both real. (Foundation's failure on `ee6f7ac` is the epoch-guard one already recorded in GL-026 and fixed in `6b44cb7`; it predates this work.)
+
+### Finding 20 (P1) — one fence where two were needed
+
+`can_edit_farm` admits `owner`, `manager` **and** `worker`. Grain itself sits behind `can_read_private_financials`, which admits owner, manager, a worker the owner explicitly gave financial access, and a named rep. My RPCs checked only the first, and they are `security definer` — so they answer to no row-level policy unless they ask. A worker with no financial access, holding a contract's id from earlier access or a cached page, could therefore rewrite or delete private contract money that they are not allowed to see.
+
+- **Repair:** both RPCs now require `can_edit_farm` **and** `can_read_private_financials`. The intersection is exactly right: owner, manager, or a worker the owner trusted with the numbers. A named rep passes the financial test and fails `can_edit_farm`, which is also right — a rep reads, and does not correct.
+- **Assertion:** a real worker fixture with `can_view_financials = false`, which first asserts it *can* edit the farm and *cannot* read financials (so the block can never pass vacuously), then proves both RPCs refuse it and the contract is unchanged.
+
+### Finding 21 (P1) — the audited action was not the only way in
+
+Module 2 granted `authenticated` direct `UPDATE` and `DELETE` on `grain_contracts` with matching policies. Every fence GL-3b adds — the reason, the audit row, the no-deliveries test, the compare-and-swap — could be walked straight around through PostgREST. A direct delete is worse than a bare update: the firm-offer foreign key clears `filled_contract_id` and leaves the offer marked `filled` pointing at nothing, which is the exact state `delete_grain_contract` was written to prevent.
+
+- **Repair:** `revoke update, delete on public.grain_contracts from authenticated`, and both policies dropped. `INSERT` and `SELECT` stay — a new contract has nothing to correct yet.
+- **Checked before revoking, because this is the widest-blast-radius change in the tranche.** Every contract write path was traced: the contract form creates (insert); `fillFirmOfferFallback` creates (insert); a queued replay of a create matches on `sameOptimisticWrite` and returns the existing row without writing; price finalization (0033) and both GL-3b functions are `security definer` and unaffected by table grants. No path in the app updates or deletes a contract row directly. The full browser suite then confirmed it: 113 passed, 0 failed.
+- **Assertion:** the privileges themselves — no `update`, no `delete`, `insert` and `select` still present, and neither dropped policy still registered in `pg_policies`.
+
+### Together
+
+- **The shape of both.** Each is the same omission from a different angle: I wrote a server-owned action and treated writing it as the whole job, without asking who else the database already lets do that job. A definer function is a hole in row-level security by construction, and a new guarded path is not a fence until the old unguarded one is closed.
+- **Guards:** `gl3b:repair-requires-financial-access` (a count, so removing it from either RPC is red) and `gl3b:audited-actions-are-the-only-path`. Four mutations, 254 → 258.
+- **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 258/258; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**. CI remains the authority until it reports green on this commit.

@@ -25,9 +25,10 @@
 \set FO1 '''00000000-0000-4000-8000-000000000094'''
 \set FO2 '''00000000-0000-4000-8000-000000000095'''
 \set D1  '''00000000-0000-4000-8000-000000000096'''
+\set W1  '''00000000-0000-4000-8000-00000000000f'''
 
 -- ------------------------------------------------- fixtures
-insert into auth.users(id,email) values (:O9,'gl3-owner-a@example.test'),(:O10,'gl3-owner-b@example.test');
+insert into auth.users(id,email) values (:O9,'gl3-owner-a@example.test'),(:O10,'gl3-owner-b@example.test'),(:W1,'gl3-worker@example.test');
 
 select set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-00000000000d"}',false);
 insert into public.farms(id,name,created_by,time_zone) values (:F3,'Contract Repair Farm',:O9,'America/Chicago');
@@ -327,7 +328,59 @@ begin
   if v_offer.status <> 'expired' then raise exception 'an offer that expired on the farm''s yesterday came back as %', v_offer.status; end if;
 end $$;
 
--- ------------------------------------------------- 13. every farm-scoped table is epoch-fenced
+-- ------------------------------------------------- 13. a worker without financial access is refused
+-- can_edit_farm admits a worker, but Grain is behind can_read_private_financials and these functions
+-- are security definer, so one fence alone would let a worker who kept a contract id reach past
+-- row-level security and rewrite private money.
+insert into public.farm_memberships(farm_id,user_id,role,status,can_view_financials)
+values ('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-00000000000f','worker','active',false);
+
+select set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-00000000000f"}',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-00000000000f','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000072',1)::text)::text,false);
+set role authenticated;
+do $$
+declare v_failed boolean; v_buyer text;
+begin
+  if not public.can_edit_farm('00000000-0000-4000-8000-000000000072')
+    then raise exception 'the worker fixture cannot edit the farm at all; this assertion proves nothing'; end if;
+  if public.can_read_private_financials('00000000-0000-4000-8000-000000000072')
+    then raise exception 'the worker fixture has financial access; this assertion proves nothing'; end if;
+
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','worker attempt','{"buyer":"Worker Edit"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000091'));
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'a worker without financial access edited a contract'; end if;
+
+  v_failed := false;
+  begin perform public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','worker attempt', (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000091'));
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'a worker without financial access deleted a contract'; end if;
+
+  select buyer into v_buyer from public.grain_contracts where id='00000000-0000-4000-8000-000000000091';
+  if v_buyer <> 'Delivered Buyer' then raise exception 'a refused worker still changed the contract'; end if;
+end $$;
+reset role;
+
+-- ------------------------------------------------- 14. the audited actions are the only way in
+-- An audited action is pointless while the direct path stays open: module 2 granted authenticated
+-- UPDATE and DELETE on grain_contracts, so an editor could change or remove one straight through
+-- PostgREST with no reason, no audit row and no deliveries check.
+do $$
+begin
+  if has_table_privilege('authenticated','public.grain_contracts','update')
+    then raise exception 'a contract can still be updated directly, bypassing the audited correction'; end if;
+  if has_table_privilege('authenticated','public.grain_contracts','delete')
+    then raise exception 'a contract can still be deleted directly, bypassing the audited delete'; end if;
+  -- insert stays: a new contract has nothing to correct yet, and the form creates one directly.
+  if not has_table_privilege('authenticated','public.grain_contracts','insert')
+    then raise exception 'a new contract can no longer be created'; end if;
+  if not has_table_privilege('authenticated','public.grain_contracts','select')
+    then raise exception 'contracts can no longer be read'; end if;
+  if exists (select 1 from pg_policies where schemaname='public' and tablename='grain_contracts' and policyname in ('grain_contracts_update','grain_contracts_delete'))
+    then raise exception 'the direct mutation policies are still in place'; end if;
+end $$;
+
+-- ------------------------------------------------- 15. every farm-scoped table is epoch-fenced
 -- Migration 0040 requires the farm_access_epoch_guard trigger on EVERY public table carrying a
 -- farm_id. The PowerShell 0040 lane already checks this, but only in CI -- which is how GL-3b's new
 -- audit table reached a pull request red. The same query runs here so a missing guard on any future

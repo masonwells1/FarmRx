@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 254')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 258')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -734,6 +734,13 @@ export function foundationStaticGuard(root = process.cwd()) {
   // The farm's own calendar day, not the database's. After UTC midnight an Illinois farm is still on
   // the previous evening, and an offer expiring that day is still fillable there.
   requireText(errors, gl3bMigration, "select (now() at time zone coalesce(f.time_zone, 'UTC'))::date into v_local_date", 'gl3b:offer-expiry-is-farm-local')
+  // can_edit_farm admits a worker; Grain is behind can_read_private_financials; these functions are
+  // security definer and so answer to neither unless they ask. Both RPCs must ask, hence the count.
+  if ((gl3bMigration.split('not public.can_read_private_financials(p_farm_id)').length - 1) !== 2) errors.push('gl3b:repair-requires-financial-access')
+  // An audited action is pointless while the direct path is open.
+  requireText(errors, gl3bMigration, 'revoke update, delete on public.grain_contracts from authenticated;', 'gl3b:audited-actions-are-the-only-path')
+  requireText(errors, gl3bMigration, 'drop policy if exists grain_contracts_update on public.grain_contracts;', 'gl3b:audited-actions-are-the-only-path')
+  requireText(errors, gl3bMigration, 'drop policy if exists grain_contracts_delete on public.grain_contracts;', 'gl3b:audited-actions-are-the-only-path')
   if (/expires_on < current_date/.test(gl3bMigration)) errors.push('gl3b:offer-expiry-is-farm-local')
   // GL-3a made the crop and year picker permanent, so the sale form must not outlive a scope change:
   // a draft typed for one crop year would otherwise be saved under the next one.

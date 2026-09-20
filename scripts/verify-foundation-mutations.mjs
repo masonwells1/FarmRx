@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 254
+const expectedMutationCount = 258
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -767,6 +767,18 @@ try {
   reset()
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("expires_on < v_local_date", "expires_on < current_date"))
   detected("a reopened offer is retired on the database's calendar instead of the farm's", 'gl3b:offer-expiry-is-farm-local')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("     or not public.can_edit_farm(p_farm_id) or not public.can_read_private_financials(p_farm_id) then\n    raise exception 'you do not have permission to change this contract';", "     or not public.can_edit_farm(p_farm_id) then\n    raise exception 'you do not have permission to change this contract';"))
+  detected('a worker with no financial access can rewrite a private contract', 'gl3b:repair-requires-financial-access')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("     or not public.can_edit_farm(p_farm_id) or not public.can_read_private_financials(p_farm_id) then\n    raise exception 'you do not have permission to delete this contract';", "     or not public.can_edit_farm(p_farm_id) then\n    raise exception 'you do not have permission to delete this contract';"))
+  detected('a worker with no financial access can delete a private contract', 'gl3b:repair-requires-financial-access')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('revoke update, delete on public.grain_contracts from authenticated;', '-- revoke removed'))
+  detected('a contract can be changed straight through PostgREST with no reason and no audit row', 'gl3b:audited-actions-are-the-only-path')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('drop policy if exists grain_contracts_delete on public.grain_contracts;', '-- policy kept'))
+  detected('the direct delete policy is left in place', 'gl3b:audited-actions-are-the-only-path')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('<tfoot>', '<tfoot hidden>').replace('</tfoot>', '</tfoot>'))
   detected('the contracts totals row is removed', 'gl3:contract-totals-row')
