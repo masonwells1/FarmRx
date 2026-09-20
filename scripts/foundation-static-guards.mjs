@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 225')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 227')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -585,6 +585,12 @@ export function foundationStaticGuard(root = process.cwd()) {
   // Read from the RAW record, never through strictRow: that proxy fails closed on a column the row does
   // not carry, and these two do not exist until the GL-2 migration is applied.
   requireText(errors, read(root, 'src/data/SupabaseFieldsRepository.ts'), "const marketingMonth = optionalSmallInt(raw, 'marketing_year_start_month')", 'gl2:pre-migration-commodity-still-loads')
+  // A merge deploys the client on its own; the migration is a separate owner action. Until the server
+  // carries the eligibility rule the browser must not write alert_rule_states, or it and the old sweep
+  // re-fire the same alert at each other.
+  requireText(errors, read(root, 'src/data/grainAlerts.ts'), 'export function mayRecordAlertTransitions(', 'gl2:transitions-gated-on-schema')
+  requireText(errors, read(root, 'src/GrainModule.tsx'), 'void (mayRecordAlertTransitions(data.capabilities)', 'gl2:transitions-gated-on-schema')
+  requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), 'gl2_alert_eligibility: !functionMissing(per_commodity_cash_bids.error)', 'gl2:capability-reports-schema')
   requireText(errors, marketingYear, 'return inside(low) && inside(high)', 'gl2:window-wholly-inside')
   const marketingAlerts = read(root, 'src/data/marketingAlerts.ts')
   requireText(errors, marketingAlerts, 'cashBidEligibleForCropYear(commodity, rule.crop_year, bid.bid_date, bid.delivery_start, bid.delivery_end)', 'gl2:alert-reader-uses-eligibility')

@@ -54,6 +54,7 @@ import { marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate,
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
+  mayRecordAlertTransitions,
   recordMarketingAlertTransitions,
   requestOwnerAlertDelivery,
   verifyGrainAlertOperationContext,
@@ -394,7 +395,15 @@ export function GrainPage({ services }: { services: GrainServices }) {
         }
       }
       setAlerts(nextAlerts);
-      void recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions, alertOperationContext).then((transitioned) => {
+      // GL-2: do not write a rule's state until the live database carries the crop-year eligibility rule.
+      // A merge deploys this client on its own while applying the migration is a separate owner action,
+      // so a new client will run against the old sweep for a while. They judge a bid by different rules,
+      // and if both write alert_rule_states the same alert re-fires or stays suppressed indefinitely.
+      // Until the server agrees, the sweep owns the state alone -- which is what it did before GL-2.
+      void (mayRecordAlertTransitions(data.capabilities)
+        ? recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions, alertOperationContext)
+        : Promise.resolve(null)
+      ).then((transitioned) => {
         if (transitioned !== null) return requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId || transitioned.has(alert.ruleId)), data.fields.farm.id, alertOperationContext);
         // Pre-0035: retain current behavior, but one synchronous refresh lock
         // prevents a refresh burst from double-writing the same rule state.

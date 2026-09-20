@@ -62,7 +62,14 @@ export interface GrainContract extends PositionScope {
   updated_at: string
 }
 export interface GrainContractDelivery { id: string; farm_id: string; grain_contract_id: string; bushels: number; delivered_on: string; note: string | null; created_at: string; allow_overdelivery?: boolean }
-export interface GrainCapabilities { bin_movements: boolean; contract_price_finalization: boolean; contract_deliveries: boolean; /** False until the slice-3 tables exist on the live database; the screens then keep their session-only behavior. */ persisted_settings?: boolean }
+export interface GrainCapabilities { bin_movements: boolean; contract_price_finalization: boolean; contract_deliveries: boolean; /** False until the slice-3 tables exist on the live database; the screens then keep their session-only behavior. */ persisted_settings?: boolean;
+  /** GL-2: false until the live database carries the crop-year eligibility rule. A merge deploys this
+   * client to production on its own, while applying the migration is a separate owner action, so the
+   * two are guaranteed to be out of step for a while. In that window the browser and the sweep judge a
+   * bid by different rules, and both write alert_rule_states -- which re-fires or suppresses the same
+   * alert over and over. While this is false the browser records no transition at all and leaves the
+   * rule state entirely to the sweep, which is exactly what the pre-GL-2 sweep expects. */
+  gl2_alert_eligibility?: boolean }
 
 export interface MarketingPlanTarget extends PositionScope {
   id: string

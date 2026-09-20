@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 225
+const expectedMutationCount = 227
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -21,7 +21,7 @@ const files = [
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
   'supabase/functions/_shared/marsFeedOrchestrator.ts', 'src/data/grainAlerts.ts', 'supabase/functions/deliver-grain-alert/index.ts',
-  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'src/data/marketingYear.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts',
+  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'src/data/marketingYear.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -607,6 +607,12 @@ try {
   reset()
   mutate('src/data/SupabaseFieldsRepository.ts', (source) => source.replace("const marketingMonth = optionalSmallInt(raw, 'marketing_year_start_month')", "const marketingMonth = optionalSmallInt(row, 'marketing_year_start_month')"))
   detected('a farm on the previous schema cannot load its fields at all', 'gl2:pre-migration-commodity-still-loads')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('void (mayRecordAlertTransitions(data.capabilities)', 'void (true'))
+  detected('a new client writes rule state against a pre-GL-2 sweep', 'gl2:transitions-gated-on-schema')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('gl2_alert_eligibility: !functionMissing(per_commodity_cash_bids.error)', 'gl2_alert_eligibility: true'))
+  detected('the client assumes the migration is applied', 'gl2:capability-reports-schema')
   reset()
   mutate('src/data/marketingYear.ts', (source) => source.replace('return inside(low) && inside(high)', 'return inside(low) || inside(high)'))
   detected('a delivery window straddling the year end counts as inside', 'gl2:window-wholly-inside')

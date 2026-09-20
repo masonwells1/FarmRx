@@ -27,6 +27,16 @@ export function evaluateGrainAlerts(workspace: GrainWorkspace, now = new Date())
   for (const item of evaluateMarketingAlertRules(workspace, now).alerts) alerts.push({ ...item, ruleId: item.ruleId })
   return alerts
 }
+/** GL-2: whether this browser may write a marketing rule's state, or must leave it to the sweep.
+ *
+ * A merge deploys the client to production on its own; applying the migration is a separate owner
+ * action. Between the two, a client that applies crop-year eligibility runs against a sweep that does
+ * not, and every open of Grain writes a verdict the sweep disagrees with -- re-firing or suppressing
+ * the same alert indefinitely. The capability is absent on an old client and on a workspace loaded
+ * before GL-2, so only an explicit false holds the browser back; undefined keeps the prior behaviour. */
+export function mayRecordAlertTransitions(capabilities: { gl2_alert_eligibility?: boolean } | null | undefined): boolean {
+  return capabilities?.gl2_alert_eligibility !== false
+}
 function sentKey(userId: string, farmId: string) { return `farm-rx-grain-alert-sent:v1:${userId}:${farmId}` }
 function readSent(key: string) { try { const value: unknown = JSON.parse(localStorage.getItem(key) ?? '[]'); return Array.isArray(value) && value.every((item) => typeof item === 'string') ? new Set(value) : new Set<string>() } catch { return new Set<string>() } }
 export async function captureGrainAlertOperationContext() { return captureFarmOperationContext(localStorage, supabaseConfig.projectRef, await currentFarmContext()) }
