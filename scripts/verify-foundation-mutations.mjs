@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 278
+const expectedMutationCount = 281
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -735,7 +735,7 @@ try {
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('set buyer = v_buyer, bushels = v_bushels, delivery_start = v_start, delivery_end = v_end,\n         contract_number = v_number, notes = v_notes, updated_at = now()', 'set buyer = v_buyer, bushels = v_bushels, delivery_start = v_start, delivery_end = v_end,\n         contract_number = v_number, notes = v_notes, cash_price = 0, updated_at = now()'))
   detected('a correction reaches past the one-shot finalization rule into contract pricing', 'gl3b:identity-and-math-not-editable')
   reset()
-  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, actor_id)\n  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, auth.uid());\n\n  delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;", "  delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;\n\n  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, actor_id)\n  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, auth.uid());"))
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, operation_id, actor_id)\n  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, p_operation_id, auth.uid());\n\n  delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;", "  delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;\n\n  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, operation_id, actor_id)\n  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, p_operation_id, auth.uid());"))
   detected('the record of a delete is written after the row it describes is gone', 'gl3b:audit-outlives-the-contract')
   reset()
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('grant select on public.grain_contract_audit to authenticated;', 'grant select, insert, update on public.grain_contract_audit to authenticated;'))
@@ -744,7 +744,7 @@ try {
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('contract_edit_delete: !tableMissing(contract_audit_probe.error)', 'contract_edit_delete: true'))
   detected('the repair controls are offered against a database that has no audit table', 'gl3b:capability-reports-schema')
   reset()
-  mutate('src/data/QueuedGrainRepository.ts', (source) => source.replace("async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before deleting a contract.');", "async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string) {"))
+  mutate('src/data/QueuedGrainRepository.ts', (source) => source.replace("async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string, operationId: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before deleting a contract.');", "async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string, operationId: string) {"))
   detected('a contract delete is attempted offline', 'gl3b:correction-needs-a-connection')
   reset()
   mutate('src/data/SupabaseGrainRepository.ts', (source) => source.replace('if (changes.delivery_start !== undefined) payload.delivery_start = changes.delivery_start || null', 'payload.delivery_start = changes.delivery_start || null'))
@@ -753,10 +753,19 @@ try {
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('filled_contract_id = null, updated_at = now()', 'updated_at = now()'))
   detected('a deleted contract leaves its firm offer marked filled pointing at nothing', 'gl3b:filled-offer-does-not-dangle')
   reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('where farm_id = p_farm_id and (id = v_before.firm_offer_id or filled_contract_id = p_contract_id)', 'where farm_id = p_farm_id and id = v_before.firm_offer_id'))
+  detected('an offer filled through the legacy fallback becomes an unusable dead end', 'gl3b:filled-offer-does-not-dangle')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('if v_replay.operation_id = p_operation_id and v_replay.reason is not distinct from v_reason then', 'if true then'))
+  detected("a delete with a different reason is answered as this caller's own retry", 'gl3b:a-delete-retry-must-be-the-same-delete')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("if p_operation_id is null then raise exception 'a delete must carry its own operation id'; end if;", ''))
+  detected('a delete can opt out of being recognisable on retry', 'gl3b:a-delete-retry-must-be-the-same-delete')
+  reset()
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("  if p_expected_updated_at is null or v_before.updated_at is distinct from p_expected_updated_at then\n    raise exception using errcode = 'P0001', message = 'FARM_RX_STALE_WRITE';\n  end if;\n  if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then\n    raise exception 'this contract already has delivered bushels and can no longer be changed';", "  if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then\n    raise exception 'this contract already has delivered bushels and can no longer be changed';"))
   detected('a correction typed on a stale page silently reverses a newer one', 'gl3b:correction-is-compare-and-swap')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at);', 'await services.grainRepository.deleteContract(contract.id, reason, new Date().toISOString());'))
+  mutate('src/GrainModule.tsx', (source) => source.replace('await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at, operationId.current);', 'await services.grainRepository.deleteContract(contract.id, reason, new Date().toISOString(), operationId.current);'))
   detected('the delete stops naming the version it means to remove', 'gl3b:correction-is-compare-and-swap')
   reset()
   mutate('src/data/grain.ts', (source) => source.replace('export function contractCorrectionDiff(', 'export function contractCorrectionDiffUnused('))

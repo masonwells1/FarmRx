@@ -3266,7 +3266,8 @@ export function ContractRepair({ contract, workspace, services, onSaved, onDelet
       if (problem) { setMessage(problem); return }
       if (!(await confirmDialog({ title: `Delete the ${contract.buyer} contract?`, body: "The contract is removed from your position. The reason you gave is kept. This cannot be undone.", confirmLabel: "Delete contract", destructive: true }))) return;
       setSaving(true);
-      const result = await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at);
+      operationId.current ??= services.createGrainId();
+      const result = await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at, operationId.current);
       // This row is about to vanish, so the news goes above the table. A contract that came from a
       // firm offer sent that offer back to open; entering a replacement contract by hand instead of
       // refilling the offer would leave the offer counted as pending AND fillable into a second one.

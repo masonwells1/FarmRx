@@ -194,7 +194,7 @@ export interface GrainRepository {
   saveContract(contract: GrainContract): Promise<void>
   finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number): Promise<void>
   editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, operationId: string): Promise<GrainContract>
-  deleteContract(contractId: string, reason: string, expectedUpdatedAt: string): Promise<ContractDeleteResult>
+  deleteContract(contractId: string, reason: string, expectedUpdatedAt: string, operationId: string): Promise<ContractDeleteResult>
   recordContractDelivery(delivery: GrainContractDelivery): Promise<void>
   saveMarketingPlanTarget(target: MarketingPlanTarget): Promise<void>
   replaceMarketingPlanTargets(scope: PositionScope, targets: MarketingPlanTarget[]): Promise<void>

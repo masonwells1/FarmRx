@@ -199,7 +199,7 @@ grant execute on function public.edit_grain_contract(uuid, uuid, text, jsonb, ti
 comment on function public.edit_grain_contract(uuid, uuid, text, jsonb, timestamptz, uuid) is
   'GL-3b: correct a contract that has no deliveries, with a required reason recorded in grain_contract_audit. Crop year, commodity, contract type and pricing are not editable here; 0033 owns pricing.';
 
-create or replace function public.delete_grain_contract(p_farm_id uuid, p_contract_id uuid, p_reason text, p_expected_updated_at timestamptz)
+create or replace function public.delete_grain_contract(p_farm_id uuid, p_contract_id uuid, p_reason text, p_expected_updated_at timestamptz, p_operation_id uuid)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $fn$
 declare
   v_before public.grain_contracts%rowtype;
@@ -216,6 +216,7 @@ begin
   if v_reason is null or length(v_reason) < 3 or length(v_reason) > 2000 then
     raise exception 'a reason of 3 to 2000 characters is required to delete a contract';
   end if;
+  if p_operation_id is null then raise exception 'a delete must carry its own operation id'; end if;
 
   select * into v_before from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id for update;
   if not found then
@@ -226,11 +227,18 @@ begin
     -- Reporting null there would let the screen say only "Contract deleted", and the farmer would
     -- follow the panel's advice to enter a replacement by hand while that offer stayed fillable.
     select * into v_replay from public.grain_contract_audit a
-    where a.farm_id = p_farm_id and a.grain_contract_id = p_contract_id and a.action = 'delete';
+    where a.farm_id = p_farm_id and a.grain_contract_id = p_contract_id and a.action = 'delete'
+    order by a.created_at desc limit 1;
     if found then
-      return jsonb_build_object('deleted', true, 'reopened_firm_offer_id', v_replay.reopened_firm_offer_id,
-        'reopened_firm_offer_status', (select o.status::text from public.firm_offers o where o.id = v_replay.reopened_firm_offer_id and o.farm_id = p_farm_id),
-        'already_deleted', true);
+      -- Only the SAME delete is a retry. "A delete audit row exists" is not enough: a later call with
+      -- a different reason would be answered with success while the earlier reason stood as the record,
+      -- and a delete somebody else made would be reported as this caller's own.
+      if v_replay.operation_id = p_operation_id and v_replay.reason is not distinct from v_reason then
+        return jsonb_build_object('deleted', true, 'reopened_firm_offer_id', v_replay.reopened_firm_offer_id,
+          'reopened_firm_offer_status', (select o.status::text from public.firm_offers o where o.id = v_replay.reopened_firm_offer_id and o.farm_id = p_farm_id),
+          'already_deleted', true);
+      end if;
+      raise exception using errcode = 'P0001', message = 'FARM_RX_CONTRACT_ALREADY_DELETED';
     end if;
     raise exception 'contract does not belong to this farm';
   end if;
@@ -251,19 +259,24 @@ begin
   -- retire it hours early. Offer expiry is read against the farmer's local day everywhere else.
   select (now() at time zone coalesce(f.time_zone, 'UTC'))::date into v_local_date
   from public.farms f where f.id = p_farm_id;
-  if v_before.firm_offer_id is not null then
-    select * into v_offer from public.firm_offers where id = v_before.firm_offer_id and farm_id = p_farm_id for update;
-    if found then
-      update public.firm_offers
-         set status = case when v_offer.expires_on is not null and v_offer.expires_on < v_local_date then 'expired'::public.firm_offer_status else 'open'::public.firm_offer_status end,
-             filled_contract_id = null, updated_at = now()
-       where id = v_offer.id and farm_id = p_farm_id;
-      v_reopened := v_offer.id;
-    end if;
+  -- Either association. A contract filled through the pre-RPC fallback never received firm_offer_id --
+  -- contractColumns does not carry it -- so the link lives only on the offer's filled_contract_id.
+  -- Matching on the contract's column alone would skip those, the foreign key would clear the offer's
+  -- link, and the offer would sit 'filled' pointing at nothing: an unusable dead end.
+  select * into v_offer from public.firm_offers
+  where farm_id = p_farm_id and (id = v_before.firm_offer_id or filled_contract_id = p_contract_id)
+  order by id limit 1
+  for update;
+  if found then
+    update public.firm_offers
+       set status = case when v_offer.expires_on is not null and v_offer.expires_on < v_local_date then 'expired'::public.firm_offer_status else 'open'::public.firm_offer_status end,
+           filled_contract_id = null, updated_at = now()
+     where id = v_offer.id and farm_id = p_farm_id;
+    v_reopened := v_offer.id;
   end if;
 
-  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, actor_id)
-  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, auth.uid());
+  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, reopened_firm_offer_id, operation_id, actor_id)
+  values (p_farm_id, p_contract_id, 'delete', v_reason, to_jsonb(v_before), null, v_reopened, p_operation_id, auth.uid());
 
   delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;
 
@@ -274,10 +287,10 @@ begin
     'reopened_firm_offer_status', (select o.status::text from public.firm_offers o where o.id = v_reopened and o.farm_id = p_farm_id),
     'already_deleted', false);
 end $fn$;
-revoke all on function public.delete_grain_contract(uuid, uuid, text, timestamptz) from public, anon;
-grant execute on function public.delete_grain_contract(uuid, uuid, text, timestamptz) to authenticated;
+revoke all on function public.delete_grain_contract(uuid, uuid, text, timestamptz, uuid) from public, anon;
+grant execute on function public.delete_grain_contract(uuid, uuid, text, timestamptz, uuid) to authenticated;
 
-comment on function public.delete_grain_contract(uuid, uuid, text, timestamptz) is
+comment on function public.delete_grain_contract(uuid, uuid, text, timestamptz, uuid) is
   'GL-3b: delete a contract that has no deliveries, with a required reason recorded in grain_contract_audit before the row is removed. A contract created from a firm offer returns that offer to open, or expired if its expiry has passed.';
 
 -- The audited actions above are pointless while the old direct paths are still open. Module 2 granted

@@ -175,7 +175,7 @@ begin
       ('delete_program','p_farm_id uuid, p_operation_id uuid, p_program_id uuid'),
       ('delete_program_pass','p_farm_id uuid, p_operation_id uuid, p_program_id uuid, p_pass_id uuid'),
       ('delete_push_subscription','p_farm_id uuid, p_endpoint text'),
-      ('delete_grain_contract','p_farm_id uuid, p_contract_id uuid, p_reason text, p_expected_updated_at timestamp with time zone'),
+      ('delete_grain_contract','p_farm_id uuid, p_contract_id uuid, p_reason text, p_expected_updated_at timestamp with time zone, p_operation_id uuid'),
       ('delete_scouting_note','p_farm_id uuid, p_note_id uuid'),
       ('delete_service_log_with_reversal','p_farm_id uuid, p_log_id uuid'),
       ('edit_grain_contract','p_farm_id uuid, p_contract_id uuid, p_reason text, p_changes jsonb, p_expected_updated_at timestamp with time zone, p_operation_id uuid'),

@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 278')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 281')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -711,7 +711,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // have taken a delivery, and a queued delete against one that no longer exists.
   const gl3bQueued = read(root, 'src/data/QueuedGrainRepository.ts')
   requireText(errors, gl3bQueued, "async editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, operationId: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before correcting a contract.')", 'gl3b:correction-needs-a-connection')
-  requireText(errors, gl3bQueued, "async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before deleting a contract.')", 'gl3b:correction-needs-a-connection')
+  requireText(errors, gl3bQueued, "async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string, operationId: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before deleting a contract.')", 'gl3b:correction-needs-a-connection')
   // An absent key keeps the stored value; only an explicit null clears one. A payload that named every
   // column would turn a buyer correction into a silent wipe of the window and the notes.
   requireText(errors, read(root, 'src/data/SupabaseGrainRepository.ts'), 'if (changes.delivery_start !== undefined) payload.delivery_start = changes.delivery_start || null', 'gl3b:absent-key-keeps-stored-value')
@@ -720,6 +720,9 @@ export function foundationStaticGuard(root = process.cwd()) {
   // leave the offer marked filled pointing at nothing, which no screen can explain and which would
   // block that offer from ever being filled again.
   requireText(errors, gl3bMigration, "set status = case when v_offer.expires_on is not null and v_offer.expires_on < v_local_date then 'expired'::public.firm_offer_status else 'open'::public.firm_offer_status end,", 'gl3b:filled-offer-does-not-dangle')
+  // Either association. A contract filled through the pre-RPC fallback never got firm_offer_id --
+  // contractColumns does not carry it -- so for those the link lives only on the offer's side.
+  requireText(errors, gl3bMigration, 'where farm_id = p_farm_id and (id = v_before.firm_offer_id or filled_contract_id = p_contract_id)', 'gl3b:filled-offer-does-not-dangle')
   requireText(errors, gl3bMigration, 'filled_contract_id = null, updated_at = now()', 'gl3b:filled-offer-does-not-dangle')
   // Two members can hold the same contract open. Without a compare-and-swap the second save reverses
   // the first correction, and the audit records both as deliberate. Same fence as optimisticSave.
@@ -730,7 +733,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, read(root, 'src/data/grain.ts'), 'export function contractCorrectionDiff(', 'gl3b:only-changed-fields-are-sent')
   requireText(errors, grainModule, 'const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number, notes });', 'gl3b:only-changed-fields-are-sent')
   requireText(errors, grainModule, 'await services.grainRepository.editContract(contract.id, reason, changes, contract.updated_at, operationId.current);', 'gl3b:correction-is-compare-and-swap')
-  requireText(errors, grainModule, 'await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at);', 'gl3b:correction-is-compare-and-swap')
+  requireText(errors, grainModule, 'await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at, operationId.current);', 'gl3b:correction-is-compare-and-swap')
   // The farm's own calendar day, not the database's. After UTC midnight an Illinois farm is still on
   // the previous evening, and an offer expiring that day is still fillable there.
   requireText(errors, gl3bMigration, "select (now() at time zone coalesce(f.time_zone, 'UTC'))::date into v_local_date", 'gl3b:offer-expiry-is-farm-local')
@@ -776,6 +779,11 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, grainModule, 'marked expired rather than reopened', 'gl3b:a-reopened-offer-is-surfaced')
   // A retry after a lost response owes the same answer, or that guidance is lost entirely.
   requireText(errors, gl3bMigration, "'reopened_firm_offer_id', v_replay.reopened_firm_offer_id,", 'gl3b:a-reopened-offer-is-surfaced')
+  // A delete retry is the SAME delete or it is not a retry. "An audit row exists" would answer a
+  // different reason, or another member's delete, with this caller's success.
+  requireText(errors, gl3bMigration, 'if v_replay.operation_id = p_operation_id and v_replay.reason is not distinct from v_reason then', 'gl3b:a-delete-retry-must-be-the-same-delete')
+  requireText(errors, gl3bMigration, "raise exception using errcode = 'P0001', message = 'FARM_RX_CONTRACT_ALREADY_DELETED';", 'gl3b:a-delete-retry-must-be-the-same-delete')
+  requireText(errors, gl3bMigration, "if p_operation_id is null then raise exception 'a delete must carry its own operation id'; end if;", 'gl3b:a-delete-retry-must-be-the-same-delete')
   // A replay returns the row THAT operation produced. Handing back a later member's version would let
   // the browser adopt it as its own and then overwrite their work with the values it still holds.
   requireText(errors, gl3bMigration, '      return v_replay.after_row;', 'gl3b:a-retry-must-be-the-same-correction')
@@ -794,6 +802,9 @@ export function foundationStaticGuard(root = process.cwd()) {
   if ((grainModule.split('redraft();').length - 1) !== 7) errors.push('gl3b:a-retry-must-be-the-same-correction')
   // ??=, not =: a retry must reuse the id its first attempt used, or the server cannot recognise it.
   requireText(errors, grainModule, 'operationId.current ??= services.createGrainId();', 'gl3b:correction-survives-a-lost-response')
+  // Both paths mint lazily, correction and delete. A plain assignment in either would hand a retry a
+  // fresh id, and the server would read it as a different operation rather than the same one.
+  if ((grainModule.split('operationId.current ??= services.createGrainId();').length - 1) !== 2) errors.push('gl3b:correction-survives-a-lost-response')
   requireText(errors, grainModule, 'contract.updated_at, operationId.current);\n      operationId.current = null;', 'gl3b:correction-survives-a-lost-response')
   if (/expires_on < current_date/.test(gl3bMigration)) errors.push('gl3b:offer-expiry-is-farm-local')
   // GL-3a made the crop and year picker permanent, so the sale form must not outlive a scope change:

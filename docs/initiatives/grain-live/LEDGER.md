@@ -536,3 +536,30 @@ The edit replay returned `v_before`, the row **as it now stands**. If another me
 - **Guards:** `gl3b:a-reopened-offer-is-surfaced` extended to the status, the expired wording and the retry; `gl3b:a-retry-must-be-the-same-correction` extended to `after_row`. Four mutations, 274 → 278.
 - **The count and two pins drifted and the gates caught all three** — the replay no longer returns `to_jsonb(v_before)` and the repository result gained a field, so two `requireText` pins and one mutation target were stale. Recorded because that is the drill doing its job on my own edits, not on hypothetical ones.
 - **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 278/278; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**.
+
+## GL-035 — Thirty-fourth and thirty-fifth findings, on `d5d5feb`
+
+- **Date/time:** 2026-09-20 15:15 -05:00 (`America/Chicago`).
+- **Foundation on `9217da9`: success.** Three green runs in a row now (`54992f5`, `1855089`, `9217da9`), each read from its run conclusion.
+- **Trigger:** Codex reviewed `d5d5feb` and returned two P2s. Both verified before acting; both real.
+
+### Finding 34 — an offer filled by the legacy fallback became a dead end
+
+The delete resolved the firm offer through `v_before.firm_offer_id`. But `contractColumns` in the gateway **does not carry `firm_offer_id`**, so any contract written through `saveContract` has it null — and `fillFirmOfferFallback`, the path used before the fill RPC existed, creates the contract exactly that way. For those the link lives only on the offer's `filled_contract_id`. Deleting such a contract therefore skipped the reopen branch entirely; the foreign key cleared the offer's link and left it `filled` pointing at nothing, which is the unusable state GL-023 introduced the reopen to prevent. **Checked against `contractColumns` and `fillFirmOfferFallback` before accepting it**, not taken on the reviewer's word.
+
+- **Repair:** the offer is resolved by **either** association — `id = v_before.firm_offer_id or filled_contract_id = p_contract_id`.
+
+### Finding 35 — "a delete audit row exists" was treated as a retry
+
+The idempotent delete path matched on nothing but the existence of a delete audit row for that contract. A later call with a different reason was answered with success while the earlier reason stood as the record, and a delete another member had made was reported back as this caller's own. The expected version was ignored entirely.
+
+- **Repair:** the delete carries its own operation id, stored on the audit row, and a retry must match that id **and** the reason. Anything else raises `FARM_RX_CONTRACT_ALREADY_DELETED` — "This contract was already deleted. Reload to see the current contracts." This is the same identity lesson as findings 22, 25 and 28, applied to the other action before the reviewer had to find it there too — except that it had to be found there too, which is the point: I fixed the edit three times and never once looked at the delete beside it.
+
+### Three things my own gates caught in this round
+
+1. The new delete signature broke the **0043 allowlist check I added in GL-031** — it failed locally with the exact argument text mismatch. That check exists because the PowerShell lane cannot run here, and this is the first time it earned its keep.
+2. The audit-insert mutation still targeted the pre-`operation_id` text, so the drill reported a mutation that no longer applied.
+3. Adding a second `operationId.current ??=` (the delete path) made the existing mutation toothless — `String.replace` changes only the first occurrence, so the guard still matched. The guard now requires exactly two.
+
+- **Guards:** `gl3b:filled-offer-does-not-dangle` extended to either association; new `gl3b:a-delete-retry-must-be-the-same-delete`; `gl3b:correction-survives-a-lost-response` now counts both lazy-mint sites. Three mutations, 278 → 281.
+- **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 281/281; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**.
