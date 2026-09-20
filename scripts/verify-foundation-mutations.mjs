@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 261
+const expectedMutationCount = 263
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -788,6 +788,12 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('operationId.current ??= services.createGrainId();', 'operationId.current = services.createGrainId();'))
   detected('a retry invents a new operation id and is refused as stale', 'gl3b:correction-survives-a-lost-response')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('if (contract.updated_at !== seenVersion) {', 'if (false) {'))
+  detected("a draft opened before a refresh undoes another member's correction", 'gl3b:draft-rebases-on-a-changed-contract')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('This contract changed while you had it open. The fields now show the current values', 'Contract reloaded'))
+  detected('the farmer is not told that the contract moved under their draft', 'gl3b:draft-rebases-on-a-changed-contract')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('<tfoot>', '<tfoot hidden>').replace('</tfoot>', '</tfoot>'))
   detected('the contracts totals row is removed', 'gl3:contract-totals-row')

@@ -436,6 +436,35 @@ begin
     then raise exception 'the direct mutation policies are still in place'; end if;
 end $$;
 
+-- The same two probes the 0033 PowerShell lane makes, run here because that lane cannot run on a
+-- development machine and its expectations changed with this revoke. Privilege is now the outer
+-- fence for a signed-in client; the 0033 trigger still guards any caller that does hold the
+-- privilege, and losing either would be a real regression.
+insert into public.grain_contracts(id,farm_id,crop_year,commodity_id,contract_type,buyer,bushels,futures_price)
+values ('00000000-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-000000000072',2026,'corn_yellow','hta','Pricing Fence Buyer',100,5);
+
+select set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-00000000000d"}',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-00000000000d','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000072',1)::text)::text,false);
+set role authenticated;
+do $$
+begin
+  begin
+    update public.grain_contracts set basis = -0.20, cash_price = 4.80 where id = '00000000-0000-4000-8000-0000000000b1';
+    raise exception 'a signed-in client updated a contract directly';
+  exception when insufficient_privilege then null;
+  end;
+end $$;
+reset role;
+do $$
+begin
+  begin
+    update public.grain_contracts set basis = -0.20, cash_price = 4.80 where id = '00000000-0000-4000-8000-0000000000b1';
+    raise exception 'a privileged caller changed basis and HTA pricing outside the finalization rule';
+  exception when others then
+    if position('only be finalized through the price-finalization action' in sqlerrm) = 0 then raise; end if;
+  end;
+end $$;
+
 -- ------------------------------------------------- 15. every farm-scoped table is epoch-fenced
 -- Migration 0040 requires the farm_access_epoch_guard trigger on EVERY public table carrying a
 -- farm_id. The PowerShell 0040 lane already checks this, but only in CI -- which is how GL-3b's new

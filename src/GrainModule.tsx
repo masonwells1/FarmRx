@@ -3184,6 +3184,26 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
   // Minted on the first save, never during render: an id generator is shared and ordered, and taking
   // one on every render of every contract row would shift the id the next real write gets.
   const operationId = useRef<string | null>(null);
+  // This panel stays mounted across a workspace refresh, so the contract prop can move under a draft
+  // that is still holding the values it was opened with. Without this, correcting only the buyer would
+  // send the bushels as they were BEFORE another member corrected them -- and because the refreshed
+  // updated_at now rides along, the compare-and-swap would accept it and quietly undo their work. The
+  // version fence and a stale draft together are worse than either alone.
+  //
+  // The fields are rebased on the contract as it now stands and the farmer is told, rather than the
+  // draft being discarded silently. The reason is kept: it is their words, not a copy of the row. The
+  // operation id is dropped, because this is a different correction from the one they started.
+  const [seenVersion, setSeenVersion] = useState(contract.updated_at);
+  if (contract.updated_at !== seenVersion) {
+    setSeenVersion(contract.updated_at);
+    setBuyer(contract.buyer);
+    setContractBushels(String(contract.bushels));
+    setStart(contract.delivery_start ?? "");
+    setEnd(contract.delivery_end ?? "");
+    setNumber(contract.contract_number ?? "");
+    operationId.current = null;
+    setMessage("This contract changed while you had it open. The fields now show the current values \u2014 check them before saving.");
+  }
   const available = workspace.capabilities?.contract_edit_delete !== false;
   if (!available || !contractIsCorrectable(workspace, contract.id)) return null;
   const correct = async () => {

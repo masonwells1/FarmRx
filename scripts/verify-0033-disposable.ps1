@@ -81,15 +81,29 @@ do $$ begin
   if (select count(*) from public.bin_transactions where id = 'f2222222-2222-4222-8222-222222222222') <> 1 then raise exception 'movement sequential replay inserted more than one row'; end if;
   raise notice 'PROBE movement sequential replay: same row';
 end $$;
+-- GL-3b revoked UPDATE on grain_contracts from authenticated, so a signed-in client no longer
+-- reaches the trigger at all: the privilege is the outer fence, exactly as 0033 already did for
+-- bin_transactions above. Both facts stay pinned -- the grant is gone here, and the trigger still
+-- guards any caller that does hold the privilege, checked as the owner below.
 do $$ begin
   begin
     update public.grain_contracts set basis = -0.20, cash_price = 4.80 where id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
     raise exception 'direct price update was accepted';
-  exception when others then
-    if position('only be finalized through the price-finalization action' in sqlerrm) = 0 then raise; end if;
-    raise notice 'PROBE direct pricing UPDATE rejected: %', sqlerrm;
+  exception when insufficient_privilege then
+    raise notice 'PROBE direct pricing UPDATE revoked: %', sqlerrm;
   end;
 end $$;
+reset role;
+do $$ begin
+  begin
+    update public.grain_contracts set basis = -0.20, cash_price = 4.80 where id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    raise exception 'direct price update was accepted by a privileged caller';
+  exception when others then
+    if position('only be finalized through the price-finalization action' in sqlerrm) = 0 then raise; end if;
+    raise notice 'PROBE direct pricing UPDATE rejected by trigger: %', sqlerrm;
+  end;
+end $$;
+set role authenticated;
 select (public.finalize_contract_price_leg('22222222-2222-4222-8222-222222222222', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', 'basis', -0.20)->>'cash_price') as rpc_cash_price;
 do $$ begin
   begin insert into public.bin_transactions (id, farm_id, grain_bin_id, direction, bushels, commodity_id, occurred_on) values ('f3333333-3333-4333-8333-333333333333', '22222222-2222-4222-8222-222222222222', 'abababab-abab-4aba-8aba-abababababab', 'in', 1, 'corn_yellow', '2026-07-03'); raise exception 'direct insert was accepted'; exception when insufficient_privilege then raise notice 'PROBE direct INSERT revoked: %', sqlerrm; end;
