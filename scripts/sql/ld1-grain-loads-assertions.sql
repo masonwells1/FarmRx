@@ -422,4 +422,50 @@ begin
     raise exception 'authenticated can execute % security definer functions; the 0043 lane expects 60', v_total; end if;
 end $$;
 
+-- ------------------------------------------------- 14. every public foreign key has a covering index
+-- The third thing the PowerShell-only 0043 lane checks that nothing runnable here did, and the one
+-- that broke this tranche: grain_loads shipped seven foreign keys and four indexes written farm-first,
+-- so six keys had no covering index and 0043 failed after the branch was already pushed. The rule
+-- below is 0043's own, copied whole -- global scope, same two allowlisted partial indexes -- so any
+-- new table that forgets an index now fails on a development machine instead of in CI. Keep the two
+-- copies identical; if 0043 ever grows a third exception, this list grows with it.
+do $$
+declare v_missing integer;
+begin
+  with foreign_keys as (
+    select c.conrelid, c.conkey, c.conname
+    from pg_catalog.pg_constraint c
+    join pg_catalog.pg_class t on t.oid = c.conrelid
+    join pg_catalog.pg_namespace n on n.oid = t.relnamespace
+    where c.contype = 'f' and n.nspname = 'public'
+  ), valid_indexes as (
+    select
+      i.indrelid,
+      i.indkey::smallint[] as keys,
+      pg_catalog.pg_get_expr(i.indpred, i.indrelid) as predicate
+    from pg_catalog.pg_index i
+    where i.indisvalid and i.indisready
+  )
+  select count(*) into v_missing
+  from foreign_keys fk
+  where not exists (
+    select 1 from valid_indexes i
+    where i.indrelid = fk.conrelid
+      and i.keys[0:cardinality(fk.conkey) - 1] = fk.conkey
+      and (
+        i.predicate is null
+        or (
+          fk.conname = 'firm_offers_filled_contract_same_farm_fk'
+          and i.predicate = '(filled_contract_id IS NOT NULL)'
+        )
+        or (
+          fk.conname = 'push_delivery_targets_subscription_id_fkey'
+          and i.predicate = '(subscription_id IS NOT NULL)'
+        )
+      )
+  );
+  if v_missing <> 0 then
+    raise exception '% public foreign keys remain without a covering index (the 0043 advisor rule)', v_missing; end if;
+end $$;
+
 select 'LD1_GRAIN_LOADS_DISPOSABLE_PASS' as result;

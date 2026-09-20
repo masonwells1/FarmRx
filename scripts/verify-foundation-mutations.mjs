@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 306
+const expectedMutationCount = 308
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -928,6 +928,12 @@ try {
   reset()
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('.limit(RECENT_GRAIN_LOAD_LIMIT)', ''))
   detected('the loads read loses its bound and a hauling season pushes the current tickets past the cap', 'ld1:the-newest-tickets-are-the-ones-loaded')
+  reset()
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('create index grain_loads_origin_bin_idx on public.grain_loads (origin_grain_bin_id, farm_id, load_date desc);', 'create index grain_loads_origin_bin_idx on public.grain_loads (farm_id, origin_grain_bin_id, load_date desc);'))
+  detected('a foreign key index is written farm-first, so deleting a bin scans every load', 'ld1:every-foreign-key-has-a-covering-index')
+  reset()
+  mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('create index grain_loads_truck_idx on public.grain_loads (truck_equipment_id, farm_id);', 'create index grain_loads_truck_idx on public.grain_loads (truck_equipment_id, farm_id) where truck_equipment_id is not null;'))
+  detected('a foreign key index is narrowed to a partial one the advisor rule does not accept', 'ld1:every-foreign-key-has-a-covering-index')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('    "contracts",\n    "loads",\n    "storage",', '    "contracts",\n    "storage",'))
   detected('a tab in the Grain header has no route and silently opens Overview', 'grain:every-tab-has-a-route')

@@ -58,3 +58,81 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **No lane renders the Loads tab on a phone**, so the one-column form is proven by the stylesheet and the desktop journey, not by a rendered phone assertion.
 - **Known flake, sixth occurrence:** `Soil Rx drains custody after lost Storage and row-delete responses without unrelated writes` (phone) failed in the full run and passed alone immediately after, as it did in GL-009, GL-019, GL-022, GL-029 and GL-037. It is in code no LD tranche touches. Recorded, not explained.
 - **`src/data/programInventoryCW2.regression.ts` fails on this machine**, and fails identically on `origin/main` `efafc3a` with none of this branch's changes. It needs a service this sandbox does not have. Unchanged by LD-1, and green in CI on `main`.
+
+## LD-002 — CI caught the eleventh defect: six foreign keys with no covering index
+
+PR #50's `foundation` check failed on `c658f73`, in the PowerShell-only 0043 advisor lane:
+
+```
+ERROR:  6 public foreign keys remain without a covering index
+```
+
+### What was wrong
+
+`grain_loads` declares seven foreign keys and shipped with four indexes. The 0043 advisor rule wants,
+for each key, an index whose **leading columns are exactly that key's columns, in the order the
+constraint declares them**, and which is **not partial**. That rule exists so `on delete restrict`
+can be checked with an index scan: without it, deleting an equipment asset, a bin, a field assignment
+or a contract has to sequentially scan every load the farm has ever recorded.
+
+Only `farm_id` was covered, by `grain_loads_farm_date_idx`. The other six were not, for two reasons
+at once. Three indexes were written **farm-first** — `(farm_id, origin_grain_bin_id)` — because that
+is the order the *application* queries in, which is the opposite of the order the *constraint* is
+checked in. Those same three were also **partial** (`where ... is not null`), narrowed to save space
+on nullable columns; a partial index does not satisfy the rule at all, and the two partial indexes
+elsewhere in the schema that do pass are named exceptions in 0043's allowlist. The remaining three
+keys — the truck, the destination bin, and the commodity — had no index of any kind.
+
+The fix replaces them with seven non-partial indexes in constraint-column order, several carrying a
+trailing `load_date desc` that the existing `bin_transactions_bin_history_idx` already models, so
+they serve LD-2's per-bin and per-contract reads as well as the constraint checks.
+
+### Why nothing on a development machine saw it
+
+0043 is one of three lanes written only in PowerShell against a container, and this sandbox cannot
+run them. LD-1 already knew that: section 13 of `scripts/sql/ld1-grain-loads-assertions.sql` exists
+precisely because "the allowlist lane is PowerShell and cannot run on a development machine, so the
+two things most likely to be wrong are checked here" — and it caught the definer count on day one.
+The covering-index rule was simply the third such thing, and nobody had thought to copy it across.
+
+So the fix is not only the indexes:
+
+- **Section 14** of the LD-1 assertions now carries 0043's covering-index rule **copied whole** —
+  global scope, both allowlisted partial-index exceptions — and the bash lane applies every migration
+  to a real PostgreSQL, so it runs against a true catalog. Reverting the migration to its shipped
+  indexes with section 14 in place reproduces CI's failure exactly, same count and same rule, on a
+  development machine. **This now fails for any new table that forgets an index, not just this one.**
+- **A static guard** (`ld1:every-foreign-key-has-a-covering-index`) pins the six leading-column
+  prefixes and bans a `where` predicate on any `grain_loads` index, so the warning written into the
+  migration is enforced rather than merely hoped for.
+- **Two controlled mutations** prove the guard bites: one rewrites an index farm-first, one narrows
+  an index to partial. Both turn the gate red.
+
+### The pattern, for the eleventh time
+
+*Two things that had to agree, and I changed one* — here the table's foreign keys and the advisor's
+index rule. Nine of LD-1's eleven defects are now this shape. What is different about this one is
+that it is the first to reach CI: every earlier instance was caught by a guard, a drill, a browser
+journey or the disposable database before the branch was pushed. The gap was not carelessness about
+the rule, it was a rule enforced **only** in a lane that cannot run here — and the remedy that
+matters is section 14, which moves it to a lane that can.
+
+### Proof observed on the fix
+
+- All six disposable suites pass, including `LD1_GRAIN_LOADS_DISPOSABLE_PASS` with section 14.
+- **Negative proof:** restoring the shipped indexes fails section 14 with `6 public foreign keys
+  remain without a covering index (the 0043 advisor rule)` — the same six CI counted.
+- `node scripts/foundation-static-guards.mjs`: PASS, with 15 LD-1 guards.
+- `node scripts/verify-foundation-mutations.mjs`: **308/308**, including both new mutations.
+- `npx tsc -b --force` clean; `npm run build` clean; `npm audit --audit-level=high` 0;
+  `git diff --check` clean; the full chain prints `CHAIN_PASS`.
+- **Browser journeys were not re-run, and did not need to be:** this change touches one migration,
+  one SQL assertion and two build scripts. No file under `src/` changed, so nothing the browser
+  loads is different from the run recorded in LD-001.
+
+### Still owed
+
+The other two PowerShell-only lanes (`verify-0040-disposable.ps1`, `verify-0033-disposable.ps1`)
+remain unrunnable here, and their rules have not been copied across the way 0043's covering-index
+rule now has been. That is the next instance of this defect waiting to happen, and it is worth a
+deliberate pass rather than another tranche discovering it in CI.

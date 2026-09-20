@@ -109,10 +109,21 @@ create table public.grain_loads (
     references public.grain_contracts(id, farm_id) on delete restrict
 );
 
+-- Every foreign key above needs an index whose leading columns are exactly that key's
+-- columns, in the order the constraint declares them, and which is not partial. That is the
+-- database advisor rule the 0043 lane enforces across the whole public schema, and it is why
+-- these read (referenced_column, farm_id) rather than the farm-first order the rest of the
+-- app queries in: without it every delete of an equipment asset, a bin, a field assignment or
+-- a contract has to sequentially scan grain_loads to honour `on delete restrict`. Do not
+-- narrow these with a `where ... is not null` predicate to save space on the nullable
+-- columns; a partial index does not satisfy the rule and 0043 fails closed.
 create index grain_loads_farm_date_idx on public.grain_loads (farm_id, load_date desc, created_at desc);
-create index grain_loads_contract_idx on public.grain_loads (farm_id, destination_grain_contract_id) where destination_grain_contract_id is not null;
-create index grain_loads_origin_bin_idx on public.grain_loads (farm_id, origin_grain_bin_id) where origin_grain_bin_id is not null;
-create index grain_loads_crop_assignment_idx on public.grain_loads (farm_id, origin_crop_assignment_id) where origin_crop_assignment_id is not null;
+create index grain_loads_commodity_idx on public.grain_loads (commodity_id, farm_id);
+create index grain_loads_truck_idx on public.grain_loads (truck_equipment_id, farm_id);
+create index grain_loads_origin_bin_idx on public.grain_loads (origin_grain_bin_id, farm_id, load_date desc);
+create index grain_loads_destination_bin_idx on public.grain_loads (destination_grain_bin_id, farm_id, load_date desc);
+create index grain_loads_origin_crop_idx on public.grain_loads (origin_crop_assignment_id, farm_id);
+create index grain_loads_destination_contract_idx on public.grain_loads (destination_grain_contract_id, farm_id, load_date desc);
 
 alter table public.grain_loads enable row level security;
 revoke all on public.grain_loads from public, anon;

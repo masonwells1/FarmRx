@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 306')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 308')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -882,6 +882,21 @@ export function foundationStaticGuard(root = process.cwd()) {
   }
   // Bounded and newest-first, so a hauling season cannot push the current tickets past PostgREST's cap.
   requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), ".limit(RECENT_GRAIN_LOAD_LIMIT)", 'ld1:the-newest-tickets-are-the-ones-loaded')
+  // Six of grain_loads' seven foreign keys shipped with no covering index, because the indexes were
+  // written farm-first the way the app queries rather than key-first the way `on delete restrict`
+  // checks. The 0043 advisor rule wants each key's own columns leading, in the order the constraint
+  // declares them, with no partial predicate -- and 0043 is a PowerShell lane, so nothing runnable on
+  // a development machine saw it until CI did. Pin the leading columns and the predicate ban here;
+  // section 14 of scripts/sql/ld1-grain-loads-assertions.sql proves the same rule against a catalog.
+  for (const leading of [
+    'create index grain_loads_commodity_idx on public.grain_loads (commodity_id, farm_id)',
+    'create index grain_loads_truck_idx on public.grain_loads (truck_equipment_id, farm_id)',
+    'create index grain_loads_origin_bin_idx on public.grain_loads (origin_grain_bin_id, farm_id',
+    'create index grain_loads_destination_bin_idx on public.grain_loads (destination_grain_bin_id, farm_id',
+    'create index grain_loads_origin_crop_idx on public.grain_loads (origin_crop_assignment_id, farm_id)',
+    'create index grain_loads_destination_contract_idx on public.grain_loads (destination_grain_contract_id, farm_id',
+  ]) requireText(errors, ld1Migration, leading, 'ld1:every-foreign-key-has-a-covering-index')
+  if (/create index[^;]*on public\.grain_loads[^;]*\bwhere\b/i.test(ld1Migration)) errors.push('ld1:every-foreign-key-has-a-covering-index')
   return errors
 }
 
