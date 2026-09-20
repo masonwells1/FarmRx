@@ -1,5 +1,5 @@
 import type { GrainDataGateway, GrainRowBundle, ReplaceMarketingPlanInput } from './GrainDataGateway'
-import { productionActualColumns } from './SupabaseGrainDataGateway'
+import { MANUAL_CASH_BID_LIMIT, mergeCashBids, productionActualColumns, RECENT_CASH_BID_LIMIT } from './SupabaseGrainDataGateway'
 import { GrainWriteQueue, grainWriteQueueKey, parseGrainQueue, type GrainQueueEntryV1 } from './grainWriteQueue'
 import { QueuedGrainRepository } from './QueuedGrainRepository'
 import { fieldsSeedForRegression } from './MockFieldsRepository'
@@ -440,6 +440,20 @@ async function run() {
       `GL-3: suggestions must be the farm's own counterparties, trimmed, de-duplicated and sorted, never a USDA market location (saw ${JSON.stringify(suggestions)}).`,
     )
     assert(!knownCounterparties({ cash_bids: [bid('Iowa Interior', { feed_source: 'usda_mars' })] as never, grain_contracts: [] }).length, 'GL-3: a farm whose only bids are feed rows must be offered no suggestions at all.')
+  }
+  // 22 (GL-2 repair): the workspace's cash bids are two bounded slices, newest first, merged by id.
+  // GL-1 made this table grow every market day, so an unbounded ascending read would hand the browser
+  // the OLDEST rows once it crossed PostgREST's cap -- and a browser that sees no fresh bid records the
+  // rule condition false while the server still sees a current one, which the sweep then re-fires.
+  {
+    const recent = [{ id: 'feed-3' }, { id: 'feed-2' }, { id: 'manual-new' }]
+    const manual = [{ id: 'manual-new' }, { id: 'manual-old' }]
+    const merged = mergeCashBids(recent, manual) as Array<{ id: string }>
+    assert(merged.length === 4, `GL-2: the two slices must merge without duplicating a row present in both (saw ${merged.length}).`)
+    assert(merged.filter((item) => item.id === 'manual-new').length === 1, 'GL-2: a manual bid in both slices must be counted once.')
+    assert(merged.some((item) => item.id === 'manual-old'), "GL-2: the farm's own older bid must survive however much feed history sits in front of it.")
+    assert(mergeCashBids([{ id: 'a' }, {}, null], []).length === 1, 'GL-2: a row without an id must be dropped, not merged as undefined.')
+    assert(RECENT_CASH_BID_LIMIT + MANUAL_CASH_BID_LIMIT <= 1000, 'GL-2: the two slices together must stay inside PostgREST\'s default row cap.')
   }
   console.log('SupabaseGrainRepository regressions passed.')
 }

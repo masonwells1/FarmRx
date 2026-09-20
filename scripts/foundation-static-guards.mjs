@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 217')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 219')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -589,6 +589,11 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, gl2Migration, 'create or replace function public.latest_eligible_cash_bid(', 'gl2:one-eligible-bid-selection')
   requireText(errors, gl2Migration, 'from public.latest_eligible_cash_bid(v_farm.id,v_rule.commodity_id,v_rule.crop_year,v_local_date) b;', 'gl2:sweep-uses-shared-selection')
   requireText(errors, deliverGrainAlert, "admin.rpc('latest_eligible_cash_bid'", 'gl2:email-recheck-uses-shared-selection')
+  // GL-1 made cash_bids grow every market day. The browser must read the NEWEST rows, bounded, or it
+  // will judge a rule on stale history and fight the sweep over alert_rule_states.
+  const gl2Gateway = read(root, 'src/data/SupabaseGrainDataGateway.ts')
+  requireText(errors, gl2Gateway, ".order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(RECENT_CASH_BID_LIMIT)", 'gl2:cash-bids-read-newest-first')
+  requireText(errors, gl2Gateway, ".is('feed_source', null).order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)", 'gl2:cash-bids-keep-manual-history')
   // The page must break a tie exactly as the sweep does, or the two record opposite conditions.
   requireText(errors, marketingAlerts, 'right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id)', 'gl2:tie-breaker-matches-sweep')
   requireText(errors, gl2Migration, 'order by b.bid_date desc, b.updated_at desc, b.id desc', 'gl2:tie-breaker-matches-sweep')

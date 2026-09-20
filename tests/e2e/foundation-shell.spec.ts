@@ -207,7 +207,7 @@ const programsSharedShapes: Record<string, (farm: FarmFixture) => Record<string,
   application_records: (farm) => ({ select: 'id,farm_id,crop_assignment_id,application_date,applied_acres,status', farm_id: `eq.${farm.id}`, status: 'neq.voided', order: 'application_date.desc,id.asc' }),
   inventory_products: (farm) => ({ select: 'id,farm_id,name,inventory_unit,is_active', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' }),
 }
-const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
+const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, string> | Array<Record<string, string>>> = {
   production_estimates: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
   grain_contracts: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,delivery_start.asc,id.asc' }),
   grain_contract_deliveries: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'delivered_on.asc,id.asc' }),
@@ -216,7 +216,12 @@ const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, str
   grain_bins: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' }),
   bin_inventory: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
   bin_transactions: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'occurred_on.desc,created_at.desc,id.desc' }),
-  cash_bids: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'bid_date.asc,id.asc' }),
+  // GL-2 repair: two bounded slices, newest first -- the recent window, and the farm's own bids so they
+  // survive however much USDA feed history sits in front of them.
+  cash_bids: (farm) => [
+    { select: '*', farm_id: `eq.${farm.id}`, order: 'bid_date.desc,id.desc', limit: '750' },
+    { select: '*', farm_id: `eq.${farm.id}`, feed_source: 'is.null', order: 'bid_date.desc,id.desc', limit: '250' },
+  ],
   usda_report_dates: () => ({ select: '*', order: 'report_date.asc,id.asc' }),
   usda_market_reports: () => ({ select: '*', order: 'report_id.asc' }),
   marketing_alert_rules: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,created_at.asc,id.asc' }),
@@ -322,7 +327,7 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks' || url.pathname === '/rest/v1/rpc/generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${url.pathname}`)
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, session(activeUserId).user); return }
     if (url.pathname === '/auth/v1/logout') { await fulfillJson(route, {}); return }
-    if (rest && Object.hasOwn(grainReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, grainReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, moduleRows[rest] ?? grainRows(rest, farm)); return }
+    if (rest && Object.hasOwn(grainReadQueries, rest)) { const farm = requestedFarm(url); const expected = grainReadQueries[rest]!(farm); const shapes = Array.isArray(expected) ? expected : [expected]; if (route.request().method() !== 'GET' || !shapes.some((shape) => exactQuery(url, shape))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, moduleRows[rest] ?? grainRows(rest, farm)); return }
     // The profitability workspace load probes for the U of I badge column when the farm has no cost lines (an undefined column answers 42703 live); the mock's schema has it.
     if (emptyUnknownReads && rest === 'budget_cost_lines' && route.request().method() === 'GET' && exactQuery(url, { select: 'university_default_amount', farm_id: `eq.${requestedFarm(url).id}`, limit: '1' })) { await fulfillJson(route, []); return }
     if (emptyUnknownReads && rest && Object.hasOwn(profitabilityReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, profitabilityReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, []); return }

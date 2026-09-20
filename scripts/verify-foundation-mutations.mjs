@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 217
+const expectedMutationCount = 219
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -21,7 +21,7 @@ const files = [
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
   'supabase/functions/_shared/marsFeedOrchestrator.ts', 'src/data/grainAlerts.ts', 'supabase/functions/deliver-grain-alert/index.ts',
-  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'src/data/marketingYear.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx',
+  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'src/data/marketingYear.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -623,6 +623,12 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('checks these on the server about every fifteen minutes. You', 'checks these and emails the farm owner. You'))
   detected('the page promises an email the scheduled path never sends', 'gl2:email-promise-is-true')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(".order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(RECENT_CASH_BID_LIMIT)", ".order('bid_date').order('id')"))
+  detected('the browser reads the oldest cash bids once the feed fills the table', 'gl2:cash-bids-read-newest-first')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(".is('feed_source', null).order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)", ".order('bid_date', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)"))
+  detected("the farm's own older bids are lost behind feed volume", 'gl2:cash-bids-keep-manual-history')
   reset()
   mutate('src/data/marketingAlerts.ts', (source) => source.replace(' || right.id.localeCompare(left.id))[0] ?? null', ')[0] ?? null'))
   detected('the page breaks a bid tie the opposite way from the sweep', 'gl2:tie-breaker-matches-sweep')

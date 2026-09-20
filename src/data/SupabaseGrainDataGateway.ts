@@ -7,6 +7,20 @@ import { optimisticSave } from './optimisticSave'
 import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
 
 function rows(data: unknown, error: { message: string } | null): unknown[] { if (error) throw error; if (!Array.isArray(data)) throw new Error('Farm Rx could not load the complete grain workspace.'); return data }
+
+/** GL-2 repair: the two bounded cash-bid slices, de-duplicated by id. A manual bid appears in both when
+ * it is also among the newest rows; it must be counted once. Together they stay inside PostgREST's cap. */
+export const RECENT_CASH_BID_LIMIT = 750
+export const MANUAL_CASH_BID_LIMIT = 250
+export function mergeCashBids(recent: unknown[], manual: unknown[]): unknown[] {
+  const byId = new Map<unknown, unknown>()
+  for (const row of [...recent, ...manual]) {
+    const id = row && typeof row === 'object' ? (row as { id?: unknown }).id : undefined
+    if (id === undefined) continue
+    if (!byId.has(id)) byId.set(id, row)
+  }
+  return [...byId.values()]
+}
 function row(data: unknown, error: { message: string } | null): unknown { if (error) throw error; if (!data || typeof data !== 'object') throw new Error('Farm Rx could not confirm the grain save. Please try again.'); return data }
 function productionColumns(value: ProductionEstimate) { const { id, farm_id, crop_year, commodity_id, operating_entity_id, enterprise_label, planted_acres, aph_yield, expected_bushels, actual_bushels, drives_math, notes } = value; return { id, farm_id, crop_year, commodity_id, operating_entity_id, enterprise_label, planted_acres, aph_yield, expected_bushels, actual_bushels, drives_math, notes } }
 export function productionActualColumns(actualBushels: number) { return { actual_bushels: actualBushels, drives_math: 'actual' as const } }
@@ -34,7 +48,7 @@ async function confirmDelete(table: 'marketing_alert_rules' | 'firm_offers', far
 
 export class SupabaseGrainDataGateway implements GrainDataGateway {
   async loadWorkspace(farmId: string): Promise<GrainRowBundle> {
-    const [permission, production_estimates, grain_contracts, grain_contract_deliveries, marketing_plan_targets, insurance_units, grain_bins, bin_inventory, bin_transactions, cash_bids, usda_report_dates, usda_market_reports, marketing_alert_rules, firm_offers, grain_alert_settings, grain_sale_limits, grain_carry_settings, grain_carry_grids] = await Promise.all([
+    const [permission, production_estimates, grain_contracts, grain_contract_deliveries, marketing_plan_targets, insurance_units, grain_bins, bin_inventory, bin_transactions, cash_bids, manual_cash_bids, usda_report_dates, usda_market_reports, marketing_alert_rules, firm_offers, grain_alert_settings, grain_sale_limits, grain_carry_settings, grain_carry_grids] = await Promise.all([
       supabase.rpc('can_read_private_financials', { target_farm_id: farmId }),
       supabase.from('production_estimates').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('id'),
       supabase.from('grain_contracts').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('delivery_start').order('id'),
@@ -44,7 +58,15 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
       supabase.from('grain_bins').select('*').eq('farm_id', farmId).order('name').order('id'),
       supabase.from('bin_inventory').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('id'),
       supabase.from('bin_transactions').select('*').eq('farm_id', farmId).order('occurred_on', { ascending: false }).order('created_at', { ascending: false }).order('id', { ascending: false }),
-      supabase.from('cash_bids').select('*').eq('farm_id', farmId).order('bid_date').order('id'),
+      // GL-2 repair (Codex P1 on 64cf24c): newest first, and bounded. GL-1 turned cash_bids from a
+      // handful of typed rows into a table the USDA feed writes to every market day, so it will cross
+      // PostgREST's row cap. Ascending and unbounded, the browser would then receive the OLDEST rows,
+      // find no fresh eligible bid, and record the rule condition false while the server still sees a
+      // current one -- which the next sweep reads as a new transition and notifies on, again and again.
+      // The second slice keeps the farm's own bids reachable however much feed history sits in front of
+      // them, so valuation never loses a manual bid to feed volume. The repository re-sorts ascending.
+      supabase.from('cash_bids').select('*').eq('farm_id', farmId).order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(RECENT_CASH_BID_LIMIT),
+      supabase.from('cash_bids').select('*').eq('farm_id', farmId).is('feed_source', null).order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT),
       supabase.from('usda_report_dates').select('*').order('report_date').order('id'),
       supabase.from('usda_market_reports').select('*').order('report_id'),
       supabase.from('marketing_alert_rules').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('created_at').order('id'),
@@ -65,7 +87,7 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
     // GL-1 introduces the report mapping; before that migration is applied live the Grain page simply has no reports to name.
     const marketReportsUnavailable = usda_market_reports.error?.code === '42P01' || usda_market_reports.error?.code === 'PGRST205'
     const settingsSlices = settingsSlicesFromResults(grain_sale_limits, grain_carry_settings, grain_carry_grids)
-    return { production_estimates: rows(production_estimates.data, production_estimates.error), grain_contracts: rows(grain_contracts.data, grain_contracts.error), grain_contract_deliveries: deliveriesUnavailable ? [] : rows(grain_contract_deliveries.data, grain_contract_deliveries.error), marketing_plan_targets: rows(marketing_plan_targets.data, marketing_plan_targets.error), insurance_units: rows(insurance_units.data, insurance_units.error), grain_bins: rows(grain_bins.data, grain_bins.error), bin_inventory: rows(bin_inventory.data, bin_inventory.error), bin_transactions: rows(bin_transactions.data, bin_transactions.error), cash_bids: rows(cash_bids.data, cash_bids.error), usda_report_dates: rows(usda_report_dates.data, usda_report_dates.error), usda_market_reports: marketReportsUnavailable ? [] : rows(usda_market_reports.data, usda_market_reports.error), marketing_alert_rules: rows(marketing_alert_rules.data, marketing_alert_rules.error), firm_offers: rows(firm_offers.data, firm_offers.error), grain_alert_settings: grain_alert_settings.data, grain_sale_limits: settingsSlices.grain_sale_limits, grain_carry_settings: settingsSlices.grain_carry_settings, grain_carry_grids: settingsSlices.grain_carry_grids, capabilities: { bin_movements: post0033, contract_price_finalization: post0033, contract_deliveries: post0033, persisted_settings: settingsSlices.persisted } }
+    return { production_estimates: rows(production_estimates.data, production_estimates.error), grain_contracts: rows(grain_contracts.data, grain_contracts.error), grain_contract_deliveries: deliveriesUnavailable ? [] : rows(grain_contract_deliveries.data, grain_contract_deliveries.error), marketing_plan_targets: rows(marketing_plan_targets.data, marketing_plan_targets.error), insurance_units: rows(insurance_units.data, insurance_units.error), grain_bins: rows(grain_bins.data, grain_bins.error), bin_inventory: rows(bin_inventory.data, bin_inventory.error), bin_transactions: rows(bin_transactions.data, bin_transactions.error), cash_bids: mergeCashBids(rows(cash_bids.data, cash_bids.error), rows(manual_cash_bids.data, manual_cash_bids.error)), usda_report_dates: rows(usda_report_dates.data, usda_report_dates.error), usda_market_reports: marketReportsUnavailable ? [] : rows(usda_market_reports.data, usda_market_reports.error), marketing_alert_rules: rows(marketing_alert_rules.data, marketing_alert_rules.error), firm_offers: rows(firm_offers.data, firm_offers.error), grain_alert_settings: grain_alert_settings.data, grain_sale_limits: settingsSlices.grain_sale_limits, grain_carry_settings: settingsSlices.grain_carry_settings, grain_carry_grids: settingsSlices.grain_carry_grids, capabilities: { bin_movements: post0033, contract_price_finalization: post0033, contract_deliveries: post0033, persisted_settings: settingsSlices.persisted } }
   }
   async upsertProductionEstimate(farmId: string, value: ProductionEstimate, context: FarmOperationContext) { return optimisticSave('production_estimates', farmId, value.id, { ...productionColumns(value), farm_id: farmId }, value.updated_at, context) }
   async updateProductionActual(farmId: string, id: string, actualBushels: number, expectedUpdatedAt: string, context: FarmOperationContext) { return optimisticSave('production_estimates', farmId, id, productionActualColumns(actualBushels), expectedUpdatedAt, context) }
