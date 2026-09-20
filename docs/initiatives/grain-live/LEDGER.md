@@ -481,3 +481,27 @@ Setting a basis or futures price shows: *"This cannot be changed afterward. Add 
 - **The shape, recorded because it is the fourth of its kind in this tranche.** Findings 22, 25 and 28 are one idea arriving in three pieces: an idempotency key has to be compared against the whole of what it identified. I added the key (22), then the reason and the changes (25), then the contract (28) — each time treating the previous omission as complete. The question I did not ask until it was asked for me: *what exactly does this key claim to identify?* Not "is the key present", which is what I kept checking.
 - **Guards:** `gl3b:a-retry-must-be-the-same-correction` re-pinned to the three-part comparison, with a mutation that strips the contract clause alone. One mutation, 270 → 271.
 - **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 271/271; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**. CI remains the authority.
+
+## GL-033 — Twenty-ninth and thirtieth findings, on `1855089`
+
+- **Date/time:** 2026-09-20 14:15 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `1855089` and returned two P2s. Both verified before acting; both real. Its review of `54992f5` completed with **no findings** — the first clean review of this pull request.
+
+### Finding 30 (P2) — my finding-26 repair moved the bug instead of removing it
+
+GL-031 adopted the saved version with `setSeenVersion(saved.updated_at)` at save time. But the **prop** still carries the old version until `onSaved()`'s refresh lands, and `onSaved()` awaits — so React renders in between with `seenVersion` new and `contract.updated_at` old. The mismatch branch fires on that render, restores the pre-save field values, and replaces "Contract corrected" with the concurrent-change warning. Then the refresh arrives and it fires a second time. The warning I set out to remove appeared after **every** successful online correction, and the fields were reset twice on the way.
+
+- **Repair:** the version this panel wrote is remembered in a ref, separate from the version the prop carries. When the refreshed prop finally brings that version, it is recognised and adopted quietly, keeping the success message. Any other version still rebases and warns.
+- **The lesson, stated plainly:** I treated "adopt the new version" as the fix without asking *when* the prop would actually carry it. Local state and a prop that lags it are two clocks, and I set one of them forward.
+
+### Finding 29 (P2) — the reopened firm offer never reached the farmer
+
+`delete_grain_contract` returns the offer it reopened; the repository threw the response away. Meanwhile the correction panel tells the farmer that if crop year, commodity, type or price is wrong they should delete and enter the contract again. Following that instruction after deleting an offer-backed contract creates a replacement by hand while the original offer sits open — counted as pending, and still fillable into a second contract. Two contracts for one sale, from following the product's own advice.
+
+- **Repair:** the delete returns `{ reopenedFirmOfferId }` through the gateway, repository, queue and mock. The Contracts tab shows, above the table where the row used to be: *"Contract deleted. It came from a firm offer, and that offer is open again — fill it from Firm offers rather than entering a new contract, or the offer stays counted as pending."* A plain "Contract deleted." otherwise. The notice cannot live in the row, because the delete removes the row.
+
+### Together
+
+- **Guards:** `gl3b:own-save-is-not-a-concurrent-change` re-pinned to the separate-ref form, and `gl3b:a-reopened-offer-is-surfaced`. Net three mutations, 271 → 274.
+- **The count was wrong first:** I wrote 275 expecting four new mutations, but one of the four replaced an existing one, so the real figure is 274 — and the drill said so rather than letting it pass. Recorded because a mutation count is only worth keeping if it is the true one.
+- **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 274/274; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**. CI remains the authority.

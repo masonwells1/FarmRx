@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 271
+const expectedMutationCount = 274
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -795,8 +795,17 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace('This contract changed while you had it open. The fields now show the current values', 'Contract reloaded'))
   detected('the farmer is not told that the contract moved under their draft', 'gl3b:draft-rebases-on-a-changed-contract')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('setSeenVersion(saved.updated_at);', ''))
+  mutate('src/GrainModule.tsx', (source) => source.replace('savedVersion.current = saved.updated_at;', ''))
   detected("a farmer's own correction is reported back to them as somebody else's change", 'gl3b:own-save-is-not-a-concurrent-change')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('if (contract.updated_at !== seenVersion && contract.updated_at === savedVersion.current) {', 'if (false) {'))
+  detected('the panel stops recognising the version its own save wrote', 'gl3b:own-save-is-not-a-concurrent-change')
+  reset()
+  mutate('src/data/SupabaseGrainRepository.ts', (source) => source.replace('return { reopenedFirmOfferId: reopened }', 'return { reopenedFirmOfferId: null }'))
+  detected('the offer a deleted contract reopened never reaches the screen', 'gl3b:a-reopened-offer-is-surfaced')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('fill it from Firm offers rather than entering a new contract', 'enter the contract again'))
+  detected('the farmer is told to enter a replacement contract and leave the offer pending', 'gl3b:a-reopened-offer-is-surfaced')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('<label>Contract note<textarea value={notes}', '<label hidden>Contract note<textarea value={notes}'))
   detected('the contract note price finalization tells the farmer to add is unreachable', 'gl3b:a-contract-note-is-reachable')

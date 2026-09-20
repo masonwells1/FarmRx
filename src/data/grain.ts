@@ -92,6 +92,12 @@ export interface GrainContractCorrection {
 /** The one message for "the GL-3b migration is not applied yet". The screens hide the controls when
  * the capability is false, so a farmer should never see it; it exists for the window between that
  * read and a click, and for a client that loaded before the capability was known. */
+/** GL-3b: what a delete did beyond removing the row. A contract created from a firm offer sends that
+ * offer back to open, and the farmer has to know: the correction panel tells them to enter the
+ * contract again, and doing that without refilling the offer leaves the offer counted as pending and
+ * still fillable into a second contract. */
+export interface ContractDeleteResult { reopenedFirmOfferId: string | null }
+
 export const CONTRACT_REPAIR_PENDING = 'Correcting a contract arrives with the next database update.'
 
 /** GL-3b: a contract with any delivery recorded against it is history, not a draft. The same test the
@@ -188,7 +194,7 @@ export interface GrainRepository {
   saveContract(contract: GrainContract): Promise<void>
   finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number): Promise<void>
   editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, operationId: string): Promise<GrainContract>
-  deleteContract(contractId: string, reason: string, expectedUpdatedAt: string): Promise<void>
+  deleteContract(contractId: string, reason: string, expectedUpdatedAt: string): Promise<ContractDeleteResult>
   recordContractDelivery(delivery: GrainContractDelivery): Promise<void>
   saveMarketingPlanTarget(target: MarketingPlanTarget): Promise<void>
   replaceMarketingPlanTargets(scope: PositionScope, targets: MarketingPlanTarget[]): Promise<void>

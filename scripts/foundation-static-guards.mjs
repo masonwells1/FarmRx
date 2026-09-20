@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 271')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 274')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -757,10 +757,19 @@ export function foundationStaticGuard(root = process.cwd()) {
   // The refresh after a successful save hands back the row this panel just wrote. Without adopting
   // that version, the farmer's own correction is read as somebody else's and the success message is
   // replaced by a warning that nothing concurrent actually happened.
-  requireText(errors, grainModule, 'setSeenVersion(saved.updated_at);', 'gl3b:own-save-is-not-a-concurrent-change')
+  // The prop does not carry the new version until the refresh lands, so adopting it at save time
+  // only moves the mismatch. The version this panel wrote is remembered separately and recognised.
+  requireText(errors, grainModule, 'savedVersion.current = saved.updated_at;', 'gl3b:own-save-is-not-a-concurrent-change')
+  requireText(errors, grainModule, 'if (contract.updated_at !== seenVersion && contract.updated_at === savedVersion.current) {', 'gl3b:own-save-is-not-a-concurrent-change')
   // Setting a basis or futures price tells the farmer to add a contract note. Without a note field in
   // the only form that can change one, that instruction has nowhere to land.
   requireText(errors, grainModule, '<label>Contract note<textarea value={notes}', 'gl3b:a-contract-note-is-reachable')
+  // A deleted contract takes its row with it, so what the delete has to say goes above the table. A
+  // contract that came from a firm offer sent that offer back to open; entering a replacement by hand
+  // instead of refilling it leaves the offer counted as pending and fillable into a second contract.
+  requireText(errors, read(root, 'src/data/SupabaseGrainRepository.ts'), 'return { reopenedFirmOfferId: reopened }', 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, grainModule, 'onDeleted?.(result.reopenedFirmOfferId', 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, grainModule, 'fill it from Firm offers rather than entering a new contract', 'gl3b:a-reopened-offer-is-surfaced')
   requireText(errors, read(root, 'src/data/grain.ts'), 'if ((draft.notes.trim() || null) !== contract.notes) changes.notes = draft.notes.trim() || null', 'gl3b:a-contract-note-is-reachable')
   // The browser refuses an empty correction, but the RPC is reachable without the browser, and a
   // no-op there would move updated_at and make every other member's open draft stale for nothing.

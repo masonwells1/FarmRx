@@ -297,6 +297,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const [settingsNotice, setSettingsNotice] = useState("");
   const [alerts, setAlerts] = useState<GrainAlert[]>([]);
   const [deliveryNotice, setDeliveryNotice] = useState("");
+  // GL-3b: a deleted contract takes its row off the screen with it, so anything the delete has to tell
+  // the farmer cannot live in the row. This sits above the table, where the contract used to be.
+  const [repairNotice, setRepairNotice] = useState("");
   // No existing per-scope settings field is suitable, so this farmer decision is
   // intentionally limited to the open session instead of being hidden in another record.
   const [saleLimits, setSaleLimits] = useState<Record<string, number | null>>({});
@@ -970,6 +973,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
             }}
             onReceipt={setLastReceiptId}
           />}
+          {repairNotice && (
+            <p className="form-error grain-inline-error" role="status">{repairNotice}</p>
+          )}
           <div className="table-scroll">
             <table>
               <thead>
@@ -1019,7 +1025,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
                         {contract.delivery_start?.slice(5).replace("-", "/") ??
                           "—"}
                       </td>
-                      <td className="align-right numeric">{workspace.capabilities?.contract_deliveries ? <><strong>{preciseBushels.format(delivered)} / {preciseBushels.format(Math.max(0, remaining))} bu</strong>{remaining < 0 && <small className="negative-text">Over-delivered by {preciseBushels.format(-remaining)} bu</small>}</> : <strong>Tracking arrives with the next database update</strong>}<ContractActions contract={contract} workspace={workspace} services={services} autoFocusDelivery={deliveryIntent && contractIndex === 0} onSaved={async () => { whisper(); await refresh(); }} onDeliverySaved={async () => { await refresh(true); whisper(); }} onReceipt={setLastReceiptId} /></td>
+                      <td className="align-right numeric">{workspace.capabilities?.contract_deliveries ? <><strong>{preciseBushels.format(delivered)} / {preciseBushels.format(Math.max(0, remaining))} bu</strong>{remaining < 0 && <small className="negative-text">Over-delivered by {preciseBushels.format(-remaining)} bu</small>}</> : <strong>Tracking arrives with the next database update</strong>}<ContractActions contract={contract} workspace={workspace} services={services} autoFocusDelivery={deliveryIntent && contractIndex === 0} onSaved={async () => { whisper(); await refresh(); }} onDeliverySaved={async () => { await refresh(true); whisper(); }} onDeleted={setRepairNotice} onReceipt={setLastReceiptId} /></td>
                     </tr>
                     );
                   },
@@ -3167,7 +3173,7 @@ export function ContractEntry({
  * What is NOT offered here is deliberate: crop year, commodity, contract type and every price. Those
  * are the contract's identity and its math, and a basis or HTA price belongs to the one-shot
  * finalization rule. Getting one of those wrong is what Delete is for. */
-export function ContractRepair({ contract, workspace, services, onSaved }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; onSaved: () => Promise<void> }) {
+export function ContractRepair({ contract, workspace, services, onSaved, onDeleted }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; onSaved: () => Promise<void>; onDeleted?: (notice: string) => void }) {
   const [open, setOpen] = useState(false);
   const [buyer, setBuyer] = useState(contract.buyer);
   const [contractBushels, setContractBushels] = useState(String(contract.bushels));
@@ -3194,9 +3200,21 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
   // The fields are rebased on the contract as it now stands and the farmer is told, rather than the
   // draft being discarded silently. The reason is kept: it is their words, not a copy of the row. The
   // operation id is dropped, because this is a different correction from the one they started.
+  //
+  // The panel's own successful save is NOT such a change. It produces a new version too, but the prop
+  // does not carry it until the refresh lands -- so adopting the new version at save time only moved
+  // the mismatch: the prop still held the old one, this branch fired on the next render, and the
+  // farmer's own correction was reported back to them as somebody else's. The version this panel
+  // wrote is therefore remembered separately and recognised when the refresh finally brings it.
   const [seenVersion, setSeenVersion] = useState(contract.updated_at);
-  if (contract.updated_at !== seenVersion) {
+  const savedVersion = useRef<string | null>(null);
+  if (contract.updated_at !== seenVersion && contract.updated_at === savedVersion.current) {
+    // Our own save, arriving. Adopt it and keep the success message the farmer is reading.
     setSeenVersion(contract.updated_at);
+    savedVersion.current = null;
+  } else if (contract.updated_at !== seenVersion) {
+    setSeenVersion(contract.updated_at);
+    savedVersion.current = null;
     setBuyer(contract.buyer);
     setContractBushels(String(contract.bushels));
     setStart(contract.delivery_start ?? "");
@@ -3235,7 +3253,7 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
       // Adopt the version this save produced. The refresh below hands back the row we just wrote, and
       // without this the rebase branch would read our own save as somebody else's change and replace
       // "Contract corrected" with a warning. A version we did not write still warns, which is the point.
-      setSeenVersion(saved.updated_at);
+      savedVersion.current = saved.updated_at;
       setMessage("Contract corrected.");
       setReason("");
       await onSaved();
@@ -3248,7 +3266,13 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
       if (problem) { setMessage(problem); return }
       if (!(await confirmDialog({ title: `Delete the ${contract.buyer} contract?`, body: "The contract is removed from your position. The reason you gave is kept. This cannot be undone.", confirmLabel: "Delete contract", destructive: true }))) return;
       setSaving(true);
-      await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at);
+      const result = await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at);
+      // This row is about to vanish, so the news goes above the table. A contract that came from a
+      // firm offer sent that offer back to open; entering a replacement contract by hand instead of
+      // refilling the offer would leave the offer counted as pending AND fillable into a second one.
+      onDeleted?.(result.reopenedFirmOfferId
+        ? "Contract deleted. It came from a firm offer, and that offer is open again \u2014 fill it from Firm offers rather than entering a new contract, or the offer stays counted as pending."
+        : "Contract deleted.");
       await onSaved();
     } catch (error) { setMessage(farmerError(error, "delete this contract")) } finally { lock.current.release(); setSaving(false) }
   };
@@ -3274,7 +3298,7 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
   </div>;
 }
 
-export function ContractActions({ contract, workspace, services, autoFocusDelivery = false, onSaved, onDeliverySaved, onReceipt }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; autoFocusDelivery?: boolean; onSaved: () => Promise<void>; onDeliverySaved: () => Promise<void>; onReceipt: (id: string) => void }) {
+export function ContractActions({ contract, workspace, services, autoFocusDelivery = false, onSaved, onDeliverySaved, onDeleted, onReceipt }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; autoFocusDelivery?: boolean; onSaved: () => Promise<void>; onDeliverySaved: () => Promise<void>; onDeleted?: (notice: string) => void; onReceipt: (id: string) => void }) {
   const [price, setPrice] = useState(""); const [delivery, setDelivery] = useState(""); const [message, setMessage] = useState(""); const [saving, setSaving] = useState(false); const [deliveryUnconfirmed, setDeliveryUnconfirmed] = useState(false); const lock = useRef(createSubmitLock()); const deliveryDraft = useRef<GrainContractDelivery | null>(null);
   const missingLeg = contract.contract_type === "basis" ? "futures_price" : contract.contract_type === "hta" ? "basis" : null;
   const finalize = async () => { if (!missingLeg || !lock.current.acquire()) return; setSaving(true); try { if (price.trim() === "") throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const value = Number(price); if (!Number.isFinite(value) || (missingLeg === "futures_price" && value <= 0)) throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const shown = `${missingLeg === "basis" && value < 0 ? "-" : ""}$${Math.abs(value).toFixed(2)}/bu`; if (!(await confirmDialog({ title: `Set ${missingLeg === "basis" ? "basis" : "futures price"} to ${shown}?`, body: "This cannot be changed afterward. Add a contract note for any correction.", confirmLabel: "Set price", destructive: true }))) return; await services.grainRepository.finalizeContractPriceLeg(contract.id, missingLeg, value); setMessage("Price leg set. Add a contract note for any correction."); await onSaved() } catch (error) { setMessage(farmerError(error, "set this price")) } finally { lock.current.release(); setSaving(false) } };
@@ -3313,7 +3337,7 @@ export function ContractActions({ contract, workspace, services, autoFocusDelive
       setSaving(false);
     }
   };
-  return <div className="contract-actions">{missingLeg && contract[missingLeg] === null && <label>{missingLeg === "basis" ? "Set basis $/bu" : "Set futures price $/bu"}<input type="number" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_price_finalization} onClick={() => void finalize()}>{missingLeg === "basis" ? "Set basis" : "Set futures price"}</button>{!workspace.capabilities?.contract_price_finalization && <small>Price finalization arrives with the next database update. Reload the app after the update.</small>}</label>}<label>Delivered bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={delivery} disabled={deliveryUnconfirmed} autoFocus={autoFocusDelivery} onChange={(event) => setDelivery(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_deliveries} onClick={() => void record()}>{deliveryUnconfirmed ? "Retry delivery" : "Record delivery"}</button><small>Recording a delivery does not remove grain from a bin.</small>{!workspace.capabilities?.contract_deliveries && <small>Tracking arrives with the next database update. Reload the app after the update.</small>}</label>{message && <small>{message}</small>}<ContractRepair contract={contract} workspace={workspace} services={services} onSaved={onSaved} /></div>
+  return <div className="contract-actions">{missingLeg && contract[missingLeg] === null && <label>{missingLeg === "basis" ? "Set basis $/bu" : "Set futures price $/bu"}<input type="number" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_price_finalization} onClick={() => void finalize()}>{missingLeg === "basis" ? "Set basis" : "Set futures price"}</button>{!workspace.capabilities?.contract_price_finalization && <small>Price finalization arrives with the next database update. Reload the app after the update.</small>}</label>}<label>Delivered bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={delivery} disabled={deliveryUnconfirmed} autoFocus={autoFocusDelivery} onChange={(event) => setDelivery(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_deliveries} onClick={() => void record()}>{deliveryUnconfirmed ? "Retry delivery" : "Record delivery"}</button><small>Recording a delivery does not remove grain from a bin.</small>{!workspace.capabilities?.contract_deliveries && <small>Tracking arrives with the next database update. Reload the app after the update.</small>}</label>{message && <small>{message}</small>}<ContractRepair contract={contract} workspace={workspace} services={services} onSaved={onSaved} onDeleted={onDeleted} /></div>
 }
 
 export function Bins({
