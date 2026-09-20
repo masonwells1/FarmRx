@@ -3178,6 +3178,12 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const lock = useRef(createSubmitLock());
+  // One id for one correction attempt, held until that attempt succeeds. If the write commits but the
+  // response is lost, pressing Save again sends the same id, and the server reports the correction it
+  // already made instead of a stale-version error the farmer cannot tell apart from a failure.
+  // Minted on the first save, never during render: an id generator is shared and ordered, and taking
+  // one on every render of every contract row would shift the id the next real write gets.
+  const operationId = useRef<string | null>(null);
   const available = workspace.capabilities?.contract_edit_delete !== false;
   if (!available || !contractIsCorrectable(workspace, contract.id)) return null;
   const correct = async () => {
@@ -3197,7 +3203,9 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
       const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number });
       if (!Object.keys(changes).length) { setMessage("Nothing has changed on this contract yet."); return }
       setSaving(true);
-      await services.grainRepository.editContract(contract.id, reason, changes, contract.updated_at);
+      operationId.current ??= services.createGrainId();
+      await services.grainRepository.editContract(contract.id, reason, changes, contract.updated_at, operationId.current);
+      operationId.current = null;
       setMessage("Contract corrected.");
       setReason("");
       await onSaved();

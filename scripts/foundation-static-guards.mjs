@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 258')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 261')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -710,7 +710,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // Neither correction is ever queued: a queued edit would replay against a contract that may since
   // have taken a delivery, and a queued delete against one that no longer exists.
   const gl3bQueued = read(root, 'src/data/QueuedGrainRepository.ts')
-  requireText(errors, gl3bQueued, "async editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before correcting a contract.')", 'gl3b:correction-needs-a-connection')
+  requireText(errors, gl3bQueued, "async editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, operationId: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before correcting a contract.')", 'gl3b:correction-needs-a-connection')
   requireText(errors, gl3bQueued, "async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before deleting a contract.')", 'gl3b:correction-needs-a-connection')
   // An absent key keeps the stored value; only an explicit null clears one. A payload that named every
   // column would turn a buyer correction into a silent wipe of the window and the notes.
@@ -729,7 +729,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   if ((gl3bMigration.split("is distinct from p_expected_updated_at").length - 1) !== 2) errors.push('gl3b:correction-is-compare-and-swap')
   requireText(errors, read(root, 'src/data/grain.ts'), 'export function contractCorrectionDiff(', 'gl3b:only-changed-fields-are-sent')
   requireText(errors, grainModule, 'const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number });', 'gl3b:only-changed-fields-are-sent')
-  requireText(errors, grainModule, 'await services.grainRepository.editContract(contract.id, reason, changes, contract.updated_at);', 'gl3b:correction-is-compare-and-swap')
+  requireText(errors, grainModule, 'await services.grainRepository.editContract(contract.id, reason, changes, contract.updated_at, operationId.current);', 'gl3b:correction-is-compare-and-swap')
   requireText(errors, grainModule, 'await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at);', 'gl3b:correction-is-compare-and-swap')
   // The farm's own calendar day, not the database's. After UTC midnight an Illinois farm is still on
   // the previous evening, and an offer expiring that day is still fillable there.
@@ -741,6 +741,16 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, gl3bMigration, 'revoke update, delete on public.grain_contracts from authenticated;', 'gl3b:audited-actions-are-the-only-path')
   requireText(errors, gl3bMigration, 'drop policy if exists grain_contracts_update on public.grain_contracts;', 'gl3b:audited-actions-are-the-only-path')
   requireText(errors, gl3bMigration, 'drop policy if exists grain_contracts_delete on public.grain_contracts;', 'gl3b:audited-actions-are-the-only-path')
+  // A write that commits and loses its response must not read as a failure the farmer cannot resolve.
+  // The recognition has to come BEFORE the compare-and-swap, because a committed edit moved updated_at.
+  requireText(errors, gl3bMigration, "if exists (select 1 from public.grain_contract_audit a where a.farm_id = p_farm_id and a.operation_id = p_operation_id) then\n    return to_jsonb(v_before);", 'gl3b:correction-survives-a-lost-response')
+  if (gl3bMigration.indexOf('a.operation_id = p_operation_id') > gl3bMigration.indexOf('is distinct from p_expected_updated_at')) errors.push('gl3b:correction-survives-a-lost-response')
+  requireText(errors, gl3bMigration, 'create unique index grain_contract_audit_operation_idx', 'gl3b:correction-survives-a-lost-response')
+  requireText(errors, gl3bMigration, "if p_operation_id is null then raise exception 'a correction must carry its own operation id'; end if;", 'gl3b:correction-survives-a-lost-response')
+  requireText(errors, grainModule, 'const operationId = useRef<string | null>(null);', 'gl3b:correction-survives-a-lost-response')
+  // ??=, not =: a retry must reuse the id its first attempt used, or the server cannot recognise it.
+  requireText(errors, grainModule, 'operationId.current ??= services.createGrainId();', 'gl3b:correction-survives-a-lost-response')
+  requireText(errors, grainModule, 'contract.updated_at, operationId.current);\n      operationId.current = null;', 'gl3b:correction-survives-a-lost-response')
   if (/expires_on < current_date/.test(gl3bMigration)) errors.push('gl3b:offer-expiry-is-farm-local')
   // GL-3a made the crop and year picker permanent, so the sale form must not outlive a scope change:
   // a draft typed for one crop year would otherwise be saved under the next one.

@@ -67,7 +67,7 @@ do $$
 declare v_failed boolean;
 begin
   v_failed := false;
-  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','service role attempt','{"buyer":"Nope"}'::jsonb, now());
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','service role attempt','{"buyer":"Nope"}'::jsonb, now(), gen_random_uuid());
   exception when others then v_failed := true; end;
   if not v_failed then raise exception 'the service role edited a contract'; end if;
 
@@ -92,12 +92,12 @@ do $$
 declare v_failed boolean;
 begin
   v_failed := false;
-  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090',null,'{"buyer":"Corrected Buyer"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000090'));
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090',null,'{"buyer":"Corrected Buyer"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000090'), gen_random_uuid());
   exception when others then v_failed := true; end;
   if not v_failed then raise exception 'a contract was edited with no reason'; end if;
 
   v_failed := false;
-  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','   ','{"buyer":"Corrected Buyer"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000090'));
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','   ','{"buyer":"Corrected Buyer"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000090'), gen_random_uuid());
   exception when others then v_failed := true; end;
   if not v_failed then raise exception 'whitespace passed as a reason'; end if;
 
@@ -112,17 +112,17 @@ do $$
 declare v_failed boolean; v_buyer text; v_bushels numeric;
 begin
   v_failed := false;
-  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','zero bushels','{"bushels":0}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000090'));
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','zero bushels','{"bushels":0}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000090'), gen_random_uuid());
   exception when others then v_failed := true; end;
   if not v_failed then raise exception 'bushels of zero were accepted'; end if;
 
   v_failed := false;
-  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','blank buyer','{"buyer":"  "}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000090'));
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','blank buyer','{"buyer":"  "}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000090'), gen_random_uuid());
   exception when others then v_failed := true; end;
   if not v_failed then raise exception 'a blank buyer was accepted'; end if;
 
   v_failed := false;
-  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','backwards window','{"delivery_start":"2026-11-30","delivery_end":"2026-11-01"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000090'));
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090','backwards window','{"delivery_start":"2026-11-30","delivery_end":"2026-11-01"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000090'), gen_random_uuid());
   exception when others then v_failed := true; end;
   if not v_failed then raise exception 'a delivery window ending before it starts was accepted'; end if;
 
@@ -137,7 +137,7 @@ do $$
 declare v_failed boolean;
 begin
   v_failed := false;
-  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','fix the buyer','{"buyer":"Too Late"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000091'));
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','fix the buyer','{"buyer":"Too Late"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000091'), gen_random_uuid());
   exception when others then v_failed := true; end;
   if not v_failed then raise exception 'a contract with deliveries was edited'; end if;
 
@@ -157,7 +157,7 @@ begin
   perform public.edit_grain_contract(
     '00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000090',
     'buyer was typed wrong and the bushels were off by a truckload',
-    '{"buyer":"Corrected Buyer","bushels":9250,"delivery_end":null,"contract_number":"CN-7781"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000090'));
+    '{"buyer":"Corrected Buyer","bushels":9250,"delivery_end":null,"contract_number":"CN-7781"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000090'), gen_random_uuid());
 
   select * into v_row from public.grain_contracts where id='00000000-0000-4000-8000-000000000090';
   if v_row.buyer <> 'Corrected Buyer' then raise exception 'the buyer was not corrected'; end if;
@@ -242,7 +242,7 @@ begin
   if has_table_privilege('authenticated','public.grain_contract_audit','update') then raise exception 'a signed-in client can update audit rows'; end if;
   if has_table_privilege('authenticated','public.grain_contract_audit','delete') then raise exception 'a signed-in client can delete audit rows'; end if;
   if has_table_privilege('anon','public.grain_contract_audit','select') then raise exception 'an anonymous caller can read audit rows'; end if;
-  if has_function_privilege('anon','public.edit_grain_contract(uuid,uuid,text,jsonb,timestamptz)','execute') then raise exception 'an anonymous caller can edit a contract'; end if;
+  if has_function_privilege('anon','public.edit_grain_contract(uuid,uuid,text,jsonb,timestamptz,uuid)','execute') then raise exception 'an anonymous caller can edit a contract'; end if;
   if has_function_privilege('anon','public.delete_grain_contract(uuid,uuid,text,timestamptz)','execute') then raise exception 'an anonymous caller can delete a contract'; end if;
   if not (select relrowsecurity from pg_class where oid='public.grain_contract_audit'::regclass) then raise exception 'the audit table has no row-level security'; end if;
 end $$;
@@ -272,12 +272,12 @@ declare v_failed boolean; v_buyer text; v_audit_rows integer;
 begin
   v_audit_rows := (select count(*) from public.grain_contract_audit where grain_contract_id='00000000-0000-4000-8000-000000000091');
   v_failed := false;
-  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','from a stale page','{"buyer":"Stale Overwrite"}'::jsonb, now() - interval '1 day');
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','from a stale page','{"buyer":"Stale Overwrite"}'::jsonb, now() - interval '1 day', gen_random_uuid());
   exception when others then v_failed := sqlerrm = 'FARM_RX_STALE_WRITE'; end;
   if not v_failed then raise exception 'a stale expected version was accepted, or refused for the wrong reason'; end if;
 
   v_failed := false;
-  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','no version at all','{"buyer":"Stale Overwrite"}'::jsonb, null);
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','no version at all','{"buyer":"Stale Overwrite"}'::jsonb, null, gen_random_uuid());
   exception when others then v_failed := sqlerrm = 'FARM_RX_STALE_WRITE'; end;
   if not v_failed then raise exception 'a missing expected version was accepted'; end if;
 
@@ -328,6 +328,62 @@ begin
   if v_offer.status <> 'expired' then raise exception 'an offer that expired on the farm''s yesterday came back as %', v_offer.status; end if;
 end $$;
 
+-- ------------------------------------------------- 12b. a lost response is not a lost correction
+-- The write commits, the HTTP response never arrives, and the form still holds the old version. The
+-- farmer presses Save again. Without an operation id the second call is refused as stale, and there
+-- is no way to tell that apart from a correction that never happened.
+select set_config('request.jwt.claims','{"role":"authenticated","sub":"00000000-0000-4000-8000-00000000000d"}',false);
+select set_config('request.headers',jsonb_build_object('x-farm-rx-expected-user-id','00000000-0000-4000-8000-00000000000d','x-farm-rx-access-epochs',jsonb_build_object('00000000-0000-4000-8000-000000000072',1)::text)::text,false);
+set role authenticated;
+-- Each top-level statement below is its own transaction on purpose. now() is the TRANSACTION
+-- timestamp, so an insert and an edit inside one do-block would share it, updated_at would not move,
+-- and the stale check at the end would pass for the wrong reason. Splitting them is what makes the
+-- difference between "the retry was recognised" and "nothing changed" observable at all.
+create temporary table gl3_retry_state(operation uuid, stamp timestamptz);
+
+insert into public.grain_contracts(id,farm_id,crop_year,commodity_id,contract_type,buyer,bushels,cash_price)
+values ('00000000-0000-4000-8000-0000000000a1','00000000-0000-4000-8000-000000000072',2026,'corn_yellow','forward_cash','Retry Buyer',4000,4.5);
+
+insert into gl3_retry_state(operation, stamp)
+select gen_random_uuid(), updated_at from public.grain_contracts where id='00000000-0000-4000-8000-0000000000a1';
+
+do $$
+declare v_first jsonb; v_state gl3_retry_state%rowtype;
+begin
+  select * into v_state from gl3_retry_state;
+  v_first := public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','buyer typed wrong','{"buyer":"Retry Buyer Fixed"}'::jsonb, v_state.stamp, v_state.operation);
+  if v_first->>'buyer' <> 'Retry Buyer Fixed' then raise exception 'the first correction did not land'; end if;
+end $$;
+
+do $$
+declare v_retry jsonb; v_state gl3_retry_state%rowtype; v_failed boolean;
+begin
+  select * into v_state from gl3_retry_state;
+  if (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-0000000000a1') = v_state.stamp
+    then raise exception 'updated_at did not move, so this block cannot tell a recognised retry from a no-op'; end if;
+
+  -- the retry the farmer makes: same operation id, the version the page still holds
+  v_retry := public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','buyer typed wrong','{"buyer":"Retry Buyer Fixed"}'::jsonb, v_state.stamp, v_state.operation);
+  if v_retry->>'buyer' <> 'Retry Buyer Fixed' then raise exception 'the retry did not report the correction that had already landed'; end if;
+  if (select count(*) from public.grain_contract_audit where grain_contract_id='00000000-0000-4000-8000-0000000000a1') <> 1
+    then raise exception 'the retry wrote a second audit row for one correction'; end if;
+
+  -- a DIFFERENT correction from the same stale page is still refused; idempotency is not a bypass
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','something else','{"buyer":"Third Buyer"}'::jsonb, v_state.stamp, gen_random_uuid());
+  exception when others then v_failed := sqlerrm = 'FARM_RX_STALE_WRITE'; end;
+  if not v_failed then raise exception 'a new correction from a stale page was accepted'; end if;
+
+  -- and a correction with no operation id at all is refused outright
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','no operation id','{"buyer":"Fourth Buyer"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-0000000000a1'), null);
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'a correction with no operation id was accepted'; end if;
+end $$;
+
+drop table gl3_retry_state;
+reset role;
+
 -- ------------------------------------------------- 13. a worker without financial access is refused
 -- can_edit_farm admits a worker, but Grain is behind can_read_private_financials and these functions
 -- are security definer, so one fence alone would let a worker who kept a contract id reach past
@@ -347,7 +403,7 @@ begin
     then raise exception 'the worker fixture has financial access; this assertion proves nothing'; end if;
 
   v_failed := false;
-  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','worker attempt','{"buyer":"Worker Edit"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000091'));
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000091','worker attempt','{"buyer":"Worker Edit"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-000000000091'), gen_random_uuid());
   exception when others then v_failed := true; end;
   if not v_failed then raise exception 'a worker without financial access edited a contract'; end if;
 

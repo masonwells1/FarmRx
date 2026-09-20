@@ -186,7 +186,7 @@ export interface GrainRepository {
   reconcileHarvestActual(estimate: ProductionEstimate, harvestActual: number): Promise<void>
   saveContract(contract: GrainContract): Promise<void>
   finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number): Promise<void>
-  editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string): Promise<void>
+  editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, operationId: string): Promise<void>
   deleteContract(contractId: string, reason: string, expectedUpdatedAt: string): Promise<void>
   recordContractDelivery(delivery: GrainContractDelivery): Promise<void>
   saveMarketingPlanTarget(target: MarketingPlanTarget): Promise<void>

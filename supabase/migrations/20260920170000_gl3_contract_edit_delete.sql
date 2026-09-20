@@ -29,6 +29,11 @@ create table public.grain_contract_audit (
   before_row jsonb not null,
   after_row jsonb,
   reopened_firm_offer_id uuid,
+  -- The browser's own id for one correction attempt. A retry after a lost response carries the same
+  -- one, so the second call can recognise the first and report what it already did instead of a
+  -- stale-write error the farmer cannot interpret. Null on a delete, which is idempotent by its own
+  -- audit row instead; Postgres treats nulls as distinct, so the unique index below allows many.
+  operation_id uuid,
   actor_id uuid,
   created_at timestamptz not null default now(),
   constraint grain_contract_audit_after_row_by_action check (
@@ -37,6 +42,8 @@ create table public.grain_contract_audit (
 );
 create index grain_contract_audit_contract_idx
   on public.grain_contract_audit (farm_id, grain_contract_id, created_at desc);
+create unique index grain_contract_audit_operation_idx
+  on public.grain_contract_audit (farm_id, operation_id);
 
 alter table public.grain_contract_audit enable row level security;
 revoke all on public.grain_contract_audit from public, anon;
@@ -81,7 +88,7 @@ $fn$;
 comment on function public.grain_contract_has_deliveries(uuid, uuid) is
   'GL-3b: whether a contract has delivered bushels against it. A contract with deliveries is history, not a draft, and is neither editable nor deletable.';
 
-create or replace function public.edit_grain_contract(p_farm_id uuid, p_contract_id uuid, p_reason text, p_changes jsonb, p_expected_updated_at timestamptz)
+create or replace function public.edit_grain_contract(p_farm_id uuid, p_contract_id uuid, p_reason text, p_changes jsonb, p_expected_updated_at timestamptz, p_operation_id uuid)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $fn$
 declare
   v_before public.grain_contracts%rowtype;
@@ -104,8 +111,17 @@ begin
     raise exception 'a reason of 3 to 2000 characters is required to change a contract';
   end if;
 
+  if p_operation_id is null then raise exception 'a correction must carry its own operation id'; end if;
+
   select * into v_before from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id for update;
   if not found then raise exception 'contract does not belong to this farm'; end if;
+  -- This exact correction already landed; the response to it was lost, not the write. Report the
+  -- contract as it now stands rather than the stale-write error the check below would raise, which a
+  -- farmer reading "try again" cannot tell apart from a correction that never happened.
+  -- Deliberately before the compare-and-swap: a committed edit has already moved updated_at.
+  if exists (select 1 from public.grain_contract_audit a where a.farm_id = p_farm_id and a.operation_id = p_operation_id) then
+    return to_jsonb(v_before);
+  end if;
   -- Compare-and-swap, the same fence optimisticSave applies to every other mutable farm row. Two
   -- members can have this contract open at once; without it the second save silently reverses the
   -- first correction, and the audit would record both as deliberate.
@@ -135,15 +151,15 @@ begin
    where id = p_contract_id and farm_id = p_farm_id
   returning * into v_after;
 
-  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, actor_id)
-  values (p_farm_id, p_contract_id, 'edit', v_reason, to_jsonb(v_before), to_jsonb(v_after), auth.uid());
+  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, operation_id, actor_id)
+  values (p_farm_id, p_contract_id, 'edit', v_reason, to_jsonb(v_before), to_jsonb(v_after), p_operation_id, auth.uid());
 
   return to_jsonb(v_after);
 end $fn$;
-revoke all on function public.edit_grain_contract(uuid, uuid, text, jsonb, timestamptz) from public, anon;
-grant execute on function public.edit_grain_contract(uuid, uuid, text, jsonb, timestamptz) to authenticated;
+revoke all on function public.edit_grain_contract(uuid, uuid, text, jsonb, timestamptz, uuid) from public, anon;
+grant execute on function public.edit_grain_contract(uuid, uuid, text, jsonb, timestamptz, uuid) to authenticated;
 
-comment on function public.edit_grain_contract(uuid, uuid, text, jsonb, timestamptz) is
+comment on function public.edit_grain_contract(uuid, uuid, text, jsonb, timestamptz, uuid) is
   'GL-3b: correct a contract that has no deliveries, with a required reason recorded in grain_contract_audit. Crop year, commodity, contract type and pricing are not editable here; 0033 owns pricing.';
 
 create or replace function public.delete_grain_contract(p_farm_id uuid, p_contract_id uuid, p_reason text, p_expected_updated_at timestamptz)
