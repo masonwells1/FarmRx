@@ -327,6 +327,34 @@ begin
   if v_offer.status <> 'expired' then raise exception 'an offer that expired on the farm''s yesterday came back as %', v_offer.status; end if;
 end $$;
 
+-- ------------------------------------------------- 13. every farm-scoped table is epoch-fenced
+-- Migration 0040 requires the farm_access_epoch_guard trigger on EVERY public table carrying a
+-- farm_id. The PowerShell 0040 lane already checks this, but only in CI -- which is how GL-3b's new
+-- audit table reached a pull request red. The same query runs here so a missing guard on any future
+-- farm-scoped table is caught on this machine, before the push, not twenty minutes later.
+do $$
+declare v_missing text;
+begin
+  select string_agg(column_row.table_name, ', ' order by column_row.table_name) into v_missing
+  from information_schema.columns column_row
+  where column_row.table_schema = 'public' and column_row.column_name = 'farm_id'
+    and column_row.table_name <> 'farm_access_epochs'
+    and exists (
+      select 1 from pg_catalog.pg_class base_relation
+      join pg_catalog.pg_namespace base_namespace on base_namespace.oid = base_relation.relnamespace
+      where base_namespace.nspname = 'public' and base_relation.relname = column_row.table_name
+        and base_relation.relkind in ('r', 'p')
+    )
+    and not exists (
+      select 1 from pg_catalog.pg_trigger trigger_row
+      join pg_catalog.pg_class relation on relation.oid = trigger_row.tgrelid
+      join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
+      where namespace.nspname = 'public' and relation.relname = column_row.table_name
+        and trigger_row.tgname = 'farm_access_epoch_guard' and not trigger_row.tgisinternal
+    );
+  if v_missing is not null then raise exception 'farm-scoped tables without the access epoch guard: %', v_missing; end if;
+end $$;
+
 reset role;
 select set_config('request.headers','',false);
 select set_config('request.jwt.claims','',false);

@@ -46,6 +46,14 @@ create policy grain_contract_audit_select on public.grain_contract_audit
   for select to authenticated using (public.can_read_private_financials(farm_id));
 -- No insert, update or delete grant: the only writer is the definer RPCs below.
 
+-- Access-epoch fencing (migration 0040): a request whose farm access epoch is stale can never write
+-- a farm-scoped row, exactly like every other farm table. The RPCs below are security definer and
+-- already check can_edit_farm, but that is a different question from "is this browser's view of its
+-- own access still current", and 0040 requires every farm-scoped table to answer it.
+create trigger farm_access_epoch_guard
+before insert or update or delete on public.grain_contract_audit
+for each row execute function public.guard_row_farm_access_epoch();
+
 -- Append-only is enforced the way bin_transactions already enforces it: authenticated holds
 -- SELECT and nothing else, so no browser can rewrite a reason after the fact. The trigger adds
 -- a hard stop on rewriting a row in place even from an owner connection. It deliberately does
