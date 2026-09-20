@@ -74,7 +74,7 @@ import {
   validateBinTransaction,
   validateGrainBin,
 } from "./data/binLedger";
-import { isMarsBid, latestBasis, marsBidLabel } from "./data/basisMath";
+import { knownCounterparties, isMarsBid, latestBasis, marsBidLabel } from "./data/basisMath";
 import { GrainCostOfCarry } from "./GrainCostOfCarry";
 import {
   displayFirmOfferStatus,
@@ -776,6 +776,16 @@ export function GrainPage({ services }: { services: GrainServices }) {
               />
             ))}
           </section>
+          {/* GL-3: the way to add a second crop. Renders nothing when every crop assignment already has
+              an estimate. */}
+          <FirstEstimate
+            compact
+            workspace={workspace}
+            services={services}
+            onSaved={refresh}
+            onReceipt={setLastReceiptId}
+            receipt={receipt}
+          />
         </>
       )}
       {tabPath === "plan" && (
@@ -914,7 +924,20 @@ export function GrainPage({ services }: { services: GrainServices }) {
             </div>
             <SaveReceipt state={receipt} />
           </div>
-          {deliveryIntent ? <div className="grain-delivery-intent" role="status"><div><strong>Recording a grain delivery</strong><p>Pick the crop and year, then the contract below, and enter the delivered bushels. Nothing is written until you tap Record delivery.</p><label className="commodity-picker"><span>Crop and year</span><select value={selectedEstimate.id} onChange={(event) => setSelectedEstimateId(event.target.value)}>{workspace.production_estimates.map((estimate) => <option key={estimate.id} value={estimate.id}>{scopeLabel(workspace, estimate)}</option>)}</select></label></div><button className="secondary-action" type="button" onClick={() => setDeliveryIntent(false)}>Record a sale instead</button></div> : <ContractEntry
+          {/* GL-3: the crop and year picker belongs on the tab, not only in delivery mode. The table below
+              is filtered to the chosen scope, so without it a farmer reading Contracts could not tell which
+              crop year the list was showing, or change it. */}
+          {workspace.production_estimates.length > 0 && (
+            <label className="commodity-picker">
+              <span>Crop and year</span>
+              <select value={selectedEstimate.id} onChange={(event) => setSelectedEstimateId(event.target.value)}>
+                {workspace.production_estimates.map((estimate) => (
+                  <option key={estimate.id} value={estimate.id}>{scopeLabel(workspace, estimate)}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {deliveryIntent ? <div className="grain-delivery-intent" role="status"><div><strong>Recording a grain delivery</strong><p>Pick the crop and year above, then the contract below, and enter the delivered bushels. Nothing is written until you tap Record delivery.</p></div><button className="secondary-action" type="button" onClick={() => setDeliveryIntent(false)}>Record a sale instead</button></div> : <ContractEntry
             workspace={workspace}
             scope={selectedScope}
             services={services}
@@ -980,6 +1003,29 @@ export function GrainPage({ services }: { services: GrainServices }) {
                   },
                 )}
               </tbody>
+              {/* GL-3: a totals row, so the tab answers "how much have I sold, and how much is left to
+                  deliver" without the farmer adding the column up by hand. Totals cover the rows shown,
+                  which are the chosen crop and year. Over-delivery is not netted away: remaining is
+                  floored per contract exactly as each row shows it, so the total can never be made to
+                  look smaller by one contract that was over-delivered. */}
+              {scopeRows(workspace.grain_contracts, selectedScope).length > 0 && (
+                <tfoot>
+                  <tr>
+                    <th scope="row" colSpan={3}>Total for {scopeLabel(workspace, selectedScope)}</th>
+                    <td className="align-right numeric"><strong>{bushels.format(scopeRows(workspace.grain_contracts, selectedScope).reduce((sum, contract) => sum + contract.bushels, 0))}</strong></td>
+                    <td />
+                    <td />
+                    <td className="align-right numeric">
+                      {workspace.capabilities?.contract_deliveries ? (() => {
+                        const rows = scopeRows(workspace.grain_contracts, selectedScope);
+                        const deliveredTotal = rows.reduce((sum, contract) => sum + workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((inner, item) => inner + item.bushels, 0), 0);
+                        const remainingTotal = rows.reduce((sum, contract) => sum + Math.max(0, contract.bushels - workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((inner, item) => inner + item.bushels, 0)), 0);
+                        return <strong>{preciseBushels.format(deliveredTotal)} / {preciseBushels.format(remainingTotal)} bu</strong>;
+                      })() : <strong>—</strong>}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
         </section>
@@ -2141,18 +2187,23 @@ function AlertEmailSettings({
   );
 }
 
+/** GL-3: this was reachable only on a farm with no estimate at all, so a second crop could never be
+ * added. It now lists the crop assignments that have no estimate yet, and renders compactly on the
+ * Overview once the farm has its first one. The create path is unchanged. */
 export function FirstEstimate({
   workspace,
   services,
   onSaved,
   onReceipt,
   receipt,
+  compact = false,
 }: {
   workspace: GrainWorkspace;
   services: GrainServices;
   onSaved: () => Promise<void>;
   onReceipt: (id: string) => void;
   receipt: ReturnType<typeof useSaveReceipt>;
+  compact?: boolean;
 }) {
   const assignments = workspace.fields.crop_assignments;
   const [aph, setAph] = useState("");
@@ -2166,13 +2217,19 @@ export function FirstEstimate({
         </div>
       </section>
     );
+  // A crop that already has an estimate is not offered again; adding it twice would split one crop's
+  // position across two rows.
+  const covered = new Set(
+    workspace.production_estimates.map(
+      (estimate) => `${estimate.crop_year}|${estimate.commodity_id}`,
+    ),
+  );
   const grouped = new Map<string, (typeof assignments)[number]>();
-  for (const assignment of assignments)
-    if (!grouped.has(`${assignment.crop_year}|${assignment.commodity_id}`))
-      grouped.set(
-        `${assignment.crop_year}|${assignment.commodity_id}`,
-        assignment,
-      );
+  for (const assignment of assignments) {
+    const key = `${assignment.crop_year}|${assignment.commodity_id}`;
+    if (!covered.has(key) && !grouped.has(key)) grouped.set(key, assignment);
+  }
+  if (compact && grouped.size === 0) return null;
   const create = async (assignment: (typeof assignments)[number]) => {
     if (!submitLock.current.acquire()) return;
     const now = new Date().toISOString();
@@ -2208,13 +2265,14 @@ export function FirstEstimate({
     }
   };
   return (
-    <section className="page grain-page">
-      <div className="page-heading grain-heading">
+    <section className={compact ? "grain-section add-crop-card" : "page grain-page"}>
+      <div className={compact ? "section-heading" : "page-heading grain-heading"}>
         <div>
-          <h1>Start your grain estimate</h1>
+          {compact ? <h2>Add another crop</h2> : <h1>Start your grain estimate</h1>}
           <p>
-            Your live crop assignments are ready. Add an expected yield to
-            create the first estimate.
+            {compact
+              ? "These crop assignments have no grain estimate yet. Add an expected yield to start one."
+              : "Your live crop assignments are ready. Add an expected yield to create the first estimate."}
           </p>
         </div>
       </div>
@@ -2287,6 +2345,10 @@ export function PositionCard({
   const [actual, setActual] = useState(
     estimate.actual_bushels?.toString() ?? "",
   );
+  // GL-3: React-controlled, not a bare <details>. The card re-renders whenever the breakeven and
+  // profitability reads resolve, and an uncontrolled disclosure can lose the farmer's open state to one
+  // of those renders mid-read.
+  const [showMore, setShowMore] = useState(false);
   const [error, setError] = useState("");
   const submitLock = useRef(createSubmitLock());
   const [breakeven, setBreakeven] = useState<number | null>(null);
@@ -2497,24 +2559,14 @@ export function PositionCard({
           </button>
         </div>
       </div>
-      <p className="position-sentence">
-        {Math.round(pricedPct)}% fully priced at{" "}
-        {average === null ? "—" : money.format(average)} avg. Breakeven{" "}
-        {breakeven === null ? "—" : money.format(breakeven)}.{" "}
-        {bushels.format(
-          basisOpen.reduce((sum, contract) => sum + contract.bushels, 0),
-        )}{" "}
-        bu basis open and{" "}
-        {bushels.format(
-          futuresOpen.reduce((sum, contract) => sum + contract.bushels, 0),
-        )}{" "}
-        bu futures open. {bushels.format(outrightOpen)} bu unpriced
-        {plannedPrice === null
-          ? ". Add a cash price target to estimate it."
-          : ` using your cash price target of ${money.format(plannedPrice)}.`}
+      {/* GL-3: the card opened with a paragraph and nine numbers. It now leads with one line and three
+          tiles; everything else is still here, one tap away, and nothing was removed. */}
+      <p className="position-hero">
+        <strong>{Math.round(pricedPct)}% priced</strong>
+        {average === null ? "" : ` at ${money.format(average)} average`} ·{" "}
+        <strong>{bushels.format(outrightOpen)} bu</strong> still unpriced
       </p>
-      <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p><button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { void reconcileHarvest() }}>Use harvest total as Grain actual</button></section>
-      <div className="position-stats">
+      <div className="position-stats position-tiles">
         <Metric
           label="Fully priced"
           value={`${bushels.format(finalBushels)} bu`}
@@ -2534,88 +2586,121 @@ export function PositionCard({
               : "cash-target plan estimate"
           }
         />
-        <Metric
-          label="Insurance floor estimate"
-          value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`}
-          note={estimateNote}
-        />
       </div>
-      <p className="insurance-limit-note">
-        Revenue Protection pays money, not bushels — enterprise averaging, basis,
-        premiums, and your share can leave you exposed.
-      </p>
-      <div className="production-editor sale-limit-editor">
-        <label>
-          Your sale limit (bushels)
-          <input
-            type="number"
-            min="0"
-            step="1"
-            inputMode="numeric"
-            value={saleLimit ?? ""}
-            onChange={(event) => {
-              const value = event.target.value.trim();
-              onSaleLimitChange(value === "" ? null : Number(value));
-            }}
-            onBlur={() => onSaleLimitCommit?.()}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                onSaleLimitCommit?.();
-              }
-            }}
-          />
-          <small>{saleLimitPersisted ? "Saved for this farm; it is your limit, not an insurance guarantee." : "Used only in this open session; it is your limit, not an insurance guarantee."}</small>
-        </label>
-        <Metric label="Insurance estimate guarantee" value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`} note={estimateNote} />
-        <Metric label="Already contracted" value={`${bushels.format(contractedBushels)} bu`} note="Signed contracts" />
-        <Metric label="Pending offers" value={`${bushels.format(pendingOffers)} bu`} note="Open firm offers; not sold yet" />
-        <Metric label="Insurance estimate remaining" value={remainingEstimate === null ? "Blocked" : `${bushels.format(remainingEstimate)} bu`} note={savedCoverageBlocked ? unsupportedCoverageMessage : "Guarantee − contracted − pending; never below zero"} />
-        <Metric label="Your sale limit remaining" value={remainingSaleLimit === null ? "Set your own sale limit" : `${bushels.format(remainingSaleLimit)} bu`} note={saleLimit === null ? "Set your own sale limit to plan sales." : `${bushels.format(saleLimit)} limit − contracted − pending`} />
-      </div>
-      {pendingOffers > 0 && (
-        <p className="pending-offer-line">
-          <b className="numeric">{bushels.format(pendingOffers)} bu</b> on firm
-          offer — pending, not sold.
-        </p>
-      )}
-      <div className="production-editor">
-        <label>
-          Planted acres
-          <strong>
-            {estimate.planted_acres === null
-              ? "—"
-              : `${estimate.planted_acres.toLocaleString()} ac`}
-          </strong>
-        </label>
-        <label>
-          APH / expected yield
-          <input
-            type="number"
-            min="0.01"
-            step="any"
-            value={aph}
-            onChange={(event) => setAph(event.target.value)}
-          />
-        </label>
-        <label>
-          Actual bushels
-          <input
-            type="number"
-            min="0"
-            step="1"
-            value={actual}
-            placeholder="Enter at harvest"
-            onChange={(event) => setActual(event.target.value)}
-          />
-        </label>
+      <div className="position-more">
         <button
           type="button"
-          className="secondary-action"
-          onClick={() => void saveProduction(buildProductionSaveInput(estimate, aph, actual))}
+          className="position-more-toggle"
+          aria-expanded={showMore}
+          onClick={() => setShowMore((value) => !value)}
         >
-          Save production
+          {showMore ? "Hide details" : "More details"}
         </button>
+        {showMore && (
+        <div className="position-more-body">
+        <p className="position-sentence">
+          {Math.round(pricedPct)}% fully priced at{" "}
+          {average === null ? "—" : money.format(average)} avg. Breakeven{" "}
+          {breakeven === null ? "—" : money.format(breakeven)}.{" "}
+          {bushels.format(
+            basisOpen.reduce((sum, contract) => sum + contract.bushels, 0),
+          )}{" "}
+          bu basis open and{" "}
+          {bushels.format(
+            futuresOpen.reduce((sum, contract) => sum + contract.bushels, 0),
+          )}{" "}
+          bu futures open. {bushels.format(outrightOpen)} bu unpriced
+          {plannedPrice === null
+            ? ". Add a cash price target to estimate it."
+            : ` using your cash price target of ${money.format(plannedPrice)}.`}
+        </p>
+        <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p><button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { void reconcileHarvest() }}>Use harvest total as Grain actual</button></section>
+        <div className="position-stats">
+          <Metric
+            label="Insurance floor estimate"
+            value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`}
+            note={estimateNote}
+          />
+        </div>
+        <p className="insurance-limit-note">
+          Revenue Protection pays money, not bushels — enterprise averaging, basis,
+          premiums, and your share can leave you exposed.
+        </p>
+        <div className="production-editor sale-limit-editor">
+          <label>
+            Your sale limit (bushels)
+            <input
+              type="number"
+              min="0"
+              step="1"
+              inputMode="numeric"
+              value={saleLimit ?? ""}
+              onChange={(event) => {
+                const value = event.target.value.trim();
+                onSaleLimitChange(value === "" ? null : Number(value));
+              }}
+              onBlur={() => onSaleLimitCommit?.()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onSaleLimitCommit?.();
+                }
+              }}
+            />
+            <small>{saleLimitPersisted ? "Saved for this farm; it is your limit, not an insurance guarantee." : "Used only in this open session; it is your limit, not an insurance guarantee."}</small>
+          </label>
+          <Metric label="Insurance estimate guarantee" value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`} note={estimateNote} />
+          <Metric label="Already contracted" value={`${bushels.format(contractedBushels)} bu`} note="Signed contracts" />
+          <Metric label="Pending offers" value={`${bushels.format(pendingOffers)} bu`} note="Open firm offers; not sold yet" />
+          <Metric label="Insurance estimate remaining" value={remainingEstimate === null ? "Blocked" : `${bushels.format(remainingEstimate)} bu`} note={savedCoverageBlocked ? unsupportedCoverageMessage : "Guarantee − contracted − pending; never below zero"} />
+          <Metric label="Your sale limit remaining" value={remainingSaleLimit === null ? "Set your own sale limit" : `${bushels.format(remainingSaleLimit)} bu`} note={saleLimit === null ? "Set your own sale limit to plan sales." : `${bushels.format(saleLimit)} limit − contracted − pending`} />
+        </div>
+        {pendingOffers > 0 && (
+          <p className="pending-offer-line">
+            <b className="numeric">{bushels.format(pendingOffers)} bu</b> on firm
+            offer — pending, not sold.
+          </p>
+        )}
+        <div className="production-editor">
+          <label>
+            Planted acres
+            <strong>
+              {estimate.planted_acres === null
+                ? "—"
+                : `${estimate.planted_acres.toLocaleString()} ac`}
+            </strong>
+          </label>
+          <label>
+            APH / expected yield
+            <input
+              type="number"
+              min="0.01"
+              step="any"
+              value={aph}
+              onChange={(event) => setAph(event.target.value)}
+            />
+          </label>
+          <label>
+            Actual bushels
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={actual}
+              placeholder="Enter at harvest"
+              onChange={(event) => setActual(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => void saveProduction(buildProductionSaveInput(estimate, aph, actual))}
+          >
+            Save production
+          </button>
+        </div>
+        </div>
+        )}
       </div>
       {error && (
         <p className="form-error grain-inline-error" role="alert">
@@ -2826,14 +2911,9 @@ export function ContractEntry({
   saleLimit: number | null;
   onReceipt: (id: string) => void;
 }) {
-  const buyers = [
-    ...new Set([
-      ...workspace.cash_bids
-        .filter((bid) => !isMarsBid(bid))
-        .map((bid) => bid.elevator),
-      ...(initialOffer ? [initialOffer.buyer] : []),
-    ]),
-  ];
+  // GL-3: suggestions, not the only options. Existing contract buyers count too, so the second sale to
+  // a buyer never has to be retyped from scratch.
+  const buyers = knownCounterparties(workspace, [initialOffer?.buyer]);
   const preset = initialOffer
     ? offerToContract(
         initialOffer,
@@ -2841,7 +2921,7 @@ export function ContractEntry({
         new Date().toISOString(),
       )
     : null;
-  const [buyer, setBuyer] = useState(initialOffer?.buyer ?? buyers[0] ?? "");
+  const [buyer, setBuyer] = useState(initialOffer?.buyer ?? "");
   const [type, setType] = useState<GrainContractType>(
     preset?.contract_type ?? "forward_cash",
   );
@@ -2922,14 +3002,20 @@ export function ContractEntry({
     <form className="contract-entry" onSubmit={(event) => void submit(event)}>
       <label>
         <span>Buyer</span>
-        <select
+        <input
+          required
+          type="text"
+          list="contract-buyer-suggestions"
+          placeholder="Buyer or elevator"
+          maxLength={200}
           value={buyer}
           onChange={(event) => setBuyer(event.target.value)}
-        >
+        />
+        <datalist id="contract-buyer-suggestions">
           {buyers.map((item) => (
-            <option key={item}>{item}</option>
+            <option key={item} value={item} />
           ))}
-        </select>
+        </datalist>
       </label>
       <label>
         <span>Type</span>
@@ -3632,7 +3718,7 @@ function Basis({
   services: GrainServices;
   onSaved: () => Promise<void>;
 }) {
-  const [elevator, setElevator] = useState("Cargill - Olney");
+  const [elevator, setElevator] = useState("");
   const [commodity, setCommodity] = useState("corn_yellow");
   const [basis, setBasis] = useState("");
   const [cashPrice, setCashPrice] = useState("");
@@ -3729,21 +3815,24 @@ function Basis({
         </div>
       </div>
       <form className="basis-entry" onSubmit={(event) => void submit(event)}>
-        <select
+        {/* GL-3: free text with suggestions, not a dropdown. A farm with no bids yet had an empty list
+            and no way to record its first one. GL-004 still holds: knownCounterparties never offers a
+            USDA market location as somewhere to save a manual bid. */}
+        <input
+          required
+          type="text"
+          list="basis-elevator-suggestions"
+          aria-label="Elevator"
+          placeholder="Elevator"
+          maxLength={200}
           value={elevator}
           onChange={(event) => setElevator(event.target.value)}
-        >
-          {[
-            ...new Set(
-              // GL-004: feed rows are display-only; their USDA market locations are never offered as an elevator to save against.
-              workspace.cash_bids
-                .filter((bid) => !isMarsBid(bid))
-                .map((bid) => bid.elevator),
-            ),
-          ].map((item) => (
-            <option key={item}>{item}</option>
+        />
+        <datalist id="basis-elevator-suggestions">
+          {knownCounterparties(workspace).map((item) => (
+            <option key={item} value={item} />
           ))}
-        </select>
+        </datalist>
         <select
           value={commodity}
           onChange={(event) => setCommodity(event.target.value)}

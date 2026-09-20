@@ -445,6 +445,22 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .position-stats > div { display: grid; gap: 2px; min-height: 88px; padding: 11px 12px; border-right: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); }
 .position-stats span, .position-stats small { color: var(--matte-gray); font-size: 18px; font-weight: 600; }
 .position-stats strong { color: var(--charcoal); font-size: 18px; line-height: 1.2; }
+
+/* GL-3: the position card leads with one line and three tiles; the rest is one tap away. Nothing was
+   removed, so the disclosure has to be comfortable to open on a phone and obvious that it holds more. */
+.position-hero { margin: 18px 0 14px; font-family: var(--brand-font); font-size: 22px; font-weight: 600; line-height: 1.35; }
+.position-hero strong { font-weight: 700; }
+.position-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.position-more { margin: 16px 0 4px; border-top: 1px solid var(--hairline); }
+.position-more-toggle { display: block; width: 100%; min-height: 48px; padding: 14px 2px; border: 0; background: none; font: inherit; font-size: 18px; font-weight: 600; text-align: left; color: var(--deep-green, var(--charcoal)); cursor: pointer; }
+.position-more-toggle:focus-visible { outline: 2px solid var(--charcoal); outline-offset: 2px; }
+.position-more-body { border-top: 1px solid var(--hairline); }
+.position-more .position-sentence { min-height: 0; }
+.add-crop-card { padding: 20px; }
+@media (max-width: 640px) {
+  .position-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .position-hero { font-size: 20px; }
+}
 .position-foot { margin-top: 14px; color: var(--matte-gray); font-size: 18px; }
 .position-foot strong { color: var(--charcoal); }
 .position-foot em { color: var(--deep-green); font-style: normal; font-weight: 700; }

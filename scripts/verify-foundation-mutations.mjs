@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 203
+const expectedMutationCount = 212
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -616,6 +616,34 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('checks these on the server about every', 'checks these when you open Grain, about every'))
   detected('the page goes back to calling server-checked alerts check-on-open', 'gl2:true-schedule-stated')
+  reset()
+  // GL-3: the dead ends stay closed.
+  mutate('src/data/basisMath.ts', (source) => source.replace('export function knownCounterparties(', 'export function knownCounterpartiesRenamed('))
+  detected('the shared counterparty suggestions disappear', 'gl3:suggestions-are-shared')
+  reset()
+  mutate('src/data/basisMath.ts', (source) => source.replace('...workspace.cash_bids.filter((bid) => !isMarsBid(bid)).map((bid) => bid.elevator),', '...workspace.cash_bids.map((bid) => bid.elevator),'))
+  detected('a USDA market location is suggested as a buyer', 'gl3:suggestions-exclude-feed')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('const [elevator, setElevator] = useState("");', 'const [elevator, setElevator] = useState("Cargill - Olney");'))
+  detected('a buyer is hardcoded into the bid form again', 'gl3:no-hardcoded-buyer')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('list="basis-elevator-suggestions"', 'readOnly'))
+  detected('the elevator field stops taking a new name', 'gl3:elevator-is-free-text')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('list="contract-buyer-suggestions"', 'readOnly'))
+  detected('the buyer field stops taking a new name', 'gl3:buyer-is-free-text')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('className="position-more-toggle"', 'className="position-more-open"'))
+  detected('the position card loses its More details disclosure', 'gl3:position-card-discloses')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('<h2>Add another crop</h2>', '<h2>Start your grain estimate</h2>'))
+  detected('a second crop becomes unreachable again', 'gl3:second-crop-reachable')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('<tfoot>', '<tfoot hidden>').replace('</tfoot>', '</tfoot>'))
+  detected('the contracts totals row is removed', 'gl3:contract-totals-row')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('sum + Math.max(0, contract.bushels - workspace.grain_contract_deliveries', 'sum + (contract.bushels - workspace.grain_contract_deliveries'))
+  detected('one over-delivered contract shrinks the farm total remaining', 'gl3:totals-never-net-over-delivery')
   if (mutationCount !== expectedMutationCount) throw new Error(`Foundation mutation count drifted: expected ${expectedMutationCount}, observed ${mutationCount}.`)
   console.log(`Foundation mutation drill: PASS (${mutationCount}/${expectedMutationCount} controlled mutations turned the gate red)`)
 } finally {

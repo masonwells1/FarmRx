@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 203')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 212')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -587,6 +587,22 @@ export function foundationStaticGuard(root = process.cwd()) {
   const grainModule = read(root, 'src/GrainModule.tsx')
   requireText(errors, grainModule, 'checks these on the server about every', 'gl2:true-schedule-stated')
   if (/Check-on-open/.test(grainModule)) errors.push('gl2:true-schedule-stated')
+
+  // GL-3: the dead ends. Both counterparty fields accept free text with suggestions, no buyer or
+  // elevator is hardcoded, the position card leads with a disclosure, and a second crop is reachable.
+  const gl3BasisMath = read(root, 'src/data/basisMath.ts')
+  requireText(errors, gl3BasisMath, 'export function knownCounterparties(', 'gl3:suggestions-are-shared')
+  requireText(errors, gl3BasisMath, "...workspace.cash_bids.filter((bid) => !isMarsBid(bid)).map((bid) => bid.elevator),", 'gl3:suggestions-exclude-feed')
+  if (/Cargill/.test(grainModule)) errors.push('gl3:no-hardcoded-buyer')
+  requireText(errors, grainModule, 'list="basis-elevator-suggestions"', 'gl3:elevator-is-free-text')
+  requireText(errors, grainModule, 'list="contract-buyer-suggestions"', 'gl3:buyer-is-free-text')
+  requireText(errors, grainModule, 'className="position-more-toggle"', 'gl3:position-card-discloses')
+  requireText(errors, grainModule, '{showMore ? "Hide details" : "More details"}', 'gl3:position-card-discloses')
+  requireText(errors, grainModule, '<h2>Add another crop</h2>', 'gl3:second-crop-reachable')
+  requireText(errors, grainModule, '<tfoot>', 'gl3:contract-totals-row')
+  // The totals row floors each contract's remaining exactly as its own row does, so one over-delivered
+  // contract can never make the farm's remaining look smaller than it is.
+  requireText(errors, grainModule, 'sum + Math.max(0, contract.bushels - workspace.grain_contract_deliveries', 'gl3:totals-never-net-over-delivery')
   return errors
 }
 

@@ -9,7 +9,7 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import { getSyncStatus } from './syncStatus'
 import { getSaveReceipt } from '../lib/saveReceipt'
 import { readNeedsAttention } from './needsAttentionStore'
-import { isMarsBid, latestBasis, marsBidLabel } from './basisMath'
+import { isMarsBid, knownCounterparties, latestBasis, marsBidLabel } from './basisMath'
 import { farmerError } from '../lib/farmerErrors'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from './binLedger'
 import { deriveBinOnHand } from './binLedger'
@@ -419,6 +419,27 @@ async function run() {
     offline = false
     await queued.replayCurrent()
     assert((settingsGateway.state.bundle.grain_sale_limits[0] as GrainSaleLimit).sale_limit_bushels === 70_000 && parseGrainQueue(queueStorage.values.get(grainWriteQueueKey(supabaseConfig.projectRef, uid(10), farm)) ?? '{"version":1,"entries":[]}').entries.length === 0, 'Replay must write the queued sale limit and drain the queue.')
+  }
+  // 21 (GL-3): the type-ahead suggestions behind the buyer and elevator fields. Both were dropdowns
+  // that a farm with no history could not complete at all; the feed fence still holds inside them.
+  {
+    const bid = (elevator: string, extra: Record<string, unknown> = {}) => ({ elevator, notes: null, ...extra })
+    const suggestions = knownCounterparties({
+      cash_bids: [
+        bid('Cargill - Olney'),
+        bid('  Cargill - Olney  '),
+        bid('ADM - Mt. Carmel'),
+        bid('Iowa Interior', { feed_source: 'usda_mars' }),
+        bid('Cedar Rapids', { notes: '[USDA MARS 2850 · Iowa]' }),
+        bid('   '),
+      ] as never,
+      grain_contracts: [{ buyer: 'Premier White Corn' }, { buyer: 'ADM - Mt. Carmel' }],
+    }, ['Bunge', null, undefined, ''])
+    assert(
+      JSON.stringify(suggestions) === JSON.stringify(['ADM - Mt. Carmel', 'Bunge', 'Cargill - Olney', 'Premier White Corn']),
+      `GL-3: suggestions must be the farm's own counterparties, trimmed, de-duplicated and sorted, never a USDA market location (saw ${JSON.stringify(suggestions)}).`,
+    )
+    assert(!knownCounterparties({ cash_bids: [bid('Iowa Interior', { feed_source: 'usda_mars' })] as never, grain_contracts: [] }).length, 'GL-3: a farm whose only bids are feed rows must be offered no suggestions at all.')
   }
   console.log('SupabaseGrainRepository regressions passed.')
 }

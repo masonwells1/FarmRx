@@ -1478,8 +1478,15 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   await page.goto('/today')
   await page.getByRole('link', { name: /^Grain: Corn 2026: 35% sold/ }).click()
   await expect(page).toHaveURL('http://127.0.0.1:4173/grain')
-  await expect(page.getByText('Already contracted')).toBeVisible()
-  await expect(page.getByText('5,320 bu', { exact: true }).first()).toBeVisible()
+  // GL-3: the card leads with one line and three tiles. The same 35% the grain line quoted is the first
+  // thing on it, and the detail the farmer used to have to read past is one tap away, not gone.
+  const positionCard = page.locator('article.position-card').first()
+  await expect(positionCard.getByText('35% priced', { exact: true })).toBeVisible()
+  await expect(positionCard.getByText('Fully priced', { exact: true })).toBeVisible()
+  await expect(positionCard.getByText('Already contracted')).toBeHidden()
+  await positionCard.getByRole('button', { name: 'More details' }).click()
+  await expect(positionCard.getByText('Already contracted')).toBeVisible()
+  await expect(positionCard.getByText('5,320 bu', { exact: true }).first()).toBeVisible()
   // GL-1: on the storage tab the feed row is named for its report and geography, and a farm without a market region is told how to get bids.
   await page.goto('/grain/storage')
   await expect(page.getByText(/USDA MARS 2850 · Iowa, display-only; last dated 2026-07-15\./)).toBeVisible()

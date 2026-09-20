@@ -23,3 +23,25 @@ export function latestBasis(workspace: GrainWorkspace, scope: PositionScope) {
     .filter((bid) => !isMarsBid(bid) && bid.farm_id === scope.farm_id && bid.commodity_id === scope.commodity_id)
     .sort((left, right) => right.bid_date.localeCompare(left.bid_date))[0]?.basis ?? 0
 }
+
+/** GL-3: the buyers and elevators this farm has actually dealt with, for the type-ahead suggestions on
+ * the manual bid and contract forms. Replaces two dropdowns that were empty on a farm with no history
+ * and so could not be completed at all.
+ *
+ * A USDA MARS market location is never suggested. A feed row is display-only history; its location is a
+ * USDA reporting point, not a place this farm sells grain, and offering it would invite a manual bid or
+ * a contract saved against a counterparty that does not exist. Both forms still accept free text, so a
+ * new buyer never needs a row to exist first. */
+export function knownCounterparties(
+  workspace: { cash_bids: Array<Pick<CashBid, 'elevator' | 'notes'> & Partial<Pick<CashBid, 'feed_source'>>>; grain_contracts: Array<{ buyer: string }> },
+  extra: Array<string | null | undefined> = [],
+): string[] {
+  const names = [
+    ...workspace.cash_bids.filter((bid) => !isMarsBid(bid)).map((bid) => bid.elevator),
+    ...workspace.grain_contracts.map((contract) => contract.buyer),
+    ...extra,
+  ]
+    .map((name) => (typeof name === 'string' ? name.trim() : ''))
+    .filter((name) => name.length > 0)
+  return [...new Set(names)].sort((left, right) => left.localeCompare(right))
+}
