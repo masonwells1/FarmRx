@@ -96,7 +96,7 @@ export interface GrainContractCorrection {
  * offer back to open, and the farmer has to know: the correction panel tells them to enter the
  * contract again, and doing that without refilling the offer leaves the offer counted as pending and
  * still fillable into a second contract. */
-export interface ContractDeleteResult { reopenedFirmOfferId: string | null }
+export interface ContractDeleteResult { reopenedFirmOfferId: string | null; reopenedFirmOfferStatus: string | null }
 
 export const CONTRACT_REPAIR_PENDING = 'Correcting a contract arrives with the next database update.'
 

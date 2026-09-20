@@ -505,3 +505,34 @@ GL-031 adopted the saved version with `setSeenVersion(saved.updated_at)` at save
 - **Guards:** `gl3b:own-save-is-not-a-concurrent-change` re-pinned to the separate-ref form, and `gl3b:a-reopened-offer-is-surfaced`. Net three mutations, 271 → 274.
 - **The count was wrong first:** I wrote 275 expecting four new mutations, but one of the four replaced an existing one, so the real figure is 274 — and the drill said so rather than letting it pass. Recorded because a mutation count is only worth keeping if it is the true one.
 - **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 274/274; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**. CI remains the authority.
+
+## GL-034 — Foundation green at last, and findings 31 to 33 on `9217da9`
+
+- **Date/time:** 2026-09-20 14:45 -05:00 (`America/Chicago`).
+- **Foundation is green.** Run 272 on `54992f5` and run 273 on `1855089` both completed **success**, read from the run conclusions rather than inferred from a notification. That clears all three PowerShell lanes this tranche kept tripping — 0040's epoch guard, 0033's pricing probe and 0043's definer allowlist — and confirms those three repairs, which until now had only local evidence behind them.
+- **Trigger:** Codex reviewed `9217da9` and returned three P2s. All verified before acting; all real; all three are consequences of repairs in the two commits before.
+
+### Finding 31 — an expired offer reported as reopened
+
+GL-033's notice treats any returned offer id as "open again". But `delete_grain_contract` sets an offer whose expiry has already passed to `expired`, and returns its id all the same. The screen would then send the farmer to Firm offers to refill something that cannot be filled and is not counted as pending.
+
+- **Repair:** the delete returns the offer's resulting **status** alongside its id, and the notice has three forms: no offer, an offer now open (refill it), an offer expired (enter a new contract, or renew the offer first). The id alone never carried enough to know what to say.
+
+### Finding 32 — a delete retry lost the guidance entirely
+
+The idempotent path returned `reopened_firm_offer_id: null` unconditionally. So a delete whose response was lost reported only "Contract deleted", and the farmer — following the panel's own advice to enter the contract again — would leave that offer open and fillable. Exactly the double-sale finding 29 fixed, reachable again through the retry path.
+
+- **Repair:** the retry reads the reopened id from the audit row it already found, and reports the offer's current status with it. A retry owes the same answer as the first call.
+
+### Finding 33 — a replay handed back the wrong row
+
+The edit replay returned `v_before`, the row **as it now stands**. If another member corrected the contract between the lost response and the retry, that is *their* version — and the browser would record it as the version its own save wrote, skip rebasing, and then overwrite their work with the values it still held. Finding 23's bug, arriving through finding 22's door.
+
+- **Repair:** the replay returns the audit row's `after_row` — the row that operation actually produced. Any newer version is then detected as newer and rebased normally.
+- **Its assertion had to change shape too:** simulating "another member corrected it" with a direct `UPDATE` failed on the very revoke GL-027 added. It now goes through `edit_grain_contract`, which is how a real second member would do it — a better test for having been forced.
+
+### Together
+
+- **Guards:** `gl3b:a-reopened-offer-is-surfaced` extended to the status, the expired wording and the retry; `gl3b:a-retry-must-be-the-same-correction` extended to `after_row`. Four mutations, 274 → 278.
+- **The count and two pins drifted and the gates caught all three** — the replay no longer returns `to_jsonb(v_before)` and the repository result gained a field, so two `requireText` pins and one mutation target were stale. Recorded because that is the drill doing its job on my own edits, not on hypothetical ones.
+- **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 278/278; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**.

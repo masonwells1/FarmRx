@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 274
+const expectedMutationCount = 278
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -801,11 +801,23 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace('if (contract.updated_at !== seenVersion && contract.updated_at === savedVersion.current) {', 'if (false) {'))
   detected('the panel stops recognising the version its own save wrote', 'gl3b:own-save-is-not-a-concurrent-change')
   reset()
-  mutate('src/data/SupabaseGrainRepository.ts', (source) => source.replace('return { reopenedFirmOfferId: reopened }', 'return { reopenedFirmOfferId: null }'))
+  mutate('src/data/SupabaseGrainRepository.ts', (source) => source.replace('return { reopenedFirmOfferId: reopened, reopenedFirmOfferStatus: status }', 'return { reopenedFirmOfferId: null, reopenedFirmOfferStatus: null }'))
   detected('the offer a deleted contract reopened never reaches the screen', 'gl3b:a-reopened-offer-is-surfaced')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('fill it from Firm offers rather than entering a new contract', 'enter the contract again'))
   detected('the farmer is told to enter a replacement contract and leave the offer pending', 'gl3b:a-reopened-offer-is-surfaced')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("'reopened_firm_offer_status', (select o.status::text from public.firm_offers o where o.id = v_reopened and o.farm_id = p_farm_id),\n", ""))
+  detected('the delete stops reporting whether the offer actually reopened', 'gl3b:a-reopened-offer-is-surfaced')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('result.reopenedFirmOfferStatus === "open"', 'true'))
+  detected('an expired offer is reported to the farmer as open and fillable', 'gl3b:a-reopened-offer-is-surfaced')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("'reopened_firm_offer_id', v_replay.reopened_firm_offer_id,", "'reopened_firm_offer_id', null,"))
+  detected('a delete retry loses the offer the delete reopened', 'gl3b:a-reopened-offer-is-surfaced')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('      return v_replay.after_row;', '      return to_jsonb(v_before);'))
+  detected("a replay hands back a later member's version as this operation's own", 'gl3b:a-retry-must-be-the-same-correction')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('<label>Contract note<textarea value={notes}', '<label hidden>Contract note<textarea value={notes}'))
   detected('the contract note price finalization tells the farmer to add is unreachable', 'gl3b:a-contract-note-is-reachable')

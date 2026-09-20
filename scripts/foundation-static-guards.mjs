@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 274')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 278')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -744,7 +744,6 @@ export function foundationStaticGuard(root = process.cwd()) {
   // A write that commits and loses its response must not read as a failure the farmer cannot resolve.
   // The recognition has to come BEFORE the compare-and-swap, because a committed edit moved updated_at.
   requireText(errors, gl3bMigration, 'select * into v_replay from public.grain_contract_audit a where a.farm_id = p_farm_id and a.operation_id = p_operation_id;\n  if found then', 'gl3b:correction-survives-a-lost-response')
-  requireText(errors, gl3bMigration, '      return to_jsonb(v_before);', 'gl3b:correction-survives-a-lost-response')
   if (gl3bMigration.indexOf('a.operation_id = p_operation_id') > gl3bMigration.indexOf('is distinct from p_expected_updated_at')) errors.push('gl3b:correction-survives-a-lost-response')
   requireText(errors, gl3bMigration, 'create unique index grain_contract_audit_operation_idx', 'gl3b:correction-survives-a-lost-response')
   requireText(errors, gl3bMigration, "if p_operation_id is null then raise exception 'a correction must carry its own operation id'; end if;", 'gl3b:correction-survives-a-lost-response')
@@ -767,9 +766,19 @@ export function foundationStaticGuard(root = process.cwd()) {
   // A deleted contract takes its row with it, so what the delete has to say goes above the table. A
   // contract that came from a firm offer sent that offer back to open; entering a replacement by hand
   // instead of refilling it leaves the offer counted as pending and fillable into a second contract.
-  requireText(errors, read(root, 'src/data/SupabaseGrainRepository.ts'), 'return { reopenedFirmOfferId: reopened }', 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, read(root, 'src/data/SupabaseGrainRepository.ts'), 'return { reopenedFirmOfferId: reopened, reopenedFirmOfferStatus: status }', 'gl3b:a-reopened-offer-is-surfaced')
   requireText(errors, grainModule, 'onDeleted?.(result.reopenedFirmOfferId', 'gl3b:a-reopened-offer-is-surfaced')
   requireText(errors, grainModule, 'fill it from Firm offers rather than entering a new contract', 'gl3b:a-reopened-offer-is-surfaced')
+  // An offer whose expiry had passed comes back 'expired', not 'open'. It cannot be filled and is not
+  // counted as pending, so the id alone is not enough to know what to tell the farmer.
+  requireText(errors, gl3bMigration, "'reopened_firm_offer_status', (select o.status::text from public.firm_offers o where o.id = v_reopened and o.farm_id = p_farm_id)", 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, grainModule, 'result.reopenedFirmOfferStatus === "open"', 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, grainModule, 'marked expired rather than reopened', 'gl3b:a-reopened-offer-is-surfaced')
+  // A retry after a lost response owes the same answer, or that guidance is lost entirely.
+  requireText(errors, gl3bMigration, "'reopened_firm_offer_id', v_replay.reopened_firm_offer_id,", 'gl3b:a-reopened-offer-is-surfaced')
+  // A replay returns the row THAT operation produced. Handing back a later member's version would let
+  // the browser adopt it as its own and then overwrite their work with the values it still holds.
+  requireText(errors, gl3bMigration, '      return v_replay.after_row;', 'gl3b:a-retry-must-be-the-same-correction')
   requireText(errors, read(root, 'src/data/grain.ts'), 'if ((draft.notes.trim() || null) !== contract.notes) changes.notes = draft.notes.trim() || null', 'gl3b:a-contract-note-is-reachable')
   // The browser refuses an empty correction, but the RPC is reachable without the browser, and a
   // no-op there would move updated_at and make every other member's open draft stale for nothing.

@@ -3270,9 +3270,14 @@ export function ContractRepair({ contract, workspace, services, onSaved, onDelet
       // This row is about to vanish, so the news goes above the table. A contract that came from a
       // firm offer sent that offer back to open; entering a replacement contract by hand instead of
       // refilling the offer would leave the offer counted as pending AND fillable into a second one.
-      onDeleted?.(result.reopenedFirmOfferId
-        ? "Contract deleted. It came from a firm offer, and that offer is open again \u2014 fill it from Firm offers rather than entering a new contract, or the offer stays counted as pending."
-        : "Contract deleted.");
+      // An offer whose expiry had already passed comes back expired, not open. It cannot be filled
+      // and is not counted as pending, so sending the farmer to refill it would be sending them after
+      // something that is not there.
+      onDeleted?.(result.reopenedFirmOfferId === null
+        ? "Contract deleted."
+        : result.reopenedFirmOfferStatus === "open"
+          ? "Contract deleted. It came from a firm offer, and that offer is open again \u2014 fill it from Firm offers rather than entering a new contract, or the offer stays counted as pending."
+          : "Contract deleted. It came from a firm offer whose expiry has passed, so that offer is marked expired rather than reopened \u2014 enter a new contract, or renew the offer first.");
       await onSaved();
     } catch (error) { setMessage(farmerError(error, "delete this contract")) } finally { lock.current.release(); setSaving(false) }
   };

@@ -139,7 +139,11 @@ begin
     if v_replay.grain_contract_id = p_contract_id
        and v_replay.reason is not distinct from v_reason
        and v_replay.requested_changes is not distinct from v_changes then
-      return to_jsonb(v_before);
+      -- The row THIS operation produced, not whatever the row is now. Another member may have
+      -- corrected it in between; handing back their version would let the browser record it as the
+      -- version its own save wrote, skip rebasing, and then overwrite their work with the values it
+      -- still holds. after_row is what this operation actually did, which is what a replay owes.
+      return v_replay.after_row;
     end if;
     -- Same id, DIFFERENT correction. The farmer edited the draft after a lost response and pressed
     -- Save again, or the id was spent on another contract. Returning the earlier row here would
@@ -201,6 +205,7 @@ declare
   v_before public.grain_contracts%rowtype;
   v_offer public.firm_offers%rowtype;
   v_reopened uuid := null;
+  v_replay public.grain_contract_audit%rowtype;
   v_local_date date;
   v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
 begin
@@ -217,8 +222,15 @@ begin
     -- Idempotent on a retry after a lost response: the row is already gone and the audit row
     -- for that delete already exists, so report the completed delete rather than an error the
     -- farmer would read as "it failed" and try again.
-    if exists (select 1 from public.grain_contract_audit a where a.farm_id = p_farm_id and a.grain_contract_id = p_contract_id and a.action = 'delete') then
-      return jsonb_build_object('deleted', true, 'reopened_firm_offer_id', null, 'already_deleted', true);
+    -- The retry owes the same answer as the first call, including which offer the delete reopened.
+    -- Reporting null there would let the screen say only "Contract deleted", and the farmer would
+    -- follow the panel's advice to enter a replacement by hand while that offer stayed fillable.
+    select * into v_replay from public.grain_contract_audit a
+    where a.farm_id = p_farm_id and a.grain_contract_id = p_contract_id and a.action = 'delete';
+    if found then
+      return jsonb_build_object('deleted', true, 'reopened_firm_offer_id', v_replay.reopened_firm_offer_id,
+        'reopened_firm_offer_status', (select o.status::text from public.firm_offers o where o.id = v_replay.reopened_firm_offer_id and o.farm_id = p_farm_id),
+        'already_deleted', true);
     end if;
     raise exception 'contract does not belong to this farm';
   end if;
@@ -255,7 +267,12 @@ begin
 
   delete from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id;
 
-  return jsonb_build_object('deleted', true, 'reopened_firm_offer_id', v_reopened, 'already_deleted', false);
+  -- The status matters as much as the id. An offer whose own expiry had already passed comes back
+  -- 'expired', not 'open': it cannot be filled and is not counted as pending, so telling the farmer
+  -- to go and refill it would send them after something that is not there.
+  return jsonb_build_object('deleted', true, 'reopened_firm_offer_id', v_reopened,
+    'reopened_firm_offer_status', (select o.status::text from public.firm_offers o where o.id = v_reopened and o.farm_id = p_farm_id),
+    'already_deleted', false);
 end $fn$;
 revoke all on function public.delete_grain_contract(uuid, uuid, text, timestamptz) from public, anon;
 grant execute on function public.delete_grain_contract(uuid, uuid, text, timestamptz) to authenticated;

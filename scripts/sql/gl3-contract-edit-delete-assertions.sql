@@ -226,6 +226,33 @@ begin
   if v_offer.filled_contract_id is not null then raise exception 'the expired offer still points at a contract that is gone'; end if;
 end $$;
 
+-- ------------------------------------------------- 8b. the delete reports the offer's real state
+-- The id alone is not enough for the screen: an offer whose expiry had passed is marked expired, not
+-- reopened, and telling the farmer to go and refill it sends them after something that is not there.
+-- A retry after a lost response owes the same answer, or the farmer loses that guidance entirely.
+do $$
+declare v_result jsonb; v_status text;
+begin
+  select (public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000092','x', now()))::text into v_status;
+exception when others then null; -- already deleted above; the assertions below read the retry path
+end $$;
+do $$
+declare v_result jsonb;
+begin
+  -- the unexpired offer's contract, deleted earlier: its retry must still name the offer AND its state
+  v_result := public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000092','the elevator never confirmed this fill', null);
+  if not (v_result->>'already_deleted')::boolean then raise exception 'the retry did not report the completed delete'; end if;
+  if v_result->>'reopened_firm_offer_id' <> '00000000-0000-4000-8000-000000000094'
+    then raise exception 'the retry lost the offer the delete reopened'; end if;
+  if v_result->>'reopened_firm_offer_status' <> 'open'
+    then raise exception 'the retry reported the reopened offer as %', coalesce(v_result->>'reopened_firm_offer_status','nothing'); end if;
+
+  -- and the expired offer's contract must report expired, not open
+  v_result := public.delete_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-000000000093','wrong offer filled', null);
+  if v_result->>'reopened_firm_offer_status' <> 'expired'
+    then raise exception 'an expired offer was reported as %', coalesce(v_result->>'reopened_firm_offer_status','nothing'); end if;
+end $$;
+
 -- ------------------------------------------------- 9. the audit is append-only and fenced
 -- Back to the owning role on purpose: as authenticated the update below would fail on the
 -- missing grant, which proves nothing about the trigger.
@@ -392,6 +419,17 @@ begin
   begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','a different reason this time','{"buyer":"Retry Buyer Fixed"}'::jsonb, v_state.stamp, v_state.operation);
   exception when others then v_failed := sqlerrm = 'FARM_RX_CORRECTION_ALREADY_SAVED'; end;
   if not v_failed then raise exception 'a changed REASON reusing an operation id was answered as a retry'; end if;
+
+  -- A replay must hand back the row THIS operation produced, not whatever the row is now. If it
+  -- returned a later member's version, the browser would record that as the version its own save
+  -- wrote, skip rebasing, and then overwrite their work with the values it still holds. The other
+  -- member's change goes through the RPC, the way a real one would -- a direct UPDATE is revoked.
+  perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','another member corrects it','{"buyer":"Someone Else Corrected This"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-0000000000a1'), gen_random_uuid());
+  v_retry := public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','buyer typed wrong','{"buyer":"Retry Buyer Fixed"}'::jsonb, v_state.stamp, v_state.operation);
+  if v_retry->>'buyer' <> 'Retry Buyer Fixed'
+    then raise exception 'the replay handed back a later version (%) instead of what this operation produced', v_retry->>'buyer'; end if;
+  -- put it back so the blocks below read the contract they were written against
+  perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','restore for the next block','{"buyer":"Retry Buyer Fixed"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-0000000000a1'), gen_random_uuid());
 
   -- The contract is part of the identity too. An id spent on one contract must not answer for
   -- another, even when the reason and the requested change are word for word the same.
