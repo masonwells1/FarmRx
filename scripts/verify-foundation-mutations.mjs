@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 267
+const expectedMutationCount = 270
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -762,7 +762,7 @@ try {
   mutate('src/data/grain.ts', (source) => source.replace('export function contractCorrectionDiff(', 'export function contractCorrectionDiffUnused('))
   detected('the whole form is sent again instead of what changed', 'gl3b:only-changed-fields-are-sent')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number });', 'const changes = { buyer, bushels: Number(contractBushels), delivery_start: start || null, delivery_end: end || null, contract_number: number || null };'))
+  mutate('src/GrainModule.tsx', (source) => source.replace('const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number, notes });', 'const changes = { buyer, bushels: Number(contractBushels), delivery_start: start || null, delivery_end: end || null, contract_number: number || null };'))
   detected("a buyer correction also rewrites every other field this page loaded", 'gl3b:only-changed-fields-are-sent')
   reset()
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("expires_on < v_local_date", "expires_on < current_date"))
@@ -794,6 +794,15 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('This contract changed while you had it open. The fields now show the current values', 'Contract reloaded'))
   detected('the farmer is not told that the contract moved under their draft', 'gl3b:draft-rebases-on-a-changed-contract')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('setSeenVersion(saved.updated_at);', ''))
+  detected("a farmer's own correction is reported back to them as somebody else's change", 'gl3b:own-save-is-not-a-concurrent-change')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('<label>Contract note<textarea value={notes}', '<label hidden>Contract note<textarea value={notes}'))
+  detected('the contract note price finalization tells the farmer to add is unreachable', 'gl3b:a-contract-note-is-reachable')
+  reset()
+  mutate('src/data/grain.ts', (source) => source.replace('if ((draft.notes.trim() || null) !== contract.notes) changes.notes = draft.notes.trim() || null\n', ''))
+  detected('a corrected contract note is never sent', 'gl3b:a-contract-note-is-reachable')
   reset()
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("if v_changes is null or not (v_changes ?| array['buyer','bushels','delivery_start','delivery_end','contract_number','notes']) then", 'if false then'))
   detected('an empty correction writes an audit row and makes every other draft stale', 'gl3b:a-correction-must-correct-something')

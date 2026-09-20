@@ -440,3 +440,33 @@ The replay check matched on `operation_id` alone. After a lost response the pane
 - **Guards:** `gl3b:a-correction-must-correct-something`, `gl3b:a-retry-must-be-the-same-correction`, and `gl3b:correction-survives-a-lost-response` re-pinned to the new replay branch. Four mutations, 263 → 267.
 - **One of those mutations was toothless at first,** and the drill said so: changing `if found then` to `if false then` broke no pinned text, so the guard did not see it. The guard now pins the `select ... ; if found then` pair rather than the select alone. A mutation that passes is a guard that is not guarding.
 - **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 267/267; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**. CI remains the authority until it reports green.
+
+## GL-031 — The 0043 allowlist, and the twenty-sixth and twenty-seventh findings
+
+- **Date/time:** 2026-09-20 13:20 -05:00 (`America/Chicago`).
+
+### Foundation on `12fc1d8`: the 0033 repair worked, and the next lane caught me
+
+`verify-0033-disposable.ps1` passed — GL-029's repair was right. The run then failed further on at `verify-0043-disposable.ps1`: *authenticated SECURITY DEFINER ACL allowlist drift: expected 56, matched 56, actual 58.* 0043 holds an **exact** allowlist of the security-definer functions `authenticated` may execute, by name and identity arguments, plus a total. GL-3b's two RPCs are the 57th and 58th and were not in it.
+
+- **Repair:** both added, with their identity arguments, and the total raised to 58.
+- **This is the third PowerShell-only lane to catch this tranche** (0040 in GL-026, 0033 in GL-029, 0043 here). Porting each whole lane is not proportionate, but the two things most likely to be wrong in this edit are cheap to check, so block 14b of the GL-3b assertions now verifies them against real Postgres: the exact `pg_get_function_identity_arguments` text each allowlist row has to carry, and that `authenticated` can execute exactly 58 definer functions. Both pass here, so the allowlist edit is verified in substance even though the lane itself still cannot run on this machine.
+
+### Finding 26 (P2) — a farmer's own correction reported back as somebody else's
+
+GL-029's rebase branch fires on any change of `contract.updated_at`. After a successful correction, `onSaved()` refreshes and hands back **the row this panel just wrote**, with a new version — so the branch fired on the farmer's own save and replaced "Contract corrected" with "This contract changed while you had it open." The warning was not just noise: it said something untrue about a save that had worked perfectly.
+
+- **Repair:** `editContract` now returns the saved contract, and the panel adopts that version before the refresh. A version it did not write still warns, which is the whole point of the branch.
+- That return value also had to be threaded through the repository, the queue and the mock — the queued path previously discarded it.
+
+### Finding 27 (P2) — the contract note the app tells you to write had nowhere to go
+
+Setting a basis or futures price shows: *"This cannot be changed afterward. Add a contract note for any correction."* The correction form had no note field, and `contractCorrectionDiff` never sent one, so the instruction the product gives a farmer after the one irreversible action in Grain was unreachable. The RPC and the correction type both supported `notes` already; only the form did not.
+
+- **Repair:** a Contract note field in the correction form, included in the diff like every other field. The instruction is now true.
+- Worth recording plainly: this is the one finding in twenty-seven that is a **missing capability** rather than a defect in something I built, and it was reachable only by reading what the product tells the farmer and checking whether the product lets them do it. Guards and mutations pin behaviour that exists; nothing I wrote could have noticed an instruction with no destination.
+
+### Together
+
+- **Guards:** `gl3b:own-save-is-not-a-concurrent-change`, `gl3b:a-contract-note-is-reachable`, plus the `redraft()` call-site count raised from six to seven so the new field cannot be wired without clearing the attempt id. Three mutations, 267 → 270.
+- **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 270/270; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**, with the journey now also asserting the note field is offered. CI remains the authority.

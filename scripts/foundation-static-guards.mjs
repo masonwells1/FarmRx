@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 267')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 270')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -728,7 +728,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // a write against a row another member may have moved.
   if ((gl3bMigration.split("is distinct from p_expected_updated_at").length - 1) !== 2) errors.push('gl3b:correction-is-compare-and-swap')
   requireText(errors, read(root, 'src/data/grain.ts'), 'export function contractCorrectionDiff(', 'gl3b:only-changed-fields-are-sent')
-  requireText(errors, grainModule, 'const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number });', 'gl3b:only-changed-fields-are-sent')
+  requireText(errors, grainModule, 'const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number, notes });', 'gl3b:only-changed-fields-are-sent')
   requireText(errors, grainModule, 'await services.grainRepository.editContract(contract.id, reason, changes, contract.updated_at, operationId.current);', 'gl3b:correction-is-compare-and-swap')
   requireText(errors, grainModule, 'await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at);', 'gl3b:correction-is-compare-and-swap')
   // The farm's own calendar day, not the database's. After UTC midnight an Illinois farm is still on
@@ -754,6 +754,14 @@ export function foundationStaticGuard(root = process.cwd()) {
   // undoes whatever another member just corrected.
   requireText(errors, grainModule, 'if (contract.updated_at !== seenVersion) {', 'gl3b:draft-rebases-on-a-changed-contract')
   requireText(errors, grainModule, 'This contract changed while you had it open. The fields now show the current values', 'gl3b:draft-rebases-on-a-changed-contract')
+  // The refresh after a successful save hands back the row this panel just wrote. Without adopting
+  // that version, the farmer's own correction is read as somebody else's and the success message is
+  // replaced by a warning that nothing concurrent actually happened.
+  requireText(errors, grainModule, 'setSeenVersion(saved.updated_at);', 'gl3b:own-save-is-not-a-concurrent-change')
+  // Setting a basis or futures price tells the farmer to add a contract note. Without a note field in
+  // the only form that can change one, that instruction has nowhere to land.
+  requireText(errors, grainModule, '<label>Contract note<textarea value={notes}', 'gl3b:a-contract-note-is-reachable')
+  requireText(errors, read(root, 'src/data/grain.ts'), 'if ((draft.notes.trim() || null) !== contract.notes) changes.notes = draft.notes.trim() || null', 'gl3b:a-contract-note-is-reachable')
   // The browser refuses an empty correction, but the RPC is reachable without the browser, and a
   // no-op there would move updated_at and make every other member's open draft stale for nothing.
   requireText(errors, gl3bMigration, "if v_changes is null or not (v_changes ?| array['buyer','bushels','delivery_start','delivery_end','contract_number','notes']) then", 'gl3b:a-correction-must-correct-something')
@@ -763,7 +771,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, gl3bMigration, 'if v_replay.reason is not distinct from v_reason and v_replay.requested_changes is not distinct from v_changes then', 'gl3b:a-retry-must-be-the-same-correction')
   requireText(errors, gl3bMigration, "raise exception using errcode = 'P0001', message = 'FARM_RX_CORRECTION_ALREADY_SAVED';", 'gl3b:a-retry-must-be-the-same-correction')
   requireText(errors, grainModule, 'const redraft = () => { operationId.current = null };', 'gl3b:a-retry-must-be-the-same-correction')
-  if ((grainModule.split('redraft();').length - 1) !== 6) errors.push('gl3b:a-retry-must-be-the-same-correction')
+  if ((grainModule.split('redraft();').length - 1) !== 7) errors.push('gl3b:a-retry-must-be-the-same-correction')
   // ??=, not =: a retry must reuse the id its first attempt used, or the server cannot recognise it.
   requireText(errors, grainModule, 'operationId.current ??= services.createGrainId();', 'gl3b:correction-survives-a-lost-response')
   requireText(errors, grainModule, 'contract.updated_at, operationId.current);\n      operationId.current = null;', 'gl3b:correction-survives-a-lost-response')

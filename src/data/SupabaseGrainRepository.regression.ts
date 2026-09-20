@@ -518,12 +518,12 @@ async function run() {
 
     // Only what the farmer changed. A whole-form payload would let a buyer correction typed on a
     // stale page quietly undo a bushels correction another member just saved.
-    const loaded = { ...target, buyer: 'Loaded Buyer', bushels: 1000, delivery_start: '2026-11-01', delivery_end: null, contract_number: 'CN-1' }
-    const untouched = contractCorrectionDiff(loaded, { buyer: 'Loaded Buyer', bushels: '1000', delivery_start: '2026-11-01', delivery_end: '', contract_number: 'CN-1' })
+    const loaded = { ...target, buyer: 'Loaded Buyer', bushels: 1000, delivery_start: '2026-11-01', delivery_end: null, contract_number: 'CN-1', notes: null }
+    const untouched = contractCorrectionDiff(loaded, { buyer: 'Loaded Buyer', bushels: '1000', delivery_start: '2026-11-01', delivery_end: '', contract_number: 'CN-1', notes: '' })
     assert(Object.keys(untouched).length === 0, `GL-3b: a form nobody touched must produce no change at all (saw ${JSON.stringify(untouched)}).`)
-    const buyerOnly = contractCorrectionDiff(loaded, { buyer: 'New Buyer', bushels: '1000', delivery_start: '2026-11-01', delivery_end: '', contract_number: 'CN-1' })
+    const buyerOnly = contractCorrectionDiff(loaded, { buyer: 'New Buyer', bushels: '1000', delivery_start: '2026-11-01', delivery_end: '', contract_number: 'CN-1', notes: '' })
     assert(JSON.stringify(buyerOnly) === JSON.stringify({ buyer: 'New Buyer' }), `GL-3b: a buyer correction must carry the buyer and nothing else (saw ${JSON.stringify(buyerOnly)}).`)
-    const cleared = contractCorrectionDiff(loaded, { buyer: 'Loaded Buyer', bushels: '1000', delivery_start: '', delivery_end: '', contract_number: 'CN-1' })
+    const cleared = contractCorrectionDiff(loaded, { buyer: 'Loaded Buyer', bushels: '1000', delivery_start: '', delivery_end: '', contract_number: 'CN-1', notes: '' })
     assert(JSON.stringify(cleared) === JSON.stringify({ delivery_start: null }), `GL-3b: clearing a window must be sent as an explicit null and nothing else (saw ${JSON.stringify(cleared)}).`)
 
     await repairRepo.deleteContract(target.id, 'entered twice', target.updated_at)

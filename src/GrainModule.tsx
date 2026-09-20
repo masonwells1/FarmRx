@@ -3174,6 +3174,7 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
   const [start, setStart] = useState(contract.delivery_start ?? "");
   const [end, setEnd] = useState(contract.delivery_end ?? "");
   const [number, setNumber] = useState(contract.contract_number ?? "");
+  const [notes, setNotes] = useState(contract.notes ?? "");
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -3201,6 +3202,7 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
     setStart(contract.delivery_start ?? "");
     setEnd(contract.delivery_end ?? "");
     setNumber(contract.contract_number ?? "");
+    setNotes(contract.notes ?? "");
     operationId.current = null;
     setMessage("This contract changed while you had it open. The fields now show the current values \u2014 check them before saving.");
   }
@@ -3224,12 +3226,16 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
       // typed on a stale page quietly undo a bushels correction another member just saved, and the
       // audit would show both as deliberate. The contract's own updated_at goes with it, so the
       // server refuses the write outright if the row moved under this page.
-      const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number });
+      const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number, notes });
       if (!Object.keys(changes).length) { setMessage("Nothing has changed on this contract yet."); return }
       setSaving(true);
       operationId.current ??= services.createGrainId();
-      await services.grainRepository.editContract(contract.id, reason, changes, contract.updated_at, operationId.current);
+      const saved = await services.grainRepository.editContract(contract.id, reason, changes, contract.updated_at, operationId.current);
       operationId.current = null;
+      // Adopt the version this save produced. The refresh below hands back the row we just wrote, and
+      // without this the rebase branch would read our own save as somebody else's change and replace
+      // "Contract corrected" with a warning. A version we did not write still warns, which is the point.
+      setSeenVersion(saved.updated_at);
       setMessage("Contract corrected.");
       setReason("");
       await onSaved();
@@ -3254,6 +3260,9 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
       <label>Delivery start<input type="date" value={start} onChange={(event) => { redraft(); setStart(event.target.value) }} /></label>
       <label>Delivery end<input type="date" value={end} onChange={(event) => { redraft(); setEnd(event.target.value) }} /></label>
       <label>Contract #<input value={number} onChange={(event) => { redraft(); setNumber(event.target.value) }} /></label>
+      {/* Setting a basis or futures price tells the farmer to "add a contract note for any
+          correction". Without this field that instruction had nowhere to land. */}
+      <label>Contract note<textarea value={notes} rows={2} onChange={(event) => { redraft(); setNotes(event.target.value) }} /></label>
       <label>Why are you changing this?<textarea value={reason} rows={2} onChange={(event) => { redraft(); setReason(event.target.value) }} /></label>
       <small>Crop year, commodity, type and price cannot be corrected here. Delete the contract and enter it again if one of those is wrong.</small>
       <div className="contract-repair-buttons">

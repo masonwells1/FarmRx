@@ -517,6 +517,38 @@ begin
   end;
 end $$;
 
+-- ------------------------------------------------- 14b. the 0043 definer allowlist still matches
+-- 0043 keeps an exact allowlist of SECURITY DEFINER functions that `authenticated` may execute, by
+-- name AND identity arguments, plus a total count. Adding an RPC without updating it turns Foundation
+-- red -- which is how this tranche learned the lane exists. That lane is PowerShell and cannot run on
+-- a development machine, so the two things most likely to be wrong are checked here: the exact
+-- argument text the allowlist has to carry, and the total the count has to be raised to.
+do $$
+declare v_args text; v_total integer;
+begin
+  select pg_catalog.pg_get_function_identity_arguments(p.oid) into v_args
+  from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.proname = 'edit_grain_contract';
+  if v_args is distinct from 'p_farm_id uuid, p_contract_id uuid, p_reason text, p_changes jsonb, p_expected_updated_at timestamp with time zone, p_operation_id uuid'
+    then raise exception 'edit_grain_contract identity arguments are %, which is not what the 0043 allowlist carries', v_args; end if;
+
+  select pg_catalog.pg_get_function_identity_arguments(p.oid) into v_args
+  from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.proname = 'delete_grain_contract';
+  if v_args is distinct from 'p_farm_id uuid, p_contract_id uuid, p_reason text, p_expected_updated_at timestamp with time zone'
+    then raise exception 'delete_grain_contract identity arguments are %, which is not what the 0043 allowlist carries', v_args; end if;
+
+  select count(*) into v_total
+  from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.prosecdef and has_function_privilege('authenticated', p.oid, 'execute');
+  if v_total <> 58 then raise exception 'authenticated can execute % security definer functions; the 0043 lane expects 58', v_total; end if;
+
+  -- neither may be reachable anonymously, which the allowlist join also requires
+  if has_function_privilege('anon', 'public.edit_grain_contract(uuid,uuid,text,jsonb,timestamptz,uuid)', 'execute')
+     or has_function_privilege('anon', 'public.delete_grain_contract(uuid,uuid,text,timestamptz)', 'execute')
+    then raise exception 'a contract repair function is executable anonymously'; end if;
+end $$;
+
 -- ------------------------------------------------- 15. every farm-scoped table is epoch-fenced
 -- Migration 0040 requires the farm_access_epoch_guard trigger on EVERY public table carrying a
 -- farm_id. The PowerShell 0040 lane already checks this, but only in CI -- which is how GL-3b's new

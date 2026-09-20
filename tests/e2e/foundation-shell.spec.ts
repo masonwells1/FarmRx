@@ -1582,6 +1582,9 @@ test('a contract with no deliveries can be corrected with a reason, and one alre
   // Only what was touched. The delivery window and the contract number were not, so they are absent
   // entirely -- a whole-form payload would let this save undo someone else's correction to them.
   expect(contractRepairCalls[0]!.body.p_changes).toEqual({ buyer: 'Corrected Buyer', bushels: 9250 })
+  // Setting a basis or futures price tells the farmer to add a contract note, so the only form that
+  // can change one has to offer it.
+  await expect(typo.getByLabel('Contract note')).toBeVisible()
   // And the version this page loaded rides along, so the server refuses the write if the row moved.
   expect(contractRepairCalls[0]!.body.p_expected_updated_at).toBe(now)
   expect(unexpected).toEqual([])
