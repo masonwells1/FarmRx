@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 222
+const expectedMutationCount = 225
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -21,7 +21,7 @@ const files = [
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
   'supabase/functions/_shared/marsFeedOrchestrator.ts', 'src/data/grainAlerts.ts', 'supabase/functions/deliver-grain-alert/index.ts',
-  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'src/data/marketingYear.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts',
+  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'src/data/marketingYear.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -599,10 +599,19 @@ try {
   mutate('src/data/marketingYear.ts', (source) => source.replace('wheat: { month: 6, day: 1 },', 'wheat: { month: 9, day: 1 },'))
   detected('browser marketing year drifts from the SQL configuration', 'gl2:browser-marketing-year-matches-sql')
   reset()
+  mutate('src/data/marketingYear.ts', (source) => source.replace('const configured = marketingYearStartFor(commodity)', 'const configured = commodity?.crop_family ? MARKETING_YEAR_START[commodity.crop_family as CropFamily] ?? null : null'))
+  detected('the page ignores stored marketing-year configuration the sweep obeys', 'gl2:marketing-year-from-stored-configuration')
+  reset()
+  mutate('src/data/SupabaseFieldsRepository.ts', (source) => source.replace('marketing_year_start_month: marketingMonth, marketing_year_start_day: marketingDay', 'marketing_year_start_month: null, marketing_year_start_day: null'))
+  detected('the commodity row drops its marketing-year configuration on the way in', 'gl2:commodity-carries-marketing-year')
+  reset()
+  mutate('src/data/SupabaseFieldsRepository.ts', (source) => source.replace("const marketingMonth = optionalSmallInt(raw, 'marketing_year_start_month')", "const marketingMonth = optionalSmallInt(row, 'marketing_year_start_month')"))
+  detected('a farm on the previous schema cannot load its fields at all', 'gl2:pre-migration-commodity-still-loads')
+  reset()
   mutate('src/data/marketingYear.ts', (source) => source.replace('return inside(low) && inside(high)', 'return inside(low) || inside(high)'))
   detected('a delivery window straddling the year end counts as inside', 'gl2:window-wholly-inside')
   reset()
-  mutate('src/data/marketingAlerts.ts', (source) => source.replace('cashBidEligibleForCropYear(family, rule.crop_year, bid.bid_date, bid.delivery_start, bid.delivery_end)', 'true'))
+  mutate('src/data/marketingAlerts.ts', (source) => source.replace('cashBidEligibleForCropYear(commodity, rule.crop_year, bid.bid_date, bid.delivery_start, bid.delivery_end)', 'true'))
   detected('the page stops applying crop-year eligibility', 'gl2:alert-reader-uses-eligibility')
   reset()
   mutate('src/data/marketingAlerts.ts', (source) => source.replace("bid.commodity_id === commodityId && bid.cash_price !== null && !isMarsBid(bid)", "bid.commodity_id === commodityId && bid.cash_price !== null"))

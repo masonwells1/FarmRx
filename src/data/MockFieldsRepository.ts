@@ -23,12 +23,12 @@ const entities: Entity[] = [
 ]
 
 const commodities: Commodity[] = [
-  { id: 'corn_yellow', name: 'Yellow Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: farm.created_at, updated_at: farm.updated_at },
-  { id: 'corn_white', name: 'White Corn', crop_family: 'corn', traits: { identity_preserved: true, premium_eligible: true }, is_active: true, created_at: farm.created_at, updated_at: farm.updated_at },
-  { id: 'corn_non_gmo', name: 'Conventional Corn (Non-GMO)', crop_family: 'corn', traits: { identity_preserved: true, premium_eligible: true, non_gmo: true }, is_active: true, created_at: farm.created_at, updated_at: farm.updated_at },
-  { id: 'soybeans', name: 'Soybeans', crop_family: 'soybeans', traits: {}, is_active: true, created_at: farm.created_at, updated_at: farm.updated_at },
-  { id: 'soybeans_double_crop', name: 'Double-Crop Soybeans', crop_family: 'soybeans', traits: { double_crop: true }, is_active: true, created_at: farm.created_at, updated_at: farm.updated_at },
-  { id: 'wheat', name: 'Wheat', crop_family: 'wheat', traits: {}, is_active: true, created_at: farm.created_at, updated_at: farm.updated_at },
+  { id: 'corn_yellow', name: 'Yellow Corn', crop_family: 'corn', marketing_year_start_month: 9, marketing_year_start_day: 1, traits: {}, is_active: true, created_at: farm.created_at, updated_at: farm.updated_at },
+  { id: 'corn_white', name: 'White Corn', crop_family: 'corn', marketing_year_start_month: 9, marketing_year_start_day: 1, traits: { identity_preserved: true, premium_eligible: true }, is_active: true, created_at: farm.created_at, updated_at: farm.updated_at },
+  { id: 'corn_non_gmo', name: 'Conventional Corn (Non-GMO)', crop_family: 'corn', marketing_year_start_month: 9, marketing_year_start_day: 1, traits: { identity_preserved: true, premium_eligible: true, non_gmo: true }, is_active: true, created_at: farm.created_at, updated_at: farm.updated_at },
+  { id: 'soybeans', name: 'Soybeans', crop_family: 'soybeans', marketing_year_start_month: 9, marketing_year_start_day: 1, traits: {}, is_active: true, created_at: farm.created_at, updated_at: farm.updated_at },
+  { id: 'soybeans_double_crop', name: 'Double-Crop Soybeans', crop_family: 'soybeans', marketing_year_start_month: 9, marketing_year_start_day: 1, traits: { double_crop: true }, is_active: true, created_at: farm.created_at, updated_at: farm.updated_at },
+  { id: 'wheat', name: 'Wheat', crop_family: 'wheat', marketing_year_start_month: 6, marketing_year_start_day: 1, traits: {}, is_active: true, created_at: farm.created_at, updated_at: farm.updated_at },
 ]
 
 const fieldSeed: Array<[string, number, number, string, string]> = [

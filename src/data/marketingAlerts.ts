@@ -1,5 +1,5 @@
 import { isMarsBid } from './basisMath'
-import { cashBidEligibleForCropYear, type CropFamily } from './marketingYear'
+import { cashBidEligibleForCropYear } from './marketingYear'
 import { farmLocalCalendarDate } from './farmDates'
 import { marketedPercent, sameScope, type CashBid, type GrainWorkspace, type MarketingAlertRule } from './grain'
 
@@ -36,11 +36,13 @@ export function latestManualCashPrice(workspace: GrainWorkspace, commodityId: st
  * bid, bin, or on-hand quantity. This function and `public.cash_bid_eligible_for_crop_year` must agree:
  * the sweep is the monitor and this page reports the same rule for the same reason. */
 export function latestAlertEligibleCashBid(workspace: GrainWorkspace, rule: Pick<MarketingAlertRule, 'commodity_id' | 'crop_year'>, today: string, maxAgeDays = MARKETING_BID_MAX_AGE_DAYS): CashBid | null {
-  const family = workspace.fields.commodities.find((item) => item.id === rule.commodity_id)?.crop_family as CropFamily | undefined
+  // The whole commodity row, not just its family: the marketing-year start is stored configuration the
+  // sweep reads, so the page must read the same row rather than a constant that a data change cannot move.
+  const commodity = workspace.fields.commodities.find((item) => item.id === rule.commodity_id)
   return workspace.cash_bids
     .filter((bid) => bid.commodity_id === rule.commodity_id && bid.cash_price !== null
       && dayDifference(today, bid.bid_date) >= 0 && dayDifference(today, bid.bid_date) <= maxAgeDays
-      && cashBidEligibleForCropYear(family, rule.crop_year, bid.bid_date, bid.delivery_start, bid.delivery_end))
+      && cashBidEligibleForCropYear(commodity, rule.crop_year, bid.bid_date, bid.delivery_start, bid.delivery_end))
     // The tie-breaker matters and must match `order by b.bid_date desc, b.updated_at desc, b.id desc`
     // in latest_eligible_cash_bid. One MARS run writes many rows for the same commodity and bid date in
     // one statement, so they can share updated_at to the microsecond; without the id, Array#sort's

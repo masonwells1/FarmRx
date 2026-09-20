@@ -1,5 +1,5 @@
 import { cashTargetRevenue, evaluateMarketingAlertRules, latestAlertEligibleCashBid, latestManualCashBid, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
-import { cashBidEligibleForCropYear, marketingYearBounds } from './marketingYear'
+import { cashBidEligibleForCropYear, marketingYearBounds, marketingYearStartFor } from './marketingYear'
 import { scopeKey, scopeOf, type FirmOffer, type GrainWorkspace, type InsuranceUnit, type MarketingAlertRule } from './grain'
 import { calculateGrainPosition, hasUnsupportedSavedCoverage, remainingMarketingCapacity, saleLimitForScope, saleLimitWarning, unsupportedCoverageMessage } from './grainPosition'
 
@@ -8,7 +8,7 @@ const stamp = '2026-07-13T12:00:00.000Z'
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 const scope = { farm_id: uid(1), crop_year: 2026, commodity_id: 'corn', operating_entity_id: null, enterprise_label: null }
 const base = (id: number, rule_type: MarketingAlertRule['rule_type']): MarketingAlertRule => ({ id: uid(id), ...scope, rule_type, direction: rule_type === 'price_target' ? 'at_or_above' : null, threshold: rule_type === 'deadline' ? null : rule_type === 'price_target' ? 4.75 : 55, remind_on: rule_type === 'deadline' ? '2026-07-20' : null, message: null, active: true, last_triggered_at: null, created_at: stamp, updated_at: stamp })
-const workspace = { fields: { farm: { id: scope.farm_id }, commodities: [{ id: 'corn', name: 'Corn', crop_family: 'corn' }, { id: 'wheat', name: 'Wheat', crop_family: 'wheat' }], crop_assignments: [], entities: [], fields: [] }, production_estimates: [{ id: uid(2), ...scope, planted_acres: 1, aph_yield: 100, expected_bushels: 1000, actual_bushels: null, drives_math: 'projected', notes: null, created_at: stamp, updated_at: stamp }], grain_contracts: [{ id: uid(3), ...scope, contract_type: 'forward_cash', buyer: 'Buyer', bushels: 400, futures_price: null, basis: null, cash_price: 4.5, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, created_at: stamp, updated_at: stamp }], marketing_plan_targets: [], insurance_units: [], grain_bins: [], bin_inventory: [], cash_bids: [{ id: uid(4), farm_id: scope.farm_id, elevator: 'Local elevator', commodity_id: 'corn', bid_date: '2026-07-13', basis: 0, cash_price: 4.8, delivery_start: '2026-10-01', delivery_end: '2026-10-31', notes: null, created_at: stamp, updated_at: stamp }], usda_report_dates: [], marketing_alert_rules: [], grain_alert_settings: null, grain_sale_limits: [], grain_carry_settings: null, grain_carry_grids: [] } as unknown as GrainWorkspace
+const workspace = { fields: { farm: { id: scope.farm_id }, commodities: [{ id: 'corn', name: 'Corn', crop_family: 'corn', marketing_year_start_month: 9, marketing_year_start_day: 1 }, { id: 'wheat', name: 'Wheat', crop_family: 'wheat', marketing_year_start_month: 6, marketing_year_start_day: 1 }], crop_assignments: [], entities: [], fields: [] }, production_estimates: [{ id: uid(2), ...scope, planted_acres: 1, aph_yield: 100, expected_bushels: 1000, actual_bushels: null, drives_math: 'projected', notes: null, created_at: stamp, updated_at: stamp }], grain_contracts: [{ id: uid(3), ...scope, contract_type: 'forward_cash', buyer: 'Buyer', bushels: 400, futures_price: null, basis: null, cash_price: 4.5, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, created_at: stamp, updated_at: stamp }], marketing_plan_targets: [], insurance_units: [], grain_bins: [], bin_inventory: [], cash_bids: [{ id: uid(4), farm_id: scope.farm_id, elevator: 'Local elevator', commodity_id: 'corn', bid_date: '2026-07-13', basis: 0, cash_price: 4.8, delivery_start: '2026-10-01', delivery_end: '2026-10-31', notes: null, created_at: stamp, updated_at: stamp }], usda_report_dates: [], marketing_alert_rules: [], grain_alert_settings: null, grain_sale_limits: [], grain_carry_settings: null, grain_carry_grids: [] } as unknown as GrainWorkspace
 
 const now = new Date('2026-07-13T12:00:00.000Z')
 const price = base(10, 'price_target'); const below = { ...base(11, 'price_target'), direction: 'at_or_below' as const, threshold: 4.7 }; const marketed = base(12, 'pct_marketed_goal'); const deadline = base(13, 'deadline')
@@ -96,13 +96,25 @@ assert(result.firedRuleIds.length === 0, 'GL-2: a tie on bid date and updated_at
 assert(latestAlertEligibleCashBid({ ...workspace, cash_bids: [tiedLow, tiedHigh] } as GrainWorkspace, price, '2026-07-13')?.id === uid(8), 'GL-2: the alerting reader must pick the highest id when bid date and updated_at tie.')
 
 // The rule itself, directly.
-assert(cashBidEligibleForCropYear('corn', 2026, '2026-10-15', '2026-11-01', '2026-11-30'), 'GL-2: a November 2026 window is not eligible for corn 2026.')
-assert(!cashBidEligibleForCropYear('corn', 2026, '2026-10-15', '2027-09-01', '2027-09-01'), 'GL-2: the marketing-year end bound is inclusive; it must be exclusive.')
-assert(cashBidEligibleForCropYear('corn', 2026, '2026-10-15', '2026-12-01', null), 'GL-2: a lone delivery start inside the year is not eligible.')
-assert(!cashBidEligibleForCropYear('corn', 2026, '2026-10-15', null, '2027-12-01'), 'GL-2: a lone delivery end outside the year is eligible.')
-assert(!cashBidEligibleForCropYear(undefined, 2026, '2026-10-15'), 'GL-2: an unknown crop family is eligible; it must skip, never guess.')
-assert(!cashBidEligibleForCropYear('corn', 2026, null), 'GL-2: a bid with no date is eligible.')
-assert(marketingYearBounds('corn', 2026).start === '2026-09-01' && marketingYearBounds('corn', 2026).endExclusive === '2027-09-01', 'GL-2: the corn 2026 marketing year is wrong.')
-assert(marketingYearBounds('wheat', 2026).start === '2026-06-01' && marketingYearBounds('wheat', 2026).endExclusive === '2027-06-01', 'GL-2: the wheat 2026 marketing year is wrong.')
+const cornCommodity = { crop_family: 'corn', marketing_year_start_month: 9, marketing_year_start_day: 1 }
+assert(cashBidEligibleForCropYear(cornCommodity, 2026, '2026-10-15', '2026-11-01', '2026-11-30'), 'GL-2: a November 2026 window is not eligible for corn 2026.')
+assert(!cashBidEligibleForCropYear(cornCommodity, 2026, '2026-10-15', '2027-09-01', '2027-09-01'), 'GL-2: the marketing-year end bound is inclusive; it must be exclusive.')
+assert(cashBidEligibleForCropYear(cornCommodity, 2026, '2026-10-15', '2026-12-01', null), 'GL-2: a lone delivery start inside the year is not eligible.')
+assert(!cashBidEligibleForCropYear(cornCommodity, 2026, '2026-10-15', null, '2027-12-01'), 'GL-2: a lone delivery end outside the year is eligible.')
+assert(!cashBidEligibleForCropYear(undefined, 2026, '2026-10-15'), 'GL-2: an unknown commodity is eligible; it must skip, never guess.')
+assert(!cashBidEligibleForCropYear({ crop_family: 'barley' }, 2026, '2026-10-15'), 'GL-2: a commodity with neither stored configuration nor a known family is eligible.')
+assert(!cashBidEligibleForCropYear(cornCommodity, 2026, null), 'GL-2: a bid with no date is eligible.')
+assert(marketingYearBounds({ month: 9, day: 1 }, 2026).start === '2026-09-01' && marketingYearBounds({ month: 9, day: 1 }, 2026).endExclusive === '2027-09-01', 'GL-2: the corn 2026 marketing year is wrong.')
+assert(marketingYearBounds({ month: 6, day: 1 }, 2026).start === '2026-06-01' && marketingYearBounds({ month: 6, day: 1 }, 2026).endExclusive === '2027-06-01', 'GL-2: the wheat 2026 marketing year is wrong.')
+
+// GL-2 repair: the STORED configuration decides, because the sweep reads it. A hardcoded family table
+// would still be right in code and wrong against a database whose commodity row was changed.
+assert(marketingYearStartFor({ crop_family: 'corn', marketing_year_start_month: 3, marketing_year_start_day: 15 })?.month === 3, 'GL-2: stored configuration must beat the crop-family default.')
+assert(marketingYearStartFor({ crop_family: 'corn' })?.month === 9, "GL-2: without stored configuration the crop family's USDA default must stand in.")
+assert(marketingYearStartFor({ crop_family: 'corn', marketing_year_start_month: 13, marketing_year_start_day: 1 })?.month === 9, 'GL-2: an out-of-range stored month must fall back, not be used.')
+assert(marketingYearStartFor({ crop_family: 'barley' }) === null && marketingYearStartFor(null) === null, 'GL-2: an unknown commodity has no marketing year.')
+assert(!cashBidEligibleForCropYear({ crop_family: 'corn', marketing_year_start_month: 3, marketing_year_start_day: 1 }, 2026, '2026-10-15', '2027-06-01', '2027-06-30'), 'GL-2: a March-start commodity must judge a June 2027 window as the next crop year.')
+result = evaluateMarketingAlertRules({ ...workspace, fields: { ...workspace.fields, commodities: [{ id: 'corn', name: 'Corn', crop_family: 'corn', marketing_year_start_month: 3, marketing_year_start_day: 1 }] } as GrainWorkspace['fields'], cash_bids: [spotBid], marketing_alert_rules: [{ ...price, crop_year: 2026 }] }, now)
+assert(result.firedRuleIds.includes(price.id), 'GL-2: a commodity configured to start in March must make a July 2026 spot bid the 2026 crop on the page, as it is for the sweep.')
 
 console.log('Marketing alert regressions passed.')

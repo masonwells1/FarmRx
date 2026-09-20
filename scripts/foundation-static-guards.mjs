@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 222')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 225')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -576,9 +576,18 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, gl2Migration, "add column if not exists marketing_year_start_month smallint not null default 9", 'gl2:marketing-year-configured')
   const marketingYear = read(root, 'src/data/marketingYear.ts')
   requireText(errors, marketingYear, "corn: { month: 9, day: 1 },\n  soybeans: { month: 9, day: 1 },\n  wheat: { month: 6, day: 1 },", 'gl2:browser-marketing-year-matches-sql')
+  // Those constants are the fallback for a database without the GL-2 migration, never the authority: the
+  // sweep reads commodities.marketing_year_start_*, so a data change there must move the page too. A
+  // guard can pin code to code; only reading the same row keeps the page honest against a data change.
+  requireText(errors, marketingYear, 'export function marketingYearStartFor(', 'gl2:marketing-year-from-stored-configuration')
+  requireText(errors, marketingYear, 'const configured = marketingYearStartFor(commodity)', 'gl2:marketing-year-from-stored-configuration')
+  requireText(errors, read(root, 'src/data/SupabaseFieldsRepository.ts'), 'marketing_year_start_month: marketingMonth, marketing_year_start_day: marketingDay', 'gl2:commodity-carries-marketing-year')
+  // Read from the RAW record, never through strictRow: that proxy fails closed on a column the row does
+  // not carry, and these two do not exist until the GL-2 migration is applied.
+  requireText(errors, read(root, 'src/data/SupabaseFieldsRepository.ts'), "const marketingMonth = optionalSmallInt(raw, 'marketing_year_start_month')", 'gl2:pre-migration-commodity-still-loads')
   requireText(errors, marketingYear, 'return inside(low) && inside(high)', 'gl2:window-wholly-inside')
   const marketingAlerts = read(root, 'src/data/marketingAlerts.ts')
-  requireText(errors, marketingAlerts, 'cashBidEligibleForCropYear(family, rule.crop_year, bid.bid_date, bid.delivery_start, bid.delivery_end)', 'gl2:alert-reader-uses-eligibility')
+  requireText(errors, marketingAlerts, 'cashBidEligibleForCropYear(commodity, rule.crop_year, bid.bid_date, bid.delivery_start, bid.delivery_end)', 'gl2:alert-reader-uses-eligibility')
   // The valuation reader keeps the feed out; the alerting reader admits it. That split is GL-2's whole point.
   requireText(errors, marketingAlerts, "bid.commodity_id === commodityId && bid.cash_price !== null && !isMarsBid(bid)", 'gl2:valuation-still-excludes-feed')
   if (/latestAlertEligibleCashBid[\s\S]{0,600}?isMarsBid/.test(marketingAlerts)) errors.push('gl2:alert-reader-must-not-exclude-feed')
