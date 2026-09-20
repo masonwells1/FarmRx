@@ -133,6 +133,26 @@ grant execute on function public.latest_eligible_cash_bid(uuid, text, integer, d
 --
 -- Security-invoker on purpose: this returns cash_bids rows to a signed-in client, so row-level security
 -- must apply to it exactly as it does to a direct select.
+-- GL-2 repair (Codex P2 on 4365c17): what counts as a feed row, in one SQL place.
+-- A row written before GL-1 added feed_source carries its provenance in the note instead, and the
+-- browser's isMarsBid has always honoured both. SQL that reads only feed_source would hand back such a
+-- legacy row as a farm's newest MANUAL bid; the browser would then discard it as feed, and the farm
+-- would show no manual valuation at all while a real manual bid sat just outside the loaded window.
+-- The pattern below is the exact SQL twin of `marsNote` in src/data/basisMath.ts, pinned to it by a
+-- static guard: an opening bracket, the report id, an optional middle dot and geography, a closing
+-- bracket, anchored at the start of the note.
+create or replace function public.cash_bid_is_feed(p_feed_source text, p_notes text)
+returns boolean
+language sql
+immutable
+set search_path = pg_catalog
+as $fn$
+  select p_feed_source is not null or coalesce(p_notes, '') ~ '^\[USDA MARS \S+( · [^]]+)?\]';
+$fn$;
+
+comment on function public.cash_bid_is_feed(text, text) is
+  'GL-2: whether a cash bid is USDA MARS feed history, by provenance column or by the legacy note marker. The SQL twin of isMarsBid in src/data/basisMath.ts; the two must agree.';
+
 create or replace function public.latest_cash_bids_per_commodity(p_farm_id uuid)
 returns setof public.cash_bids
 language sql
@@ -143,14 +163,14 @@ as $fn$
   (
     select distinct on (b.commodity_id) b.*
     from public.cash_bids b
-    where b.farm_id = p_farm_id and b.feed_source is null
+    where b.farm_id = p_farm_id and not public.cash_bid_is_feed(b.feed_source, b.notes)
     order by b.commodity_id, b.bid_date desc, b.updated_at desc, b.id desc
   )
   union all
   (
     select distinct on (b.commodity_id) b.*
     from public.cash_bids b
-    where b.farm_id = p_farm_id and b.feed_source is not null
+    where b.farm_id = p_farm_id and public.cash_bid_is_feed(b.feed_source, b.notes)
     order by b.commodity_id, b.bid_date desc, b.updated_at desc, b.id desc
   );
 $fn$;

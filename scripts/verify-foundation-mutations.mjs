@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 230
+const expectedMutationCount = 235
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -648,8 +648,24 @@ try {
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(".order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(RECENT_CASH_BID_LIMIT)", ".order('bid_date').order('id')"))
   detected('the browser reads the oldest cash bids once the feed fills the table', 'gl2:cash-bids-read-newest-first')
   reset()
-  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(".is('feed_source', null).order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)", ".order('bid_date', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)"))
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(".is('feed_source', null).not('notes', 'like', '[USDA MARS %').order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)", ".order('bid_date', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)"))
   detected("the farm's own older bids are lost behind feed volume", 'gl2:cash-bids-keep-manual-history')
+  reset()
+  // GL-2 repair: one feed test, both sides of the wire.
+  mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace('create or replace function public.cash_bid_is_feed(', 'create or replace function public.cash_bid_is_feed_unused('))
+  detected('the shared feed test disappears from the schema', 'gl2:feed-test-is-shared')
+  reset()
+  mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace("coalesce(p_notes, '') ~ '^\\[USDA MARS \\S+( \u00b7 [^]]+)?\\]'", "coalesce(p_notes, '') ~ '^\\[USDA MARS\\]'"))
+  detected('the server stops recognising the note marker the browser reads', 'gl2:feed-marker-matches-browser')
+  reset()
+  mutate('src/data/basisMath.ts', (source) => source.replace('const marsNote = /^\\[USDA MARS (\\S+)(?: \u00b7 ([^\\]]+))?\\]/', 'const marsNote = /^\\[USDA MARS\\]/'))
+  detected('the browser marker drifts away from the server test', 'gl2:feed-marker-matches-browser')
+  reset()
+  mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace('where b.farm_id = p_farm_id and not public.cash_bid_is_feed(b.feed_source, b.notes)', 'where b.farm_id = p_farm_id and b.feed_source is null'))
+  detected('a note-marked feed row is returned as the newest manual bid', 'gl2:manual-side-uses-shared-feed-test')
+  reset()
+  mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace('where b.farm_id = p_farm_id and public.cash_bid_is_feed(b.feed_source, b.notes)', 'where b.farm_id = p_farm_id and b.feed_source is not null'))
+  detected('a note-marked feed row is missing from the feed side', 'gl2:feed-side-uses-shared-feed-test')
   reset()
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('columnMissing(manual_cash_bids.error) ? [] : rows(manual_cash_bids.data, manual_cash_bids.error)', 'rows(manual_cash_bids.data, manual_cash_bids.error)'))
   detected('every farm loses Grain entirely until the GL-1 migration is applied', 'gl2:pre-gl1-workspace-still-loads')

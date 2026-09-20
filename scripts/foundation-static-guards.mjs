@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 230')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 235')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -613,8 +613,9 @@ export function foundationStaticGuard(root = process.cwd()) {
   // GL-1 made cash_bids grow every market day. The browser must read the NEWEST rows, bounded, or it
   // will judge a rule on stale history and fight the sweep over alert_rule_states.
   const gl2Gateway = read(root, 'src/data/SupabaseGrainDataGateway.ts')
+  const gl3BasisMath = read(root, 'src/data/basisMath.ts')
   requireText(errors, gl2Gateway, ".order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(RECENT_CASH_BID_LIMIT)", 'gl2:cash-bids-read-newest-first')
-  requireText(errors, gl2Gateway, ".is('feed_source', null).order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)", 'gl2:cash-bids-keep-manual-history')
+  requireText(errors, gl2Gateway, ".is('feed_source', null).not('notes', 'like', '[USDA MARS %').order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)", 'gl2:cash-bids-keep-manual-history')
   // That slice names feed_source, which GL-1's migration adds and which is applied separately from the
   // deploy. Its absence must be tolerated, or the first farm to load Grain after the merge loses the
   // whole workspace.
@@ -623,6 +624,15 @@ export function foundationStaticGuard(root = process.cwd()) {
   // read. Those rows are fetched exactly, and row-level security still applies to them.
   requireText(errors, gl2Gateway, "supabase.rpc('latest_cash_bids_per_commodity', { p_farm_id: farmId })", 'gl2:cash-bids-complete-per-commodity')
   requireText(errors, gl2Migration, 'create or replace function public.latest_cash_bids_per_commodity(', 'gl2:cash-bids-complete-per-commodity')
+  // One definition of "this row is feed", on both sides of the wire. The browser has always read
+  // provenance from the column OR the legacy note marker; the server's partition must do the same, or
+  // a note-marked row written before the column existed is returned as the newest manual bid, the
+  // browser discards it as feed, and the farm shows no valuation while a real manual bid sits below it.
+  requireText(errors, gl2Migration, 'create or replace function public.cash_bid_is_feed(', 'gl2:feed-test-is-shared')
+  requireText(errors, gl2Migration, "select p_feed_source is not null or coalesce(p_notes, '') ~ '^\\[USDA MARS \\S+( \u00b7 [^]]+)?\\]';", 'gl2:feed-marker-matches-browser')
+  requireText(errors, gl3BasisMath, "const marsNote = /^\\[USDA MARS (\\S+)(?: \u00b7 ([^\\]]+))?\\]/", 'gl2:feed-marker-matches-browser')
+  requireText(errors, gl2Migration, 'where b.farm_id = p_farm_id and not public.cash_bid_is_feed(b.feed_source, b.notes)', 'gl2:manual-side-uses-shared-feed-test')
+  requireText(errors, gl2Migration, 'where b.farm_id = p_farm_id and public.cash_bid_is_feed(b.feed_source, b.notes)', 'gl2:feed-side-uses-shared-feed-test')
   requireText(errors, gl2Migration, 'security invoker', 'gl2:per-commodity-read-keeps-rls')
   // The page must break a tie exactly as the sweep does, or the two record opposite conditions.
   requireText(errors, marketingAlerts, 'right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id)', 'gl2:tie-breaker-matches-sweep')
@@ -647,7 +657,6 @@ export function foundationStaticGuard(root = process.cwd()) {
 
   // GL-3: the dead ends. Both counterparty fields accept free text with suggestions, no buyer or
   // elevator is hardcoded, the position card leads with a disclosure, and a second crop is reachable.
-  const gl3BasisMath = read(root, 'src/data/basisMath.ts')
   requireText(errors, gl3BasisMath, 'export function knownCounterparties(', 'gl3:suggestions-are-shared')
   requireText(errors, gl3BasisMath, "...workspace.cash_bids.filter((bid) => !isMarsBid(bid)).map((bid) => bid.elevator),", 'gl3:suggestions-exclude-feed')
   if (/Cargill/.test(grainModule)) errors.push('gl3:no-hardcoded-buyer')

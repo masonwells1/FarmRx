@@ -218,5 +218,37 @@ begin
     then raise exception 'the service role cannot call latest_eligible_cash_bid'; end if;
 end $$;
 
+-- ------------------------------------------------- 6. a legacy feed row is not a manual bid
+-- Before GL-1 added feed_source a feed row carried its provenance in the note, and isMarsBid has always
+-- honoured both. SQL that read only the column would return such a row as a farm's newest MANUAL bid,
+-- the browser would discard it as feed, and the farm would show no manual valuation at all.
+insert into public.cash_bids(farm_id,elevator,commodity_id,bid_date,basis,cash_price,notes)
+values
+ ('00000000-0000-4000-8000-000000000071','Legacy Feed Row','soybeans','2026-10-15',-0.40,11.00,'[USDA MARS 2850 · Iowa] pre-column row'),
+ ('00000000-0000-4000-8000-000000000071','Real Manual Bid','soybeans','2026-10-14',-0.35,10.90,'typed by the farmer');
+
+do $$
+declare v_elevator text;
+begin
+  if not public.cash_bid_is_feed('usda_mars', null) then raise exception 'the provenance column must mark a feed row'; end if;
+  if not public.cash_bid_is_feed(null, '[USDA MARS 2850 · Iowa]') then raise exception 'the legacy note must mark a feed row'; end if;
+  if not public.cash_bid_is_feed(null, '[USDA MARS 2850]') then raise exception 'a legacy note without a geography must mark a feed row'; end if;
+  if public.cash_bid_is_feed(null, 'Cargill quoted this by phone') then raise exception 'an ordinary note must not mark a feed row'; end if;
+  if public.cash_bid_is_feed(null, 'see [USDA MARS 2850] for context') then raise exception 'the marker is anchored at the start; a mention mid-note is not provenance'; end if;
+  if public.cash_bid_is_feed(null, null) then raise exception 'a row with no provenance at all must not be a feed row'; end if;
+
+  -- The per-commodity selection must reach past the legacy row to the farmer's own bid.
+  select b.elevator into v_elevator
+  from public.latest_cash_bids_per_commodity('00000000-0000-4000-8000-000000000071') b
+  where b.commodity_id = 'soybeans' and not public.cash_bid_is_feed(b.feed_source, b.notes);
+  if v_elevator is distinct from 'Real Manual Bid' then raise exception 'the manual selection returned % instead of the farmer''s own bid', coalesce(v_elevator, 'nothing'); end if;
+
+  -- and it must still surface the legacy row on the feed side, where the basis history shows it.
+  select b.elevator into v_elevator
+  from public.latest_cash_bids_per_commodity('00000000-0000-4000-8000-000000000071') b
+  where b.commodity_id = 'soybeans' and public.cash_bid_is_feed(b.feed_source, b.notes);
+  if v_elevator is distinct from 'Legacy Feed Row' then raise exception 'the legacy feed row was lost instead of being classified as feed'; end if;
+end $$;
+
 select set_config('request.jwt.claims','',false);
 select 'GL2_ALERT_ELIGIBILITY_DISPOSABLE_PASS' as result;
