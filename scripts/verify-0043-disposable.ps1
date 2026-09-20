@@ -175,8 +175,10 @@ begin
       ('delete_program','p_farm_id uuid, p_operation_id uuid, p_program_id uuid'),
       ('delete_program_pass','p_farm_id uuid, p_operation_id uuid, p_program_id uuid, p_pass_id uuid'),
       ('delete_push_subscription','p_farm_id uuid, p_endpoint text'),
+      ('delete_grain_contract','p_farm_id uuid, p_contract_id uuid, p_reason text, p_expected_updated_at timestamp with time zone, p_operation_id uuid'),
       ('delete_scouting_note','p_farm_id uuid, p_note_id uuid'),
       ('delete_service_log_with_reversal','p_farm_id uuid, p_log_id uuid'),
+      ('edit_grain_contract','p_farm_id uuid, p_contract_id uuid, p_reason text, p_changes jsonb, p_expected_updated_at timestamp with time zone, p_operation_id uuid'),
       ('finalize_contract_price_leg','p_farm_id uuid, p_contract_id uuid, p_leg text, p_value numeric'),
       ('generate_due_program_items','p_farm_id uuid, p_operation_id uuid, p_local_date date'),
       ('generate_due_program_items_v2','p_farm_id uuid, p_operation_id uuid'),
@@ -235,8 +237,8 @@ begin
     and p.prosecdef
     and has_function_privilege('authenticated', p.oid, 'execute');
 
-  if v_allowed_definers <> 56 or v_actual_definers <> 56 then
-    raise exception 'authenticated SECURITY DEFINER ACL allowlist drift: expected 56, matched %, actual %',
+  if v_allowed_definers <> 58 or v_actual_definers <> 58 then
+    raise exception 'authenticated SECURITY DEFINER ACL allowlist drift: expected 58, matched %, actual %',
       v_allowed_definers, v_actual_definers;
   end if;
 

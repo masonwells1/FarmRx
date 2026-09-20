@@ -14,7 +14,9 @@ const addDays = (value: string, count: number) => { const date = new Date(`${val
 const businessDay = (value: string) => { const weekday = new Date(`${value}T00:00:00Z`).getUTCDay(); return weekday !== 0 && weekday !== 6 }
 const observationFresh = (bidDate: string, now: Date) => businessDay(bidDate) && now.getTime() - new Date(`${bidDate}T23:59:59Z`).getTime() <= 36 * 60 * 60 * 1000
 
-/** Client v1 is intentionally check-on-open, not background monitoring. */
+/** Plan targets and USDA report reminders are evaluated here, when the owner opens Grain. The saved
+ * marketing alert rules folded in below are the server sweep's (run_scheduled_alert_sweep, every
+ * fifteen minutes); this evaluation of them exists so the page agrees with the email that arrives. */
 export function evaluateGrainAlerts(workspace: GrainWorkspace, now = new Date()): GrainAlert[] {
   const today = farmLocalCalendarDate(now); const alerts: GrainAlert[] = []
   for (const target of workspace.marketing_plan_targets) {
@@ -24,6 +26,16 @@ export function evaluateGrainAlerts(workspace: GrainWorkspace, now = new Date())
   for (const report of workspace.usda_report_dates) if (report.report_date === today || report.report_date === addDays(today, 7)) { const window = report.report_date === today ? 'due' : 'seven-days'; alerts.push({ key: `report:${report.id}:${report.report_date}:${window}`, kind: 'usda_report', reportId: report.id, message: report.report_date === today ? `${report.report_name} is scheduled today.` : `${report.report_name} is scheduled in seven days.` }) }
   for (const item of evaluateMarketingAlertRules(workspace, now).alerts) alerts.push({ ...item, ruleId: item.ruleId })
   return alerts
+}
+/** GL-2: whether this browser may write a marketing rule's state, or must leave it to the sweep.
+ *
+ * A merge deploys the client to production on its own; applying the migration is a separate owner
+ * action. Between the two, a client that applies crop-year eligibility runs against a sweep that does
+ * not, and every open of Grain writes a verdict the sweep disagrees with -- re-firing or suppressing
+ * the same alert indefinitely. The capability is absent on an old client and on a workspace loaded
+ * before GL-2, so only an explicit false holds the browser back; undefined keeps the prior behaviour. */
+export function mayRecordAlertTransitions(capabilities: { gl2_alert_eligibility?: boolean } | null | undefined): boolean {
+  return capabilities?.gl2_alert_eligibility !== false
 }
 function sentKey(userId: string, farmId: string) { return `farm-rx-grain-alert-sent:v1:${userId}:${farmId}` }
 function readSent(key: string) { try { const value: unknown = JSON.parse(localStorage.getItem(key) ?? '[]'); return Array.isArray(value) && value.every((item) => typeof item === 'string') ? new Set(value) : new Set<string>() } catch { return new Set<string>() } }

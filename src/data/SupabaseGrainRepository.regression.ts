@@ -1,5 +1,5 @@
 import type { GrainDataGateway, GrainRowBundle, ReplaceMarketingPlanInput } from './GrainDataGateway'
-import { productionActualColumns } from './SupabaseGrainDataGateway'
+import { columnMissing, functionMissing, MANUAL_CASH_BID_LIMIT, mergeCashBids, productionActualColumns, RECENT_CASH_BID_LIMIT, tableMissing } from './SupabaseGrainDataGateway'
 import { GrainWriteQueue, grainWriteQueueKey, parseGrainQueue, type GrainQueueEntryV1 } from './grainWriteQueue'
 import { QueuedGrainRepository } from './QueuedGrainRepository'
 import { fieldsSeedForRegression } from './MockFieldsRepository'
@@ -9,11 +9,12 @@ import { supabaseConfig } from '../lib/supabaseConfig'
 import { getSyncStatus } from './syncStatus'
 import { getSaveReceipt } from '../lib/saveReceipt'
 import { readNeedsAttention } from './needsAttentionStore'
-import { isMarsBid, latestBasis, marsBidLabel } from './basisMath'
+import { isMarsBid, knownCounterparties, latestBasis, marsBidLabel } from './basisMath'
 import { farmerError } from '../lib/farmerErrors'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from './binLedger'
 import { deriveBinOnHand } from './binLedger'
 import { FILLED_OFFER_DELETE_MESSAGE } from './firmOffers'
+import { CONTRACT_REPAIR_PENDING, contractCorrectionDiff, contractIsCorrectable, validateContractCorrectionReason } from './grain'
 import { readFileSync } from 'node:fs'
 import type { FieldsRepository } from './fields'
 import type { FarmOperationContext } from './farmOperationContext'
@@ -79,6 +80,11 @@ class FakeGateway implements GrainDataGateway {
   async appendBinTransactionRpc(_farm: string, row: BinTransaction) { this.guard(); this.movementInputs.push(structuredClone(row)); await this.beforeMovement?.(); if (this.movementError) throw this.movementError; const existing = this.state.bundle.bin_transactions.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === row.id) as BinTransaction | undefined; if (existing) { if (existing.farm_id === row.farm_id && existing.grain_bin_id === row.grain_bin_id && existing.direction === row.direction && existing.bushels === row.bushels && existing.commodity_id === row.commodity_id && existing.occurred_on === row.occurred_on && existing.note === row.note && existing.source_kind === row.source_kind) { const response = structuredClone(existing); this.afterOnlineMutation?.(); return response } throw new Error('Movement id was already used with different content.') } this.state.bundle.bin_transactions = [...this.state.bundle.bin_transactions, structuredClone(row)]; if (this.throwAfterMovementPersist) { this.afterMovementPersist?.(); throw new TypeError('lost movement response') }; const response = structuredClone(row); this.afterOnlineMutation?.(); return response }
   async appendContractDeliveryRpc(_farm: string, row: { id: string; farm_id: string; grain_contract_id: string; bushels: number; delivered_on: string; note: string | null }, _allow: boolean) { this.guard(); await this.beforeDelivery?.(); const existing = this.state.bundle.grain_contract_deliveries.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === row.id) as typeof row | undefined; if (existing) { if (existing.farm_id === row.farm_id && existing.grain_contract_id === row.grain_contract_id && existing.bushels === row.bushels && existing.delivered_on === row.delivered_on && existing.note === row.note) { const response = structuredClone(existing); this.afterOnlineMutation?.(); return response } throw new Error('Delivery id was already used with different content.') } this.state.bundle.grain_contract_deliveries = [...this.state.bundle.grain_contract_deliveries, structuredClone(row)]; if (this.throwAfterDeliveryPersist) { this.afterDeliveryPersist?.(); throw new TypeError('lost delivery response') }; const response = structuredClone(row); this.afterOnlineMutation?.(); return response }
   async finalizeContractPriceLegRpc(_farm: string, contractId: string, leg: 'futures_price' | 'basis', value: number) { const raw = this.state.bundle.grain_contracts.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId) as Record<string, unknown> | undefined; if (!raw) throw new Error('missing contract'); if (raw[leg] !== null) throw new Error('already finalized'); const future = leg === 'futures_price' ? value : Number(raw.futures_price); const basis = leg === 'basis' ? value : Number(raw.basis); const saved = { ...raw, futures_price: future, basis, cash_price: future + basis + Number(raw.premium_cents_per_bu) / 100, updated_at: stamp }; this.state.bundle.grain_contracts = this.state.bundle.grain_contracts.map((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId ? saved : item); const response = structuredClone(saved); this.afterOnlineMutation?.(); return response }
+  editContractPayloads: Array<{ contractId: string; reason: string; changes: Record<string, unknown>; expectedUpdatedAt: string; operationId: string }> = []
+  deleteContractCalls: Array<{ contractId: string; reason: string; expectedUpdatedAt: string; operationId: string }> = []
+  reopenedOnDelete: string | null = null
+  async editContractRpc(_farm: string, contractId: string, reason: string, changes: Record<string, unknown>, expectedUpdatedAt: string, operationId: string) { this.guard(); this.editContractPayloads.push({ contractId, reason, changes: structuredClone(changes), expectedUpdatedAt, operationId }); const raw = this.state.bundle.grain_contracts.find((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId) as Record<string, unknown> | undefined; if (!raw) throw new Error('missing contract'); const saved = { ...raw, ...changes, updated_at: stamp }; this.state.bundle.grain_contracts = this.state.bundle.grain_contracts.map((item) => item && typeof item === 'object' && (item as { id?: unknown }).id === contractId ? saved : item); return structuredClone(saved) }
+  async deleteContractRpc(_farm: string, contractId: string, reason: string, expectedUpdatedAt: string, operationId: string) { this.guard(); this.deleteContractCalls.push({ contractId, reason, expectedUpdatedAt, operationId }); this.state.bundle.grain_contracts = this.state.bundle.grain_contracts.filter((item) => !(item && typeof item === 'object' && (item as { id?: unknown }).id === contractId)); return { deleted: true, reopened_firm_offer_id: this.reopenedOnDelete, already_deleted: false } }
   async upsertGrainAlertSettings(_farm: string, row: GrainAlertSettings) { this.guard(); return structuredClone(row) }
   async upsertGrainSaleLimit(_farm: string, row: GrainSaleLimit) { this.guard(); this.state.bundle.grain_sale_limits = [...(this.state.bundle.grain_sale_limits as GrainSaleLimit[]).filter((item) => item.id !== row.id), structuredClone(row)]; return structuredClone(row) }
   async upsertGrainCarrySettings(_farm: string, row: GrainCarrySettings) { this.guard(); this.state.bundle.grain_carry_settings = structuredClone(row); return structuredClone(row) }
@@ -419,6 +425,128 @@ async function run() {
     offline = false
     await queued.replayCurrent()
     assert((settingsGateway.state.bundle.grain_sale_limits[0] as GrainSaleLimit).sale_limit_bushels === 70_000 && parseGrainQueue(queueStorage.values.get(grainWriteQueueKey(supabaseConfig.projectRef, uid(10), farm)) ?? '{"version":1,"entries":[]}').entries.length === 0, 'Replay must write the queued sale limit and drain the queue.')
+  }
+  // 21 (GL-3): the type-ahead suggestions behind the buyer and elevator fields. Both were dropdowns
+  // that a farm with no history could not complete at all; the feed fence still holds inside them.
+  {
+    const bid = (elevator: string, extra: Record<string, unknown> = {}) => ({ elevator, notes: null, ...extra })
+    const suggestions = knownCounterparties({
+      cash_bids: [
+        bid('Cargill - Olney'),
+        bid('  Cargill - Olney  '),
+        bid('ADM - Mt. Carmel'),
+        bid('Iowa Interior', { feed_source: 'usda_mars' }),
+        bid('Cedar Rapids', { notes: '[USDA MARS 2850 · Iowa]' }),
+        bid('   '),
+      ] as never,
+      grain_contracts: [{ buyer: 'Premier White Corn' }, { buyer: 'ADM - Mt. Carmel' }],
+    }, ['Bunge', null, undefined, ''])
+    assert(
+      JSON.stringify(suggestions) === JSON.stringify(['ADM - Mt. Carmel', 'Bunge', 'Cargill - Olney', 'Premier White Corn']),
+      `GL-3: suggestions must be the farm's own counterparties, trimmed, de-duplicated and sorted, never a USDA market location (saw ${JSON.stringify(suggestions)}).`,
+    )
+    assert(!knownCounterparties({ cash_bids: [bid('Iowa Interior', { feed_source: 'usda_mars' })] as never, grain_contracts: [] }).length, 'GL-3: a farm whose only bids are feed rows must be offered no suggestions at all.')
+  }
+  // 22 (GL-2 repair): the workspace's cash bids are two bounded slices, newest first, merged by id.
+  // GL-1 made this table grow every market day, so an unbounded ascending read would hand the browser
+  // the OLDEST rows once it crossed PostgREST's cap -- and a browser that sees no fresh bid records the
+  // rule condition false while the server still sees a current one, which the sweep then re-fires.
+  {
+    const recent = [{ id: 'feed-3' }, { id: 'feed-2' }, { id: 'manual-new' }]
+    const manual = [{ id: 'manual-new' }, { id: 'manual-old' }]
+    const merged = mergeCashBids(recent, manual) as Array<{ id: string }>
+    assert(merged.length === 4, `GL-2: the two slices must merge without duplicating a row present in both (saw ${merged.length}).`)
+    assert(merged.filter((item) => item.id === 'manual-new').length === 1, 'GL-2: a manual bid in both slices must be counted once.')
+    assert(merged.some((item) => item.id === 'manual-old'), "GL-2: the farm's own older bid must survive however much feed history sits in front of it.")
+    assert(mergeCashBids([{ id: 'a' }, {}, null], []).length === 1, 'GL-2: a row without an id must be dropped, not merged as undefined.')
+    assert(RECENT_CASH_BID_LIMIT + MANUAL_CASH_BID_LIMIT <= 1000, 'GL-2: the two slices together must stay inside PostgREST\'s default row cap.')
+    // A cap keeps the newest rows overall; only the per-commodity slice keeps the newest row FOR EACH
+    // commodity, which is what latestBasis, the suggestions and the Today grain line read. A farm with
+    // more manual bids than the cap would otherwise lose one commodity's latest bid behind another's.
+    const capped = [{ id: 'corn-new' }, { id: 'corn-older' }]
+    const perCommodity = [{ id: 'corn-new' }, { id: 'beans-latest' }]
+    const withPerCommodity = mergeCashBids(capped, [], perCommodity) as Array<{ id: string }>
+    assert(withPerCommodity.length === 3, `GL-2: the per-commodity slice must add only what the windows missed (saw ${withPerCommodity.length}).`)
+    assert(withPerCommodity.some((item) => item.id === 'beans-latest'), "GL-2: a commodity's latest bid must survive even when newer bids for another commodity fill the cap.")
+    assert(mergeCashBids([], [], []).length === 0, 'GL-2: an empty merge must stay empty, which is what a farm sees before the GL-2 migration is applied.')
+  }
+  // 23 (GL-2 repair): a read that names a not-yet-applied column or function must not fail the whole
+  // workspace. GL-1's feed columns and GL-2's function are each approved and applied separately from the
+  // deploy that references them, so between merge and migration the browser meets both absences. A farm
+  // that met one and lost Grain entirely would be every farm, on the day of the merge.
+  {
+    assert(columnMissing({ code: '42703' }) && columnMissing({ code: 'PGRST204' }), 'GL-2: an undefined column must be recognized as a not-yet-applied migration.')
+    assert(!columnMissing({ code: '42P01' }) && !columnMissing(null) && !columnMissing(undefined), 'GL-2: only an undefined-column error counts; a missing table or no error must not be swallowed.')
+    assert(!columnMissing({ code: '42883' }) && functionMissing({ code: '42883' }), 'GL-2: a missing function and a missing column must stay distinguishable.')
+    assert(tableMissing({ code: '42P01' }) && !tableMissing({ code: '42703' }), 'GL-2: the table and column probes must not overlap.')
+  }
+  // 24 (GL-3b): the way out of a contract typed wrong, and the fences around it.
+  {
+    assert(validateContractCorrectionReason('  ') !== null && validateContractCorrectionReason('ab') !== null, 'GL-3b: a reason shorter than three characters must be refused.')
+    assert(validateContractCorrectionReason('x'.repeat(2001)) !== null, "GL-3b: a reason longer than the column's check constraint must be refused before it reaches the database.")
+    assert(validateContractCorrectionReason('  wrong buyer  ') === null, 'GL-3b: a real reason must be accepted, trimmed.')
+    const deliveredWorkspace = { grain_contract_deliveries: [{ grain_contract_id: 'contract-a' }] } as unknown as Parameters<typeof contractIsCorrectable>[0]
+    assert(!contractIsCorrectable(deliveredWorkspace, 'contract-a'), 'GL-3b: a contract with a delivery is history, not a draft.')
+    assert(contractIsCorrectable(deliveredWorkspace, 'contract-b'), 'GL-3b: a contract with no delivery must stay correctable.')
+
+    const repairGateway = new FakeGateway()
+    const repairRepo = repository(repairGateway)
+    const repairData = await repairRepo.getData()
+    const target = repairData.grain_contracts[0]
+    // Only what the farmer touched is sent. A payload naming every column would read as an instruction
+    // to clear the delivery window and the notes the farmer never opened.
+    await repairRepo.editContract(target.id, '  buyer typed wrong  ', { buyer: '  Corrected Buyer  ', delivery_end: null }, target.updated_at, uid(70))
+    const sent = repairGateway.editContractPayloads[0]
+    assert(sent?.reason === 'buyer typed wrong', 'GL-3b: the reason must reach the server trimmed.')
+    assert(sent.changes.buyer === 'Corrected Buyer', 'GL-3b: the buyer must reach the server trimmed.')
+    assert('delivery_end' in sent.changes && sent.changes.delivery_end === null, 'GL-3b: an explicit null must survive as a null, which is how a delivery window is cleared.')
+    assert(!('delivery_start' in sent.changes) && !('notes' in sent.changes) && !('bushels' in sent.changes), 'GL-3b: an untouched field must not be sent at all; the server reads an absent key as keep.')
+
+    let refusedReason = ''
+    try { await repairRepo.editContract(target.id, 'no', { buyer: 'X' }, target.updated_at, uid(71)) } catch (error) { refusedReason = error instanceof Error ? error.message : '' }
+    assert(/three characters/.test(refusedReason), `GL-3b: a short reason must be refused before any write (saw ${refusedReason}).`)
+    assert(repairGateway.editContractPayloads.length === 1, 'GL-3b: a refused correction must reach the server not at all.')
+
+    let emptyEdit = ''
+    try { await repairRepo.editContract(target.id, 'nothing actually changed', {}, target.updated_at, uid(72)) } catch (error) { emptyEdit = error instanceof Error ? error.message : '' }
+    assert(/Change something/.test(emptyEdit), `GL-3b: an empty correction must be refused rather than writing an audit row for nothing (saw ${emptyEdit}).`)
+
+    assert(sent.expectedUpdatedAt === target.updated_at, "GL-3b: the contract's own updated_at must ride along, so the server can refuse a write against a row that moved.")
+    assert(sent.operationId === uid(70), 'GL-3b: a correction must carry its own operation id, so a retry after a lost response is recognised rather than refused as stale.')
+    let missingOperation = ''
+    try { await repairRepo.editContract(target.id, 'buyer typed wrong', { buyer: 'Y' }, target.updated_at, 'not-a-uuid') } catch (error) { missingOperation = error instanceof Error ? error.message : '' }
+    assert(missingOperation.length > 0, 'GL-3b: an operation id that is not an id must be refused before any write.')
+
+    // Only what the farmer changed. A whole-form payload would let a buyer correction typed on a
+    // stale page quietly undo a bushels correction another member just saved.
+    const loaded = { ...target, buyer: 'Loaded Buyer', bushels: 1000, delivery_start: '2026-11-01', delivery_end: null, contract_number: 'CN-1', notes: null }
+    const untouched = contractCorrectionDiff(loaded, { buyer: 'Loaded Buyer', bushels: '1000', delivery_start: '2026-11-01', delivery_end: '', contract_number: 'CN-1', notes: '' })
+    assert(Object.keys(untouched).length === 0, `GL-3b: a form nobody touched must produce no change at all (saw ${JSON.stringify(untouched)}).`)
+    const buyerOnly = contractCorrectionDiff(loaded, { buyer: 'New Buyer', bushels: '1000', delivery_start: '2026-11-01', delivery_end: '', contract_number: 'CN-1', notes: '' })
+    assert(JSON.stringify(buyerOnly) === JSON.stringify({ buyer: 'New Buyer' }), `GL-3b: a buyer correction must carry the buyer and nothing else (saw ${JSON.stringify(buyerOnly)}).`)
+    const cleared = contractCorrectionDiff(loaded, { buyer: 'Loaded Buyer', bushels: '1000', delivery_start: '', delivery_end: '', contract_number: 'CN-1', notes: '' })
+    assert(JSON.stringify(cleared) === JSON.stringify({ delivery_start: null }), `GL-3b: clearing a window must be sent as an explicit null and nothing else (saw ${JSON.stringify(cleared)}).`)
+
+    repairGateway.reopenedOnDelete = uid(80)
+    const deleteResult = await repairRepo.deleteContract(target.id, 'entered twice', target.updated_at, uid(81))
+    assert(repairGateway.deleteContractCalls[0]?.contractId === target.id, 'GL-3b: the delete must name the contract.')
+    // The offer a deleted contract reopened has to reach the screen. Entering a replacement contract
+    // by hand instead of refilling that offer leaves it counted as pending and fillable a second time.
+    assert(deleteResult.reopenedFirmOfferId === uid(80), `GL-3b: the delete must report the firm offer it reopened (saw ${String(deleteResult.reopenedFirmOfferId)}).`)
+    assert(repairGateway.deleteContractCalls[0]?.expectedUpdatedAt === target.updated_at, 'GL-3b: the delete must carry the version it means to remove.')
+    assert(repairGateway.deleteContractCalls[0]?.operationId === uid(81), 'GL-3b: the delete must carry its own operation id, so a repeat is recognised as the same delete and not as a different one.')
+
+    // The GL-3b migration is applied separately from the deploy that carries this client. Between the
+    // two the RPCs do not exist, and the farmer must read a schema-skew message, not a Postgres error.
+    const preMigrationGateway = new FakeGateway()
+    Object.defineProperty(preMigrationGateway, 'editContractRpc', { value: undefined })
+    Object.defineProperty(preMigrationGateway, 'deleteContractRpc', { value: undefined })
+    const preMigrationRepo = repository(preMigrationGateway)
+    const preMigrationData = await preMigrationRepo.getData()
+    let pendingEdit = ''; let pendingDelete = ''
+    try { await preMigrationRepo.editContract(preMigrationData.grain_contracts[0].id, 'buyer typed wrong', { buyer: 'X' }, preMigrationData.grain_contracts[0].updated_at, uid(73)) } catch (error) { pendingEdit = error instanceof Error ? error.message : '' }
+    try { await preMigrationRepo.deleteContract(preMigrationData.grain_contracts[0].id, 'entered twice', preMigrationData.grain_contracts[0].updated_at, uid(82)) } catch (error) { pendingDelete = error instanceof Error ? error.message : '' }
+    assert(pendingEdit === CONTRACT_REPAIR_PENDING && pendingDelete === CONTRACT_REPAIR_PENDING, `GL-3b: a pre-migration database must say so plainly (saw ${pendingEdit} / ${pendingDelete}).`)
   }
   console.log('SupabaseGrainRepository regressions passed.')
 }

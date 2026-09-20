@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 194')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 287')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -565,7 +565,269 @@ export function foundationStaticGuard(root = process.cwd()) {
   const grainAlerts = read(root, 'src/data/grainAlerts.ts')
   requireText(errors, grainAlerts, "bid.commodity_id === target.commodity_id && bid.cash_price !== null && !isMarsBid(bid) && observationFresh(bid.bid_date, now)", 'mars-feed:plan-target-ignores-feed')
   const deliverGrainAlert = read(root, 'supabase/functions/deliver-grain-alert/index.ts')
-  if ((deliverGrainAlert.match(/\.is\('feed_source',null\)/g) ?? []).length !== 2) errors.push('mars-feed:alert-recheck-ignores-feed')
+  // GL-2 narrowed GL-004 here: the plan-target confirm keeps its feed fence (exactly one), while the
+  // marketing-rule re-check deliberately admits feed rows through the shared selection below.
+  if ((deliverGrainAlert.match(/\.is\('feed_source',null\)/g) ?? []).length !== 1) errors.push('mars-feed:alert-recheck-ignores-feed')
+
+  // GL-2: crop-year eligibility decides which bid may satisfy a rule, in SQL and in the browser, and
+  // the two copies of the marketing-year start are pinned to each other here so neither moves alone.
+  const gl2Migration = read(root, 'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql')
+  requireText(errors, gl2Migration, "where crop_family = 'wheat'", 'gl2:wheat-marketing-year-seeded')
+  requireText(errors, gl2Migration, "add column if not exists marketing_year_start_month smallint not null default 9", 'gl2:marketing-year-configured')
+  const marketingYear = read(root, 'src/data/marketingYear.ts')
+  requireText(errors, marketingYear, "corn: { month: 9, day: 1 },\n  soybeans: { month: 9, day: 1 },\n  wheat: { month: 6, day: 1 },", 'gl2:browser-marketing-year-matches-sql')
+  // Those constants are the fallback for a database without the GL-2 migration, never the authority: the
+  // sweep reads commodities.marketing_year_start_*, so a data change there must move the page too. A
+  // guard can pin code to code; only reading the same row keeps the page honest against a data change.
+  requireText(errors, marketingYear, 'export function marketingYearStartFor(', 'gl2:marketing-year-from-stored-configuration')
+  requireText(errors, marketingYear, 'const configured = marketingYearStartFor(commodity)', 'gl2:marketing-year-from-stored-configuration')
+  requireText(errors, read(root, 'src/data/SupabaseFieldsRepository.ts'), 'marketing_year_start_month: marketingMonth, marketing_year_start_day: marketingDay', 'gl2:commodity-carries-marketing-year')
+  // Read from the RAW record, never through strictRow: that proxy fails closed on a column the row does
+  // not carry, and these two do not exist until the GL-2 migration is applied.
+  requireText(errors, read(root, 'src/data/SupabaseFieldsRepository.ts'), "const marketingMonth = optionalSmallInt(raw, 'marketing_year_start_month')", 'gl2:pre-migration-commodity-still-loads')
+  // A merge deploys the client on its own; the migration is a separate owner action. Until the server
+  // carries the eligibility rule the browser must not write alert_rule_states, or it and the old sweep
+  // re-fire the same alert at each other.
+  requireText(errors, read(root, 'src/data/grainAlerts.ts'), 'export function mayRecordAlertTransitions(', 'gl2:transitions-gated-on-schema')
+  // The holdback selects the delivery input; it must not fall through into the pre-0035 branch, which
+  // would stamp last_triggered_at and ask for a delivery the pre-GL-2 server refuses, hiding the alert
+  // for the rest of the day -- the very harm the gate exists to prevent.
+  requireText(errors, read(root, 'src/GrainModule.tsx'), 'const deliveries = mayRecordAlertTransitions(data.capabilities)', 'gl2:transitions-gated-on-schema')
+  // And it reaches no further than saved marketing rules: a plan-target or report reminder carries no
+  // ruleId, owes nothing to GL-2, and must keep the email the page still promises it.
+  requireText(errors, read(root, 'src/GrainModule.tsx'), ': requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId), data.fields.farm.id, alertOperationContext);', 'gl2:holdback-still-emails-plan-targets')
+  requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), 'gl2_alert_eligibility: !functionMissing(per_commodity_cash_bids.error)', 'gl2:capability-reports-schema')
+  requireText(errors, marketingYear, 'return inside(low) && inside(high)', 'gl2:window-wholly-inside')
+  const marketingAlerts = read(root, 'src/data/marketingAlerts.ts')
+  requireText(errors, marketingAlerts, 'cashBidEligibleForCropYear(commodity, rule.crop_year, bid.bid_date, bid.delivery_start, bid.delivery_end)', 'gl2:alert-reader-uses-eligibility')
+  // The valuation reader keeps the feed out; the alerting reader admits it. That split is GL-2's whole point.
+  requireText(errors, marketingAlerts, "bid.commodity_id === commodityId && bid.cash_price !== null && !isMarsBid(bid)", 'gl2:valuation-still-excludes-feed')
+  if (/latestAlertEligibleCashBid[\s\S]{0,600}?isMarsBid/.test(marketingAlerts)) errors.push('gl2:alert-reader-must-not-exclude-feed')
+  requireText(errors, read(root, '.github/workflows/usda-mars-feed.yml'), 'Evaluate marketing alerts against the bids just ingested', 'gl2:sweep-sequenced-after-feed')
+  // GL-2 repair: one selection decides which bid may satisfy a rule. The sweep and the email re-check
+  // both call it, so a rule can never be judged true by one and 409'd by the other -- which would
+  // consume the transition in alert_rule_states and lose the alert with nothing sent.
+  requireText(errors, gl2Migration, 'create or replace function public.latest_eligible_cash_bid(', 'gl2:one-eligible-bid-selection')
+  requireText(errors, gl2Migration, 'from public.latest_eligible_cash_bid(v_farm.id,v_rule.commodity_id,v_rule.crop_year,v_local_date) b;', 'gl2:sweep-uses-shared-selection')
+  requireText(errors, deliverGrainAlert, "admin.rpc('latest_eligible_cash_bid'", 'gl2:email-recheck-uses-shared-selection')
+  // GL-1 made cash_bids grow every market day. The browser must read the NEWEST rows, bounded, or it
+  // will judge a rule on stale history and fight the sweep over alert_rule_states.
+  const gl2Gateway = read(root, 'src/data/SupabaseGrainDataGateway.ts')
+  const gl3BasisMath = read(root, 'src/data/basisMath.ts')
+  requireText(errors, gl2Gateway, ".order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(RECENT_CASH_BID_LIMIT)", 'gl2:cash-bids-read-newest-first')
+  requireText(errors, gl2Gateway, `.is('feed_source', null).or('notes.is.null,notes.not.like."[USDA MARS %"').order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)`, 'gl2:cash-bids-keep-manual-history')
+  // A bare not.like is null for a row with no note, so it drops the ordinary manual bids this slice
+  // exists to keep. The null branch must stay.
+  if (/\.not\('notes', 'like'/.test(gl2Gateway)) errors.push('gl2:manual-slice-admits-null-notes')
+  // That slice names feed_source, which GL-1's migration adds and which is applied separately from the
+  // deploy. Its absence must be tolerated, or the first farm to load Grain after the merge loses the
+  // whole workspace.
+  requireText(errors, gl2Gateway, 'columnMissing(manual_cash_bids.error) ? [] : rows(manual_cash_bids.data, manual_cash_bids.error)', 'gl2:pre-gl1-workspace-still-loads')
+  // A cap cannot promise the newest row for each commodity, which is what valuation and the grain line
+  // read. Those rows are fetched exactly, and row-level security still applies to them.
+  requireText(errors, gl2Gateway, "supabase.rpc('latest_cash_bids_per_commodity', { p_farm_id: farmId })", 'gl2:cash-bids-complete-per-commodity')
+  requireText(errors, gl2Migration, 'create or replace function public.latest_cash_bids_per_commodity(', 'gl2:cash-bids-complete-per-commodity')
+  // One definition of "this row is feed", on both sides of the wire. The browser has always read
+  // provenance from the column OR the legacy note marker; the server's partition must do the same, or
+  // a note-marked row written before the column existed is returned as the newest manual bid, the
+  // browser discards it as feed, and the farm shows no valuation while a real manual bid sits below it.
+  requireText(errors, gl2Migration, 'create or replace function public.cash_bid_is_feed(', 'gl2:feed-test-is-shared')
+  requireText(errors, gl2Migration, "select p_feed_source is not null or coalesce(p_notes, '') ~ '^\\[USDA MARS \\S+( \u00b7 [^]]+)?\\]';", 'gl2:feed-marker-matches-browser')
+  requireText(errors, gl3BasisMath, "const marsNote = /^\\[USDA MARS (\\S+)(?: \u00b7 ([^\\]]+))?\\]/", 'gl2:feed-marker-matches-browser')
+  requireText(errors, gl2Migration, 'where b.farm_id = p_farm_id and not public.cash_bid_is_feed(b.feed_source, b.notes)', 'gl2:manual-side-uses-shared-feed-test')
+  requireText(errors, gl2Migration, 'where b.farm_id = p_farm_id and public.cash_bid_is_feed(b.feed_source, b.notes)', 'gl2:feed-side-uses-shared-feed-test')
+  requireText(errors, gl2Migration, 'security invoker', 'gl2:per-commodity-read-keeps-rls')
+  // The page must break a tie exactly as the sweep does, or the two record opposite conditions.
+  requireText(errors, marketingAlerts, 'right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id)', 'gl2:tie-breaker-matches-sweep')
+  requireText(errors, gl2Migration, 'order by b.bid_date desc, b.updated_at desc, b.id desc', 'gl2:tie-breaker-matches-sweep')
+  // GL-2 (c): the page states the real schedule. It must never go back to calling the server-checked
+  // marketing alerts check-on-open.
+  const grainModule = read(root, 'src/GrainModule.tsx')
+  requireText(errors, grainModule, 'checks these on the server about every', 'gl2:true-schedule-stated')
+  if (/Check-on-open/.test(grainModule)) errors.push('gl2:true-schedule-stated')
+  // GL-2 (c) must not promise an email for a saved marketing alert. There are two reasons, and the
+  // second only showed up after the first repair: the scheduled path has no Resend call at all, and a
+  // rule the sweep already fired returns fired:false from record_marketing_alert_transition, so the
+  // browser filters it out before deliver-grain-alert is ever invoked. A server-fired marketing alert
+  // therefore never produces an email by any route.
+  requireText(errors, grainModule, 'sends the alert to your phone, if you have turned notifications on', 'gl2:email-promise-is-true')
+  // Three rounds went on this one sentence. Every phrasing that claimed something the code does not do
+  // is rejected by name, so the fourth attempt cannot be another rewording that passes.
+  if (/(emails the farm owner|The email goes out|their email goes out|and it is listed\s+here|and listed here)/.test(grainModule)) errors.push('gl2:email-promise-is-true')
+  // A rule the sweep fired today is suppressed from the page's list by hasFiredToday, so the page must
+  // say so rather than imply the farmer will find it there.
+  requireText(errors, grainModule, 'already sent to your phone today is not', 'gl2:same-day-suppression-stated')
+
+  // GL-3: the dead ends. Both counterparty fields accept free text with suggestions, no buyer or
+  // elevator is hardcoded, the position card leads with a disclosure, and a second crop is reachable.
+  requireText(errors, gl3BasisMath, 'export function knownCounterparties(', 'gl3:suggestions-are-shared')
+  requireText(errors, gl3BasisMath, "...workspace.cash_bids.filter((bid) => !isMarsBid(bid)).map((bid) => bid.elevator),", 'gl3:suggestions-exclude-feed')
+  if (/Cargill/.test(grainModule)) errors.push('gl3:no-hardcoded-buyer')
+  requireText(errors, grainModule, 'list="basis-elevator-suggestions"', 'gl3:elevator-is-free-text')
+  requireText(errors, grainModule, 'list="contract-buyer-suggestions"', 'gl3:buyer-is-free-text')
+  requireText(errors, grainModule, 'className="position-more-toggle"', 'gl3:position-card-discloses')
+  requireText(errors, grainModule, '{showMore ? "Hide details" : "More details"}', 'gl3:position-card-discloses')
+  requireText(errors, grainModule, '<h2>Add another crop</h2>', 'gl3:second-crop-reachable')
+  // The compact card stays mounted between crops, so the yield must not carry from one to the next.
+  requireText(errors, grainModule, 'setAph("");\n      await onSaved();', 'gl3:yield-cleared-between-crops')
+
+  // GL-3b: the way out of a contract typed wrong. Both actions are server-owned, because "this
+  // contract has no deliveries" must be decided under a row lock, the reason is not optional, and the
+  // audit row and the change are one transaction.
+  const gl3bMigration = read(root, 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql')
+  requireText(errors, gl3bMigration, 'create or replace function public.edit_grain_contract(', 'gl3b:repair-is-server-owned')
+  requireText(errors, gl3bMigration, 'create or replace function public.delete_grain_contract(', 'gl3b:repair-is-server-owned')
+  requireText(errors, gl2Gateway, "supabase.rpc('edit_grain_contract'", 'gl3b:repair-is-server-owned')
+  requireText(errors, gl2Gateway, "supabase.rpc('delete_grain_contract'", 'gl3b:repair-is-server-owned')
+  // One test of "this contract can still be corrected", on both sides of the wire. The screen must
+  // never offer a control the database will refuse, and the database must never accept one the screen
+  // thought it had already withheld.
+  requireText(errors, gl3bMigration, 'create or replace function public.grain_contract_has_deliveries(', 'gl3b:delivered-contract-is-history')
+  requireText(errors, gl3bMigration, 'if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then\n    raise exception \'this contract already has delivered bushels and can no longer be changed\';', 'gl3b:delivered-contract-is-history')
+  requireText(errors, gl3bMigration, 'if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then\n    raise exception \'this contract already has delivered bushels and can no longer be deleted\';', 'gl3b:delivered-contract-is-history')
+  requireText(errors, read(root, 'src/data/grain.ts'), 'return !workspace.grain_contract_deliveries.some((delivery) => delivery.grain_contract_id === contractId)', 'gl3b:delivered-contract-is-history')
+  requireText(errors, grainModule, 'if (!available || !contractIsCorrectable(workspace, contract.id)) return null;', 'gl3b:delivered-contract-is-history')
+  // The reason is the farm's own record of why a number moved, so it is required in the browser, in
+  // the repository, and in the column's own check constraint.
+  requireText(errors, read(root, 'src/data/grain.ts'), 'export function validateContractCorrectionReason(', 'gl3b:reason-is-required')
+  requireText(errors, gl3bMigration, 'reason text not null check (length(btrim(reason)) between 3 and 2000)', 'gl3b:reason-is-required')
+  requireText(errors, gl3bMigration, 'a reason of 3 to 2000 characters is required to change a contract', 'gl3b:reason-is-required')
+  requireText(errors, gl3bMigration, 'a reason of 3 to 2000 characters is required to delete a contract', 'gl3b:reason-is-required')
+  // A correction changes what was typed wrong, never the contract's identity or its math. Pricing on a
+  // basis or HTA contract belongs to 0033's one-shot finalization rule, which this must not reach past.
+  requireText(errors, gl3bMigration, 'set buyer = v_buyer, bushels = v_bushels, delivery_start = v_start, delivery_end = v_end,\n         contract_number = v_number, notes = v_notes, updated_at = now()', 'gl3b:identity-and-math-not-editable')
+  if (/(crop_year|commodity_id|contract_type|cash_price|futures_price|basis|premium_cents_per_bu)\s*=/.test(gl3bMigration.slice(gl3bMigration.indexOf('update public.grain_contracts'), gl3bMigration.indexOf('returning * into v_after')))) errors.push('gl3b:identity-and-math-not-editable')
+  // The record of a delete has to outlive the row it removed, which is the whole point of the table.
+  if (gl3bMigration.indexOf("values (p_farm_id, p_contract_id, 'delete'") > gl3bMigration.indexOf('delete from public.grain_contracts')) errors.push('gl3b:audit-outlives-the-contract')
+  if (/grain_contract_id uuid not null references/.test(gl3bMigration)) errors.push('gl3b:audit-outlives-the-contract')
+  requireText(errors, gl3bMigration, 'create trigger grain_contract_audit_immutable', 'gl3b:audit-is-append-only')
+  requireText(errors, gl3bMigration, 'grant select on public.grain_contract_audit to authenticated;', 'gl3b:audit-is-append-only')
+  if (/grant[^;\n]*(insert|update|delete)[^;\n]*on public\.grain_contract_audit/.test(gl3bMigration)) errors.push('gl3b:audit-is-append-only')
+  // This migration is applied separately from the deploy that carries the client, so the screen must
+  // withhold both controls until the schema is there rather than offer one that fails on first use.
+  requireText(errors, gl2Gateway, 'contract_edit_delete: !tableMissing(contract_audit_probe.error)', 'gl3b:capability-reports-schema')
+  requireText(errors, grainModule, "const available = workspace.capabilities?.contract_edit_delete !== false;", 'gl3b:capability-reports-schema')
+  // Neither correction is ever queued: a queued edit would replay against a contract that may since
+  // have taken a delivery, and a queued delete against one that no longer exists.
+  const gl3bQueued = read(root, 'src/data/QueuedGrainRepository.ts')
+  requireText(errors, gl3bQueued, "async editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, operationId: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before correcting a contract.')", 'gl3b:correction-needs-a-connection')
+  requireText(errors, gl3bQueued, "async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string, operationId: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before deleting a contract.')", 'gl3b:correction-needs-a-connection')
+  // An absent key keeps the stored value; only an explicit null clears one. A payload that named every
+  // column would turn a buyer correction into a silent wipe of the window and the notes.
+  requireText(errors, read(root, 'src/data/SupabaseGrainRepository.ts'), 'if (changes.delivery_start !== undefined) payload.delivery_start = changes.delivery_start || null', 'gl3b:absent-key-keeps-stored-value')
+  requireText(errors, gl3bMigration, "v_start   := case when p_changes ? 'delivery_start'  then (p_changes->>'delivery_start')::date           else v_before.delivery_start end;", 'gl3b:absent-key-keeps-stored-value')
+  // A contract created from a firm offer IS the record that the offer was filled. Deleting it must not
+  // leave the offer marked filled pointing at nothing, which no screen can explain and which would
+  // block that offer from ever being filled again.
+  requireText(errors, gl3bMigration, "v_reopened_status := case when v_offer.expires_on is not null and v_offer.expires_on < v_local_date then 'expired' else 'open' end;", 'gl3b:filled-offer-does-not-dangle')
+  requireText(errors, gl3bMigration, 'set status = v_reopened_status::public.firm_offer_status,', 'gl3b:filled-offer-does-not-dangle')
+  // Either association. A contract filled through the pre-RPC fallback never got firm_offer_id --
+  // contractColumns does not carry it -- so for those the link lives only on the offer's side.
+  requireText(errors, gl3bMigration, 'where farm_id = p_farm_id and (id = v_before.firm_offer_id or filled_contract_id = p_contract_id)', 'gl3b:filled-offer-does-not-dangle')
+  requireText(errors, gl3bMigration, 'filled_contract_id = null, updated_at = now()', 'gl3b:filled-offer-does-not-dangle')
+  // Two members can hold the same contract open. Without a compare-and-swap the second save reverses
+  // the first correction, and the audit records both as deliberate. Same fence as optimisticSave.
+  requireText(errors, gl3bMigration, "if p_expected_updated_at is null or v_before.updated_at is distinct from p_expected_updated_at then\n    raise exception using errcode = 'P0001', message = 'FARM_RX_STALE_WRITE';", 'gl3b:correction-is-compare-and-swap')
+  // Both RPCs, not just whichever one happens to still carry the text: an edit and a delete are each
+  // a write against a row another member may have moved.
+  if ((gl3bMigration.split("is distinct from p_expected_updated_at").length - 1) !== 2) errors.push('gl3b:correction-is-compare-and-swap')
+  requireText(errors, read(root, 'src/data/grain.ts'), 'export function contractCorrectionDiff(', 'gl3b:only-changed-fields-are-sent')
+  requireText(errors, grainModule, 'const changes = contractCorrectionDiff(current, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number, notes });', 'gl3b:only-changed-fields-are-sent')
+  requireText(errors, grainModule, 'await services.grainRepository.editContract(contract.id, reason, changes, current.updated_at, operationId.current);', 'gl3b:correction-is-compare-and-swap')
+  requireText(errors, grainModule, 'await services.grainRepository.deleteContract(contract.id, reason, current.updated_at, operationId.current);', 'gl3b:correction-is-compare-and-swap')
+  // The farm's own calendar day, not the database's. After UTC midnight an Illinois farm is still on
+  // the previous evening, and an offer expiring that day is still fillable there.
+  requireText(errors, gl3bMigration, "select (now() at time zone coalesce(f.time_zone, 'UTC'))::date into v_local_date", 'gl3b:offer-expiry-is-farm-local')
+  // can_edit_farm admits a worker; Grain is behind can_read_private_financials; these functions are
+  // security definer and so answer to neither unless they ask. Both RPCs must ask, hence the count.
+  if ((gl3bMigration.split('not public.can_read_private_financials(p_farm_id)').length - 1) !== 2) errors.push('gl3b:repair-requires-financial-access')
+  // An audited action is pointless while the direct path is open.
+  requireText(errors, gl3bMigration, 'revoke update, delete on public.grain_contracts from authenticated;', 'gl3b:audited-actions-are-the-only-path')
+  requireText(errors, gl3bMigration, 'drop policy if exists grain_contracts_update on public.grain_contracts;', 'gl3b:audited-actions-are-the-only-path')
+  requireText(errors, gl3bMigration, 'drop policy if exists grain_contracts_delete on public.grain_contracts;', 'gl3b:audited-actions-are-the-only-path')
+  // A write that commits and loses its response must not read as a failure the farmer cannot resolve.
+  // The recognition has to come BEFORE the compare-and-swap, because a committed edit moved updated_at.
+  requireText(errors, gl3bMigration, 'select * into v_replay from public.grain_contract_audit a where a.farm_id = p_farm_id and a.operation_id = p_operation_id;\n  if found then', 'gl3b:correction-survives-a-lost-response')
+  if (gl3bMigration.indexOf('a.operation_id = p_operation_id') > gl3bMigration.indexOf('is distinct from p_expected_updated_at')) errors.push('gl3b:correction-survives-a-lost-response')
+  requireText(errors, gl3bMigration, 'create unique index grain_contract_audit_operation_idx', 'gl3b:correction-survives-a-lost-response')
+  requireText(errors, gl3bMigration, "if p_operation_id is null then raise exception 'a correction must carry its own operation id'; end if;", 'gl3b:correction-survives-a-lost-response')
+  requireText(errors, grainModule, 'const operationId = useRef<string | null>(null);', 'gl3b:correction-survives-a-lost-response')
+  // A version fence plus a draft holding pre-refresh values is worse than either alone: the request
+  // carries the NEW updated_at with the OLD field values, so the compare-and-swap accepts a write that
+  // undoes whatever another member just corrected.
+  requireText(errors, grainModule, 'if (contract.updated_at !== seenVersion) {', 'gl3b:draft-rebases-on-a-changed-contract')
+  requireText(errors, grainModule, 'This contract changed while you had it open. The fields now show the current values', 'gl3b:draft-rebases-on-a-changed-contract')
+  // The refresh after a successful save hands back the row this panel just wrote. Without adopting
+  // that version, the farmer's own correction is read as somebody else's and the success message is
+  // replaced by a warning that nothing concurrent actually happened.
+  // The prop does not carry the new version until the refresh lands, so adopting it at save time
+  // only moves the mismatch. The version this panel wrote is remembered separately and recognised.
+  requireText(errors, grainModule, 'setSavedRow(saved);', 'gl3b:own-save-is-not-a-concurrent-change')
+  requireText(errors, grainModule, 'if (contract.updated_at !== seenVersion && savedRow !== null && contract.updated_at === savedRow.updated_at) {', 'gl3b:own-save-is-not-a-concurrent-change')
+  // The reload after a save catches its own failure, so a correction can succeed while the prop stays
+  // on the row before it. The panel diffs and versions against the row it last wrote, not the prop.
+  requireText(errors, grainModule, 'const current = savedRow ?? contract;', 'gl3b:a-failed-reload-cannot-strand-the-panel')
+  requireText(errors, grainModule, 'const changes = contractCorrectionDiff(current, {', 'gl3b:a-failed-reload-cannot-strand-the-panel')
+  requireText(errors, grainModule, 'changes, current.updated_at, operationId.current);', 'gl3b:a-failed-reload-cannot-strand-the-panel')
+  requireText(errors, grainModule, 'reason, current.updated_at, operationId.current);', 'gl3b:a-failed-reload-cannot-strand-the-panel')
+  // Setting a basis or futures price tells the farmer to add a contract note. Without a note field in
+  // the only form that can change one, that instruction has nowhere to land.
+  requireText(errors, grainModule, '<label>Contract note<textarea value={notes}', 'gl3b:a-contract-note-is-reachable')
+  // A deleted contract takes its row with it, so what the delete has to say goes above the table. A
+  // contract that came from a firm offer sent that offer back to open; entering a replacement by hand
+  // instead of refilling it leaves the offer counted as pending and fillable into a second contract.
+  requireText(errors, read(root, 'src/data/SupabaseGrainRepository.ts'), 'return { reopenedFirmOfferId: reopened, reopenedFirmOfferStatus: status }', 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, grainModule, 'onDeleted?.(result.reopenedFirmOfferId', 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, grainModule, 'fill it from Firm offers rather than entering a new contract', 'gl3b:a-reopened-offer-is-surfaced')
+  // An offer whose expiry had passed comes back 'expired', not 'open'. It cannot be filled and is not
+  // counted as pending, so the id alone is not enough to know what to tell the farmer.
+  // The status the delete SET, stored and replayed -- not the offer's state at some later moment,
+  // which by the time of a retry can be whatever another member did to it since.
+  requireText(errors, gl3bMigration, "  reopened_firm_offer_status text,", 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, gl3bMigration, "'reopened_firm_offer_status', v_reopened_status,", 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, gl3bMigration, "'reopened_firm_offer_status', v_replay.reopened_firm_offer_status,", 'gl3b:a-reopened-offer-is-surfaced')
+  if (/'reopened_firm_offer_status', \(select/.test(gl3bMigration)) errors.push('gl3b:a-reopened-offer-is-surfaced')
+  // Every state named. "Not open, therefore expired" announces an expiry that never happened.
+  requireText(errors, grainModule, 'result.reopenedFirmOfferStatus === "expired"', 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, grainModule, 'result.reopenedFirmOfferStatus === "open"', 'gl3b:a-reopened-offer-is-surfaced')
+  requireText(errors, grainModule, 'marked expired rather than reopened', 'gl3b:a-reopened-offer-is-surfaced')
+  // A retry after a lost response owes the same answer, or that guidance is lost entirely.
+  requireText(errors, gl3bMigration, "'reopened_firm_offer_id', v_replay.reopened_firm_offer_id,", 'gl3b:a-reopened-offer-is-surfaced')
+  // A delete retry is the SAME delete or it is not a retry. "An audit row exists" would answer a
+  // different reason, or another member's delete, with this caller's success.
+  requireText(errors, gl3bMigration, 'if v_replay.operation_id = p_operation_id and v_replay.reason is not distinct from v_reason then', 'gl3b:a-delete-retry-must-be-the-same-delete')
+  requireText(errors, gl3bMigration, "raise exception using errcode = 'P0001', message = 'FARM_RX_CONTRACT_ALREADY_DELETED';", 'gl3b:a-delete-retry-must-be-the-same-delete')
+  requireText(errors, gl3bMigration, "if p_operation_id is null then raise exception 'a delete must carry its own operation id'; end if;", 'gl3b:a-delete-retry-must-be-the-same-delete')
+  // A replay returns the row THAT operation produced. Handing back a later member's version would let
+  // the browser adopt it as its own and then overwrite their work with the values it still holds.
+  requireText(errors, gl3bMigration, '      return v_replay.after_row;', 'gl3b:a-retry-must-be-the-same-correction')
+  requireText(errors, read(root, 'src/data/grain.ts'), 'if ((draft.notes.trim() || null) !== contract.notes) changes.notes = draft.notes.trim() || null', 'gl3b:a-contract-note-is-reachable')
+  // The browser refuses an empty correction, but the RPC is reachable without the browser, and a
+  // no-op there would move updated_at and make every other member's open draft stale for nothing.
+  requireText(errors, gl3bMigration, "if v_changes is null or not (v_changes ?| array['buyer','bushels','delivery_start','delivery_end','contract_number','notes']) then", 'gl3b:a-correction-must-correct-something')
+  requireText(errors, gl3bMigration, "raise exception 'a correction must change something';", 'gl3b:a-correction-must-correct-something')
+  // Recognising a retry by id alone would answer a CHANGED draft with the earlier correction and
+  // report success while dropping what the farmer just typed.
+  // The contract is part of the replay identity, not context around it: an id spent on contract A
+  // must not answer for contract B, however identical the reason and the requested change are.
+  requireText(errors, gl3bMigration, 'if v_replay.grain_contract_id = p_contract_id\n       and v_replay.reason is not distinct from v_reason\n       and v_replay.requested_changes is not distinct from v_changes then', 'gl3b:a-retry-must-be-the-same-correction')
+  requireText(errors, gl3bMigration, "raise exception using errcode = 'P0001', message = 'FARM_RX_CORRECTION_ALREADY_SAVED';", 'gl3b:a-retry-must-be-the-same-correction')
+  requireText(errors, grainModule, 'const redraft = () => { operationId.current = null };', 'gl3b:a-retry-must-be-the-same-correction')
+  if ((grainModule.split('redraft();').length - 1) !== 7) errors.push('gl3b:a-retry-must-be-the-same-correction')
+  // ??=, not =: a retry must reuse the id its first attempt used, or the server cannot recognise it.
+  requireText(errors, grainModule, 'operationId.current ??= services.createGrainId();', 'gl3b:correction-survives-a-lost-response')
+  // Both paths mint lazily, correction and delete. A plain assignment in either would hand a retry a
+  // fresh id, and the server would read it as a different operation rather than the same one.
+  if ((grainModule.split('operationId.current ??= services.createGrainId();').length - 1) !== 2) errors.push('gl3b:correction-survives-a-lost-response')
+  requireText(errors, grainModule, 'current.updated_at, operationId.current);\n      operationId.current = null;', 'gl3b:correction-survives-a-lost-response')
+  if (/expires_on < current_date/.test(gl3bMigration)) errors.push('gl3b:offer-expiry-is-farm-local')
+  // GL-3a made the crop and year picker permanent, so the sale form must not outlive a scope change:
+  // a draft typed for one crop year would otherwise be saved under the next one.
+  requireText(errors, grainModule, 'key={scopeKey(selectedScope)}', 'gl3:contract-form-resets-on-scope-change')
+  requireText(errors, grainModule, '<tfoot>', 'gl3:contract-totals-row')
+  // The totals row floors each contract's remaining exactly as its own row does, so one over-delivered
+  // contract can never make the farm's remaining look smaller than it is.
+  requireText(errors, grainModule, 'sum + Math.max(0, contract.bushels - workspace.grain_contract_deliveries', 'gl3:totals-never-net-over-delivery')
   return errors
 }
 

@@ -207,7 +207,7 @@ const programsSharedShapes: Record<string, (farm: FarmFixture) => Record<string,
   application_records: (farm) => ({ select: 'id,farm_id,crop_assignment_id,application_date,applied_acres,status', farm_id: `eq.${farm.id}`, status: 'neq.voided', order: 'application_date.desc,id.asc' }),
   inventory_products: (farm) => ({ select: 'id,farm_id,name,inventory_unit,is_active', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' }),
 }
-const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, string>> = {
+const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, string> | Array<Record<string, string>>> = {
   production_estimates: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
   grain_contracts: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,delivery_start.asc,id.asc' }),
   grain_contract_deliveries: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'delivered_on.asc,id.asc' }),
@@ -216,7 +216,14 @@ const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, str
   grain_bins: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' }),
   bin_inventory: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
   bin_transactions: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'occurred_on.desc,created_at.desc,id.desc' }),
-  cash_bids: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'bid_date.asc,id.asc' }),
+  // GL-2 repair: two bounded slices, newest first -- the recent window, and the farm's own bids so they
+  // survive however much USDA feed history sits in front of them.
+  cash_bids: (farm) => [
+    { select: '*', farm_id: `eq.${farm.id}`, order: 'bid_date.desc,id.desc', limit: '750' },
+    { select: '*', farm_id: `eq.${farm.id}`, feed_source: 'is.null', or: '(notes.is.null,notes.not.like."[USDA MARS %")', order: 'bid_date.desc,id.desc', limit: '250' },
+  ],
+  // GL-3b capability probe: one indexed read of at most one row, whose contents are not used.
+  grain_contract_audit: (farm) => ({ select: 'id', farm_id: `eq.${farm.id}`, limit: '1' }),
   usda_report_dates: () => ({ select: '*', order: 'report_date.asc,id.asc' }),
   usda_market_reports: () => ({ select: '*', order: 'report_id.asc' }),
   marketing_alert_rules: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,created_at.asc,id.asc' }),
@@ -233,6 +240,10 @@ const profitabilityReadQueries: Record<string, (farm: FarmFixture) => Record<str
   budget_field_allocations: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'budget_id.asc,crop_assignment_id.asc' }),
   equipment: (farm) => ({ select: 'id,farm_id,name,status', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' }),
 }
+// GL-3b: what the browser actually asked the server to change, so a journey can prove the payload
+// rather than only the screen. Cleared by the test that reads it.
+const contractRepairCalls: Array<{ rpc: string; body: Record<string, unknown> }> = []
+
 function grainRows(table: string, farm: FarmFixture) {
   if (table === 'production_estimates') return [{ id: '00000000-0000-4000-8000-000000000051', farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, planted_acres: 80, aph_yield: 190, expected_bushels: 15_200, actual_bushels: null, drives_math: 'projected', notes: null, created_at: now, updated_at: now }]
   return table === 'grain_alert_settings' || table === 'grain_carry_settings' ? null : []
@@ -318,11 +329,22 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
     }
     if (['program_due_generation_status', 'service_due_generation_status'].some((name) => url.pathname === `/rest/v1/rpc/${name}`)) { const value = route.request().postDataJSON() as Record<string, unknown>; if (route.request().method() !== 'POST' || Object.keys(value).length !== 1 || !accessible.some((farm) => farm.id === value.p_farm_id)) { await rejectShape('due status body'); return }; await fulfillJson(route, { has_due: false, task_needed: false, notification_needed: false, local_date: '2026-07-12' }); return }
     if (['generate_due_program_items_v2', 'generate_due_service_tasks_v2'].some((name) => url.pathname === `/rest/v1/rpc/${name}`)) throw new Error(`False due preflight unexpectedly called ${url.pathname}`)
+    // GL-2 repair: the newest bid per commodity, fetched exactly rather than hoped for inside a cap.
+    // Row-level security applies to it, so the mock answers only for a farm this member can reach and
+    // serves the same rows the windowed reads do; the merge de-duplicates them by id.
+    if (url.pathname === '/rest/v1/rpc/latest_cash_bids_per_commodity') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !accessible.some((farm) => farm.id === value.p_farm_id)) { await rejectShape('latest_cash_bids_per_commodity body'); return }; const perCommodityFarm = accessible.find((item) => item.id === value.p_farm_id)!; await fulfillJson(route, moduleRows.cash_bids ?? grainRows('cash_bids', perCommodityFarm)); return }
+    if (url.pathname === '/rest/v1/rpc/edit_grain_contract' || url.pathname === '/rest/v1/rpc/delete_grain_contract') {
+      let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
+      const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
+      if (route.request().method() !== 'POST' || !value || typeof value.p_farm_id !== 'string' || typeof value.p_contract_id !== 'string' || typeof value.p_reason !== 'string') { await rejectShape(`${url.pathname.split('/').pop()} body`); return }
+      contractRepairCalls.push({ rpc: url.pathname.split('/').pop()!, body: value })
+      await fulfillJson(route, url.pathname.endsWith('edit_grain_contract') ? { id: value.p_contract_id } : { deleted: true, reopened_firm_offer_id: null, already_deleted: false }); return
+    }
     if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks' || url.pathname === '/rest/v1/rpc/generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${url.pathname}`)
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, session(activeUserId).user); return }
     if (url.pathname === '/auth/v1/logout') { await fulfillJson(route, {}); return }
-    if (rest && Object.hasOwn(grainReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, grainReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, moduleRows[rest] ?? grainRows(rest, farm)); return }
+    if (rest && Object.hasOwn(grainReadQueries, rest)) { const farm = requestedFarm(url); const expected = grainReadQueries[rest]!(farm); const shapes = Array.isArray(expected) ? expected : [expected]; if (route.request().method() !== 'GET' || !shapes.some((shape) => exactQuery(url, shape))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, moduleRows[rest] ?? grainRows(rest, farm)); return }
     // The profitability workspace load probes for the U of I badge column when the farm has no cost lines (an undefined column answers 42703 live); the mock's schema has it.
     if (emptyUnknownReads && rest === 'budget_cost_lines' && route.request().method() === 'GET' && exactQuery(url, { select: 'university_default_amount', farm_id: `eq.${requestedFarm(url).id}`, limit: '1' })) { await fulfillJson(route, []); return }
     if (emptyUnknownReads && rest && Object.hasOwn(profitabilityReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, profitabilityReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, []); return }
@@ -1015,6 +1037,17 @@ test('a direct signed-in A to B replacement hides Farm A before B access validat
     if (['can_access_farm', 'is_active_farm_member', 'can_edit_farm', 'can_manage_farm', 'can_read_private_financials', 'has_explicit_rep_access'].some((name) => url.pathname === `/rest/v1/rpc/${name}`)) { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || value.target_farm_id !== accessible[0]!.id) { await rejectShape(`${url.pathname} body`); return }; await fulfillJson(route, !url.pathname.endsWith('/has_explicit_rep_access')); return }
     if (['program_due_generation_status', 'service_due_generation_status'].some((name) => url.pathname === `/rest/v1/rpc/${name}`)) { const value = route.request().postDataJSON() as Record<string, unknown>; if (route.request().method() !== 'POST' || Object.keys(value).length !== 1 || value.p_farm_id !== accessible[0]!.id) { await rejectShape('due status body'); return }; await fulfillJson(route, { has_due: false, task_needed: false, notification_needed: false, local_date: '2026-07-12' }); return }
     if (['generate_due_program_items_v2', 'generate_due_service_tasks_v2'].some((name) => url.pathname === `/rest/v1/rpc/${name}`)) throw new Error(`False due preflight unexpectedly called ${url.pathname}`)
+    // GL-2 repair: the newest bid per commodity, fetched exactly rather than hoped for inside a cap.
+    // Row-level security applies to it, so the mock answers only for a farm this member can reach and
+    // serves the same rows the windowed reads do; the merge de-duplicates them by id.
+    if (url.pathname === '/rest/v1/rpc/latest_cash_bids_per_commodity') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !accessible.some((farm) => farm.id === value.p_farm_id)) { await rejectShape('latest_cash_bids_per_commodity body'); return }; const perCommodityFarm = accessible.find((item) => item.id === value.p_farm_id)!; await fulfillJson(route, moduleRows.cash_bids ?? grainRows('cash_bids', perCommodityFarm)); return }
+    if (url.pathname === '/rest/v1/rpc/edit_grain_contract' || url.pathname === '/rest/v1/rpc/delete_grain_contract') {
+      let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
+      const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
+      if (route.request().method() !== 'POST' || !value || typeof value.p_farm_id !== 'string' || typeof value.p_contract_id !== 'string' || typeof value.p_reason !== 'string') { await rejectShape(`${url.pathname.split('/').pop()} body`); return }
+      contractRepairCalls.push({ rpc: url.pathname.split('/').pop()!, body: value })
+      await fulfillJson(route, url.pathname.endsWith('edit_grain_contract') ? { id: value.p_contract_id } : { deleted: true, reopened_firm_offer_id: null, already_deleted: false }); return
+    }
     if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks' || url.pathname === '/rest/v1/rpc/generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${url.pathname}`)
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, isUserB ? sessionB.user : session().user); return }
@@ -1478,8 +1511,15 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   await page.goto('/today')
   await page.getByRole('link', { name: /^Grain: Corn 2026: 35% sold/ }).click()
   await expect(page).toHaveURL('http://127.0.0.1:4173/grain')
-  await expect(page.getByText('Already contracted')).toBeVisible()
-  await expect(page.getByText('5,320 bu', { exact: true }).first()).toBeVisible()
+  // GL-3: the card leads with one line and three tiles. The same 35% the grain line quoted is the first
+  // thing on it, and the detail the farmer used to have to read past is one tap away, not gone.
+  const positionCard = page.locator('article.position-card').first()
+  await expect(positionCard.getByText('35% priced', { exact: true })).toBeVisible()
+  await expect(positionCard.getByText('Fully priced', { exact: true })).toBeVisible()
+  await expect(positionCard.getByText('Already contracted')).toBeHidden()
+  await positionCard.getByRole('button', { name: 'More details' }).click()
+  await expect(positionCard.getByText('Already contracted')).toBeVisible()
+  await expect(positionCard.getByText('5,320 bu', { exact: true }).first()).toBeVisible()
   // GL-1: on the storage tab the feed row is named for its report and geography, and a farm without a market region is told how to get bids.
   await page.goto('/grain/storage')
   await expect(page.getByText(/USDA MARS 2850 · Iowa, display-only; last dated 2026-07-15\./)).toBeVisible()
@@ -1493,6 +1533,60 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   await expect(page.getByRole('button', { name: 'Add contract' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Record a sale instead' }).click()
   await expect(page.getByRole('button', { name: 'Add contract' })).toBeVisible()
+  expect(unexpected).toEqual([])
+})
+
+// GL-3b: a contract typed wrong was a dead end -- no edit, no delete, and a marketing position that
+// stayed wrong forever. The control appears only for a contract with no deliveries, it requires a
+// reason, and it sends only the fields the farmer actually touched.
+test('a contract with no deliveries can be corrected with a reason, and one already delivered against cannot', async ({ page, context }) => {
+  await seedSession(context)
+  contractRepairCalls.length = 0
+  const farm = farms[0]!
+  const contractRows = [
+    { id: '00000000-0000-4000-8000-000000000061', farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer: 'Buyer Typo', bushels: 10_000, futures_price: null, basis: null, cash_price: 4.75, delivery_start: '2026-11-01', delivery_end: '2026-11-30', contract_number: null, premium_cents_per_bu: 0, notes: null, firm_offer_id: null, created_at: now, updated_at: now },
+    { id: '00000000-0000-4000-8000-000000000062', farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer: 'Already Delivered', bushels: 8_000, futures_price: null, basis: null, cash_price: 4.80, delivery_start: '2026-12-01', delivery_end: '2026-12-31', contract_number: null, premium_cents_per_bu: 0, notes: null, firm_offer_id: null, created_at: now, updated_at: now },
+  ]
+  const deliveryRows = [{ id: '00000000-0000-4000-8000-000000000063', farm_id: farm.id, grain_contract_id: '00000000-0000-4000-8000-000000000062', bushels: 1_000, delivered_on: '2026-12-05', note: null, created_at: now }]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: contractRows, grain_contract_deliveries: deliveryRows, grain_contract_audit: [] })
+  await page.goto('/grain/contracts')
+
+  const typo = page.getByRole('row').filter({ hasText: 'Buyer Typo' })
+  const delivered = page.getByRole('row').filter({ hasText: 'Already Delivered' })
+  await expect(typo.getByRole('button', { name: 'Correct or delete' })).toBeVisible()
+  // A contract with delivered bushels is history, not a draft. The screen offers nothing the database
+  // would refuse, so the control is absent rather than present and failing.
+  await expect(delivered.getByRole('button', { name: 'Correct or delete' })).toHaveCount(0)
+
+  await typo.getByRole('button', { name: 'Correct or delete' }).click()
+  await expect(typo.getByText('Crop year, commodity, type and price cannot be corrected here.', { exact: false })).toBeVisible()
+  // The reason is not optional, and refusing it must cost nothing: no request leaves the browser.
+  await typo.getByRole('button', { name: 'Save correction' }).click()
+  await expect(typo.getByText('Say why you are changing this contract', { exact: false })).toBeVisible()
+  expect(contractRepairCalls).toEqual([])
+
+  // A reason with no actual change is not a correction, and must not write an audit row for nothing.
+  await typo.getByLabel('Why are you changing this?').fill('nothing actually changed')
+  await typo.getByRole('button', { name: 'Save correction' }).click()
+  await expect(typo.getByText('Nothing has changed on this contract yet.')).toBeVisible()
+  expect(contractRepairCalls).toEqual([])
+
+  await typo.getByLabel('Buyer', { exact: true }).fill('Corrected Buyer')
+  await typo.getByLabel('Contract bushels').fill('9250')
+  await typo.getByLabel('Why are you changing this?').fill('buyer was typed wrong')
+  await typo.getByRole('button', { name: 'Save correction' }).click()
+  await expect.poll(() => contractRepairCalls.length).toBe(1)
+  expect(contractRepairCalls[0]!.rpc).toBe('edit_grain_contract')
+  expect(contractRepairCalls[0]!.body.p_contract_id).toBe('00000000-0000-4000-8000-000000000061')
+  expect(contractRepairCalls[0]!.body.p_reason).toBe('buyer was typed wrong')
+  // Only what was touched. The delivery window and the contract number were not, so they are absent
+  // entirely -- a whole-form payload would let this save undo someone else's correction to them.
+  expect(contractRepairCalls[0]!.body.p_changes).toEqual({ buyer: 'Corrected Buyer', bushels: 9250 })
+  // Setting a basis or futures price tells the farmer to add a contract note, so the only form that
+  // can change one has to offer it.
+  await expect(typo.getByLabel('Contract note')).toBeVisible()
+  // And the version this page loaded rides along, so the server refuses the write if the row moved.
+  expect(contractRepairCalls[0]!.body.p_expected_updated_at).toBe(now)
   expect(unexpected).toEqual([])
 })
 

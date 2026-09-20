@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { farmOperationRequestHeaders, type FarmOperationContext } from './farmOperationContext'
-import { evaluateGrainAlerts, recordMarketingAlertTransitionsGuarded, requestOwnerAlertDeliveryGuarded, type GrainAlert } from './grainAlerts'
+import { evaluateGrainAlerts, mayRecordAlertTransitions, recordMarketingAlertTransitionsGuarded, requestOwnerAlertDeliveryGuarded, type GrainAlert } from './grainAlerts'
 import type { GrainWorkspace } from './grain'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -86,5 +86,13 @@ assert(transitionStart >= 0 && serverFence > transitionStart && stateLock > serv
   const highestManual = priceAlerts([bid(34, 4.7), feedByColumn, manualAbove])
   assert(highestManual[0]!.observationId === uid(34), 'The alert names the highest manual bid, never a feed row above it.')
 }
+
+
+// GL-2 schema skew: a merge deploys this client on its own, and the migration is a separate owner
+// action. Until the live database carries the eligibility rule, the browser must not write a rule's
+// state, or it and the old sweep will fight over alert_rule_states and re-fire the same alert.
+assert(mayRecordAlertTransitions({ gl2_alert_eligibility: true }), 'GL-2: with the migration applied the browser must record transitions as before.')
+assert(!mayRecordAlertTransitions({ gl2_alert_eligibility: false }), 'GL-2: against a pre-GL-2 server the browser must leave alert_rule_states to the sweep.')
+assert(mayRecordAlertTransitions({}) && mayRecordAlertTransitions(undefined) && mayRecordAlertTransitions(null), 'GL-2: only an explicit false holds the browser back; an absent capability keeps the prior behaviour.')
 
 console.log('Grain alert operation-context regression passed (capture-before-load, dispatch-race rejection, auth/invoke/transition fencing, and exact headers; plan-target price alerts ignore USDA MARS feed rows).')

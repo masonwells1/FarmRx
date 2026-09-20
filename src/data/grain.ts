@@ -62,7 +62,74 @@ export interface GrainContract extends PositionScope {
   updated_at: string
 }
 export interface GrainContractDelivery { id: string; farm_id: string; grain_contract_id: string; bushels: number; delivered_on: string; note: string | null; created_at: string; allow_overdelivery?: boolean }
-export interface GrainCapabilities { bin_movements: boolean; contract_price_finalization: boolean; contract_deliveries: boolean; /** False until the slice-3 tables exist on the live database; the screens then keep their session-only behavior. */ persisted_settings?: boolean }
+export interface GrainCapabilities { bin_movements: boolean; contract_price_finalization: boolean; contract_deliveries: boolean; /** False until the slice-3 tables exist on the live database; the screens then keep their session-only behavior. */ persisted_settings?: boolean;
+  /** GL-2: false until the live database carries the crop-year eligibility rule. A merge deploys this
+   * client to production on its own, while applying the migration is a separate owner action, so the
+   * two are guaranteed to be out of step for a while. In that window the browser and the sweep judge a
+   * bid by different rules, and both write alert_rule_states -- which re-fires or suppresses the same
+   * alert over and over. While this is false the browser records no transition at all and leaves the
+   * rule state entirely to the sweep, which is exactly what the pre-GL-2 sweep expects. */
+  gl2_alert_eligibility?: boolean;
+  /** GL-3b: false until the live database carries the contract-repair RPCs and their audit table.
+   * The same merge-before-migration window as above: while this is false the Contracts tab offers no
+   * Correct or Delete control at all, rather than offering one that fails on the farmer's first try. */
+  contract_edit_delete?: boolean }
+
+/** GL-3b: the fields a contract correction may change. An absent key keeps the stored value; an
+ * explicit null clears a nullable one. Crop year, commodity, contract type and every pricing column
+ * are absent by design -- they are the contract's identity and its math, and pricing on a basis or
+ * HTA contract belongs to the one-shot finalization rule. A farmer who got one of those wrong
+ * deletes the contract with a reason and enters it again. */
+export interface GrainContractCorrection {
+  buyer?: string
+  bushels?: number
+  delivery_start?: string | null
+  delivery_end?: string | null
+  contract_number?: string | null
+  notes?: string | null
+}
+
+/** The one message for "the GL-3b migration is not applied yet". The screens hide the controls when
+ * the capability is false, so a farmer should never see it; it exists for the window between that
+ * read and a click, and for a client that loaded before the capability was known. */
+/** GL-3b: what a delete did beyond removing the row. A contract created from a firm offer sends that
+ * offer back to open, and the farmer has to know: the correction panel tells them to enter the
+ * contract again, and doing that without refilling the offer leaves the offer counted as pending and
+ * still fillable into a second contract. */
+export interface ContractDeleteResult { reopenedFirmOfferId: string | null; reopenedFirmOfferStatus: string | null }
+
+export const CONTRACT_REPAIR_PENDING = 'Correcting a contract arrives with the next database update.'
+
+/** GL-3b: a contract with any delivery recorded against it is history, not a draft. The same test the
+ * server applies under a row lock, so the screen offers a control the database will honour. */
+export function contractIsCorrectable(workspace: Pick<GrainWorkspace, 'grain_contract_deliveries'>, contractId: string): boolean {
+  return !workspace.grain_contract_deliveries.some((delivery) => delivery.grain_contract_id === contractId)
+}
+
+/** GL-3b: what the farmer actually changed, and nothing else. Sending every field the form holds
+ * would make a buyer correction also rewrite the bushels this page loaded -- so a second member
+ * correcting the buyer from a stale page silently reverses a bushels correction someone else just
+ * made, and the audit would record both as deliberate. An empty result means nothing changed. */
+export function contractCorrectionDiff(contract: GrainContract, draft: { buyer: string; bushels: string; delivery_start: string; delivery_end: string; contract_number: string; notes: string }): GrainContractCorrection {
+  const changes: GrainContractCorrection = {}
+  const bushels = Number(draft.bushels)
+  if (draft.buyer.trim() !== contract.buyer) changes.buyer = draft.buyer.trim()
+  if (Number.isFinite(bushels) && bushels !== contract.bushels) changes.bushels = bushels
+  if ((draft.delivery_start || null) !== contract.delivery_start) changes.delivery_start = draft.delivery_start || null
+  if ((draft.delivery_end || null) !== contract.delivery_end) changes.delivery_end = draft.delivery_end || null
+  if ((draft.contract_number.trim() || null) !== contract.contract_number) changes.contract_number = draft.contract_number.trim() || null
+  if ((draft.notes.trim() || null) !== contract.notes) changes.notes = draft.notes.trim() || null
+  return changes
+}
+
+/** The reason is the farmer's own record of why the number changed, so it is required and is stored
+ * verbatim. The bounds match the column's check constraint exactly. */
+export function validateContractCorrectionReason(reason: string): string | null {
+  const trimmed = reason.trim()
+  if (trimmed.length < 3) return 'Say why you are changing this contract, in at least three characters.'
+  if (trimmed.length > 2000) return 'Keep the reason to 2000 characters or fewer.'
+  return null
+}
 
 export interface MarketingPlanTarget extends PositionScope {
   id: string
@@ -126,6 +193,8 @@ export interface GrainRepository {
   reconcileHarvestActual(estimate: ProductionEstimate, harvestActual: number): Promise<void>
   saveContract(contract: GrainContract): Promise<void>
   finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number): Promise<void>
+  editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, operationId: string): Promise<GrainContract>
+  deleteContract(contractId: string, reason: string, expectedUpdatedAt: string, operationId: string): Promise<ContractDeleteResult>
   recordContractDelivery(delivery: GrainContractDelivery): Promise<void>
   saveMarketingPlanTarget(target: MarketingPlanTarget): Promise<void>
   replaceMarketingPlanTargets(scope: PositionScope, targets: MarketingPlanTarget[]): Promise<void>

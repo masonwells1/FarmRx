@@ -50,10 +50,11 @@ import type {
   GrainCarryGrid,
   GrainCarrySettings,
 } from "./data/grain";
-import { marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth } from "./data/grain";
+import { contractCorrectionDiff, contractIsCorrectable, marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
+  mayRecordAlertTransitions,
   recordMarketingAlertTransitions,
   requestOwnerAlertDelivery,
   verifyGrainAlertOperationContext,
@@ -74,7 +75,7 @@ import {
   validateBinTransaction,
   validateGrainBin,
 } from "./data/binLedger";
-import { isMarsBid, latestBasis, marsBidLabel } from "./data/basisMath";
+import { knownCounterparties, isMarsBid, latestBasis, marsBidLabel } from "./data/basisMath";
 import { GrainCostOfCarry } from "./GrainCostOfCarry";
 import {
   displayFirmOfferStatus,
@@ -296,6 +297,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
   const [settingsNotice, setSettingsNotice] = useState("");
   const [alerts, setAlerts] = useState<GrainAlert[]>([]);
   const [deliveryNotice, setDeliveryNotice] = useState("");
+  // GL-3b: a deleted contract takes its row off the screen with it, so anything the delete has to tell
+  // the farmer cannot live in the row. This sits above the table, where the contract used to be.
+  const [repairNotice, setRepairNotice] = useState("");
   // No existing per-scope settings field is suitable, so this farmer decision is
   // intentionally limited to the open session instead of being hidden in another record.
   const [saleLimits, setSaleLimits] = useState<Record<string, number | null>>({});
@@ -394,19 +398,34 @@ export function GrainPage({ services }: { services: GrainServices }) {
         }
       }
       setAlerts(nextAlerts);
-      void recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions, alertOperationContext).then((transitioned) => {
-        if (transitioned !== null) return requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId || transitioned.has(alert.ruleId)), data.fields.farm.id, alertOperationContext);
-        // Pre-0035: retain current behavior, but one synchronous refresh lock
-        // prevents a refresh burst from double-writing the same rule state.
-        if (ruleEvaluation.firedRuleIds.length && refreshWriteLock.current.acquire()) {
-          const stamp = new Date().toISOString();
-          void Promise.all(ruleEvaluation.firedRuleIds.map((id) => {
-            const rule = data.marketing_alert_rules.find((item) => item.id === id);
-            return rule ? verifyGrainAlertOperationContext(alertOperationContext).then(() => services.grainRepository.saveMarketingAlertRule({ ...rule, last_triggered_at: stamp, updated_at: stamp })) : Promise.resolve();
-          })).finally(() => refreshWriteLock.current.release());
-        }
-        return requestOwnerAlertDelivery(nextAlerts, data.fields.farm.id, alertOperationContext);
-      }).then(
+      // GL-2: until the live database carries the crop-year eligibility rule, this client writes nothing
+      // about a SAVED MARKETING RULE and asks for no delivery of one. A merge deploys this client on its
+      // own while applying the migration is a separate owner action, so a new client runs against the old
+      // sweep for a while; the two judge a bid by different rules, and any rule write from here in that
+      // window ends up wrong. The holdback must skip the pre-0035 branch rather than fall through it:
+      // that branch stamps last_triggered_at, which hides the alert from the page for the rest of the
+      // day, and then asks for a delivery the server refuses.
+      //
+      // It reaches no further than that. A plan-target or USDA report reminder carries no ruleId, owes
+      // nothing to crop-year eligibility, and is emailed by the same check-on-open path it always was --
+      // which the page still tells the farmer. Holding those back too would silence real emails for the
+      // length of the rollout gap. The delivery below is the same call either way; only its input narrows.
+      const deliveries = mayRecordAlertTransitions(data.capabilities)
+        ? recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions, alertOperationContext).then((transitioned) => {
+          if (transitioned !== null) return requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId || transitioned.has(alert.ruleId)), data.fields.farm.id, alertOperationContext);
+          // Pre-0035: retain current behavior, but one synchronous refresh lock
+          // prevents a refresh burst from double-writing the same rule state.
+          if (ruleEvaluation.firedRuleIds.length && refreshWriteLock.current.acquire()) {
+            const stamp = new Date().toISOString();
+            void Promise.all(ruleEvaluation.firedRuleIds.map((id) => {
+              const rule = data.marketing_alert_rules.find((item) => item.id === id);
+              return rule ? verifyGrainAlertOperationContext(alertOperationContext).then(() => services.grainRepository.saveMarketingAlertRule({ ...rule, last_triggered_at: stamp, updated_at: stamp })) : Promise.resolve();
+            })).finally(() => refreshWriteLock.current.release());
+          }
+          return requestOwnerAlertDelivery(nextAlerts, data.fields.farm.id, alertOperationContext);
+        })
+        : requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId), data.fields.farm.id, alertOperationContext);
+      void deliveries.then(
         (failed) =>
           setDeliveryNotice(
             failed.length
@@ -718,11 +737,14 @@ export function GrainPage({ services }: { services: GrainServices }) {
             <section className="grain-section" aria-label="Grain alerts">
               <div className="section-heading">
                 <div>
-                  <span className="eyebrow">Check-on-open alerts</span>
+                  <span className="eyebrow">Grain alerts</span>
                   <h2>Items to review</h2>
                   <p>
-                    These are checked only when the farm owner opens Grain; they
-                    are not 24/7 monitoring.
+                    Marketing alerts are checked on the server about every
+                    fifteen minutes; one already sent to your phone today is not
+                    repeated in this list. Plan-target and USDA report reminders
+                    are checked when the owner opens Grain, and those are the
+                    ones Farm Rx emails.
                   </p>
                 </div>
               </div>
@@ -774,6 +796,16 @@ export function GrainPage({ services }: { services: GrainServices }) {
               />
             ))}
           </section>
+          {/* GL-3: the way to add a second crop. Renders nothing when every crop assignment already has
+              an estimate. */}
+          <FirstEstimate
+            compact
+            workspace={workspace}
+            services={services}
+            onSaved={refresh}
+            onReceipt={setLastReceiptId}
+            receipt={receipt}
+          />
         </>
       )}
       {tabPath === "plan" && (
@@ -912,7 +944,25 @@ export function GrainPage({ services }: { services: GrainServices }) {
             </div>
             <SaveReceipt state={receipt} />
           </div>
-          {deliveryIntent ? <div className="grain-delivery-intent" role="status"><div><strong>Recording a grain delivery</strong><p>Pick the crop and year, then the contract below, and enter the delivered bushels. Nothing is written until you tap Record delivery.</p><label className="commodity-picker"><span>Crop and year</span><select value={selectedEstimate.id} onChange={(event) => setSelectedEstimateId(event.target.value)}>{workspace.production_estimates.map((estimate) => <option key={estimate.id} value={estimate.id}>{scopeLabel(workspace, estimate)}</option>)}</select></label></div><button className="secondary-action" type="button" onClick={() => setDeliveryIntent(false)}>Record a sale instead</button></div> : <ContractEntry
+          {/* GL-3: the crop and year picker belongs on the tab, not only in delivery mode. The table below
+              is filtered to the chosen scope, so without it a farmer reading Contracts could not tell which
+              crop year the list was showing, or change it. */}
+          {workspace.production_estimates.length > 0 && (
+            <label className="commodity-picker">
+              <span>Crop and year</span>
+              <select value={selectedEstimate.id} onChange={(event) => setSelectedEstimateId(event.target.value)}>
+                {workspace.production_estimates.map((estimate) => (
+                  <option key={estimate.id} value={estimate.id}>{scopeLabel(workspace, estimate)}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {deliveryIntent ? <div className="grain-delivery-intent" role="status"><div><strong>Recording a grain delivery</strong><p>Pick the crop and year above, then the contract below, and enter the delivered bushels. Nothing is written until you tap Record delivery.</p></div><button className="secondary-action" type="button" onClick={() => setDeliveryIntent(false)}>Record a sale instead</button></div> : <ContractEntry
+            // GL-3a made the crop and year picker permanent on this tab, which introduced a way to save a
+            // contract under the wrong scope: React reused this form across a scope change, so a draft
+            // typed for 2026 kept its delivery window while the save spread the newly chosen 2027 scope.
+            // Keying by the scope remounts the form, so a draft never outlives the crop year it was for.
+            key={scopeKey(selectedScope)}
             workspace={workspace}
             scope={selectedScope}
             services={services}
@@ -923,6 +973,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
             }}
             onReceipt={setLastReceiptId}
           />}
+          {repairNotice && (
+            <p className="form-error grain-inline-error" role="status">{repairNotice}</p>
+          )}
           <div className="table-scroll">
             <table>
               <thead>
@@ -972,12 +1025,35 @@ export function GrainPage({ services }: { services: GrainServices }) {
                         {contract.delivery_start?.slice(5).replace("-", "/") ??
                           "—"}
                       </td>
-                      <td className="align-right numeric">{workspace.capabilities?.contract_deliveries ? <><strong>{preciseBushels.format(delivered)} / {preciseBushels.format(Math.max(0, remaining))} bu</strong>{remaining < 0 && <small className="negative-text">Over-delivered by {preciseBushels.format(-remaining)} bu</small>}</> : <strong>Tracking arrives with the next database update</strong>}<ContractActions contract={contract} workspace={workspace} services={services} autoFocusDelivery={deliveryIntent && contractIndex === 0} onSaved={async () => { whisper(); await refresh(); }} onDeliverySaved={async () => { await refresh(true); whisper(); }} onReceipt={setLastReceiptId} /></td>
+                      <td className="align-right numeric">{workspace.capabilities?.contract_deliveries ? <><strong>{preciseBushels.format(delivered)} / {preciseBushels.format(Math.max(0, remaining))} bu</strong>{remaining < 0 && <small className="negative-text">Over-delivered by {preciseBushels.format(-remaining)} bu</small>}</> : <strong>Tracking arrives with the next database update</strong>}<ContractActions contract={contract} workspace={workspace} services={services} autoFocusDelivery={deliveryIntent && contractIndex === 0} onSaved={async () => { whisper(); await refresh(); }} onDeliverySaved={async () => { await refresh(true); whisper(); }} onDeleted={setRepairNotice} onReceipt={setLastReceiptId} /></td>
                     </tr>
                     );
                   },
                 )}
               </tbody>
+              {/* GL-3: a totals row, so the tab answers "how much have I sold, and how much is left to
+                  deliver" without the farmer adding the column up by hand. Totals cover the rows shown,
+                  which are the chosen crop and year. Over-delivery is not netted away: remaining is
+                  floored per contract exactly as each row shows it, so the total can never be made to
+                  look smaller by one contract that was over-delivered. */}
+              {scopeRows(workspace.grain_contracts, selectedScope).length > 0 && (
+                <tfoot>
+                  <tr>
+                    <th scope="row" colSpan={3}>Total for {scopeLabel(workspace, selectedScope)}</th>
+                    <td className="align-right numeric"><strong>{bushels.format(scopeRows(workspace.grain_contracts, selectedScope).reduce((sum, contract) => sum + contract.bushels, 0))}</strong></td>
+                    <td />
+                    <td />
+                    <td className="align-right numeric">
+                      {workspace.capabilities?.contract_deliveries ? (() => {
+                        const rows = scopeRows(workspace.grain_contracts, selectedScope);
+                        const deliveredTotal = rows.reduce((sum, contract) => sum + workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((inner, item) => inner + item.bushels, 0), 0);
+                        const remainingTotal = rows.reduce((sum, contract) => sum + Math.max(0, contract.bushels - workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((inner, item) => inner + item.bushels, 0)), 0);
+                        return <strong>{preciseBushels.format(deliveredTotal)} / {preciseBushels.format(remainingTotal)} bu</strong>;
+                      })() : <strong>—</strong>}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
         </section>
@@ -1013,8 +1089,8 @@ export function GrainPage({ services }: { services: GrainServices }) {
         <strong>For your records.</strong> Farm Rx shows your numbers and your
         targets. It does not give marketing advice.{" "}
         <span>
-          Owner-only alerts are best-effort check-on-open notices, not 24/7
-          monitoring.
+          Plan-target alerts are best-effort notices checked when the owner
+          opens Grain. Saved marketing alerts are checked on the server.
         </span>
       </aside>
       {editingTarget && (
@@ -1135,11 +1211,14 @@ function MarketingAlerts({
       <section className="grain-section alerts-card">
         <div className="section-heading">
           <div>
-            <span className="eyebrow">Check-on-open alerts</span>
+            <span className="eyebrow">Checked for you</span>
             <h2>Marketing alerts</h2>
             <p>
-              Farm Rx checks these when you open Grain. They are not 24/7
-              monitoring.
+              Farm Rx checks these on the server about every fifteen minutes and
+              sends the alert to your phone, if you have turned notifications on.
+              You do not have to keep Grain open. A USDA market price can reach a
+              target; feed prices are never used in your position or revenue
+              numbers.
             </p>
           </div>
           <label className="commodity-picker">
@@ -2137,18 +2216,23 @@ function AlertEmailSettings({
   );
 }
 
+/** GL-3: this was reachable only on a farm with no estimate at all, so a second crop could never be
+ * added. It now lists the crop assignments that have no estimate yet, and renders compactly on the
+ * Overview once the farm has its first one. The create path is unchanged. */
 export function FirstEstimate({
   workspace,
   services,
   onSaved,
   onReceipt,
   receipt,
+  compact = false,
 }: {
   workspace: GrainWorkspace;
   services: GrainServices;
   onSaved: () => Promise<void>;
   onReceipt: (id: string) => void;
   receipt: ReturnType<typeof useSaveReceipt>;
+  compact?: boolean;
 }) {
   const assignments = workspace.fields.crop_assignments;
   const [aph, setAph] = useState("");
@@ -2162,13 +2246,19 @@ export function FirstEstimate({
         </div>
       </section>
     );
+  // A crop that already has an estimate is not offered again; adding it twice would split one crop's
+  // position across two rows.
+  const covered = new Set(
+    workspace.production_estimates.map(
+      (estimate) => `${estimate.crop_year}|${estimate.commodity_id}`,
+    ),
+  );
   const grouped = new Map<string, (typeof assignments)[number]>();
-  for (const assignment of assignments)
-    if (!grouped.has(`${assignment.crop_year}|${assignment.commodity_id}`))
-      grouped.set(
-        `${assignment.crop_year}|${assignment.commodity_id}`,
-        assignment,
-      );
+  for (const assignment of assignments) {
+    const key = `${assignment.crop_year}|${assignment.commodity_id}`;
+    if (!covered.has(key) && !grouped.has(key)) grouped.set(key, assignment);
+  }
+  if (compact && grouped.size === 0) return null;
   const create = async (assignment: (typeof assignments)[number]) => {
     if (!submitLock.current.acquire()) return;
     const now = new Date().toISOString();
@@ -2192,6 +2282,11 @@ export function FirstEstimate({
         updated_at: now,
       });
       setError("");
+      // GL-3a: clear the yield after a successful save. The compact card stays mounted while any crop
+      // assignment still lacks an estimate, so without this the next crop is offered with the previous
+      // crop's yield already filled in -- 200 bu/ac corn leaving 200 ready to save for soybeans. A yield
+      // drives the whole position, so a carried-over number is a wrong number, not a convenience.
+      setAph("");
       await onSaved();
     } catch (caught) {
       setError(
@@ -2204,13 +2299,14 @@ export function FirstEstimate({
     }
   };
   return (
-    <section className="page grain-page">
-      <div className="page-heading grain-heading">
+    <section className={compact ? "grain-section add-crop-card" : "page grain-page"}>
+      <div className={compact ? "section-heading" : "page-heading grain-heading"}>
         <div>
-          <h1>Start your grain estimate</h1>
+          {compact ? <h2>Add another crop</h2> : <h1>Start your grain estimate</h1>}
           <p>
-            Your live crop assignments are ready. Add an expected yield to
-            create the first estimate.
+            {compact
+              ? "These crop assignments have no grain estimate yet. Add an expected yield to start one."
+              : "Your live crop assignments are ready. Add an expected yield to create the first estimate."}
           </p>
         </div>
       </div>
@@ -2283,6 +2379,10 @@ export function PositionCard({
   const [actual, setActual] = useState(
     estimate.actual_bushels?.toString() ?? "",
   );
+  // GL-3: React-controlled, not a bare <details>. The card re-renders whenever the breakeven and
+  // profitability reads resolve, and an uncontrolled disclosure can lose the farmer's open state to one
+  // of those renders mid-read.
+  const [showMore, setShowMore] = useState(false);
   const [error, setError] = useState("");
   const submitLock = useRef(createSubmitLock());
   const [breakeven, setBreakeven] = useState<number | null>(null);
@@ -2493,24 +2593,14 @@ export function PositionCard({
           </button>
         </div>
       </div>
-      <p className="position-sentence">
-        {Math.round(pricedPct)}% fully priced at{" "}
-        {average === null ? "—" : money.format(average)} avg. Breakeven{" "}
-        {breakeven === null ? "—" : money.format(breakeven)}.{" "}
-        {bushels.format(
-          basisOpen.reduce((sum, contract) => sum + contract.bushels, 0),
-        )}{" "}
-        bu basis open and{" "}
-        {bushels.format(
-          futuresOpen.reduce((sum, contract) => sum + contract.bushels, 0),
-        )}{" "}
-        bu futures open. {bushels.format(outrightOpen)} bu unpriced
-        {plannedPrice === null
-          ? ". Add a cash price target to estimate it."
-          : ` using your cash price target of ${money.format(plannedPrice)}.`}
+      {/* GL-3: the card opened with a paragraph and nine numbers. It now leads with one line and three
+          tiles; everything else is still here, one tap away, and nothing was removed. */}
+      <p className="position-hero">
+        <strong>{Math.round(pricedPct)}% priced</strong>
+        {average === null ? "" : ` at ${money.format(average)} average`} ·{" "}
+        <strong>{bushels.format(outrightOpen)} bu</strong> still unpriced
       </p>
-      <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p><button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { void reconcileHarvest() }}>Use harvest total as Grain actual</button></section>
-      <div className="position-stats">
+      <div className="position-stats position-tiles">
         <Metric
           label="Fully priced"
           value={`${bushels.format(finalBushels)} bu`}
@@ -2530,88 +2620,121 @@ export function PositionCard({
               : "cash-target plan estimate"
           }
         />
-        <Metric
-          label="Insurance floor estimate"
-          value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`}
-          note={estimateNote}
-        />
       </div>
-      <p className="insurance-limit-note">
-        Revenue Protection pays money, not bushels — enterprise averaging, basis,
-        premiums, and your share can leave you exposed.
-      </p>
-      <div className="production-editor sale-limit-editor">
-        <label>
-          Your sale limit (bushels)
-          <input
-            type="number"
-            min="0"
-            step="1"
-            inputMode="numeric"
-            value={saleLimit ?? ""}
-            onChange={(event) => {
-              const value = event.target.value.trim();
-              onSaleLimitChange(value === "" ? null : Number(value));
-            }}
-            onBlur={() => onSaleLimitCommit?.()}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                onSaleLimitCommit?.();
-              }
-            }}
-          />
-          <small>{saleLimitPersisted ? "Saved for this farm; it is your limit, not an insurance guarantee." : "Used only in this open session; it is your limit, not an insurance guarantee."}</small>
-        </label>
-        <Metric label="Insurance estimate guarantee" value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`} note={estimateNote} />
-        <Metric label="Already contracted" value={`${bushels.format(contractedBushels)} bu`} note="Signed contracts" />
-        <Metric label="Pending offers" value={`${bushels.format(pendingOffers)} bu`} note="Open firm offers; not sold yet" />
-        <Metric label="Insurance estimate remaining" value={remainingEstimate === null ? "Blocked" : `${bushels.format(remainingEstimate)} bu`} note={savedCoverageBlocked ? unsupportedCoverageMessage : "Guarantee − contracted − pending; never below zero"} />
-        <Metric label="Your sale limit remaining" value={remainingSaleLimit === null ? "Set your own sale limit" : `${bushels.format(remainingSaleLimit)} bu`} note={saleLimit === null ? "Set your own sale limit to plan sales." : `${bushels.format(saleLimit)} limit − contracted − pending`} />
-      </div>
-      {pendingOffers > 0 && (
-        <p className="pending-offer-line">
-          <b className="numeric">{bushels.format(pendingOffers)} bu</b> on firm
-          offer — pending, not sold.
-        </p>
-      )}
-      <div className="production-editor">
-        <label>
-          Planted acres
-          <strong>
-            {estimate.planted_acres === null
-              ? "—"
-              : `${estimate.planted_acres.toLocaleString()} ac`}
-          </strong>
-        </label>
-        <label>
-          APH / expected yield
-          <input
-            type="number"
-            min="0.01"
-            step="any"
-            value={aph}
-            onChange={(event) => setAph(event.target.value)}
-          />
-        </label>
-        <label>
-          Actual bushels
-          <input
-            type="number"
-            min="0"
-            step="1"
-            value={actual}
-            placeholder="Enter at harvest"
-            onChange={(event) => setActual(event.target.value)}
-          />
-        </label>
+      <div className="position-more">
         <button
           type="button"
-          className="secondary-action"
-          onClick={() => void saveProduction(buildProductionSaveInput(estimate, aph, actual))}
+          className="position-more-toggle"
+          aria-expanded={showMore}
+          onClick={() => setShowMore((value) => !value)}
         >
-          Save production
+          {showMore ? "Hide details" : "More details"}
         </button>
+        {showMore && (
+        <div className="position-more-body">
+        <p className="position-sentence">
+          {Math.round(pricedPct)}% fully priced at{" "}
+          {average === null ? "—" : money.format(average)} avg. Breakeven{" "}
+          {breakeven === null ? "—" : money.format(breakeven)}.{" "}
+          {bushels.format(
+            basisOpen.reduce((sum, contract) => sum + contract.bushels, 0),
+          )}{" "}
+          bu basis open and{" "}
+          {bushels.format(
+            futuresOpen.reduce((sum, contract) => sum + contract.bushels, 0),
+          )}{" "}
+          bu futures open. {bushels.format(outrightOpen)} bu unpriced
+          {plannedPrice === null
+            ? ". Add a cash price target to estimate it."
+            : ` using your cash price target of ${money.format(plannedPrice)}.`}
+        </p>
+        <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p><button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { void reconcileHarvest() }}>Use harvest total as Grain actual</button></section>
+        <div className="position-stats">
+          <Metric
+            label="Insurance floor estimate"
+            value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`}
+            note={estimateNote}
+          />
+        </div>
+        <p className="insurance-limit-note">
+          Revenue Protection pays money, not bushels — enterprise averaging, basis,
+          premiums, and your share can leave you exposed.
+        </p>
+        <div className="production-editor sale-limit-editor">
+          <label>
+            Your sale limit (bushels)
+            <input
+              type="number"
+              min="0"
+              step="1"
+              inputMode="numeric"
+              value={saleLimit ?? ""}
+              onChange={(event) => {
+                const value = event.target.value.trim();
+                onSaleLimitChange(value === "" ? null : Number(value));
+              }}
+              onBlur={() => onSaleLimitCommit?.()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onSaleLimitCommit?.();
+                }
+              }}
+            />
+            <small>{saleLimitPersisted ? "Saved for this farm; it is your limit, not an insurance guarantee." : "Used only in this open session; it is your limit, not an insurance guarantee."}</small>
+          </label>
+          <Metric label="Insurance estimate guarantee" value={insuranceEstimate === null ? "Blocked" : `${bushels.format(insuranceEstimate)} bu`} note={estimateNote} />
+          <Metric label="Already contracted" value={`${bushels.format(contractedBushels)} bu`} note="Signed contracts" />
+          <Metric label="Pending offers" value={`${bushels.format(pendingOffers)} bu`} note="Open firm offers; not sold yet" />
+          <Metric label="Insurance estimate remaining" value={remainingEstimate === null ? "Blocked" : `${bushels.format(remainingEstimate)} bu`} note={savedCoverageBlocked ? unsupportedCoverageMessage : "Guarantee − contracted − pending; never below zero"} />
+          <Metric label="Your sale limit remaining" value={remainingSaleLimit === null ? "Set your own sale limit" : `${bushels.format(remainingSaleLimit)} bu`} note={saleLimit === null ? "Set your own sale limit to plan sales." : `${bushels.format(saleLimit)} limit − contracted − pending`} />
+        </div>
+        {pendingOffers > 0 && (
+          <p className="pending-offer-line">
+            <b className="numeric">{bushels.format(pendingOffers)} bu</b> on firm
+            offer — pending, not sold.
+          </p>
+        )}
+        <div className="production-editor">
+          <label>
+            Planted acres
+            <strong>
+              {estimate.planted_acres === null
+                ? "—"
+                : `${estimate.planted_acres.toLocaleString()} ac`}
+            </strong>
+          </label>
+          <label>
+            APH / expected yield
+            <input
+              type="number"
+              min="0.01"
+              step="any"
+              value={aph}
+              onChange={(event) => setAph(event.target.value)}
+            />
+          </label>
+          <label>
+            Actual bushels
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={actual}
+              placeholder="Enter at harvest"
+              onChange={(event) => setActual(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => void saveProduction(buildProductionSaveInput(estimate, aph, actual))}
+          >
+            Save production
+          </button>
+        </div>
+        </div>
+        )}
       </div>
       {error && (
         <p className="form-error grain-inline-error" role="alert">
@@ -2822,14 +2945,9 @@ export function ContractEntry({
   saleLimit: number | null;
   onReceipt: (id: string) => void;
 }) {
-  const buyers = [
-    ...new Set([
-      ...workspace.cash_bids
-        .filter((bid) => !isMarsBid(bid))
-        .map((bid) => bid.elevator),
-      ...(initialOffer ? [initialOffer.buyer] : []),
-    ]),
-  ];
+  // GL-3: suggestions, not the only options. Existing contract buyers count too, so the second sale to
+  // a buyer never has to be retyped from scratch.
+  const buyers = knownCounterparties(workspace, [initialOffer?.buyer]);
   const preset = initialOffer
     ? offerToContract(
         initialOffer,
@@ -2837,7 +2955,7 @@ export function ContractEntry({
         new Date().toISOString(),
       )
     : null;
-  const [buyer, setBuyer] = useState(initialOffer?.buyer ?? buyers[0] ?? "");
+  const [buyer, setBuyer] = useState(initialOffer?.buyer ?? "");
   const [type, setType] = useState<GrainContractType>(
     preset?.contract_type ?? "forward_cash",
   );
@@ -2918,14 +3036,20 @@ export function ContractEntry({
     <form className="contract-entry" onSubmit={(event) => void submit(event)}>
       <label>
         <span>Buyer</span>
-        <select
+        <input
+          required
+          type="text"
+          list="contract-buyer-suggestions"
+          placeholder="Buyer or elevator"
+          maxLength={200}
           value={buyer}
           onChange={(event) => setBuyer(event.target.value)}
-        >
+        />
+        <datalist id="contract-buyer-suggestions">
           {buyers.map((item) => (
-            <option key={item}>{item}</option>
+            <option key={item} value={item} />
           ))}
-        </select>
+        </datalist>
       </label>
       <label>
         <span>Type</span>
@@ -3041,7 +3165,157 @@ export function ContractEntry({
   );
 }
 
-export function ContractActions({ contract, workspace, services, autoFocusDelivery = false, onSaved, onDeliverySaved, onReceipt }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; autoFocusDelivery?: boolean; onSaved: () => Promise<void>; onDeliverySaved: () => Promise<void>; onReceipt: (id: string) => void }) {
+/** GL-3b: the way out of a contract typed wrong. A contract with any delivery recorded against it is
+ * history and offers neither control -- the same test the server applies under a row lock, so the
+ * screen never offers a button the database will refuse. The reason is required for both actions and
+ * is stored with the change, so next season the farm can see why a number moved.
+ *
+ * What is NOT offered here is deliberate: crop year, commodity, contract type and every price. Those
+ * are the contract's identity and its math, and a basis or HTA price belongs to the one-shot
+ * finalization rule. Getting one of those wrong is what Delete is for. */
+export function ContractRepair({ contract, workspace, services, onSaved, onDeleted }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; onSaved: () => Promise<void>; onDeleted?: (notice: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [buyer, setBuyer] = useState(contract.buyer);
+  const [contractBushels, setContractBushels] = useState(String(contract.bushels));
+  const [start, setStart] = useState(contract.delivery_start ?? "");
+  const [end, setEnd] = useState(contract.delivery_end ?? "");
+  const [number, setNumber] = useState(contract.contract_number ?? "");
+  const [notes, setNotes] = useState(contract.notes ?? "");
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  const lock = useRef(createSubmitLock());
+  // One id for one correction attempt, held until that attempt succeeds. If the write commits but the
+  // response is lost, pressing Save again sends the same id, and the server reports the correction it
+  // already made instead of a stale-version error the farmer cannot tell apart from a failure.
+  // Minted on the first save, never during render: an id generator is shared and ordered, and taking
+  // one on every render of every contract row would shift the id the next real write gets.
+  const operationId = useRef<string | null>(null);
+  // This panel stays mounted across a workspace refresh, so the contract prop can move under a draft
+  // that is still holding the values it was opened with. Without this, correcting only the buyer would
+  // send the bushels as they were BEFORE another member corrected them -- and because the refreshed
+  // updated_at now rides along, the compare-and-swap would accept it and quietly undo their work. The
+  // version fence and a stale draft together are worse than either alone.
+  //
+  // The fields are rebased on the contract as it now stands and the farmer is told, rather than the
+  // draft being discarded silently. The reason is kept: it is their words, not a copy of the row. The
+  // operation id is dropped, because this is a different correction from the one they started.
+  //
+  // The panel's own successful save is NOT such a change. It produces a new version too, but the prop
+  // does not carry it until the refresh lands -- so adopting the new version at save time only moved
+  // the mismatch: the prop still held the old one, this branch fired on the next render, and the
+  // farmer's own correction was reported back to them as somebody else's. The version this panel
+  // wrote is therefore remembered separately and recognised when the refresh finally brings it.
+  // The whole row this panel last wrote, not only its version. onSaved() reloads the workspace and
+  // that reload CATCHES its own failure, so a correction can succeed and the refresh that follows it
+  // fail on a lost signal -- leaving the prop on the row before the save. Holding the saved row means
+  // the next correction still diffs against, and is versioned against, what the server actually has,
+  // instead of sending a version the server moved past and being refused as stale.
+  const [seenVersion, setSeenVersion] = useState(contract.updated_at);
+  const [savedRow, setSavedRow] = useState<GrainContract | null>(null);
+  if (contract.updated_at !== seenVersion && savedRow !== null && contract.updated_at === savedRow.updated_at) {
+    // Our own save, arriving. Adopt it and keep the success message the farmer is reading.
+    setSeenVersion(contract.updated_at);
+    setSavedRow(null);
+  } else if (contract.updated_at !== seenVersion) {
+    setSeenVersion(contract.updated_at);
+    setSavedRow(null);
+    setBuyer(contract.buyer);
+    setContractBushels(String(contract.bushels));
+    setStart(contract.delivery_start ?? "");
+    setEnd(contract.delivery_end ?? "");
+    setNumber(contract.contract_number ?? "");
+    setNotes(contract.notes ?? "");
+    operationId.current = null;
+    setMessage("This contract changed while you had it open. The fields now show the current values \u2014 check them before saving.");
+  }
+  // Touching any field makes this a different correction from the one a previous attempt sent, so it
+  // must not reuse that attempt's id: the server would recognise the id, answer with what it already
+  // saved, and the newly typed change would be dropped while the screen said it was corrected.
+  const redraft = () => { operationId.current = null };
+  // The freshest row this panel knows of: what it last saved, or the prop when it has caught up.
+  const current = savedRow ?? contract;
+  const available = workspace.capabilities?.contract_edit_delete !== false;
+  if (!available || !contractIsCorrectable(workspace, contract.id)) return null;
+  const correct = async () => {
+    if (!lock.current.acquire()) return;
+    try {
+      // These three speak to the farmer directly. Routing them through the error taxonomy would turn
+      // "say why" into "Farm Rx could not correct this contract right now", which is not what happened.
+      const problem = validateContractCorrectionReason(reason);
+      if (problem) { setMessage(problem); return }
+      const value = Number(contractBushels);
+      if (!Number.isFinite(value) || value <= 0) { setMessage("Bushels must be greater than zero."); return }
+      if (start && end && end < start) { setMessage("Delivery end must be on or after delivery start."); return }
+      // Only what this farmer actually changed. Sending the whole form would let a buyer correction
+      // typed on a stale page quietly undo a bushels correction another member just saved, and the
+      // audit would show both as deliberate. The contract's own updated_at goes with it, so the
+      // server refuses the write outright if the row moved under this page.
+      const changes = contractCorrectionDiff(current, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number, notes });
+      if (!Object.keys(changes).length) { setMessage("Nothing has changed on this contract yet."); return }
+      setSaving(true);
+      operationId.current ??= services.createGrainId();
+      const saved = await services.grainRepository.editContract(contract.id, reason, changes, current.updated_at, operationId.current);
+      operationId.current = null;
+      // Adopt the version this save produced. The refresh below hands back the row we just wrote, and
+      // without this the rebase branch would read our own save as somebody else's change and replace
+      // "Contract corrected" with a warning. A version we did not write still warns, which is the point.
+      setSavedRow(saved);
+      setMessage("Contract corrected.");
+      setReason("");
+      await onSaved();
+    } catch (error) { setMessage(farmerError(error, "correct this contract")) } finally { lock.current.release(); setSaving(false) }
+  };
+  const remove = async () => {
+    if (!lock.current.acquire()) return;
+    try {
+      const problem = validateContractCorrectionReason(reason);
+      if (problem) { setMessage(problem); return }
+      if (!(await confirmDialog({ title: `Delete the ${contract.buyer} contract?`, body: "The contract is removed from your position. The reason you gave is kept. This cannot be undone.", confirmLabel: "Delete contract", destructive: true }))) return;
+      setSaving(true);
+      operationId.current ??= services.createGrainId();
+      const result = await services.grainRepository.deleteContract(contract.id, reason, current.updated_at, operationId.current);
+      // This row is about to vanish, so the news goes above the table. A contract that came from a
+      // firm offer sent that offer back to open; entering a replacement contract by hand instead of
+      // refilling the offer would leave the offer counted as pending AND fillable into a second one.
+      // An offer whose expiry had already passed comes back expired, not open. It cannot be filled
+      // and is not counted as pending, so sending the farmer to refill it would be sending them after
+      // something that is not there.
+      // Each state named explicitly. "Anything that is not open must be expired" was the looser half
+      // of the same mistake: it would announce an expiry that never happened for any other value.
+      onDeleted?.(result.reopenedFirmOfferId === null
+        ? "Contract deleted."
+        : result.reopenedFirmOfferStatus === "open"
+          ? "Contract deleted. It came from a firm offer, and that offer is open again \u2014 fill it from Firm offers rather than entering a new contract, or the offer stays counted as pending."
+          : result.reopenedFirmOfferStatus === "expired"
+            ? "Contract deleted. It came from a firm offer whose expiry has passed, so that offer is marked expired rather than reopened \u2014 enter a new contract, or renew the offer first."
+            : "Contract deleted. It came from a firm offer \u2014 check that offer under Firm offers before entering a replacement contract.");
+      await onSaved();
+    } catch (error) { setMessage(farmerError(error, "delete this contract")) } finally { lock.current.release(); setSaving(false) }
+  };
+  return <div className="contract-repair">
+    <button className="text-action" type="button" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Cancel correction" : "Correct or delete"}</button>
+    {open && <div className="contract-repair-body">
+      <label>Buyer<input value={buyer} onChange={(event) => { redraft(); setBuyer(event.target.value) }} /></label>
+      <label>Contract bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={contractBushels} onChange={(event) => { redraft(); setContractBushels(event.target.value) }} /></label>
+      <label>Delivery start<input type="date" value={start} onChange={(event) => { redraft(); setStart(event.target.value) }} /></label>
+      <label>Delivery end<input type="date" value={end} onChange={(event) => { redraft(); setEnd(event.target.value) }} /></label>
+      <label>Contract #<input value={number} onChange={(event) => { redraft(); setNumber(event.target.value) }} /></label>
+      {/* Setting a basis or futures price tells the farmer to "add a contract note for any
+          correction". Without this field that instruction had nowhere to land. */}
+      <label>Contract note<textarea value={notes} rows={2} onChange={(event) => { redraft(); setNotes(event.target.value) }} /></label>
+      <label>Why are you changing this?<textarea value={reason} rows={2} onChange={(event) => { redraft(); setReason(event.target.value) }} /></label>
+      <small>Crop year, commodity, type and price cannot be corrected here. Delete the contract and enter it again if one of those is wrong.</small>
+      <div className="contract-repair-buttons">
+        <button className="text-action" type="button" disabled={saving} onClick={() => void correct()}>Save correction</button>
+        <button className="text-action destructive" type="button" disabled={saving} onClick={() => void remove()}>Delete contract</button>
+      </div>
+      {message && <small>{message}</small>}
+    </div>}
+  </div>;
+}
+
+export function ContractActions({ contract, workspace, services, autoFocusDelivery = false, onSaved, onDeliverySaved, onDeleted, onReceipt }: { contract: GrainContract; workspace: GrainWorkspace; services: GrainServices; autoFocusDelivery?: boolean; onSaved: () => Promise<void>; onDeliverySaved: () => Promise<void>; onDeleted?: (notice: string) => void; onReceipt: (id: string) => void }) {
   const [price, setPrice] = useState(""); const [delivery, setDelivery] = useState(""); const [message, setMessage] = useState(""); const [saving, setSaving] = useState(false); const [deliveryUnconfirmed, setDeliveryUnconfirmed] = useState(false); const lock = useRef(createSubmitLock()); const deliveryDraft = useRef<GrainContractDelivery | null>(null);
   const missingLeg = contract.contract_type === "basis" ? "futures_price" : contract.contract_type === "hta" ? "basis" : null;
   const finalize = async () => { if (!missingLeg || !lock.current.acquire()) return; setSaving(true); try { if (price.trim() === "") throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const value = Number(price); if (!Number.isFinite(value) || (missingLeg === "futures_price" && value <= 0)) throw new Error(missingLeg === "basis" ? "Enter a valid basis." : "Enter a futures price above zero."); const shown = `${missingLeg === "basis" && value < 0 ? "-" : ""}$${Math.abs(value).toFixed(2)}/bu`; if (!(await confirmDialog({ title: `Set ${missingLeg === "basis" ? "basis" : "futures price"} to ${shown}?`, body: "This cannot be changed afterward. Add a contract note for any correction.", confirmLabel: "Set price", destructive: true }))) return; await services.grainRepository.finalizeContractPriceLeg(contract.id, missingLeg, value); setMessage("Price leg set. Add a contract note for any correction."); await onSaved() } catch (error) { setMessage(farmerError(error, "set this price")) } finally { lock.current.release(); setSaving(false) } };
@@ -3080,7 +3354,7 @@ export function ContractActions({ contract, workspace, services, autoFocusDelive
       setSaving(false);
     }
   };
-  return <div className="contract-actions">{missingLeg && contract[missingLeg] === null && <label>{missingLeg === "basis" ? "Set basis $/bu" : "Set futures price $/bu"}<input type="number" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_price_finalization} onClick={() => void finalize()}>{missingLeg === "basis" ? "Set basis" : "Set futures price"}</button>{!workspace.capabilities?.contract_price_finalization && <small>Price finalization arrives with the next database update. Reload the app after the update.</small>}</label>}<label>Delivered bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={delivery} disabled={deliveryUnconfirmed} autoFocus={autoFocusDelivery} onChange={(event) => setDelivery(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_deliveries} onClick={() => void record()}>{deliveryUnconfirmed ? "Retry delivery" : "Record delivery"}</button><small>Recording a delivery does not remove grain from a bin.</small>{!workspace.capabilities?.contract_deliveries && <small>Tracking arrives with the next database update. Reload the app after the update.</small>}</label>{message && <small>{message}</small>}</div>
+  return <div className="contract-actions">{missingLeg && contract[missingLeg] === null && <label>{missingLeg === "basis" ? "Set basis $/bu" : "Set futures price $/bu"}<input type="number" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_price_finalization} onClick={() => void finalize()}>{missingLeg === "basis" ? "Set basis" : "Set futures price"}</button>{!workspace.capabilities?.contract_price_finalization && <small>Price finalization arrives with the next database update. Reload the app after the update.</small>}</label>}<label>Delivered bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={delivery} disabled={deliveryUnconfirmed} autoFocus={autoFocusDelivery} onChange={(event) => setDelivery(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_deliveries} onClick={() => void record()}>{deliveryUnconfirmed ? "Retry delivery" : "Record delivery"}</button><small>Recording a delivery does not remove grain from a bin.</small>{!workspace.capabilities?.contract_deliveries && <small>Tracking arrives with the next database update. Reload the app after the update.</small>}</label>{message && <small>{message}</small>}<ContractRepair contract={contract} workspace={workspace} services={services} onSaved={onSaved} onDeleted={onDeleted} /></div>
 }
 
 export function Bins({
@@ -3628,7 +3902,7 @@ function Basis({
   services: GrainServices;
   onSaved: () => Promise<void>;
 }) {
-  const [elevator, setElevator] = useState("Cargill - Olney");
+  const [elevator, setElevator] = useState("");
   const [commodity, setCommodity] = useState("corn_yellow");
   const [basis, setBasis] = useState("");
   const [cashPrice, setCashPrice] = useState("");
@@ -3725,21 +3999,24 @@ function Basis({
         </div>
       </div>
       <form className="basis-entry" onSubmit={(event) => void submit(event)}>
-        <select
+        {/* GL-3: free text with suggestions, not a dropdown. A farm with no bids yet had an empty list
+            and no way to record its first one. GL-004 still holds: knownCounterparties never offers a
+            USDA market location as somewhere to save a manual bid. */}
+        <input
+          required
+          type="text"
+          list="basis-elevator-suggestions"
+          aria-label="Elevator"
+          placeholder="Elevator"
+          maxLength={200}
           value={elevator}
           onChange={(event) => setElevator(event.target.value)}
-        >
-          {[
-            ...new Set(
-              // GL-004: feed rows are display-only; their USDA market locations are never offered as an elevator to save against.
-              workspace.cash_bids
-                .filter((bid) => !isMarsBid(bid))
-                .map((bid) => bid.elevator),
-            ),
-          ].map((item) => (
-            <option key={item}>{item}</option>
+        />
+        <datalist id="basis-elevator-suggestions">
+          {knownCounterparties(workspace).map((item) => (
+            <option key={item} value={item} />
           ))}
-        </select>
+        </datalist>
         <select
           value={commodity}
           onChange={(event) => setCommodity(event.target.value)}

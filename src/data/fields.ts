@@ -150,6 +150,10 @@ export interface Commodity {
   id: string
   name: string
   crop_family: 'corn' | 'soybeans' | 'wheat'
+  /** GL-2: the marketing-year start the alert sweep reads. Null on a database without the GL-2
+   * migration, where the crop family's USDA default stands in (src/data/marketingYear.ts). */
+  marketing_year_start_month: number | null
+  marketing_year_start_day: number | null
   traits: Record<string, unknown>
   is_active: boolean
   created_at: string

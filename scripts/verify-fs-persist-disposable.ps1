@@ -42,6 +42,9 @@ try {
   # Initiative FD-1 (Today) reads only existing rows; this asserts the row-level rules Today depends on, in the same database.
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/fd-today-role-assertions.sql')) 'FD_TODAY_DISPOSABLE_PASS' 'Today role assertions failed.'
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/gl1-mars-feed-assertions.sql')) 'GL1_MARS_FEED_DISPOSABLE_PASS' 'GL-1 MARS feed assertions failed.'
+  # Initiative GL-2 (alert truth): crop-year eligibility and the feed's one permitted effect.
+  Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/gl2-alert-eligibility-assertions.sql')) 'GL2_ALERT_ELIGIBILITY_DISPOSABLE_PASS' 'GL-2 alert eligibility assertions failed.'
+  Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/gl3-contract-edit-delete-assertions.sql')) 'GL3_CONTRACT_EDIT_DELETE_DISPOSABLE_PASS' 'GL-3b contract edit/delete assertions failed.'
 
   $passed = $true
 } finally {

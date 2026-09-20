@@ -3,7 +3,7 @@ import type { FieldsDataGateway, FieldsRowBundle, SaveFieldBundleInput, SavedFie
 import { fieldsSeedForRegression } from './MockFieldsRepository'
 import { MockGrainRepository, writeGrainEnvelope } from './MockGrainRepository'
 import { QueuedFieldsRepository } from './QueuedFieldsRepository'
-import { normalizeFieldDraft, SupabaseFieldsRepository } from './SupabaseFieldsRepository'
+import { mapCommodity, normalizeFieldDraft, SupabaseFieldsRepository } from './SupabaseFieldsRepository'
 import { createFieldEditDraft } from './fieldEditPatch'
 import { getSyncStatus } from './syncStatus'
 import { FieldsWriteQueue, parseFieldsQueue, writeQueueKey, type FieldsQueueEntryV1 } from './writeQueue'
@@ -282,6 +282,20 @@ async function run() {
   const previousLocalStorage = globalThis.localStorage; Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage }); const injected: FieldsRepository = { getData: async () => data, saveField: async (value) => ({ ...data.fields[0], id: value.id ?? data.fields[0].id }) }; const grain = new MockGrainRepository(injected); const grainData = await grain.getData(); const grainEnvelope = writeGrainEnvelope(storage.getItem('farm-rx-local-data'), { ...grainData, fields: data }); assert(grainData.fields.farm.id === data.farm.id && !('fields' in (JSON.parse(grainEnvelope).grain as object)), 'Injected Grain crossed into Fields storage.'); Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: previousLocalStorage })
   // 15. release composition is deliberately live Fields + queued live Grain at the exact project ref.
   assert(moduleBackends.fields === 'supabase' && moduleBackends.grain === 'supabase' && supabaseConfig.projectRef === 'agvsozfbstpekuqxpqjr', 'Backend manifest or project identity drifted.')
+}
+
+// GL-2: a commodity row from a database WITHOUT the GL-2 migration must still map. strictRow is a proxy
+// that fails closed on any column the row does not carry -- the right rule for a column the app depends
+// on, and the wrong one for a column that does not exist yet. Reading these two through it took down the
+// whole fields load, and with it Today's inventory and grain, on every farm on the previous schema.
+{
+  const base = { id: 'corn_yellow', name: 'Yellow Corn', crop_family: 'corn', traits: {}, is_active: true, created_at: '2026-07-13T12:00:00.000Z', updated_at: '2026-07-13T12:00:00.000Z' }
+  const preMigration = mapCommodity(base)
+  if (preMigration.marketing_year_start_month !== null || preMigration.marketing_year_start_day !== null) throw new Error('GL-2: a commodity row without the marketing-year columns must map them as null.')
+  const migrated = mapCommodity({ ...base, marketing_year_start_month: 6, marketing_year_start_day: 1 })
+  if (migrated.marketing_year_start_month !== 6 || migrated.marketing_year_start_day !== 1) throw new Error('GL-2: stored marketing-year configuration must survive the mapper.')
+  const malformed = mapCommodity({ ...base, marketing_year_start_month: 'June', marketing_year_start_day: 1.5 })
+  if (malformed.marketing_year_start_month !== null || malformed.marketing_year_start_day !== null) throw new Error('GL-2: a malformed stored value must fall back to null, not reach the marketing-year rule.')
 }
 
 void run().then(() => console.log('SupabaseFieldsRepository regressions passed.'))
