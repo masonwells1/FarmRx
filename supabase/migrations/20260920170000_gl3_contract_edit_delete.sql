@@ -73,7 +73,7 @@ $fn$;
 comment on function public.grain_contract_has_deliveries(uuid, uuid) is
   'GL-3b: whether a contract has delivered bushels against it. A contract with deliveries is history, not a draft, and is neither editable nor deletable.';
 
-create or replace function public.edit_grain_contract(p_farm_id uuid, p_contract_id uuid, p_reason text, p_changes jsonb)
+create or replace function public.edit_grain_contract(p_farm_id uuid, p_contract_id uuid, p_reason text, p_changes jsonb, p_expected_updated_at timestamptz)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $fn$
 declare
   v_before public.grain_contracts%rowtype;
@@ -90,6 +90,12 @@ begin
 
   select * into v_before from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id for update;
   if not found then raise exception 'contract does not belong to this farm'; end if;
+  -- Compare-and-swap, the same fence optimisticSave applies to every other mutable farm row. Two
+  -- members can have this contract open at once; without it the second save silently reverses the
+  -- first correction, and the audit would record both as deliberate.
+  if p_expected_updated_at is null or v_before.updated_at is distinct from p_expected_updated_at then
+    raise exception using errcode = 'P0001', message = 'FARM_RX_STALE_WRITE';
+  end if;
   if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then
     raise exception 'this contract already has delivered bushels and can no longer be changed';
   end if;
@@ -118,18 +124,19 @@ begin
 
   return to_jsonb(v_after);
 end $fn$;
-revoke all on function public.edit_grain_contract(uuid, uuid, text, jsonb) from public, anon;
-grant execute on function public.edit_grain_contract(uuid, uuid, text, jsonb) to authenticated;
+revoke all on function public.edit_grain_contract(uuid, uuid, text, jsonb, timestamptz) from public, anon;
+grant execute on function public.edit_grain_contract(uuid, uuid, text, jsonb, timestamptz) to authenticated;
 
-comment on function public.edit_grain_contract(uuid, uuid, text, jsonb) is
+comment on function public.edit_grain_contract(uuid, uuid, text, jsonb, timestamptz) is
   'GL-3b: correct a contract that has no deliveries, with a required reason recorded in grain_contract_audit. Crop year, commodity, contract type and pricing are not editable here; 0033 owns pricing.';
 
-create or replace function public.delete_grain_contract(p_farm_id uuid, p_contract_id uuid, p_reason text)
+create or replace function public.delete_grain_contract(p_farm_id uuid, p_contract_id uuid, p_reason text, p_expected_updated_at timestamptz)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $fn$
 declare
   v_before public.grain_contracts%rowtype;
   v_offer public.firm_offers%rowtype;
   v_reopened uuid := null;
+  v_local_date date;
   v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
 begin
   if auth.uid() is null or public.request_uses_service_role() or not public.can_edit_farm(p_farm_id) then
@@ -149,6 +156,9 @@ begin
     end if;
     raise exception 'contract does not belong to this farm';
   end if;
+  if p_expected_updated_at is null or v_before.updated_at is distinct from p_expected_updated_at then
+    raise exception using errcode = 'P0001', message = 'FARM_RX_STALE_WRITE';
+  end if;
   if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then
     raise exception 'this contract already has delivered bushels and can no longer be deleted';
   end if;
@@ -158,11 +168,16 @@ begin
   -- otherwise leave it marked 'filled' pointing at nothing -- a state no screen can explain and
   -- that blocks the offer from ever being filled again. It returns to 'open', or to 'expired'
   -- if its own expiry has already passed, so the delete never resurrects a stale offer as live.
+  -- The farm's own calendar day, not the database's. After UTC midnight an Illinois farm is still on
+  -- the previous evening, and an offer that expires today is still fillable there; current_date would
+  -- retire it hours early. Offer expiry is read against the farmer's local day everywhere else.
+  select (now() at time zone coalesce(f.time_zone, 'UTC'))::date into v_local_date
+  from public.farms f where f.id = p_farm_id;
   if v_before.firm_offer_id is not null then
     select * into v_offer from public.firm_offers where id = v_before.firm_offer_id and farm_id = p_farm_id for update;
     if found then
       update public.firm_offers
-         set status = case when v_offer.expires_on is not null and v_offer.expires_on < current_date then 'expired'::public.firm_offer_status else 'open'::public.firm_offer_status end,
+         set status = case when v_offer.expires_on is not null and v_offer.expires_on < v_local_date then 'expired'::public.firm_offer_status else 'open'::public.firm_offer_status end,
              filled_contract_id = null, updated_at = now()
        where id = v_offer.id and farm_id = p_farm_id;
       v_reopened := v_offer.id;
@@ -176,8 +191,8 @@ begin
 
   return jsonb_build_object('deleted', true, 'reopened_firm_offer_id', v_reopened, 'already_deleted', false);
 end $fn$;
-revoke all on function public.delete_grain_contract(uuid, uuid, text) from public, anon;
-grant execute on function public.delete_grain_contract(uuid, uuid, text) to authenticated;
+revoke all on function public.delete_grain_contract(uuid, uuid, text, timestamptz) from public, anon;
+grant execute on function public.delete_grain_contract(uuid, uuid, text, timestamptz) to authenticated;
 
-comment on function public.delete_grain_contract(uuid, uuid, text) is
+comment on function public.delete_grain_contract(uuid, uuid, text, timestamptz) is
   'GL-3b: delete a contract that has no deliveries, with a required reason recorded in grain_contract_audit before the row is removed. A contract created from a firm offer returns that offer to open, or expired if its expiry has passed.';

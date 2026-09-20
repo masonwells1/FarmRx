@@ -1565,6 +1565,12 @@ test('a contract with no deliveries can be corrected with a reason, and one alre
   await expect(typo.getByText('Say why you are changing this contract', { exact: false })).toBeVisible()
   expect(contractRepairCalls).toEqual([])
 
+  // A reason with no actual change is not a correction, and must not write an audit row for nothing.
+  await typo.getByLabel('Why are you changing this?').fill('nothing actually changed')
+  await typo.getByRole('button', { name: 'Save correction' }).click()
+  await expect(typo.getByText('Nothing has changed on this contract yet.')).toBeVisible()
+  expect(contractRepairCalls).toEqual([])
+
   await typo.getByLabel('Buyer', { exact: true }).fill('Corrected Buyer')
   await typo.getByLabel('Contract bushels').fill('9250')
   await typo.getByLabel('Why are you changing this?').fill('buyer was typed wrong')
@@ -1573,7 +1579,11 @@ test('a contract with no deliveries can be corrected with a reason, and one alre
   expect(contractRepairCalls[0]!.rpc).toBe('edit_grain_contract')
   expect(contractRepairCalls[0]!.body.p_contract_id).toBe('00000000-0000-4000-8000-000000000061')
   expect(contractRepairCalls[0]!.body.p_reason).toBe('buyer was typed wrong')
-  expect(contractRepairCalls[0]!.body.p_changes).toEqual({ buyer: 'Corrected Buyer', bushels: 9250, delivery_start: '2026-11-01', delivery_end: '2026-11-30', contract_number: null })
+  // Only what was touched. The delivery window and the contract number were not, so they are absent
+  // entirely -- a whole-form payload would let this save undo someone else's correction to them.
+  expect(contractRepairCalls[0]!.body.p_changes).toEqual({ buyer: 'Corrected Buyer', bushels: 9250 })
+  // And the version this page loaded rides along, so the server refuses the write if the row moved.
+  expect(contractRepairCalls[0]!.body.p_expected_updated_at).toBe(now)
   expect(unexpected).toEqual([])
 })
 

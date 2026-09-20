@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 249
+const expectedMutationCount = 254
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -744,7 +744,7 @@ try {
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('contract_edit_delete: !tableMissing(contract_audit_probe.error)', 'contract_edit_delete: true'))
   detected('the repair controls are offered against a database that has no audit table', 'gl3b:capability-reports-schema')
   reset()
-  mutate('src/data/QueuedGrainRepository.ts', (source) => source.replace("async deleteContract(contractId: string, reason: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before deleting a contract.');", "async deleteContract(contractId: string, reason: string) {"))
+  mutate('src/data/QueuedGrainRepository.ts', (source) => source.replace("async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string) { if (this.dependencies.isOffline()) throw new Error('Connect to the internet before deleting a contract.');", "async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string) {"))
   detected('a contract delete is attempted offline', 'gl3b:correction-needs-a-connection')
   reset()
   mutate('src/data/SupabaseGrainRepository.ts', (source) => source.replace('if (changes.delivery_start !== undefined) payload.delivery_start = changes.delivery_start || null', 'payload.delivery_start = changes.delivery_start || null'))
@@ -752,6 +752,21 @@ try {
   reset()
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('filled_contract_id = null, updated_at = now()', 'updated_at = now()'))
   detected('a deleted contract leaves its firm offer marked filled pointing at nothing', 'gl3b:filled-offer-does-not-dangle')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("  if p_expected_updated_at is null or v_before.updated_at is distinct from p_expected_updated_at then\n    raise exception using errcode = 'P0001', message = 'FARM_RX_STALE_WRITE';\n  end if;\n  if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then\n    raise exception 'this contract already has delivered bushels and can no longer be changed';", "  if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then\n    raise exception 'this contract already has delivered bushels and can no longer be changed';"))
+  detected('a correction typed on a stale page silently reverses a newer one', 'gl3b:correction-is-compare-and-swap')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at);', 'await services.grainRepository.deleteContract(contract.id, reason, new Date().toISOString());'))
+  detected('the delete stops naming the version it means to remove', 'gl3b:correction-is-compare-and-swap')
+  reset()
+  mutate('src/data/grain.ts', (source) => source.replace('export function contractCorrectionDiff(', 'export function contractCorrectionDiffUnused('))
+  detected('the whole form is sent again instead of what changed', 'gl3b:only-changed-fields-are-sent')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number });', 'const changes = { buyer, bushels: Number(contractBushels), delivery_start: start || null, delivery_end: end || null, contract_number: number || null };'))
+  detected("a buyer correction also rewrites every other field this page loaded", 'gl3b:only-changed-fields-are-sent')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("expires_on < v_local_date", "expires_on < current_date"))
+  detected("a reopened offer is retired on the database's calendar instead of the farm's", 'gl3b:offer-expiry-is-farm-local')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('<tfoot>', '<tfoot hidden>').replace('</tfoot>', '</tfoot>'))
   detected('the contracts totals row is removed', 'gl3:contract-totals-row')

@@ -40,8 +40,8 @@ export interface GrainDataGateway {
   appendBinTransactionRpc?(farmId: string, row: BinTransaction, context: FarmOperationContext): Promise<unknown>
   appendContractDeliveryRpc?(farmId: string, row: GrainContractDelivery, allowOverdelivery: boolean, context: FarmOperationContext): Promise<unknown>
   finalizeContractPriceLegRpc?(farmId: string, contractId: string, leg: 'futures_price' | 'basis', value: number, context: FarmOperationContext): Promise<unknown>
-  editContractRpc?(farmId: string, contractId: string, reason: string, changes: GrainContractCorrection, context: FarmOperationContext): Promise<unknown>
-  deleteContractRpc?(farmId: string, contractId: string, reason: string, context: FarmOperationContext): Promise<unknown>
+  editContractRpc?(farmId: string, contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, context: FarmOperationContext): Promise<unknown>
+  deleteContractRpc?(farmId: string, contractId: string, reason: string, expectedUpdatedAt: string, context: FarmOperationContext): Promise<unknown>
   upsertGrainAlertSettings(farmId: string, row: GrainAlertSettings, context: FarmOperationContext): Promise<unknown>
   upsertGrainSaleLimit(farmId: string, row: GrainSaleLimit, context: FarmOperationContext): Promise<unknown>
   upsertGrainCarrySettings(farmId: string, row: GrainCarrySettings, context: FarmOperationContext): Promise<unknown>

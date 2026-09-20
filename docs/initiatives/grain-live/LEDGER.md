@@ -318,3 +318,30 @@ This ledger is append-only. Never edit, reorder, or delete an earlier entry. If 
 - **Disposable assertions:** a seventh block in `scripts/sql/gl2-alert-eligibility-assertions.sql` that first checks three-valued logic still behaves as assumed (and raises if it ever does not, so the block can never pass vacuously), then proves the bare predicate drops a note-less manual bid, the corrected predicate keeps it, and the corrected predicate still keeps the legacy feed row out. The reasoning now lives where it can be re-run, not only in a comment.
 - **Proof observed:** `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 249/249; `bash scripts/verify-fs-persist-disposable.sh` printed all five PASS lines; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean.
 - **Browser proof, stated exactly:** **113 passed, 0 failed, 15 skipped, retries 0.** A clean sweep; the Soil Rx custody test that flaked four times earlier in this session passed in the suite this time. That does not retract anything recorded about it — it is a flaky test, and a run where it passes is not evidence that it is fixed.
+
+## GL-025 — Eighteenth and nineteenth findings, on `a951327`: GL-3b's two open edges
+
+- **Date/time:** 2026-09-20 10:35 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `a951327` and returned two P2s, both on GL-3b. Both verified before acting; both real.
+
+### Finding 18 (P2, `src/GrainModule.tsx` and the migration) — a stale page could silently undo someone else's correction
+
+The form sent **every** field it held, and `edit_grain_contract` applied every key it was given with no version check. Two members open the same contract; one corrects the bushels; the other, still on the page loaded before that, corrects only the buyer — and the save carries the stale bushels with it and reverses the first correction. The audit then records both as deliberate, which is worse than no audit: it is a false record. A reason-only submission could also write a no-op audit row.
+
+- **Repair, in two halves, because one alone is not enough.** `contractCorrectionDiff` builds the payload from the fields that actually **differ** from the contract this page loaded, so an untouched field is absent and the server keeps what is stored; an empty result is refused in the browser with "Nothing has changed on this contract yet." And the contract's own `updated_at` now rides along as `p_expected_updated_at`, with both RPCs raising `FARM_RX_STALE_WRITE` — the same compare-and-swap `optimisticSave` has applied to every other mutable farm row since slice 1, and the same code `farmerError` already translates into "This record changed in another tab or device."
+- **Why I missed it.** I wrote the RPCs thinking about the *contract* — deliveries, reason, audit, pricing — and not about the *row*. Every other mutable row in this project goes through `optimisticSave`; by writing a bespoke RPC I stepped outside the one mechanism that would have given me this for free, and did not notice I had.
+- A guard now requires the fence in **both** RPCs by count, not by presence: the first version of that guard passed a mutation that stripped it from the edit path, because the delete path still carried the text.
+
+### Finding 19 (P2, the migration) — a reopened offer was retired on the wrong calendar
+
+The delete compared `expires_on` with `current_date`, which is the **database's** day. After UTC midnight an Illinois farm is still on the previous evening, and an offer expiring on the farm's today is still fillable there. The offer would come back `expired` several hours early, which is the opposite of what reopening it is for.
+
+- **Repair:** the farm's own day, `(now() at time zone coalesce(f.time_zone, 'UTC'))::date`, which is what GL-2's sweep already uses for `v_local_date`. A guard fails if `expires_on < current_date` ever reappears.
+- **The assertion is deterministic at any hour.** The fixture farm's time zone is chosen at run time (`Etc/GMT+12` before noon UTC, `Etc/GMT-12` after) so its local date is guaranteed to differ from the database's, and the block raises rather than passing quietly if that ever stops being true. Two offers are then deleted — one expiring on the farm's today, one on the farm's yesterday — and whichever direction the offset runs, one of the two discriminates between the farm's date and `current_date`.
+
+### Together
+
+- **Guards:** `gl3b:correction-is-compare-and-swap`, `gl3b:only-changed-fields-are-sent`, `gl3b:offer-expiry-is-farm-local`, plus `gl3b:correction-needs-a-connection` and `gl3b:filled-offer-does-not-dangle` re-pinned to the new signatures. Five mutations, 249 → 254.
+- **Disposable assertions:** two new blocks (11 and 12) in `scripts/sql/gl3-contract-edit-delete-assertions.sql`, and every existing call in that file now passes the expected version.
+- **Proof observed:** `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 254/254; `bash scripts/verify-fs-persist-disposable.sh` printed all five PASS lines; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean.
+- **Browser proof, stated exactly:** **113 passed, 0 failed, 15 skipped, retries 0.** The GL-3b journey now also proves that a reason typed with nothing changed is refused in the browser with no request sent, that the payload carries only the two fields touched, and that the loaded version rides along with it.

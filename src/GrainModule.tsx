@@ -50,7 +50,7 @@ import type {
   GrainCarryGrid,
   GrainCarrySettings,
 } from "./data/grain";
-import { contractIsCorrectable, marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason } from "./data/grain";
+import { contractCorrectionDiff, contractIsCorrectable, marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -3190,8 +3190,14 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
       const value = Number(contractBushels);
       if (!Number.isFinite(value) || value <= 0) { setMessage("Bushels must be greater than zero."); return }
       if (start && end && end < start) { setMessage("Delivery end must be on or after delivery start."); return }
+      // Only what this farmer actually changed. Sending the whole form would let a buyer correction
+      // typed on a stale page quietly undo a bushels correction another member just saved, and the
+      // audit would show both as deliberate. The contract's own updated_at goes with it, so the
+      // server refuses the write outright if the row moved under this page.
+      const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number });
+      if (!Object.keys(changes).length) { setMessage("Nothing has changed on this contract yet."); return }
       setSaving(true);
-      await services.grainRepository.editContract(contract.id, reason, { buyer, bushels: value, delivery_start: start || null, delivery_end: end || null, contract_number: number || null });
+      await services.grainRepository.editContract(contract.id, reason, changes, contract.updated_at);
       setMessage("Contract corrected.");
       setReason("");
       await onSaved();
@@ -3204,7 +3210,7 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
       if (problem) { setMessage(problem); return }
       if (!(await confirmDialog({ title: `Delete the ${contract.buyer} contract?`, body: "The contract is removed from your position. The reason you gave is kept. This cannot be undone.", confirmLabel: "Delete contract", destructive: true }))) return;
       setSaving(true);
-      await services.grainRepository.deleteContract(contract.id, reason);
+      await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at);
       await onSaved();
     } catch (error) { setMessage(farmerError(error, "delete this contract")) } finally { lock.current.release(); setSaving(false) }
   };

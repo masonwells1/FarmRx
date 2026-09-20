@@ -100,6 +100,21 @@ export function contractIsCorrectable(workspace: Pick<GrainWorkspace, 'grain_con
   return !workspace.grain_contract_deliveries.some((delivery) => delivery.grain_contract_id === contractId)
 }
 
+/** GL-3b: what the farmer actually changed, and nothing else. Sending every field the form holds
+ * would make a buyer correction also rewrite the bushels this page loaded -- so a second member
+ * correcting the buyer from a stale page silently reverses a bushels correction someone else just
+ * made, and the audit would record both as deliberate. An empty result means nothing changed. */
+export function contractCorrectionDiff(contract: GrainContract, draft: { buyer: string; bushels: string; delivery_start: string; delivery_end: string; contract_number: string }): GrainContractCorrection {
+  const changes: GrainContractCorrection = {}
+  const bushels = Number(draft.bushels)
+  if (draft.buyer.trim() !== contract.buyer) changes.buyer = draft.buyer.trim()
+  if (Number.isFinite(bushels) && bushels !== contract.bushels) changes.bushels = bushels
+  if ((draft.delivery_start || null) !== contract.delivery_start) changes.delivery_start = draft.delivery_start || null
+  if ((draft.delivery_end || null) !== contract.delivery_end) changes.delivery_end = draft.delivery_end || null
+  if ((draft.contract_number.trim() || null) !== contract.contract_number) changes.contract_number = draft.contract_number.trim() || null
+  return changes
+}
+
 /** The reason is the farmer's own record of why the number changed, so it is required and is stored
  * verbatim. The bounds match the column's check constraint exactly. */
 export function validateContractCorrectionReason(reason: string): string | null {
@@ -171,8 +186,8 @@ export interface GrainRepository {
   reconcileHarvestActual(estimate: ProductionEstimate, harvestActual: number): Promise<void>
   saveContract(contract: GrainContract): Promise<void>
   finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number): Promise<void>
-  editContract(contractId: string, reason: string, changes: GrainContractCorrection): Promise<void>
-  deleteContract(contractId: string, reason: string): Promise<void>
+  editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string): Promise<void>
+  deleteContract(contractId: string, reason: string, expectedUpdatedAt: string): Promise<void>
   recordContractDelivery(delivery: GrainContractDelivery): Promise<void>
   saveMarketingPlanTarget(target: MarketingPlanTarget): Promise<void>
   replaceMarketingPlanTargets(scope: PositionScope, targets: MarketingPlanTarget[]): Promise<void>
