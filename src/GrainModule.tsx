@@ -3206,15 +3206,20 @@ export function ContractRepair({ contract, workspace, services, onSaved, onDelet
   // the mismatch: the prop still held the old one, this branch fired on the next render, and the
   // farmer's own correction was reported back to them as somebody else's. The version this panel
   // wrote is therefore remembered separately and recognised when the refresh finally brings it.
+  // The whole row this panel last wrote, not only its version. onSaved() reloads the workspace and
+  // that reload CATCHES its own failure, so a correction can succeed and the refresh that follows it
+  // fail on a lost signal -- leaving the prop on the row before the save. Holding the saved row means
+  // the next correction still diffs against, and is versioned against, what the server actually has,
+  // instead of sending a version the server moved past and being refused as stale.
   const [seenVersion, setSeenVersion] = useState(contract.updated_at);
-  const savedVersion = useRef<string | null>(null);
-  if (contract.updated_at !== seenVersion && contract.updated_at === savedVersion.current) {
+  const [savedRow, setSavedRow] = useState<GrainContract | null>(null);
+  if (contract.updated_at !== seenVersion && savedRow !== null && contract.updated_at === savedRow.updated_at) {
     // Our own save, arriving. Adopt it and keep the success message the farmer is reading.
     setSeenVersion(contract.updated_at);
-    savedVersion.current = null;
+    setSavedRow(null);
   } else if (contract.updated_at !== seenVersion) {
     setSeenVersion(contract.updated_at);
-    savedVersion.current = null;
+    setSavedRow(null);
     setBuyer(contract.buyer);
     setContractBushels(String(contract.bushels));
     setStart(contract.delivery_start ?? "");
@@ -3228,6 +3233,8 @@ export function ContractRepair({ contract, workspace, services, onSaved, onDelet
   // must not reuse that attempt's id: the server would recognise the id, answer with what it already
   // saved, and the newly typed change would be dropped while the screen said it was corrected.
   const redraft = () => { operationId.current = null };
+  // The freshest row this panel knows of: what it last saved, or the prop when it has caught up.
+  const current = savedRow ?? contract;
   const available = workspace.capabilities?.contract_edit_delete !== false;
   if (!available || !contractIsCorrectable(workspace, contract.id)) return null;
   const correct = async () => {
@@ -3244,16 +3251,16 @@ export function ContractRepair({ contract, workspace, services, onSaved, onDelet
       // typed on a stale page quietly undo a bushels correction another member just saved, and the
       // audit would show both as deliberate. The contract's own updated_at goes with it, so the
       // server refuses the write outright if the row moved under this page.
-      const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number, notes });
+      const changes = contractCorrectionDiff(current, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number, notes });
       if (!Object.keys(changes).length) { setMessage("Nothing has changed on this contract yet."); return }
       setSaving(true);
       operationId.current ??= services.createGrainId();
-      const saved = await services.grainRepository.editContract(contract.id, reason, changes, contract.updated_at, operationId.current);
+      const saved = await services.grainRepository.editContract(contract.id, reason, changes, current.updated_at, operationId.current);
       operationId.current = null;
       // Adopt the version this save produced. The refresh below hands back the row we just wrote, and
       // without this the rebase branch would read our own save as somebody else's change and replace
       // "Contract corrected" with a warning. A version we did not write still warns, which is the point.
-      savedVersion.current = saved.updated_at;
+      setSavedRow(saved);
       setMessage("Contract corrected.");
       setReason("");
       await onSaved();
@@ -3267,7 +3274,7 @@ export function ContractRepair({ contract, workspace, services, onSaved, onDelet
       if (!(await confirmDialog({ title: `Delete the ${contract.buyer} contract?`, body: "The contract is removed from your position. The reason you gave is kept. This cannot be undone.", confirmLabel: "Delete contract", destructive: true }))) return;
       setSaving(true);
       operationId.current ??= services.createGrainId();
-      const result = await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at, operationId.current);
+      const result = await services.grainRepository.deleteContract(contract.id, reason, current.updated_at, operationId.current);
       // This row is about to vanish, so the news goes above the table. A contract that came from a
       // firm offer sent that offer back to open; entering a replacement contract by hand instead of
       // refilling the offer would leave the offer counted as pending AND fillable into a second one.

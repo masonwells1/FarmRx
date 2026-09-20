@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 281
+const expectedMutationCount = 284
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -765,13 +765,13 @@ try {
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("  if p_expected_updated_at is null or v_before.updated_at is distinct from p_expected_updated_at then\n    raise exception using errcode = 'P0001', message = 'FARM_RX_STALE_WRITE';\n  end if;\n  if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then\n    raise exception 'this contract already has delivered bushels and can no longer be changed';", "  if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then\n    raise exception 'this contract already has delivered bushels and can no longer be changed';"))
   detected('a correction typed on a stale page silently reverses a newer one', 'gl3b:correction-is-compare-and-swap')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at, operationId.current);', 'await services.grainRepository.deleteContract(contract.id, reason, new Date().toISOString(), operationId.current);'))
+  mutate('src/GrainModule.tsx', (source) => source.replace('await services.grainRepository.deleteContract(contract.id, reason, current.updated_at, operationId.current);', 'await services.grainRepository.deleteContract(contract.id, reason, new Date().toISOString(), operationId.current);'))
   detected('the delete stops naming the version it means to remove', 'gl3b:correction-is-compare-and-swap')
   reset()
   mutate('src/data/grain.ts', (source) => source.replace('export function contractCorrectionDiff(', 'export function contractCorrectionDiffUnused('))
   detected('the whole form is sent again instead of what changed', 'gl3b:only-changed-fields-are-sent')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number, notes });', 'const changes = { buyer, bushels: Number(contractBushels), delivery_start: start || null, delivery_end: end || null, contract_number: number || null };'))
+  mutate('src/GrainModule.tsx', (source) => source.replace('const changes = contractCorrectionDiff(current, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number, notes });', 'const changes = { buyer, bushels: Number(contractBushels), delivery_start: start || null, delivery_end: end || null, contract_number: number || null };'))
   detected("a buyer correction also rewrites every other field this page loaded", 'gl3b:only-changed-fields-are-sent')
   reset()
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("expires_on < v_local_date", "expires_on < current_date"))
@@ -804,11 +804,20 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace('This contract changed while you had it open. The fields now show the current values', 'Contract reloaded'))
   detected('the farmer is not told that the contract moved under their draft', 'gl3b:draft-rebases-on-a-changed-contract')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('savedVersion.current = saved.updated_at;', ''))
+  mutate('src/GrainModule.tsx', (source) => source.replace('setSavedRow(saved);', ''))
   detected("a farmer's own correction is reported back to them as somebody else's change", 'gl3b:own-save-is-not-a-concurrent-change')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('if (contract.updated_at !== seenVersion && contract.updated_at === savedVersion.current) {', 'if (false) {'))
+  mutate('src/GrainModule.tsx', (source) => source.replace('if (contract.updated_at !== seenVersion && savedRow !== null && contract.updated_at === savedRow.updated_at) {', 'if (false) {'))
   detected('the panel stops recognising the version its own save wrote', 'gl3b:own-save-is-not-a-concurrent-change')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('const current = savedRow ?? contract;', 'const current = contract;'))
+  detected('a correction after a failed reload is versioned against the row before the save', 'gl3b:a-failed-reload-cannot-strand-the-panel')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('const changes = contractCorrectionDiff(current, {', 'const changes = contractCorrectionDiff(contract, {'))
+  detected('a correction after a failed reload diffs against the row before the save', 'gl3b:a-failed-reload-cannot-strand-the-panel')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('reason, current.updated_at, operationId.current);', 'reason, contract.updated_at, operationId.current);'))
+  detected('a delete after a failed reload carries the version before the save', 'gl3b:a-failed-reload-cannot-strand-the-panel')
   reset()
   mutate('src/data/SupabaseGrainRepository.ts', (source) => source.replace('return { reopenedFirmOfferId: reopened, reopenedFirmOfferStatus: status }', 'return { reopenedFirmOfferId: null, reopenedFirmOfferStatus: null }'))
   detected('the offer a deleted contract reopened never reaches the screen', 'gl3b:a-reopened-offer-is-surfaced')

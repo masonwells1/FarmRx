@@ -563,3 +563,14 @@ The idempotent delete path matched on nothing but the existence of a delete audi
 
 - **Guards:** `gl3b:filled-offer-does-not-dangle` extended to either association; new `gl3b:a-delete-retry-must-be-the-same-delete`; `gl3b:correction-survives-a-lost-response` now counts both lazy-mint sites. Three mutations, 278 → 281.
 - **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 281/281; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**.
+
+## GL-036 — Thirty-sixth finding, on `76ceec1`: a failed reload stranded the panel
+
+- **Date/time:** 2026-09-20 15:45 -05:00 (`America/Chicago`).
+- **Foundation on `d5d5feb`: success.** Four green runs in a row now (`54992f5`, `1855089`, `9217da9`, `d5d5feb`), each read from its conclusion.
+- **Finding 36 (P2).** `onSaved()` calls `GrainPage.refresh`, whose `catch` sets a load error and **resolves** rather than rejecting. So a correction can commit while the reload that follows it fails on a lost signal — and the panel keeps the prop it had before the save. GL-033's `savedVersion` ref recorded that a newer version exists but nothing else used it, so the next correction still diffed against, and was versioned against, the row from before the save: refused as stale, with nothing explaining why. **Verified by reading `refresh`'s catch** before acting.
+  - **Repair:** the panel now keeps the whole row it last wrote, not just its version, and every use reads `current = savedRow ?? contract`: the diff, the expected version on a correction, and the expected version on a delete. When the refreshed prop finally carries that version, it is recognised and the local copy is dropped. A version the panel did not write still rebases and warns.
+  - The ref became state because the value is now read during render. The same repair, one level deeper than GL-033 went.
+- **The shape, and it is the sixth of this kind.** Findings 23, 26, 30 and 36 are the same question asked four times: *when, exactly, does the prop carry what the server has?* Never at save time (26). Not before the refresh lands (30). Not if the refresh fails at all (36). Each answer I gave was correct for the case in front of me and wrong for the next one out. Holding the row rather than tracking the gap is what finally removes the question.
+- **Guards:** `gl3b:a-failed-reload-cannot-strand-the-panel`, plus `gl3b:own-save-is-not-a-concurrent-change` and three others re-pinned to `current`. Three mutations, 281 → 284.
+- **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 284/284; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**.

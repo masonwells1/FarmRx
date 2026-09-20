@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 281')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 284')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -731,9 +731,9 @@ export function foundationStaticGuard(root = process.cwd()) {
   // a write against a row another member may have moved.
   if ((gl3bMigration.split("is distinct from p_expected_updated_at").length - 1) !== 2) errors.push('gl3b:correction-is-compare-and-swap')
   requireText(errors, read(root, 'src/data/grain.ts'), 'export function contractCorrectionDiff(', 'gl3b:only-changed-fields-are-sent')
-  requireText(errors, grainModule, 'const changes = contractCorrectionDiff(contract, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number, notes });', 'gl3b:only-changed-fields-are-sent')
-  requireText(errors, grainModule, 'await services.grainRepository.editContract(contract.id, reason, changes, contract.updated_at, operationId.current);', 'gl3b:correction-is-compare-and-swap')
-  requireText(errors, grainModule, 'await services.grainRepository.deleteContract(contract.id, reason, contract.updated_at, operationId.current);', 'gl3b:correction-is-compare-and-swap')
+  requireText(errors, grainModule, 'const changes = contractCorrectionDiff(current, { buyer, bushels: contractBushels, delivery_start: start, delivery_end: end, contract_number: number, notes });', 'gl3b:only-changed-fields-are-sent')
+  requireText(errors, grainModule, 'await services.grainRepository.editContract(contract.id, reason, changes, current.updated_at, operationId.current);', 'gl3b:correction-is-compare-and-swap')
+  requireText(errors, grainModule, 'await services.grainRepository.deleteContract(contract.id, reason, current.updated_at, operationId.current);', 'gl3b:correction-is-compare-and-swap')
   // The farm's own calendar day, not the database's. After UTC midnight an Illinois farm is still on
   // the previous evening, and an offer expiring that day is still fillable there.
   requireText(errors, gl3bMigration, "select (now() at time zone coalesce(f.time_zone, 'UTC'))::date into v_local_date", 'gl3b:offer-expiry-is-farm-local')
@@ -761,8 +761,14 @@ export function foundationStaticGuard(root = process.cwd()) {
   // replaced by a warning that nothing concurrent actually happened.
   // The prop does not carry the new version until the refresh lands, so adopting it at save time
   // only moves the mismatch. The version this panel wrote is remembered separately and recognised.
-  requireText(errors, grainModule, 'savedVersion.current = saved.updated_at;', 'gl3b:own-save-is-not-a-concurrent-change')
-  requireText(errors, grainModule, 'if (contract.updated_at !== seenVersion && contract.updated_at === savedVersion.current) {', 'gl3b:own-save-is-not-a-concurrent-change')
+  requireText(errors, grainModule, 'setSavedRow(saved);', 'gl3b:own-save-is-not-a-concurrent-change')
+  requireText(errors, grainModule, 'if (contract.updated_at !== seenVersion && savedRow !== null && contract.updated_at === savedRow.updated_at) {', 'gl3b:own-save-is-not-a-concurrent-change')
+  // The reload after a save catches its own failure, so a correction can succeed while the prop stays
+  // on the row before it. The panel diffs and versions against the row it last wrote, not the prop.
+  requireText(errors, grainModule, 'const current = savedRow ?? contract;', 'gl3b:a-failed-reload-cannot-strand-the-panel')
+  requireText(errors, grainModule, 'const changes = contractCorrectionDiff(current, {', 'gl3b:a-failed-reload-cannot-strand-the-panel')
+  requireText(errors, grainModule, 'changes, current.updated_at, operationId.current);', 'gl3b:a-failed-reload-cannot-strand-the-panel')
+  requireText(errors, grainModule, 'reason, current.updated_at, operationId.current);', 'gl3b:a-failed-reload-cannot-strand-the-panel')
   // Setting a basis or futures price tells the farmer to add a contract note. Without a note field in
   // the only form that can change one, that instruction has nowhere to land.
   requireText(errors, grainModule, '<label>Contract note<textarea value={notes}', 'gl3b:a-contract-note-is-reachable')
@@ -805,7 +811,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   // Both paths mint lazily, correction and delete. A plain assignment in either would hand a retry a
   // fresh id, and the server would read it as a different operation rather than the same one.
   if ((grainModule.split('operationId.current ??= services.createGrainId();').length - 1) !== 2) errors.push('gl3b:correction-survives-a-lost-response')
-  requireText(errors, grainModule, 'contract.updated_at, operationId.current);\n      operationId.current = null;', 'gl3b:correction-survives-a-lost-response')
+  requireText(errors, grainModule, 'current.updated_at, operationId.current);\n      operationId.current = null;', 'gl3b:correction-survives-a-lost-response')
   if (/expires_on < current_date/.test(gl3bMigration)) errors.push('gl3b:offer-expiry-is-farm-local')
   // GL-3a made the crop and year picker permanent, so the sale form must not outlive a scope change:
   // a draft typed for one crop year would otherwise be saved under the next one.
