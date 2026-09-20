@@ -71,6 +71,8 @@ async function mockFarm(page: Page) {
       if (rpc === "program_due_generation_status" || rpc === "service_due_generation_status") return fulfillJson(route, { has_due: false, task_needed: false, notification_needed: false, local_date: "2026-07-12" });
       if (rpc === "generate_due_service_tasks_v2" || rpc === "generate_due_program_items_v2") throw new Error(`False due preflight unexpectedly called ${rpc}`);
       if (rpc === "generate_due_service_tasks" || rpc === "generate_due_program_items") throw new Error(`False due preflight unexpectedly called legacy ${rpc}`);
+      // GL-2 repair: the per-commodity cash-bid read returns rows, not a boolean. This farm has none.
+      if (rpc === "latest_cash_bids_per_commodity") return fulfillJson(route, []);
       return fulfillJson(route, rpc !== "has_explicit_rep_access");
     }
     if (table === "farms") {

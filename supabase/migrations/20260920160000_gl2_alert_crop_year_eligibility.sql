@@ -123,6 +123,44 @@ comment on function public.latest_eligible_cash_bid(uuid, text, integer, date, i
 revoke all on function public.latest_eligible_cash_bid(uuid, text, integer, date, integer) from public, anon, authenticated;
 grant execute on function public.latest_eligible_cash_bid(uuid, text, integer, date, integer) to service_role;
 
+-- GL-2 repair (Codex P2 on e480051): a bounded read cannot promise what each consumer needs.
+-- The browser loads cash_bids as two capped windows. That keeps the newest rows, but a farm with more
+-- manual bids than the manual cap can still lose the latest bid for ONE commodity behind newer bids for
+-- another, and valuation (latestBasis), the counterparty suggestions and the Today grain line would then
+-- read no bid or an older one. The rows that must never be missing are few and knowable: for each
+-- commodity, the newest farmer-entered bid and the newest feed bid. That is at most two rows per
+-- commodity, so it is fetched exactly rather than hoped for inside a cap.
+--
+-- Security-invoker on purpose: this returns cash_bids rows to a signed-in client, so row-level security
+-- must apply to it exactly as it does to a direct select.
+create or replace function public.latest_cash_bids_per_commodity(p_farm_id uuid)
+returns setof public.cash_bids
+language sql
+stable
+security invoker
+set search_path = pg_catalog
+as $fn$
+  (
+    select distinct on (b.commodity_id) b.*
+    from public.cash_bids b
+    where b.farm_id = p_farm_id and b.feed_source is null
+    order by b.commodity_id, b.bid_date desc, b.updated_at desc, b.id desc
+  )
+  union all
+  (
+    select distinct on (b.commodity_id) b.*
+    from public.cash_bids b
+    where b.farm_id = p_farm_id and b.feed_source is not null
+    order by b.commodity_id, b.bid_date desc, b.updated_at desc, b.id desc
+  );
+$fn$;
+
+comment on function public.latest_cash_bids_per_commodity(uuid) is
+  'GL-2: the newest farmer-entered bid and the newest feed bid for each commodity on a farm. Row-level security applies. The browser merges these into its bounded windows so a capped read can never silently drop the bid a calculation depends on.';
+
+revoke all on function public.latest_cash_bids_per_commodity(uuid) from public, anon;
+grant execute on function public.latest_cash_bids_per_commodity(uuid) to authenticated, service_role;
+
 -- The sweep, replaced whole from migration 20260716122213_0039 with one change: its price_target
 -- select becomes a call to latest_eligible_cash_bid above, so the newest ELIGIBLE bid decides the rule
 -- instead of the newest bid of any delivery window, and the sweep and the email re-check read one

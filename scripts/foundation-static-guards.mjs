@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 220')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 222')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -594,6 +594,11 @@ export function foundationStaticGuard(root = process.cwd()) {
   const gl2Gateway = read(root, 'src/data/SupabaseGrainDataGateway.ts')
   requireText(errors, gl2Gateway, ".order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(RECENT_CASH_BID_LIMIT)", 'gl2:cash-bids-read-newest-first')
   requireText(errors, gl2Gateway, ".is('feed_source', null).order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)", 'gl2:cash-bids-keep-manual-history')
+  // A cap cannot promise the newest row for each commodity, which is what valuation and the grain line
+  // read. Those rows are fetched exactly, and row-level security still applies to them.
+  requireText(errors, gl2Gateway, "supabase.rpc('latest_cash_bids_per_commodity', { p_farm_id: farmId })", 'gl2:cash-bids-complete-per-commodity')
+  requireText(errors, gl2Migration, 'create or replace function public.latest_cash_bids_per_commodity(', 'gl2:cash-bids-complete-per-commodity')
+  requireText(errors, gl2Migration, 'security invoker', 'gl2:per-commodity-read-keeps-rls')
   // The page must break a tie exactly as the sweep does, or the two record opposite conditions.
   requireText(errors, marketingAlerts, 'right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id)', 'gl2:tie-breaker-matches-sweep')
   requireText(errors, gl2Migration, 'order by b.bid_date desc, b.updated_at desc, b.id desc', 'gl2:tie-breaker-matches-sweep')

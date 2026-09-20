@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 220
+const expectedMutationCount = 222
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -632,6 +632,12 @@ try {
   reset()
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(".is('feed_source', null).order('bid_date', { ascending: false }).order('id', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)", ".order('bid_date', { ascending: false }).limit(MANUAL_CASH_BID_LIMIT)"))
   detected("the farm's own older bids are lost behind feed volume", 'gl2:cash-bids-keep-manual-history')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace("supabase.rpc('latest_cash_bids_per_commodity', { p_farm_id: farmId })", "Promise.resolve({ data: [], error: null })"))
+  detected("a commodity's latest bid can be lost behind another commodity's newer ones", 'gl2:cash-bids-complete-per-commodity')
+  reset()
+  mutate('supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', (source) => source.replace('security invoker', 'security definer'))
+  detected('the per-commodity read stops applying row-level security', 'gl2:per-commodity-read-keeps-rls')
   reset()
   mutate('src/data/marketingAlerts.ts', (source) => source.replace(' || right.id.localeCompare(left.id))[0] ?? null', ')[0] ?? null'))
   detected('the page breaks a bid tie the opposite way from the sweep', 'gl2:tie-breaker-matches-sweep')

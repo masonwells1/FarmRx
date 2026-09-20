@@ -454,6 +454,15 @@ async function run() {
     assert(merged.some((item) => item.id === 'manual-old'), "GL-2: the farm's own older bid must survive however much feed history sits in front of it.")
     assert(mergeCashBids([{ id: 'a' }, {}, null], []).length === 1, 'GL-2: a row without an id must be dropped, not merged as undefined.')
     assert(RECENT_CASH_BID_LIMIT + MANUAL_CASH_BID_LIMIT <= 1000, 'GL-2: the two slices together must stay inside PostgREST\'s default row cap.')
+    // A cap keeps the newest rows overall; only the per-commodity slice keeps the newest row FOR EACH
+    // commodity, which is what latestBasis, the suggestions and the Today grain line read. A farm with
+    // more manual bids than the cap would otherwise lose one commodity's latest bid behind another's.
+    const capped = [{ id: 'corn-new' }, { id: 'corn-older' }]
+    const perCommodity = [{ id: 'corn-new' }, { id: 'beans-latest' }]
+    const withPerCommodity = mergeCashBids(capped, [], perCommodity) as Array<{ id: string }>
+    assert(withPerCommodity.length === 3, `GL-2: the per-commodity slice must add only what the windows missed (saw ${withPerCommodity.length}).`)
+    assert(withPerCommodity.some((item) => item.id === 'beans-latest'), "GL-2: a commodity's latest bid must survive even when newer bids for another commodity fill the cap.")
+    assert(mergeCashBids([], [], []).length === 0, 'GL-2: an empty merge must stay empty, which is what a farm sees before the GL-2 migration is applied.')
   }
   console.log('SupabaseGrainRepository regressions passed.')
 }
