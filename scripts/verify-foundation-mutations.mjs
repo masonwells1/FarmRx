@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 227
+const expectedMutationCount = 228
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -608,8 +608,11 @@ try {
   mutate('src/data/SupabaseFieldsRepository.ts', (source) => source.replace("const marketingMonth = optionalSmallInt(raw, 'marketing_year_start_month')", "const marketingMonth = optionalSmallInt(row, 'marketing_year_start_month')"))
   detected('a farm on the previous schema cannot load its fields at all', 'gl2:pre-migration-commodity-still-loads')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('if (mayRecordAlertTransitions(data.capabilities)) {', 'if (true) {'))
+  mutate('src/GrainModule.tsx', (source) => source.replace('const deliveries = mayRecordAlertTransitions(data.capabilities)', 'const deliveries = true'))
   detected('a new client writes rule state against a pre-GL-2 sweep', 'gl2:transitions-gated-on-schema')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace(': requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId), data.fields.farm.id, alertOperationContext);', ': Promise.resolve([] as string[]);'))
+  detected('the rollout gap silences plan-target and report emails too', 'gl2:holdback-still-emails-plan-targets')
   reset()
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('gl2_alert_eligibility: !functionMissing(per_commodity_cash_bids.error)', 'gl2_alert_eligibility: true'))
   detected('the client assumes the migration is applied', 'gl2:capability-reports-schema')

@@ -395,17 +395,20 @@ export function GrainPage({ services }: { services: GrainServices }) {
         }
       }
       setAlerts(nextAlerts);
-      // GL-2: until the live database carries the crop-year eligibility rule, this client writes NOTHING
-      // about a marketing rule and asks for no delivery. A merge deploys this client on its own while
-      // applying the migration is a separate owner action, so a new client runs against the old sweep for
-      // a while; the two judge a bid by different rules, and any write from here during that window ends
-      // up wrong. The holdback must skip the pre-0035 branch below rather than fall through it: that
-      // branch stamps last_triggered_at, which hides the alert from the page for the rest of the day, and
-      // then asks for a delivery the server refuses. The sweep owns rule state alone until the schemas
-      // agree. It is a wrapped block and not an early return, because the load-error reset and the
-      // selected-estimate fallback below still have to run.
-      if (mayRecordAlertTransitions(data.capabilities)) {
-        void recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions, alertOperationContext).then((transitioned) => {
+      // GL-2: until the live database carries the crop-year eligibility rule, this client writes nothing
+      // about a SAVED MARKETING RULE and asks for no delivery of one. A merge deploys this client on its
+      // own while applying the migration is a separate owner action, so a new client runs against the old
+      // sweep for a while; the two judge a bid by different rules, and any rule write from here in that
+      // window ends up wrong. The holdback must skip the pre-0035 branch rather than fall through it:
+      // that branch stamps last_triggered_at, which hides the alert from the page for the rest of the
+      // day, and then asks for a delivery the server refuses.
+      //
+      // It reaches no further than that. A plan-target or USDA report reminder carries no ruleId, owes
+      // nothing to crop-year eligibility, and is emailed by the same check-on-open path it always was --
+      // which the page still tells the farmer. Holding those back too would silence real emails for the
+      // length of the rollout gap. The delivery below is the same call either way; only its input narrows.
+      const deliveries = mayRecordAlertTransitions(data.capabilities)
+        ? recordMarketingAlertTransitions(data.fields.farm.id, ruleEvaluation.conditions, alertOperationContext).then((transitioned) => {
           if (transitioned !== null) return requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId || transitioned.has(alert.ruleId)), data.fields.farm.id, alertOperationContext);
           // Pre-0035: retain current behavior, but one synchronous refresh lock
           // prevents a refresh burst from double-writing the same rule state.
@@ -417,19 +420,20 @@ export function GrainPage({ services }: { services: GrainServices }) {
             })).finally(() => refreshWriteLock.current.release());
           }
           return requestOwnerAlertDelivery(nextAlerts, data.fields.farm.id, alertOperationContext);
-        }).then(
-          (failed) =>
-            setDeliveryNotice(
-              failed.length
-                ? "An email notice could not be sent. Your in-app alert is still here."
-                : "",
-            ),
-        ).catch(() =>
+        })
+        : requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId), data.fields.farm.id, alertOperationContext);
+      void deliveries.then(
+        (failed) =>
           setDeliveryNotice(
-            "An email notice could not be sent. Your in-app alert is still here.",
+            failed.length
+              ? "An email notice could not be sent. Your in-app alert is still here."
+              : "",
           ),
-        );
-      }
+      ).catch(() =>
+        setDeliveryNotice(
+          "An email notice could not be sent. Your in-app alert is still here.",
+        ),
+      );
       setLoadError("");
       setSelectedEstimateId((current) =>
         data.production_estimates.some((estimate) => estimate.id === current)

@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 227')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 228')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -589,10 +589,13 @@ export function foundationStaticGuard(root = process.cwd()) {
   // carries the eligibility rule the browser must not write alert_rule_states, or it and the old sweep
   // re-fire the same alert at each other.
   requireText(errors, read(root, 'src/data/grainAlerts.ts'), 'export function mayRecordAlertTransitions(', 'gl2:transitions-gated-on-schema')
-  // The holdback must WRAP the transition-and-delivery block. Falling through it into the pre-0035
-  // branch would stamp last_triggered_at and ask for a delivery the pre-GL-2 server refuses, which hides
-  // the alert for the rest of the day -- the very harm the gate exists to prevent.
-  requireText(errors, read(root, 'src/GrainModule.tsx'), 'if (mayRecordAlertTransitions(data.capabilities)) {', 'gl2:transitions-gated-on-schema')
+  // The holdback selects the delivery input; it must not fall through into the pre-0035 branch, which
+  // would stamp last_triggered_at and ask for a delivery the pre-GL-2 server refuses, hiding the alert
+  // for the rest of the day -- the very harm the gate exists to prevent.
+  requireText(errors, read(root, 'src/GrainModule.tsx'), 'const deliveries = mayRecordAlertTransitions(data.capabilities)', 'gl2:transitions-gated-on-schema')
+  // And it reaches no further than saved marketing rules: a plan-target or report reminder carries no
+  // ruleId, owes nothing to GL-2, and must keep the email the page still promises it.
+  requireText(errors, read(root, 'src/GrainModule.tsx'), ': requestOwnerAlertDelivery(nextAlerts.filter((alert) => !alert.ruleId), data.fields.farm.id, alertOperationContext);', 'gl2:holdback-still-emails-plan-targets')
   requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), 'gl2_alert_eligibility: !functionMissing(per_commodity_cash_bids.error)', 'gl2:capability-reports-schema')
   requireText(errors, marketingYear, 'return inside(low) && inside(high)', 'gl2:window-wholly-inside')
   const marketingAlerts = read(root, 'src/data/marketingAlerts.ts')
