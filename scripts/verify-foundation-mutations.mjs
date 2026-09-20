@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 263
+const expectedMutationCount = 267
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -780,7 +780,7 @@ try {
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('drop policy if exists grain_contracts_delete on public.grain_contracts;', '-- policy kept'))
   detected('the direct delete policy is left in place', 'gl3b:audited-actions-are-the-only-path')
   reset()
-  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("  if exists (select 1 from public.grain_contract_audit a where a.farm_id = p_farm_id and a.operation_id = p_operation_id) then\n    return to_jsonb(v_before);\n  end if;\n", ""))
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('  select * into v_replay from public.grain_contract_audit a where a.farm_id = p_farm_id and a.operation_id = p_operation_id;\n  if found then', '  select * into v_replay from public.grain_contract_audit a where a.farm_id = p_farm_id and a.operation_id = p_operation_id;\n  if false then'))
   detected('a correction whose response was lost reads as a stale-write failure', 'gl3b:correction-survives-a-lost-response')
   reset()
   mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('create unique index grain_contract_audit_operation_idx', 'create index grain_contract_audit_operation_idx'))
@@ -794,6 +794,18 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('This contract changed while you had it open. The fields now show the current values', 'Contract reloaded'))
   detected('the farmer is not told that the contract moved under their draft', 'gl3b:draft-rebases-on-a-changed-contract')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("if v_changes is null or not (v_changes ?| array['buyer','bushels','delivery_start','delivery_end','contract_number','notes']) then", 'if false then'))
+  detected('an empty correction writes an audit row and makes every other draft stale', 'gl3b:a-correction-must-correct-something')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace("raise exception 'a correction must change something';", 'null;'))
+  detected('a correction that changes nothing is recorded as a correction', 'gl3b:a-correction-must-correct-something')
+  reset()
+  mutate('supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', (source) => source.replace('if v_replay.reason is not distinct from v_reason and v_replay.requested_changes is not distinct from v_changes then', 'if true then'))
+  detected("a changed draft reusing an id is answered with the earlier correction", 'gl3b:a-retry-must-be-the-same-correction')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('const redraft = () => { operationId.current = null };', 'const redraft = () => { /* kept */ };'))
+  detected('editing a draft after a lost response reuses the previous attempt id', 'gl3b:a-retry-must-be-the-same-correction')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('<tfoot>', '<tfoot hidden>').replace('</tfoot>', '</tfoot>'))
   detected('the contracts totals row is removed', 'gl3:contract-totals-row')

@@ -379,10 +379,62 @@ begin
   begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','no operation id','{"buyer":"Fourth Buyer"}'::jsonb, (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-0000000000a1'), null);
   exception when others then v_failed := true; end;
   if not v_failed then raise exception 'a correction with no operation id was accepted'; end if;
+
+  -- Reusing the id with DIFFERENT content is not a retry. Answering it with the earlier row would
+  -- report success while dropping what the farmer just typed, so it must say what really happened.
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','buyer typed wrong','{"buyer":"Different Buyer Entirely"}'::jsonb, v_state.stamp, v_state.operation);
+  exception when others then v_failed := sqlerrm = 'FARM_RX_CORRECTION_ALREADY_SAVED'; end;
+  if not v_failed then raise exception 'a changed draft reusing an operation id was answered as a retry'; end if;
+  if (select buyer from public.grain_contracts where id='00000000-0000-4000-8000-0000000000a1') <> 'Retry Buyer Fixed'
+    then raise exception 'the mismatched replay changed the contract'; end if;
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','a different reason this time','{"buyer":"Retry Buyer Fixed"}'::jsonb, v_state.stamp, v_state.operation);
+  exception when others then v_failed := sqlerrm = 'FARM_RX_CORRECTION_ALREADY_SAVED'; end;
+  if not v_failed then raise exception 'a changed REASON reusing an operation id was answered as a retry'; end if;
 end $$;
 
-drop table gl3_retry_state;
+-- ------------------------------------------------- 12c. a correction has to correct something
+-- The browser refuses an empty change, but this function is reachable without the browser. A no-op
+-- would write an audit row for nothing and move updated_at, turning every other open draft stale.
+set role authenticated;
+do $$
+declare v_failed boolean; v_stamp timestamptz; v_rows integer;
+begin
+  select updated_at into v_stamp from public.grain_contracts where id='00000000-0000-4000-8000-0000000000a1';
+  v_rows := (select count(*) from public.grain_contract_audit where grain_contract_id='00000000-0000-4000-8000-0000000000a1');
+
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','empty payload','{}'::jsonb, v_stamp, gen_random_uuid());
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'an empty correction was accepted'; end if;
+
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','null payload', null, v_stamp, gen_random_uuid());
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'a null correction was accepted'; end if;
+
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','unknown keys only','{"crop_year":2027,"cash_price":9.99}'::jsonb, v_stamp, gen_random_uuid());
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'a payload of unsupported keys was accepted'; end if;
+
+  -- naming a field is not changing it
+  v_failed := false;
+  begin perform public.edit_grain_contract('00000000-0000-4000-8000-000000000072','00000000-0000-4000-8000-0000000000a1','same value again','{"buyer":"Retry Buyer Fixed"}'::jsonb, v_stamp, gen_random_uuid());
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'a correction that changes nothing was accepted'; end if;
+
+  if (select updated_at from public.grain_contracts where id='00000000-0000-4000-8000-0000000000a1') <> v_stamp
+    then raise exception 'a refused no-op still moved updated_at and made other drafts stale'; end if;
+  if (select count(*) from public.grain_contract_audit where grain_contract_id='00000000-0000-4000-8000-0000000000a1') <> v_rows
+    then raise exception 'a refused no-op still wrote an audit row'; end if;
+  if (select crop_year from public.grain_contracts where id='00000000-0000-4000-8000-0000000000a1') <> 2026
+    then raise exception 'an unsupported key reached the contract'; end if;
+end $$;
 reset role;
+
+drop table gl3_retry_state;
 
 -- ------------------------------------------------- 13. a worker without financial access is refused
 -- can_edit_farm admits a worker, but Grain is behind can_read_private_financials and these functions

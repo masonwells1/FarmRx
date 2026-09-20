@@ -3204,6 +3204,10 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
     operationId.current = null;
     setMessage("This contract changed while you had it open. The fields now show the current values \u2014 check them before saving.");
   }
+  // Touching any field makes this a different correction from the one a previous attempt sent, so it
+  // must not reuse that attempt's id: the server would recognise the id, answer with what it already
+  // saved, and the newly typed change would be dropped while the screen said it was corrected.
+  const redraft = () => { operationId.current = null };
   const available = workspace.capabilities?.contract_edit_delete !== false;
   if (!available || !contractIsCorrectable(workspace, contract.id)) return null;
   const correct = async () => {
@@ -3245,12 +3249,12 @@ export function ContractRepair({ contract, workspace, services, onSaved }: { con
   return <div className="contract-repair">
     <button className="text-action" type="button" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Cancel correction" : "Correct or delete"}</button>
     {open && <div className="contract-repair-body">
-      <label>Buyer<input value={buyer} onChange={(event) => setBuyer(event.target.value)} /></label>
-      <label>Contract bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={contractBushels} onChange={(event) => setContractBushels(event.target.value)} /></label>
-      <label>Delivery start<input type="date" value={start} onChange={(event) => setStart(event.target.value)} /></label>
-      <label>Delivery end<input type="date" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
-      <label>Contract #<input value={number} onChange={(event) => setNumber(event.target.value)} /></label>
-      <label>Why are you changing this?<textarea value={reason} rows={2} onChange={(event) => setReason(event.target.value)} /></label>
+      <label>Buyer<input value={buyer} onChange={(event) => { redraft(); setBuyer(event.target.value) }} /></label>
+      <label>Contract bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={contractBushels} onChange={(event) => { redraft(); setContractBushels(event.target.value) }} /></label>
+      <label>Delivery start<input type="date" value={start} onChange={(event) => { redraft(); setStart(event.target.value) }} /></label>
+      <label>Delivery end<input type="date" value={end} onChange={(event) => { redraft(); setEnd(event.target.value) }} /></label>
+      <label>Contract #<input value={number} onChange={(event) => { redraft(); setNumber(event.target.value) }} /></label>
+      <label>Why are you changing this?<textarea value={reason} rows={2} onChange={(event) => { redraft(); setReason(event.target.value) }} /></label>
       <small>Crop year, commodity, type and price cannot be corrected here. Delete the contract and enter it again if one of those is wrong.</small>
       <div className="contract-repair-buttons">
         <button className="text-action" type="button" disabled={saving} onClick={() => void correct()}>Save correction</button>

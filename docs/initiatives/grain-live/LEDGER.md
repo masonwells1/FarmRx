@@ -416,3 +416,27 @@ Codex reviewed `d81ed3d`. `ContractRepair` stays mounted across a workspace refr
 - **Guards:** `gl3b:draft-rebases-on-a-changed-contract`, pinning both the version check and the sentence that tells the farmer. Two mutations, 261 → 263.
 - **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 263/263; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean.
 - **Browser proof, stated exactly:** 112 passed, 1 failed, 15 skipped. The failure was `Soil Rx drains custody after lost Storage and row-delete responses without unrelated writes` on phone, which passed alone — the **fifth** occurrence this session (GL-009, GL-019, GL-022, GL-028's run was clean, and here). Still recorded as a known-flaky test rather than re-run until quiet.
+
+## GL-030 — Twenty-fourth and twenty-fifth findings, on `1a8db49`: the edit RPC's own two edges
+
+- **Date/time:** 2026-09-20 12:50 -05:00 (`America/Chicago`).
+- **Trigger:** Codex reviewed `1a8db49` and returned two P2s, both on `edit_grain_contract`. Both verified before acting; both real. (Foundation's failure on `1a8db49` is the 0033 probe already recorded in GL-029 and fixed in `12fc1d8`; that commit predates the fix.)
+
+### Finding 24 (P2) — a correction that corrects nothing
+
+Called directly with `{}`, `null`, or only unsupported keys, every local value fell back to the stored row and the function still ran the update and wrote an `edit` audit row. That is a successful no-op: it advances `updated_at`, which turns every other member's open draft stale for a change that never happened, and leaves a correction in the record that corrected nothing. The browser filters empty payloads, but the RPC is granted to `authenticated` and reachable without it — "the browser happens to prevent it" is not a fence.
+
+- **Repair, in two parts, because one is not enough.** The payload must be an object naming at least one supported field, **and** the resulting values must actually differ from the row. Naming a field is not changing it: a payload setting every field to what it already holds is refused too.
+
+### Finding 25 (P2) — a retry that was not the same correction
+
+The replay check matched on `operation_id` alone. After a lost response the panel stays editable, so the farmer could change a field or the reason and press Save again; the same id would be recognised, the earlier row returned, and the screen would say "Contract corrected" while the newly typed change was silently dropped. This is finding 22's repair creating its own edge, the third time in this tranche that a fix has opened the next finding.
+
+- **Repair, on both sides.** The audit row now stores the `requested_changes` it was asked for, and a replay must match **both** the reason and the requested changes; a mismatch raises `FARM_RX_CORRECTION_ALREADY_SAVED`, which tells the farmer the earlier correction landed and to reload — never "try again", which would be false. In the browser, touching any field or the reason drops the pending attempt id, so a changed draft is a new correction and never reaches that error in normal use. The server check is the fence; the browser change is so the fence is not hit by an honest farmer.
+- A guard counts the six `redraft()` call sites, so wiring a new field without clearing the id is red.
+
+### Together
+
+- **Guards:** `gl3b:a-correction-must-correct-something`, `gl3b:a-retry-must-be-the-same-correction`, and `gl3b:correction-survives-a-lost-response` re-pinned to the new replay branch. Four mutations, 263 → 267.
+- **One of those mutations was toothless at first,** and the drill said so: changing `if found then` to `if false then` broke no pinned text, so the guard did not see it. The guard now pins the `select ... ; if found then` pair rather than the select alone. A mutation that passes is a guard that is not guarding.
+- **Proof observed:** all five disposable PASS lines; `npx tsc -b --force` exit 0; the 61-step chain `CHAIN_PASS`; static guards PASS; mutation drill 267/267; `npm run build` exit 0; `npm audit --audit-level=high` 0 vulnerabilities; `git diff --check` clean; browser **113 passed, 0 failed, 15 skipped, retries 0**. CI remains the authority until it reports green.

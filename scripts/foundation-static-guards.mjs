@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 263')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 267')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -743,7 +743,8 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, gl3bMigration, 'drop policy if exists grain_contracts_delete on public.grain_contracts;', 'gl3b:audited-actions-are-the-only-path')
   // A write that commits and loses its response must not read as a failure the farmer cannot resolve.
   // The recognition has to come BEFORE the compare-and-swap, because a committed edit moved updated_at.
-  requireText(errors, gl3bMigration, "if exists (select 1 from public.grain_contract_audit a where a.farm_id = p_farm_id and a.operation_id = p_operation_id) then\n    return to_jsonb(v_before);", 'gl3b:correction-survives-a-lost-response')
+  requireText(errors, gl3bMigration, 'select * into v_replay from public.grain_contract_audit a where a.farm_id = p_farm_id and a.operation_id = p_operation_id;\n  if found then', 'gl3b:correction-survives-a-lost-response')
+  requireText(errors, gl3bMigration, '      return to_jsonb(v_before);', 'gl3b:correction-survives-a-lost-response')
   if (gl3bMigration.indexOf('a.operation_id = p_operation_id') > gl3bMigration.indexOf('is distinct from p_expected_updated_at')) errors.push('gl3b:correction-survives-a-lost-response')
   requireText(errors, gl3bMigration, 'create unique index grain_contract_audit_operation_idx', 'gl3b:correction-survives-a-lost-response')
   requireText(errors, gl3bMigration, "if p_operation_id is null then raise exception 'a correction must carry its own operation id'; end if;", 'gl3b:correction-survives-a-lost-response')
@@ -753,6 +754,16 @@ export function foundationStaticGuard(root = process.cwd()) {
   // undoes whatever another member just corrected.
   requireText(errors, grainModule, 'if (contract.updated_at !== seenVersion) {', 'gl3b:draft-rebases-on-a-changed-contract')
   requireText(errors, grainModule, 'This contract changed while you had it open. The fields now show the current values', 'gl3b:draft-rebases-on-a-changed-contract')
+  // The browser refuses an empty correction, but the RPC is reachable without the browser, and a
+  // no-op there would move updated_at and make every other member's open draft stale for nothing.
+  requireText(errors, gl3bMigration, "if v_changes is null or not (v_changes ?| array['buyer','bushels','delivery_start','delivery_end','contract_number','notes']) then", 'gl3b:a-correction-must-correct-something')
+  requireText(errors, gl3bMigration, "raise exception 'a correction must change something';", 'gl3b:a-correction-must-correct-something')
+  // Recognising a retry by id alone would answer a CHANGED draft with the earlier correction and
+  // report success while dropping what the farmer just typed.
+  requireText(errors, gl3bMigration, 'if v_replay.reason is not distinct from v_reason and v_replay.requested_changes is not distinct from v_changes then', 'gl3b:a-retry-must-be-the-same-correction')
+  requireText(errors, gl3bMigration, "raise exception using errcode = 'P0001', message = 'FARM_RX_CORRECTION_ALREADY_SAVED';", 'gl3b:a-retry-must-be-the-same-correction')
+  requireText(errors, grainModule, 'const redraft = () => { operationId.current = null };', 'gl3b:a-retry-must-be-the-same-correction')
+  if ((grainModule.split('redraft();').length - 1) !== 6) errors.push('gl3b:a-retry-must-be-the-same-correction')
   // ??=, not =: a retry must reuse the id its first attempt used, or the server cannot recognise it.
   requireText(errors, grainModule, 'operationId.current ??= services.createGrainId();', 'gl3b:correction-survives-a-lost-response')
   requireText(errors, grainModule, 'contract.updated_at, operationId.current);\n      operationId.current = null;', 'gl3b:correction-survives-a-lost-response')

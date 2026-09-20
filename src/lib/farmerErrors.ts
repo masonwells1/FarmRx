@@ -20,6 +20,9 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (/movement date must be after the latest bin baseline|dated on or before the bin's baseline/.test(message)) return PRE_BASELINE_BIN_MOVEMENT_MESSAGE
   if (/connect to the internet before recording a delivery/.test(message)) return 'Connect to the internet before recording a delivery.'
   if (/correcting a contract arrives with the next database update/.test(message)) return CONTRACT_REPAIR_PENDING
+  // The earlier attempt did commit; only its response was lost. Saying "try again" would be wrong.
+  if (/farm_rx_correction_already_saved/.test(message)) return 'Your earlier correction was saved. Reload the contract before making another change.'
+  if (/a correction must change something|a correction must name at least one field/.test(message)) return 'Nothing has changed on this contract yet.'
   if (/connect to the internet before correcting a contract/.test(message)) return 'Connect to the internet before correcting a contract.'
   if (/connect to the internet before deleting a contract/.test(message)) return 'Connect to the internet before deleting a contract.'
   // The server decides this under a row lock, so a screen that offered the control can still be told

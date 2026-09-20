@@ -28,6 +28,10 @@ create table public.grain_contract_audit (
   reason text not null check (length(btrim(reason)) between 3 and 2000),
   before_row jsonb not null,
   after_row jsonb,
+  -- What the caller asked for, kept so a repeat carrying the same operation id can be checked
+  -- against it. Recognising a retry by id alone would let a changed draft reuse the id and be
+  -- answered with the earlier correction while the new one is silently dropped.
+  requested_changes jsonb,
   reopened_firm_offer_id uuid,
   -- The browser's own id for one correction attempt. A retry after a lost response carries the same
   -- one, so the second call can recognise the first and report what it already did instead of a
@@ -93,6 +97,8 @@ returns jsonb language plpgsql security definer set search_path = public, pg_tem
 declare
   v_before public.grain_contracts%rowtype;
   v_after public.grain_contracts%rowtype;
+  v_replay public.grain_contract_audit%rowtype;
+  v_changes jsonb := case when jsonb_typeof(p_changes) = 'object' then p_changes else null end;
   v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
   v_buyer text; v_bushels numeric; v_start date; v_end date; v_number text; v_notes text;
 begin
@@ -112,6 +118,12 @@ begin
   end if;
 
   if p_operation_id is null then raise exception 'a correction must carry its own operation id'; end if;
+  -- The browser already refuses an empty correction, but this function is reachable without it. An
+  -- empty or unrecognised payload would otherwise write an audit row for nothing and move updated_at,
+  -- which turns every other member's open draft stale for a change that never happened.
+  if v_changes is null or not (v_changes ?| array['buyer','bushels','delivery_start','delivery_end','contract_number','notes']) then
+    raise exception 'a correction must name at least one field to change';
+  end if;
 
   select * into v_before from public.grain_contracts where id = p_contract_id and farm_id = p_farm_id for update;
   if not found then raise exception 'contract does not belong to this farm'; end if;
@@ -119,8 +131,16 @@ begin
   -- contract as it now stands rather than the stale-write error the check below would raise, which a
   -- farmer reading "try again" cannot tell apart from a correction that never happened.
   -- Deliberately before the compare-and-swap: a committed edit has already moved updated_at.
-  if exists (select 1 from public.grain_contract_audit a where a.farm_id = p_farm_id and a.operation_id = p_operation_id) then
-    return to_jsonb(v_before);
+  select * into v_replay from public.grain_contract_audit a where a.farm_id = p_farm_id and a.operation_id = p_operation_id;
+  if found then
+    -- Same id, same correction: answer with the contract as it stands.
+    if v_replay.reason is not distinct from v_reason and v_replay.requested_changes is not distinct from v_changes then
+      return to_jsonb(v_before);
+    end if;
+    -- Same id, DIFFERENT correction. The farmer edited the draft after a lost response and pressed
+    -- Save again. Returning the earlier row here would report "Contract corrected" while dropping
+    -- what they just typed, so this says plainly that the earlier one landed and this one did not.
+    raise exception using errcode = 'P0001', message = 'FARM_RX_CORRECTION_ALREADY_SAVED';
   end if;
   -- Compare-and-swap, the same fence optimisticSave applies to every other mutable farm row. Two
   -- members can have this contract open at once; without it the second save silently reverses the
@@ -141,6 +161,14 @@ begin
   v_number  := case when p_changes ? 'contract_number' then nullif(btrim(p_changes->>'contract_number'),'') else v_before.contract_number end;
   v_notes   := case when p_changes ? 'notes'           then nullif(btrim(p_changes->>'notes'), '')          else v_before.notes end;
 
+  -- Naming a field is not the same as changing it. A payload that sets every field to what it already
+  -- holds is a no-op, and a no-op must not advance updated_at or leave a correction in the record.
+  if v_buyer is not distinct from v_before.buyer and v_bushels is not distinct from v_before.bushels
+     and v_start is not distinct from v_before.delivery_start and v_end is not distinct from v_before.delivery_end
+     and v_number is not distinct from v_before.contract_number and v_notes is not distinct from v_before.notes then
+    raise exception 'a correction must change something';
+  end if;
+
   if v_buyer is null or length(v_buyer) > 200 then raise exception 'buyer is required and must be 200 characters or fewer'; end if;
   if v_bushels is null or v_bushels::text in ('NaN', 'Infinity', '-Infinity') or v_bushels <= 0 then raise exception 'bushels must be greater than zero'; end if;
   if v_start is not null and v_end is not null and v_end < v_start then raise exception 'delivery end must be on or after delivery start'; end if;
@@ -151,8 +179,8 @@ begin
    where id = p_contract_id and farm_id = p_farm_id
   returning * into v_after;
 
-  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, operation_id, actor_id)
-  values (p_farm_id, p_contract_id, 'edit', v_reason, to_jsonb(v_before), to_jsonb(v_after), p_operation_id, auth.uid());
+  insert into public.grain_contract_audit (farm_id, grain_contract_id, action, reason, before_row, after_row, requested_changes, operation_id, actor_id)
+  values (p_farm_id, p_contract_id, 'edit', v_reason, to_jsonb(v_before), to_jsonb(v_after), v_changes, p_operation_id, auth.uid());
 
   return to_jsonb(v_after);
 end $fn$;
