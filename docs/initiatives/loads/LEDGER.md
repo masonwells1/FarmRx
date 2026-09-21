@@ -334,3 +334,81 @@ form offers no effects and says the rest arrives with the next database update. 
 list hides itself for the same reason.
 
 So the order is safe either way, and the migration can be applied whenever suits.
+
+## LD-006 — three P1 findings Codex raised on the merged LD-2, and what came of them
+
+**Branch:** `claude/ld2-codex-p1-fixes`, cut from `main` `11bd1e3`.
+**Context:** Codex reviewed PR #51 when it was marked ready and finished at 20:56, about thirty
+seconds after the PR merged. Its three findings therefore landed on `main`, not on an open PR. All
+three were verified against the code rather than taken at face value. **All three are real.**
+
+### Fixed here
+
+**1. A page left open across the migration would have performed effects it never showed.** (P1)
+
+The effect flags are a preference that survives a change of shape, and they default to ticked. While
+`grain_load_effects` is false the form shows no effects at all and says the save records only the
+ticket — but the flags underneath were still true, and `grainLoadPayload` narrows them by the load's
+origin and destination, not by the capability. Pre-migration the old RPC ignores the extra keys, so
+nothing happened. **The moment the migration is applied with that page still open, the next save
+reaches the new RPC and moves bushels, pays down a contract and adds to a harvest, none of which the
+farmer was shown.**
+
+That is precisely the invariant LD-2 exists to hold — *nothing happens that is not on this list* —
+and the window is not hypothetical: the migration had not yet been applied when this was found.
+
+What the screen says it will do is now what gets sent: the save clears all four flags when the
+capability is false, rather than trusting a narrowing that does not know about the migration.
+
+**2. A summed figure was silently capped.** (P1)
+
+`listHarvestLoads` reused `RECENT_GRAIN_LOAD_LIMIT`, the **display** cap of 500. Harvest and Fields
+**sum** that answer. A farm with more than 500 contributing tickets — reachable in one harvest —
+would have been shown an understated figure, and *Use load total* would have overwritten a typed
+harvest total with a partial one.
+
+The read now has its own bound (`HARVEST_LOAD_SUM_LIMIT`, 5,000) and asks for **one row past it**, so
+a truncated answer can be told from a whole one. When the answer is short the screens say *"at least
+N bu from loads"*, explain why, and **withhold *Use load total* entirely** — a sum that may be short
+is never offered as a replacement for a number the farmer typed. Offline the queued repository
+returns `complete: false` for the same reason: an empty list claiming completeness would read as
+"no loads contribute" rather than "not known right now".
+
+### Not fixed here, and why
+
+**3. A bin origin can only ever haul its baseline's crop year.** (P1)
+
+`loadLotFor` and `save_grain_load` both derive a bin origin's lot from `bin_inventory` alone. So a
+bin filled only by LD-2's own bin-in effect has no baseline and cannot be chosen as an origin at
+all, and a bin holding carry-over plus a newer stamped lot can only be hauled as the older year.
+
+This is real, and **LD-3 makes it worse rather than academic**: the Bins page now tells a farmer they
+have, say, 1,000 free bushels of the 2026 crop, and the load form will not let them record hauling
+those bushels.
+
+It is also, word for word, what the amendment asked of LD-1: *"a bin origin requires the farmer to
+pick which crop year (lot) is being moved from the list of crop years present in that bin, defaulting
+only when the bin holds a single lot."* LD-1 recorded it as a stated limit — *"a bin can name only
+one lot today"* — because `bin_transactions` carried no crop year to enumerate. **LD-2 added that
+column, so the deferral no longer holds.**
+
+Fixing it needs the lot list derived from baseline plus transactions, a picker on the form when more
+than one lot is present, and a `save_grain_load` that accepts and validates a chosen crop year for a
+bin origin — which is a migration. That is a tranche, not a repair, and it is **the recommended next
+piece of work**.
+
+### Proof observed
+
+- `npx tsc -b --force`; `npm run build`; `git diff --check` clean; all nine disposable suites pass.
+- Static guards PASS with two new guards; **mutation drill 322/322**, count changed in both files.
+- **Browser: 117 passed, 15 skipped, none failed** across desktop and phone.
+- Three mutations cover the repairs: the harvest read losing its ability to detect truncation,
+  *Use load total* offered on a possibly-short figure, and the effect flags sent despite the
+  capability being false.
+
+### What this says about the process
+
+Codex's review ran on the draft being marked ready, which happened at merge time — so the findings
+arrived after the merge rather than before it. Nothing was lost, but the review had no chance to
+gate. Marking a PR ready a few minutes before merging, rather than as part of merging, would give it
+that chance.

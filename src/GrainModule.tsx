@@ -4461,7 +4461,16 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       if (problems.length) { setMessage(problems[0]); return }
       setSaving(true);
       loadId.current ??= services.createGrainId();
-      const saved = await services.grainRepository.saveLoad(loadId.current, draft);
+      // The effect flags are a preference that survives a change of shape, and they default to
+      // ticked. While the migration is not applied this page shows no effects at all and says the
+      // save records only the ticket -- but the flags are still true underneath. If the migration
+      // lands while this page stays open, the very next save would reach the new RPC and perform
+      // bin, contract and harvest effects the farmer was never shown. What the screen says it will
+      // do is what gets sent, so the flags are cleared here rather than trusted.
+      const outgoing = effectsReady
+        ? draft
+        : { ...draft, effect_bin_out: false, effect_bin_in: false, effect_contract_delivery: false, effect_harvest: false };
+      const saved = await services.grainRepository.saveLoad(loadId.current, outgoing);
       loadId.current = null;
       // The next ticket almost always shares the date, the truck and the origin -- a farmer hauling
       // out of one bin all afternoon should not retype them. The weights, moisture and ticket number

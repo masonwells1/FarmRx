@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 320
+const expectedMutationCount = 322
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -21,7 +21,7 @@ const files = [
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
   'supabase/functions/_shared/marsFeedOrchestrator.ts', 'src/data/grainAlerts.ts', 'supabase/functions/deliver-grain-alert/index.ts',
-  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'supabase/migrations/20260920180000_ld1_grain_loads.sql', 'supabase/migrations/20260921120000_ld2_load_effects.sql', 'src/App.tsx', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
+  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'supabase/migrations/20260920180000_ld1_grain_loads.sql', 'supabase/migrations/20260921120000_ld2_load_effects.sql', 'src/App.tsx', 'src/HarvestModule.tsx', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -962,8 +962,14 @@ try {
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('.limit(RECENT_GRAIN_LOAD_LIMIT)', ''))
   detected('the loads read loses its bound and a hauling season pushes the current tickets past the cap', 'ld1:the-newest-tickets-are-the-ones-loaded')
   reset()
-  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(".is('voided_at', null).order('load_date', { ascending: false }).limit(RECENT_GRAIN_LOAD_LIMIT)", ".is('voided_at', null).order('load_date', { ascending: false })"))
-  detected('the harvest contributions read loses its bound', 'ld1:the-newest-tickets-are-the-ones-loaded')
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('.limit(HARVEST_LOAD_SUM_LIMIT + 1)', '.limit(HARVEST_LOAD_SUM_LIMIT)'))
+  detected('the harvest sum can no longer tell a truncated answer from a whole one', 'ld2:a-summed-figure-says-when-it-is-short')
+  reset()
+  mutate('src/HarvestModule.tsx', (source) => source.replace('canEdit && loadsComplete && !confirming', 'canEdit && !confirming'))
+  detected('Use load total is offered for a figure that may be short', 'ld2:a-summed-figure-says-when-it-is-short')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('effectsReady\n        ? draft', 'true\n        ? draft'))
+  detected('a page left open across the migration sends effects it never showed', 'ld2:a-hidden-effect-is-never-sent')
   reset()
   mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('create index grain_loads_origin_bin_idx on public.grain_loads (origin_grain_bin_id, farm_id, load_date desc);', 'create index grain_loads_origin_bin_idx on public.grain_loads (farm_id, origin_grain_bin_id, load_date desc);'))
   detected('a foreign key index is written farm-first, so deleting a bin scans every load', 'ld1:every-foreign-key-has-a-covering-index')

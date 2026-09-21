@@ -104,7 +104,9 @@ export class QueuedGrainRepository implements GrainRepository {
   // have to pass the bin guards at the moment they run. Offline load entry is worth having and
   // belongs with those effects, not ahead of them.
   async listLoadTrucks() { if (this.dependencies.isOffline()) return []; return this.writer.listLoadTrucks() }
-  async listHarvestLoads() { if (this.dependencies.isOffline()) return []; return this.writer.listHarvestLoads() }
+  // Offline there is no answer at all, and an empty list that claimed to be complete would read as
+  // "no loads contribute" rather than "not known right now".
+  async listHarvestLoads() { if (this.dependencies.isOffline()) return { loads: [], complete: false }; return this.writer.listHarvestLoads() }
   // Naming the crop year of a past movement restates history and is owner-confirmed, so it is never
   // queued: it happens online against the current ledger or it does not happen.
   async assignBinMovementCropYear(transactionId: string, cropYear: number) { if (this.dependencies.isOffline()) throw new Error('Naming the crop year of an older movement needs a connection.'); return this.writer.assignBinMovementCropYear(transactionId, cropYear) }

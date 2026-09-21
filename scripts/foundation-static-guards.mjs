@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 320')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 322')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -927,7 +927,18 @@ export function foundationStaticGuard(root = process.cwd()) {
     // contributions. Counting rather than merely finding one is the point -- with a single
     // requireText, dropping the bound from either read still left the other to satisfy it.
     const gateway = read(root, 'src/data/SupabaseGrainDataGateway.ts')
-    if ((gateway.split('.limit(RECENT_GRAIN_LOAD_LIMIT)').length - 1) < 2) errors.push('ld1:the-newest-tickets-are-the-ones-loaded')
+    requireText(errors, gateway, '.limit(RECENT_GRAIN_LOAD_LIMIT)', 'ld1:the-newest-tickets-are-the-ones-loaded')
+    // The harvest read is a SUM, not a display list, so it does not share the display cap. It asks
+    // for one row past its own bound precisely so a truncated answer can be told from a full one:
+    // a figure that is quietly short would let "Use load total" overwrite a typed harvest with a
+    // partial total. Codex found this on PR #51 after it merged.
+    requireText(errors, gateway, '.limit(HARVEST_LOAD_SUM_LIMIT + 1)', 'ld2:a-summed-figure-says-when-it-is-short')
+    const harvestModule = read(root, 'src/HarvestModule.tsx')
+    requireText(errors, harvestModule, 'canEdit && loadsComplete && !confirming', 'ld2:a-summed-figure-says-when-it-is-short')
+    // While the migration is not applied the load form shows no effects and says the save records
+    // only the ticket. The flags underneath still default to ticked, so what is SENT has to be
+    // cleared too -- otherwise a page left open across the migration performs effects unseen.
+    requireText(errors, grainModule, 'effectsReady\n        ? draft', 'ld2:a-hidden-effect-is-never-sent')
   }
   // Six of grain_loads' seven foreign keys shipped with no covering index, because the indexes were
   // written farm-first the way the app queries rather than key-first the way `on delete restrict`
