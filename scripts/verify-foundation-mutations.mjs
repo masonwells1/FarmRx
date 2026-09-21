@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 327
+const expectedMutationCount = 329
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -985,6 +985,12 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('effectsReady\n        ? draft', 'true\n        ? draft'))
   detected('a page left open across the migration sends effects it never showed', 'ld2:a-hidden-effect-is-never-sent')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('.filter((row) => row.movementCount > 0)', '.filter((row) => Math.abs(row.bushels) > 0.000001)'))
+  detected('unresolved movements that cancel out today stop being named at all', 'ld3:an-unresolved-movement-is-named-however-it-nets')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('      {lots.length > 0 && (\n        <ul>', '      {lots.length === 0 ? (\n        <p>Nothing stored or contracted yet.</p>\n      ) : (\n        <ul>'))
+  detected('a farm with unresolved grain is told nothing is stored or contracted', 'ld3:the-empty-state-that-could-never-be-true')
   reset()
   mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('create index grain_loads_origin_bin_idx on public.grain_loads (origin_grain_bin_id, farm_id, load_date desc);', 'create index grain_loads_origin_bin_idx on public.grain_loads (farm_id, origin_grain_bin_id, load_date desc);'))
   detected('a foreign key index is written farm-first, so deleting a bin scans every load', 'ld1:every-foreign-key-has-a-covering-index')

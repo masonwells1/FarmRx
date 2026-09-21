@@ -3484,15 +3484,18 @@ export function ContractActions({ contract, workspace, services, autoFocusDelive
  * will not guess which year they were. */
 function CommittedFreeLine({ workspace }: { workspace: GrainWorkspace }) {
   const lots = deriveCommittedFree(workspace);
-  const unknown = deriveUnknownCropYearBushels(workspace.bin_transactions).filter((row) => Math.abs(row.bushels) > 0.000001);
+  // Kept by MOVEMENT COUNT, not by net bushels. An unresolved 1,000 in and 1,000 out net to zero
+  // today, but they are still two movements with no crop year: naming their years can put the
+  // thousand bushels in one year and take it out of another, moving both figures above. Filtering
+  // on the net hid exactly the rows whose resolution changes the most.
+  const unknown = deriveUnknownCropYearBushels(workspace.bin_transactions).filter((row) => row.movementCount > 0);
   if (lots.length === 0 && unknown.length === 0) return null;
+  const unknownMovements = unknown.reduce((total, row) => total + row.movementCount, 0);
   const commodityLabel = (id: string) => workspace.fields.commodities.find((item) => item.id === id)?.name ?? id;
   return (
     <section className="committed-free" aria-label="Committed and free bushels">
       <h3>Committed and free</h3>
-      {lots.length === 0 ? (
-        <p>Nothing stored or contracted yet.</p>
-      ) : (
+      {lots.length > 0 && (
         <ul>
           {lots.map((lot) => (
             <li key={`${lot.commodity_id}:${lot.crop_year}`}>
@@ -3513,10 +3516,18 @@ function CommittedFreeLine({ workspace }: { workspace: GrainWorkspace }) {
       )}
       {unknown.length > 0 && (
         <p className="committed-free-unknown" role="status">
-          {unknown.map((row) => `${displayBushels(Math.abs(row.bushels))} bu of ${commodityLabel(row.commodity_id)}`).join(", ")}
+          {unknown.map((row) => {
+            const movements = row.movementCount === 1 ? "1 movement" : `${row.movementCount} movements`;
+            // The net is worth saying when there is one, and saying nothing about it is better than
+            // printing "0 bu", which reads as "nothing to see here" about rows that still matter.
+            return Math.abs(row.bushels) > 0.000001
+              ? `${displayBushels(Math.abs(row.bushels))} bu of ${commodityLabel(row.commodity_id)} in ${movements}`
+              : `${commodityLabel(row.commodity_id)} in ${movements} that cancel out today`;
+          }).join(", ")}
           {" "}
-          {unknown.length === 1 ? "is" : "are"} in movements recorded before Farm Rx kept crop years, so
-          {" "}{unknown.length === 1 ? "it is" : "they are"} in none of the figures above. Naming their crop year brings them in.
+          {unknownMovements === 1 ? "was" : "were"} recorded before Farm Rx kept crop years, so
+          {" "}{unknownMovements === 1 ? "it is" : "they are"} in none of the figures above. Naming their crop year
+          {" "}brings them in, and can change the figures above even where the movements cancel out today.
         </p>
       )}
     </section>

@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 327')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 329')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -909,6 +909,15 @@ export function foundationStaticGuard(root = process.cwd()) {
     requireText(errors, committedFree, 'movement.commodity_id === commodityId && movement.crop_year === cropYear', 'ld3:an-unstamped-movement-joins-no-year')
     // An over-delivered contract owes nothing; letting it go negative pays down a different one.
     requireText(errors, committedFree, 'Math.max(0, contract.bushels - delivered)', 'ld3:over-delivery-never-pays-down-another-contract')
+
+    // An unresolved movement is unresolved whatever it nets to. Filtering the unknown bucket by net
+    // bushels dropped exactly the rows whose resolution moves the figures most -- an unknown 1,000
+    // in and 1,000 out, which can land in two different crop years.
+    requireText(errors, grainModule, 'deriveUnknownCropYearBushels(workspace.bin_transactions).filter((row) => row.movementCount > 0)', 'ld3:an-unresolved-movement-is-named-however-it-nets')
+    // This component returns null when it has neither lots nor unknown movements, so reaching an
+    // empty state meant unknown movements existed -- and "Nothing stored or contracted yet" was
+    // printed directly above a list of stored bushels. It can never be true here.
+    if (grainModule.includes('Nothing stored or contracted yet')) errors.push('ld3:the-empty-state-that-could-never-be-true')
   }
   {
     // A load's harvest contribution is derived and never written into the replaceable manual total.
