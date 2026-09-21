@@ -161,6 +161,7 @@ begin
   with expected(proname, identity_args) as (
     values
       ('append_bin_movement','p_farm_id uuid, p_transaction jsonb'),
+      ('assign_bin_movement_crop_year','p_farm_id uuid, p_transaction_id uuid, p_crop_year integer'),
       ('assign_program','p_farm_id uuid, p_operation_id uuid, p_program_id uuid, p_assignment_plan jsonb'),
       ('bootstrap_first_farm','p_farm_name text, p_entity_name text, p_entity_type text'),
       ('can_access_farm','target_farm_id uuid'),
@@ -239,8 +240,8 @@ begin
     and p.prosecdef
     and has_function_privilege('authenticated', p.oid, 'execute');
 
-  if v_allowed_definers <> 60 or v_actual_definers <> 60 then
-    raise exception 'authenticated SECURITY DEFINER ACL allowlist drift: expected 60, matched %, actual %',
+  if v_allowed_definers <> 61 or v_actual_definers <> 61 then
+    raise exception 'authenticated SECURITY DEFINER ACL allowlist drift: expected 61, matched %, actual %',
       v_allowed_definers, v_actual_definers;
   end if;
 

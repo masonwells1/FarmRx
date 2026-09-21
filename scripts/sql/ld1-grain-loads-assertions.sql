@@ -418,8 +418,8 @@ begin
   from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace
   where n.nspname = 'public' and p.prosecdef
     and has_function_privilege('authenticated', p.oid, 'execute');
-  if v_total <> 60 then
-    raise exception 'authenticated can execute % security definer functions; the 0043 lane expects 60', v_total; end if;
+  if v_total <> 61 then
+    raise exception 'authenticated can execute % security definer functions; the 0043 lane expects 61. This count is pinned in THREE files -- scripts/verify-0043-disposable.ps1 (which also carries the name allowlist), scripts/sql/gl3-contract-edit-delete-assertions.sql and scripts/sql/ld1-grain-loads-assertions.sql -- and adding a definer function means changing all three', v_total; end if;
 end $$;
 
 -- ------------------------------------------------- 14. every public foreign key has a covering index
