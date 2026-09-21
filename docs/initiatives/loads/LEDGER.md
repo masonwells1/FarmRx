@@ -300,6 +300,22 @@ typed, with the difference when both exist, and Harvest offers one **Use load to
 - **`programInventoryCW2.regression.ts` fails on the development machine** and fails identically on
   `origin/main` `36abdd6` with none of this branch's changes; verified in a clean worktree this
   session. It needs a service the sandbox lacks.
+
+### CI caught a twelfth defect, and the reason it got that far
+
+`npm run regression` chains 64 files with `&&`. The known-broken `programInventoryCW2` sits at
+**position 48**, so the suite stops there on this machine and the last sixteen files never run. One
+of them, `roundSevenSweep`, enforces the 18px farmer-text contract over every `font-size` in
+`app.css` — and LD-2 had set the note under the harvest effect checkbox to 16px. CI ran the file
+this machine could not reach and failed in four minutes.
+
+The fix is one character of CSS. The finding is that **a known-failing regression early in a chained
+suite silently hides every regression behind it** — the same shape as LD-002's covering-index
+defect: the rule existed, and nothing here was asking it.
+
+All 64 files have now been run individually on this branch; only `programInventoryCW2` fails, and it
+fails identically on `origin/main`. Running them individually rather than through the chained script
+is the way to run them here until that failure is fixed.
 - **The browser suite ran against the sandbox's pre-installed Chromium** (build 1194) through a
   throwaway config, because the pinned Playwright expects 1228 and this environment forbids
   downloading a browser. Nothing about that config is committed; CI uses the repo's own.
