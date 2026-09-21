@@ -912,15 +912,17 @@ function InlineAddRow({
 
 /** LD-2: `readHarvestLoads` is supplied only for a member who can read private financials, decided
  * at the composition root exactly as it is for Harvest. Without it this page makes no grain read. */
-export function FieldDetailPage({ readHarvestLoads }: { readHarvestLoads?: () => Promise<GrainLoad[]> } = {}) {
+export function FieldDetailPage({ readHarvestLoads }: { readHarvestLoads?: () => Promise<{ loads: GrainLoad[]; complete: boolean }> } = {}) {
   const { data, error, refresh } = useFieldsData();
   const [harvestLoads, setHarvestLoads] = useState<GrainLoad[]>([]);
+  // See HarvestPage: a summed figure that may be short says so rather than reading as the whole.
+  const [loadsComplete, setLoadsComplete] = useState(true);
   useEffect(() => {
     let current = true;
     if (!readHarvestLoads) { setHarvestLoads([]); return }
     void readHarvestLoads()
-      .then((rows) => { if (current) setHarvestLoads(rows) })
-      .catch(() => { if (current) setHarvestLoads([]) });
+      .then((answer) => { if (current) { setHarvestLoads(answer.loads); setLoadsComplete(answer.complete) } })
+      .catch(() => { if (current) { setHarvestLoads([]); setLoadsComplete(true) } });
     return () => { current = false };
   }, [readHarvestLoads]);
   const { id } = useParams();
@@ -1008,6 +1010,7 @@ export function FieldDetailPage({ readHarvestLoads }: { readHarvestLoads?: () =>
         data={data}
         field={field}
         harvestLoads={harvestLoads}
+        loadsComplete={loadsComplete}
         onSave={save}
       />
     </section>
@@ -1727,11 +1730,13 @@ function RecordsCard({
   data,
   field,
   harvestLoads,
+  loadsComplete,
   onSave,
 }: {
   data: FieldsData;
   field: Field;
   harvestLoads: GrainLoad[];
+  loadsComplete: boolean;
   onSave: (patch: FieldEditPatch) => Promise<void>;
 }) {
   const rows = cropRows(data, field.id);
@@ -1968,8 +1973,8 @@ function RecordsCard({
                   if (fromLoads.loadCount === 0) return null;
                   return (
                     <span className="numeric field-from-loads">
-                      {number.format(fromLoads.fromLoads)} bu from loads
-                      {fromLoads.difference !== null && fromLoads.difference !== 0
+                      {loadsComplete ? "" : "at least "}{number.format(fromLoads.fromLoads)} bu from loads
+                      {loadsComplete && fromLoads.difference !== null && fromLoads.difference !== 0
                         ? ` · ${fromLoads.difference > 0 ? "+" : "−"}${number.format(Math.abs(fromLoads.difference))} bu vs typed`
                         : ""}
                     </span>
