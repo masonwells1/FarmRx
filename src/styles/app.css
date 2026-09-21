@@ -1228,6 +1228,15 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .load-effects input[type="checkbox"] { width: 24px; height: 24px; flex: none; }
 .load-effects small { display: block; font-size: 16px; margin-top: 4px; }
 .load-effect-summary { font-size: 18px; font-weight: 600; margin: 8px 0 0; }
+/* LD-2: the derived "from loads" figure beside the harvest total the farmer typed. It reads as a
+   second opinion rather than a replacement, because that is exactly what it is until they adopt it. */
+.harvest-from-loads { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hairline, rgba(0, 0, 0, 0.16)); }
+.harvest-from-loads p { margin: 0; font-size: 18px; }
+.harvest-from-loads-diff { color: var(--muted-text, #4a4a4a); }
+.harvest-from-loads .text-action { min-height: 48px; }
+.harvest-from-loads-confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.harvest-from-loads-confirm p { flex-basis: 100%; }
+.field-from-loads { color: var(--muted-text, #4a4a4a); }
 .load-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 18px; }
 .load-table th, .load-table td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--hairline, rgba(0, 0, 0, 0.16)); }
 .load-table .text-action { min-height: 48px; }

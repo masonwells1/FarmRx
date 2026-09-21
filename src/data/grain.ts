@@ -495,6 +495,12 @@ export interface GrainRepository {
    * grain workspace: Today serves its front door from the same workspace load, and a named rep's
    * Today must make no equipment read at all. */
   listLoadTrucks(): Promise<LoadTruck[]>
+  /** LD-2: the loads that carry a harvest contribution, for the derived "from loads" figure on
+   * Harvest and Fields. Read for the same reason listLoadTrucks is and kept out of the workspace for
+   * the same reason: a scale ticket is private financial data, and Harvest is a screen a worker
+   * without financial access uses every day. The caller asks for this ONLY when that member can read
+   * private financials, so a worker's Harvest makes no load read at all. */
+  listHarvestLoads(): Promise<GrainLoad[]>
   saveLoad(id: string, draft: GrainLoadDraft): Promise<GrainLoad>
   voidLoad(loadId: string, reason: string): Promise<LoadVoidResult>
   recordContractDelivery(delivery: GrainContractDelivery): Promise<void>

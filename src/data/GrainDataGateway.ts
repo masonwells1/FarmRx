@@ -44,6 +44,7 @@ export interface GrainDataGateway {
   editContractRpc?(farmId: string, contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, operationId: string, context: FarmOperationContext): Promise<unknown>
   deleteContractRpc?(farmId: string, contractId: string, reason: string, expectedUpdatedAt: string, operationId: string, context: FarmOperationContext): Promise<unknown>
   listLoadTrucks?(farmId: string, context: FarmOperationContext): Promise<unknown[]>
+  listHarvestLoads?(farmId: string, context: FarmOperationContext): Promise<unknown[]>
   saveGrainLoadRpc?(farmId: string, id: string, draft: GrainLoadDraft, context: FarmOperationContext): Promise<unknown>
   voidGrainLoadRpc?(farmId: string, loadId: string, reason: string, context: FarmOperationContext): Promise<unknown>
   upsertGrainAlertSettings(farmId: string, row: GrainAlertSettings, context: FarmOperationContext): Promise<unknown>

@@ -188,6 +188,11 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
   // LD-1: read only when the Loads form is open. Today serves its front door from loadWorkspace
   // above, and a named rep's Today must make no equipment read at all, so this cannot live there.
   async listLoadTrucks(farmId: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.from('equipment').select('id,name').eq('farm_id', farmId).eq('category', 'truck').eq('status', 'active').order('name').order('id'), context); return rows(data, error) }
+  /** LD-2: only the tickets that actually contribute -- confirmed for harvest and not voided. A row
+   * the migration has not reached reports 42703/PGRST204 on effect_harvest, and an LD-1 database has
+   * no effect column at all, so an absent column reads as no contributing loads rather than an error
+   * on a screen that has nothing to do with grain. */
+  async listHarvestLoads(farmId: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.from('grain_loads').select('*').eq('farm_id', farmId).eq('effect_harvest', true).is('voided_at', null).order('load_date', { ascending: false }).limit(RECENT_GRAIN_LOAD_LIMIT), context); if (error && (columnMissing(error) || tableMissing(error))) return []; return rows(data, error) }
   async saveGrainLoadRpc(farmId: string, id: string, draft: GrainLoadDraft, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('save_grain_load', { p_farm_id: farmId, p_load: grainLoadPayload(id, draft) }), context); if (error) throw error; return row(data, null) }
   async voidGrainLoadRpc(farmId: string, loadId: string, reason: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('void_grain_load', { p_farm_id: farmId, p_load_id: loadId, p_reason: reason }), context); if (error) throw error; return row(data, null) }
   async upsertGrainAlertSettings(farmId: string, value: GrainAlertSettings, context: FarmOperationContext) { return optimisticSave('grain_alert_settings', farmId, farmId, { farm_id: farmId, alert_emails: value.alert_emails }, value.updated_at, context, 'farm_id') }

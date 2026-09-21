@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router'
 import { parseTodayRecordIntent } from './data/todayIntents'
 import type { CropAssignment, Field, FieldsData } from './data/fields'
 import { canEditHarvest, harvestMaximumDate, harvestRevenue, validateHarvestDraft, yieldDelta, yieldPerAcre, type HarvestDraft, type HarvestRepository } from './data/harvest'
+import { loadHarvestComparison, type GrainLoad, type LoadHarvestComparison } from './data/grain'
 import { farmerError } from './lib/farmerErrors'
 import { farmLocalCalendarDate } from './data/farmDates'
 import { createSubmitLock } from './lib/submitLock'
@@ -14,7 +15,11 @@ const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 })
 const money = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 const price = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-export function HarvestPage({ harvestRepository }: { harvestRepository: HarvestRepository }) {
+/** `readHarvestLoads` is supplied ONLY for a member who can read private financials. Harvest does
+ * not decide that itself: a scale ticket is private financial data and this is a screen a worker
+ * without financial access uses every day, so the decision lives in one visible place at the
+ * composition root and this page simply has no reader to call. */
+export function HarvestPage({ harvestRepository, readHarvestLoads }: { harvestRepository: HarvestRepository; readHarvestLoads?: () => Promise<GrainLoad[]> }) {
   const location = useLocation()
   // A Today "Harvest" tile arrives with a record intent: open the harvest entry for the first crop on the first field.
   const [openFirstHarvest] = useState(() => parseTodayRecordIntent(location.state)?.record === 'harvest')
@@ -26,6 +31,16 @@ export function HarvestPage({ harvestRepository }: { harvestRepository: HarvestR
   const [loading, setLoading] = useState(true)
   const reload = async () => { setLoading(true); try { const next = await harvestRepository.getData(); setData(next); setError(null) } catch (caught) { setError(farmerError(caught, 'open harvest records')) } finally { setLoading(false) } }
   useEffect(() => { void reload() }, [])
+  // LD-2: the "from loads" figure. A scale ticket is private financial data and Harvest is a screen
+  // a worker without financial access uses every day, so this read is issued only when that member
+  // can read private financials -- for everyone else no request is made and no figure is shown. A
+  // failed read leaves the figure absent rather than breaking a page that is not about grain.
+  const [harvestLoads, setHarvestLoads] = useState<GrainLoad[]>([])
+  const reloadLoads = async () => {
+    if (!readHarvestLoads) { setHarvestLoads([]); return }
+    try { setHarvestLoads(await readHarvestLoads()) } catch { setHarvestLoads([]) }
+  }
+  useEffect(() => { void reloadLoads() }, [readHarvestLoads])
   // Years come from crops on active fields only: a retired field's newer crop must not become the year the page opens on.
   const years = useMemo(() => { if (!data) return []; const active = new Set(data.fieldsData.fields.filter((field) => field.is_active).map((field) => field.id)); return [...new Set(data.fieldsData.crop_assignments.filter((item) => active.has(item.field_id)).map((item) => item.crop_year))].sort((a, b) => b - a) }, [data])
   // The newest year with crops is the effective year from the first render, so a Today harvest intent opens a real crop even
@@ -38,15 +53,53 @@ export function HarvestPage({ harvestRepository }: { harvestRepository: HarvestR
   // A Today harvest intent opens the first active field that actually has a crop in the effective year.
   const intentFieldId = openFirstHarvest ? fields.find((field) => data.fieldsData.crop_assignments.some((item) => item.field_id === field.id && item.crop_year === effectiveYear))?.id ?? null : null
   const applySaved = (saved: { crop_assignment_id: string; harvested_bushels: number | null; harvest_date: string | null; actual_price_per_bu: number | null; updated_at: string }) => setData((current) => current ? { ...current, fieldsData: { ...current.fieldsData, crop_assignments: current.fieldsData.crop_assignments.map((assignment) => assignment.id === saved.crop_assignment_id ? { ...assignment, harvested_bushels: saved.harvested_bushels, harvest_date: saved.harvest_date, actual_price_per_bu: saved.actual_price_per_bu, updated_at: saved.updated_at } : assignment) } } : current)
-  return <section className="page harvest-page"><header className="page-heading harvest-heading"><div><h1>Harvest</h1><p>Record actual bushels and keep your yield history in one place.</p></div><label className="harvest-year">Crop year<select value={effectiveYear} onChange={(event) => setSelectedYear(Number(event.target.value))}>{years.length ? years.map((year) => <option key={year} value={year}>{year}</option>) : <option value={effectiveYear}>{effectiveYear}</option>}</select></label></header>{error && <p className="form-error">{error}</p>}<SaveReceipt state={receipt} />{!fields.length ? <section className="empty-state"><h2>Add your first field to start harvest tracking.</h2><p>Harvest records stay with the field and crop that produced them.</p>{canEditHarvest(data.viewer.role) && <Link className="primary-action" to="/fields">Add a field</Link>}</section> : <div className="harvest-list">{fields.map((field) => <HarvestFieldCard key={field.id} field={field} fieldsData={data.fieldsData} selectedYear={effectiveYear} canEdit={canEditHarvest(data.viewer.role)} initialOpen={field.id === intentFieldId && canEditHarvest(data.viewer.role)} repository={harvestRepository} onSaved={async (saved) => { applySaved(saved); if (!saved.pending) await reload() }} onError={setError} onReceipt={setLastReceiptId} />)}</div>}</section>
+  return <section className="page harvest-page"><header className="page-heading harvest-heading"><div><h1>Harvest</h1><p>Record actual bushels and keep your yield history in one place.</p></div><label className="harvest-year">Crop year<select value={effectiveYear} onChange={(event) => setSelectedYear(Number(event.target.value))}>{years.length ? years.map((year) => <option key={year} value={year}>{year}</option>) : <option value={effectiveYear}>{effectiveYear}</option>}</select></label></header>{error && <p className="form-error">{error}</p>}<SaveReceipt state={receipt} />{!fields.length ? <section className="empty-state"><h2>Add your first field to start harvest tracking.</h2><p>Harvest records stay with the field and crop that produced them.</p>{canEditHarvest(data.viewer.role) && <Link className="primary-action" to="/fields">Add a field</Link>}</section> : <div className="harvest-list">{fields.map((field) => <HarvestFieldCard key={field.id} field={field} fieldsData={data.fieldsData} selectedYear={effectiveYear} canEdit={canEditHarvest(data.viewer.role)} harvestLoads={harvestLoads} initialOpen={field.id === intentFieldId && canEditHarvest(data.viewer.role)} repository={harvestRepository} onSaved={async (saved) => { applySaved(saved); if (!saved.pending) await reload(); await reloadLoads() }} onError={setError} onReceipt={setLastReceiptId} />)}</div>}</section>
 }
 
-function HarvestFieldCard({ field, fieldsData, selectedYear, canEdit, initialOpen = false, repository, onSaved, onError, onReceipt }: { field: Field; fieldsData: FieldsData; selectedYear: number; canEdit: boolean; initialOpen?: boolean; repository: HarvestRepository; onSaved: (saved: Awaited<ReturnType<HarvestRepository['saveHarvest']>>) => Promise<void>; onError: (error: string | null) => void; onReceipt: (id: string) => void }) {
+function HarvestFieldCard({ field, fieldsData, selectedYear, canEdit, harvestLoads, initialOpen = false, repository, onSaved, onError, onReceipt }: { field: Field; fieldsData: FieldsData; selectedYear: number; canEdit: boolean; harvestLoads: GrainLoad[]; initialOpen?: boolean; repository: HarvestRepository; onSaved: (saved: Awaited<ReturnType<HarvestRepository['saveHarvest']>>) => Promise<void>; onError: (error: string | null) => void; onReceipt: (id: string) => void }) {
   const commodities = new Map(fieldsData.commodities.map((item) => [item.id, item.name]))
   const crops = fieldsData.crop_assignments.filter((item) => item.field_id === field.id && item.crop_year === selectedYear).sort((a, b) => a.planting_sequence - b.planting_sequence)
   const [editing, setEditing] = useState<CropAssignment | null>(() => initialOpen ? crops[0] ?? null : null)
   const history = fieldsData.crop_assignments.filter((item) => item.field_id === field.id && item.crop_year < selectedYear && item.harvested_bushels !== null).sort((a, b) => b.crop_year - a.crop_year)
-  return <article className="harvest-card"><header className="harvest-card-head"><div><h2>{field.name}</h2><p>{number.format(field.total_acres)} ac</p></div><span>{selectedYear} crops</span></header>{crops.length ? <div className="harvest-crops">{crops.map((crop) => <section className="harvest-crop" key={crop.id}><div className="harvest-crop-main"><h3>{commodities.get(crop.commodity_id) ?? 'Crop'}</h3><p>{number.format(crop.planted_acres)} ac planted{crop.expected_yield_per_acre === null ? '' : ` · ${number.format(crop.expected_yield_per_acre)} bu/ac expected`}</p><HarvestResults crop={crop} /></div>{canEdit && <button className="secondary-action harvest-enter" type="button" onClick={() => { setEditing(editing?.id === crop.id ? null : crop); onError(null) }}>{editing?.id === crop.id ? 'Close' : crop.harvested_bushels === null ? 'Enter harvest' : 'Edit harvest'}</button>}{editing?.id === crop.id && <HarvestForm crop={crop} save={async (draft) => { try { onReceipt(draft.crop_assignment_id); const saved = await repository.saveHarvest(draft); setEditing(null); onError(null); await onSaved(saved) } catch (caught) { onError(farmerError(caught, 'save this harvest entry')) } }} cancel={() => setEditing(null)} />}</section>)}</div> : <p className="card-empty">No crops are assigned to this field for {selectedYear}.</p>}<section className="yield-history"><h3>Yield history</h3>{history.length ? <div className="yield-history-strip">{history.map((crop) => { const actual = yieldPerAcre(crop.harvested_bushels, crop.planted_acres); return <span key={crop.id}><strong>{crop.crop_year} · {commodities.get(crop.commodity_id) ?? 'Crop'}</strong><em>{actual === null ? '—' : `${number.format(actual)} bu/ac`}</em></span> })}</div> : <p className="card-empty">No prior harvested yields recorded for this field.</p>}</section></article>
+  return <article className="harvest-card"><header className="harvest-card-head"><div><h2>{field.name}</h2><p>{number.format(field.total_acres)} ac</p></div><span>{selectedYear} crops</span></header>{crops.length ? <div className="harvest-crops">{crops.map((crop) => <section className="harvest-crop" key={crop.id}><div className="harvest-crop-main"><h3>{commodities.get(crop.commodity_id) ?? 'Crop'}</h3><p>{number.format(crop.planted_acres)} ac planted{crop.expected_yield_per_acre === null ? '' : ` · ${number.format(crop.expected_yield_per_acre)} bu/ac expected`}</p><HarvestResults crop={crop} /><LoadsHarvestLine crop={crop} harvestLoads={harvestLoads} canEdit={canEdit} onUseLoadTotal={async (bushels) => { try { onReceipt(crop.id); const saved = await repository.saveHarvest({ crop_assignment_id: crop.id, harvested_bushels: bushels, harvest_date: crop.harvest_date, actual_price_per_bu: crop.actual_price_per_bu, expected_updated_at: crop.updated_at }); onError(null); await onSaved(saved) } catch (caught) { onError(farmerError(caught, 'use the load total')) } }} /></div>{canEdit && <button className="secondary-action harvest-enter" type="button" onClick={() => { setEditing(editing?.id === crop.id ? null : crop); onError(null) }}>{editing?.id === crop.id ? 'Close' : crop.harvested_bushels === null ? 'Enter harvest' : 'Edit harvest'}</button>}{editing?.id === crop.id && <HarvestForm crop={crop} save={async (draft) => { try { onReceipt(draft.crop_assignment_id); const saved = await repository.saveHarvest(draft); setEditing(null); onError(null); await onSaved(saved) } catch (caught) { onError(farmerError(caught, 'save this harvest entry')) } }} cancel={() => setEditing(null)} />}</section>)}</div> : <p className="card-empty">No crops are assigned to this field for {selectedYear}.</p>}<section className="yield-history"><h3>Yield history</h3>{history.length ? <div className="yield-history-strip">{history.map((crop) => { const actual = yieldPerAcre(crop.harvested_bushels, crop.planted_acres); return <span key={crop.id}><strong>{crop.crop_year} · {commodities.get(crop.commodity_id) ?? 'Crop'}</strong><em>{actual === null ? '—' : `${number.format(actual)} bu/ac`}</em></span> })}</div> : <p className="card-empty">No prior harvested yields recorded for this field.</p>}</section></article>
+}
+
+/** LD-2: the bushels this crop has from scale tickets, beside the total the farmer typed.
+ *
+ * The two are deliberately NOT merged. crop_assignments.harvested_bushels is one replaceable total
+ * that this page overwrites whole, so a load that incremented it would be erased by the next manual
+ * entry or double-counted by it. Load contributions live only in grain_loads, and the farmer decides
+ * whether to adopt them -- "Use load total" writes the derived sum through this same harvest save,
+ * as a replacement they confirmed, and voiding a load afterwards changes only the figure below and
+ * never the total they accepted. */
+function LoadsHarvestLine({ crop, harvestLoads, canEdit, onUseLoadTotal }: { crop: CropAssignment; harvestLoads: GrainLoad[]; canEdit: boolean; onUseLoadTotal: (bushels: number) => Promise<void> }) {
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const comparison: LoadHarvestComparison = loadHarvestComparison(harvestLoads, crop.id, crop.harvested_bushels)
+  if (comparison.loadCount === 0) return null
+  const ticketWord = comparison.loadCount === 1 ? 'ticket' : 'tickets'
+  return <div className="harvest-from-loads">
+    <p><strong>{number.format(comparison.fromLoads)} bu from loads</strong> <span>({comparison.loadCount} {ticketWord})</span></p>
+    {comparison.difference !== null && comparison.difference !== 0 && (
+      <p className="harvest-from-loads-diff">
+        {comparison.difference > 0
+          ? `${number.format(comparison.difference)} bu more than the total you typed.`
+          : `${number.format(Math.abs(comparison.difference))} bu less than the total you typed.`}
+      </p>
+    )}
+    {canEdit && !confirming && (
+      <button className="text-action" type="button" onClick={() => setConfirming(true)}>Use load total</button>
+    )}
+    {canEdit && confirming && (
+      <div className="harvest-from-loads-confirm">
+        <p>{crop.harvested_bushels === null
+          ? `Record ${number.format(comparison.fromLoads)} bu as this crop's harvest?`
+          : `Replace the ${number.format(crop.harvested_bushels)} bu you typed with ${number.format(comparison.fromLoads)} bu from loads?`}</p>
+        <button className="primary-action" type="button" disabled={busy} onClick={async () => { setBusy(true); try { await onUseLoadTotal(comparison.fromLoads); setConfirming(false) } finally { setBusy(false) } }}>Use load total</button>
+        <button className="secondary-action" type="button" disabled={busy} onClick={() => setConfirming(false)}>Keep what I typed</button>
+      </div>
+    )}
+  </div>
 }
 
 function HarvestResults({ crop }: { crop: CropAssignment }) {

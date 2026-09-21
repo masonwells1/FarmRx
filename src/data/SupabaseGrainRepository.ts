@@ -196,6 +196,17 @@ export class SupabaseGrainRepository implements GrainRepository, GrainOperationW
     const raw = await read.call(this.dependencies.gateway, await this.operationFarmId(context), context)
     return raw.map(loadTruck)
   }
+  async listHarvestLoads(): Promise<GrainLoad[]> {
+    const context = await this.dependencies.getOperationContext()
+    const read = this.dependencies.gateway.listHarvestLoads
+    if (!read) return []
+    const farmId = await this.operationFarmId(context)
+    const raw = await read.call(this.dependencies.gateway, farmId, context)
+    const loads = raw.map(grainLoad)
+    // Same farm check every other private read makes: a row from another farm is never displayed.
+    for (const load of loads) if (load.farm_id !== farmId) fail('Farm Rx could not verify the farm for these loads.')
+    return loads
+  }
   async saveLoad(id: string, draft: GrainLoadDraft) { return this.saveLoadOperation(id, draft, await this.dependencies.getOperationContext()) }
   // The id belongs to the ticket, not to the attempt: the caller keeps one across every retry, and the
   // server replays rather than writing a second load. The workspace-dependent rules (which lot the
