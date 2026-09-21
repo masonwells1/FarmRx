@@ -30,7 +30,7 @@ const isSaleLimitDraft = (key: string, payload: unknown): payload is SaleLimitDr
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOfferType, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainContractType, GrainLoad, GrainLoadDraft, GrainServices, GrainWorkspace, LoadTruck, MarketingAlertRule, MarketingAlertRuleType, MarketingPlanTarget, PositionScope, ProductionEstimate } from "./data/grain";
-import { contractCorrectionDiff, contractIsCorrectable, loadLotFor, LOAD_RECORD_PENDING, marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
+import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, LOAD_RECORD_PENDING, marketedPercent, normalizeLoadEffects, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -137,7 +137,13 @@ const GRAIN_TABS = [
   { slug: "storage", label: "Bins & basis" },
 ];
 /** LD-1: a blank ticket. Dated today because that is what a farmer hauling right now needs, and a bin
- * origin because grain leaving storage is the load a farm records year-round. */
+ * origin because grain leaving storage is the load a farm records year-round.
+ *
+ * LD-2: the four effects start ticked. Recording a load out of a bin normally does take the grain
+ * out of the bin, so the common case should not need four taps in a truck cab -- and the form shows
+ * in plain words what the ticked boxes will do before the save. Unticking is the exception, which is
+ * why unticking is what takes the deliberate action. normalizeLoadEffects clears whichever of them
+ * the chosen origin and destination cannot reach. */
 const emptyLoadDraft = (): GrainLoadDraft => ({
   load_date: localCalendarDay(new Date()),
   truck_equipment_id: "",
@@ -155,6 +161,10 @@ const emptyLoadDraft = (): GrainLoadDraft => ({
   moisture_pct: "",
   ticket_number: "",
   notes: "",
+  effect_bin_out: true,
+  effect_bin_in: true,
+  effect_contract_delivery: true,
+  effect_harvest: true,
 });
 type Template =
   "balanced" | "harvest" | "storage" | "conservative" | "seasonal";
@@ -3793,7 +3803,7 @@ function MovementForm({
         occurred_on: occurredOn,
         note: note.trim() || null,
         source_kind: "manual entry",
-        created_at: new Date().toISOString(),
+        crop_year: null, grain_load_id: null, created_at: new Date().toISOString(),
       };
       const errors = validateBinTransaction(transaction);
       if (errors.length) {
@@ -4319,7 +4329,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
     return () => { current = false };
   }, [services]);
   const redraft = () => { loadId.current = null };
-  const update = (patch: Partial<GrainLoadDraft>) => { redraft(); setDraft((current) => ({ ...current, ...patch })) };
+  const update = (patch: Partial<GrainLoadDraft>) => { redraft(); setDraft((current) => normalizeLoadEffects({ ...current, ...patch })) };
 
   const lot = loadLotFor(workspace, draft);
   const problems = validateGrainLoad(draft, workspace);
@@ -4332,6 +4342,28 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
     const field = workspace.fields.fields.find((row) => row.id === assignment.field_id);
     return field ? field.name : "a field";
   };
+  const contractLabel = (id: string | null) => {
+    const contract = workspace.grain_contracts.find((row) => row.id === id);
+    return contract ? `${contract.buyer} (${contract.crop_year})` : "the contract";
+  };
+  // LD-2: the effects this load's shape can reach, and the ones the farmer has actually ticked.
+  const availableEffects = loadEffectsAvailable(draft);
+  const confirmedEffects = confirmedLoadEffects(draft);
+  const typedNet = Number(draft.net_bushels);
+  const bushelLabel = draft.net_bushels.trim() && Number.isFinite(typedNet) && typedNet > 0
+    ? `${typedNet.toLocaleString()} bu`
+    : "these bushels";
+  // The same four effects said as a sentence, so what is about to happen reads as English rather
+  // than as a column of ticked boxes.
+  const effectPhrases = confirmedEffects.map((key) => {
+    if (key === "bin_out") return `takes ${bushelLabel} out of ${binName(draft.origin_grain_bin_id)}`;
+    if (key === "bin_in") return `puts ${bushelLabel} into ${binName(draft.destination_grain_bin_id)}`;
+    if (key === "contract_delivery") return `records ${bushelLabel} delivered against ${contractLabel(draft.destination_grain_contract_id)}`;
+    return `counts ${bushelLabel} toward ${fieldName(draft.origin_crop_assignment_id)}\u2019s harvest`;
+  });
+  const effectSentence = effectPhrases.length <= 1
+    ? effectPhrases.join("")
+    : `${effectPhrases.slice(0, -1).join(", ")} and ${effectPhrases[effectPhrases.length - 1]}`;
 
   const save = async () => {
     if (!lock.current.acquire()) return;
@@ -4368,8 +4400,21 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       const problem = validateLoadVoidReason(reason);
       if (problem) { setMessage(problem); return }
       setSaving(true);
-      await services.grainRepository.voidLoad(load.id, reason);
-      setMessage("Load voided. It stays on the list with your reason.");
+      const result = await services.grainRepository.voidLoad(load.id, reason);
+      // LD-2: a void the bin cannot take changed NOTHING -- not the ledger, not the delivery, not
+      // the ticket. Reporting it as done would leave the farmer believing bushels moved back when
+      // they did not, so the blocked answer gets its own words and names what is in the way.
+      if (result.status === "blocked") {
+        const movements = result.blockedBy
+          .map((entry) => `${entry.bushels.toLocaleString()} bu ${entry.direction === "in" ? "into" : "out of"} ${binName(entry.grain_bin_id)} on ${entry.occurred_on}`)
+          .join("; ");
+        setMessage(movements
+          ? `This ticket cannot be voided yet: ${movements}. Deal with that movement first, then void this ticket.`
+          : "This ticket cannot be voided yet, because the bins it touched have changed since. Nothing was changed.");
+        await onSaved();
+        return;
+      }
+      setMessage("Load voided. It stays on the list with your reason, and everything it did has been reversed.");
       await onSaved();
     } catch (error) { setMessage(farmerError(error, "void this load")) } finally { lock.current.release(); setSaving(false) }
   };
@@ -4469,15 +4514,42 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
         )}
         <label>Note<input type="text" value={draft.notes} onChange={(event) => update({ notes: event.target.value })} /></label>
 
+        {/* LD-2: every effect a save can have, shown as a box the farmer ticks. Only the effects this
+            load's shape can actually reach are offered, and the sentence underneath says in plain
+            words what the ticked boxes will do. Nothing happens that is not on this list. */}
+        <fieldset className="load-effects">
+          <legend>What saving this will do</legend>
+          {availableEffects.length === 0 ? (
+            <p className="panel-note">This ticket is a record only. Nothing else in Farm Rx changes when you save it.</p>
+          ) : (
+            <>
+              {availableEffects.includes("bin_out") && (
+                <label><input type="checkbox" checked={draft.effect_bin_out} onChange={(event) => update({ effect_bin_out: event.target.checked })} /> Take {bushelLabel} out of {binName(draft.origin_grain_bin_id)}</label>
+              )}
+              {availableEffects.includes("bin_in") && (
+                <label><input type="checkbox" checked={draft.effect_bin_in} onChange={(event) => update({ effect_bin_in: event.target.checked })} /> Put {bushelLabel} into {binName(draft.destination_grain_bin_id)}</label>
+              )}
+              {availableEffects.includes("contract_delivery") && (
+                <label><input type="checkbox" checked={draft.effect_contract_delivery} onChange={(event) => update({ effect_contract_delivery: event.target.checked })} /> Record {bushelLabel} delivered against {contractLabel(draft.destination_grain_contract_id)}</label>
+              )}
+              {availableEffects.includes("harvest") && (
+                <label><input type="checkbox" checked={draft.effect_harvest} onChange={(event) => update({ effect_harvest: event.target.checked })} /> Count {bushelLabel} toward {fieldName(draft.origin_crop_assignment_id)}&rsquo;s harvest</label>
+              )}
+              <p className="load-effect-summary" role="status">
+                {confirmedEffects.length === 0
+                  ? "Saving this records the ticket and changes nothing else."
+                  : `Saving this records the ticket and ${effectSentence}.`}
+              </p>
+              {/* A load's harvest contribution is never written into the manual harvest total. Harvest
+                  and Fields show it beside that total so the farmer can compare the two and choose. */}
+              {draft.effect_harvest && <small>This adds to the &ldquo;from loads&rdquo; figure on Harvest. It does not change a harvest total you typed.</small>}
+            </>
+          )}
+        </fieldset>
+
         <button className="primary-action" type="button" disabled={saving} onClick={() => void save()}>Save load</button>
         {message && <p className="load-message" role="status">{message}</p>}
       </div>
-
-      {/* LD-1 records the ticket and nothing else: no bin movement, no contract delivery, no harvest
-          figure. Saying so is the only honest thing to do, because a farmer who assumed otherwise
-          would stop recording bin-outs and their stored bushels would drift. LD-2 makes each of those
-          an effect the farmer sees and confirms on the save. */}
-      <p className="load-scope-note">Saving a load records the ticket. It does not yet move bushels out of a bin, count against a contract, or add to a field&rsquo;s harvest &mdash; keep recording those the way you do now.</p>
 
       <h3>Recent loads</h3>
       {workspace.grain_loads.length === 0 ? (

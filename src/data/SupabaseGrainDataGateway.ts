@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabaseClient'
 import { localCalendarDay } from './marketingAlerts'
 import type { GrainDataGateway, GrainRowBundle, ReplaceMarketingPlanInput } from './GrainDataGateway'
 import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainLoadDraft, GrainSaleLimit, MarketingAlertRule, ProductionEstimate } from './grain'
+import { loadEffectsAvailable } from './grain'
 import { DELETE_PERMISSION_MESSAGE } from './saveDurability'
 import { optimisticSave } from './optimisticSave'
 import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
@@ -68,6 +69,14 @@ export function grainLoadPayload(id: string, draft: GrainLoadDraft): Record<stri
   if (draft.destination_kind === 'buyer') payload.destination_buyer = draft.destination_buyer.trim()
   if (draft.destination_kind === 'contract') payload.destination_grain_contract_id = draft.destination_grain_contract_id
   if (draft.destination_kind === 'bin') payload.destination_grain_bin_id = draft.destination_grain_bin_id
+  // LD-2: each effect the farmer confirmed, and only the ones this load's shape can reach. The
+  // server carries the same four rules, so an impossible combination is refused rather than
+  // quietly dropped -- but the form should never build one in the first place.
+  const available = loadEffectsAvailable(draft)
+  payload.effect_bin_out = draft.effect_bin_out && available.includes('bin_out')
+  payload.effect_bin_in = draft.effect_bin_in && available.includes('bin_in')
+  payload.effect_contract_delivery = draft.effect_contract_delivery && available.includes('contract_delivery')
+  payload.effect_harvest = draft.effect_harvest && available.includes('harvest')
   if (draft.truck_equipment_id) payload.truck_equipment_id = draft.truck_equipment_id
   if (draft.truck_name.trim()) payload.truck_name = draft.truck_name.trim()
   if (draft.gross_lbs.trim()) payload.gross_lbs = Number(draft.gross_lbs)

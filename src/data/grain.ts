@@ -61,7 +61,7 @@ export interface GrainContract extends PositionScope {
   created_at: string
   updated_at: string
 }
-export interface GrainContractDelivery { id: string; farm_id: string; grain_contract_id: string; bushels: number; delivered_on: string; note: string | null; created_at: string; allow_overdelivery?: boolean }
+export interface GrainContractDelivery { id: string; farm_id: string; grain_contract_id: string; bushels: number; delivered_on: string; note: string | null; created_at: string; allow_overdelivery?: boolean; /** LD-2: set when a saved load recorded this delivery as a confirmed effect. */ grain_load_id?: string | null }
 export interface GrainCapabilities { bin_movements: boolean; contract_price_finalization: boolean; contract_deliveries: boolean; /** False until the slice-3 tables exist on the live database; the screens then keep their session-only behavior. */ persisted_settings?: boolean;
   /** GL-2: false until the live database carries the crop-year eligibility rule. A merge deploys this
    * client to production on its own, while applying the migration is a separate owner action, so the
@@ -163,7 +163,10 @@ export interface InsuranceUnit extends PositionScope {
 export interface GrainBin { id: string; farm_id: string; name: string; capacity_bu: number; location_type: GrainStorageLocationType; location_name: string | null; notes: string | null; moisture_pct: number | null; moisture_checked_on: string | null; created_at: string; updated_at: string }
 export interface BinInventory { id: string; farm_id: string; grain_bin_id: string; crop_year: number; commodity_id: string; bushels: number; committed_bushels: number; measured_at: string; notes: string | null; created_at: string; updated_at: string }
 /** Immutable record. Fixes are represented by a new movement in the other direction. */
-export interface BinTransaction { id: string; farm_id: string; grain_bin_id: string; direction: BinTransactionDirection; bushels: number; commodity_id: string; occurred_on: string; note: string | null; source_kind: string | null; created_at: string }
+/** LD-2: `crop_year` is the lot this movement moved. It is null on every row written before LD-2;
+ * those rows are an explicit "crop year unknown" bucket that no year-specific figure may count.
+ * `grain_load_id` names the load that created the row, which is how a void finds what to reverse. */
+export interface BinTransaction { id: string; farm_id: string; grain_bin_id: string; direction: BinTransactionDirection; bushels: number; commodity_id: string; crop_year: number | null; occurred_on: string; note: string | null; source_kind: string | null; grain_load_id: string | null; created_at: string }
 /** A farmer's bid keeps the three feed columns null; a GL-1 USDA MARS feed row sets them (display-and-history only, never position math). */
 export interface CashBid { id: string; farm_id: string; elevator: string; commodity_id: string; bid_date: string; basis: number; cash_price: number | null; delivery_start: string | null; delivery_end: string | null; notes: string | null; feed_source: string | null; feed_report_id: string | null; feed_geography: string | null; created_at: string; updated_at: string }
 export interface MarketingAlertRule extends PositionScope { id: string; rule_type: MarketingAlertRuleType; direction: MarketingAlertDirection | null; threshold: number | null; remind_on: string | null; message: string | null; active: boolean; last_triggered_at: string | null; created_at: string; updated_at: string }
@@ -219,6 +222,12 @@ export interface GrainLoad {
   ticket_number: string | null
   photo_path: string | null
   notes: string | null
+  /** LD-2: which effects the farmer confirmed on the save that created this ticket. These are the
+   * record of what the load did, which is why they are on the row and not inferred later. */
+  effect_bin_out: boolean
+  effect_bin_in: boolean
+  effect_contract_delivery: boolean
+  effect_harvest: boolean
   voided_at: string | null
   void_reason: string | null
   created_at: string
@@ -244,11 +253,35 @@ export interface GrainLoadDraft {
   moisture_pct: string
   ticket_number: string
   notes: string
+  /** LD-2: the four effects, each a box the farmer ticks. Only the ones the draft's shape can
+   * actually reach are ever shown; normalizeLoadEffects keeps the rest false. */
+  effect_bin_out: boolean
+  effect_bin_in: boolean
+  effect_contract_delivery: boolean
+  effect_harvest: boolean
 }
 
-/** LD-1: what a void did. `blockedBy` is always empty for an LD-1 load, which creates nothing else;
- * LD-2 fills it with the later movements that depend on the load and make the void impossible. */
-export interface LoadVoidResult { status: 'voided' | 'blocked'; load: GrainLoad | null; blockedBy: string[] }
+/** LD-2: one later bin movement standing in the way of a void, as the server names it. */
+export interface LoadVoidBlocker {
+  id: string
+  grain_bin_id: string
+  direction: 'in' | 'out'
+  bushels: number
+  commodity_id: string
+  crop_year: number | null
+  occurred_on: string
+  source_kind: string | null
+}
+
+/** LD-1: what a void did. LD-2 fills `blockedBy` with the later movements that depend on the load
+ * and make the void impossible, and `reason` with the guard's own words. A blocked void changed
+ * nothing at all -- not the ledger, not the delivery, not the ticket. */
+export interface LoadVoidResult {
+  status: 'voided' | 'blocked'
+  load: GrainLoad | null
+  blockedBy: LoadVoidBlocker[]
+  reason: string | null
+}
 
 /** LD-1: the lot a load is carrying -- the commodity and the crop year together. Keeping them as one
  * value is the point: a load that knew its commodity but guessed its crop year would let carry-over
@@ -353,7 +386,93 @@ export function validateGrainLoad(draft: GrainLoadDraft, workspace: Pick<GrainWo
     }
   }
 
+  const available = loadEffectsAvailable(draft)
+  if (draft.effect_bin_out && !available.includes('bin_out')) problems.push('This load did not come out of a bin, so it cannot take bushels out of one.')
+  if (draft.effect_bin_in && !available.includes('bin_in')) problems.push('This load did not go into a bin, so it cannot put bushels into one.')
+  if (draft.effect_contract_delivery && !available.includes('contract_delivery')) problems.push('This load did not go against a contract, so it cannot record a delivery.')
+  if (draft.effect_harvest && !available.includes('harvest')) problems.push('This load did not come off a field, so it cannot count toward a harvest.')
+
   return problems
+}
+
+/** LD-2: the four effects a saved load can have. Each is a separate visible write the farmer
+ * confirmed on that save; nothing here ever happens silently. */
+export type LoadEffectKey = 'bin_out' | 'bin_in' | 'contract_delivery' | 'harvest'
+
+export const LOAD_EFFECT_KEYS: readonly LoadEffectKey[] = ['bin_out', 'bin_in', 'contract_delivery', 'harvest']
+
+/** LD-2: which effects this draft's shape can actually reach. A load to a buyer cannot record a
+ * contract delivery, and a load out of a bin cannot count toward a field's harvest. The database
+ * carries the same four rules as check constraints; this is what keeps the form from ever offering
+ * a box that could not be honoured. */
+export function loadEffectsAvailable(draft: Pick<GrainLoadDraft, 'origin_kind' | 'destination_kind'>): LoadEffectKey[] {
+  const available: LoadEffectKey[] = []
+  if (draft.origin_kind === 'bin') available.push('bin_out')
+  if (draft.destination_kind === 'bin') available.push('bin_in')
+  if (draft.destination_kind === 'contract') available.push('contract_delivery')
+  if (draft.origin_kind === 'field') available.push('harvest')
+  return available
+}
+
+export function loadEffectFlag(key: LoadEffectKey): 'effect_bin_out' | 'effect_bin_in' | 'effect_contract_delivery' | 'effect_harvest' {
+  if (key === 'bin_out') return 'effect_bin_out'
+  if (key === 'bin_in') return 'effect_bin_in'
+  if (key === 'contract_delivery') return 'effect_contract_delivery'
+  return 'effect_harvest'
+}
+
+/** LD-2: clear any effect the draft's current shape can no longer reach. The form calls this every
+ * time the origin or destination changes, so switching a destination from a contract to an elevator
+ * cannot leave a confirmed delivery behind on a load that has no contract. */
+export function normalizeLoadEffects(draft: GrainLoadDraft): GrainLoadDraft {
+  const available = loadEffectsAvailable(draft)
+  let next = draft
+  for (const key of LOAD_EFFECT_KEYS) {
+    const flag = loadEffectFlag(key)
+    if (!available.includes(key) && next[flag]) next = { ...next, [flag]: false }
+  }
+  return next
+}
+
+/** LD-2: the effects this draft is actually asking for, in a stable order. The form shows this back
+ * to the farmer in words, so what is about to happen is on screen before the button is pressed. */
+export function confirmedLoadEffects(draft: GrainLoadDraft): LoadEffectKey[] {
+  return loadEffectsAvailable(draft).filter((key) => draft[loadEffectFlag(key)])
+}
+
+/** LD-2: the bushels a crop assignment has from loads. This is the ONLY record of a load's harvest
+ * contribution: crop_assignments.harvested_bushels is one replaceable total that the Harvest form
+ * overwrites whole, so a load increment would be erased by the next manual entry or double-counted
+ * by it. Voided loads drop out here and nowhere else. */
+export function harvestBushelsFromLoads(loads: readonly GrainLoad[], cropAssignmentId: string): number {
+  return activeLoads(loads)
+    .filter((load) => load.effect_harvest && load.origin_crop_assignment_id === cropAssignmentId)
+    .reduce((total, load) => total + load.net_bushels, 0)
+}
+
+/** LD-2: what Harvest and Fields show beside the manual total. `difference` is present only when
+ * both figures exist, because a difference against nothing is not a difference. */
+export interface LoadHarvestComparison {
+  fromLoads: number
+  loadCount: number
+  manual: number | null
+  difference: number | null
+}
+
+export function loadHarvestComparison(
+  loads: readonly GrainLoad[],
+  cropAssignmentId: string,
+  manual: number | null,
+): LoadHarvestComparison {
+  const contributing = activeLoads(loads)
+    .filter((load) => load.effect_harvest && load.origin_crop_assignment_id === cropAssignmentId)
+  const fromLoads = contributing.reduce((total, load) => total + load.net_bushels, 0)
+  return {
+    fromLoads,
+    loadCount: contributing.length,
+    manual,
+    difference: manual === null || contributing.length === 0 ? null : fromLoads - manual,
+  }
 }
 
 export interface GrainData { production_estimates: ProductionEstimate[]; grain_contracts: GrainContract[]; grain_contract_deliveries: GrainContractDelivery[]; grain_loads: GrainLoad[]; marketing_plan_targets: MarketingPlanTarget[]; insurance_units: InsuranceUnit[]; grain_bins: GrainBin[]; bin_inventory: BinInventory[]; bin_transactions: BinTransaction[]; cash_bids: CashBid[]; usda_report_dates: UsdaReportDate[]; usda_market_reports: UsdaMarketReport[]; marketing_alert_rules: MarketingAlertRule[]; firm_offers: FirmOffer[]; grain_alert_settings: GrainAlertSettings | null; grain_sale_limits: GrainSaleLimit[]; grain_carry_settings: GrainCarrySettings | null; grain_carry_grids: GrainCarryGrid[]; capabilities?: GrainCapabilities }

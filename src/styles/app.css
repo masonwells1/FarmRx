@@ -1221,7 +1221,13 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 /* What the origin decided this load is. Never typed, so never styled as an input. */
 .load-lot { margin: 0; font-size: 18px; font-weight: 600; }
 .load-message { font-size: 18px; margin: 0; }
-.load-scope-note { font-size: 18px; margin: 16px 0 0; }
+/* LD-2: the effects a save will have. Each row is a tap target in a truck cab, so the boxes keep
+   the 48px minimum and the summary sentence stays at the body size rather than shrinking to a
+   caption -- it is the most important sentence on the form. */
+.load-effects label { display: flex; align-items: center; gap: 10px; min-height: 48px; font-size: 18px; }
+.load-effects input[type="checkbox"] { width: 24px; height: 24px; flex: none; }
+.load-effects small { display: block; font-size: 16px; margin-top: 4px; }
+.load-effect-summary { font-size: 18px; font-weight: 600; margin: 8px 0 0; }
 .load-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 18px; }
 .load-table th, .load-table td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--hairline, rgba(0, 0, 0, 0.16)); }
 .load-table .text-action { min-height: 48px; }
