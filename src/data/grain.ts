@@ -2,6 +2,7 @@ import { farmCalendarDate } from './farmDates'
 import type { Commodity, FieldsData, ReadOnlySnapshot } from './fields'
 import type { FarmOperationContext } from './farmOperationContext'
 import type { ProfitabilityRepository } from './profitability'
+import { binLotsOnHand, type BinLotOnHand } from './committedFree'
 
 export type ProductionMathBasis = 'projected' | 'actual'
 export type GrainContractType = 'cash_spot' | 'forward_cash' | 'basis' | 'hta'
@@ -82,7 +83,13 @@ export interface GrainCapabilities { bin_movements: boolean; contract_price_fina
    * merge-before-migration window again, and a worse one than LD-1's: the table exists, so the
    * Loads tab opens, and a farmer would tick effects the save cannot honour and be shown a
    * database error. While this is false the form offers no effects and says the rest is arriving. */
-  grain_load_effects?: boolean }
+  grain_load_effects?: boolean;
+  /** LD-4: false until the live database carries public.bin_lots and the save_grain_load that reads
+   * it. The merge-before-migration window once more, and LD-006 finding 1 is the reason this exists
+   * rather than being assumed: while this is false the form offers no lot choice and falls back to
+   * the bin's baseline year, which is exactly what the installed RPC will accept. Offering a picker
+   * against the old RPC would let a farmer choose a year and be refused on save. */
+  grain_load_bin_lot?: boolean }
 
 /** GL-3b: the fields a contract correction may change. An absent key keeps the stored value; an
  * explicit null clears a nullable one. Crop year, commodity, contract type and every pricing column
@@ -248,6 +255,10 @@ export interface GrainLoadDraft {
   origin_kind: LoadOriginKind
   origin_grain_bin_id: string
   origin_crop_assignment_id: string
+  /** LD-4: which lot a bin origin is being hauled from, as a crop year. Empty means the farmer has
+   * not chosen, which is correct and common -- a bin holding one lot needs no answer. Ignored
+   * entirely for a field origin, where the crop assignment already names the lot. */
+  origin_crop_year: string
   destination_kind: LoadDestinationKind
   destination_buyer: string
   destination_grain_contract_id: string
@@ -313,13 +324,41 @@ export function validateAssignedCropYear(cropYear: number): string | null {
 /** LD-1: the browser's twin of the server's derivation. The origin decides the lot and nothing else
  * may; this returns null when the origin cannot name one, and the form then refuses to save rather
  * than sending a guess the server would have to reject. */
-export function loadLotFor(workspace: Pick<GrainWorkspace, 'bin_inventory' | 'fields'>, draft: Pick<GrainLoadDraft, 'origin_kind' | 'origin_grain_bin_id' | 'origin_crop_assignment_id'>): LoadLot | null {
+export function loadLotFor(workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions' | 'fields' | 'capabilities'>, draft: Pick<GrainLoadDraft, 'origin_kind' | 'origin_grain_bin_id' | 'origin_crop_assignment_id' | 'origin_crop_year'>): LoadLot | null {
   if (draft.origin_kind === 'field') {
     const crop = workspace.fields.crop_assignments.find((row) => row.id === draft.origin_crop_assignment_id)
     return crop ? { commodity_id: crop.commodity_id, crop_year: crop.crop_year } : null
   }
-  const lot = workspace.bin_inventory.find((row) => row.grain_bin_id === draft.origin_grain_bin_id)
-  return lot ? { commodity_id: lot.commodity_id, crop_year: lot.crop_year } : null
+  // LD-4, and the LD-006 finding 1 lesson applied in the other direction: until the migration is
+  // applied, the installed save_grain_load still reads the baseline alone. Deriving a lot it would
+  // refuse would tell the farmer a load is fine and let the server contradict it, so while the
+  // capability is false this answers exactly as LD-1 did.
+  if (workspace.capabilities?.grain_load_bin_lot === false) {
+    const baseline = workspace.bin_inventory.find((row) => row.grain_bin_id === draft.origin_grain_bin_id)
+    return baseline ? { commodity_id: baseline.commodity_id, crop_year: baseline.crop_year } : null
+  }
+  // LD-4: the bin's lots, not its baseline. LD-1 read bin_inventory alone here, which is why a bin
+  // could only ever be hauled as its baseline's crop year and a bin with no baseline could not be
+  // hauled at all. The chosen year wins when the farmer named one; otherwise a bin holding a single
+  // lot answers for itself, and a bin holding several names nothing rather than guessing.
+  const lots = binLotsOnHand(
+    workspace.bin_inventory.find((row) => row.grain_bin_id === draft.origin_grain_bin_id),
+    workspace.bin_transactions.filter((row) => row.grain_bin_id === draft.origin_grain_bin_id),
+  )
+  if (draft.origin_crop_year.trim()) {
+    const chosen = lots.find((lot) => lot.crop_year === Number(draft.origin_crop_year))
+    return chosen ? { commodity_id: chosen.commodity_id, crop_year: chosen.crop_year } : null
+  }
+  return lots.length === 1 ? { commodity_id: lots[0].commodity_id, crop_year: lots[0].crop_year } : null
+}
+
+/** LD-4: the lots a bin origin could be hauled from, for the picker and for the messages below. */
+export function originBinLots(workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions'>, binId: string): BinLotOnHand[] {
+  if (!binId) return []
+  return binLotsOnHand(
+    workspace.bin_inventory.find((row) => row.grain_bin_id === binId),
+    workspace.bin_transactions.filter((row) => row.grain_bin_id === binId),
+  )
 }
 
 /** LD-1: a load that has been voided still shows on the ledger, and still must not count toward
@@ -380,15 +419,30 @@ export function validateGrainLoadShape(draft: GrainLoadDraft): string[] {
  * names, and whether a chosen contract is for that lot. The screen calls this; the repository calls
  * the shape half only, because it does not hold a workspace and the server settles the rest under a
  * row lock anyway. */
-export function validateGrainLoad(draft: GrainLoadDraft, workspace: Pick<GrainWorkspace, 'bin_inventory' | 'fields' | 'grain_contracts'>): string[] {
+export function validateGrainLoad(draft: GrainLoadDraft, workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions' | 'fields' | 'grain_contracts' | 'capabilities'>): string[] {
   const problems = validateGrainLoadShape(draft)
 
   const lot = loadLotFor(workspace, draft)
   if ((draft.origin_kind === 'field' && draft.origin_crop_assignment_id) || (draft.origin_kind === 'bin' && draft.origin_grain_bin_id)) {
     if (!lot) {
-      problems.push(draft.origin_kind === 'bin'
-        ? 'That bin has no recorded crop yet, so Farm Rx cannot tell which crop year this load is. Set the bin inventory first.'
-        : 'That field crop is no longer on this farm.')
+      // LD-4: three different reasons a bin cannot name a lot, and the farmer needs the right one.
+      // "Set the bin inventory first" was LD-1's only answer and is now wrong for two of the three.
+      if (draft.origin_kind === 'bin') {
+        if (workspace.capabilities?.grain_load_bin_lot === false) {
+          problems.push('That bin has no recorded crop yet, so Farm Rx cannot tell which crop year this load is. Set the bin inventory first.')
+          return problems
+        }
+        const lots = originBinLots(workspace, draft.origin_grain_bin_id)
+        if (lots.length === 0) {
+          problems.push('That bin holds no crop with a crop year, so Farm Rx cannot tell which crop year this load is.')
+        } else if (draft.origin_crop_year.trim()) {
+          problems.push('That bin does not hold the ' + draft.origin_crop_year.trim() + ' crop.')
+        } else {
+          problems.push('That bin holds more than one crop year. Pick which one this load came from.')
+        }
+      } else {
+        problems.push('That field crop is no longer on this farm.')
+      }
     }
   }
 

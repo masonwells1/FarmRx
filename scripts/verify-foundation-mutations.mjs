@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 327
+const expectedMutationCount = 333
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -21,7 +21,7 @@ const files = [
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
   'supabase/functions/_shared/marsFeedOrchestrator.ts', 'src/data/grainAlerts.ts', 'supabase/functions/deliver-grain-alert/index.ts',
-  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'supabase/migrations/20260920180000_ld1_grain_loads.sql', 'supabase/migrations/20260921120000_ld2_load_effects.sql', 'src/App.tsx', 'src/HarvestModule.tsx', 'src/data/committedFree.ts', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
+  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'supabase/migrations/20260920180000_ld1_grain_loads.sql', 'supabase/migrations/20260921120000_ld2_load_effects.sql', 'supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', 'src/App.tsx', 'src/HarvestModule.tsx', 'src/data/committedFree.ts', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -985,6 +985,24 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('effectsReady\n        ? draft', 'true\n        ? draft'))
   detected('a page left open across the migration sends effects it never showed', 'ld2:a-hidden-effect-is-never-sent')
+  reset()
+  mutate('src/data/grain.ts', (source) => source.replace("  const lots = binLotsOnHand(\n    workspace.bin_inventory.find((row) => row.grain_bin_id === draft.origin_grain_bin_id),\n    workspace.bin_transactions.filter((row) => row.grain_bin_id === draft.origin_grain_bin_id),\n  )", "  const baselineOnly = workspace.bin_inventory.find((row) => row.grain_bin_id === draft.origin_grain_bin_id)\n  const lots = baselineOnly ? [{ commodity_id: baselineOnly.commodity_id, crop_year: baselineOnly.crop_year, bushels: baselineOnly.bushels }] : []"))
+  detected('a bin origin goes back to reading its baseline, so a carry-over bin can only be hauled as the older year', 'ld4:a-bin-origin-reads-its-lots-not-its-baseline')
+  reset()
+  mutate('src/data/grain.ts', (source) => source.replace('return lots.length === 1 ?', 'return lots.length >= 1 ?'))
+  detected('a bin holding two crop years picks one for the farmer instead of asking', 'ld4:only-a-single-lot-bin-defaults')
+  reset()
+  mutate('src/data/committedFree.ts', (source) => source.replace("lot.crop_year !== null && lot.bushels > 0.000001", "lot.bushels > 0.000001"))
+  detected('bushels with no crop year are offered as a crop year', 'ld4:the-unstamped-bucket-is-never-a-crop-year')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('binLotReady ? outgoing0 : { ...outgoing0, origin_crop_year: "" }', 'outgoing0'))
+  detected('a page left open across the migration sends a crop year the installed save cannot honour', 'ld4:a-hidden-lot-choice-is-never-sent')
+  reset()
+  mutate('src/data/grain.ts', (source) => source.replace("if (workspace.capabilities?.grain_load_bin_lot === false) {", "if (false) {"))
+  detected('the lot derivation stops waiting for the migration and contradicts the installed save', 'ld4:the-lot-choice-waits-for-the-migration')
+  reset()
+  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("      if v_lot_commodity is null then\n        raise exception 'this bin has no record of the % crop', v_crop_year;\n      end if;", "      if v_lot_commodity is null then\n        v_lot_commodity := 'corn_yellow';\n      end if;"))
+  detected('a chosen crop year is taken on trust, so a bin can be hauled as a year it never held', 'ld4:save-grain-load-checks-the-lot-is-real')
   reset()
   mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('create index grain_loads_origin_bin_idx on public.grain_loads (origin_grain_bin_id, farm_id, load_date desc);', 'create index grain_loads_origin_bin_idx on public.grain_loads (farm_id, origin_grain_bin_id, load_date desc);'))
   detected('a foreign key index is written farm-first, so deleting a bin scans every load', 'ld1:every-foreign-key-has-a-covering-index')

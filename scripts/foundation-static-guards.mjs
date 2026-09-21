@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 327')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 333')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -909,6 +909,50 @@ export function foundationStaticGuard(root = process.cwd()) {
     requireText(errors, committedFree, 'movement.commodity_id === commodityId && movement.crop_year === cropYear', 'ld3:an-unstamped-movement-joins-no-year')
     // An over-delivered contract owes nothing; letting it go negative pays down a different one.
     requireText(errors, committedFree, 'Math.max(0, contract.bushels - delivered)', 'ld3:over-delivery-never-pays-down-another-contract')
+  }
+  {
+    // LD-4: a bin origin hauls the lot the farmer names, and the rules that decide which lot are
+    // the ones the amendment wrote. These four are the ones a plausible rewrite would lose.
+    const committedFree = read(root, 'src/data/committedFree.ts')
+    const grainData = read(root, 'src/data/grain.ts')
+
+    // The lot list comes from the baseline AND the movements. Reading the baseline alone is the
+    // LD-1 defect this initiative closed, and it is a one-line regression away.
+    // Pinned as the movements read inside loadLotFor, not as a bare binLotsOnHand( call: that call
+    // appears twice, so a guard on the name alone stays satisfied by originBinLots while the
+    // origin quietly goes back to the baseline. The mutation drill caught exactly that.
+    requireText(errors, grainData, 'workspace.bin_transactions.filter((row) => row.grain_bin_id === draft.origin_grain_bin_id)', 'ld4:a-bin-origin-reads-its-lots-not-its-baseline')
+    // Defaulting happens only for a bin holding exactly one lot. The amendment's words.
+    requireText(errors, grainData, 'lots.length === 1 ?', 'ld4:only-a-single-lot-bin-defaults')
+    // Bushels with no crop year are never offered as one, and never defaulted to.
+    requireText(errors, committedFree, "lot.crop_year !== null && lot.bushels > 0.000001", 'ld4:the-unstamped-bucket-is-never-a-crop-year')
+
+    // The same merge-before-migration window as LD-2's effects, and the reason LD-006 finding 1
+    // existed: while the capability is false the form offers no choice and the derivation answers
+    // as LD-1 did, because that is what the installed RPC will accept.
+    // Counted, not merely present. Two places consult this capability -- the derivation and the
+    // validation -- and a guard that only asks whether the string appears stays green while one of
+    // them quietly stops asking. The mutation drill caught that too.
+    if ((grainData.split("workspace.capabilities?.grain_load_bin_lot === false").length - 1) !== 2) errors.push('ld4:the-lot-choice-waits-for-the-migration')
+    requireText(errors, grainModule, "workspace.capabilities?.grain_load_bin_lot !== false", 'ld4:the-lot-choice-waits-for-the-migration')
+    requireText(errors, grainModule, 'binLotReady ? outgoing0 : { ...outgoing0, origin_crop_year: "" }', 'ld4:a-hidden-lot-choice-is-never-sent')
+    requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), "supabase.rpc('bin_lots'", 'ld4:the-lot-choice-waits-for-the-migration')
+
+    // The balance question stays in append_bin_movement, under a row lock. save_grain_load asking
+    // it too would make two guards that can disagree -- the defect shape this initiative keeps
+    // finding. Comments are stripped, for the same reason the LD-3 guard above strips them: the
+    // migration's own header explains the rule and would otherwise satisfy the guard.
+    const ld4Migration = read(root, 'supabase/migrations/20260921180000_ld4_bin_origin_lot.sql')
+    const saveBody = ld4Migration
+      .slice(ld4Migration.indexOf('create or replace function public.save_grain_load'))
+      .split('\n')
+      .map((line) => line.replace(/--.*$/, ''))
+      .join('\n')
+    if (saveBody.includes('FR001')) errors.push('ld4:the-balance-question-has-one-answer')
+    if (saveBody.includes('bin_inventory')) errors.push('ld4:a-bin-origin-reads-its-lots-not-its-baseline')
+    // A lot the farmer names has to be one the bin has a record of. Without this the server would
+    // take any year on trust and stamp a ticket with a crop the bin has never held.
+    requireText(errors, ld4Migration, "raise exception 'this bin has no record of the % crop', v_crop_year;", 'ld4:save-grain-load-checks-the-lot-is-real')
   }
   {
     // A load's harvest contribution is derived and never written into the replaceable manual total.

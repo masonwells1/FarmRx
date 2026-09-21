@@ -499,3 +499,133 @@ Codex's review ran on the draft being marked ready, which happened at merge time
 arrived after the merge rather than before it. Nothing was lost, but the review had no chance to
 gate. Marking a PR ready a few minutes before merging, rather than as part of merging, would give it
 that chance.
+
+## LD-007 — the bin origin's lot, and the deferral LD-1 wrote down
+
+**Branch:** `claude/ld4-bin-origin-lot`, cut from `main` `8716da0` (LD-3 merged as #52, the Codex
+repairs as #53).
+**Tier:** full. One migration, `20260921180000_ld4_bin_origin_lot.sql`.
+
+This closes a deferral LD-1 recorded in its own words — *"a bin can name only one lot today"* — and
+which the amendment had asked for by name:
+
+> *"a bin origin requires the farmer to pick which crop year (lot) is being moved from the list of
+> crop years present in that bin, defaulting only when the bin holds a single lot."*
+
+LD-1 could not do it honestly, because `bin_transactions` carried no crop year and so there was no
+list to offer. LD-2 added the column. LD-3 then made the gap visible to the farmer rather than
+merely latent, which is what moved this from a nicety to a defect: the Bins page says a farm has
+1,000 free bushels of the 2026 crop, and the load form would refuse to record hauling them.
+
+### What a farmer notices
+
+Picking a bin that holds one crop year changes nothing at all. The form says, in a line under the
+bin, *"This bin holds one crop year: 2026 Corn, 20,000 bu"*, and asks nothing — which matters,
+because the common case is a farmer in a truck cab who should be typing weights, not answering
+questions.
+
+A bin holding more than one asks: **Crop year**, with what each lot actually holds beside it —
+*2026 Corn · 4,000 bu*, *2025 Corn · 6,000 bu* — so the choice is made against the bin rather than
+from memory. Saving without answering says *"That bin holds more than one crop year. Pick which one
+this load came from."*
+
+Two things that were impossible are now ordinary: **hauling the newer lot out of a bin holding
+carry-over**, and **hauling out of a bin that has never been measured** — which LD-2's own bin-in
+effect creates, so LD-2 had been filling bins its own load form would not empty.
+
+### Four decisions, each ruling out a cheaper thing that would have been wrong
+
+1. **The lot list is one function, not an expression repeated where it is needed.** `public.bin_lots`
+   is the only server answer to "what is in this bin, by crop year", and `deriveBinLots` is the only
+   browser answer. Two evaluators is already one more than anyone wants, and it is unavoidable: a
+   truck cab with no signal cannot ask the database. A third, inline, is how they would quietly
+   stop agreeing. The disposable suite checks both against the same fixture.
+2. **`save_grain_load` does not re-ask whether the bushels can move.** `append_bin_movement` already
+   refuses to draw a lot below zero, under a row lock, stamped `FR001`. The new branch checks only
+   that the chosen lot is one the bin has a record of. Two balance checks could race and disagree,
+   and the farmer would be told different things by the same save. A static guard and a mutation
+   both hold this.
+3. **A movement with no crop year is still in no lot.** `bin_lots` returns the unstamped bucket as a
+   null crop year row and the origin branch skips it. Those bushels are real and the bin balance
+   counts them; what they are not is a year anyone may pick.
+4. **`bin_lots` is `security invoker`.** It reads two RLS-protected tables, so the caller's own
+   policies apply and it needs no rights of its own. **The SECURITY DEFINER allowlist is unchanged
+   at 61**, in all three files that pin it.
+
+### A lot the bin has emptied stays on the record
+
+`bin_lots` keeps an emptied lot at zero rather than dropping it. *"This bin has no record of that
+crop year"* and *"this bin is out of that crop year"* are different answers, and the farmer deserves
+the right one. The picker still does not offer it.
+
+### The assertion that matters
+
+`scripts/sql/ld4-bin-origin-lot-assertions.sql`, thirteen sections. The sharpest is section 9: the
+2026 lot is emptied while **5,500 bushels of 2025 corn remain in the same bin**, and the next
+bushel of 2026 is refused by name. A bin full of corn that will not let out one more bushel of a
+particular year is Initiative LD in a single assertion.
+
+Writing it found something worth recording: emptying a bin *completely* is refused by the
+**commodity** balance guard, which fires first and says "this movement would make the bin balance
+negative" — true, but not the rule under test. The fixture was changed so only the lot guard can
+possibly refuse, and the section now asserts the bin still holds 5,500 bushels so that a future
+edit cannot quietly weaken it back.
+
+### Proof observed
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` (0); `git diff --check` clean.
+- **Eleven disposable suites pass together**, the new LD-4 file included, wired into both runners.
+- **Seven SQL mutations against the migration, all seven caught**: the superseded-baseline rule
+  lost, lots keyed by commodity alone, an emptied lot hidden, a two-lot bin picking for the farmer,
+  a chosen year taken on trust, the unstamped bucket counted as a lot, and `save_grain_load`
+  answering the balance question a second time.
+- **Eighteen browser regression groups** across two files — ten in `committedFree.regression.ts`,
+  eight in the new `loadOriginLot.regression.ts`.
+- Static guards PASS with **eight new LD-4 guards**; **mutation drill 333/333** (327 after the
+  LD-3 merge), count changed in both files that pin it.
+- **Browser: 119 passed, 15 skipped** on desktop and phone, including a new LD-4 journey that reads
+  both lots off the picker, is refused for not answering, and then proves the chosen year is what
+  reaches the RPC.
+- **All 66 regression files run individually.** Only `programInventoryCW2` fails, and it was
+  confirmed to fail identically on `origin/main` `8716da0` in a clean worktree.
+
+### The drill found two real guard weaknesses
+
+Both are the same shape, and it is the shape this initiative keeps producing: **a guard that asks
+whether a string appears, when the string appears twice.**
+
+- `requireText(grainData, 'binLotsOnHand(')` stayed green while the bin origin went back to reading
+  its baseline, because `originBinLots` calls `binLotsOnHand` too. Now pinned to the movements read
+  inside `loadLotFor`, which is unique to it.
+- `requireText(grainData, 'capabilities?.grain_load_bin_lot === false')` stayed green while the
+  derivation stopped consulting the capability, because the validation still did. Now **counted**:
+  it must appear exactly twice.
+
+Neither was found by reading. Both were found by mutating, which is the argument for the drill.
+
+### Limits, stated rather than implied
+
+- **The manual bin-out form still does not ask which crop year a movement is.** Raised in LD-004,
+  made visible in LD-005, and still not fixed here: LD-4 changed the load form, not the movement
+  form. The unknown bucket keeps growing until that form asks. **Still the recommended next
+  change**, and it is now the only place in Grain where bushels move without naming a lot.
+- **A lot with a zero balance can still be chosen when the bin-out effect is unticked.** That is
+  deliberate — recording a historical ticket that moves nothing should not be blocked by today's
+  balance — but it means a saved ticket can name a lot the bin is out of. The ticket is a record,
+  not a movement, so nothing is double counted.
+- **`bin_inventory.committed_bushels` still exists and is still written.** Unchanged from LD-005.
+- **Free is still farm-level and says nothing about which bin the grain is in.** LD-4 makes a
+  specific bin's lots haulable; it does not tell a farmer which bin to drive to.
+- **The browser suite ran against the sandbox's pre-installed Chromium** (build 1194) through a
+  throwaway config, because the pinned Playwright expects 1228 and this environment forbids
+  downloading a browser. Nothing about that config is committed.
+- **The Soil Rx custody journey failed once on phone** in the full run and passed on rerun. Eighth
+  occurrence; unrelated to LD-4 and still unexplained.
+
+### Live steps
+
+**One migration to apply: `20260921180000_ld4_bin_origin_lot.sql`.** Until it is applied the
+capability probe reports false, the form offers no crop year choice, and the derivation answers
+exactly as LD-1 did — because that is what the installed `save_grain_load` will accept. This is
+LD-006 finding 1's lesson applied in the other direction, and it is guarded and mutation-tested
+rather than assumed.

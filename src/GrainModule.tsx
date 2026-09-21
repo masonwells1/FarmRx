@@ -31,7 +31,7 @@ import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceip
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOfferType, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainContractType, GrainLoad, GrainLoadDraft, GrainServices, GrainWorkspace, LoadTruck, MarketingAlertRule, MarketingAlertRuleType, MarketingPlanTarget, PositionScope, ProductionEstimate } from "./data/grain";
 import { deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
-import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
+import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, originBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -224,6 +224,7 @@ const emptyLoadDraft = (): GrainLoadDraft => ({
   origin_kind: "bin",
   origin_grain_bin_id: "",
   origin_crop_assignment_id: "",
+  origin_crop_year: "",
   destination_kind: "buyer",
   destination_buyer: "",
   destination_grain_contract_id: "",
@@ -4492,6 +4493,13 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // While the migration is not applied the columns do not exist, so no effect is offered at all --
   // ticking one would produce a database error rather than a moved bushel.
   const effectsReady = workspace.capabilities?.grain_load_effects !== false;
+  // LD-4: the lots this bin actually holds. While the migration is not applied the installed RPC
+  // still reads the bin's baseline alone, so no choice is offered -- offering one would let a
+  // farmer pick a year and be refused on save, which is LD-006 finding 1 with the roles reversed.
+  const binLotReady = workspace.capabilities?.grain_load_bin_lot !== false;
+  const originLots = draft.origin_kind === "bin" && binLotReady
+    ? originBinLots(workspace, draft.origin_grain_bin_id)
+    : [];
   const availableEffects = effectsReady ? loadEffectsAvailable(draft) : [];
   const confirmedEffects = confirmedLoadEffects(draft);
   const typedNet = Number(draft.net_bushels);
@@ -4524,9 +4532,13 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       // lands while this page stays open, the very next save would reach the new RPC and perform
       // bin, contract and harvest effects the farmer was never shown. What the screen says it will
       // do is what gets sent, so the flags are cleared here rather than trusted.
-      const outgoing = effectsReady
+      const outgoing0 = effectsReady
         ? draft
         : { ...draft, effect_bin_out: false, effect_bin_in: false, effect_contract_delivery: false, effect_harvest: false };
+      // LD-4, for the same reason as the line above: while the capability is false the form shows no
+      // crop year choice, so it must send none either. A stale value surviving in the draft would
+      // reach an RPC that reads the baseline alone and be refused.
+      const outgoing = binLotReady ? outgoing0 : { ...outgoing0, origin_crop_year: "" };
       const saved = await services.grainRepository.saveLoad(loadId.current, outgoing);
       loadId.current = null;
       // The next ticket almost always shares the date, the truck and the origin -- a farmer hauling
@@ -4597,13 +4609,37 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
 
         <fieldset className="load-origin">
           <legend>Where it came from</legend>
-          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "bin"} onChange={() => update({ origin_kind: "bin", origin_crop_assignment_id: "" })} /> Out of a bin</label>
-          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "field"} onChange={() => update({ origin_kind: "field", origin_grain_bin_id: "" })} /> Off a field</label>
+          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "bin"} onChange={() => update({ origin_kind: "bin", origin_crop_assignment_id: "", origin_crop_year: "" })} /> Out of a bin</label>
+          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "field"} onChange={() => update({ origin_kind: "field", origin_grain_bin_id: "", origin_crop_year: "" })} /> Off a field</label>
           {draft.origin_kind === "bin" ? (
-            <label>Bin<select value={draft.origin_grain_bin_id} onChange={(event) => update({ origin_grain_bin_id: event.target.value })}>
-              <option value="">Pick a bin</option>
-              {workspace.grain_bins.map((bin) => <option key={bin.id} value={bin.id}>{bin.name}</option>)}
-            </select></label>
+            <>
+              {/* A year chosen for one bin means nothing in another, so picking a bin clears it. */}
+              <label>Bin<select value={draft.origin_grain_bin_id} onChange={(event) => update({ origin_grain_bin_id: event.target.value, origin_crop_year: "" })}>
+                <option value="">Pick a bin</option>
+                {workspace.grain_bins.map((bin) => <option key={bin.id} value={bin.id}>{bin.name}</option>)}
+              </select></label>
+              {/* LD-4: the amendment's rule, on screen. A bin holding one lot answers for itself and
+                  the farmer taps nothing; a bin holding several asks, because guessing between a
+                  carry-over lot and this year's crop is the defect the whole initiative exists to
+                  stop. The bushels beside each year are what that lot holds, so the choice is made
+                  against the bin rather than from memory. */}
+              {binLotReady && draft.origin_grain_bin_id ? (
+                originLots.length === 0 ? (
+                  <p className="load-lot">This bin holds no crop with a crop year, so a load cannot say which crop year it is yet.</p>
+                ) : originLots.length === 1 ? (
+                  <p className="load-lot">This bin holds one crop year: <strong>{originLots[0].crop_year} {commodityLabel(originLots[0].commodity_id)}</strong>, {Math.round(originLots[0].bushels).toLocaleString()} bu.</p>
+                ) : (
+                  <label>Crop year<select value={draft.origin_crop_year} onChange={(event) => update({ origin_crop_year: event.target.value })}>
+                    <option value="">Pick which crop year</option>
+                    {originLots.map((binLot) => (
+                      <option key={`${binLot.commodity_id}:${binLot.crop_year}`} value={String(binLot.crop_year)}>
+                        {binLot.crop_year} {commodityLabel(binLot.commodity_id)} &middot; {Math.round(binLot.bushels).toLocaleString()} bu
+                      </option>
+                    ))}
+                  </select></label>
+                )
+              ) : null}
+            </>
           ) : (
             <label>Field crop<select value={draft.origin_crop_assignment_id} onChange={(event) => update({ origin_crop_assignment_id: event.target.value })}>
               <option value="">Pick a field crop</option>

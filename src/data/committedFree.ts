@@ -47,6 +47,72 @@ export function deriveBinLotOnHand(
     .reduce((total, movement) => total + (movement.direction === 'in' ? movement.bushels : -movement.bushels), baseline)
 }
 
+/** LD-4: one lot a bin has a record of, with what that lot currently holds. A `crop_year` of null
+ * is the unstamped bucket -- real bushels in the bin that belong to no crop year, and so can be
+ * neither picked as a load's lot nor defaulted to. */
+export interface BinLot {
+  commodity_id: string
+  crop_year: number | null
+  bushels: number
+}
+
+/** LD-4: the browser's twin of the `public.bin_lots` function migration 20260921180000 installs.
+ *
+ * Two evaluators of one fact is the shape this initiative keeps finding, and this is one of the two
+ * -- unavoidably, because a truck cab with no signal cannot ask the database which lots a bin holds.
+ * The disposable assertions check both answers against the same fixture for exactly that reason.
+ *
+ * A lot the bin has emptied is still returned, at zero. "This bin has no record of that crop year"
+ * and "this bin is out of that crop year" are different answers, and a farmer deserves the right
+ * one. */
+export function deriveBinLots(
+  inventory: BinInventory | undefined,
+  transactions: readonly BinTransaction[],
+): BinLot[] {
+  const keys = new Map<string, { commodity_id: string; crop_year: number | null }>()
+  const remember = (commodity_id: string, crop_year: number | null) => {
+    keys.set(`${commodity_id}:${crop_year ?? ''}`, { commodity_id, crop_year })
+  }
+  if (inventory) remember(inventory.commodity_id, inventory.crop_year)
+  for (const movement of transactions) remember(movement.commodity_id, movement.crop_year)
+  return [...keys.values()]
+    .map((key) => {
+      const baseline = inventory && inventory.commodity_id === key.commodity_id && inventory.crop_year === key.crop_year
+        ? inventory.bushels
+        : 0
+      const bushels = transactions
+        .filter((movement) => movement.commodity_id === key.commodity_id && movement.crop_year === key.crop_year)
+        .filter((movement) => !isLotMovementSuperseded(inventory, movement))
+        .reduce((total, movement) => total + (movement.direction === 'in' ? movement.bushels : -movement.bushels), baseline)
+      return { commodity_id: key.commodity_id, crop_year: key.crop_year, bushels }
+    })
+    .sort((a, b) => {
+      // The unstamped bucket sorts last wherever it appears: it is never an answer to "which year".
+      if (a.crop_year === null && b.crop_year === null) return a.commodity_id.localeCompare(b.commodity_id)
+      if (a.crop_year === null) return 1
+      if (b.crop_year === null) return -1
+      return b.crop_year - a.crop_year || a.commodity_id.localeCompare(b.commodity_id)
+    })
+}
+
+/** LD-4: a lot a load may actually be hauled out of -- one with a crop year, holding something. */
+export interface BinLotOnHand {
+  commodity_id: string
+  crop_year: number
+  bushels: number
+}
+
+/** LD-4: the lots the form offers. Whether the bin will really let those bushels go is
+ * append_bin_movement's question, asked under a row lock when the movement is written; this decides
+ * only which lots are worth showing a farmer. */
+export function binLotsOnHand(
+  inventory: BinInventory | undefined,
+  transactions: readonly BinTransaction[],
+): BinLotOnHand[] {
+  return deriveBinLots(inventory, transactions)
+    .filter((lot): lot is BinLotOnHand => lot.crop_year !== null && lot.bushels > 0.000001)
+}
+
 /** The bushels of one lot across every bin on the farm. */
 export function deriveFarmLotOnHand(
   inventories: readonly BinInventory[],

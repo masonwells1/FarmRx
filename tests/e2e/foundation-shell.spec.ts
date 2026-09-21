@@ -374,6 +374,9 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
       }
       await fulfillJson(route, { status: 'voided', load: { ...(moduleRows.grain_loads?.[0] as Record<string, unknown> ?? {}), voided_at: now, void_reason: value.p_reason }, blocked_by: [] }); return
     }
+    // LD-4: the capability probe asking whether public.bin_lots is installed. Declared by shape
+    // rather than matched by name, so a future call with a different body is still rejected.
+    if (url.pathname === '/rest/v1/rpc/bin_lots') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 2 || typeof value.p_farm_id !== 'string' || value.p_grain_bin_id !== '00000000-0000-0000-0000-000000000000') { await rejectShape('bin_lots body'); return }; await fulfillJson(route, []); return }
     if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks' || url.pathname === '/rest/v1/rpc/generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${url.pathname}`)
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, session(activeUserId).user); return }
@@ -1095,6 +1098,9 @@ test('a direct signed-in A to B replacement hides Farm A before B access validat
       }
       await fulfillJson(route, { status: 'voided', load: { ...(moduleRows.grain_loads?.[0] as Record<string, unknown> ?? {}), voided_at: now, void_reason: value.p_reason }, blocked_by: [] }); return
     }
+    // LD-4: the capability probe asking whether public.bin_lots is installed. Declared by shape
+    // rather than matched by name, so a future call with a different body is still rejected.
+    if (url.pathname === '/rest/v1/rpc/bin_lots') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 2 || typeof value.p_farm_id !== 'string' || value.p_grain_bin_id !== '00000000-0000-0000-0000-000000000000') { await rejectShape('bin_lots body'); return }; await fulfillJson(route, []); return }
     if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks' || url.pathname === '/rest/v1/rpc/generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${url.pathname}`)
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, isUserB ? sessionB.user : session().user); return }
@@ -1758,6 +1764,64 @@ test('committed and free are one farm-level figure per crop year, and carry-over
   // that number must appear nowhere on the page: a farm-level figure repeated per bin is the same
   // bushels counted twice.
   await expect(page.getByText('5,500')).toHaveCount(0)
+  expect(unexpected).toEqual([])
+})
+
+test('a bin holding two crop years asks which one a load came from, and hauls the year the farmer picks', async ({ page, context }) => {
+  await seedSession(context)
+  loadRecordCalls.length = 0
+  const farm = farms[0]!
+  const carryOverBin = '00000000-0000-4000-8000-000000000091'
+  const singleLotBin = '00000000-0000-4000-8000-000000000092'
+  // The bin from the LD-3 journey: 6,000 bushels of 2025 carry-over measured as the baseline, and
+  // 4,000 of the 2026 crop moved in on top. LD-3 shows 1,000 of the 2026 crop as free; before LD-4
+  // this form would not let a farmer record hauling any of it, because the baseline said 2025.
+  const binRows = [
+    { id: carryOverBin, farm_id: farm.id, name: 'Home bin', capacity_bu: 40_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now },
+    { id: singleLotBin, farm_id: farm.id, name: 'North dryer bin', capacity_bu: 42_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now },
+  ]
+  const inventoryRows = [
+    { id: '00000000-0000-4000-8000-000000000093', farm_id: farm.id, grain_bin_id: carryOverBin, crop_year: 2025, commodity_id: commodityId, bushels: 6_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now },
+    { id: '00000000-0000-4000-8000-000000000094', farm_id: farm.id, grain_bin_id: singleLotBin, crop_year: 2026, commodity_id: commodityId, bushels: 20_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now },
+  ]
+  const movementRows = [{ id: '00000000-0000-4000-8000-000000000095', farm_id: farm.id, grain_bin_id: carryOverBin, direction: 'in', bushels: 4_000, commodity_id: commodityId, crop_year: 2026, occurred_on: '2026-10-01', note: null, source_kind: null, grain_load_id: null, created_at: now }]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: movementRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
+  await page.goto('/grain/loads')
+  await expect(page.getByRole('heading', { name: 'Loads', exact: true })).toBeVisible()
+
+  // The common case first: a bin holding one crop year answers for itself and asks nothing. A
+  // farmer hauling out of it all afternoon taps the bin and nothing else.
+  await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(singleLotBin)
+  await expect(page.getByText('This bin holds one crop year')).toContainText('2026')
+  await expect(page.getByRole('combobox', { name: 'Crop year', exact: true })).toHaveCount(0)
+
+  // The carry-over bin holds two, so it asks -- with what each lot holds beside it, so the choice
+  // is made against the bin rather than from memory.
+  await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(carryOverBin)
+  const cropYear = page.getByRole('combobox', { name: 'Crop year', exact: true })
+  await expect(cropYear).toBeVisible()
+  await expect(cropYear.getByRole('option')).toHaveText([/Pick which crop year/, /2026.*4,000 bu/, /2025.*6,000 bu/])
+
+  // Saving without answering is refused in the farmer's own words, not the database's. Everything
+  // else the form needs is filled first, so the unanswered crop year is the only thing left to
+  // complain about and the message below is provably about it.
+  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('1000')
+  await page.getByRole('button', { name: 'Save load' }).click()
+  await expect(page.getByText('That bin holds more than one crop year')).toBeVisible()
+  expect(loadRecordCalls.length).toBe(0)
+
+  // The 2026 crop: the newer lot, which before LD-4 this bin could never be hauled as.
+  await cropYear.selectOption('2026')
+  await page.getByRole('button', { name: 'Save load' }).click()
+
+  await expect.poll(() => loadRecordCalls.length).toBe(1)
+  const sent = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
+  expect(sent.origin_grain_bin_id).toBe(carryOverBin)
+  // The one thing LD-4 adds to what the browser sends, and only because the farmer named it. A bin
+  // holding a single lot still sends nothing at all and lets the server decide, as LD-1 required.
+  expect(sent.crop_year).toBe(2026)
+  expect('commodity_id' in sent).toBe(false)
   expect(unexpected).toEqual([])
 })
 
