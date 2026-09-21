@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 308')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 320')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -865,9 +865,50 @@ export function foundationStaticGuard(root = process.cwd()) {
   // one thing the server refuses outright.
   const loadsTabBody = grainModule.slice(grainModule.indexOf('export function LoadsTab'))
   if ((loadsTabBody.split('update({').length - 1) < 12) errors.push('ld1:a-lost-response-is-not-a-lost-ticket')
-  // LD-1 stores the ticket and nothing else. Saying otherwise would have farmers stop recording
-  // bin-outs while their stored bushels quietly drift.
-  requireText(errors, grainModule, 'It does not yet move bushels out of a bin, count against a contract, or add to a field', 'ld1:the-scope-is-stated-to-the-farmer')
+  // LD-1 stored the ticket and nothing else, and said so. LD-2 gives the ticket its effects, so that
+  // sentence is gone and what replaces it is the list of effects the farmer confirms. The rule is the
+  // same rule: what a save will do is on the screen before the button is pressed.
+  requireText(errors, grainModule, 'What saving this will do', 'ld2:the-effects-are-shown-before-the-save')
+  requireText(errors, grainModule, 'Saving this records the ticket and changes nothing else.', 'ld2:the-effects-are-shown-before-the-save')
+  // An effect is only ever offered when the load's shape can reach it. All four are checked, because
+  // offering a box that the server would refuse is the same defect as performing an effect silently.
+  for (const effect of ['bin_out', 'bin_in', 'contract_delivery', 'harvest']) {
+    requireText(errors, grainModule, `availableEffects.includes("${effect}")`, 'ld2:an-effect-is-only-offered-when-reachable')
+  }
+  // An effect the load's shape cannot reach is never SENT, whatever the draft remembers. The
+  // narrowing happens once, in the payload, so there is one place to check rather than one per
+  // screen that edits a draft.
+  requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), 'const effective = normalizeLoadEffects(draft)', 'ld2:an-impossible-effect-is-never-sent')
+  // A blocked void changed nothing at all. Reporting it as done would leave the farmer believing
+  // bushels moved back when they did not.
+  requireText(errors, grainModule, 'result.status === "blocked"', 'ld2:a-blocked-void-is-not-reported-as-done')
+  // Merging deploys this client before the migration is applied, every time. LD-1 made the Loads
+  // tab wait for its table; LD-2 has a worse window, because the table exists and only the columns
+  // are missing, so the form would offer effects whose save produces a database error.
+  requireText(errors, grainModule, "workspace.capabilities?.grain_load_effects !== false", 'ld2:the-effects-wait-for-the-migration')
+  requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), "select('id,effect_harvest')", 'ld2:the-effects-wait-for-the-migration')
+  {
+    // A load's harvest contribution is derived and never written into the replaceable manual total.
+    // This reads the migration, because the one place it could go wrong is a well-meaning UPDATE.
+    const ld2Migration = read(root, 'supabase/migrations/20260921120000_ld2_load_effects.sql')
+    if (/update\s+public\.crop_assignments/i.test(ld2Migration)) errors.push('ld2:a-load-never-writes-the-manual-harvest-total')
+    // The lot guard is added ON TOP of the commodity guard, never in place of it: rows written before
+    // this migration carry a null crop year and are invisible to the lot figure, so the commodity
+    // guard is what still stops a bin being drawn past what is physically in it.
+    requireText(errors, ld2Migration, 'this movement would make the bin balance negative', 'ld2:both-negative-balance-guards-are-live')
+    requireText(errors, ld2Migration, 'does not hold that many bushels of the %s crop', 'ld2:both-negative-balance-guards-are-live')
+    // The compensating movements a void writes are found by link, and marked so a second void does
+    // not write them twice.
+    requireText(errors, ld2Migration, "'grain_load_void'", 'ld2:a-void-reverses-what-the-load-created')
+  }
+  {
+    // A scale ticket is private financial data and Harvest is a screen a worker without financial
+    // access uses every day. The reader is handed to those screens ONLY under that capability, and
+    // the decision lives at the composition root so there is one place to check.
+    const app = read(root, 'src/App.tsx')
+    requireText(errors, app, 'canReadPrivateFinancials ? () => grainServices.grainRepository.listHarvestLoads()', 'ld2:the-loads-read-is-gated-on-financial-access')
+    if (/HarvestPage[^>]*grainRepository=/.test(app)) errors.push('ld2:the-loads-read-is-gated-on-financial-access')
+  }
   // The Loads tab hides itself until the migration is applied, rather than offering a form that cannot save.
   requireText(errors, grainModule, "workspace.capabilities?.grain_loads !== false", 'ld1:the-tab-waits-for-the-migration')
   requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), 'grain_loads: !loadsUnavailable', 'ld1:the-tab-waits-for-the-migration')
@@ -881,7 +922,13 @@ export function foundationStaticGuard(root = process.cwd()) {
     if (slugs.length === 0 || slugs.some((slug) => !routerList.includes(`"${slug}"`))) errors.push('grain:every-tab-has-a-route')
   }
   // Bounded and newest-first, so a hauling season cannot push the current tickets past PostgREST's cap.
-  requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), ".limit(RECENT_GRAIN_LOAD_LIMIT)", 'ld1:the-newest-tickets-are-the-ones-loaded')
+  {
+    // Two reads of grain_loads are bounded now: the workspace's recent tickets and LD-2's harvest
+    // contributions. Counting rather than merely finding one is the point -- with a single
+    // requireText, dropping the bound from either read still left the other to satisfy it.
+    const gateway = read(root, 'src/data/SupabaseGrainDataGateway.ts')
+    if ((gateway.split('.limit(RECENT_GRAIN_LOAD_LIMIT)').length - 1) < 2) errors.push('ld1:the-newest-tickets-are-the-ones-loaded')
+  }
   // Six of grain_loads' seven foreign keys shipped with no covering index, because the indexes were
   // written farm-first the way the app queries rather than key-first the way `on delete restrict`
   // checks. The 0043 advisor rule wants each key's own columns leading, in the order the constraint

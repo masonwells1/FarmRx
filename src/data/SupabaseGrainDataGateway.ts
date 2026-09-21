@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabaseClient'
 import { localCalendarDay } from './marketingAlerts'
 import type { GrainDataGateway, GrainRowBundle, ReplaceMarketingPlanInput } from './GrainDataGateway'
 import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainLoadDraft, GrainSaleLimit, MarketingAlertRule, ProductionEstimate } from './grain'
+import { normalizeLoadEffects } from './grain'
 import { DELETE_PERMISSION_MESSAGE } from './saveDurability'
 import { optimisticSave } from './optimisticSave'
 import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
@@ -68,6 +69,15 @@ export function grainLoadPayload(id: string, draft: GrainLoadDraft): Record<stri
   if (draft.destination_kind === 'buyer') payload.destination_buyer = draft.destination_buyer.trim()
   if (draft.destination_kind === 'contract') payload.destination_grain_contract_id = draft.destination_grain_contract_id
   if (draft.destination_kind === 'bin') payload.destination_grain_bin_id = draft.destination_grain_bin_id
+  // LD-2: each effect the farmer confirmed, narrowed to the ones this load's shape can reach. This
+  // is the one place the narrowing happens, so a preference the farmer expressed for a different
+  // shape can never be sent. All four are sent explicitly, false included, so the server never has
+  // to guess what an absent effect meant.
+  const effective = normalizeLoadEffects(draft)
+  payload.effect_bin_out = effective.effect_bin_out
+  payload.effect_bin_in = effective.effect_bin_in
+  payload.effect_contract_delivery = effective.effect_contract_delivery
+  payload.effect_harvest = effective.effect_harvest
   if (draft.truck_equipment_id) payload.truck_equipment_id = draft.truck_equipment_id
   if (draft.truck_name.trim()) payload.truck_name = draft.truck_name.trim()
   if (draft.gross_lbs.trim()) payload.gross_lbs = Number(draft.gross_lbs)
@@ -82,7 +92,7 @@ async function confirmDelete(table: 'marketing_alert_rules' | 'firm_offers', far
 
 export class SupabaseGrainDataGateway implements GrainDataGateway {
   async loadWorkspace(farmId: string): Promise<GrainRowBundle> {
-    const [permission, production_estimates, grain_contracts, grain_contract_deliveries, marketing_plan_targets, insurance_units, grain_bins, bin_inventory, bin_transactions, cash_bids, manual_cash_bids, per_commodity_cash_bids, usda_report_dates, usda_market_reports, marketing_alert_rules, firm_offers, grain_alert_settings, grain_sale_limits, grain_carry_settings, grain_carry_grids, contract_audit_probe, grain_loads] = await Promise.all([
+    const [permission, production_estimates, grain_contracts, grain_contract_deliveries, marketing_plan_targets, insurance_units, grain_bins, bin_inventory, bin_transactions, cash_bids, manual_cash_bids, per_commodity_cash_bids, usda_report_dates, usda_market_reports, marketing_alert_rules, firm_offers, grain_alert_settings, grain_sale_limits, grain_carry_settings, grain_carry_grids, contract_audit_probe, load_effects_probe, grain_loads] = await Promise.all([
       supabase.rpc('can_read_private_financials', { target_farm_id: farmId }),
       supabase.from('production_estimates').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('id'),
       supabase.from('grain_contracts').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('delivery_start').order('id'),
@@ -128,6 +138,9 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
       // the table's absence is the one truthful signal that the Correct and Delete controls would fail.
       // One indexed read of at most one row; its contents are not used.
       supabase.from('grain_contract_audit').select('id').eq('farm_id', farmId).limit(1),
+      // LD-2 probe: naming a column the migration adds is the only way to tell an LD-1 database
+      // from an LD-2 one. `select('*')` on the same table succeeds either way and tells us nothing.
+      supabase.from('grain_loads').select('id,effect_harvest').eq('farm_id', farmId).limit(1),
       // LD-1. This read is its own capability probe: grain_loads and its two RPCs are one release, so
       // the table's absence is the one truthful signal that the Loads tab cannot save anything. Newest
       // first, and bounded -- a farm hauling all week generates loads faster than any other grain row,
@@ -148,7 +161,7 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
     // LD-1 is applied separately from the deploy that reads it, like every migration before it.
     const loadsUnavailable = tableMissing(grain_loads.error)
     const settingsSlices = settingsSlicesFromResults(grain_sale_limits, grain_carry_settings, grain_carry_grids)
-    return { production_estimates: rows(production_estimates.data, production_estimates.error), grain_contracts: rows(grain_contracts.data, grain_contracts.error), grain_contract_deliveries: deliveriesUnavailable ? [] : rows(grain_contract_deliveries.data, grain_contract_deliveries.error), marketing_plan_targets: rows(marketing_plan_targets.data, marketing_plan_targets.error), insurance_units: rows(insurance_units.data, insurance_units.error), grain_bins: rows(grain_bins.data, grain_bins.error), bin_inventory: rows(bin_inventory.data, bin_inventory.error), bin_transactions: rows(bin_transactions.data, bin_transactions.error), cash_bids: mergeCashBids(rows(cash_bids.data, cash_bids.error), columnMissing(manual_cash_bids.error) ? [] : rows(manual_cash_bids.data, manual_cash_bids.error), functionMissing(per_commodity_cash_bids.error) ? [] : rows(per_commodity_cash_bids.data, per_commodity_cash_bids.error)), usda_report_dates: rows(usda_report_dates.data, usda_report_dates.error), usda_market_reports: marketReportsUnavailable ? [] : rows(usda_market_reports.data, usda_market_reports.error), marketing_alert_rules: rows(marketing_alert_rules.data, marketing_alert_rules.error), firm_offers: rows(firm_offers.data, firm_offers.error), grain_alert_settings: grain_alert_settings.data, grain_sale_limits: settingsSlices.grain_sale_limits, grain_carry_settings: settingsSlices.grain_carry_settings, grain_carry_grids: settingsSlices.grain_carry_grids, grain_loads: loadsUnavailable ? [] : rows(grain_loads.data, grain_loads.error), capabilities: { bin_movements: post0033, contract_price_finalization: post0033, contract_deliveries: post0033, persisted_settings: settingsSlices.persisted, gl2_alert_eligibility: !functionMissing(per_commodity_cash_bids.error), contract_edit_delete: !tableMissing(contract_audit_probe.error), grain_loads: !loadsUnavailable } }
+    return { production_estimates: rows(production_estimates.data, production_estimates.error), grain_contracts: rows(grain_contracts.data, grain_contracts.error), grain_contract_deliveries: deliveriesUnavailable ? [] : rows(grain_contract_deliveries.data, grain_contract_deliveries.error), marketing_plan_targets: rows(marketing_plan_targets.data, marketing_plan_targets.error), insurance_units: rows(insurance_units.data, insurance_units.error), grain_bins: rows(grain_bins.data, grain_bins.error), bin_inventory: rows(bin_inventory.data, bin_inventory.error), bin_transactions: rows(bin_transactions.data, bin_transactions.error), cash_bids: mergeCashBids(rows(cash_bids.data, cash_bids.error), columnMissing(manual_cash_bids.error) ? [] : rows(manual_cash_bids.data, manual_cash_bids.error), functionMissing(per_commodity_cash_bids.error) ? [] : rows(per_commodity_cash_bids.data, per_commodity_cash_bids.error)), usda_report_dates: rows(usda_report_dates.data, usda_report_dates.error), usda_market_reports: marketReportsUnavailable ? [] : rows(usda_market_reports.data, usda_market_reports.error), marketing_alert_rules: rows(marketing_alert_rules.data, marketing_alert_rules.error), firm_offers: rows(firm_offers.data, firm_offers.error), grain_alert_settings: grain_alert_settings.data, grain_sale_limits: settingsSlices.grain_sale_limits, grain_carry_settings: settingsSlices.grain_carry_settings, grain_carry_grids: settingsSlices.grain_carry_grids, grain_loads: loadsUnavailable ? [] : rows(grain_loads.data, grain_loads.error), capabilities: { bin_movements: post0033, contract_price_finalization: post0033, contract_deliveries: post0033, persisted_settings: settingsSlices.persisted, gl2_alert_eligibility: !functionMissing(per_commodity_cash_bids.error), contract_edit_delete: !tableMissing(contract_audit_probe.error), grain_loads: !loadsUnavailable, grain_load_effects: !(tableMissing(load_effects_probe.error) || columnMissing(load_effects_probe.error)) } }
   }
   async upsertProductionEstimate(farmId: string, value: ProductionEstimate, context: FarmOperationContext) { return optimisticSave('production_estimates', farmId, value.id, { ...productionColumns(value), farm_id: farmId }, value.updated_at, context) }
   async updateProductionActual(farmId: string, id: string, actualBushels: number, expectedUpdatedAt: string, context: FarmOperationContext) { return optimisticSave('production_estimates', farmId, id, productionActualColumns(actualBushels), expectedUpdatedAt, context) }
@@ -179,6 +192,12 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
   // LD-1: read only when the Loads form is open. Today serves its front door from loadWorkspace
   // above, and a named rep's Today must make no equipment read at all, so this cannot live there.
   async listLoadTrucks(farmId: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.from('equipment').select('id,name').eq('farm_id', farmId).eq('category', 'truck').eq('status', 'active').order('name').order('id'), context); return rows(data, error) }
+  /** LD-2: only the tickets that actually contribute -- confirmed for harvest and not voided. A row
+   * the migration has not reached reports 42703/PGRST204 on effect_harvest, and an LD-1 database has
+   * no effect column at all, so an absent column reads as no contributing loads rather than an error
+   * on a screen that has nothing to do with grain. */
+  async listHarvestLoads(farmId: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.from('grain_loads').select('*').eq('farm_id', farmId).eq('effect_harvest', true).is('voided_at', null).order('load_date', { ascending: false }).limit(RECENT_GRAIN_LOAD_LIMIT), context); if (error && (columnMissing(error) || tableMissing(error))) return []; return rows(data, error) }
+  async assignBinMovementCropYearRpc(farmId: string, transactionId: string, cropYear: number, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('assign_bin_movement_crop_year', { p_farm_id: farmId, p_transaction_id: transactionId, p_crop_year: cropYear }), context); if (error) throw error; return row(data, null) }
   async saveGrainLoadRpc(farmId: string, id: string, draft: GrainLoadDraft, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('save_grain_load', { p_farm_id: farmId, p_load: grainLoadPayload(id, draft) }), context); if (error) throw error; return row(data, null) }
   async voidGrainLoadRpc(farmId: string, loadId: string, reason: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('void_grain_load', { p_farm_id: farmId, p_load_id: loadId, p_reason: reason }), context); if (error) throw error; return row(data, null) }
   async upsertGrainAlertSettings(farmId: string, value: GrainAlertSettings, context: FarmOperationContext) { return optimisticSave('grain_alert_settings', farmId, farmId, { farm_id: farmId, alert_emails: value.alert_emails }, value.updated_at, context, 'farm_id') }

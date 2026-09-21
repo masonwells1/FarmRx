@@ -1221,7 +1221,27 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 /* What the origin decided this load is. Never typed, so never styled as an input. */
 .load-lot { margin: 0; font-size: 18px; font-weight: 600; }
 .load-message { font-size: 18px; margin: 0; }
-.load-scope-note { font-size: 18px; margin: 16px 0 0; }
+/* LD-2: the effects a save will have. Each row is a tap target in a truck cab, so the boxes keep
+   the 48px minimum and the summary sentence stays at the body size rather than shrinking to a
+   caption -- it is the most important sentence on the form. */
+.load-effects label { display: flex; align-items: center; gap: 10px; min-height: 48px; font-size: 18px; }
+.load-effects input[type="checkbox"] { width: 24px; height: 24px; flex: none; }
+.load-effects small { display: block; font-size: 18px; margin-top: 4px; }
+.load-effect-summary { font-size: 18px; font-weight: 600; margin: 8px 0 0; }
+/* LD-2: the derived "from loads" figure beside the harvest total the farmer typed. It reads as a
+   second opinion rather than a replacement, because that is exactly what it is until they adopt it. */
+.harvest-from-loads { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hairline, rgba(0, 0, 0, 0.16)); }
+.harvest-from-loads p { margin: 0; font-size: 18px; }
+.harvest-from-loads-diff { color: var(--muted-text, #4a4a4a); }
+.harvest-from-loads .text-action { min-height: 48px; }
+.harvest-from-loads-confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.harvest-from-loads-confirm p { flex-basis: 100%; }
+.field-from-loads { color: var(--muted-text, #4a4a4a); }
+/* LD-2: the one-time crop-year reconciliation list. It disappears once every movement has a year,
+   so it is styled as a task to finish rather than a permanent part of the Bins page. */
+.crop-year-reconcile select { min-height: 48px; font-size: 18px; }
+.crop-year-reconcile .text-action { min-height: 48px; }
+.crop-year-reconcile p { font-size: 18px; }
 .load-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 18px; }
 .load-table th, .load-table td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--hairline, rgba(0, 0, 0, 0.16)); }
 .load-table .text-action { min-height: 48px; }

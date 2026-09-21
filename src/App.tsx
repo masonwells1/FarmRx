@@ -1,13 +1,4 @@
-import {
-  lazy,
-  Suspense,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type FormEvent,
-  type ReactNode,
-} from "react";
+import { type FormEvent, type ReactNode, Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   Navigate,
   NavLink,
@@ -262,6 +253,15 @@ function AppLayout() {
   const { farms, activeFarm, profile, source, chooseFarm } = useFarmAccess();
   const navigate = useNavigate();
   const location = useLocation();
+  // LD-2: Harvest and Fields show a "from loads" figure derived from scale tickets, which are
+  // private financial data. The reader is handed to them ONLY when this member can read those, so
+  // a worker without financial access makes no load request from either screen. Memoised because
+  // both pages use it as an effect dependency.
+  const canReadPrivateFinancials = profile?.capabilities.canReadPrivateFinancials === true;
+  const readHarvestLoads = useMemo(
+    () => (canReadPrivateFinancials ? () => grainServices.grainRepository.listHarvestLoads() : undefined),
+    [canReadPrivateFinancials],
+  );
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const signOutLock = useRef(createSubmitLock());
@@ -335,11 +335,11 @@ function AppLayout() {
             <Route path="/today" element={<CapabilityRoute module="fields"><TodayPage fieldsRepository={fieldsRepository} equipmentTasksRepository={equipmentTasksRepository} notificationsRepository={notificationsRepository} inventoryRepository={inventoryRepository} programsRepository={programsRepository} grainRepository={grainServices.grainRepository} /></CapabilityRoute>} />
             <Route path="/fields" element={<CapabilityRoute module="fields" lockWrites><FieldsPage /></CapabilityRoute>} />
             <Route path="/fields/new" element={<CapabilityRoute module="fields" editOnly><FieldFormPage /></CapabilityRoute>} />
-            <Route path="/fields/:id" element={<CapabilityRoute module="fields" lockWrites><FieldDetailPage /></CapabilityRoute>} />
+            <Route path="/fields/:id" element={<CapabilityRoute module="fields" lockWrites><FieldDetailPage readHarvestLoads={readHarvestLoads} /></CapabilityRoute>} />
             <Route path="/fields/:id/edit" element={<CapabilityRoute module="fields" editOnly><FieldFormPage /></CapabilityRoute>} />
             <Route
               path="/grain/*"
-              element={<CapabilityRoute module="grain" lockWrites><GrainPage services={grainServices} /></CapabilityRoute>}
+              element={<CapabilityRoute module="grain" lockWrites><GrainPage services={grainServices} canManageFarm={profile?.capabilities.canManageFarm === true} /></CapabilityRoute>}
             />
             <Route
               path="/inventory"
@@ -375,7 +375,7 @@ function AppLayout() {
             />
             <Route
               path="/harvest"
-              element={<CapabilityRoute module="harvest" lockWrites><HarvestPage harvestRepository={harvestRepository} /></CapabilityRoute>}
+              element={<CapabilityRoute module="harvest" lockWrites><HarvestPage harvestRepository={harvestRepository} readHarvestLoads={readHarvestLoads} /></CapabilityRoute>}
             />
             <Route
               path="/programs"

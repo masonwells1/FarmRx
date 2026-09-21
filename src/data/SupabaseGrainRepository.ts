@@ -1,9 +1,9 @@
 import type { FieldsData, FieldsRepository, ReadOnlySnapshot } from './fields'
 import type { GrainDataGateway } from './GrainDataGateway'
 import type { UsdaMarketReport } from './grain'
-import type { BinInventory, BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarryMode, GrainCarrySettings, ContractDeleteResult, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, LoadTruck, GrainRepository, GrainSaleLimit, GrainStorageLocationType, GrainWorkspace, InsuranceUnit, LoadDestinationKind, LoadOriginKind, LoadVoidResult, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaReportDate } from './grain'
+import type { BinInventory, BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarryMode, GrainCarrySettings, ContractDeleteResult, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, LoadTruck, GrainRepository, GrainSaleLimit, GrainStorageLocationType, GrainWorkspace, InsuranceUnit, LoadDestinationKind, LoadOriginKind, LoadVoidBlocker, LoadVoidResult, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
-import { CONTRACT_REPAIR_PENDING, LOAD_RECORD_PENDING, MARKETING_PLAN_PERCENT_TOLERANCE, sameScope, scopeKey, validateContractCorrectionReason, validateGrainLoadShape, validateLoadVoidReason, validateGrainContract } from './grain'
+import { CONTRACT_REPAIR_PENDING, CROP_YEAR_RECONCILE_PENDING, LOAD_RECORD_PENDING, MARKETING_PLAN_PERCENT_TOLERANCE, sameScope, scopeKey, validateAssignedCropYear, validateContractCorrectionReason, validateGrainLoadShape, validateLoadVoidReason, validateGrainContract } from './grain'
 import { validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE, validateBinTransaction, validateGrainBin } from './binLedger'
@@ -31,7 +31,7 @@ function target(value: unknown): MarketingPlanTarget { const row = object(value)
 function insurance(value: unknown): InsuranceUnit { const row = object(value); const result: InsuranceUnit = { ...common(row), unit_name: text(required(row, 'unit_name'), 160), insured_acres: number(required(row, 'insured_acres')), aph: number(required(row, 'aph')), coverage_level_pct: number(required(row, 'coverage_level_pct')), revenue_guarantee_per_acre: number(required(row, 'revenue_guarantee_per_acre')), guarantee_per_bu: number(required(row, 'guarantee_per_bu')), notes: nullableText(required(row, 'notes')) }; if (!result.unit_name.trim() || result.insured_acres <= 0 || result.aph <= 0 || result.coverage_level_pct <= 0 || result.coverage_level_pct > 100 || result.revenue_guarantee_per_acre < 0 || result.guarantee_per_bu < 0) fail(); return result }
 function bin(value: unknown): GrainBin { const row = object(value); const location_type = text(required(row, 'location_type')); if (location_type !== 'on_farm' && location_type !== 'commercial') fail(); const result: GrainBin = { id: id(required(row, 'id')), farm_id: id(required(row, 'farm_id')), name: text(required(row, 'name'), 160), capacity_bu: number(required(row, 'capacity_bu')), location_type: location_type as GrainStorageLocationType, location_name: nullableText(required(row, 'location_name')), notes: nullableText(required(row, 'notes')), moisture_pct: nullableNumber(required(row, 'moisture_pct')), moisture_checked_on: nullableDate(required(row, 'moisture_checked_on')), created_at: stamp(required(row, 'created_at')), updated_at: stamp(required(row, 'updated_at')) }; if (validateGrainBin(result).length) fail(); return result }
 function inventory(value: unknown): BinInventory { const row = object(value); const result: BinInventory = { id: id(required(row, 'id')), farm_id: id(required(row, 'farm_id')), grain_bin_id: id(required(row, 'grain_bin_id')), crop_year: integer(required(row, 'crop_year')), commodity_id: text(required(row, 'commodity_id'), 160), bushels: number(required(row, 'bushels')), committed_bushels: number(required(row, 'committed_bushels')), measured_at: stamp(required(row, 'measured_at')), notes: nullableText(required(row, 'notes')), created_at: stamp(required(row, 'created_at')), updated_at: stamp(required(row, 'updated_at')) }; if (result.bushels < 0 || result.committed_bushels < 0 || result.committed_bushels > result.bushels) fail(); return result }
-function binTransaction(value: unknown): BinTransaction { const row = object(value); const direction = text(required(row, 'direction')); const result: BinTransaction = { id: id(required(row, 'id')), farm_id: id(required(row, 'farm_id')), grain_bin_id: id(required(row, 'grain_bin_id')), direction: direction as BinTransaction['direction'], bushels: number(required(row, 'bushels')), commodity_id: text(required(row, 'commodity_id'), 160), occurred_on: date(required(row, 'occurred_on')), note: nullableText(required(row, 'note'), 4000), source_kind: nullableText(required(row, 'source_kind'), 80), created_at: stamp(required(row, 'created_at')) }; if (validateBinTransaction(result).length) fail(); return result }
+function binTransaction(value: unknown): BinTransaction { const row = object(value); const direction = text(required(row, 'direction')); const result: BinTransaction = { id: id(required(row, 'id')), farm_id: id(required(row, 'farm_id')), grain_bin_id: id(required(row, 'grain_bin_id')), direction: direction as BinTransaction['direction'], bushels: number(required(row, 'bushels')), commodity_id: text(required(row, 'commodity_id'), 160), crop_year: typeof row.crop_year === 'number' ? row.crop_year : null, grain_load_id: typeof row.grain_load_id === 'string' ? row.grain_load_id : null, occurred_on: date(required(row, 'occurred_on')), note: nullableText(required(row, 'note'), 4000), source_kind: nullableText(required(row, 'source_kind'), 80), created_at: stamp(required(row, 'created_at')) }; if (validateBinTransaction(result).length) fail(); return result }
 function contractDelivery(value: unknown): GrainContractDelivery { const row = object(value); const result = { id: id(required(row, 'id')), farm_id: id(required(row, 'farm_id')), grain_contract_id: id(required(row, 'grain_contract_id')), bushels: number(required(row, 'bushels')), delivered_on: date(required(row, 'delivered_on')), note: nullableText(required(row, 'note'), 4000), created_at: stamp(required(row, 'created_at')) }; if (result.bushels <= 0) fail(); return result }
 function bid(value: unknown): CashBid { const row = object(value); const result: CashBid = { id: id(required(row, 'id')), farm_id: id(required(row, 'farm_id')), elevator: text(required(row, 'elevator'), 200), commodity_id: text(required(row, 'commodity_id'), 160), bid_date: date(required(row, 'bid_date')), basis: number(required(row, 'basis')), cash_price: nullableNumber(required(row, 'cash_price')), delivery_start: nullableDate(required(row, 'delivery_start')), delivery_end: nullableDate(required(row, 'delivery_end')), notes: nullableText(required(row, 'notes')), feed_source: Object.hasOwn(row, 'feed_source') ? nullableText(row.feed_source, 40) : null, feed_report_id: Object.hasOwn(row, 'feed_report_id') ? nullableText(row.feed_report_id, 20) : null, feed_geography: Object.hasOwn(row, 'feed_geography') ? nullableText(row.feed_geography, 2) : null, created_at: stamp(required(row, 'created_at')), updated_at: stamp(required(row, 'updated_at')) }; if (!result.elevator.trim() || (result.feed_source !== null && result.feed_source !== 'usda_mars') || (result.cash_price !== null && result.cash_price < 0) || (result.delivery_start && result.delivery_end && result.delivery_end < result.delivery_start)) fail(); return result }
 function alertRule(value: unknown): MarketingAlertRule { const row = object(value); const rule_type = text(required(row, 'rule_type')); const directionValue = required(row, 'direction'); const direction = directionValue === null ? null : text(directionValue); const result: MarketingAlertRule = { ...common(row), rule_type: rule_type as MarketingAlertRule['rule_type'], direction: direction as MarketingAlertRule['direction'], threshold: nullableNumber(required(row, 'threshold')), remind_on: nullableDate(required(row, 'remind_on')), message: nullableText(required(row, 'message'), 1000), active: required(row, 'active') === true, last_triggered_at: nullableStamp(required(row, 'last_triggered_at')) }; if (required(row, 'active') !== true && required(row, 'active') !== false) fail(); const errors = validateMarketingAlertRule(result); if (errors.length) fail('Farm Rx found an invalid marketing alert rule.'); return result }
@@ -74,6 +74,12 @@ function grainLoad(value: unknown): GrainLoad {
     ticket_number: nullableText(required(row, 'ticket_number'), 120),
     photo_path: nullableText(required(row, 'photo_path'), 400),
     notes: nullableText(required(row, 'notes'), 4000),
+    // LD-2 columns, read tolerantly: a row cached by an LD-1 client carries none of them, and an
+    // absent flag means the effect was never confirmed, which is the safe reading.
+    effect_bin_out: row.effect_bin_out === true,
+    effect_bin_in: row.effect_bin_in === true,
+    effect_contract_delivery: row.effect_contract_delivery === true,
+    effect_harvest: row.effect_harvest === true,
     voided_at: nullableStamp(required(row, 'voided_at')),
     void_reason: nullableText(required(row, 'void_reason'), 2000),
     created_at: stamp(required(row, 'created_at')),
@@ -190,6 +196,44 @@ export class SupabaseGrainRepository implements GrainRepository, GrainOperationW
     const raw = await read.call(this.dependencies.gateway, await this.operationFarmId(context), context)
     return raw.map(loadTruck)
   }
+  async listHarvestLoads(): Promise<GrainLoad[]> {
+    const context = await this.dependencies.getOperationContext()
+    const read = this.dependencies.gateway.listHarvestLoads
+    if (!read) return []
+    const farmId = await this.operationFarmId(context)
+    const raw = await read.call(this.dependencies.gateway, farmId, context)
+    const loads = raw.map(grainLoad)
+    // Same farm check every other private read makes: a row from another farm is never displayed.
+    for (const load of loads) if (load.farm_id !== farmId) fail('Farm Rx could not verify the farm for these loads.')
+    return loads
+  }
+  /** LD-2: name the crop year of a movement that predates the column. The server is the only place
+   * that decides whether the answer is allowed -- it is owner-only, one-way, and refused when the
+   * year would be left short -- so this sends it and reports back what came home. */
+  async assignBinMovementCropYear(transactionId: string, cropYear: number): Promise<BinTransaction> {
+    const context = await this.dependencies.getOperationContext()
+    const farmId = await this.operationFarmId(context)
+    const problem = validateAssignedCropYear(cropYear)
+    if (!uuid.test(transactionId) || problem) fail(problem ?? 'Farm Rx could not name the crop year for this movement.')
+    const write = this.dependencies.gateway.assignBinMovementCropYearRpc
+    if (!write) throw new Error(CROP_YEAR_RECONCILE_PENDING)
+    let raw: unknown
+    try {
+      raw = await write.call(this.dependencies.gateway, farmId, transactionId, cropYear, context)
+    } catch (error) {
+      const candidate = error as { code?: unknown; message?: unknown }
+      if ((candidate.code === '42883' || candidate.code === 'PGRST202') && /assign_bin_movement_crop_year/i.test(String(candidate.message ?? ''))) {
+        throw new Error(CROP_YEAR_RECONCILE_PENDING)
+      }
+      throw error
+    }
+    await this.dependencies.verifyOperationContext(context)
+    const saved = binTransaction(raw)
+    if (saved.farm_id !== farmId || saved.id !== transactionId || saved.crop_year !== cropYear) {
+      fail('Farm Rx could not confirm the crop year was named.')
+    }
+    return saved
+  }
   async saveLoad(id: string, draft: GrainLoadDraft) { return this.saveLoadOperation(id, draft, await this.dependencies.getOperationContext()) }
   // The id belongs to the ticket, not to the attempt: the caller keeps one across every retry, and the
   // server replays rather than writing a second load. The workspace-dependent rules (which lot the
@@ -227,13 +271,35 @@ export class SupabaseGrainRepository implements GrainRepository, GrainOperationW
     await this.dependencies.verifyOperationContext(context)
     const result = raw && typeof raw === 'object' ? raw as { status?: unknown; load?: unknown; blocked_by?: unknown } : null
     const status = result?.status === 'blocked' ? 'blocked' as const : 'voided' as const
-    // LD-1 loads create nothing else, so blocked_by is always empty; LD-2 fills it. Reading it now
-    // means the browser needs no second answer shape when it does.
-    const blockedBy = Array.isArray(result?.blocked_by) ? result.blocked_by.filter((entry): entry is string => typeof entry === 'string') : []
+    // LD-2: a blocked void names the later movements standing in the way, and changed nothing at
+    // all. Anything the server did not send in the shape we expect is dropped rather than guessed.
+    const blockedBy = Array.isArray(result?.blocked_by) ? result.blocked_by.flatMap((entry): LoadVoidBlocker[] => {
+      if (!entry || typeof entry !== 'object') return []
+      const candidate = entry as Record<string, unknown>
+      const direction = candidate.direction
+      if (typeof candidate.id !== 'string' || typeof candidate.grain_bin_id !== 'string') return []
+      if (direction !== 'in' && direction !== 'out') return []
+      const bushels = Number(candidate.bushels)
+      if (!Number.isFinite(bushels)) return []
+      const cropYear = candidate.crop_year === null || candidate.crop_year === undefined ? null : Number(candidate.crop_year)
+      return [{
+        id: candidate.id,
+        grain_bin_id: candidate.grain_bin_id,
+        direction,
+        bushels,
+        commodity_id: typeof candidate.commodity_id === 'string' ? candidate.commodity_id : '',
+        crop_year: cropYear !== null && Number.isFinite(cropYear) ? cropYear : null,
+        occurred_on: typeof candidate.occurred_on === 'string' ? candidate.occurred_on : '',
+        source_kind: typeof candidate.source_kind === 'string' ? candidate.source_kind : null,
+      }]
+    }) : []
+    const blockedReason = typeof (result as { reason?: unknown } | null)?.reason === 'string' ? (result as { reason: string }).reason : null
     const load = result?.load ? grainLoad(result.load) : null
     if (load) privateRow(load, farmId, fields)
     if (status === 'voided' && (!load || load.voided_at === null)) fail('Farm Rx could not confirm the load was voided.')
-    return { status, load, blockedBy }
+    // A blocked void must not look like a success: the ticket is still live and still counting.
+    if (status === 'blocked' && load && load.voided_at !== null) fail('Farm Rx could not confirm what happened to this load.')
+    return { status, load, blockedBy, reason: blockedReason }
   }
   async recordContractDelivery(value: GrainContractDelivery) { await this.recordContractDeliveryOperation(value, await this.dependencies.getOperationContext()) }
   async recordContractDeliveryOperation(value: GrainContractDelivery, context: FarmOperationContext): Promise<GrainContractDelivery> { const farmId = await this.operationFarmId(context); if (!uuid.test(value.id) || !uuid.test(value.grain_contract_id) || !Number.isFinite(value.bushels) || value.bushels <= 0) fail('Farm Rx could not record this delivery.'); const write = this.dependencies.gateway.appendContractDeliveryRpc; if (!write) throw new Error('Delivery tracking arrives with the next database update.'); let raw: unknown; try { raw = await write.call(this.dependencies.gateway, farmId, { ...value, farm_id: farmId, note: value.note?.trim() || null }, value.allow_overdelivery === true, context) } catch (error) { const candidate = error as { code?: unknown; message?: unknown }; if ((candidate.code === '42P01' || candidate.code === 'PGRST205' || candidate.code === '42883' || candidate.code === 'PGRST202') && /(?:grain_contract_deliveries|record_grain_contract_delivery)/i.test(String(candidate.message ?? ''))) throw new Error('Delivery tracking arrives with the next database update.'); throw error } await this.dependencies.verifyOperationContext(context); return contractDelivery(raw) }

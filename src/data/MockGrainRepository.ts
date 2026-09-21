@@ -1,7 +1,7 @@
 import type { FieldsRepository } from './fields'
-import type { BinTransaction, CashBid, FirmOffer, FuturesQuote, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, GrainRepository, GrainSaleLimit, GrainWorkspace, LoadVoidResult, MarketDataService, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaMarketReport, UsdaReportDate } from './grain'
+import type { BinTransaction, BinTransactionDirection, CashBid, FirmOffer, FuturesQuote, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, GrainRepository, GrainSaleLimit, GrainWorkspace, LoadVoidBlocker, LoadVoidResult, MarketDataService, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaMarketReport, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
-import { contractIsCorrectable, loadLotFor, sameScope, scopeOf, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason } from './grain'
+import { contractIsCorrectable, loadEffectsAvailable, loadLotFor, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason } from './grain'
 import { localCalendarDay, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { activeBinCommodityIds, deriveBinOnHand, PRE_BASELINE_BIN_MOVEMENT_MESSAGE, validateBinTransaction, validateGrainBin } from './binLedger'
@@ -60,6 +60,29 @@ function persist(grain: GrainData) {
   const { fields: _fields, ...grainSlice } = grain as GrainData & { fields?: unknown }
   localStorage.setItem(STORAGE_KEY, writeGrainEnvelope(localStorage.getItem(STORAGE_KEY), grainSlice))
 }
+/** LD-2: one bin movement a load causes. The mock writes these for real rather than recording the
+ * flag and stopping, because a fake that quietly skips the effect would let a test prove the
+ * opposite of what the product does. */
+function loadMovement(load: GrainLoad, binId: string, direction: BinTransactionDirection, note: string, sourceKind: string): BinTransaction {
+  return {
+    id: createGrainId(), farm_id: load.farm_id, grain_bin_id: binId, direction,
+    bushels: load.net_bushels, commodity_id: load.commodity_id, crop_year: load.crop_year,
+    occurred_on: load.load_date, note, source_kind: sourceKind, grain_load_id: load.id,
+    created_at: now(),
+  }
+}
+
+/** LD-2: the bushels of one lot -- a commodity AND a crop year -- in one bin. The baseline counts
+ * only for its own crop year, and rows carrying no crop year are their own bucket and are never
+ * credited to a named year. */
+function lotBalance(workspace: GrainWorkspace, binId: string, commodityId: string, cropYear: number | null): number {
+  const baseline = workspace.bin_inventory.find((row) => row.grain_bin_id === binId)
+  const base = baseline && baseline.commodity_id === commodityId && baseline.crop_year === cropYear ? baseline.bushels : 0
+  return workspace.bin_transactions
+    .filter((row) => row.grain_bin_id === binId && row.commodity_id === commodityId && row.crop_year === cropYear)
+    .reduce((total, row) => total + (row.direction === 'in' ? row.bushels : -row.bushels), base)
+}
+
 function grainSlice(workspace: GrainWorkspace): GrainData { const { fields: _fields, ...grain } = workspace; return grain }
 
 export class MockMarketDataService implements MarketDataService {
@@ -74,6 +97,27 @@ export class MockGrainRepository implements GrainRepository {
   async saveContract(contract: GrainContract) { const workspace = await load(this.fieldsRepository); const errors = validateGrainContract(contract, new Set(workspace.fields.commodities.map((commodity) => commodity.id))); if (errors.length) throw new Error(errors.join(' ')); const rows = workspace.grain_contracts.some((row) => row.id === contract.id) ? workspace.grain_contracts.map((row) => row.id === contract.id ? { ...contract, updated_at: now() } : row) : [...workspace.grain_contracts, contract]; persist({ ...grainSlice(workspace), grain_contracts: rows }); }
   async editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, _operationId: string) { const problem = validateContractCorrectionReason(reason); if (problem) throw new Error(problem); const workspace = await load(this.fieldsRepository); const current = workspace.grain_contracts.find((row) => row.id === contractId); if (!current) throw new Error('This contract is no longer available. Reload before trying again.'); if (current.updated_at !== expectedUpdatedAt) throw new Error('FARM_RX_STALE_WRITE'); if (!contractIsCorrectable(workspace, contractId)) throw new Error('This contract already has delivered bushels and can no longer be changed.'); const next = { ...current, ...(changes.buyer !== undefined ? { buyer: changes.buyer.trim() } : {}), ...(changes.bushels !== undefined ? { bushels: changes.bushels } : {}), ...(changes.delivery_start !== undefined ? { delivery_start: changes.delivery_start || null } : {}), ...(changes.delivery_end !== undefined ? { delivery_end: changes.delivery_end || null } : {}), ...(changes.contract_number !== undefined ? { contract_number: changes.contract_number?.trim() || null } : {}), ...(changes.notes !== undefined ? { notes: changes.notes?.trim() || null } : {}), updated_at: now() }; const errors = validateGrainContract(next, new Set(workspace.fields.commodities.map((commodity) => commodity.id))); if (errors.length) throw new Error(errors.join(' ')); persist({ ...grainSlice(workspace), grain_contracts: workspace.grain_contracts.map((row) => row.id === contractId ? next : row) }); return next }
   async listLoadTrucks() { return [{ id: seedId(1201), name: 'Red semi' }, { id: seedId(1202), name: 'Blue tandem' }] }
+  async listHarvestLoads(): Promise<GrainLoad[]> { const workspace = await load(this.fieldsRepository); return workspace.grain_loads.filter((row) => row.effect_harvest && row.voided_at === null) }
+  async assignBinMovementCropYear(transactionId: string, cropYear: number): Promise<BinTransaction> {
+    const problem = validateAssignedCropYear(cropYear)
+    if (problem) throw new Error(problem)
+    const workspace = await load(this.fieldsRepository)
+    const existing = workspace.bin_transactions.find((row) => row.id === transactionId)
+    if (!existing) throw new Error('That movement is no longer available. Reload before trying again.')
+    if (existing.crop_year !== null) {
+      if (existing.crop_year === cropYear) return existing
+      throw new Error(`This movement already names the ${existing.crop_year} crop and cannot be changed.`)
+    }
+    // The same refusal the server makes: naming a year the bin never held that grain in would
+    // create a lot out of nothing.
+    const named: BinTransaction = { ...existing, crop_year: cropYear }
+    const after = { ...workspace, bin_transactions: workspace.bin_transactions.map((row) => row.id === transactionId ? named : row) }
+    if (lotBalance(after, existing.grain_bin_id, existing.commodity_id, cropYear) < 0) {
+      throw new Error(`Calling this the ${cropYear} crop would leave that year short.`)
+    }
+    persist({ ...grainSlice(workspace), bin_transactions: after.bin_transactions })
+    return named
+  }
   async saveLoad(id: string, draft: GrainLoadDraft) {
     const workspace = await load(this.fieldsRepository)
     const problems = validateGrainLoad(draft, workspace)
@@ -83,6 +127,12 @@ export class MockGrainRepository implements GrainRepository {
     const lot = loadLotFor(workspace, draft)
     if (!lot) throw new Error('Farm Rx cannot tell which crop year this load is.')
     const stamp = now()
+    const available = loadEffectsAvailable(draft)
+    const confirmed = (key: 'bin_out' | 'bin_in' | 'contract_delivery' | 'harvest') => available.includes(key) && (
+      key === 'bin_out' ? draft.effect_bin_out
+        : key === 'bin_in' ? draft.effect_bin_in
+        : key === 'contract_delivery' ? draft.effect_contract_delivery
+        : draft.effect_harvest)
     const saved: GrainLoad = {
       id, farm_id: workspace.fields.farm.id, load_date: draft.load_date,
       truck_equipment_id: draft.truck_equipment_id || null,
@@ -102,10 +152,28 @@ export class MockGrainRepository implements GrainRepository {
       ticket_number: draft.ticket_number.trim() || null,
       photo_path: null,
       notes: draft.notes.trim() || null,
+      effect_bin_out: confirmed('bin_out'),
+      effect_bin_in: confirmed('bin_in'),
+      effect_contract_delivery: confirmed('contract_delivery'),
+      effect_harvest: confirmed('harvest'),
       voided_at: null, void_reason: null,
       created_at: stamp, updated_at: stamp,
     }
-    persist({ ...grainSlice(workspace), grain_loads: [saved, ...workspace.grain_loads] })
+    // LD-2: every effect the farmer confirmed, applied here the way the server applies it. The
+    // harvest effect writes nothing -- it is the flag above, and the figure is derived from it.
+    const note = saved.ticket_number ? `Scale ticket ${saved.ticket_number}` : 'Recorded from a load'
+    const movements: BinTransaction[] = []
+    if (saved.effect_bin_out && saved.origin_grain_bin_id) movements.push(loadMovement(saved, saved.origin_grain_bin_id, 'out', note, 'grain_load'))
+    if (saved.effect_bin_in && saved.destination_grain_bin_id) movements.push(loadMovement(saved, saved.destination_grain_bin_id, 'in', note, 'grain_load'))
+    const deliveries: GrainContractDelivery[] = saved.effect_contract_delivery && saved.destination_grain_contract_id
+      ? [{ id: createGrainId(), farm_id: saved.farm_id, grain_contract_id: saved.destination_grain_contract_id, bushels: saved.net_bushels, delivered_on: saved.load_date, note, grain_load_id: saved.id, created_at: stamp }]
+      : []
+    persist({
+      ...grainSlice(workspace),
+      grain_loads: [saved, ...workspace.grain_loads],
+      bin_transactions: [...movements, ...workspace.bin_transactions],
+      grain_contract_deliveries: [...deliveries, ...workspace.grain_contract_deliveries],
+    })
     return saved
   }
   async voidLoad(loadId: string, reason: string): Promise<LoadVoidResult> {
@@ -115,12 +183,49 @@ export class MockGrainRepository implements GrainRepository {
     const existing = workspace.grain_loads.find((row) => row.id === loadId)
     if (!existing) throw new Error('That load is no longer available. Reload before trying again.')
     if (existing.voided_at !== null) {
-      if (existing.void_reason === reason.trim()) return { status: 'voided', load: existing, blockedBy: [] }
+      if (existing.void_reason === reason.trim()) return { status: 'voided', load: existing, blockedBy: [], reason: null }
       throw new Error('FARM_RX_LOAD_ALREADY_VOIDED')
     }
+
+    // LD-2: the rows this load created, found by link rather than guesswork.
+    const created = workspace.bin_transactions.filter((row) => row.grain_load_id === loadId && row.source_kind === 'grain_load')
+
+    // A compensating out cannot take grain that has since left the bin. When it cannot, nothing
+    // changes at all and the later movements standing in the way are named.
+    const blockedBy: LoadVoidBlocker[] = []
+    for (const movement of created) {
+      if (movement.direction !== 'in') continue
+      if (lotBalance(workspace, movement.grain_bin_id, movement.commodity_id, movement.crop_year) >= movement.bushels) continue
+      for (const later of workspace.bin_transactions) {
+        if (later.grain_load_id === loadId) continue
+        if (later.grain_bin_id !== movement.grain_bin_id) continue
+        if (later.commodity_id !== movement.commodity_id || later.crop_year !== movement.crop_year) continue
+        if (later.created_at <= movement.created_at) continue
+        blockedBy.push({ id: later.id, grain_bin_id: later.grain_bin_id, direction: later.direction, bushels: later.bushels, commodity_id: later.commodity_id, crop_year: later.crop_year, occurred_on: later.occurred_on, source_kind: later.source_kind })
+      }
+    }
+    if (blockedBy.length) {
+      return { status: 'blocked', load: existing, blockedBy, reason: 'This bin no longer holds the bushels this load put in.' }
+    }
+
+    const reversalNote = `Reversing a voided load: ${reason.trim()}`
+    const compensating = created.map((movement) => loadMovement(
+      existing,
+      movement.grain_bin_id,
+      movement.direction === 'in' ? 'out' : 'in',
+      reversalNote,
+      'grain_load_void',
+    ))
     const voided: GrainLoad = { ...existing, voided_at: now(), void_reason: reason.trim(), updated_at: now() }
-    persist({ ...grainSlice(workspace), grain_loads: workspace.grain_loads.map((row) => row.id === loadId ? voided : row) })
-    return { status: 'voided', load: voided, blockedBy: [] }
+    persist({
+      ...grainSlice(workspace),
+      grain_loads: workspace.grain_loads.map((row) => row.id === loadId ? voided : row),
+      bin_transactions: [...compensating, ...workspace.bin_transactions],
+      // A delivery is a claim rather than a physical event, so it is removed outright and every
+      // reader of delivered bushels stays correct with no second rule to learn.
+      grain_contract_deliveries: workspace.grain_contract_deliveries.filter((row) => row.grain_load_id !== loadId),
+    })
+    return { status: 'voided', load: voided, blockedBy: [], reason: null }
   }
   async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string, _operationId: string) { const problem = validateContractCorrectionReason(reason); if (problem) throw new Error(problem); const workspace = await load(this.fieldsRepository); const existing = workspace.grain_contracts.find((row) => row.id === contractId); if (!existing) return { reopenedFirmOfferId: null, reopenedFirmOfferStatus: null }; if (existing.updated_at !== expectedUpdatedAt) throw new Error('FARM_RX_STALE_WRITE'); if (!contractIsCorrectable(workspace, contractId)) throw new Error('This contract already has delivered bushels and can no longer be deleted.'); const reopenedOffer = workspace.firm_offers.find((row) => row.filled_contract_id === contractId); const reopened = reopenedOffer?.id ?? null; persist({ ...grainSlice(workspace), grain_contracts: workspace.grain_contracts.filter((row) => row.id !== contractId), firm_offers: workspace.firm_offers.map((row) => row.filled_contract_id === contractId ? { ...row, status: 'open' as const, filled_contract_id: null, updated_at: now() } : row) }); return { reopenedFirmOfferId: reopened, reopenedFirmOfferStatus: reopened ? 'open' : null } }
   async finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number) { if (!Number.isFinite(value) || (leg === 'futures_price' && value <= 0)) throw new Error(leg === 'basis' ? 'Enter a valid basis.' : 'Enter a futures price above zero.'); const workspace = await load(this.fieldsRepository); const current = workspace.grain_contracts.find((row) => row.id === contractId); if (!current) throw new Error('This contract is no longer available. Reload before trying again.'); if (current[leg] !== null) throw new Error('This price leg is already finalized. Add a contract note for a correction.'); const next = { ...current, [leg]: value, cash_price: (leg === 'basis' ? current.futures_price! + value : value + current.basis!) + current.premium_cents_per_bu / 100, updated_at: now() }; persist({ ...grainSlice(workspace), grain_contracts: workspace.grain_contracts.map((row) => row.id === contractId ? next : row) }); }

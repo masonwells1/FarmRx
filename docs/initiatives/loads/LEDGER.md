@@ -206,3 +206,131 @@ Neither came from reading the code. Both came from breaking it and watching what
 - **The third lane, 0043, is only partly ported.** LD-002 moved its covering-index rule and LD-001
   its definer-allowlist essentials; its policy fingerprints and the rest of its catalog remain
   PowerShell-only.
+
+## LD-004 — load effects, explicit and atomic
+
+**Branch:** `claude/ld2-load-effects`, cut from `main` `36abdd6` (LD-1 merged as #50).
+**Tier:** full. New migration, new RLS-adjacent write paths, money-adjacent bushel math.
+
+### What a farmer notices
+
+The load form now ends with **What saving this will do** — a short list of boxes, ticked, and one
+sentence underneath saying what the ticked boxes will do in plain words. Saving takes the bushels
+out of the origin bin, puts them into the destination bin, records them delivered against the
+chosen contract, and counts them toward the field crop's harvest — each one only if its box is
+ticked, and only if this load's shape can reach it at all. A load to an elevator is never offered a
+contract delivery.
+
+LD-1's sentence — *"It does not yet move bushels out of a bin…"* — is gone, because it stopped
+being true. Voiding a ticket now reverses everything it did.
+
+Harvest and the field record card show **bushels from loads** beside the harvest total the farmer
+typed, with the difference when both exist, and Harvest offers one **Use load total** action.
+
+### The four decisions that carry the weight
+
+1. **The lot is (commodity, crop year), not commodity.** `bin_transactions` carried no crop year, so
+   a bin-out of 2026 corn could be satisfied by 2025 corn in the same bin. Every load-created
+   movement is now stamped, and the negative-balance guard holds at the lot. **The commodity guard
+   is kept, not replaced**: rows written before this migration carry a null crop year and are their
+   own bucket, so the lot figure alone would read high on a bin whose baseline was drawn down by
+   them. Both guards must pass.
+2. **The harvest contribution is derived and never written.** `crop_assignments.harvested_bushels`
+   is one replaceable total the Harvest form overwrites whole, so a load increment would be erased
+   by the next manual entry or double-counted by it. A load's contribution is a flag on the load and
+   nothing else. "Use load total" writes the derived sum through `save_crop_harvest` as a
+   replacement the farmer confirmed; voiding a load afterwards changes only the derived figure.
+3. **A load's effects are found by link, not guesswork.** `bin_transactions.grain_load_id` and
+   `grain_contract_deliveries.grain_load_id` say which rows a load created. A void reverses exactly
+   those: the delivery is removed (a claim, not a physical event, so every existing reader of
+   delivered bushels stays correct with no second rule about voided deliveries), and each movement
+   is answered by its opposite through the same guards. A bin that cannot take the reversal makes
+   the void **blocked** — nothing changes at all, and the answer names the later movements in the
+   way.
+4. **The effect flags are a preference, narrowed once at send time.** They survive a change of
+   origin or destination, so a box the farmer never touched keeps its default and one they unticked
+   stays unticked. Clearing them as the shape changed looked tidier and was wrong — see below.
+
+### Defects found
+
+| Found by | What was wrong |
+|---|---|
+| Disposable lane, first run | The new `assign_bin_movement_crop_year` took the 0043 definer allowlist from 60 to 61. That count turned out to be pinned in **three** files, not two; all three now carry it and each names the other two. |
+| **Browser journey** | **The contract-delivery box defaulted ticked and was silently unticked before the farmer ever saw it.** Picking a bin called the form's update, which normalised the effects against a destination that was still "a buyer", clearing the contract default. By the time the farmer chose a contract the box they were promised would be ticked read as unticked. The flags are now a preference and the narrowing happens once, in the payload. |
+| **Mutation drill** | The privacy gate read `profile?.capabilities.canReadPrivateFinancials` twice, so a mutation replacing the first occurrence left the second to satisfy the guard. The gate is now one expression, pinned whole. |
+| **Mutation drill** | LD-2's harvest read reuses LD-1's `RECENT_GRAIN_LOAD_LIMIT`, so requiring that text once meant dropping the bound from *either* read still passed. The guard counts both reads now. |
+| Browser journey | The e2e mock matches `grain_loads` by exact query shape. LD-2's narrower read is a second shape and was rejected as invalid — which is the mock behaving correctly. Both shapes are now declared, rather than claiming the table by name. |
+| Harvest receipt regression | The first attempt called `useFarmAccess` inside `HarvestPage`; that regression renders the page with no provider and the hook is right to throw. The capability decision moved to the composition root, which is the better shape anyway. |
+| Offline queue | The queue envelope validates its keys exactly. Requiring the two new ledger columns would fail the parse closed on a device holding a movement queued before LD-2 and tell that farmer their saved changes need attention. They are accepted as optional. |
+
+### Proof observed
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` (0); `git diff --check` clean.
+- **All nine disposable suites pass together**, the new `ld2-load-effects-assertions.sql` included,
+  wired into both runners so CI enforces it too.
+- **Seven negative proofs on the SQL**, each failing with its own message: both negative-balance
+  guards, the effect gating, the void's movement lookup, the blocked-void classification, the
+  crop-year assignment's short-year refusal, and a harvest effect that writes the manual total.
+- `node scripts/foundation-static-guards.mjs`: PASS, with eight new LD-2 guards.
+- `node scripts/verify-foundation-mutations.mjs`: **320/320** (308 at branch point). The count is
+  pinned in two files and both were changed together.
+- **Browser: 117 passed, 15 skipped, none failed** across desktop and phone, including a new LD-2
+  journey that runs on both — which also closes LD-1's recorded gap that no lane rendered the Loads
+  tab on a phone.
+
+### Limits, stated rather than implied
+
+- **A manual bin movement still carries no crop year.** LD-2 stamps every *load-created* movement,
+  which is what the amendment requires, but the hand-entered bin-out form does not ask. Those rows
+  join the unknown bucket, so the bucket keeps growing rather than only shrinking. Asking the
+  farmer to confirm the lot on the manual form is the obvious follow-up and is **recommended before
+  LD-3**, whose committed-and-free figures exclude unknown-year rows.
+- **The reconciliation list is owner and manager only**, and is the only way to name a legacy
+  movement. A farm whose owner never opens it keeps those bushels out of every year-specific figure
+  — which is the deliberate fail-closed choice, not an oversight.
+- **A load is still not queued offline.** Unchanged from LD-1, and LD-2 makes it harder, not easier:
+  the effects must pass the bin guards at the moment they run.
+- **`.sr-only` is referenced in `src/ProfitabilityModule.tsx` but defined in no stylesheet**, so
+  text meant for screen readers is visible. Found while building the reconciliation picker, which
+  uses `aria-label` instead. Not fixed here — it is unrelated to loads and changes what Profitability
+  renders.
+- **Known flake, seventh occurrence:** `Soil Rx drains custody after lost Storage and row-delete
+  responses…` failed in one full run and passed alone immediately after, as in six earlier tranches;
+  the final full run was clean. In code no LD tranche touches.
+- **`programInventoryCW2.regression.ts` fails on the development machine** and fails identically on
+  `origin/main` `36abdd6` with none of this branch's changes; verified in a clean worktree this
+  session. It needs a service the sandbox lacks.
+
+### CI caught a twelfth defect, and the reason it got that far
+
+`npm run regression` chains 64 files with `&&`. The known-broken `programInventoryCW2` sits at
+**position 48**, so the suite stops there on this machine and the last sixteen files never run. One
+of them, `roundSevenSweep`, enforces the 18px farmer-text contract over every `font-size` in
+`app.css` — and LD-2 had set the note under the harvest effect checkbox to 16px. CI ran the file
+this machine could not reach and failed in four minutes.
+
+The fix is one character of CSS. The finding is that **a known-failing regression early in a chained
+suite silently hides every regression behind it** — the same shape as LD-002's covering-index
+defect: the rule existed, and nothing here was asking it.
+
+All 64 files have now been run individually on this branch; only `programInventoryCW2` fails, and it
+fails identically on `origin/main`. Running them individually rather than through the chained script
+is the way to run them here until that failure is fixed.
+- **The browser suite ran against the sandbox's pre-installed Chromium** (build 1194) through a
+  throwaway config, because the pinned Playwright expects 1228 and this environment forbids
+  downloading a browser. Nothing about that config is committed; CI uses the repo's own.
+
+### Live steps, still the owner's
+
+Applying `20260921120000_ld2_load_effects.sql` is Mason's, and **merging deploys the client through
+Vercel before that migration exists** — as it does every tranche.
+
+Writing this section is what surfaced the gap and it is now closed rather than merely recorded.
+LD-2's window is worse than LD-1's: the `grain_loads` table already exists, so the Loads tab opens
+normally and only the effect columns are missing. A farmer would have ticked a box and been shown a
+database error. The gateway now probes a column only this migration adds (`select('id,effect_harvest')`
+— `select('*')` succeeds against an LD-1 database and proves nothing), and while that probe fails the
+form offers no effects and says the rest arrives with the next database update. The reconciliation
+list hides itself for the same reason.
+
+So the order is safe either way, and the migration can be applied whenever suits.

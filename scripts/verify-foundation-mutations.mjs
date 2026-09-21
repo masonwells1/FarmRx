@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 308
+const expectedMutationCount = 320
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -21,7 +21,7 @@ const files = [
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
   'supabase/functions/_shared/marsFeedOrchestrator.ts', 'src/data/grainAlerts.ts', 'supabase/functions/deliver-grain-alert/index.ts',
-  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'supabase/migrations/20260920180000_ld1_grain_loads.sql', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
+  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'supabase/migrations/20260920180000_ld1_grain_loads.sql', 'supabase/migrations/20260921120000_ld2_load_effects.sql', 'src/App.tsx', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -917,8 +917,41 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace('const redraft = () => { loadId.current = null };', 'const redraft = () => { /* keep the id */ };'))
   detected('editing the load form after a lost response reuses the previous ticket id', 'ld1:a-lost-response-is-not-a-lost-ticket')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('It does not yet move bushels out of a bin, count against a contract, or add to a field', 'It updates your bins, contracts and harvest'))
-  detected('the screen claims a load does more than it does', 'ld1:the-scope-is-stated-to-the-farmer')
+  mutate('src/GrainModule.tsx', (source) => source.replace('What saving this will do', 'Extras'))
+  detected('the load form stops saying what saving will do', 'ld2:the-effects-are-shown-before-the-save')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('Saving this records the ticket and changes nothing else.', 'Ready to save.'))
+  detected('the load form stops naming the effects it is about to perform', 'ld2:the-effects-are-shown-before-the-save')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('availableEffects.includes("contract_delivery")', 'true'))
+  detected('a load to an elevator is offered a contract delivery it cannot perform', 'ld2:an-effect-is-only-offered-when-reachable')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('const effective = normalizeLoadEffects(draft)', 'const effective = draft'))
+  detected('a load sends an effect its own shape cannot reach', 'ld2:an-impossible-effect-is-never-sent')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('result.status === "blocked"', 'false'))
+  detected('a blocked void is reported to the farmer as done', 'ld2:a-blocked-void-is-not-reported-as-done')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace("workspace.capabilities?.grain_load_effects !== false", 'true'))
+  detected('the load form offers effects the database cannot honour yet', 'ld2:the-effects-wait-for-the-migration')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace("select('id,effect_harvest')", "select('id')"))
+  detected('the capability probe stops naming a column only the migration adds', 'ld2:the-effects-wait-for-the-migration')
+  reset()
+  mutate('supabase/migrations/20260921120000_ld2_load_effects.sql', (source) => source.replace('  -- The harvest effect writes nothing.', '  update public.crop_assignments set harvested_bushels = v_net where id = v_origin_crop;\n  -- The harvest effect writes nothing.'))
+  detected('a load writes the replaceable manual harvest total', 'ld2:a-load-never-writes-the-manual-harvest-total')
+  reset()
+  mutate('supabase/migrations/20260921120000_ld2_load_effects.sql', (source) => source.replace("message = 'this movement would make the bin balance negative';", "message = 'refused';"))
+  detected('the commodity-level negative balance guard loses its name', 'ld2:both-negative-balance-guards-are-live')
+  reset()
+  mutate('supabase/migrations/20260921120000_ld2_load_effects.sql', (source) => source.replace("format('this bin does not hold that many bushels of the %s crop', v_crop_year)", "'refused'"))
+  detected('the lot-level negative balance guard loses its name', 'ld2:both-negative-balance-guards-are-live')
+  reset()
+  mutate('supabase/migrations/20260921120000_ld2_load_effects.sql', (source) => source.replace("'source_kind', 'grain_load_void',", "'source_kind', 'grain_load',"))
+  detected('a void stops marking the movements it wrote to reverse a load', 'ld2:a-void-reverses-what-the-load-created')
+  reset()
+  mutate('src/App.tsx', (source) => source.replace('canReadPrivateFinancials ? () => grainServices.grainRepository.listHarvestLoads()', 'true ? () => grainServices.grainRepository.listHarvestLoads()'))
+  detected('a member without financial access is handed the private load reader', 'ld2:the-loads-read-is-gated-on-financial-access')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('const available = workspace.capabilities?.grain_loads !== false;', 'const available = true;'))
   detected('the Loads tab offers a form the database cannot save yet', 'ld1:the-tab-waits-for-the-migration')
@@ -928,6 +961,9 @@ try {
   reset()
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('.limit(RECENT_GRAIN_LOAD_LIMIT)', ''))
   detected('the loads read loses its bound and a hauling season pushes the current tickets past the cap', 'ld1:the-newest-tickets-are-the-ones-loaded')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace(".is('voided_at', null).order('load_date', { ascending: false }).limit(RECENT_GRAIN_LOAD_LIMIT)", ".is('voided_at', null).order('load_date', { ascending: false })"))
+  detected('the harvest contributions read loses its bound', 'ld1:the-newest-tickets-are-the-ones-loaded')
   reset()
   mutate('supabase/migrations/20260920180000_ld1_grain_loads.sql', (source) => source.replace('create index grain_loads_origin_bin_idx on public.grain_loads (origin_grain_bin_id, farm_id, load_date desc);', 'create index grain_loads_origin_bin_idx on public.grain_loads (farm_id, origin_grain_bin_id, load_date desc);'))
   detected('a foreign key index is written farm-first, so deleting a bin scans every load', 'ld1:every-foreign-key-has-a-covering-index')

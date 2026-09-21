@@ -9,7 +9,7 @@ function assert(value: unknown, message: string): asserts value { if (!value) th
 async function rejects(action: () => Promise<unknown>, message: string) { let rejected = false; try { await action() } catch { rejected = true }; assert(rejected, message) }
 const bin: GrainBin = { id: uid(1), farm_id: uid(2), name: 'North', capacity_bu: 1_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: 15, moisture_checked_on: '2026-06-13', created_at: stamp, updated_at: stamp }
 const inventory: BinInventory = { id: uid(3), farm_id: bin.farm_id, grain_bin_id: bin.id, crop_year: 2026, commodity_id: 'corn', bushels: 100, committed_bushels: 0, measured_at: '2026-01-15T12:00:00.000Z', notes: null, created_at: stamp, updated_at: stamp }
-const movement = (n: number, direction: BinTransaction['direction'], bushels: number): BinTransaction => ({ id: uid(10 + n), farm_id: bin.farm_id, grain_bin_id: bin.id, direction, bushels, commodity_id: 'corn', occurred_on: '2026-07-13', note: null, source_kind: 'manual entry', created_at: stamp })
+const movement = (n: number, direction: BinTransaction['direction'], bushels: number): BinTransaction => ({ id: uid(10 + n), farm_id: bin.farm_id, grain_bin_id: bin.id, direction, bushels, commodity_id: 'corn', occurred_on: '2026-07-13', note: null, source_kind: 'manual entry', crop_year: null, grain_load_id: null, created_at: stamp })
 const balanced = deriveBinOnHand(inventory, [movement(1, 'in', 30), movement(2, 'out', 20)])
 assert(balanced.rawOnHand === 110 && balanced.onHand === 110, 'On-hand must be recorded inventory plus in minus out.')
 const belowZero = deriveBinOnHand(inventory, [movement(3, 'out', 200)])

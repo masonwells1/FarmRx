@@ -50,3 +50,8 @@ echo EPOCH_FENCING_DISPOSABLE_PASS
 # that decide whether the bushels Farm Rx shows a farmer are the bushels they actually have.
 psql_ -d farmrx_disposable -f "$root/scripts/sql/bin-and-contract-truth-assertions.sql" | grep -q BIN_CONTRACT_TRUTH_DISPOSABLE_PASS || { echo "0033 bin and contract truth assertions failed" >&2; exit 1; }
 echo BIN_CONTRACT_TRUTH_DISPOSABLE_PASS
+# Initiative LD-2 (load effects): each effect happens only when the farmer confirmed it, the save
+# is all-or-nothing, the negative-balance guard now holds at the lot, a void reverses exactly what
+# the load created, and a void the bin cannot take changes nothing.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/ld2-load-effects-assertions.sql" | grep -q LD2_LOAD_EFFECTS_DISPOSABLE_PASS || { echo "LD-2 load effects assertions failed" >&2; exit 1; }
+echo LD2_LOAD_EFFECTS_DISPOSABLE_PASS

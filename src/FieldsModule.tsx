@@ -9,6 +9,7 @@ import {
 } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { fieldsRepository, moduleYear } from "./data";
+import { loadHarvestComparison, type GrainLoad } from "./data/grain";
 import type {
   Arrangement,
   CropAssignment,
@@ -909,8 +910,19 @@ function InlineAddRow({
   );
 }
 
-export function FieldDetailPage() {
+/** LD-2: `readHarvestLoads` is supplied only for a member who can read private financials, decided
+ * at the composition root exactly as it is for Harvest. Without it this page makes no grain read. */
+export function FieldDetailPage({ readHarvestLoads }: { readHarvestLoads?: () => Promise<GrainLoad[]> } = {}) {
   const { data, error, refresh } = useFieldsData();
+  const [harvestLoads, setHarvestLoads] = useState<GrainLoad[]>([]);
+  useEffect(() => {
+    let current = true;
+    if (!readHarvestLoads) { setHarvestLoads([]); return }
+    void readHarvestLoads()
+      .then((rows) => { if (current) setHarvestLoads(rows) })
+      .catch(() => { if (current) setHarvestLoads([]) });
+    return () => { current = false };
+  }, [readHarvestLoads]);
   const { id } = useParams();
   const location = useLocation();
   const fieldLock = useRef(createSubmitLock());
@@ -995,6 +1007,7 @@ export function FieldDetailPage() {
       <RecordsCard
         data={data}
         field={field}
+        harvestLoads={harvestLoads}
         onSave={save}
       />
     </section>
@@ -1713,10 +1726,12 @@ function YieldPriceCard({
 function RecordsCard({
   data,
   field,
+  harvestLoads,
   onSave,
 }: {
   data: FieldsData;
   field: Field;
+  harvestLoads: GrainLoad[];
   onSave: (patch: FieldEditPatch) => Promise<void>;
 }) {
   const rows = cropRows(data, field.id);
@@ -1945,6 +1960,21 @@ function RecordsCard({
                     ? "Yield not entered"
                     : `${number.format(row.harvested_bushels)} bu · ${number.format(row.harvested_bushels / row.planted_acres)} bu/ac`}
                 </span>
+                {/* LD-2: what the scale tickets say, beside what was typed. Never merged into the
+                    total above -- that total is replaceable and a load increment would be erased by
+                    the next manual entry. Adopting it is one explicit action, on Harvest. */}
+                {(() => {
+                  const fromLoads = loadHarvestComparison(harvestLoads, row.id, row.harvested_bushels);
+                  if (fromLoads.loadCount === 0) return null;
+                  return (
+                    <span className="numeric field-from-loads">
+                      {number.format(fromLoads.fromLoads)} bu from loads
+                      {fromLoads.difference !== null && fromLoads.difference !== 0
+                        ? ` · ${fromLoads.difference > 0 ? "+" : "−"}${number.format(Math.abs(fromLoads.difference))} bu vs typed`
+                        : ""}
+                    </span>
+                  );
+                })()}
               </div>
             ))}
         </div>

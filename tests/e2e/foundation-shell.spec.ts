@@ -226,7 +226,16 @@ const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, str
   grain_contract_audit: (farm) => ({ select: 'id', farm_id: `eq.${farm.id}`, limit: '1' }),
   // LD-1: newest first and bounded, and its own capability probe -- the table's absence is the one
   // truthful signal that the Loads tab cannot save anything.
-  grain_loads: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'load_date.desc,created_at.desc,id.desc', limit: '500' }),
+  // LD-2 adds a second, narrower read for the "from loads" harvest figure. Both shapes are listed
+  // rather than the table being claimed by name: matching by name would let any future grain_loads
+  // query pass unexamined, which is the mock defect LD-1 recorded against `equipment`.
+  grain_loads: (farm) => [
+    { select: '*', farm_id: `eq.${farm.id}`, order: 'load_date.desc,created_at.desc,id.desc', limit: '500' },
+    { select: '*', farm_id: `eq.${farm.id}`, effect_harvest: 'eq.true', voided_at: 'is.null', order: 'load_date.desc', limit: '500' },
+    // LD-2's capability probe: it has to name a column the migration adds, because select('*') on
+    // this table succeeds against an LD-1 database and tells the client nothing.
+    { select: 'id,effect_harvest', farm_id: `eq.${farm.id}`, limit: '1' },
+  ],
 
   usda_report_dates: () => ({ select: '*', order: 'report_date.asc,id.asc' }),
   usda_market_reports: () => ({ select: '*', order: 'report_id.asc' }),
@@ -1646,9 +1655,9 @@ test('a load records its ticket, takes its crop year from the origin, and can on
   await page.goto('/grain/loads')
 
   await expect(page.getByRole('heading', { name: 'Loads', exact: true })).toBeVisible()
-  // Saving a load does not yet move bushels or pay down a contract, and the screen has to say so --
-  // a farmer who assumed otherwise would stop recording bin-outs and their stored bushels would drift.
-  await expect(page.getByText('It does not yet move bushels out of a bin', { exact: false })).toBeVisible()
+  // LD-2: what saving will do is on the screen before the button is pressed. LD-1's "this does not
+  // move bushels" sentence is gone because it stopped being true.
+  await expect(page.getByRole('group', { name: 'What saving this will do' })).toBeVisible()
 
   await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(binId)
   // The origin decides the lot, and the farmer is shown what it decided rather than typing it.
@@ -1674,6 +1683,50 @@ test('a load records its ticket, takes its crop year from the origin, and can on
   // Nothing the farmer left blank is sent as an empty value, so the server's own defaults stay in force.
   expect('gross_lbs' in sent).toBe(false)
   expect('truck_equipment_id' in sent).toBe(false)
+  // LD-2: the effects the farmer saw and left ticked travel with the save, and the ones this load's
+  // shape cannot reach are sent as false rather than omitted -- the server should never have to
+  // guess what an absent effect meant.
+  expect(sent.effect_bin_out).toBe(true)
+  expect(sent.effect_contract_delivery).toBe(true)
+  expect(sent.effect_bin_in).toBe(false)
+  expect(sent.effect_harvest).toBe(false)
+  expect(unexpected).toEqual([])
+})
+
+test('a load offers only the effects its shape can reach, and unticking one drops it from the save', async ({ page, context }) => {
+  await seedSession(context)
+  loadRecordCalls.length = 0
+  const farm = farms[0]!
+  const binId = '00000000-0000-4000-8000-000000000071'
+  const binRows = [{ id: binId, farm_id: farm.id, name: 'North dryer bin', capacity_bu: 42_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now }]
+  const inventoryRows = [{ id: '00000000-0000-4000-8000-000000000074', farm_id: farm.id, grain_bin_id: binId, crop_year: 2026, commodity_id: commodityId, bushels: 20_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now }]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
+  await page.goto('/grain/loads')
+
+  const effects = page.getByRole('group', { name: 'What saving this will do' })
+  await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(binId)
+
+  // A load out of a bin to an elevator can take bushels out of that bin and do nothing else. The
+  // other three boxes are not merely disabled -- they are not offered, because the server would
+  // refuse them and a box that always fails is a dead end.
+  await expect(effects.getByRole('checkbox')).toHaveCount(1)
+  await expect(effects.getByRole('checkbox', { name: /Take .* out of North dryer bin/ })).toBeChecked()
+  await expect(effects.getByText(/Saving this records the ticket and takes/)).toBeVisible()
+
+  // Unticking it leaves a ticket that changes nothing, and the sentence says exactly that.
+  await effects.getByRole('checkbox').uncheck()
+  await expect(effects.getByText('Saving this records the ticket and changes nothing else.')).toBeVisible()
+
+  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('640')
+  await page.getByRole('button', { name: 'Save load' }).click()
+
+  await expect.poll(() => loadRecordCalls.length).toBe(1)
+  const sent = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
+  expect(sent.effect_bin_out).toBe(false)
+  expect(sent.effect_bin_in).toBe(false)
+  expect(sent.effect_contract_delivery).toBe(false)
+  expect(sent.effect_harvest).toBe(false)
   expect(unexpected).toEqual([])
 })
 
