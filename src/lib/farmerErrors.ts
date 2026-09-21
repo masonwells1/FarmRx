@@ -1,6 +1,6 @@
 import { FIRM_OFFER_FILL_PARTIAL_SUCCESS } from '../data/firmOfferFill'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from '../data/binLedger'
-import { CONTRACT_REPAIR_PENDING } from '../data/grain'
+import { CONTRACT_REPAIR_PENDING, LOAD_RECORD_PENDING } from '../data/grain'
 
 export const firmOfferFillPartialSuccessMessage = 'Your sale was recorded as a contract. The offer could not be marked filled — reload the page. Do not enter this contract again.'
 
@@ -26,6 +26,19 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (/a correction must change something|a correction must name at least one field/.test(message)) return 'Nothing has changed on this contract yet.'
   if (/connect to the internet before correcting a contract/.test(message)) return 'Connect to the internet before correcting a contract.'
   if (/connect to the internet before deleting a contract/.test(message)) return 'Connect to the internet before deleting a contract.'
+  // LD-1. The ticket id belongs to the ticket, not the attempt, so a reused one means the browser is
+  // trying to spend one id on two different loads -- which is a bug, not a retry.
+  if (/farm_rx_load_id_reused/.test(message)) return 'That ticket was already saved with different details. Reload the loads list before entering it again.'
+  // The earlier void did commit; only its response was lost. Saying "try again" would be wrong.
+  if (/farm_rx_load_already_voided/.test(message)) return 'This load was already voided, with a different reason. Reload to see the current record.'
+  if (/recording a load arrives with the next database update/.test(message)) return LOAD_RECORD_PENDING
+  if (/connect to the internet before recording a load/.test(message)) return 'Connect to the internet before recording a load.'
+  if (/connect to the internet before voiding a load/.test(message)) return 'Connect to the internet before voiding a load.'
+  // Each of these is decided on the server under a row lock, so a screen that offered the control can
+  // still be told no -- a bin re-measured or a contract changed between this page's read and the save.
+  if (/a voided load cannot be changed/.test(message)) return 'This ticket has already been voided and cannot be changed.'
+  if (/a load record cannot be edited/.test(message)) return 'A saved ticket cannot be edited. Void it with a reason and record the correct one.'
+  if (/say why this ticket is being voided/.test(message)) return 'Say why this ticket is being voided.'
   // The server decides this under a row lock, so a screen that offered the control can still be told
   // no -- a delivery recorded on another device between this page's read and this click.
   if (/already has delivered bushels/.test(message)) return 'A delivery has been recorded against this contract, so it can no longer be changed. Reload to see it.'

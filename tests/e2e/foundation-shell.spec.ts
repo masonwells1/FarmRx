@@ -224,6 +224,10 @@ const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, str
   ],
   // GL-3b capability probe: one indexed read of at most one row, whose contents are not used.
   grain_contract_audit: (farm) => ({ select: 'id', farm_id: `eq.${farm.id}`, limit: '1' }),
+  // LD-1: newest first and bounded, and its own capability probe -- the table's absence is the one
+  // truthful signal that the Loads tab cannot save anything.
+  grain_loads: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'load_date.desc,created_at.desc,id.desc', limit: '500' }),
+
   usda_report_dates: () => ({ select: '*', order: 'report_date.asc,id.asc' }),
   usda_market_reports: () => ({ select: '*', order: 'report_id.asc' }),
   marketing_alert_rules: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,created_at.asc,id.asc' }),
@@ -243,6 +247,9 @@ const profitabilityReadQueries: Record<string, (farm: FarmFixture) => Record<str
 // GL-3b: what the browser actually asked the server to change, so a journey can prove the payload
 // rather than only the screen. Cleared by the test that reads it.
 const contractRepairCalls: Array<{ rpc: string; body: Record<string, unknown> }> = []
+// LD-1: what the browser actually asked the server to record, so a journey can prove the payload --
+// in particular that it sends no commodity and no crop year, because the origin decides both.
+const loadRecordCalls: Array<{ rpc: string; body: Record<string, unknown> }> = []
 
 function grainRows(table: string, farm: FarmFixture) {
   if (table === 'production_estimates') return [{ id: '00000000-0000-4000-8000-000000000051', farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, planted_acres: 80, aph_yield: 190, expected_bushels: 15_200, actual_bushels: null, drives_math: 'projected', notes: null, created_at: now, updated_at: now }]
@@ -290,6 +297,11 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
     if (emptyUnknownReads && rest && Object.hasOwn(programsSharedShapes, rest) && route.request().method() === 'GET' && exactQuery(url, programsSharedShapes[rest]!(requestedFarm(url)))) { await fulfillJson(route, []); return }
     if (emptyUnknownReads && rest && Object.hasOwn(programsReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, programsReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, moduleRows[rest] ?? []); return }
     if (rest && Object.hasOwn(fieldsReadQueries, rest)) { const farm = requestedFarm(url); if (route.request().method() !== 'GET' || !exactQuery(url, fieldsReadQueries[rest]!(farm))) { await rejectShape(`${rest} query`); return }; await fulfillJson(route, rowsFor(rest, farm)); return }
+    // LD-1: the farm's trucks, read only while the Loads form is open -- never as part of the grain
+    // workspace, because Today serves its front door from that load and a named rep's Today must make
+    // no equipment read at all. Matched by exact shape rather than by table name: Equipment and
+    // Profitability read this table too, so it has to sit ahead of the handler that claims it by name.
+    if (rest === 'equipment' && route.request().method() === 'GET' && exactQuery(url, { select: 'id,name', farm_id: `eq.${requestedFarm(url).id}`, category: 'eq.truck', status: 'eq.active', order: 'name.asc,id.asc' })) { await fulfillJson(route, moduleRows.load_trucks ?? []); return }
     if (rest && Object.hasOwn(equipmentReadQueries, rest)) {
       const farm = requestedFarm(url)
       // Profitability reads equipment names through a narrower exact shape than the Equipment workspace.
@@ -339,6 +351,19 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
       if (route.request().method() !== 'POST' || !value || typeof value.p_farm_id !== 'string' || typeof value.p_contract_id !== 'string' || typeof value.p_reason !== 'string') { await rejectShape(`${url.pathname.split('/').pop()} body`); return }
       contractRepairCalls.push({ rpc: url.pathname.split('/').pop()!, body: value })
       await fulfillJson(route, url.pathname.endsWith('edit_grain_contract') ? { id: value.p_contract_id } : { deleted: true, reopened_firm_offer_id: null, already_deleted: false }); return
+    }
+    if (url.pathname === '/rest/v1/rpc/save_grain_load' || url.pathname === '/rest/v1/rpc/void_grain_load') {
+      let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
+      const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
+      if (route.request().method() !== 'POST' || !value || typeof value.p_farm_id !== 'string') { await rejectShape(`${url.pathname.split('/').pop()} body`); return }
+      loadRecordCalls.push({ rpc: url.pathname.split('/').pop()!, body: value })
+      if (url.pathname.endsWith('save_grain_load')) {
+        const draft = value.p_load as Record<string, unknown>
+        // The server derives the lot; the fixture answers with one the browser never sent.
+        const saved = { id: draft.id, farm_id: value.p_farm_id, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id ?? null, truck_name: draft.truck_name ?? null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_grain_bin_id ?? null, origin_crop_assignment_id: draft.origin_crop_assignment_id ?? null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_buyer ?? null, destination_grain_contract_id: draft.destination_grain_contract_id ?? null, destination_grain_bin_id: draft.destination_grain_bin_id ?? null, commodity_id: commodityId, crop_year: 2026, gross_lbs: draft.gross_lbs ?? null, tare_lbs: draft.tare_lbs ?? null, net_bushels: draft.net_bushels, moisture_pct: draft.moisture_pct ?? null, ticket_number: draft.ticket_number ?? null, photo_path: null, notes: draft.notes ?? null, voided_at: null, void_reason: null, created_at: now, updated_at: now }
+        await fulfillJson(route, saved); return
+      }
+      await fulfillJson(route, { status: 'voided', load: { ...(moduleRows.grain_loads?.[0] as Record<string, unknown> ?? {}), voided_at: now, void_reason: value.p_reason }, blocked_by: [] }); return
     }
     if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks' || url.pathname === '/rest/v1/rpc/generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${url.pathname}`)
@@ -1048,6 +1073,19 @@ test('a direct signed-in A to B replacement hides Farm A before B access validat
       contractRepairCalls.push({ rpc: url.pathname.split('/').pop()!, body: value })
       await fulfillJson(route, url.pathname.endsWith('edit_grain_contract') ? { id: value.p_contract_id } : { deleted: true, reopened_firm_offer_id: null, already_deleted: false }); return
     }
+    if (url.pathname === '/rest/v1/rpc/save_grain_load' || url.pathname === '/rest/v1/rpc/void_grain_load') {
+      let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
+      const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
+      if (route.request().method() !== 'POST' || !value || typeof value.p_farm_id !== 'string') { await rejectShape(`${url.pathname.split('/').pop()} body`); return }
+      loadRecordCalls.push({ rpc: url.pathname.split('/').pop()!, body: value })
+      if (url.pathname.endsWith('save_grain_load')) {
+        const draft = value.p_load as Record<string, unknown>
+        // The server derives the lot; the fixture answers with one the browser never sent.
+        const saved = { id: draft.id, farm_id: value.p_farm_id, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id ?? null, truck_name: draft.truck_name ?? null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_grain_bin_id ?? null, origin_crop_assignment_id: draft.origin_crop_assignment_id ?? null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_buyer ?? null, destination_grain_contract_id: draft.destination_grain_contract_id ?? null, destination_grain_bin_id: draft.destination_grain_bin_id ?? null, commodity_id: commodityId, crop_year: 2026, gross_lbs: draft.gross_lbs ?? null, tare_lbs: draft.tare_lbs ?? null, net_bushels: draft.net_bushels, moisture_pct: draft.moisture_pct ?? null, ticket_number: draft.ticket_number ?? null, photo_path: null, notes: draft.notes ?? null, voided_at: null, void_reason: null, created_at: now, updated_at: now }
+        await fulfillJson(route, saved); return
+      }
+      await fulfillJson(route, { status: 'voided', load: { ...(moduleRows.grain_loads?.[0] as Record<string, unknown> ?? {}), voided_at: now, void_reason: value.p_reason }, blocked_by: [] }); return
+    }
     if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks' || url.pathname === '/rest/v1/rpc/generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${url.pathname}`)
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, isUserB ? sessionB.user : session().user); return }
@@ -1587,6 +1625,55 @@ test('a contract with no deliveries can be corrected with a reason, and one alre
   await expect(typo.getByLabel('Contract note')).toBeVisible()
   // And the version this page loaded rides along, so the server refuses the write if the row moved.
   expect(contractRepairCalls[0]!.body.p_expected_updated_at).toBe(now)
+  expect(unexpected).toEqual([])
+})
+
+// LD-1: a scale ticket had nowhere to go. The form records one, the origin decides its crop and crop
+// year rather than the farmer typing them, a contract from another crop year is not even offered, and
+// a saved ticket can only be voided with a reason -- never edited.
+test('a load records its ticket, takes its crop year from the origin, and can only be voided with a reason', async ({ page, context }) => {
+  await seedSession(context)
+  loadRecordCalls.length = 0
+  const farm = farms[0]!
+  const binId = '00000000-0000-4000-8000-000000000071'
+  const contractRows = [
+    { id: '00000000-0000-4000-8000-000000000072', farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer: 'This Year Buyer', bushels: 10_000, futures_price: null, basis: null, cash_price: 4.75, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, firm_offer_id: null, created_at: now, updated_at: now },
+    { id: '00000000-0000-4000-8000-000000000073', farm_id: farm.id, crop_year: 2025, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer: 'Carryover Buyer', bushels: 6_000, futures_price: null, basis: null, cash_price: 4.20, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, firm_offer_id: null, created_at: now, updated_at: now },
+  ]
+  const binRows = [{ id: binId, farm_id: farm.id, name: 'North dryer bin', capacity_bu: 42_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now }]
+  const inventoryRows = [{ id: '00000000-0000-4000-8000-000000000074', farm_id: farm.id, grain_bin_id: binId, crop_year: 2026, commodity_id: commodityId, bushels: 20_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now }]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: contractRows, grain_bins: binRows, bin_inventory: inventoryRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
+  await page.goto('/grain/loads')
+
+  await expect(page.getByRole('heading', { name: 'Loads', exact: true })).toBeVisible()
+  // Saving a load does not yet move bushels or pay down a contract, and the screen has to say so --
+  // a farmer who assumed otherwise would stop recording bin-outs and their stored bushels would drift.
+  await expect(page.getByText('It does not yet move bushels out of a bin', { exact: false })).toBeVisible()
+
+  await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(binId)
+  // The origin decides the lot, and the farmer is shown what it decided rather than typing it.
+  await expect(page.getByText('This load is', { exact: false })).toContainText('2026 crop')
+
+  await page.getByRole('radio', { name: 'Against a contract' }).click()
+  // A contract from another crop year would be refused by the server, so it is not offered at all.
+  await expect(page.getByRole('combobox', { name: 'Contract', exact: true }).getByRole('option')).toHaveText(['Pick a contract', /This Year Buyer/])
+
+  await page.getByRole('combobox', { name: 'Contract', exact: true }).selectOption('00000000-0000-4000-8000-000000000072')
+  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('910.5')
+  await page.getByRole('textbox', { name: 'Ticket number' }).fill('A-1001')
+  await page.getByRole('button', { name: 'Save load' }).click()
+
+  await expect.poll(() => loadRecordCalls.length).toBe(1)
+  expect(loadRecordCalls[0]!.rpc).toBe('save_grain_load')
+  const sent = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
+  expect(sent.net_bushels).toBe(910.5)
+  expect(sent.destination_grain_contract_id).toBe('00000000-0000-4000-8000-000000000072')
+  // The browser never sends a lot. Two evaluators of one fact is the defect this tranche prevents.
+  expect('commodity_id' in sent).toBe(false)
+  expect('crop_year' in sent).toBe(false)
+  // Nothing the farmer left blank is sent as an empty value, so the server's own defaults stay in force.
+  expect('gross_lbs' in sent).toBe(false)
+  expect('truck_equipment_id' in sent).toBe(false)
   expect(unexpected).toEqual([])
 })
 

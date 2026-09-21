@@ -205,6 +205,7 @@ begin
       ('reschedule_program_pass','p_farm_id uuid, p_operation_id uuid, p_assigned_pass_id uuid, p_due_on date, p_timing_label text'),
       ('save_crop_harvest_versioned','p_farm_id uuid, p_operation_id uuid, p_expected_updated_at timestamp with time zone, p_entry jsonb'),
       ('save_field_bundle_versioned','p_farm_id uuid, p_operation_id uuid, p_expected_versions jsonb, p_draft jsonb'),
+      ('save_grain_load','p_farm_id uuid, p_load jsonb'),
       ('save_field_log_entry','p_farm_id uuid, p_operation_id uuid, p_entry jsonb'),
       ('save_program','p_farm_id uuid, p_operation_id uuid, p_program jsonb'),
       ('save_program_pass','p_farm_id uuid, p_operation_id uuid, p_program_id uuid, p_pass jsonb, p_products jsonb, p_place_after_pass_id uuid'),
@@ -215,6 +216,7 @@ begin
       ('set_field_location','p_farm_id uuid, p_field_id uuid, p_latitude numeric, p_longitude numeric, p_source text'),
       ('skip_program_pass','p_farm_id uuid, p_operation_id uuid, p_assigned_pass_id uuid, p_skipped_on date, p_reason text'),
       ('unassign_program','p_farm_id uuid, p_operation_id uuid, p_assignment_id uuid, p_reason text'),
+      ('void_grain_load','p_farm_id uuid, p_load_id uuid, p_reason text'),
       ('verify_soil_report_cleanup_terminal_absence','p_farm_id uuid, p_field_id uuid, p_test_id uuid, p_paths text[]'),
       ('verify_soil_report_objects_absent','p_farm_id uuid, p_paths text[]'),
       ('verify_soil_test_absent','p_farm_id uuid, p_test_id uuid')
@@ -237,8 +239,8 @@ begin
     and p.prosecdef
     and has_function_privilege('authenticated', p.oid, 'execute');
 
-  if v_allowed_definers <> 58 or v_actual_definers <> 58 then
-    raise exception 'authenticated SECURITY DEFINER ACL allowlist drift: expected 58, matched %, actual %',
+  if v_allowed_definers <> 60 or v_actual_definers <> 60 then
+    raise exception 'authenticated SECURITY DEFINER ACL allowlist drift: expected 60, matched %, actual %',
       v_allowed_definers, v_actual_definers;
   end if;
 

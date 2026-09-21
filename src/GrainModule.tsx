@@ -4,7 +4,7 @@ import { parseTodayRecordIntent, parseTodayGrainLineIntent } from "./data/todayI
 import { NeedsAttentionList } from "./components/NeedsAttentionList";
 import { SaveReceipt } from "./components/SaveReceipt";
 import { MarketQuoteSection, quoteCropYear } from "./components/MarketQuote";
-import { confirmDialog } from "./components/ConfirmDialog";
+import { confirmDialog, promptDialog } from "./components/ConfirmDialog";
 import { SectionTabs } from "./SectionTabs";
 import { farmerError } from "./lib/farmerErrors";
 import { currentFarmContext } from "./auth/farmContext";
@@ -29,28 +29,8 @@ const isSaleLimitDraft = (key: string, payload: unknown): payload is SaleLimitDr
 };
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
-import type {
-  BinTransaction,
-  BinInventory,
-  FirmOffer,
-  FirmOfferStatus,
-  FirmOfferType,
-  GrainAlertSettings,
-  GrainBin,
-  GrainContract,
-  GrainContractDelivery,
-  GrainContractType,
-  GrainServices,
-  GrainWorkspace,
-  MarketingAlertRule,
-  MarketingAlertRuleType,
-  MarketingPlanTarget,
-  PositionScope,
-  ProductionEstimate,
-  GrainCarryGrid,
-  GrainCarrySettings,
-} from "./data/grain";
-import { contractCorrectionDiff, contractIsCorrectable, marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason } from "./data/grain";
+import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOfferType, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainContractType, GrainLoad, GrainLoadDraft, GrainServices, GrainWorkspace, LoadTruck, MarketingAlertRule, MarketingAlertRuleType, MarketingPlanTarget, PositionScope, ProductionEstimate } from "./data/grain";
+import { contractCorrectionDiff, contractIsCorrectable, loadLotFor, LOAD_RECORD_PENDING, marketedPercent, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -153,8 +133,29 @@ const GRAIN_TABS = [
   { slug: "offers", label: "Firm offers" },
   { slug: "carry", label: "Cost of carry" },
   { slug: "contracts", label: "Contracts" },
+  { slug: "loads", label: "Loads" },
   { slug: "storage", label: "Bins & basis" },
 ];
+/** LD-1: a blank ticket. Dated today because that is what a farmer hauling right now needs, and a bin
+ * origin because grain leaving storage is the load a farm records year-round. */
+const emptyLoadDraft = (): GrainLoadDraft => ({
+  load_date: localCalendarDay(new Date()),
+  truck_equipment_id: "",
+  truck_name: "",
+  origin_kind: "bin",
+  origin_grain_bin_id: "",
+  origin_crop_assignment_id: "",
+  destination_kind: "buyer",
+  destination_buyer: "",
+  destination_grain_contract_id: "",
+  destination_grain_bin_id: "",
+  gross_lbs: "",
+  tare_lbs: "",
+  net_bushels: "",
+  moisture_pct: "",
+  ticket_number: "",
+  notes: "",
+});
 type Template =
   "balanced" | "harvest" | "storage" | "conservative" | "seasonal";
 const templates: Record<
@@ -318,6 +319,7 @@ export function GrainPage({ services }: { services: GrainServices }) {
     "offers",
     "carry",
     "contracts",
+    "loads",
     "storage",
   ].includes(rawTab)
     ? rawTab
@@ -1057,6 +1059,9 @@ export function GrainPage({ services }: { services: GrainServices }) {
             </table>
           </div>
         </section>
+      )}
+      {tabPath === "loads" && (
+        <LoadsTab workspace={workspace} services={services} onSaved={refresh} />
       )}
       {tabPath === "storage" && (
         <section className="grain-section storage-layout">
@@ -4286,5 +4291,217 @@ function TargetEditor({
         </button>
       </form>
     </div>
+  );
+}
+
+/** LD-1: the load record. A scale ticket is the farm's primary field record of grain leaving a bin or
+ * a field, and every figure LD-2 and LD-3 derive is built on it, so the ticket is captured exactly
+ * once and never edited afterwards -- a wrong one is voided with a reason and re-entered. */
+export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWorkspace; services: GrainServices; onSaved: () => Promise<void> }) {
+  const available = workspace.capabilities?.grain_loads !== false;
+  const [draft, setDraft] = useState<GrainLoadDraft>(emptyLoadDraft);
+  const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  const lock = useRef(createSubmitLock());
+  // One id for one ticket, held until that ticket is saved. If the write commits but the response is
+  // lost, pressing Save again sends the same id and the server replays the load it already recorded
+  // instead of writing a second one. Minted at save time, never during render: the id generator is
+  // shared and ordered, and taking one per render would shift the id the next real write gets.
+  const loadId = useRef<string | null>(null);
+  // LD-1: the farm's trucks, read only while this tab is open. They are deliberately not part of the
+  // grain workspace, because Today serves its front door from the same load and a named rep's Today
+  // must make no equipment read at all. A read that fails leaves the picker empty and the typed
+  // truck name still works, so a truck is never the reason a ticket cannot be saved.
+  const [trucks, setTrucks] = useState<LoadTruck[]>([]);
+  useEffect(() => {
+    let current = true;
+    void services.grainRepository.listLoadTrucks().then((rows) => { if (current) setTrucks(rows) }).catch(() => { if (current) setTrucks([]) });
+    return () => { current = false };
+  }, [services]);
+  const redraft = () => { loadId.current = null };
+  const update = (patch: Partial<GrainLoadDraft>) => { redraft(); setDraft((current) => ({ ...current, ...patch })) };
+
+  const lot = loadLotFor(workspace, draft);
+  const problems = validateGrainLoad(draft, workspace);
+  const cropAssignments = workspace.fields.crop_assignments;
+  const commodityLabel = (id: string) => workspace.fields.commodities.find((item) => item.id === id)?.name ?? id;
+  const binName = (id: string | null) => workspace.grain_bins.find((bin) => bin.id === id)?.name ?? "a bin";
+  const fieldName = (assignmentId: string | null) => {
+    const assignment = cropAssignments.find((row) => row.id === assignmentId);
+    if (!assignment) return "a field";
+    const field = workspace.fields.fields.find((row) => row.id === assignment.field_id);
+    return field ? field.name : "a field";
+  };
+
+  const save = async () => {
+    if (!lock.current.acquire()) return;
+    try {
+      // These speak to the farmer directly about the form in front of them. Routing them through the
+      // error taxonomy would turn "pick the bin" into "Farm Rx could not record this load right now".
+      if (problems.length) { setMessage(problems[0]); return }
+      setSaving(true);
+      loadId.current ??= services.createGrainId();
+      const saved = await services.grainRepository.saveLoad(loadId.current, draft);
+      loadId.current = null;
+      // The next ticket almost always shares the date, the truck and the origin -- a farmer hauling
+      // out of one bin all afternoon should not retype them. The weights, moisture and ticket number
+      // are what change per load, so only those are cleared.
+      setDraft((current) => ({ ...current, gross_lbs: "", tare_lbs: "", net_bushels: "", moisture_pct: "", ticket_number: "", notes: "" }));
+      setMessage(`Load saved: ${saved.net_bushels.toLocaleString()} bu of ${commodityLabel(saved.commodity_id)}, ${saved.crop_year} crop.`);
+      await onSaved();
+    } catch (error) { setMessage(farmerError(error, "record this load")) } finally { lock.current.release(); setSaving(false) }
+  };
+
+  const voidLoad = async (load: GrainLoad) => {
+    if (!lock.current.acquire()) return;
+    try {
+      const reason = await promptDialog({
+        title: "Why is this ticket being voided?",
+        body: "The ticket stays on the record with your reason. Recording the correct one is a separate entry.",
+        confirmLabel: "Void this load",
+        label: "Reason",
+        placeholder: "Weighed on a broken scale",
+        required: true,
+        destructive: true,
+      });
+      if (reason === null) return;
+      const problem = validateLoadVoidReason(reason);
+      if (problem) { setMessage(problem); return }
+      setSaving(true);
+      await services.grainRepository.voidLoad(load.id, reason);
+      setMessage("Load voided. It stays on the list with your reason.");
+      await onSaved();
+    } catch (error) { setMessage(farmerError(error, "void this load")) } finally { lock.current.release(); setSaving(false) }
+  };
+
+  if (!available) {
+    return (
+      <section className="grain-section loads-card">
+        <div className="section-heading"><div><span className="eyebrow">Scale tickets</span><h2>Loads</h2></div></div>
+        <p role="status">{LOAD_RECORD_PENDING} Reload the app after the update.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="grain-section loads-card">
+      <div className="section-heading">
+        <div>
+          <span className="eyebrow">Scale tickets</span>
+          <h2>Loads</h2>
+          <p>Record each load as it is hauled. A saved ticket is never edited &mdash; void it with a reason and enter the right one.</p>
+        </div>
+      </div>
+
+      <div className="load-form">
+        <label>Date hauled<input type="date" value={draft.load_date} onChange={(event) => update({ load_date: event.target.value })} /></label>
+
+        <fieldset className="load-origin">
+          <legend>Where it came from</legend>
+          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "bin"} onChange={() => update({ origin_kind: "bin", origin_crop_assignment_id: "" })} /> Out of a bin</label>
+          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "field"} onChange={() => update({ origin_kind: "field", origin_grain_bin_id: "" })} /> Off a field</label>
+          {draft.origin_kind === "bin" ? (
+            <label>Bin<select value={draft.origin_grain_bin_id} onChange={(event) => update({ origin_grain_bin_id: event.target.value })}>
+              <option value="">Pick a bin</option>
+              {workspace.grain_bins.map((bin) => <option key={bin.id} value={bin.id}>{bin.name}</option>)}
+            </select></label>
+          ) : (
+            <label>Field crop<select value={draft.origin_crop_assignment_id} onChange={(event) => update({ origin_crop_assignment_id: event.target.value })}>
+              <option value="">Pick a field crop</option>
+              {cropAssignments.map((assignment) => (
+                <option key={assignment.id} value={assignment.id}>
+                  {fieldName(assignment.id)} &middot; {commodityLabel(assignment.commodity_id)} &middot; {assignment.crop_year}
+                </option>
+              ))}
+            </select></label>
+          )}
+          {/* The origin decides the lot, and the farmer is shown what it decided. A load that guessed
+              between carry-over and current-year grain of the same commodity would let old bushels pay
+              down a new contract, so this is never a field the farmer types. */}
+          <p className="load-lot" role="status">
+            {lot
+              ? `This load is ${commodityLabel(lot.commodity_id)}, ${lot.crop_year} crop.`
+              : draft.origin_kind === "bin"
+                ? "Pick a bin that has its inventory recorded, so Farm Rx knows which crop year this load is."
+                : "Pick the field crop, and Farm Rx takes the crop and year from it."}
+          </p>
+        </fieldset>
+
+        <fieldset className="load-destination">
+          <legend>Where it went</legend>
+          <label><input type="radio" name="load-destination" checked={draft.destination_kind === "buyer"} onChange={() => update({ destination_kind: "buyer", destination_grain_contract_id: "", destination_grain_bin_id: "" })} /> A buyer or elevator</label>
+          <label><input type="radio" name="load-destination" checked={draft.destination_kind === "contract"} onChange={() => update({ destination_kind: "contract", destination_buyer: "", destination_grain_bin_id: "" })} /> Against a contract</label>
+          <label><input type="radio" name="load-destination" checked={draft.destination_kind === "bin"} onChange={() => update({ destination_kind: "bin", destination_buyer: "", destination_grain_contract_id: "" })} /> Into a bin</label>
+          {draft.destination_kind === "buyer" && (
+            <label>Buyer or elevator<input type="text" value={draft.destination_buyer} onChange={(event) => update({ destination_buyer: event.target.value })} /></label>
+          )}
+          {draft.destination_kind === "contract" && (
+            <label>Contract<select value={draft.destination_grain_contract_id} onChange={(event) => update({ destination_grain_contract_id: event.target.value })}>
+              <option value="">Pick a contract</option>
+              {/* Only the contracts this load could actually go against. A contract for another crop or
+                  another crop year is refused by the server, so offering it would be offering a dead end. */}
+              {workspace.grain_contracts.filter((contract) => !lot || (contract.commodity_id === lot.commodity_id && contract.crop_year === lot.crop_year)).map((contract) => (
+                <option key={contract.id} value={contract.id}>{contract.buyer} &middot; {contract.bushels.toLocaleString()} bu &middot; {contract.crop_year}</option>
+              ))}
+            </select></label>
+          )}
+          {draft.destination_kind === "bin" && (
+            <label>Bin<select value={draft.destination_grain_bin_id} onChange={(event) => update({ destination_grain_bin_id: event.target.value })}>
+              <option value="">Pick a bin</option>
+              {workspace.grain_bins.filter((bin) => bin.id !== draft.origin_grain_bin_id).map((bin) => <option key={bin.id} value={bin.id}>{bin.name}</option>)}
+            </select></label>
+          )}
+        </fieldset>
+
+        <label>Net bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={draft.net_bushels} onChange={(event) => update({ net_bushels: event.target.value })} /></label>
+        <label>Gross weight (lb)<input type="number" min="1" step="1" inputMode="decimal" value={draft.gross_lbs} onChange={(event) => update({ gross_lbs: event.target.value })} /></label>
+        <label>Tare weight (lb)<input type="number" min="1" step="1" inputMode="decimal" value={draft.tare_lbs} onChange={(event) => update({ tare_lbs: event.target.value })} /></label>
+        <label>Moisture %<input type="number" min="0" max="100" step="0.1" inputMode="decimal" value={draft.moisture_pct} onChange={(event) => update({ moisture_pct: event.target.value })} /></label>
+        <label>Ticket number<input type="text" value={draft.ticket_number} onChange={(event) => update({ ticket_number: event.target.value })} /></label>
+        {/* An Equipment truck or a typed name, never both -- the database refuses a ticket carrying
+            two answers, so choosing one here clears the other rather than letting the save fail. */}
+        <label>Truck<select value={draft.truck_equipment_id} onChange={(event) => update({ truck_equipment_id: event.target.value, truck_name: event.target.value ? "" : draft.truck_name })}>
+          <option value="">Not one of ours</option>
+          {trucks.map((truck) => <option key={truck.id} value={truck.id}>{truck.name}</option>)}
+        </select></label>
+        {!draft.truck_equipment_id && (
+          <label>Truck name<input type="text" value={draft.truck_name} onChange={(event) => update({ truck_name: event.target.value })} /></label>
+        )}
+        <label>Note<input type="text" value={draft.notes} onChange={(event) => update({ notes: event.target.value })} /></label>
+
+        <button className="primary-action" type="button" disabled={saving} onClick={() => void save()}>Save load</button>
+        {message && <p className="load-message" role="status">{message}</p>}
+      </div>
+
+      {/* LD-1 records the ticket and nothing else: no bin movement, no contract delivery, no harvest
+          figure. Saying so is the only honest thing to do, because a farmer who assumed otherwise
+          would stop recording bin-outs and their stored bushels would drift. LD-2 makes each of those
+          an effect the farmer sees and confirms on the save. */}
+      <p className="load-scope-note">Saving a load records the ticket. It does not yet move bushels out of a bin, count against a contract, or add to a field&rsquo;s harvest &mdash; keep recording those the way you do now.</p>
+
+      <h3>Recent loads</h3>
+      {workspace.grain_loads.length === 0 ? (
+        <p>No loads recorded yet.</p>
+      ) : (
+        <table className="load-table">
+          <thead><tr><th>Date</th><th>Crop</th><th>From</th><th>To</th><th>Net bu</th><th>Ticket</th><th /></tr></thead>
+          <tbody>
+            {workspace.grain_loads.map((load) => (
+              <tr key={load.id} className={load.voided_at ? "load-voided" : undefined}>
+                <td>{load.load_date}</td>
+                <td>{commodityLabel(load.commodity_id)} {load.crop_year}</td>
+                <td>{load.origin_kind === "bin" ? binName(load.origin_grain_bin_id) : fieldName(load.origin_crop_assignment_id)}</td>
+                <td>{load.destination_kind === "buyer" ? load.destination_buyer : load.destination_kind === "bin" ? binName(load.destination_grain_bin_id) : workspace.grain_contracts.find((contract) => contract.id === load.destination_grain_contract_id)?.buyer ?? "a contract"}</td>
+                <td>{load.net_bushels.toLocaleString()}</td>
+                <td>{load.ticket_number ?? ""}</td>
+                <td>{load.voided_at
+                  ? <span className="load-void-reason">Voided &mdash; {load.void_reason}</span>
+                  : <button className="text-action" type="button" disabled={saving} onClick={() => void voidLoad(load)}>Void</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }

@@ -38,3 +38,15 @@ echo GL2_ALERT_ELIGIBILITY_DISPOSABLE_PASS
 # Initiative GL-3b (contract repair): edit and delete with a reason, and the audit that outlives the row.
 psql_ -d farmrx_disposable -f "$root/scripts/sql/gl3-contract-edit-delete-assertions.sql" | grep -q GL3_CONTRACT_EDIT_DELETE_DISPOSABLE_PASS || { echo "GL-3b contract edit/delete assertions failed" >&2; exit 1; }
 echo GL3_CONTRACT_EDIT_DELETE_DISPOSABLE_PASS
+# Initiative LD-1 (the load record): the ticket, its one write path, and the void that keeps it.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/ld1-grain-loads-assertions.sql" | grep -q LD1_GRAIN_LOADS_DISPOSABLE_PASS || { echo "LD-1 grain loads assertions failed" >&2; exit 1; }
+echo LD1_GRAIN_LOADS_DISPOSABLE_PASS
+# Migration 0040 (farm access-epoch fencing), ported from the PowerShell-only lane so a development
+# machine checks it too: the catalog rules every new farm-scoped table must satisfy, and the four
+# write paths a stale epoch has to be refused on.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/epoch-fencing-assertions.sql" | grep -q EPOCH_FENCING_DISPOSABLE_PASS || { echo "0040 epoch fencing assertions failed" >&2; exit 1; }
+echo EPOCH_FENCING_DISPOSABLE_PASS
+# Migration 0033 (bin and contract truth), ported from the other PowerShell-only lane: the rules
+# that decide whether the bushels Farm Rx shows a farmer are the bushels they actually have.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/bin-and-contract-truth-assertions.sql" | grep -q BIN_CONTRACT_TRUTH_DISPOSABLE_PASS || { echo "0033 bin and contract truth assertions failed" >&2; exit 1; }
+echo BIN_CONTRACT_TRUTH_DISPOSABLE_PASS
