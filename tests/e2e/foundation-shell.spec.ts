@@ -231,7 +231,7 @@ const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, str
   // query pass unexamined, which is the mock defect LD-1 recorded against `equipment`.
   grain_loads: (farm) => [
     { select: '*', farm_id: `eq.${farm.id}`, order: 'load_date.desc,created_at.desc,id.desc', limit: '500' },
-    { select: '*', farm_id: `eq.${farm.id}`, effect_harvest: 'eq.true', voided_at: 'is.null', order: 'load_date.desc', limit: '500' },
+    { select: '*', farm_id: `eq.${farm.id}`, effect_harvest: 'eq.true', voided_at: 'is.null', order: 'load_date.desc', limit: '5001' },
     // LD-2's capability probe: it has to name a column the migration adds, because select('*') on
     // this table succeeds against an LD-1 database and tells the client nothing.
     { select: 'id,effect_harvest', farm_id: `eq.${farm.id}`, limit: '1' },

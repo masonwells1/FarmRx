@@ -16,6 +16,11 @@ export const RECENT_CASH_BID_LIMIT = 750
 export const MANUAL_CASH_BID_LIMIT = 250
 /** LD-1: the newest tickets. A farm hauling hard writes these faster than any other grain row. */
 export const RECENT_GRAIN_LOAD_LIMIT = 500
+/** LD-2 repair: the harvest figure SUMS its rows, so a display cap would understate it silently and
+ * "Use load total" would overwrite a typed harvest with a partial total. This bound is generous
+ * enough for a season's tickets, and one row past it is fetched deliberately so a farm that does
+ * exceed it is told the figure is incomplete rather than shown a wrong number. */
+export const HARVEST_LOAD_SUM_LIMIT = 5000
 export function mergeCashBids(...slices: unknown[][]): unknown[] {
   const byId = new Map<unknown, unknown>()
   for (const row of slices.flat()) {
@@ -196,7 +201,7 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
    * the migration has not reached reports 42703/PGRST204 on effect_harvest, and an LD-1 database has
    * no effect column at all, so an absent column reads as no contributing loads rather than an error
    * on a screen that has nothing to do with grain. */
-  async listHarvestLoads(farmId: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.from('grain_loads').select('*').eq('farm_id', farmId).eq('effect_harvest', true).is('voided_at', null).order('load_date', { ascending: false }).limit(RECENT_GRAIN_LOAD_LIMIT), context); if (error && (columnMissing(error) || tableMissing(error))) return []; return rows(data, error) }
+  async listHarvestLoads(farmId: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.from('grain_loads').select('*').eq('farm_id', farmId).eq('effect_harvest', true).is('voided_at', null).order('load_date', { ascending: false }).limit(HARVEST_LOAD_SUM_LIMIT + 1), context); if (error && (columnMissing(error) || tableMissing(error))) return []; return rows(data, error) }
   async assignBinMovementCropYearRpc(farmId: string, transactionId: string, cropYear: number, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('assign_bin_movement_crop_year', { p_farm_id: farmId, p_transaction_id: transactionId, p_crop_year: cropYear }), context); if (error) throw error; return row(data, null) }
   async saveGrainLoadRpc(farmId: string, id: string, draft: GrainLoadDraft, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('save_grain_load', { p_farm_id: farmId, p_load: grainLoadPayload(id, draft) }), context); if (error) throw error; return row(data, null) }
   async voidGrainLoadRpc(farmId: string, loadId: string, reason: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('void_grain_load', { p_farm_id: farmId, p_load_id: loadId, p_reason: reason }), context); if (error) throw error; return row(data, null) }

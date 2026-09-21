@@ -7,6 +7,7 @@ import { CONTRACT_REPAIR_PENDING, CROP_YEAR_RECONCILE_PENDING, LOAD_RECORD_PENDI
 import { validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE, validateBinTransaction, validateGrainBin } from './binLedger'
+import { HARVEST_LOAD_SUM_LIMIT } from './SupabaseGrainDataGateway'
 import type { FarmOperationContext } from './farmOperationContext'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -196,16 +197,19 @@ export class SupabaseGrainRepository implements GrainRepository, GrainOperationW
     const raw = await read.call(this.dependencies.gateway, await this.operationFarmId(context), context)
     return raw.map(loadTruck)
   }
-  async listHarvestLoads(): Promise<GrainLoad[]> {
+  async listHarvestLoads(): Promise<{ loads: GrainLoad[]; complete: boolean }> {
     const context = await this.dependencies.getOperationContext()
     const read = this.dependencies.gateway.listHarvestLoads
-    if (!read) return []
+    if (!read) return { loads: [], complete: true }
     const farmId = await this.operationFarmId(context)
     const raw = await read.call(this.dependencies.gateway, farmId, context)
-    const loads = raw.map(grainLoad)
+    // The gateway asks for one row past the bound precisely so this can tell a full answer from a
+    // truncated one. A summed figure that is quietly short is worse than one that says it is short.
+    const complete = raw.length <= HARVEST_LOAD_SUM_LIMIT
+    const loads = raw.slice(0, HARVEST_LOAD_SUM_LIMIT).map(grainLoad)
     // Same farm check every other private read makes: a row from another farm is never displayed.
     for (const load of loads) if (load.farm_id !== farmId) fail('Farm Rx could not verify the farm for these loads.')
-    return loads
+    return { loads, complete }
   }
   /** LD-2: name the crop year of a movement that predates the column. The server is the only place
    * that decides whether the answer is allowed -- it is owner-only, one-way, and refused when the

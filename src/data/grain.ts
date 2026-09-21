@@ -523,7 +523,11 @@ export interface GrainRepository {
    * the same reason: a scale ticket is private financial data, and Harvest is a screen a worker
    * without financial access uses every day. The caller asks for this ONLY when that member can read
    * private financials, so a worker's Harvest makes no load read at all. */
-  listHarvestLoads(): Promise<GrainLoad[]>
+  /** `complete` is false when the farm has more contributing tickets than one read returns. The
+   * figure is a SUM, so a capped read would understate it silently and "Use load total" would
+   * overwrite a typed harvest with a partial total. The screens say "at least" and withhold that
+   * action instead. */
+  listHarvestLoads(): Promise<{ loads: GrainLoad[]; complete: boolean }>
   /** LD-2: name the crop year of a bin movement written before crop years existed. Owner or manager
    * only, one-way, and refused by the server when the answer would leave that year short. */
   assignBinMovementCropYear(transactionId: string, cropYear: number): Promise<BinTransaction>
