@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 322')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 327')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -887,6 +887,29 @@ export function foundationStaticGuard(root = process.cwd()) {
   // are missing, so the form would offer effects whose save produces a database error.
   requireText(errors, grainModule, "workspace.capabilities?.grain_load_effects !== false", 'ld2:the-effects-wait-for-the-migration')
   requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), "select('id,effect_harvest')", 'ld2:the-effects-wait-for-the-migration')
+  {
+    // LD-3: committed and free are ONE farm-level figure. The per-bin pair read
+    // bin_inventory.committed_bushels, a stored number per bin, while contracts are written against
+    // the farm -- so the same bushels appeared again on every bin holding that crop.
+    //
+    // Comments are stripped before this is tested. LD-1 shipped a guard that its own explanatory
+    // comment satisfied, and the comment that explains THIS rule necessarily names the column it
+    // forbids; matching raw source would make the guard pass on its own prose.
+    const withoutComments = grainModule
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .map((line) => line.replace(/\/\/.*$/, ''))
+      .join('\n')
+    if (withoutComments.includes('committed_bushels')) errors.push('ld3:committed-is-one-farm-level-figure')
+    if ((grainModule.split('<CommittedFreeLine').length - 1) !== 1) errors.push('ld3:committed-is-one-farm-level-figure')
+    const committedFree = read(root, 'src/data/committedFree.ts')
+    // Carry-over grain is never charged against a current-year contract. Both halves of the lot key
+    // are required, on the contracts and on the movements.
+    requireText(errors, committedFree, 'contract.commodity_id === commodityId && contract.crop_year === cropYear', 'ld3:carry-over-is-never-charged-to-another-year')
+    requireText(errors, committedFree, 'movement.commodity_id === commodityId && movement.crop_year === cropYear', 'ld3:an-unstamped-movement-joins-no-year')
+    // An over-delivered contract owes nothing; letting it go negative pays down a different one.
+    requireText(errors, committedFree, 'Math.max(0, contract.bushels - delivered)', 'ld3:over-delivery-never-pays-down-another-contract')
+  }
   {
     // A load's harvest contribution is derived and never written into the replaceable manual total.
     // This reads the migration, because the one place it could go wrong is a well-meaning UPDATE.

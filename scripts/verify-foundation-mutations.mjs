@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 322
+const expectedMutationCount = 327
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -21,7 +21,7 @@ const files = [
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
   'supabase/functions/_shared/marsFeedOrchestrator.ts', 'src/data/grainAlerts.ts', 'supabase/functions/deliver-grain-alert/index.ts',
-  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'supabase/migrations/20260920180000_ld1_grain_loads.sql', 'supabase/migrations/20260921120000_ld2_load_effects.sql', 'src/App.tsx', 'src/HarvestModule.tsx', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
+  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'supabase/migrations/20260920180000_ld1_grain_loads.sql', 'supabase/migrations/20260921120000_ld2_load_effects.sql', 'src/App.tsx', 'src/HarvestModule.tsx', 'src/data/committedFree.ts', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -937,6 +937,21 @@ try {
   reset()
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace("select('id,effect_harvest')", "select('id')"))
   detected('the capability probe stops naming a column only the migration adds', 'ld2:the-effects-wait-for-the-migration')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('<CommittedFreeLine workspace={workspace} />', '<CommittedFreeLine workspace={workspace} /><CommittedFreeLine workspace={workspace} />'))
+  detected('the farm-level committed figure is shown more than once', 'ld3:committed-is-one-farm-level-figure')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('const lots = deriveCommittedFree(workspace);', 'const lots = deriveCommittedFree(workspace); void workspace.bin_inventory[0]?.committed_bushels;'))
+  detected('a screen reads the per-bin committed column again', 'ld3:committed-is-one-farm-level-figure')
+  reset()
+  mutate('src/data/committedFree.ts', (source) => source.replace('contract.commodity_id === commodityId && contract.crop_year === cropYear', 'contract.commodity_id === commodityId'))
+  detected('carry-over grain is charged against a current-year contract', 'ld3:carry-over-is-never-charged-to-another-year')
+  reset()
+  mutate('src/data/committedFree.ts', (source) => source.replace('movement.commodity_id === commodityId && movement.crop_year === cropYear', 'movement.commodity_id === commodityId'))
+  detected('a movement with no crop year is credited to a named year', 'ld3:an-unstamped-movement-joins-no-year')
+  reset()
+  mutate('src/data/committedFree.ts', (source) => source.replace('Math.max(0, contract.bushels - delivered)', 'contract.bushels - delivered'))
+  detected('over-delivery on one contract pays down another', 'ld3:over-delivery-never-pays-down-another-contract')
   reset()
   mutate('supabase/migrations/20260921120000_ld2_load_effects.sql', (source) => source.replace('  -- The harvest effect writes nothing.', '  update public.crop_assignments set harvested_bushels = v_net where id = v_origin_crop;\n  -- The harvest effect writes nothing.'))
   detected('a load writes the replaceable manual harvest total', 'ld2:a-load-never-writes-the-manual-harvest-total')

@@ -1242,6 +1242,16 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .crop-year-reconcile select { min-height: 48px; font-size: 18px; }
 .crop-year-reconcile .text-action { min-height: 48px; }
 .crop-year-reconcile p { font-size: 18px; }
+/* LD-3: committed and free, shown once for the farm rather than once per bin. It reads as a short
+   statement of fact, so it gets list spacing and the body size, not a tile treatment. */
+.committed-free { margin: 12px 0; }
+.committed-free h3 { margin: 0 0 6px; font-size: 18px; }
+.committed-free ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.committed-free li { font-size: 18px; }
+.committed-free p { font-size: 18px; margin: 8px 0 0; }
+.committed-free-unknown { color: var(--muted-text, #4a4a4a); }
+.committed-free-short { color: var(--warning-text, #8a4b00); }
+.position-committed-free { font-size: 18px; margin: 4px 0 0; }
 .load-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 18px; }
 .load-table th, .load-table td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--hairline, rgba(0, 0, 0, 0.16)); }
 .load-table .text-action { min-height: 48px; }

@@ -1730,6 +1730,37 @@ test('a load offers only the effects its shape can reach, and unticking one drop
   expect(unexpected).toEqual([])
 })
 
+test('committed and free are one farm-level figure per crop year, and carry-over is not charged against this year', async ({ page, context }) => {
+  await seedSession(context)
+  const farm = farms[0]!
+  const binId = '00000000-0000-4000-8000-000000000081'
+  // One bin, one commodity, two crop years: 6,000 bushels of the 2025 crop as the baseline and
+  // 4,000 of the 2026 crop moved in after it. One contract, for the 2026 crop only.
+  const binRows = [{ id: binId, farm_id: farm.id, name: 'Home bin', capacity_bu: 40_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now }]
+  const inventoryRows = [{ id: '00000000-0000-4000-8000-000000000082', farm_id: farm.id, grain_bin_id: binId, crop_year: 2025, commodity_id: commodityId, bushels: 6_000, committed_bushels: 5_500, measured_at: now, notes: null, created_at: now, updated_at: now }]
+  const movementRows = [{ id: '00000000-0000-4000-8000-000000000083', farm_id: farm.id, grain_bin_id: binId, direction: 'in', bushels: 4_000, commodity_id: commodityId, crop_year: 2026, occurred_on: '2026-10-01', note: null, source_kind: null, grain_load_id: null, created_at: now }]
+  const contractRows = [{ id: '00000000-0000-4000-8000-000000000084', farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer: 'This Year Buyer', bushels: 3_000, futures_price: null, basis: null, cash_price: 4.75, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, firm_offer_id: null, created_at: now, updated_at: now }]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: contractRows, grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: movementRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
+  await page.goto('/grain/storage')
+
+  const summary = page.getByRole('region', { name: 'Committed and free bushels' })
+  await expect(summary).toBeVisible()
+
+  // The 2026 crop owes 3,000 of the 4,000 it holds. The 2025 crop owes nothing, because a
+  // current-year contract never reaches back into carry-over grain -- the defect Initiative LD
+  // exists to prevent, read off the screen.
+  await expect(summary.getByRole('listitem').filter({ hasText: '2026' })).toContainText('3,000')
+  await expect(summary.getByRole('listitem').filter({ hasText: '2026' })).toContainText('1,000')
+  await expect(summary.getByRole('listitem').filter({ hasText: '2025' })).toContainText('nothing committed')
+  await expect(summary.getByRole('listitem').filter({ hasText: '2025' })).toContainText('6,000')
+
+  // The per-bin committed_bushels column says 5,500 for this bin. It is no longer read anywhere, so
+  // that number must appear nowhere on the page: a farm-level figure repeated per bin is the same
+  // bushels counted twice.
+  await expect(page.getByText('5,500')).toHaveCount(0)
+  expect(unexpected).toEqual([])
+})
+
 test('Today shows a worker without financial access no grain tile and no grain line, and reads no grain table', async ({ page, context }) => {
   await seedSession(context)
   const reads: string[] = []
