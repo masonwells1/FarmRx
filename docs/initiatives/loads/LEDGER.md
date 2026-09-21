@@ -334,3 +334,88 @@ form offers no effects and says the rest arrives with the next database update. 
 list hides itself for the same reason.
 
 So the order is safe either way, and the migration can be applied whenever suits.
+
+## LD-005 — committed vs free
+
+**Branch:** `claude/ld3-committed-free`, cut from `main` `11bd1e3` (LD-2 merged as #51).
+**Tier:** full, per the amendment's "all of LD". No migration: LD-3 is a read-only derivation.
+
+### What a farmer notices
+
+The Bins page gains one short section, **Committed and free**, with a line per lot:
+
+> **2026 corn** · 4,000 bu stored · 3,000 bu committed · **1,000 bu free**
+> **2025 corn** · 6,000 bu stored · nothing committed · **6,000 bu free**
+
+The position card gains the same sentence for the crop year that card is already about. Where a farm
+owes more of a lot than it holds, the figure reads **short by N bushels** rather than a negative
+"free", because that is what it means.
+
+**The per-bin committed and free pair is gone.** It is removed rather than replaced.
+
+### The three rules
+
+1. **A lot is a commodity in a crop year.** A 2026 contract never reaches back into the 2025 crop.
+   This is the defect the whole initiative exists to prevent, and LD-3 is where it becomes a number
+   the farmer reads.
+2. **The figure is farm-level and is never allocated per bin.** Contracts are written against the
+   farm, not against particular bins, so splitting committed bushels across bins would be an
+   invention — and the farm figure shown again on each bin is the same bushels counted twice. The
+   old display read `bin_inventory.committed_bushels`, a stored per-bin number; LD-3 does not read
+   that column at all and a static guard keeps it that way.
+3. **A movement with no crop year joins no lot.** Those rows are named separately, in plain words,
+   beneath the figures: *"1,200 bu of corn are in movements recorded before Farm Rx kept crop years,
+   so they are in none of the figures above."*
+
+Over-delivery is floored per contract. An over-delivered contract owes nothing; letting it read
+negative would quietly pay down a different contract's obligation.
+
+### The assertion that matters
+
+LD-3 adds no SQL, so the disposable suite does not check that the derivation exists — it checks
+that **the database agrees with it**. `scripts/sql/ld3-committed-free-assertions.sql` builds the
+same fixture the TypeScript regression uses, computes the same figures in SQL, and then proves the
+free figure is real **by hauling it**: taking exactly the 1,000 free bushels of the 2026 crop
+succeeds, and taking one bushel past what that lot holds is refused by name — on a bin holding
+10,000 bushels of corn, where a commodity-level figure would have called them all available.
+
+Its fixture also sets the bin's `committed_bushels` column to a deliberately wrong 5,500, so any
+figure that started reading it again would be caught there as well as by the guard.
+
+### Proof observed
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` (0); `git diff --check` clean.
+- **Ten disposable suites pass together**, the new LD-3 file included, wired into both runners.
+- **Seven regression groups** for the derivation, and **six mutations against them, all six caught**,
+  each with its own message: committed ignoring the crop year, an unstamped movement credited to a
+  named year, the baseline swallowing another year's movement, over-delivery going negative,
+  committed read from the per-bin column, and the farm figure reading only one bin.
+- Static guards PASS with **four new LD-3 guards**; **mutation drill 325/325** (320 at branch
+  point), count changed in both files that pin it.
+- **Browser: 119 passed, 15 skipped, none failed** on desktop and phone, including a new LD-3
+  journey that reads the two lots off the screen and asserts the old per-bin number appears nowhere.
+- **All 65 regression files run individually**, per LD-004's finding. Only `programInventoryCW2`
+  fails, and it fails identically on `origin/main`.
+
+### One guard worth describing
+
+The rule "no screen reads `committed_bushels`" cannot be written as a plain text search, because the
+comment that explains the rule has to name the column it forbids — and LD-1 already shipped a guard
+that its own comment satisfied. The guard strips comments before testing, which is the only way to
+state this particular rule honestly.
+
+### Limits, stated rather than implied
+
+- **`bin_inventory.committed_bushels` still exists and is still written** by whatever wrote it
+  before. LD-3 stops reading it for display; it does not drop the column, because dropping a column
+  is a migration and LD-3 has none. It is now a value nothing shows, which is worth removing in a
+  later tranche rather than leaving as a second answer to a question that now has one.
+- **The unknown-crop-year bucket is still fed by the manual bin-out form**, which does not ask which
+  crop year it is. LD-3's figures exclude those bushels honestly and say so on the screen, but the
+  pile grows until that form asks. This was raised in LD-004 and is now visible to the farmer, which
+  makes it more pressing rather than less. **Still the recommended next change.**
+- **Free is farm-level and says nothing about which bin the grain is in.** A farm with 1,000 free
+  bushels split across two distant bins is told it has 1,000 free bushels. That is correct for
+  contract purposes and deliberately says nothing about hauling.
+- **`programInventoryCW2.regression.ts`** fails on the development machine and identically on
+  `origin/main` `11bd1e3`.

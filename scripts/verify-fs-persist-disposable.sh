@@ -55,3 +55,7 @@ echo BIN_CONTRACT_TRUTH_DISPOSABLE_PASS
 # the load created, and a void the bin cannot take changes nothing.
 psql_ -d farmrx_disposable -f "$root/scripts/sql/ld2-load-effects-assertions.sql" | grep -q LD2_LOAD_EFFECTS_DISPOSABLE_PASS || { echo "LD-2 load effects assertions failed" >&2; exit 1; }
 echo LD2_LOAD_EFFECTS_DISPOSABLE_PASS
+# Initiative LD-3 (committed vs free): the database's own answer for the same fixture the browser
+# derivation uses, and the proof that a "free" bushel is one the bin will actually let go.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/ld3-committed-free-assertions.sql" | grep -q LD3_COMMITTED_FREE_DISPOSABLE_PASS || { echo "LD-3 committed vs free assertions failed" >&2; exit 1; }
+echo LD3_COMMITTED_FREE_DISPOSABLE_PASS

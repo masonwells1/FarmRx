@@ -58,6 +58,9 @@ try {
   # save is all-or-nothing, the negative-balance guard now holds at the lot, and a void the bin
   # cannot take changes nothing at all.
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/ld2-load-effects-assertions.sql')) 'LD2_LOAD_EFFECTS_DISPOSABLE_PASS' 'LD-2 load effects assertions failed.'
+  # Initiative LD-3 (committed vs free): the database's own answer for the same fixture the browser
+  # derivation uses, and the proof that a "free" bushel is one the bin will actually let go.
+  Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/ld3-committed-free-assertions.sql')) 'LD3_COMMITTED_FREE_DISPOSABLE_PASS' 'LD-3 committed vs free assertions failed.'
 
   $passed = $true
 } finally {

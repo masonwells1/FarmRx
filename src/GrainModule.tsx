@@ -30,6 +30,7 @@ const isSaleLimitDraft = (key: string, payload: unknown): payload is SaleLimitDr
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOfferType, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainContractType, GrainLoad, GrainLoadDraft, GrainServices, GrainWorkspace, LoadTruck, MarketingAlertRule, MarketingAlertRuleType, MarketingPlanTarget, PositionScope, ProductionEstimate } from "./data/grain";
+import { deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
 import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
@@ -2513,6 +2514,9 @@ export function PositionCard({
   const { basisOpen, futuresOpen, finalBushels, partiallyPricedBushels, outrightOpen, finalRevenue, plannedRevenue } = position;
   const average = finalBushels ? finalRevenue / finalBushels : null;
   const pricedPct = production ? (finalBushels / production) * 100 : 0;
+  // LD-3: this card is already one commodity in one crop year, which is exactly a lot. Carry-over
+  // grain of the same commodity belongs to a different card and is deliberately not counted here.
+  const committedFree = deriveCommittedFreeLot(workspace, estimate.commodity_id, estimate.crop_year);
   const insurance = scopeRows(workspace.insurance_units, scope);
   const insuranceUnitEstimate = insurance.reduce(
     (sum, unit) =>
@@ -2696,6 +2700,21 @@ export function PositionCard({
         <strong>{Math.round(pricedPct)}% priced</strong>
         {average === null ? "" : ` at ${money.format(average)} average`} ·{" "}
         <strong>{bushels.format(outrightOpen)} bu</strong> still unpriced
+      </p>
+      {/* LD-3: what is actually in the bins for THIS crop year, against what is still owed on this
+          crop year's contracts. A line rather than a fourth tile, because GL-3 settled this card at
+          one hero line and three tiles and that shape is worth keeping. Carry-over grain of the same
+          commodity is a different lot and is deliberately not counted here. */}
+      <p className="position-committed-free">
+        <span className="numeric">{bushels.format(committedFree.onHand)} bu</span> of the {estimate.crop_year} crop stored
+        {" · "}
+        {committedFree.committed > 0.000001
+          ? <><span className="numeric">{bushels.format(committedFree.committed)} bu</span> committed</>
+          : "nothing committed"}
+        {" · "}
+        {committedFree.free < -0.000001
+          ? <strong className="committed-free-short">{bushels.format(Math.abs(committedFree.free))} bu short</strong>
+          : <strong>{bushels.format(committedFree.free)} bu free</strong>}
       </p>
       <div className="position-stats position-tiles">
         <Metric
@@ -3454,6 +3473,56 @@ export function ContractActions({ contract, workspace, services, autoFocusDelive
   return <div className="contract-actions">{missingLeg && contract[missingLeg] === null && <label>{missingLeg === "basis" ? "Set basis $/bu" : "Set futures price $/bu"}<input type="number" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_price_finalization} onClick={() => void finalize()}>{missingLeg === "basis" ? "Set basis" : "Set futures price"}</button>{!workspace.capabilities?.contract_price_finalization && <small>Price finalization arrives with the next database update. Reload the app after the update.</small>}</label>}<label>Delivered bushels<input type="number" min="0.01" step="0.01" inputMode="decimal" value={delivery} disabled={deliveryUnconfirmed} autoFocus={autoFocusDelivery} onChange={(event) => setDelivery(event.target.value)} /><button className="text-action" type="button" disabled={saving || !workspace.capabilities?.contract_deliveries} onClick={() => void record()}>{deliveryUnconfirmed ? "Retry delivery" : "Record delivery"}</button><small>Recording a delivery does not remove grain from a bin.</small>{!workspace.capabilities?.contract_deliveries && <small>Tracking arrives with the next database update. Reload the app after the update.</small>}</label>{message && <small>{message}</small>}<ContractRepair contract={contract} workspace={workspace} services={services} onSaved={onSaved} onDeleted={onDeleted} /></div>
 }
 
+/** LD-3: committed and free bushels for the whole farm, one line per lot.
+ *
+ * A lot is a commodity in a crop year, which is the point: carry-over grain is never charged
+ * against a current-year contract. This appears ONCE, here, and is never allocated to a bin --
+ * contracts are written against the farm, so splitting them across bins would be an invention, and
+ * showing the farm figure on each bin would be the same bushels counted twice.
+ *
+ * Bushels in movements that carry no crop year are named separately and counted in no lot. Farm Rx
+ * will not guess which year they were. */
+function CommittedFreeLine({ workspace }: { workspace: GrainWorkspace }) {
+  const lots = deriveCommittedFree(workspace);
+  const unknown = deriveUnknownCropYearBushels(workspace.bin_transactions).filter((row) => Math.abs(row.bushels) > 0.000001);
+  if (lots.length === 0 && unknown.length === 0) return null;
+  const commodityLabel = (id: string) => workspace.fields.commodities.find((item) => item.id === id)?.name ?? id;
+  return (
+    <section className="committed-free" aria-label="Committed and free bushels">
+      <h3>Committed and free</h3>
+      {lots.length === 0 ? (
+        <p>Nothing stored or contracted yet.</p>
+      ) : (
+        <ul>
+          {lots.map((lot) => (
+            <li key={`${lot.commodity_id}:${lot.crop_year}`}>
+              <strong>{lot.crop_year} {commodityLabel(lot.commodity_id)}</strong>
+              {" · "}
+              <span className="numeric">{displayBushels(lot.onHand)}</span> stored
+              {" · "}
+              {lot.committed > 0.000001
+                ? <><span className="numeric">{displayBushels(lot.committed)}</span> committed</>
+                : "nothing committed"}
+              {" · "}
+              {lot.free < -0.000001
+                ? <strong className="committed-free-short"><span className="numeric">{displayBushels(Math.abs(lot.free))}</span> short</strong>
+                : <><strong className="numeric">{displayBushels(lot.free)}</strong> free</>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {unknown.length > 0 && (
+        <p className="committed-free-unknown" role="status">
+          {unknown.map((row) => `${displayBushels(Math.abs(row.bushels))} bu of ${commodityLabel(row.commodity_id)}`).join(", ")}
+          {" "}
+          {unknown.length === 1 ? "is" : "are"} in movements recorded before Farm Rx kept crop years, so
+          {" "}{unknown.length === 1 ? "it is" : "they are"} in none of the figures above. Naming their crop year brings them in.
+        </p>
+      )}
+    </section>
+  );
+}
+
 export function Bins({
   workspace,
   services,
@@ -3521,6 +3590,7 @@ export function Bins({
         </button>
       </div>
       <SaveReceipt state={receipt} />
+      <CommittedFreeLine workspace={workspace} />
       {(adding || editing) && (
         <BinForm
           bin={editing}
@@ -3609,24 +3679,11 @@ export function Bins({
                 </p>
               )}
               {position.onHand > bin.capacity_bu && <p className="bin-warning" role="status">This bin shows more grain than it holds — review its history.</p>}
-              {position.inventory && (
-                <div className="bin-balance">
-                         <span>
-                    <strong className="numeric">
-                      {displayBushels(position.inventory.committed_bushels)}
-                    </strong>{" "}
-                    committed
-                  </span>
-                  <span>
-                    <strong className="numeric">
-                      {displayBushels(
-                        position.onHand - position.inventory.committed_bushels,
-                      )}
-                    </strong>{" "}
-                    free
-                  </span>
-                </div>
-              )}
+              {/* LD-3: the per-bin committed and free pair is gone rather than replaced. It read
+                  bin_inventory.committed_bushels, a stored number per bin, while contracts are
+                  written against the farm and not against particular bins -- so the same bushels
+                  appeared again on every bin that held that crop. Committed and free are now one
+                  farm-level figure per commodity and crop year, shown once at the top of this card. */}
               <details className="bin-ledger">
                 <summary>
                   Movement ledger ({position.transactions.length})
