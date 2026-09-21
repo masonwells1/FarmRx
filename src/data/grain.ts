@@ -77,7 +77,12 @@ export interface GrainCapabilities { bin_movements: boolean; contract_price_fina
   /** LD-1: false until the live database carries grain_loads and its two RPCs. Same merge-before-
    * migration window: while this is false the Loads tab says the feature is arriving rather than
    * offering a form whose save cannot land. */
-  grain_loads?: boolean }
+  grain_loads?: boolean;
+  /** LD-2: false until the live database carries the effect columns and the lot-aware guards. The
+   * merge-before-migration window again, and a worse one than LD-1's: the table exists, so the
+   * Loads tab opens, and a farmer would tick effects the save cannot honour and be shown a
+   * database error. While this is false the form offers no effects and says the rest is arriving. */
+  grain_load_effects?: boolean }
 
 /** GL-3b: the fields a contract correction may change. An absent key keeps the stored value; an
  * explicit null clears a nullable one. Crop year, commodity, contract type and every pricing column
@@ -401,11 +406,8 @@ export function validateGrainLoad(draft: GrainLoadDraft, workspace: Pick<GrainWo
     }
   }
 
-  const available = loadEffectsAvailable(draft)
-  if (draft.effect_bin_out && !available.includes('bin_out')) problems.push('This load did not come out of a bin, so it cannot take bushels out of one.')
-  if (draft.effect_bin_in && !available.includes('bin_in')) problems.push('This load did not go into a bin, so it cannot put bushels into one.')
-  if (draft.effect_contract_delivery && !available.includes('contract_delivery')) problems.push('This load did not go against a contract, so it cannot record a delivery.')
-  if (draft.effect_harvest && !available.includes('harvest')) problems.push('This load did not come off a field, so it cannot count toward a harvest.')
+  // An effect the shape cannot reach is not an error the farmer has to fix -- it is a preference
+  // that does not apply to this load, and normalizeLoadEffects drops it from what is sent.
 
   return problems
 }
@@ -436,9 +438,15 @@ export function loadEffectFlag(key: LoadEffectKey): 'effect_bin_out' | 'effect_b
   return 'effect_harvest'
 }
 
-/** LD-2: clear any effect the draft's current shape can no longer reach. The form calls this every
- * time the origin or destination changes, so switching a destination from a contract to an elevator
- * cannot leave a confirmed delivery behind on a load that has no contract. */
+/** LD-2: the effects this draft will ACTUALLY perform -- the farmer's preference for each one,
+ * narrowed to what the load's shape can reach.
+ *
+ * The flags on the draft are a preference, not a promise: they survive a change of origin or
+ * destination so that a box the farmer never touched keeps its default, and a box they deliberately
+ * unticked stays unticked if they come back to it. Clearing them as the shape changed looked tidier
+ * and was wrong -- picking a bin cleared the contract-delivery default long before the farmer chose
+ * a contract destination, so the box they were promised would be ticked appeared unticked. A browser
+ * journey caught it. Narrowing happens here, at the one point that matters: what is sent. */
 export function normalizeLoadEffects(draft: GrainLoadDraft): GrainLoadDraft {
   const available = loadEffectsAvailable(draft)
   let next = draft

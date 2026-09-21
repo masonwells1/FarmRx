@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 318')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 320')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -875,12 +875,18 @@ export function foundationStaticGuard(root = process.cwd()) {
   for (const effect of ['bin_out', 'bin_in', 'contract_delivery', 'harvest']) {
     requireText(errors, grainModule, `availableEffects.includes("${effect}")`, 'ld2:an-effect-is-only-offered-when-reachable')
   }
-  // Changing the origin or destination must clear an effect the new shape cannot honour, or a
-  // confirmed delivery survives a switch to an elevator destination.
-  requireText(errors, grainModule, 'normalizeLoadEffects({ ...current, ...patch })', 'ld2:switching-the-shape-clears-an-impossible-effect')
+  // An effect the load's shape cannot reach is never SENT, whatever the draft remembers. The
+  // narrowing happens once, in the payload, so there is one place to check rather than one per
+  // screen that edits a draft.
+  requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), 'const effective = normalizeLoadEffects(draft)', 'ld2:an-impossible-effect-is-never-sent')
   // A blocked void changed nothing at all. Reporting it as done would leave the farmer believing
   // bushels moved back when they did not.
   requireText(errors, grainModule, 'result.status === "blocked"', 'ld2:a-blocked-void-is-not-reported-as-done')
+  // Merging deploys this client before the migration is applied, every time. LD-1 made the Loads
+  // tab wait for its table; LD-2 has a worse window, because the table exists and only the columns
+  // are missing, so the form would offer effects whose save produces a database error.
+  requireText(errors, grainModule, "workspace.capabilities?.grain_load_effects !== false", 'ld2:the-effects-wait-for-the-migration')
+  requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), "select('id,effect_harvest')", 'ld2:the-effects-wait-for-the-migration')
   {
     // A load's harvest contribution is derived and never written into the replaceable manual total.
     // This reads the migration, because the one place it could go wrong is a well-meaning UPDATE.

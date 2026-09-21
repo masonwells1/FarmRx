@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 318
+const expectedMutationCount = 320
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -926,11 +926,17 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace('availableEffects.includes("contract_delivery")', 'true'))
   detected('a load to an elevator is offered a contract delivery it cannot perform', 'ld2:an-effect-is-only-offered-when-reachable')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('normalizeLoadEffects({ ...current, ...patch })', '({ ...current, ...patch })'))
-  detected('changing the destination leaves a confirmed effect the new shape cannot honour', 'ld2:switching-the-shape-clears-an-impossible-effect')
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('const effective = normalizeLoadEffects(draft)', 'const effective = draft'))
+  detected('a load sends an effect its own shape cannot reach', 'ld2:an-impossible-effect-is-never-sent')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('result.status === "blocked"', 'false'))
   detected('a blocked void is reported to the farmer as done', 'ld2:a-blocked-void-is-not-reported-as-done')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace("workspace.capabilities?.grain_load_effects !== false", 'true'))
+  detected('the load form offers effects the database cannot honour yet', 'ld2:the-effects-wait-for-the-migration')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace("select('id,effect_harvest')", "select('id')"))
+  detected('the capability probe stops naming a column only the migration adds', 'ld2:the-effects-wait-for-the-migration')
   reset()
   mutate('supabase/migrations/20260921120000_ld2_load_effects.sql', (source) => source.replace('  -- The harvest effect writes nothing.', '  update public.crop_assignments set harvested_bushels = v_net where id = v_origin_crop;\n  -- The harvest effect writes nothing.'))
   detected('a load writes the replaceable manual harvest total', 'ld2:a-load-never-writes-the-manual-harvest-total')

@@ -30,7 +30,7 @@ const isSaleLimitDraft = (key: string, payload: unknown): payload is SaleLimitDr
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOfferType, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainContractType, GrainLoad, GrainLoadDraft, GrainServices, GrainWorkspace, LoadTruck, MarketingAlertRule, MarketingAlertRuleType, MarketingPlanTarget, PositionScope, ProductionEstimate } from "./data/grain";
-import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, normalizeLoadEffects, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
+import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -149,7 +149,8 @@ function CropYearReconciliation({ workspace, services, canManageFarm, onSaved }:
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const unknown = movementsWithoutCropYear(workspace.bin_transactions);
-  if (unknown.length === 0 || !canManageFarm) return null;
+  // The RPC behind this arrives with the same migration as the crop_year column itself.
+  if (unknown.length === 0 || !canManageFarm || workspace.capabilities?.grain_load_effects === false) return null;
   const binName = (id: string) => workspace.grain_bins.find((bin) => bin.id === id)?.name ?? "a bin";
   const commodityLabel = (id: string) => workspace.fields.commodities.find((item) => item.id === id)?.name ?? id;
   const thisYear = new Date().getFullYear();
@@ -4410,7 +4411,10 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
     return () => { current = false };
   }, [services]);
   const redraft = () => { loadId.current = null };
-  const update = (patch: Partial<GrainLoadDraft>) => { redraft(); setDraft((current) => normalizeLoadEffects({ ...current, ...patch })) };
+  // The effect flags are a preference and deliberately survive a change of shape: a box the farmer
+  // never touched keeps its default, and one they unticked stays unticked. What a load will
+  // actually do is narrowed once, where it is sent.
+  const update = (patch: Partial<GrainLoadDraft>) => { redraft(); setDraft((current) => ({ ...current, ...patch })) };
 
   const lot = loadLotFor(workspace, draft);
   const problems = validateGrainLoad(draft, workspace);
@@ -4428,7 +4432,10 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
     return contract ? `${contract.buyer} (${contract.crop_year})` : "the contract";
   };
   // LD-2: the effects this load's shape can reach, and the ones the farmer has actually ticked.
-  const availableEffects = loadEffectsAvailable(draft);
+  // While the migration is not applied the columns do not exist, so no effect is offered at all --
+  // ticking one would produce a database error rather than a moved bushel.
+  const effectsReady = workspace.capabilities?.grain_load_effects !== false;
+  const availableEffects = effectsReady ? loadEffectsAvailable(draft) : [];
   const confirmedEffects = confirmedLoadEffects(draft);
   const typedNet = Number(draft.net_bushels);
   const bushelLabel = draft.net_bushels.trim() && Number.isFinite(typedNet) && typedNet > 0
@@ -4600,7 +4607,9 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
             words what the ticked boxes will do. Nothing happens that is not on this list. */}
         <fieldset className="load-effects">
           <legend>What saving this will do</legend>
-          {availableEffects.length === 0 ? (
+          {!effectsReady ? (
+            <p className="panel-note">Saving records the ticket. Moving bushels, paying down a contract and counting toward a harvest arrive with the next database update &mdash; keep recording those the way you do now. Reload the app after the update.</p>
+          ) : availableEffects.length === 0 ? (
             <p className="panel-note">This ticket is a record only. Nothing else in Farm Rx changes when you save it.</p>
           ) : (
             <>
