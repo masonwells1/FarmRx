@@ -3,7 +3,7 @@ import type { GrainDataGateway } from './GrainDataGateway'
 import type { UsdaMarketReport } from './grain'
 import type { BinInventory, BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarryMode, GrainCarrySettings, ContractDeleteResult, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, LoadTruck, GrainRepository, GrainSaleLimit, GrainStorageLocationType, GrainWorkspace, InsuranceUnit, LoadDestinationKind, LoadOriginKind, LoadVoidBlocker, LoadVoidResult, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
-import { CONTRACT_REPAIR_PENDING, LOAD_RECORD_PENDING, MARKETING_PLAN_PERCENT_TOLERANCE, sameScope, scopeKey, validateContractCorrectionReason, validateGrainLoadShape, validateLoadVoidReason, validateGrainContract } from './grain'
+import { CONTRACT_REPAIR_PENDING, CROP_YEAR_RECONCILE_PENDING, LOAD_RECORD_PENDING, MARKETING_PLAN_PERCENT_TOLERANCE, sameScope, scopeKey, validateAssignedCropYear, validateContractCorrectionReason, validateGrainLoadShape, validateLoadVoidReason, validateGrainContract } from './grain'
 import { validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE, validateBinTransaction, validateGrainBin } from './binLedger'
@@ -206,6 +206,33 @@ export class SupabaseGrainRepository implements GrainRepository, GrainOperationW
     // Same farm check every other private read makes: a row from another farm is never displayed.
     for (const load of loads) if (load.farm_id !== farmId) fail('Farm Rx could not verify the farm for these loads.')
     return loads
+  }
+  /** LD-2: name the crop year of a movement that predates the column. The server is the only place
+   * that decides whether the answer is allowed -- it is owner-only, one-way, and refused when the
+   * year would be left short -- so this sends it and reports back what came home. */
+  async assignBinMovementCropYear(transactionId: string, cropYear: number): Promise<BinTransaction> {
+    const context = await this.dependencies.getOperationContext()
+    const farmId = await this.operationFarmId(context)
+    const problem = validateAssignedCropYear(cropYear)
+    if (!uuid.test(transactionId) || problem) fail(problem ?? 'Farm Rx could not name the crop year for this movement.')
+    const write = this.dependencies.gateway.assignBinMovementCropYearRpc
+    if (!write) throw new Error(CROP_YEAR_RECONCILE_PENDING)
+    let raw: unknown
+    try {
+      raw = await write.call(this.dependencies.gateway, farmId, transactionId, cropYear, context)
+    } catch (error) {
+      const candidate = error as { code?: unknown; message?: unknown }
+      if ((candidate.code === '42883' || candidate.code === 'PGRST202') && /assign_bin_movement_crop_year/i.test(String(candidate.message ?? ''))) {
+        throw new Error(CROP_YEAR_RECONCILE_PENDING)
+      }
+      throw error
+    }
+    await this.dependencies.verifyOperationContext(context)
+    const saved = binTransaction(raw)
+    if (saved.farm_id !== farmId || saved.id !== transactionId || saved.crop_year !== cropYear) {
+      fail('Farm Rx could not confirm the crop year was named.')
+    }
+    return saved
   }
   async saveLoad(id: string, draft: GrainLoadDraft) { return this.saveLoadOperation(id, draft, await this.dependencies.getOperationContext()) }
   // The id belongs to the ticket, not to the attempt: the caller keeps one across every retry, and the

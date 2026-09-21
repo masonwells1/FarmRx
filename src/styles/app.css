@@ -1237,6 +1237,11 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .harvest-from-loads-confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
 .harvest-from-loads-confirm p { flex-basis: 100%; }
 .field-from-loads { color: var(--muted-text, #4a4a4a); }
+/* LD-2: the one-time crop-year reconciliation list. It disappears once every movement has a year,
+   so it is styled as a task to finish rather than a permanent part of the Bins page. */
+.crop-year-reconcile select { min-height: 48px; font-size: 18px; }
+.crop-year-reconcile .text-action { min-height: 48px; }
+.crop-year-reconcile p { font-size: 18px; }
 .load-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 18px; }
 .load-table th, .load-table td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--hairline, rgba(0, 0, 0, 0.16)); }
 .load-table .text-action { min-height: 48px; }

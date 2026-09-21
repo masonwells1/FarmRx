@@ -257,11 +257,10 @@ function AppLayout() {
   // private financial data. The reader is handed to them ONLY when this member can read those, so
   // a worker without financial access makes no load request from either screen. Memoised because
   // both pages use it as an effect dependency.
+  const canReadPrivateFinancials = profile?.capabilities.canReadPrivateFinancials === true;
   const readHarvestLoads = useMemo(
-    () => profile?.capabilities.canReadPrivateFinancials
-      ? () => grainServices.grainRepository.listHarvestLoads()
-      : undefined,
-    [profile?.capabilities.canReadPrivateFinancials],
+    () => (canReadPrivateFinancials ? () => grainServices.grainRepository.listHarvestLoads() : undefined),
+    [canReadPrivateFinancials],
   );
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
@@ -340,7 +339,7 @@ function AppLayout() {
             <Route path="/fields/:id/edit" element={<CapabilityRoute module="fields" editOnly><FieldFormPage /></CapabilityRoute>} />
             <Route
               path="/grain/*"
-              element={<CapabilityRoute module="grain" lockWrites><GrainPage services={grainServices} /></CapabilityRoute>}
+              element={<CapabilityRoute module="grain" lockWrites><GrainPage services={grainServices} canManageFarm={profile?.capabilities.canManageFarm === true} /></CapabilityRoute>}
             />
             <Route
               path="/inventory"

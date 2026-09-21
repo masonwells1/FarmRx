@@ -30,7 +30,7 @@ const isSaleLimitDraft = (key: string, payload: unknown): payload is SaleLimitDr
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOfferType, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainContractType, GrainLoad, GrainLoadDraft, GrainServices, GrainWorkspace, LoadTruck, MarketingAlertRule, MarketingAlertRuleType, MarketingPlanTarget, PositionScope, ProductionEstimate } from "./data/grain";
-import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, LOAD_RECORD_PENDING, marketedPercent, normalizeLoadEffects, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
+import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, normalizeLoadEffects, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -136,6 +136,77 @@ const GRAIN_TABS = [
   { slug: "loads", label: "Loads" },
   { slug: "storage", label: "Bins & basis" },
 ];
+/** LD-2: the one-time list of bin movements written before crop years existed.
+ *
+ * Those rows are an explicit "crop year unknown" bucket. No year-specific figure counts them and
+ * nothing assigns them to the bin's baseline year on the farmer's behalf, because a wrong guess
+ * there would put carry-over bushels into the current year's free-and-committed maths. This is the
+ * only way to name them, it can be done once per movement, and the server refuses a year that would
+ * leave that lot short. The whole section disappears once every movement has a year, which is why
+ * it lives here rather than behind a settings menu nobody opens. */
+function CropYearReconciliation({ workspace, services, canManageFarm, onSaved }: { workspace: GrainWorkspace; services: GrainServices; canManageFarm: boolean; onSaved: () => Promise<void> }) {
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const unknown = movementsWithoutCropYear(workspace.bin_transactions);
+  if (unknown.length === 0 || !canManageFarm) return null;
+  const binName = (id: string) => workspace.grain_bins.find((bin) => bin.id === id)?.name ?? "a bin";
+  const commodityLabel = (id: string) => workspace.fields.commodities.find((item) => item.id === id)?.name ?? id;
+  const thisYear = new Date().getFullYear();
+  const years = [thisYear + 1, thisYear, thisYear - 1, thisYear - 2, thisYear - 3];
+  const assign = async (transactionId: string) => {
+    const chosen = Number(picked[transactionId]);
+    const problem = validateAssignedCropYear(chosen);
+    if (problem) { setMessage(problem); return }
+    setBusyId(transactionId);
+    setMessage(null);
+    try {
+      await services.grainRepository.assignBinMovementCropYear(transactionId, chosen);
+      await onSaved();
+    } catch (error) {
+      setMessage(farmerError(error, "name the crop year for this movement"));
+    } finally { setBusyId(null) }
+  };
+  return (
+    <section className="grain-section crop-year-reconcile">
+      <div className="section-heading"><div><span className="eyebrow">Older movements</span><h2>Which crop year were these?</h2></div></div>
+      <p>
+        {unknown.length === 1 ? "One bin movement was" : `${unknown.length} bin movements were`} recorded before Farm Rx
+        kept track of crop years. Until you say which year each one was, {unknown.length === 1 ? "it stays" : "they stay"} out
+        of every committed and free bushel figure &mdash; Farm Rx will not guess between carry-over and this year&rsquo;s crop.
+      </p>
+      {message && <p className="load-message" role="status">{message}</p>}
+      <table className="load-table">
+        <thead><tr><th>Date</th><th>Bin</th><th>Crop</th><th>Movement</th><th>Crop year</th><th /></tr></thead>
+        <tbody>
+          {unknown.map((movement) => (
+            <tr key={movement.id}>
+              <td>{movement.occurred_on}</td>
+              <td>{binName(movement.grain_bin_id)}</td>
+              <td>{commodityLabel(movement.commodity_id)}</td>
+              <td>{movement.direction === "in" ? "In" : "Out"} {movement.bushels.toLocaleString()} bu</td>
+              <td>
+                {/* aria-label rather than a hidden label: the repo's `sr-only` class is used in
+                    places but is not defined in any stylesheet, so text relying on it is visible. */}
+                <select aria-label={`Crop year for the ${movement.occurred_on} movement`} value={picked[movement.id] ?? ""} onChange={(event) => setPicked((current) => ({ ...current, [movement.id]: event.target.value }))}>
+                  <option value="">Pick a year</option>
+                  {years.map((year) => <option key={year} value={year}>{year}</option>)}
+                </select>
+              </td>
+              <td>
+                <button className="text-action" type="button" disabled={busyId !== null || !picked[movement.id]} onClick={() => void assign(movement.id)}>
+                  {busyId === movement.id ? "Saving\u2026" : "Save year"}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="panel-note">A crop year can be named once. If you name the wrong one, correct it the way the ledger corrects everything else &mdash; with a movement, not by rewriting the past.</p>
+    </section>
+  );
+}
+
 /** LD-1: a blank ticket. Dated today because that is what a farmer hauling right now needs, and a bin
  * origin because grain leaving storage is the load a farm records year-round.
  *
@@ -293,7 +364,11 @@ function binPosition(workspace: GrainWorkspace, bin: GrainBin) {
   };
 }
 
-export function GrainPage({ services }: { services: GrainServices }) {
+/** `canManageFarm` decides whether the crop-year reconciliation list is offered. Naming what a
+ * past movement was is restating history, so it takes an owner or a manager -- the server refuses
+ * anyone else by name, and this keeps the list out of a worker's way rather than letting them find
+ * a button that always fails. */
+export function GrainPage({ services, canManageFarm = false }: { services: GrainServices; canManageFarm?: boolean }) {
   const [workspace, setWorkspace] = useState<GrainWorkspace | null>(null);
   const [attentionQueueKey, setAttentionQueueKey] = useState<string | null>(null);
   const [lastReceiptId, setLastReceiptId] = useState<string | null>(null);
@@ -1088,6 +1163,12 @@ export function GrainPage({ services }: { services: GrainServices }) {
               whisper();
             }}
             onReceipt={setLastReceiptId}
+          />
+          <CropYearReconciliation
+            workspace={workspace}
+            services={services}
+            canManageFarm={canManageFarm}
+            onSaved={async () => { await refresh(true); whisper(); }}
           />
           <Basis
             workspace={workspace}

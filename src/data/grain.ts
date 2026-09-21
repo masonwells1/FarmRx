@@ -289,6 +289,21 @@ export interface LoadVoidResult {
 export interface LoadLot { commodity_id: string; crop_year: number }
 
 export const LOAD_RECORD_PENDING = 'Recording a load arrives with the next database update.'
+export const CROP_YEAR_RECONCILE_PENDING = 'Naming the crop year of older movements arrives with the next database update.'
+
+/** LD-2: the movements that carry no crop year. They are an explicit "unknown" bucket -- no
+ * year-specific figure counts them and nothing assigns them to the bin baseline's year on the
+ * farmer's behalf. This is what the reconciliation list is built from. */
+export function movementsWithoutCropYear(transactions: readonly BinTransaction[]): BinTransaction[] {
+  return transactions.filter((row) => row.crop_year === null)
+}
+
+/** LD-2: the same 1900-2200 range the database checks, so the picker cannot offer an answer the
+ * server would refuse. */
+export function validateAssignedCropYear(cropYear: number): string | null {
+  if (!Number.isInteger(cropYear) || cropYear < 1900 || cropYear > 2200) return 'Pick a crop year.'
+  return null
+}
 
 /** LD-1: the browser's twin of the server's derivation. The origin decides the lot and nothing else
  * may; this returns null when the origin cannot name one, and the form then refuses to save rather
@@ -501,6 +516,9 @@ export interface GrainRepository {
    * without financial access uses every day. The caller asks for this ONLY when that member can read
    * private financials, so a worker's Harvest makes no load read at all. */
   listHarvestLoads(): Promise<GrainLoad[]>
+  /** LD-2: name the crop year of a bin movement written before crop years existed. Owner or manager
+   * only, one-way, and refused by the server when the answer would leave that year short. */
+  assignBinMovementCropYear(transactionId: string, cropYear: number): Promise<BinTransaction>
   saveLoad(id: string, draft: GrainLoadDraft): Promise<GrainLoad>
   voidLoad(loadId: string, reason: string): Promise<LoadVoidResult>
   recordContractDelivery(delivery: GrainContractDelivery): Promise<void>

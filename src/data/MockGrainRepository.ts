@@ -1,7 +1,7 @@
 import type { FieldsRepository } from './fields'
 import type { BinTransaction, BinTransactionDirection, CashBid, FirmOffer, FuturesQuote, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, GrainRepository, GrainSaleLimit, GrainWorkspace, LoadVoidBlocker, LoadVoidResult, MarketDataService, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaMarketReport, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
-import { contractIsCorrectable, loadEffectsAvailable, loadLotFor, sameScope, scopeOf, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason } from './grain'
+import { contractIsCorrectable, loadEffectsAvailable, loadLotFor, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason } from './grain'
 import { localCalendarDay, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { activeBinCommodityIds, deriveBinOnHand, PRE_BASELINE_BIN_MOVEMENT_MESSAGE, validateBinTransaction, validateGrainBin } from './binLedger'
@@ -98,6 +98,26 @@ export class MockGrainRepository implements GrainRepository {
   async editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, _operationId: string) { const problem = validateContractCorrectionReason(reason); if (problem) throw new Error(problem); const workspace = await load(this.fieldsRepository); const current = workspace.grain_contracts.find((row) => row.id === contractId); if (!current) throw new Error('This contract is no longer available. Reload before trying again.'); if (current.updated_at !== expectedUpdatedAt) throw new Error('FARM_RX_STALE_WRITE'); if (!contractIsCorrectable(workspace, contractId)) throw new Error('This contract already has delivered bushels and can no longer be changed.'); const next = { ...current, ...(changes.buyer !== undefined ? { buyer: changes.buyer.trim() } : {}), ...(changes.bushels !== undefined ? { bushels: changes.bushels } : {}), ...(changes.delivery_start !== undefined ? { delivery_start: changes.delivery_start || null } : {}), ...(changes.delivery_end !== undefined ? { delivery_end: changes.delivery_end || null } : {}), ...(changes.contract_number !== undefined ? { contract_number: changes.contract_number?.trim() || null } : {}), ...(changes.notes !== undefined ? { notes: changes.notes?.trim() || null } : {}), updated_at: now() }; const errors = validateGrainContract(next, new Set(workspace.fields.commodities.map((commodity) => commodity.id))); if (errors.length) throw new Error(errors.join(' ')); persist({ ...grainSlice(workspace), grain_contracts: workspace.grain_contracts.map((row) => row.id === contractId ? next : row) }); return next }
   async listLoadTrucks() { return [{ id: seedId(1201), name: 'Red semi' }, { id: seedId(1202), name: 'Blue tandem' }] }
   async listHarvestLoads(): Promise<GrainLoad[]> { const workspace = await load(this.fieldsRepository); return workspace.grain_loads.filter((row) => row.effect_harvest && row.voided_at === null) }
+  async assignBinMovementCropYear(transactionId: string, cropYear: number): Promise<BinTransaction> {
+    const problem = validateAssignedCropYear(cropYear)
+    if (problem) throw new Error(problem)
+    const workspace = await load(this.fieldsRepository)
+    const existing = workspace.bin_transactions.find((row) => row.id === transactionId)
+    if (!existing) throw new Error('That movement is no longer available. Reload before trying again.')
+    if (existing.crop_year !== null) {
+      if (existing.crop_year === cropYear) return existing
+      throw new Error(`This movement already names the ${existing.crop_year} crop and cannot be changed.`)
+    }
+    // The same refusal the server makes: naming a year the bin never held that grain in would
+    // create a lot out of nothing.
+    const named: BinTransaction = { ...existing, crop_year: cropYear }
+    const after = { ...workspace, bin_transactions: workspace.bin_transactions.map((row) => row.id === transactionId ? named : row) }
+    if (lotBalance(after, existing.grain_bin_id, existing.commodity_id, cropYear) < 0) {
+      throw new Error(`Calling this the ${cropYear} crop would leave that year short.`)
+    }
+    persist({ ...grainSlice(workspace), bin_transactions: after.bin_transactions })
+    return named
+  }
   async saveLoad(id: string, draft: GrainLoadDraft) {
     const workspace = await load(this.fieldsRepository)
     const problems = validateGrainLoad(draft, workspace)
