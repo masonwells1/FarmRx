@@ -206,26 +206,6 @@ begin
     raise exception 'name the truck or pick one from equipment, not both';
   end if;
 
-  -- LD-4 repair (Codex P1 on da028bf): a retry after a lost response has to return the ticket the
-  -- first attempt already committed. LD-1 guaranteed that and LD-4 broke it for one case -- a
-  -- one-lot bin hauled to exactly zero. The first call commits the ticket and its bin-out; the
-  -- retry then finds no lot with anything left in it and is refused at "that bin holds no crop
-  -- with a crop year", seventy lines before the replay check below ever runs. The farmer is told
-  -- their load failed when it is already recorded, and retrying again never helps.
-  --
-  -- Before LD-4 this could not happen: the bin's baseline row answered, and movements never remove
-  -- it. So the replay's own lot is adopted here when the caller named none. Nothing is taken on
-  -- trust -- the stored lot still has to be one the bin has a record of, and the field-by-field
-  -- replay comparison below still decides whether this is the same ticket or a reused id.
-  if v_crop_year is null and v_origin_kind = 'bin' then
-    select crop_year, commodity_id into v_replay_year, v_replay_commodity
-      from public.grain_loads where id = v_id and farm_id = p_farm_id;
-    if found then
-      v_crop_year := v_replay_year;
-      if v_commodity is null then v_commodity := v_replay_commodity; end if;
-    end if;
-  end if;
-
   -- The origin decides the commodity and the crop year. Nothing else may.
   if v_origin_kind = 'field' then
     if v_origin_crop is null then raise exception 'pick the field crop this load came from'; end if;
@@ -250,6 +230,27 @@ begin
     -- filed under would be decided against a bin that had already changed.
     select * into v_bin from public.grain_bins where id = v_origin_bin and farm_id = p_farm_id for update;
     if not found then raise exception 'that bin does not belong to this farm'; end if;
+
+    -- LD-4 repair (Codex P1 on da028bf, corrected on 2e7e6d4): a retry after a lost response has to
+    -- return the ticket the first attempt already committed. LD-1 guaranteed that and LD-4 broke it
+    -- for one case -- a one-lot bin hauled to exactly zero -- because the retry finds no lot with
+    -- anything left in it and is refused seventy lines before the replay check it needed to reach.
+    --
+    -- This lookup sits AFTER the lock above, and that placement is the whole point. Before the
+    -- lock, a retry overlapping a slow first attempt could read "no such ticket", wait on the lock
+    -- while the first call committed and emptied the lot, and then fail the zero-lot check anyway.
+    -- Reading it inside the serialised window means the ticket the first call wrote is visible.
+    --
+    -- Nothing is taken on trust: the stored lot must still be one the bin has a record of, and the
+    -- field-by-field replay comparison below still decides same ticket or reused id.
+    if v_crop_year is null then
+      select crop_year, commodity_id into v_replay_year, v_replay_commodity
+        from public.grain_loads where id = v_id and farm_id = p_farm_id;
+      if found then
+        v_crop_year := v_replay_year;
+        if v_commodity is null then v_commodity := v_replay_commodity; end if;
+      end if;
+    end if;
 
     -- LD-4: the bin's lots, not its baseline. Until now this branch read bin_inventory alone, so a
     -- bin filled only by a load's own bin-in effect had no baseline and could not be an origin at
@@ -679,3 +680,97 @@ end $$;
 
 revoke all on function public.append_bin_movement(uuid, jsonb) from public, anon;
 grant execute on function public.append_bin_movement(uuid, jsonb) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 4. assign_bin_movement_crop_year, queued behind the same bin lock
+-- ---------------------------------------------------------------------------
+--
+-- Replaces LD-2's definition. Two changes, both described inside: it takes the bin row lock before
+-- it decides anything, and its baseline rule matches the one every other reader now uses. Naming a
+-- crop year CREATES a lot, so it belongs in the same queue as the functions that count them.
+
+create or replace function public.assign_bin_movement_crop_year(
+  p_farm_id uuid,
+  p_transaction_id uuid,
+  p_crop_year integer
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_movement public.bin_transactions%rowtype;
+  v_inventory public.bin_inventory%rowtype;
+  v_has_inventory boolean := false;
+  v_baseline_is_this_lot boolean;
+  v_baseline_covers_commodity boolean;
+  v_year_balance numeric;
+begin
+  if auth.uid() is null
+     or public.request_uses_service_role()
+     or not public.can_manage_farm(p_farm_id) then
+    raise exception 'only an owner or manager can name the crop year of a past movement';
+  end if;
+  if p_crop_year is null or p_crop_year < 1900 or p_crop_year > 2200 then
+    raise exception 'that is not a crop year';
+  end if;
+
+  select * into v_movement from public.bin_transactions
+    where id = p_transaction_id and farm_id = p_farm_id for update;
+  if not found then raise exception 'that movement does not belong to this farm'; end if;
+
+  -- LD-4 repair (Codex P2 on 2e7e6d4): lock the BIN, not just the movement. Naming a crop year
+  -- creates a lot, and save_grain_load defaults a load's lot by counting the lots a bin holds. With
+  -- only the movement row locked, a manager could name a year in the window between that count and
+  -- the movement the load appends -- so the load would file itself under the single lot it saw
+  -- while the bin had just gained a second. The farmer would never have been asked. Taking the
+  -- same row append_bin_movement and save_grain_load take puts all three in one queue.
+  perform 1 from public.grain_bins
+    where id = v_movement.grain_bin_id and farm_id = p_farm_id for update;
+
+  if v_movement.crop_year is not null then
+    if v_movement.crop_year = p_crop_year then
+      return to_jsonb(v_movement);
+    end if;
+    raise exception 'this movement already names the % crop and cannot be changed', v_movement.crop_year;
+  end if;
+
+  select * into v_inventory from public.bin_inventory
+    where grain_bin_id = v_movement.grain_bin_id and farm_id = p_farm_id;
+  v_has_inventory := found;
+  -- Whose BUSHELS the baseline is: its own commodity in its own crop year.
+  v_baseline_is_this_lot := v_has_inventory
+    and v_inventory.commodity_id = v_movement.commodity_id
+    and v_inventory.crop_year = p_crop_year;
+  -- Whether a movement is already inside that baseline: a COMMODITY question, corrected here for
+  -- the same reason it was corrected in append_bin_movement and bin_lots. A baseline measures the
+  -- bin, not one year of it.
+  v_baseline_covers_commodity := v_has_inventory
+    and v_inventory.commodity_id = v_movement.commodity_id;
+
+  -- The balance this lot would have once this movement joins it.
+  select coalesce(case when v_baseline_is_this_lot then v_inventory.bushels else 0 end, 0)
+       + coalesce(sum(case when direction = 'in' then bushels else -bushels end), 0)
+    into v_year_balance
+    from public.bin_transactions
+   where grain_bin_id = v_movement.grain_bin_id
+     and farm_id = p_farm_id
+     and commodity_id = v_movement.commodity_id
+     and (crop_year = p_crop_year or id = p_transaction_id)
+     and (not v_baseline_covers_commodity or occurred_on > v_inventory.measured_at::date);
+  if v_year_balance < 0 then
+    raise exception 'calling this the % crop would leave that year short by % bushels',
+      p_crop_year, abs(v_year_balance);
+  end if;
+
+  update public.bin_transactions
+     set crop_year = p_crop_year
+   where id = p_transaction_id and farm_id = p_farm_id
+  returning * into v_movement;
+
+  return to_jsonb(v_movement);
+end $$;
+
+revoke all on function public.assign_bin_movement_crop_year(uuid, uuid, integer) from public, anon;
+grant execute on function public.assign_bin_movement_crop_year(uuid, uuid, integer) to authenticated;

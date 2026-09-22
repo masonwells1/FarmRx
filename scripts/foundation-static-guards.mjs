@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 351')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 354')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -984,7 +984,7 @@ export function foundationStaticGuard(root = process.cwd()) {
     // the replay check -- telling a farmer their load failed when it was already recorded. The
     // stored lot is adopted only when the caller named none, so a retry naming a different lot is
     // still a reused id.
-    requireText(errors, ld4Migration, "if v_crop_year is null and v_origin_kind = 'bin' then", 'ld4:a-retry-still-returns-the-ticket-it-saved')
+    requireText(errors, ld4Migration, 'select crop_year, commodity_id into v_replay_year, v_replay_commodity', 'ld4:a-retry-still-returns-the-ticket-it-saved')
     // The form keeps the origin for the next ticket, and a save can empty the year it named. A
     // choice the picker no longer offers has to be dropped, or the form refuses every further save
     // with no control on screen to fix it.
@@ -1004,7 +1004,11 @@ export function foundationStaticGuard(root = process.cwd()) {
     // other subselect a few lines above, which decides whose BUSHELS the baseline is, does match on
     // the crop year -- correctly, because those are the baseline's own lot. Two questions.
     requireText(errors, ld4Migration, 't.occurred_on > coalesce((select inv.measured_on from inv\n                                                     where inv.commodity_id = lots.commodity_id)', 'ld4:one-baseline-rule-everywhere')
-    requireText(errors, ld4Migration, '(not v_baseline_covers_commodity or occurred_on > v_inventory.measured_at::date)', 'ld4:one-baseline-rule-everywhere')
+    // Counted, not merely present. Two functions in this migration ask this question -- the lot
+    // balance and the crop-year assignment -- and a guard that only asks whether the predicate
+    // appears stays green while one of them reverts. That is the fourth time this shape has
+    // slipped through on this tranche, so it is counted every time now.
+    if ((ld4Migration.split('(not v_baseline_covers_commodity or occurred_on > v_inventory.measured_at::date)').length - 1) !== 2) errors.push('ld4:one-baseline-rule-everywhere')
     {
       const superseded = committedFree.slice(committedFree.indexOf('export function isLotMovementSuperseded'))
       if (superseded.slice(0, superseded.indexOf('}')).includes('crop_year')) errors.push('ld4:one-baseline-rule-everywhere')
@@ -1029,7 +1033,20 @@ export function foundationStaticGuard(root = process.cwd()) {
     // what the bin holds, and that narrowing belongs where the load's effects are known.
     if (/\.filter\(\(lot\) => lot\.bushels > 0\.000001\)/.test(read(root, 'src/data/SupabaseGrainRepository.ts'))) errors.push('ld4:an-emptied-lot-can-still-be-named')
     requireText(errors, grainModule, 'const originLots = movesBushels ? onHandLots : recordedLots;', 'ld4:an-emptied-lot-can-still-be-named')
-    requireText(errors, grainModule, "const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : onHandLots;", 'ld4:an-emptied-lot-can-still-be-named')
+    requireText(errors, grainModule, "const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : originLots;", 'ld4:an-emptied-lot-can-still-be-named')
+
+    // Everything that can change which lots a bin has takes the same row lock, so counting them and
+    // acting on that count cannot be interleaved. Naming a crop year CREATES a lot, so it queues
+    // there too -- it locked only the movement row before.
+    requireText(errors, ld4Migration, 'perform 1 from public.grain_bins', 'ld4:everything-that-changes-a-bin-queues-behind-it')
+    // And the replay lookup reads INSIDE that lock. Before it, an overlapping retry could read "no
+    // such ticket", wait on the lock while the first call emptied the lot, and fail anyway.
+    {
+      const bin = ld4Migration.slice(ld4Migration.indexOf('if v_origin_bin is null then raise exception'))
+      const lock = bin.indexOf('for update;')
+      const replay = bin.indexOf('select crop_year, commodity_id into v_replay_year')
+      if (lock < 0 || replay < 0 || replay < lock) errors.push('ld4:the-replay-lookup-reads-inside-the-lock')
+    }
     // A void puts bushels back, so the lots have to be read again -- the stale answer wins over the
     // workspace refresh and would keep offering one lot where the server now sees two.
     if ((grainModule.split('setLotsRefresh((count) => count + 1);').length - 1) !== 2) errors.push('ld4:a-void-changes-what-the-bin-holds-too')

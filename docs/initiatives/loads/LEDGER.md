@@ -582,7 +582,7 @@ edit cannot quietly weaken it back.
 - **Nineteen browser regression groups** across two files — ten in `committedFree.regression.ts`,
   nine in the new `loadOriginLot.regression.ts`, the ninth covering the repair below.
 - Static guards PASS with **twenty-three new LD-4 guards** (eight, plus fifteen for the repairs below);
-  **mutation drill 351/351** after merging the LD-3 repair and adding the repair mutations,
+  **mutation drill 354/354** after merging the LD-3 repair and adding the repair mutations,
   count changed in both files that pin it.
 - **Browser: 119 passed, 15 skipped** on desktop and phone, including a new LD-4 journey that reads
   both lots off the picker, is refused for not answering, and then proves the chosen year is what
@@ -790,10 +790,39 @@ rule rather than checking it against the guard that enforces it. That is the dif
 recording: **copying a rule is not verifying it**, and the only reason this surfaced is that LD-4
 put a third evaluator beside two that already disagreed.
 
+### A seventh round: the lock was right, its edges were not
+
+Three findings, and all three are the same lock from a different angle. Taking it was correct; what
+was wrong was **what still sat outside it**.
+
+**The replay lookup read before the lock.** (P1) The sixth round moved the stored ticket's lot into
+`save_grain_load` so a retry on an emptied bin could replay. That lookup ran *before* the bin was
+locked — so an overlapping retry could read "no such ticket", wait on the lock while the first call
+committed and emptied the lot, then fail the zero-lot check anyway. The repair was right and its
+placement was not; the lookup now reads inside the serialised window.
+
+**Naming a crop year queued behind nothing.** (P2) `assign_bin_movement_crop_year` locked the
+movement row only. But naming a year **creates a lot**, and `save_grain_load` defaults a load by
+counting lots — so a manager could add one in the window between that count and the movement the
+load appends, and the ticket would be filed under a year the farmer was never asked about. It now
+takes the same bin row, and its baseline rule was corrected to match the sixth round's.
+
+**A lone emptied lot could be shown but not chosen.** (P2) A bin whose only record is an emptied lot
+renders one line rather than a picker — correctly, there is nothing to choose between — but
+defaulting looked at what the bin still *holds*, which is nothing. So a ticket moving no bushels was
+refused with no control on screen to answer with. Defaulting now uses the same list the form
+offered, which is identical when the load moves bushels and wider when it does not.
+
+**The guard trap, a fourth time.** The predicate the baseline rule turns on now appears in two
+functions, and the guard pinning it passed while one of them reverted. That is the fourth occasion
+on this tranche where *a guard asked whether a string appears when the string appears twice*. It is
+counted now, and the comment says why — but the honest lesson is that `requireText` on a shared
+idiom is a weak guard by construction, and the drill is what keeps finding it.
+
 ### Live steps
 
 **One migration to apply: `20260921180000_ld4_bin_origin_lot.sql`**, after LD-2's. It now also
-replaces `append_bin_movement`, for the one-line baseline correction above — every other guard,
+replaces `append_bin_movement` and `assign_bin_movement_crop_year`, for the baseline and locking corrections above — every other guard,
 message and error code in that function is LD-2's, unchanged.
 
 Until it is applied the

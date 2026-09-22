@@ -618,6 +618,88 @@ begin
   end if;
 end $$;
 
+-- ------------------------------------------------- 10g. a bin whose only record is an emptied lot
+-- Codex P2 on 2e7e6d4. The picker shows one line rather than a selector when the bin has a single
+-- recorded lot, which is right -- there is nothing to choose between. But defaulting used to look
+-- at what the bin still HOLDS, and an emptied lot holds nothing, so a ticket that moves no bushels
+-- was refused with no control on screen to answer with. The server half is checked here: a lone
+-- emptied lot named explicitly is accepted, which is what the form now relies on.
+do $$
+declare v_lots integer; v_load public.grain_loads%rowtype;
+begin
+  -- The one-lot bin: hauled to zero in 9b, then a ticket-only load in 10e. Its 2024 lot is its
+  -- ONLY record, and it is empty.
+  select count(*) into v_lots from public.bin_lots('00000000-0000-4000-8000-000000000410','00000000-0000-4000-8000-000000000422') where crop_year is not null;
+  if v_lots <> 1 then
+    raise exception 'the fixture no longer has a single recorded lot, so this proves nothing (% lots)', v_lots;
+  end if;
+  if (select bushels from public.bin_lots('00000000-0000-4000-8000-000000000410','00000000-0000-4000-8000-000000000422') where crop_year = 2024) <> 0 then
+    raise exception 'that lone lot is no longer empty, so this proves nothing';
+  end if;
+
+  perform public.save_grain_load('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+    'id','00000000-0000-4000-8000-00000000045f','load_date','2026-11-22',
+    'origin_kind','bin','origin_grain_bin_id','00000000-0000-4000-8000-000000000422',
+    'crop_year',2024,'commodity_id','corn_yellow',
+    'destination_kind','buyer','destination_buyer','LD4 Elevator','net_bushels',250,
+    'effect_bin_out',false));
+  select * into v_load from public.grain_loads where id = '00000000-0000-4000-8000-00000000045f';
+  if v_load.crop_year <> 2024 then
+    raise exception 'a lone emptied lot could not be named: the ticket reads %', v_load.crop_year;
+  end if;
+end $$;
+
+-- ------------------------------------------------- 10h. naming a crop year queues behind the bin
+-- Codex P2 on 2e7e6d4. assign_bin_movement_crop_year CREATES a lot, and save_grain_load defaults a
+-- load by counting them -- so with only the movement row locked, a manager could name a year in
+-- the window between that count and the movement the load appends, and the load would file itself
+-- under the single lot it saw while the bin had just gained a second. The farmer was never asked.
+--
+-- A single-session suite cannot stage that interleaving. What it can check is that the function
+-- takes the same row the other two take, which is what puts all three in one queue.
+do $$
+declare v_body text;
+begin
+  select prosrc into v_body from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'assign_bin_movement_crop_year';
+  if v_body is null then raise exception 'assign_bin_movement_crop_year is not installed'; end if;
+  if position('from public.grain_bins' in v_body) = 0 or position('for update' in v_body) = 0 then
+    raise exception 'naming a crop year does not lock the bin it changes';
+  end if;
+  -- And it uses the corrected baseline rule, like every other reader of a bin's lots. Pinned as the
+  -- PREDICATE, not the variable: declaring v_baseline_covers_commodity and then not using it in the
+  -- one place that decides supersession would otherwise read as compliance.
+  if position('not v_baseline_covers_commodity or occurred_on' in v_body) = 0 then
+    raise exception 'naming a crop year still supersedes by crop year rather than by commodity';
+  end if;
+end $$;
+
+-- ------------------------------------------------- 10i. and it still does its job
+do $$
+declare v_result jsonb; v_failed boolean := false;
+begin
+  -- The never-measured bin still carries the unstamped 400 bushels from section 10.
+  v_result := public.assign_bin_movement_crop_year(
+    '00000000-0000-4000-8000-000000000410','00000000-0000-4000-8000-000000000456',2026);
+  if (v_result->>'crop_year')::integer <> 2026 then
+    raise exception 'naming a crop year returned %, expected 2026', v_result->>'crop_year';
+  end if;
+  -- Naming it again with a different year is still refused, as LD-2 required.
+  begin
+    perform public.assign_bin_movement_crop_year(
+      '00000000-0000-4000-8000-000000000410','00000000-0000-4000-8000-000000000456',2025);
+  exception when others then
+    v_failed := true;
+    if position('already names the 2026 crop' in sqlerrm) = 0 then
+      raise exception 'renaming a stamped movement was refused, but for the wrong reason: %', sqlerrm;
+    end if;
+  end;
+  if not v_failed then
+    raise exception 'a movement that already names a crop year was renamed';
+  end if;
+end $$;
+
 -- ------------------------------------------------- 11. a field origin is untouched
 -- LD-4 changed one branch. The field branch still takes its lot from the crop assignment and still
 -- refuses a load that disagrees with it.

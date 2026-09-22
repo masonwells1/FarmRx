@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 351
+const expectedMutationCount = 354
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1010,7 +1010,7 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace("const lotsUnavailable = lotsState === 'unavailable';", 'const lotsUnavailable = false;'))
   detected('a bin whose lots could not be read stops saying so, and is guessed at from a list that may be short', 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
   reset()
-  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("  if v_crop_year is null and v_origin_kind = 'bin' then", '  if false then'))
+  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('      select crop_year, commodity_id into v_replay_year, v_replay_commodity\n        from public.grain_loads where id = v_id and farm_id = p_farm_id;', '      v_replay_year := null; v_replay_commodity := null;'))
   detected('a retry after a lost response is refused once the bin it emptied has no lot left', 'ld4:a-retry-still-returns-the-ticket-it-saved')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('setDraft((current) => ({ ...current, origin_crop_year: "", origin_commodity_id: "" }));', ''))
@@ -1048,6 +1048,15 @@ try {
   reset()
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('      if (draft.origin_commodity_id) payload.commodity_id = draft.origin_commodity_id\n', ''))
   detected('the chosen lot is sent as a bare crop year, leaving the server to guess which crop it was', 'ld4:a-lot-is-a-commodity-in-a-crop-year')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : originLots;', 'const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : onHandLots;'))
+  detected('a bin whose only record is an emptied lot cannot name it, and shows no picker to try with', 'ld4:an-emptied-lot-can-still-be-named')
+  reset()
+  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('  perform 1 from public.grain_bins\n    where id = v_movement.grain_bin_id and farm_id = p_farm_id for update;', ''))
+  detected('naming a crop year stops queueing behind the bin, so it can add a lot mid-decision', 'ld4:everything-that-changes-a-bin-queues-behind-it')
+  reset()
+  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("    if v_crop_year is null then\n      select crop_year, commodity_id into v_replay_year, v_replay_commodity\n        from public.grain_loads where id = v_id and farm_id = p_farm_id;\n      if found then\n        v_crop_year := v_replay_year;\n        if v_commodity is null then v_commodity := v_replay_commodity; end if;\n      end if;\n    end if;\n", ''))
+  detected('the replay lookup leaves the lock, so an overlapping retry fails on a lot the first call emptied', 'ld4:the-replay-lookup-reads-inside-the-lock')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace("      // LD-4 repair (Codex P2 on 46d5252): a void writes compensating movements, so a lot the\n      // voided load had emptied is holding grain again. onSaved refreshes the workspace but not\n      // this read, and the stale answer wins over the workspace -- so the form would keep offering\n      // one lot where the server now sees two, and refuse the next save with no picker to fix it.\n      setLotsRefresh((count) => count + 1);\n", ''))
   detected('a void puts bushels back and the form never reads the lots again, so it keeps offering the wrong year', 'ld4:a-void-changes-what-the-bin-holds-too')

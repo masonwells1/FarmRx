@@ -4538,8 +4538,16 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   const movesBushels = effectsReady && draft.origin_kind === "bin" && draft.effect_bin_out;
   const originLots = movesBushels ? onHandLots : recordedLots;
   // The same split decides the lot itself: a year the farmer named is resolved against everything
-  // the bin has a record of, and a year nobody named is defaulted only from what it still holds.
-  const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : onHandLots;
+  // the bin has a record of, and a year nobody named is defaulted from whatever this load could
+  // legitimately have been offered.
+  //
+  // LD-4 repair (Codex P2 on 2e7e6d4): that second list is originLots, not onHandLots. A bin whose
+  // only record is an emptied lot shows one line rather than a picker -- correctly, there is
+  // nothing to choose between -- and defaulting against what the bin still HOLDS would then find
+  // nothing, so a ticket that moves no bushels was refused with no control on screen to answer
+  // with. Defaulting against the same list the form offered keeps the two in step: when the load
+  // moves bushels, originLots is onHandLots and nothing changes.
+  const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : originLots;
   const lot = loadLotFor(workspace, draft, binLotReady ? lotsForResolution : undefined);
   const problems = validateGrainLoad(draft, workspace, binLotReady ? lotsForResolution : undefined);
   const cropAssignments = workspace.fields.crop_assignments;
