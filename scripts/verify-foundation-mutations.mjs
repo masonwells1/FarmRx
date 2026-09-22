@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 335
+const expectedMutationCount = 337
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -986,7 +986,7 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace('effectsReady\n        ? draft', 'true\n        ? draft'))
   detected('a page left open across the migration sends effects it never showed', 'ld2:a-hidden-effect-is-never-sent')
   reset()
-  mutate('src/data/grain.ts', (source) => source.replace("  const lots = binLotsOnHand(\n    workspace.bin_inventory.find((row) => row.grain_bin_id === draft.origin_grain_bin_id),\n    workspace.bin_transactions.filter((row) => row.grain_bin_id === draft.origin_grain_bin_id),\n  )", "  const baselineOnly = workspace.bin_inventory.find((row) => row.grain_bin_id === draft.origin_grain_bin_id)\n  const lots = baselineOnly ? [{ commodity_id: baselineOnly.commodity_id, crop_year: baselineOnly.crop_year, bushels: baselineOnly.bushels }] : []"))
+  mutate('src/data/grain.ts', (source) => source.replace("  const lots = authoritativeLots ?? binLotsOnHand(\n    workspace.bin_inventory.find((row) => row.grain_bin_id === draft.origin_grain_bin_id),\n    workspace.bin_transactions.filter((row) => row.grain_bin_id === draft.origin_grain_bin_id),\n  )", "  const baselineOnly = workspace.bin_inventory.find((row) => row.grain_bin_id === draft.origin_grain_bin_id)\n  const lots = baselineOnly ? [{ commodity_id: baselineOnly.commodity_id, crop_year: baselineOnly.crop_year, bushels: baselineOnly.bushels }] : []"))
   detected('a bin origin goes back to reading its baseline, so a carry-over bin can only be hauled as the older year', 'ld4:a-bin-origin-reads-its-lots-not-its-baseline')
   reset()
   mutate('src/data/grain.ts', (source) => source.replace('return lots.length === 1 ?', 'return lots.length >= 1 ?'))
@@ -1003,6 +1003,12 @@ try {
   reset()
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("      if v_lot_commodity is null then\n        raise exception 'this bin has no record of the % crop', v_crop_year;\n      end if;", "      if v_lot_commodity is null then\n        v_lot_commodity := 'corn_yellow';\n      end if;"))
   detected('a chosen crop year is taken on trust, so a bin can be hauled as a year it never held', 'ld4:save-grain-load-checks-the-lot-is-real')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id)', 'originBinLots(workspace, draft.origin_grain_bin_id)'))
+  detected('the picker goes back to a movement list the row cap can truncate, so a two-lot bin can look like one', 'ld4:the-picker-asks-the-database-what-the-bin-holds')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('if (binLotReady && originBinId && lotsUnavailable) {', 'if (false) {'))
+  detected('a bin whose lots could not be read is guessed at from a list that may be short', 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('.filter((row) => row.movementCount > 0)', '.filter((row) => Math.abs(row.bushels) > 0.000001)'))
   detected('unresolved movements that cancel out today stop being named at all', 'ld3:an-unresolved-movement-is-named-however-it-nets')

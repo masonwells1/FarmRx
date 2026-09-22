@@ -31,6 +31,7 @@ import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceip
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOfferType, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainContractType, GrainLoad, GrainLoadDraft, GrainServices, GrainWorkspace, LoadTruck, MarketingAlertRule, MarketingAlertRuleType, MarketingPlanTarget, PositionScope, ProductionEstimate } from "./data/grain";
 import { deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
+import type { BinLotOnHand } from "./data/committedFree";
 import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, originBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
@@ -4479,14 +4480,37 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
     void services.grainRepository.listLoadTrucks().then((rows) => { if (current) setTrucks(rows) }).catch(() => { if (current) setTrucks([]) });
     return () => { current = false };
   }, [services]);
+  // LD-4 repair (Codex P1 on ba64007): ask the database what THIS bin holds, rather than deriving
+  // it from workspace.bin_transactions -- which loadWorkspace reads unbounded, so PostgREST's row
+  // cap can drop the oldest movements and an older still-active crop year with them. The browser
+  // would then see one lot where save_grain_load sees two, offer no choice, send no crop year, and
+  // the save would be refused with "pick which one this load came from" while the form shows no
+  // picker to answer with: a load the farmer simply cannot record.
+  //
+  // `undefined` means not asked yet or not answerable (offline, or the migration is not applied);
+  // the derivation below is the fallback for exactly those cases, and it is the right answer there
+  // because the pre-migration server reads the bin's baseline alone anyway.
+  const [authoritativeLots, setAuthoritativeLots] = useState<BinLotOnHand[] | undefined>(undefined);
+  const [lotsUnavailable, setLotsUnavailable] = useState(false);
+  const originBinId = draft.origin_kind === "bin" ? draft.origin_grain_bin_id : "";
+  useEffect(() => {
+    setAuthoritativeLots(undefined);
+    setLotsUnavailable(false);
+    if (!originBinId) return;
+    let current = true;
+    void services.grainRepository.listBinLots(originBinId)
+      .then((lots) => { if (!current) return; if (lots) setAuthoritativeLots(lots); })
+      .catch(() => { if (current) setLotsUnavailable(true) });
+    return () => { current = false };
+  }, [services, originBinId]);
   const redraft = () => { loadId.current = null };
   // The effect flags are a preference and deliberately survive a change of shape: a box the farmer
   // never touched keeps its default, and one they unticked stays unticked. What a load will
   // actually do is narrowed once, where it is sent.
   const update = (patch: Partial<GrainLoadDraft>) => { redraft(); setDraft((current) => ({ ...current, ...patch })) };
 
-  const lot = loadLotFor(workspace, draft);
-  const problems = validateGrainLoad(draft, workspace);
+  const lot = loadLotFor(workspace, draft, authoritativeLots);
+  const problems = validateGrainLoad(draft, workspace, authoritativeLots);
   const cropAssignments = workspace.fields.crop_assignments;
   const commodityLabel = (id: string) => workspace.fields.commodities.find((item) => item.id === id)?.name ?? id;
   const binName = (id: string | null) => workspace.grain_bins.find((bin) => bin.id === id)?.name ?? "a bin";
@@ -4509,7 +4533,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // farmer pick a year and be refused on save, which is LD-006 finding 1 with the roles reversed.
   const binLotReady = workspace.capabilities?.grain_load_bin_lot !== false;
   const originLots = draft.origin_kind === "bin" && binLotReady
-    ? originBinLots(workspace, draft.origin_grain_bin_id)
+    ? (authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id))
     : [];
   const availableEffects = effectsReady ? loadEffectsAvailable(draft) : [];
   const confirmedEffects = confirmedLoadEffects(draft);
@@ -4534,6 +4558,13 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
     try {
       // These speak to the farmer directly about the form in front of them. Routing them through the
       // error taxonomy would turn "pick the bin" into "Farm Rx could not record this load right now".
+      // LD-4 repair: the capability says the server reads lots, but this bin's lots could not be
+      // read. Falling back to the workspace derivation here would be the guess that causes the
+      // defect -- a short movement list looks exactly like a one-lot bin. Fail closed instead.
+      if (binLotReady && originBinId && lotsUnavailable) {
+        setMessage("Farm Rx could not read what this bin holds. Check your signal and try again.");
+        return;
+      }
       if (problems.length) { setMessage(problems[0]); return }
       setSaving(true);
       loadId.current ??= services.createGrainId();
@@ -4634,7 +4665,9 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
                   carry-over lot and this year's crop is the defect the whole initiative exists to
                   stop. The bushels beside each year are what that lot holds, so the choice is made
                   against the bin rather than from memory. */}
-              {binLotReady && draft.origin_grain_bin_id ? (
+              {binLotReady && draft.origin_grain_bin_id && lotsUnavailable ? (
+                <p className="load-lot">Farm Rx could not read what this bin holds right now, so it cannot say which crop year this load is.</p>
+              ) : binLotReady && draft.origin_grain_bin_id ? (
                 originLots.length === 0 ? (
                   <p className="load-lot">This bin holds no crop with a crop year, so a load cannot say which crop year it is yet.</p>
                 ) : originLots.length === 1 ? (

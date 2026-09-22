@@ -171,4 +171,35 @@ function draftFrom(patch: Partial<GrainLoadDraft>): GrainLoadDraft {
   assert(loadLotFor(workspace, draftFrom({ origin_crop_year: '2026' })) === null, "A crop year held only by another bin must not resolve.")
 }
 
-console.log('Load origin lot regressions passed (8 coverage groups).')
+// ---------------------------------------------------------------- 9. the database's answer wins
+// LD-4 repair (Codex P1 on ba64007). loadWorkspace reads bin_transactions unbounded and newest
+// first, so PostgREST's row cap drops the OLDEST movements -- and an older still-active crop year
+// with them. Derived from a short array the bin looks like a one-lot bin, the form offers no
+// choice, the save sends no crop year, and save_grain_load refuses it because IT sees two lots.
+// The farmer is then stuck: a refusal naming a choice the form is not showing.
+{
+  // The workspace knows only the 2025 baseline. The movement that put 4,000 bu of 2026 in the bin
+  // is past the cap and simply absent.
+  const truncated = workspaceWith([baseline(binA, 2025, 'corn_yellow', 6000)], [])
+  assert(loadLotFor(truncated, draftFrom({})) !== null, 'Without the repair a truncated workspace silently settles on one lot -- this pins the behaviour being replaced.')
+
+  // What the database actually holds, which is what save_grain_load reads.
+  const authoritative = [
+    { commodity_id: 'corn_yellow', crop_year: 2026, bushels: 4000 },
+    { commodity_id: 'corn_yellow', crop_year: 2025, bushels: 6000 },
+  ]
+  assert(loadLotFor(truncated, draftFrom({}), authoritative) === null, 'With the database answer the same bin must refuse to guess, exactly as the server will.')
+
+  const problems = validateGrainLoad(draftFrom({}), truncated, authoritative)
+  assert(problems.some((problem) => problem.includes('more than one crop year')), `The farmer must be asked, not refused after saving. Saw ${JSON.stringify(problems)}.`)
+
+  // And the answer they give is honoured against the database's list, not the short one.
+  const chosen = loadLotFor(truncated, draftFrom({ origin_crop_year: '2026' }), authoritative)
+  assert(chosen !== null && chosen.crop_year === 2026, 'A lot the workspace never saw must still be haulable once the database names it.')
+  assert(validateGrainLoad(draftFrom({ origin_crop_year: '2026' }), truncated, authoritative).length === 0, 'A chosen lot the database confirms must leave nothing to fix.')
+
+  // A year in neither list is still refused, so the authoritative path did not become a rubber stamp.
+  assert(loadLotFor(truncated, draftFrom({ origin_crop_year: '2019' }), authoritative) === null, 'The database list is a list, not a licence: an unheld year must still be refused.')
+}
+
+console.log('Load origin lot regressions passed (9 coverage groups).')

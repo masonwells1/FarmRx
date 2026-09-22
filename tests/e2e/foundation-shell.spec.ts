@@ -376,7 +376,11 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
     }
     // LD-4: the capability probe asking whether public.bin_lots is installed. Declared by shape
     // rather than matched by name, so a future call with a different body is still rejected.
-    if (url.pathname === '/rest/v1/rpc/bin_lots') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 2 || typeof value.p_farm_id !== 'string' || value.p_grain_bin_id !== '00000000-0000-0000-0000-000000000000') { await rejectShape('bin_lots body'); return }; await fulfillJson(route, []); return }
+    // LD-4: the capability probe uses the nil bin id and reads nothing. The lot picker calls the
+    // same function with a real bin id, and the rows it gets back are the fixture's own -- NOT
+    // derived from bin_transactions here, because deriving them in the mock would make the test
+    // agree with the browser by construction and prove nothing about the repair.
+    if (url.pathname === '/rest/v1/rpc/bin_lots') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 2 || typeof value.p_farm_id !== 'string' || typeof value.p_grain_bin_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_grain_bin_id)) { await rejectShape('bin_lots body'); return }; if (value.p_grain_bin_id === '00000000-0000-0000-0000-000000000000') { await fulfillJson(route, []); return }; const declared = (moduleRows.bin_lots ?? (moduleRows.bin_inventory ?? []).map((entry) => entry as Record<string, unknown>)) as Record<string, unknown>[]; await fulfillJson(route, declared.filter((lot) => lot.grain_bin_id === value.p_grain_bin_id && Number(lot.bushels) > 0).map((lot) => ({ commodity_id: lot.commodity_id, crop_year: lot.crop_year, bushels: lot.bushels }))); return }
     if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks' || url.pathname === '/rest/v1/rpc/generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${url.pathname}`)
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, session(activeUserId).user); return }
@@ -1100,7 +1104,11 @@ test('a direct signed-in A to B replacement hides Farm A before B access validat
     }
     // LD-4: the capability probe asking whether public.bin_lots is installed. Declared by shape
     // rather than matched by name, so a future call with a different body is still rejected.
-    if (url.pathname === '/rest/v1/rpc/bin_lots') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 2 || typeof value.p_farm_id !== 'string' || value.p_grain_bin_id !== '00000000-0000-0000-0000-000000000000') { await rejectShape('bin_lots body'); return }; await fulfillJson(route, []); return }
+    // LD-4: the capability probe uses the nil bin id and reads nothing. The lot picker calls the
+    // same function with a real bin id, and the rows it gets back are the fixture's own -- NOT
+    // derived from bin_transactions here, because deriving them in the mock would make the test
+    // agree with the browser by construction and prove nothing about the repair.
+    if (url.pathname === '/rest/v1/rpc/bin_lots') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 2 || typeof value.p_farm_id !== 'string' || typeof value.p_grain_bin_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_grain_bin_id)) { await rejectShape('bin_lots body'); return }; if (value.p_grain_bin_id === '00000000-0000-0000-0000-000000000000') { await fulfillJson(route, []); return }; const declared = (moduleRows.bin_lots ?? (moduleRows.bin_inventory ?? []).map((entry) => entry as Record<string, unknown>)) as Record<string, unknown>[]; await fulfillJson(route, declared.filter((lot) => lot.grain_bin_id === value.p_grain_bin_id && Number(lot.bushels) > 0).map((lot) => ({ commodity_id: lot.commodity_id, crop_year: lot.crop_year, bushels: lot.bushels }))); return }
     if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks' || url.pathname === '/rest/v1/rpc/generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${url.pathname}`)
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, isUserB ? sessionB.user : session().user); return }
@@ -1784,8 +1792,21 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
     { id: '00000000-0000-4000-8000-000000000093', farm_id: farm.id, grain_bin_id: carryOverBin, crop_year: 2025, commodity_id: commodityId, bushels: 6_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now },
     { id: '00000000-0000-4000-8000-000000000094', farm_id: farm.id, grain_bin_id: singleLotBin, crop_year: 2026, commodity_id: commodityId, bushels: 20_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now },
   ]
-  const movementRows = [{ id: '00000000-0000-4000-8000-000000000095', farm_id: farm.id, grain_bin_id: carryOverBin, direction: 'in', bushels: 4_000, commodity_id: commodityId, crop_year: 2026, occurred_on: '2026-10-01', note: null, source_kind: null, grain_load_id: null, created_at: now }]
-  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: movementRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
+  // THE MOVEMENT LIST IS DELIBERATELY SHORT. It carries no 2026 row for the carry-over bin, which
+  // is what a farm past PostgREST's cap looks like: loadWorkspace reads bin_transactions newest
+  // first and unbounded, so the oldest movements -- and an older still-active crop year with them
+  // -- simply are not there. Derived from this array the carry-over bin looks like a one-lot 2025
+  // bin, and before the LD-4 repair the form would have offered no choice, sent no crop year, and
+  // had the save refused with "pick which one this load came from" and no picker to answer with.
+  const movementRows: unknown[] = []
+  // What the database actually holds, which is what public.bin_lots returns and what
+  // save_grain_load reads. The picker must believe this and not the array above.
+  const lotRows = [
+    { grain_bin_id: carryOverBin, commodity_id: commodityId, crop_year: 2026, bushels: 4_000 },
+    { grain_bin_id: carryOverBin, commodity_id: commodityId, crop_year: 2025, bushels: 6_000 },
+    { grain_bin_id: singleLotBin, commodity_id: commodityId, crop_year: 2026, bushels: 20_000 },
+  ]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: movementRows, bin_lots: lotRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
   await page.goto('/grain/loads')
   await expect(page.getByRole('heading', { name: 'Loads', exact: true })).toBeVisible()
 
@@ -1796,7 +1817,8 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
   await expect(page.getByRole('combobox', { name: 'Crop year', exact: true })).toHaveCount(0)
 
   // The carry-over bin holds two, so it asks -- with what each lot holds beside it, so the choice
-  // is made against the bin rather than from memory.
+  // is made against the bin rather than from memory. Neither lot appears in the movement array, so
+  // this can only come from the database: the repair, proved.
   await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(carryOverBin)
   const cropYear = page.getByRole('combobox', { name: 'Crop year', exact: true })
   await expect(cropYear).toBeVisible()

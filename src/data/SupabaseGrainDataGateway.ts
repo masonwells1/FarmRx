@@ -212,6 +212,16 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
   // which a direct table write from the browser can promise. The table grants SELECT and nothing else.
   // LD-1: read only when the Loads form is open. Today serves its front door from loadWorkspace
   // above, and a named rep's Today must make no equipment read at all, so this cannot live there.
+  /** LD-4 repair (Codex P1 on ba64007): the lots one bin holds, from the database rather than from
+   * the workspace's movement array. loadWorkspace reads bin_transactions unbounded, so PostgREST's
+   * row cap can drop the OLDEST movements -- and an older still-active crop year with them. The
+   * browser would then see one lot where the server sees two, offer no choice, send no crop year,
+   * and the save would be refused with "pick which one this load came from" while the form shows
+   * no picker to answer with. That is a load a farmer cannot record at all.
+   *
+   * This asks public.bin_lots for one bin, which is at most a handful of rows and is the same
+   * function save_grain_load itself reads -- so the picker and the save can no longer disagree. */
+  async listBinLots(farmId: string, binId: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('bin_lots', { p_farm_id: farmId, p_grain_bin_id: binId }), context); if (error) throw error; return rows(data, null) }
   async listLoadTrucks(farmId: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.from('equipment').select('id,name').eq('farm_id', farmId).eq('category', 'truck').eq('status', 'active').order('name').order('id'), context); return rows(data, error) }
   /** LD-2: only the tickets that actually contribute -- confirmed for harvest and not voided. A row
    * the migration has not reached reports 42703/PGRST204 on effect_harvest, and an LD-1 database has

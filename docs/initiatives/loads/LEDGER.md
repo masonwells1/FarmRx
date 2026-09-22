@@ -579,10 +579,11 @@ edit cannot quietly weaken it back.
   lost, lots keyed by commodity alone, an emptied lot hidden, a two-lot bin picking for the farmer,
   a chosen year taken on trust, the unstamped bucket counted as a lot, and `save_grain_load`
   answering the balance question a second time.
-- **Eighteen browser regression groups** across two files — ten in `committedFree.regression.ts`,
-  eight in the new `loadOriginLot.regression.ts`.
-- Static guards PASS with **eight new LD-4 guards**; **mutation drill 333/333** (327 after the
-  LD-3 merge), count changed in both files that pin it.
+- **Nineteen browser regression groups** across two files — ten in `committedFree.regression.ts`,
+  nine in the new `loadOriginLot.regression.ts`, the ninth covering the repair below.
+- Static guards PASS with **ten new LD-4 guards** (eight, plus two for the repair below);
+  **mutation drill 337/337** after merging the LD-3 repair and adding the two repair mutations,
+  count changed in both files that pin it.
 - **Browser: 119 passed, 15 skipped** on desktop and phone, including a new LD-4 journey that reads
   both lots off the picker, is refused for not answering, and then proves the chosen year is what
   reaches the RPC.
@@ -621,6 +622,34 @@ Neither was found by reading. Both were found by mutating, which is the argument
   downloading a browser. Nothing about that config is committed.
 - **The Soil Rx custody journey failed once on phone** in the full run and passed on rerun. Eighth
   occurrence; unrelated to LD-4 and still unexplained.
+
+### The repair Codex found before this merged
+
+Codex reviewed `ba64007` when the PR was marked ready and raised one P1, and it was right about
+something LD-008 had got wrong. LD-008 recorded the PostgREST truncation risk as **display-only**,
+reasoning that the database still guards every write. That is true of LD-3's figures. **It is not
+true of LD-4**, and the difference matters:
+
+`loadWorkspace` reads `bin_transactions` unbounded and newest first, so under the row cap the
+**oldest** movements drop — and an older still-active crop year with them. Derived from that short
+array a two-lot bin looks like a **one-lot bin**. The form then offers no choice and sends no crop
+year; `save_grain_load` reads `public.bin_lots`, sees two lots, and refuses with *"pick which one
+this load came from"* — **while the form is showing no picker to answer with.** The farmer cannot
+record the load at all. LD-4 turned a wrong number into a blocked action.
+
+The fix is the one this initiative keeps arriving at: **stop having two evaluators.** The picker now
+calls `public.bin_lots` for the selected bin — the same function `save_grain_load` reads, at most a
+handful of rows — so the two cannot disagree. The workspace derivation survives only as the
+fallback for the cases where the server behaves the old way anyway: offline, or the migration not
+yet applied. A load cannot be recorded offline at all, so that fallback never decides a real save.
+
+When the capability says the server reads lots but that read **fails**, the form says so and the
+save refuses, rather than falling back to a list that may be short — a short movement list and a
+one-lot bin are indistinguishable, and guessing between them is the defect.
+
+The browser journey was rewritten to prove it: its `bin_transactions` fixture is **deliberately
+empty** for the carry-over bin while `bin_lots` declares both lots. The picker can only get its two
+lots from the database. **Reverting the one-line change makes that journey fail.**
 
 ### Live steps
 

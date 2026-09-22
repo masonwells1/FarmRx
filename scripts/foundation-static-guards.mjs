@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 335')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 337')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -962,6 +962,16 @@ export function foundationStaticGuard(root = process.cwd()) {
     // A lot the farmer names has to be one the bin has a record of. Without this the server would
     // take any year on trust and stamp a ticket with a crop the bin has never held.
     requireText(errors, ld4Migration, "raise exception 'this bin has no record of the % crop', v_crop_year;", 'ld4:save-grain-load-checks-the-lot-is-real')
+
+    // LD-4 repair: the picker asks the database what the bin holds. Deriving it from the workspace
+    // array is what made a truncated movement list look like a one-lot bin -- the form then offered
+    // no choice, sent no crop year, and the save was refused with a message the form had no control
+    // to answer. A load the farmer could not record at all.
+    requireText(errors, grainModule, 'authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id)', 'ld4:the-picker-asks-the-database-what-the-bin-holds')
+    requireText(errors, grainData, 'authoritativeLots ?? binLotsOnHand(', 'ld4:the-picker-asks-the-database-what-the-bin-holds')
+    // And when it cannot get that answer it says so rather than falling back to a list that may be
+    // short: a short movement list is indistinguishable from a one-lot bin.
+    requireText(errors, grainModule, 'if (binLotReady && originBinId && lotsUnavailable) {', 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
   }
   {
     // A load's harvest contribution is derived and never written into the replaceable manual total.

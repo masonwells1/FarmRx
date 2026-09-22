@@ -324,7 +324,14 @@ export function validateAssignedCropYear(cropYear: number): string | null {
 /** LD-1: the browser's twin of the server's derivation. The origin decides the lot and nothing else
  * may; this returns null when the origin cannot name one, and the form then refuses to save rather
  * than sending a guess the server would have to reject. */
-export function loadLotFor(workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions' | 'fields' | 'capabilities'>, draft: Pick<GrainLoadDraft, 'origin_kind' | 'origin_grain_bin_id' | 'origin_crop_assignment_id' | 'origin_crop_year'>): LoadLot | null {
+export function loadLotFor(
+  workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions' | 'fields' | 'capabilities'>,
+  draft: Pick<GrainLoadDraft, 'origin_kind' | 'origin_grain_bin_id' | 'origin_crop_assignment_id' | 'origin_crop_year'>,
+  /** LD-4 repair: the lots the DATABASE says this bin holds, when the form has them. The workspace
+   * derivation below reads a movement array PostgREST may have truncated, so where the two could
+   * differ this one wins -- it is the same answer save_grain_load will reach. */
+  authoritativeLots?: readonly BinLotOnHand[],
+): LoadLot | null {
   if (draft.origin_kind === 'field') {
     const crop = workspace.fields.crop_assignments.find((row) => row.id === draft.origin_crop_assignment_id)
     return crop ? { commodity_id: crop.commodity_id, crop_year: crop.crop_year } : null
@@ -341,7 +348,7 @@ export function loadLotFor(workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bi
   // could only ever be hauled as its baseline's crop year and a bin with no baseline could not be
   // hauled at all. The chosen year wins when the farmer named one; otherwise a bin holding a single
   // lot answers for itself, and a bin holding several names nothing rather than guessing.
-  const lots = binLotsOnHand(
+  const lots = authoritativeLots ?? binLotsOnHand(
     workspace.bin_inventory.find((row) => row.grain_bin_id === draft.origin_grain_bin_id),
     workspace.bin_transactions.filter((row) => row.grain_bin_id === draft.origin_grain_bin_id),
   )
@@ -419,10 +426,14 @@ export function validateGrainLoadShape(draft: GrainLoadDraft): string[] {
  * names, and whether a chosen contract is for that lot. The screen calls this; the repository calls
  * the shape half only, because it does not hold a workspace and the server settles the rest under a
  * row lock anyway. */
-export function validateGrainLoad(draft: GrainLoadDraft, workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions' | 'fields' | 'grain_contracts' | 'capabilities'>): string[] {
+export function validateGrainLoad(
+  draft: GrainLoadDraft,
+  workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions' | 'fields' | 'grain_contracts' | 'capabilities'>,
+  authoritativeLots?: readonly BinLotOnHand[],
+): string[] {
   const problems = validateGrainLoadShape(draft)
 
-  const lot = loadLotFor(workspace, draft)
+  const lot = loadLotFor(workspace, draft, authoritativeLots)
   if ((draft.origin_kind === 'field' && draft.origin_crop_assignment_id) || (draft.origin_kind === 'bin' && draft.origin_grain_bin_id)) {
     if (!lot) {
       // LD-4: three different reasons a bin cannot name a lot, and the farmer needs the right one.
@@ -432,7 +443,7 @@ export function validateGrainLoad(draft: GrainLoadDraft, workspace: Pick<GrainWo
           problems.push('That bin has no recorded crop yet, so Farm Rx cannot tell which crop year this load is. Set the bin inventory first.')
           return problems
         }
-        const lots = originBinLots(workspace, draft.origin_grain_bin_id)
+        const lots = authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id)
         if (lots.length === 0) {
           problems.push('That bin holds no crop with a crop year, so Farm Rx cannot tell which crop year this load is.')
         } else if (draft.origin_crop_year.trim()) {
@@ -572,6 +583,10 @@ export interface GrainRepository {
    * grain workspace: Today serves its front door from the same workspace load, and a named rep's
    * Today must make no equipment read at all. */
   listLoadTrucks(): Promise<LoadTruck[]>
+  /** LD-4 repair: what one bin holds, by crop year, as the database sees it. Null means the answer
+   * is not available -- offline, or the migration is not applied -- and the caller must fall back
+   * to the workspace derivation rather than treat an empty list as "this bin holds nothing". */
+  listBinLots(binId: string): Promise<BinLotOnHand[] | null>
   /** LD-2: the loads that carry a harvest contribution, for the derived "from loads" figure on
    * Harvest and Fields. Read for the same reason listLoadTrucks is and kept out of the workspace for
    * the same reason: a scale ticket is private financial data, and Harvest is a screen a worker
