@@ -1,7 +1,8 @@
 import type { FieldsRepository } from './fields'
+import { deriveBinLots, type BinLotOnHand } from './committedFree'
 import type { BinTransaction, BinTransactionDirection, CashBid, FirmOffer, FuturesQuote, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, GrainRepository, GrainSaleLimit, GrainWorkspace, LoadVoidBlocker, LoadVoidResult, MarketDataService, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaMarketReport, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
-import { contractIsCorrectable, loadEffectsAvailable, loadLotFor, originBinLots, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason } from './grain'
+import { contractIsCorrectable, loadEffectsAvailable, loadLotFor, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason } from './grain'
 import { localCalendarDay, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { activeBinCommodityIds, deriveBinOnHand, PRE_BASELINE_BIN_MOVEMENT_MESSAGE, validateBinTransaction, validateGrainBin } from './binLedger'
@@ -98,10 +99,21 @@ export class MockGrainRepository implements GrainRepository {
   async editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, _operationId: string) { const problem = validateContractCorrectionReason(reason); if (problem) throw new Error(problem); const workspace = await load(this.fieldsRepository); const current = workspace.grain_contracts.find((row) => row.id === contractId); if (!current) throw new Error('This contract is no longer available. Reload before trying again.'); if (current.updated_at !== expectedUpdatedAt) throw new Error('FARM_RX_STALE_WRITE'); if (!contractIsCorrectable(workspace, contractId)) throw new Error('This contract already has delivered bushels and can no longer be changed.'); const next = { ...current, ...(changes.buyer !== undefined ? { buyer: changes.buyer.trim() } : {}), ...(changes.bushels !== undefined ? { bushels: changes.bushels } : {}), ...(changes.delivery_start !== undefined ? { delivery_start: changes.delivery_start || null } : {}), ...(changes.delivery_end !== undefined ? { delivery_end: changes.delivery_end || null } : {}), ...(changes.contract_number !== undefined ? { contract_number: changes.contract_number?.trim() || null } : {}), ...(changes.notes !== undefined ? { notes: changes.notes?.trim() || null } : {}), updated_at: now() }; const errors = validateGrainContract(next, new Set(workspace.fields.commodities.map((commodity) => commodity.id))); if (errors.length) throw new Error(errors.join(' ')); persist({ ...grainSlice(workspace), grain_contracts: workspace.grain_contracts.map((row) => row.id === contractId ? next : row) }); return next }
   async listLoadTrucks() { return [{ id: seedId(1201), name: 'Red semi' }, { id: seedId(1202), name: 'Blue tandem' }] }
   /** LD-4 repair: the mock's workspace is complete by construction, so deriving here IS the
-   * authoritative answer -- there is no row cap in front of an in-memory array. */
+   * authoritative answer -- there is no row cap in front of an in-memory array.
+   *
+   * LD-4 repair (Codex P2 on 178208c): every RECORDED lot, including the ones the bin has emptied.
+   * public.bin_lots keeps those rows on purpose -- it is how a ticket that moves no bushels names
+   * the year it really was -- and a mock that dropped them would reject a path production accepts,
+   * so no mock-backed test could ever cover it. Filtering to what the bin still holds belongs to
+   * the form, which knows whether the load moves anything. */
   async listBinLots(binId: string) {
     const workspace = await load(this.fieldsRepository)
-    return originBinLots(workspace, binId)
+    return deriveBinLots(
+      workspace.bin_inventory.find((row) => row.grain_bin_id === binId),
+      workspace.bin_transactions.filter((row) => row.grain_bin_id === binId),
+    )
+      .filter((lot): lot is BinLotOnHand => lot.crop_year !== null)
+      .sort((a, b) => b.crop_year - a.crop_year || a.commodity_id.localeCompare(b.commodity_id))
   }
   async listHarvestLoads(): Promise<{ loads: GrainLoad[]; complete: boolean }> { const workspace = await load(this.fieldsRepository); return { loads: workspace.grain_loads.filter((row) => row.effect_harvest && row.voided_at === null), complete: true } }
   async assignBinMovementCropYear(transactionId: string, cropYear: number): Promise<BinTransaction> {

@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 356')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 358')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1047,6 +1047,27 @@ export function foundationStaticGuard(root = process.cwd()) {
     // acting on that count cannot be interleaved. Naming a crop year CREATES a lot, so it queues
     // there too -- it locked only the movement row before.
     requireText(errors, ld4Migration, 'perform 1 from public.grain_bins', 'ld4:everything-that-changes-a-bin-queues-behind-it')
+    // And in the SAME ORDER append_bin_movement takes them: bin, then movement row. Two functions
+    // taking two locks in opposite orders is a deadlock cycle, and PostgreSQL resolves it by
+    // aborting a farmer's save for a reason they can neither see nor act on.
+    {
+      const assign = ld4Migration.slice(ld4Migration.indexOf('function public.assign_bin_movement_crop_year'))
+      const binLock = assign.indexOf('perform 1 from public.grain_bins')
+      const rowLock = assign.indexOf('where id = p_transaction_id and farm_id = p_farm_id for update')
+      if (binLock < 0 || rowLock < 0 || binLock > rowLock) errors.push('ld4:two-locks-are-always-taken-in-one-order')
+    }
+    // The mock answers with every RECORDED lot, as the real function does. A mock that dropped the
+    // emptied ones would reject a path production accepts, and no mock-backed test could cover it.
+    if (/originBinLots\(workspace, binId\)/.test(read(root, 'src/data/MockGrainRepository.ts'))) errors.push('ld4:the-mock-answers-like-the-database')
+    {
+      // Checked as an ABSENCE inside listBinLots, not as a string the filter starts with: appending
+      // a balance test to that predicate leaves the pinned text intact and reads as compliance.
+      // That is the fifth time a requireText on a shared idiom has passed while the rule under it
+      // changed, so this one is written the other way round.
+      const mock = read(root, 'src/data/MockGrainRepository.ts')
+      const body = mock.slice(mock.indexOf('async listBinLots('))
+      if (body.slice(0, body.indexOf('\n  }')).includes('bushels >')) errors.push('ld4:the-mock-answers-like-the-database')
+    }
     // And the replay lookup reads INSIDE that lock. Before it, an overlapping retry could read "no
     // such ticket", wait on the lock while the first call emptied the lot, and fail anyway.
     {

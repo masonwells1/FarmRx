@@ -705,6 +705,7 @@ declare
   v_has_inventory boolean := false;
   v_baseline_is_this_lot boolean;
   v_baseline_covers_commodity boolean;
+  v_bin_id uuid;
   v_year_balance numeric;
 begin
   if auth.uid() is null
@@ -716,18 +717,30 @@ begin
     raise exception 'that is not a crop year';
   end if;
 
-  select * into v_movement from public.bin_transactions
-    where id = p_transaction_id and farm_id = p_farm_id for update;
-  if not found then raise exception 'that movement does not belong to this farm'; end if;
-
   -- LD-4 repair (Codex P2 on 2e7e6d4): lock the BIN, not just the movement. Naming a crop year
   -- creates a lot, and save_grain_load defaults a load's lot by counting the lots a bin holds. With
   -- only the movement row locked, a manager could name a year in the window between that count and
   -- the movement the load appends -- so the load would file itself under the single lot it saw
   -- while the bin had just gained a second. The farmer would never have been asked. Taking the
   -- same row append_bin_movement and save_grain_load take puts all three in one queue.
+  --
+  -- LD-4 repair (Codex P2 on 178208c): and BIN FIRST, which the first version of this fix got
+  -- backwards. append_bin_movement locks the bin and then the movement row. Locking them the other
+  -- way round here made a cycle: a movement retry holding the bin and waiting for the movement,
+  -- against this function holding the movement and waiting for the bin. PostgreSQL breaks that by
+  -- aborting one of them, so a farmer's save would fail with a deadlock for no reason they could
+  -- see or act on. Two functions taking the same two locks must take them in the same order; the
+  -- unlocked read below exists only to learn which bin to lock.
+  select grain_bin_id into v_bin_id from public.bin_transactions
+    where id = p_transaction_id and farm_id = p_farm_id;
+  if not found then raise exception 'that movement does not belong to this farm'; end if;
+
   perform 1 from public.grain_bins
-    where id = v_movement.grain_bin_id and farm_id = p_farm_id for update;
+    where id = v_bin_id and farm_id = p_farm_id for update;
+
+  select * into v_movement from public.bin_transactions
+    where id = p_transaction_id and farm_id = p_farm_id for update;
+  if not found then raise exception 'that movement does not belong to this farm'; end if;
 
   if v_movement.crop_year is not null then
     if v_movement.crop_year = p_crop_year then

@@ -667,6 +667,16 @@ begin
   if position('from public.grain_bins' in v_body) = 0 or position('for update' in v_body) = 0 then
     raise exception 'naming a crop year does not lock the bin it changes';
   end if;
+  -- And it takes them BIN FIRST, the order append_bin_movement uses. Two functions taking the same
+  -- two locks in opposite orders is a deadlock cycle: PostgreSQL breaks it by aborting one, and a
+  -- farmer's save fails for a reason they can neither see nor act on. The first version of this
+  -- repair had them backwards, so the order is pinned rather than left to the next editor.
+  if position('from public.grain_bins' in v_body) > position('public.bin_transactions' in substring(v_body from position('for update' in v_body))) + position('for update' in v_body) then
+    raise exception 'naming a crop year locks the movement before the bin, which deadlocks against append_bin_movement';
+  end if;
+  if position('perform 1 from public.grain_bins' in v_body) > position('where id = p_transaction_id and farm_id = p_farm_id for update' in v_body) then
+    raise exception 'naming a crop year locks the movement before the bin, which deadlocks against append_bin_movement';
+  end if;
   -- And it uses the corrected baseline rule, like every other reader of a bin's lots. Pinned as the
   -- PREDICATE, not the variable: declaring v_baseline_covers_commodity and then not using it in the
   -- one place that decides supersession would otherwise read as compliance.

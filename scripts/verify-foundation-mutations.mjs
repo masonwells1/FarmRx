@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 356
+const expectedMutationCount = 358
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -21,7 +21,7 @@ const files = [
   'supabase/migrations/20260812135210_deny_revoked_push_delivery.sql',
   'supabase/migrations/20260915150000_gl1_usda_mars_feed.sql', 'src/data/basisMath.ts', 'src/data/SupabaseGrainDataGateway.ts', '.github/workflows/usda-mars-feed.yml', 'supabase/functions/usda-mars-feed/index.ts',
   'supabase/functions/_shared/marsFeedOrchestrator.ts', 'src/data/grainAlerts.ts', 'supabase/functions/deliver-grain-alert/index.ts',
-  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'supabase/migrations/20260920180000_ld1_grain_loads.sql', 'supabase/migrations/20260921120000_ld2_load_effects.sql', 'supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', 'src/App.tsx', 'src/HarvestModule.tsx', 'src/data/committedFree.ts', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
+  'supabase/migrations/20260920160000_gl2_alert_crop_year_eligibility.sql', 'supabase/migrations/20260920170000_gl3_contract_edit_delete.sql', 'supabase/migrations/20260920180000_ld1_grain_loads.sql', 'supabase/migrations/20260921120000_ld2_load_effects.sql', 'supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', 'src/App.tsx', 'src/HarvestModule.tsx', 'src/data/committedFree.ts', 'src/data/marketingYear.ts', 'src/data/grain.ts', 'src/data/SupabaseGrainRepository.ts', 'src/data/MockGrainRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/marketingAlerts.ts', 'src/GrainModule.tsx', 'src/data/SupabaseGrainDataGateway.ts', 'src/data/SupabaseFieldsRepository.ts', 'src/data/grainAlerts.ts',
   'supabase/functions/_shared/pushDeliveryLogic.ts', 'supabase/functions/_shared/pushDeliveryLogic.regression.ts', 'supabase/functions/send-push/index.ts',
   'src/SoilRxModule.tsx', 'src/data/SupabaseNotificationsDataGateway.ts', 'src/data/QueuedSoilRxRepository.ts', 'src/data/SupabaseSoilRxRepository.ts', 'src/data/soilRxStorage.ts', 'src/data/soilRxCleanupOutbox.ts', 'src/data/revokedFarmRecovery.ts', 'src/data/queuedOperationGuard.ts', 'supabase/migrations/20260810223508_soil_rx_storage.sql',
   'src/data/fieldLocation.ts', 'src/data/QueuedEquipmentTasksRepository.ts', 'src/data/QueuedFieldLogRepository.ts',
@@ -1058,8 +1058,14 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace('const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : originLots;', 'const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : onHandLots;'))
   detected('a bin whose only record is an emptied lot cannot name it, and shows no picker to try with', 'ld4:an-emptied-lot-can-still-be-named')
   reset()
-  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('  perform 1 from public.grain_bins\n    where id = v_movement.grain_bin_id and farm_id = p_farm_id for update;', ''))
+  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('  perform 1 from public.grain_bins\n    where id = v_bin_id and farm_id = p_farm_id for update;\n', ''))
   detected('naming a crop year stops queueing behind the bin, so it can add a lot mid-decision', 'ld4:everything-that-changes-a-bin-queues-behind-it')
+  reset()
+  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('  select grain_bin_id into v_bin_id from public.bin_transactions\n    where id = p_transaction_id and farm_id = p_farm_id;\n  if not found then raise exception \'that movement does not belong to this farm\'; end if;\n\n  perform 1 from public.grain_bins\n    where id = v_bin_id and farm_id = p_farm_id for update;\n\n  select * into v_movement from public.bin_transactions\n    where id = p_transaction_id and farm_id = p_farm_id for update;\n  if not found then raise exception \'that movement does not belong to this farm\'; end if;', '  select * into v_movement from public.bin_transactions\n    where id = p_transaction_id and farm_id = p_farm_id for update;\n  if not found then raise exception \'that movement does not belong to this farm\'; end if;\n\n  perform 1 from public.grain_bins\n    where id = v_movement.grain_bin_id and farm_id = p_farm_id for update;'))
+  detected('two functions take the same two locks in opposite orders, so a farmer save dies on a deadlock', 'ld4:two-locks-are-always-taken-in-one-order')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace("(lot): lot is BinLotOnHand => lot.crop_year !== null", "(lot): lot is BinLotOnHand => lot.crop_year !== null && lot.bushels > 0.000001"))
+  detected('the mock drops the emptied lots the real function keeps, so no mock-backed test can cover a ticket-only load', 'ld4:the-mock-answers-like-the-database')
   reset()
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("    if v_crop_year is null then\n      select crop_year, commodity_id into v_replay_year, v_replay_commodity\n        from public.grain_loads where id = v_id and farm_id = p_farm_id;\n      if found then\n        v_crop_year := v_replay_year;\n        if v_commodity is null then v_commodity := v_replay_commodity; end if;\n      end if;\n    end if;\n", ''))
   detected('the replay lookup leaves the lock, so an overlapping retry fails on a lot the first call emptied', 'ld4:the-replay-lookup-reads-inside-the-lock')

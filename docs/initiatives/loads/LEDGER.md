@@ -582,7 +582,7 @@ edit cannot quietly weaken it back.
 - **Nineteen browser regression groups** across two files — ten in `committedFree.regression.ts`,
   nine in the new `loadOriginLot.regression.ts`, the ninth covering the repair below.
 - Static guards PASS with **twenty-three new LD-4 guards** (eight, plus fifteen for the repairs below);
-  **mutation drill 356/356** after merging the LD-3 repair and adding the repair mutations,
+  **mutation drill 358/358** after merging the LD-3 repair and adding the repair mutations,
   count changed in both files that pin it.
 - **Browser: 119 passed, 15 skipped** on desktop and phone, including a new LD-4 journey that reads
   both lots off the picker, is refused for not answering, and then proves the chosen year is what
@@ -845,6 +845,30 @@ which is why it looked right — it simply had a choice already made in it.
 That is the second time on this tranche that acting on an unsettled list was the bug, after the save
 guard in round five. The rule is now explicit in both places: **nothing reads `originLots` for a
 decision unless `lotsState` is `ready`.**
+
+### A ninth round: the previous fix created a deadlock
+
+**Two functions took the same two locks in opposite orders.** (P2) Round seven made
+`assign_bin_movement_crop_year` take the bin lock — correctly — but took it *after* the movement
+row. `append_bin_movement` takes the bin first and the movement row second. That is a cycle: a
+movement retry holding the bin and waiting for the row, against a crop-year assignment holding the
+row and waiting for the bin. PostgreSQL breaks it by aborting one, so **a farmer's save would fail
+with a deadlock for a reason they can neither see nor act on.**
+
+The fix is an unlocked read to learn which bin, then bin, then row — the same order as the other
+path. The order is now asserted against the installed body, because it is invisible at the call
+site and a future editor has no way to know it matters.
+
+**The mock did not answer like the database.** (P2) `MockGrainRepository.listBinLots` dropped
+zero-balance lots, which the real function deliberately keeps. So the ticket-only path — the one
+repaired two rounds earlier — **could not be covered by any mock-backed test at all**, because the
+mock rejected what production accepts. The mock now returns every recorded lot and leaves the
+balance filter to the form, which is where it belongs.
+
+**A fifth guard passed while its rule changed.** The mock guard pinned the text the filter *starts
+with*, so appending a balance test left the pinned string intact. It is written as an absence check
+now. Five occurrences on one tranche is no longer a run of bad luck: **`requireText` on a string
+another edit can extend is not a guard**, and every one of the five was found by the drill.
 
 ### Live steps
 
