@@ -1258,6 +1258,36 @@ That is the race made deterministic. The window itself is a few milliseconds and
 reproduced honestly in a browser; removing the thing the payload used to depend on tests the same
 property without pretending to time it.
 
+### A nineteenth round: the mock refused the retry the whole design exists for
+
+One P2. `MockGrainRepository.saveLoad` validated the draft **before** checking whether the ticket id
+already existed. So a retry of a blank-year load that had drained the bin's sole lot found no
+on-hand lot to default from, was refused outright, and never reached the replay.
+
+The real function does the opposite, and deliberately: round "the replay lookup reads inside the
+lock" moved that lookup *inside* the bin lock precisely so an overlapping retry recovers the stored
+lot rather than failing on a bin the first call had emptied. So the mock refused the exact
+lost-response path LD-1 keeps the ticket id for, and could not exercise it.
+
+The replay check runs first now. The guard is positional, because both lines exist either way and
+only their order carries the rule.
+
+**One gap left open and named rather than papered over:** the mock returns the existing load for any
+reused id, where the server raises `FARM_RX_LOAD_ID_REUSED` when the id comes back with *different*
+details. Implementing that faithfully means matching the server's definition of "different", and
+guessing at it is how every divergence on this tranche started. It belongs with the
+`MockGrainRepository` test seam that round 15 already recorded as missing, not with a 5am edit.
+
+### Proof observed for round 19
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
+  `git diff --check` clean.
+- **Eleven disposable SQL suites pass together.**
+- Static guards PASS; **mutation drill 385/385**, one added for the ordering.
+- **Browser: 129 passed, 15 skipped.**
+- **All regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
+
 ### Proof observed for round 18
 
 - `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;

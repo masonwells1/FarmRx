@@ -152,10 +152,16 @@ export class MockGrainRepository implements GrainRepository {
     const lots = draft.origin_kind === 'bin' && draft.origin_grain_bin_id
       ? lotsSaveResolvesAgainst(recordedBinLots(workspace, draft.origin_grain_bin_id), draft)
       : undefined
-    const problems = validateGrainLoad(draft, workspace, lots)
-    if (problems.length) throw new Error(problems[0])
+    // LD-4 repair (Codex P2 on 052ba8d): the replay check comes FIRST, as it does in the real
+    // function, where the lookup happens inside the bin lock before any lot is resolved. A retry of
+    // a blank-year load that drained the bin's sole lot finds no on-hand lot to default from, so
+    // validating first refused the retry outright -- while the server recovers the stored lot and
+    // returns the ticket it already saved. That is the exact lost-response path LD-1 keeps the
+    // ticket id for, and the mock could not exercise it.
     const existing = workspace.grain_loads.find((row) => row.id === id)
     if (existing) return existing
+    const problems = validateGrainLoad(draft, workspace, lots)
+    if (problems.length) throw new Error(problems[0])
     const lot = loadLotFor(workspace, draft, lots)
     if (!lot) throw new Error('Farm Rx cannot tell which crop year this load is.')
     const stamp = now()

@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 384
+const expectedMutationCount = 385
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1096,6 +1096,9 @@ try {
   reset()
   mutate('src/data/MockGrainRepository.ts', (source) => source.replace('const lot = loadLotFor(workspace, draft, lots)', 'const lot = loadLotFor(workspace, draft)'))
   detected('the mock resolves the saved lot from a different list than the one it validated against', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('    const existing = workspace.grain_loads.find((row) => row.id === id)\n    if (existing) return existing\n    const problems = validateGrainLoad(draft, workspace, lots)\n    if (problems.length) throw new Error(problems[0])', '    const problems = validateGrainLoad(draft, workspace, lots)\n    if (problems.length) throw new Error(problems[0])\n    const existing = workspace.grain_loads.find((row) => row.id === id)\n    if (existing) return existing'))
+  detected('the mock validates before replaying, so a retry of a load that drained its bin is refused instead of returning the ticket already saved', 'ld4:a-save-resolves-against-the-list-the-server-uses')
   reset()
   mutate('src/data/grain.ts', (source) => source.replace("  return draft.origin_crop_year.trim()\n    ? recordedLots\n    : recordedLots.filter((lot) => lot.bushels > 0.000001)", '  return recordedLots.filter((lot) => lot.bushels > 0.000001)'))
   detected('a named crop year is resolved against what the bin still holds, so a ticket for grain already hauled cannot name its year', 'ld4:a-save-resolves-against-the-list-the-server-uses')

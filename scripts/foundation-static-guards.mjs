@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 384')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 385')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1175,6 +1175,13 @@ export function foundationStaticGuard(root = process.cwd()) {
       if (body.includes('validateGrainLoad(draft, workspace)')) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
       if (body.includes('loadLotFor(workspace, draft)')) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
       requireText(errors, body, 'lotsSaveResolvesAgainst(recordedBinLots(workspace, draft.origin_grain_bin_id), draft)', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+      // And the replay check runs BEFORE any of it, as it does in the real function inside the bin
+      // lock. A retry of a blank-year load that drained the bin's sole lot has nothing to default
+      // from, so validating first refused the very retry LD-1 keeps the ticket id for. Positional,
+      // because both lines exist either way and only their order carries the rule.
+      const replay = body.indexOf('const existing = workspace.grain_loads.find((row) => row.id === id)')
+      const validate = body.indexOf('const problems = validateGrainLoad(draft, workspace, lots)')
+      if (replay < 0 || validate < 0 || replay > validate) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
       // And the rule itself keys on whether a year was NAMED: recorded when it was, on-hand when
       // it was not. Both branches are pinned, because collapsing either one reproduces a bug this
       // tranche has already shipped once in each direction.
