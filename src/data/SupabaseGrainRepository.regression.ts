@@ -560,7 +560,7 @@ async function run() {
   {
     const loadGateway = new FakeGateway()
     const loadRepo = repository(loadGateway)
-    const draft: GrainLoadDraft = { load_date: '2026-10-01', truck_equipment_id: '', truck_name: 'Red semi', origin_kind: 'bin', origin_grain_bin_id: uid(90), origin_crop_assignment_id: '', origin_crop_year: '', destination_kind: 'buyer', destination_buyer: '  Riverside Elevator  ', destination_grain_contract_id: '', destination_grain_bin_id: '', gross_lbs: '', tare_lbs: '', net_bushels: '910.5', moisture_pct: '', ticket_number: 'A-1001', notes: '', effect_bin_out: false, effect_bin_in: false, effect_contract_delivery: false, effect_harvest: false }
+    const draft: GrainLoadDraft = { load_date: '2026-10-01', truck_equipment_id: '', truck_name: 'Red semi', origin_kind: 'bin', origin_grain_bin_id: uid(90), origin_crop_assignment_id: '', origin_crop_year: '', origin_commodity_id: '', destination_kind: 'buyer', destination_buyer: '  Riverside Elevator  ', destination_grain_contract_id: '', destination_grain_bin_id: '', gross_lbs: '', tare_lbs: '', net_bushels: '910.5', moisture_pct: '', ticket_number: 'A-1001', notes: '', effect_bin_out: false, effect_bin_in: false, effect_contract_delivery: false, effect_harvest: false }
     const ticketId = uid(91)
     const saved = await loadRepo.saveLoad(ticketId, draft)
     assert(saved.id === ticketId, 'LD-1: the saved ticket must be the one the caller named.')

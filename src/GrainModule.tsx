@@ -226,6 +226,7 @@ const emptyLoadDraft = (): GrainLoadDraft => ({
   origin_grain_bin_id: "",
   origin_crop_assignment_id: "",
   origin_crop_year: "",
+  origin_commodity_id: "",
   destination_kind: "buyer",
   destination_buyer: "",
   destination_grain_contract_id: "",
@@ -4568,9 +4569,10 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // no longer offers puts the form back in a state the farmer can actually act on.
   useEffect(() => {
     if (!draft.origin_crop_year.trim() || originLots.length === 0) return;
-    if (originLots.some((binLot) => String(binLot.crop_year) === draft.origin_crop_year.trim())) return;
-    setDraft((current) => ({ ...current, origin_crop_year: "" }));
-  }, [draft.origin_crop_year, originLots]);
+    if (originLots.some((binLot) => String(binLot.crop_year) === draft.origin_crop_year.trim()
+      && (!draft.origin_commodity_id || binLot.commodity_id === draft.origin_commodity_id))) return;
+    setDraft((current) => ({ ...current, origin_crop_year: "", origin_commodity_id: "" }));
+  }, [draft.origin_crop_year, draft.origin_commodity_id, originLots]);
   const availableEffects = effectsReady ? loadEffectsAvailable(draft) : [];
   const confirmedEffects = confirmedLoadEffects(draft);
   const typedNet = Number(draft.net_bushels);
@@ -4618,7 +4620,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       // LD-4, for the same reason as the line above: while the capability is false the form shows no
       // crop year choice, so it must send none either. A stale value surviving in the draft would
       // reach an RPC that reads the baseline alone and be refused.
-      const outgoing = binLotReady ? outgoing0 : { ...outgoing0, origin_crop_year: "" };
+      const outgoing = binLotReady ? outgoing0 : { ...outgoing0, origin_crop_year: "", origin_commodity_id: "" };
       const saved = await services.grainRepository.saveLoad(loadId.current, outgoing);
       loadId.current = null;
       // The next ticket almost always shares the date, the truck and the origin -- a farmer hauling
@@ -4708,12 +4710,12 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
 
         <fieldset className="load-origin">
           <legend>Where it came from</legend>
-          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "bin"} onChange={() => update({ origin_kind: "bin", origin_crop_assignment_id: "", origin_crop_year: "" })} /> Out of a bin</label>
-          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "field"} onChange={() => update({ origin_kind: "field", origin_grain_bin_id: "", origin_crop_year: "" })} /> Off a field</label>
+          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "bin"} onChange={() => update({ origin_kind: "bin", origin_crop_assignment_id: "", origin_crop_year: "", origin_commodity_id: "" })} /> Out of a bin</label>
+          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "field"} onChange={() => update({ origin_kind: "field", origin_grain_bin_id: "", origin_crop_year: "", origin_commodity_id: "" })} /> Off a field</label>
           {draft.origin_kind === "bin" ? (
             <>
               {/* A year chosen for one bin means nothing in another, so picking a bin clears it. */}
-              <label>Bin<select value={draft.origin_grain_bin_id} onChange={(event) => update({ origin_grain_bin_id: event.target.value, origin_crop_year: "" })}>
+              <label>Bin<select value={draft.origin_grain_bin_id} onChange={(event) => update({ origin_grain_bin_id: event.target.value, origin_crop_year: "", origin_commodity_id: "" })}>
                 <option value="">Pick a bin</option>
                 {workspace.grain_bins.map((bin) => <option key={bin.id} value={bin.id}>{bin.name}</option>)}
               </select></label>
@@ -4730,10 +4732,17 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
                 ) : originLots.length === 1 ? (
                   <p className="load-lot">This bin holds one crop year: <strong>{originLots[0].crop_year} {commodityLabel(originLots[0].commodity_id)}</strong>, {Math.round(originLots[0].bushels).toLocaleString()} bu.</p>
                 ) : (
-                  <label>Crop year<select value={draft.origin_crop_year} onChange={(event) => update({ origin_crop_year: event.target.value })}>
+                  <label>Crop year<select
+                    value={draft.origin_crop_year ? `${draft.origin_commodity_id}:${draft.origin_crop_year}` : ""}
+                    onChange={(event) => {
+                      // LD-4 repair: the value is the whole lot, not half of it. A bin can have a
+                      // record of 2025 soybeans and 2025 corn, so a year on its own names neither.
+                      const [commodity, year] = event.target.value.split(":");
+                      update({ origin_commodity_id: commodity ?? "", origin_crop_year: year ?? "" });
+                    }}>
                     <option value="">Pick which crop year</option>
                     {originLots.map((binLot) => (
-                      <option key={`${binLot.commodity_id}:${binLot.crop_year}`} value={String(binLot.crop_year)}>
+                      <option key={`${binLot.commodity_id}:${binLot.crop_year}`} value={`${binLot.commodity_id}:${binLot.crop_year}`}>
                         {binLot.crop_year} {commodityLabel(binLot.commodity_id)} &middot; {Math.round(binLot.bushels).toLocaleString()} bu
                       </option>
                     ))}

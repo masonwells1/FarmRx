@@ -1857,8 +1857,10 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
   await expect(page.getByText('That bin holds more than one crop year')).toBeVisible()
   expect(loadRecordCalls.length).toBe(0)
 
-  // The 2026 crop: the newer lot, which before LD-4 this bin could never be hauled as.
-  await cropYear.selectOption('2026')
+  // The 2026 crop: the newer lot, which before LD-4 this bin could never be hauled as. The option
+  // value is the whole lot, commodity and year, because a bin can have a record of two crops in one
+  // year and the year alone would name neither.
+  await cropYear.selectOption(`${commodityId}:2026`)
   await page.getByRole('button', { name: 'Save load' }).click()
 
   await expect.poll(() => loadRecordCalls.length).toBe(1)
@@ -1867,7 +1869,9 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
   // The one thing LD-4 adds to what the browser sends, and only because the farmer named it. A bin
   // holding a single lot still sends nothing at all and lets the server decide, as LD-1 required.
   expect(sent.crop_year).toBe(2026)
-  expect('commodity_id' in sent).toBe(false)
+  // Both halves of the lot travel with the choice. A bin holding a single lot still sends neither
+  // and lets the server settle it, which the second save below checks.
+  expect(sent.commodity_id).toBe(commodityId)
 
   // LD-4 repair (Codex P2 on da028bf): that save emptied the 2026 lot. The form keeps the origin
   // and the chosen year for the next ticket, so without the repair it would sit on an emptied 2026
@@ -1886,6 +1890,7 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
   const next = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
   // One lot left, so the form asks nothing and lets the server settle it, exactly as LD-1 required.
   expect('crop_year' in next).toBe(false)
+  expect('commodity_id' in next).toBe(false)
   expect(unexpected).toEqual([])
 })
 

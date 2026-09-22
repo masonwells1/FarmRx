@@ -54,10 +54,16 @@
 -- zero bushels, because "the bin has no record of that crop year" and "the bin is out of that crop
 -- year" are different answers and the farmer deserves the right one.
 --
--- The superseded rule matches append_bin_movement and deriveBinLotOnHand exactly: a baseline
--- restates the bin, so movements of the baseline's own lot dated at or before it are already
--- counted inside the baseline figure and must not be counted twice. Movements of any OTHER lot are
--- never superseded, because the baseline says nothing about them.
+-- The superseded rule matches append_bin_movement and deriveBinLotOnHand exactly, and the rule is
+-- a COMMODITY one: a baseline measures the bin, not one year of it, so every movement of that
+-- commodity dated at or before it is already inside the figure and must not be counted twice --
+-- whatever crop year the movement names. The baseline's own BUSHELS still belong to one lot, its
+-- own commodity and year; those are different questions and LD-2 had conflated them.
+--
+-- The narrower rule looked more careful and was wrong. It reported carry-over bushels that the
+-- commodity balance in append_bin_movement would never release, so a farmer could be shown a lot
+-- they could not haul. Where a measurement and a movement disagree, the measurement is what the
+-- farmer actually walked out and checked.
 create or replace function public.bin_lots(p_farm_id uuid, p_grain_bin_id uuid)
 returns table (commodity_id text, crop_year integer, bushels numeric)
 language sql
@@ -89,8 +95,7 @@ as $$
                       and t.commodity_id = lots.commodity_id
                       and t.crop_year is not distinct from lots.crop_year
                       and t.occurred_on > coalesce((select inv.measured_on from inv
-                                                     where inv.commodity_id = lots.commodity_id
-                                                       and inv.crop_year is not distinct from lots.crop_year),
+                                                     where inv.commodity_id = lots.commodity_id),
                                                    '-infinity'::date)), 0) as bushels
     from lots;
 $$;
@@ -138,6 +143,7 @@ declare
   v_on_hand_lots integer;
   v_replay_year integer;
   v_crop_year_default integer;
+  v_lot_matches integer;
   v_replay_commodity text;
   v_load_date date;
   v_gross numeric;
@@ -280,13 +286,22 @@ begin
       -- it is append_bin_movement's question, asked under a row lock at the moment the movement is
       -- written. Answering it a second time here would be a second evaluator of one fact, and the
       -- two could disagree -- so this checks only that the lot is real.
-      select lots.commodity_id into v_lot_commodity
+      -- LD-4 repair (Codex P1 on c0e40a3): a lot is a commodity IN a crop year, which is this
+      -- initiative's first rule, and this lookup was keyed on the year alone. A bin that held 2025
+      -- soybeans and was later reused for 2025 corn has a record of both, and "order by bushels
+      -- desc" quietly picked whichever had more -- so a ticket for the emptied soybeans would have
+      -- been stamped corn. The commodity travels with the choice now, and an unnamed commodity is
+      -- refused rather than guessed when the year alone does not settle it.
+      select count(distinct lots.commodity_id), max(lots.commodity_id)
+        into v_lot_matches, v_lot_commodity
         from public.bin_lots(p_farm_id, v_origin_bin) lots
        where lots.crop_year = v_crop_year
-       order by lots.bushels desc
-       limit 1;
-      if v_lot_commodity is null then
+         and (v_commodity is null or lots.commodity_id = v_commodity);
+      if v_lot_matches = 0 then
         raise exception 'this bin has no record of the % crop', v_crop_year;
+      end if;
+      if v_lot_matches > 1 then
+        raise exception 'this bin has held more than one crop in %, so this load has to say which one', v_crop_year;
       end if;
     end if;
 
@@ -436,3 +451,231 @@ end $$;
 
 revoke all on function public.save_grain_load(uuid, jsonb) from public, anon;
 grant execute on function public.save_grain_load(uuid, jsonb) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 3. append_bin_movement, with one baseline rule instead of two
+-- ---------------------------------------------------------------------------
+--
+-- Replaces LD-2's definition. The ONLY change is the one described inside: the lot balance now
+-- supersedes pre-baseline movements by commodity, as the commodity balance beside it always has.
+-- Every other guard, message and code is LD-2's, unchanged.
+
+create or replace function public.append_bin_movement(p_farm_id uuid, p_transaction jsonb)
+returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_bin public.grain_bins%rowtype;
+  v_inventory public.bin_inventory%rowtype;
+  v_has_inventory boolean := false;
+  v_id uuid;
+  v_bin_id uuid;
+  v_direction public.bin_transaction_direction;
+  v_bushels numeric;
+  v_commodity text;
+  v_crop_year integer;
+  v_grain_load uuid;
+  v_on date;
+  v_note text;
+  v_source text;
+  v_lot_balance numeric;
+  v_year_balance numeric;
+  v_total_balance numeric;
+  v_active_lots text[];
+  v_baseline_is_this_lot boolean;
+  v_baseline_covers_commodity boolean;
+  v_existing public.bin_transactions%rowtype;
+  v_saved public.bin_transactions%rowtype;
+begin
+  if auth.uid() is null or not public.can_edit_farm(p_farm_id) then
+    raise exception 'you do not have permission to add a bin movement';
+  end if;
+
+  v_id := (p_transaction->>'id')::uuid;
+  v_bin_id := (p_transaction->>'grain_bin_id')::uuid;
+  v_direction := (p_transaction->>'direction')::public.bin_transaction_direction;
+  v_bushels := (p_transaction->>'bushels')::numeric;
+  v_commodity := nullif(btrim(p_transaction->>'commodity_id'), '');
+  v_crop_year := (p_transaction->>'crop_year')::integer;
+  v_grain_load := (p_transaction->>'grain_load_id')::uuid;
+  v_on := (p_transaction->>'occurred_on')::date;
+  v_note := nullif(btrim(p_transaction->>'note'), '');
+  v_source := nullif(btrim(p_transaction->>'source_kind'), '');
+
+  if v_id is null or v_commodity is null or v_on is null or v_bushels is null or v_bushels <= 0 then
+    raise exception 'movement details are required';
+  end if;
+  if v_crop_year is not null and (v_crop_year < 1900 or v_crop_year > 2200) then
+    raise exception 'that is not a crop year';
+  end if;
+
+  select * into v_bin from public.grain_bins where id = v_bin_id and farm_id = p_farm_id for update;
+  if not found then raise exception 'bin does not belong to this farm'; end if;
+
+  select * into v_existing from public.bin_transactions where id = v_id for update;
+  if found then
+    if v_existing.farm_id = p_farm_id
+       and v_existing.grain_bin_id = v_bin_id
+       and v_existing.direction = v_direction
+       and v_existing.bushels = v_bushels
+       and v_existing.commodity_id = v_commodity
+       and v_existing.crop_year is not distinct from v_crop_year
+       and v_existing.grain_load_id is not distinct from v_grain_load
+       and v_existing.occurred_on = v_on
+       and v_existing.note is not distinct from v_note
+       and v_existing.source_kind is not distinct from v_source then
+      return to_jsonb(v_existing);
+    end if;
+    raise exception 'movement id was already used with different content';
+  end if;
+
+  select * into v_inventory from public.bin_inventory
+    where grain_bin_id = v_bin_id and farm_id = p_farm_id;
+  v_has_inventory := found;
+
+  -- A baseline restates the bin, so nothing may be recorded at or before it. A void whose
+  -- compensating movement now falls behind a newer baseline is a blocked void, not a crash.
+  if v_has_inventory and v_on <= v_inventory.measured_at::date then
+    raise exception using errcode = 'FR001',
+      message = 'movement date must be after the latest bin baseline';
+  end if;
+
+  -- One crop per bin: a bin still holding a nonzero lot of something else will not take this.
+  select array_agg(commodity_id order by commodity_id) into v_active_lots from (
+    select lots.commodity_id,
+           coalesce(max(case when v_has_inventory and v_inventory.commodity_id = lots.commodity_id
+                             then v_inventory.bushels else 0 end), 0)
+         + coalesce(sum(case when t.direction = 'in' then t.bushels else -t.bushels end), 0) as balance
+    from (
+      select commodity_id from public.bin_transactions
+        where grain_bin_id = v_bin_id and farm_id = p_farm_id
+      union
+      select v_inventory.commodity_id where v_has_inventory
+    ) lots
+    left join public.bin_transactions t
+      on t.commodity_id = lots.commodity_id
+     and t.grain_bin_id = v_bin_id
+     and t.farm_id = p_farm_id
+     and (not v_has_inventory
+          or t.commodity_id <> v_inventory.commodity_id
+          or t.occurred_on > v_inventory.measured_at::date)
+    group by lots.commodity_id
+  ) active where abs(balance) > 0.000001;
+  if coalesce(array_length(v_active_lots, 1), 0) > 0 and not v_commodity = any(v_active_lots) then
+    raise exception using errcode = 'FR001',
+      message = format('this bin still holds nonzero lots: %s; empty those lots before storing another crop',
+                       array_to_string(v_active_lots, ', '));
+  end if;
+
+  -- The commodity balance. Kept exactly as 0033 computed it, and still authoritative: rows
+  -- written before the crop_year column carry null and are invisible to the lot figure below,
+  -- so this is what still stops a bin being drawn past what is physically in it.
+  select coalesce(case when v_has_inventory and v_inventory.commodity_id = v_commodity
+                       then v_inventory.bushels else 0 end, 0)
+       + coalesce(sum(case when direction = 'in' then bushels else -bushels end), 0)
+    into v_lot_balance
+    from public.bin_transactions
+   where grain_bin_id = v_bin_id
+     and farm_id = p_farm_id
+     and commodity_id = v_commodity
+     and (not v_has_inventory
+          or commodity_id <> v_inventory.commodity_id
+          or occurred_on > v_inventory.measured_at::date);
+  v_lot_balance := v_lot_balance + case when v_direction = 'in' then v_bushels else -v_bushels end;
+  if v_lot_balance < 0 then
+    raise exception using errcode = 'FR001',
+      message = 'this movement would make the bin balance negative';
+  end if;
+
+  -- The lot balance: the same arithmetic narrowed to one crop year. The bin_inventory baseline
+  -- already carries a crop year, so it is its own lot and counts only for that year. Rows whose
+  -- crop year is null are a separate bucket and are deliberately not counted here -- assigning
+  -- them to this year would be the silent guess the amendment forbids.
+  if v_crop_year is not null then
+    -- LD-4 repair (Codex P1 on c0e40a3): TWO questions, and LD-2 asked only one of them.
+    --
+    -- Whether the baseline's bushels belong to THIS lot is a commodity-and-year question: the
+    -- baseline is 5,000 bushels of the 2023 crop, and none of it is 2022.
+    --
+    -- Whether a movement is already counted inside that baseline is a COMMODITY question, and LD-2
+    -- had it as a commodity-and-year one. A baseline measures the bin, not one year of it, so a
+    -- same-commodity movement dated before it is inside the figure whatever year it names. Asking
+    -- the narrower question here made this guard disagree with the commodity balance above -- that
+    -- one already excludes every same-commodity row at or before the baseline -- so the two halves
+    -- of one function reported different bushels, and public.bin_lots could agree with neither.
+    v_baseline_is_this_lot := v_has_inventory
+      and v_inventory.commodity_id = v_commodity
+      and v_inventory.crop_year = v_crop_year;
+    v_baseline_covers_commodity := v_has_inventory and v_inventory.commodity_id = v_commodity;
+    select coalesce(case when v_baseline_is_this_lot then v_inventory.bushels else 0 end, 0)
+         + coalesce(sum(case when direction = 'in' then bushels else -bushels end), 0)
+      into v_year_balance
+      from public.bin_transactions
+     where grain_bin_id = v_bin_id
+       and farm_id = p_farm_id
+       and commodity_id = v_commodity
+       and crop_year = v_crop_year
+       and (not v_baseline_covers_commodity or occurred_on > v_inventory.measured_at::date);
+    v_year_balance := v_year_balance + case when v_direction = 'in' then v_bushels else -v_bushels end;
+    if v_year_balance < 0 then
+      raise exception using errcode = 'FR001',
+        message = format('this bin does not hold that many bushels of the %s crop', v_crop_year);
+    end if;
+  end if;
+
+  -- Capacity counts every crop in the bin, not just this one.
+  select coalesce(sum(balance), 0) into v_total_balance from (
+    select lots.commodity_id,
+           coalesce(max(case when v_has_inventory and v_inventory.commodity_id = lots.commodity_id
+                             then v_inventory.bushels else 0 end), 0)
+         + coalesce(sum(case when t.direction = 'in' then t.bushels else -t.bushels end), 0) as balance
+    from (
+      select commodity_id from public.bin_transactions
+        where grain_bin_id = v_bin_id and farm_id = p_farm_id
+      union
+      select v_inventory.commodity_id where v_has_inventory
+      union
+      select v_commodity
+    ) lots
+    left join public.bin_transactions t
+      on t.commodity_id = lots.commodity_id
+     and t.grain_bin_id = v_bin_id
+     and t.farm_id = p_farm_id
+     and (not v_has_inventory
+          or t.commodity_id <> v_inventory.commodity_id
+          or t.occurred_on > v_inventory.measured_at::date)
+    group by lots.commodity_id
+  ) balances;
+  v_total_balance := v_total_balance + case when v_direction = 'in' then v_bushels else -v_bushels end;
+  if v_total_balance > v_bin.capacity_bu then
+    raise exception using errcode = 'FR001',
+      message = 'this movement would put more grain in the bin than it holds';
+  end if;
+
+  begin
+    insert into public.bin_transactions
+      (id, farm_id, grain_bin_id, direction, bushels, commodity_id, crop_year, occurred_on, note, source_kind, grain_load_id)
+    values
+      (v_id, p_farm_id, v_bin_id, v_direction, v_bushels, v_commodity, v_crop_year, v_on, v_note, v_source, v_grain_load)
+    returning * into v_saved;
+  exception when unique_violation then
+    select * into v_existing from public.bin_transactions where id = v_id;
+    if found
+       and v_existing.farm_id = p_farm_id
+       and v_existing.grain_bin_id = v_bin_id
+       and v_existing.direction = v_direction
+       and v_existing.bushels = v_bushels
+       and v_existing.commodity_id = v_commodity
+       and v_existing.crop_year is not distinct from v_crop_year
+       and v_existing.grain_load_id is not distinct from v_grain_load
+       and v_existing.occurred_on = v_on
+       and v_existing.note is not distinct from v_note
+       and v_existing.source_kind is not distinct from v_source then
+      return to_jsonb(v_existing);
+    end if;
+    raise exception 'movement id was already used with different content';
+  end;
+
+  return to_jsonb(v_saved);
+end $$;
+
+revoke all on function public.append_bin_movement(uuid, jsonb) from public, anon;
+grant execute on function public.append_bin_movement(uuid, jsonb) to authenticated;

@@ -78,7 +78,12 @@ export function grainLoadPayload(id: string, draft: GrainLoadDraft): Record<stri
     // server's cue to default, which it does only for a bin holding a single lot -- so sending a
     // guess here instead would be the one thing the amendment forbids. A field origin sends
     // nothing: its crop assignment already names the lot, and the server refuses any disagreement.
-    if (draft.origin_crop_year.trim()) payload.crop_year = Number(draft.origin_crop_year)
+    if (draft.origin_crop_year.trim()) {
+      payload.crop_year = Number(draft.origin_crop_year)
+      // Both halves of the lot, because a crop year alone does not identify one: a bin can have a
+      // record of 2025 soybeans and 2025 corn, and the server refuses rather than picking.
+      if (draft.origin_commodity_id) payload.commodity_id = draft.origin_commodity_id
+    }
   } else {
     payload.origin_crop_assignment_id = draft.origin_crop_assignment_id
   }

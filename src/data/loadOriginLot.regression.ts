@@ -45,7 +45,7 @@ const workspaceWith = (
 
 const baseDraft: GrainLoadDraft = {
   load_date: '2026-11-01', truck_equipment_id: '', truck_name: '',
-  origin_kind: 'bin', origin_grain_bin_id: binA, origin_crop_assignment_id: '', origin_crop_year: '',
+  origin_kind: 'bin', origin_grain_bin_id: binA, origin_crop_assignment_id: '', origin_crop_year: '', origin_commodity_id: '',
   destination_kind: 'buyer', destination_buyer: 'Riverside Elevator',
   destination_grain_contract_id: '', destination_grain_bin_id: '',
   gross_lbs: '', tare_lbs: '', net_bushels: '500', moisture_pct: '', ticket_number: '', notes: '',

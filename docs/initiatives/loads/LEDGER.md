@@ -582,7 +582,7 @@ edit cannot quietly weaken it back.
 - **Nineteen browser regression groups** across two files — ten in `committedFree.regression.ts`,
   nine in the new `loadOriginLot.regression.ts`, the ninth covering the repair below.
 - Static guards PASS with **twenty-three new LD-4 guards** (eight, plus fifteen for the repairs below);
-  **mutation drill 346/346** after merging the LD-3 repair and adding the repair mutations,
+  **mutation drill 351/351** after merging the LD-3 repair and adding the repair mutations,
   count changed in both files that pin it.
 - **Browser: 119 passed, 15 skipped** on desktop and phone, including a new LD-4 journey that reads
   both lots off the picker, is refused for not answering, and then proves the chosen year is what
@@ -750,9 +750,53 @@ cases. The void keeps its own refresh because it is a different handler touching
 Worth stating plainly for whoever reads this next: **when a third finding is a variation of the
 first two, the fix is the rule, not the third case.**
 
+### A sixth round, and this one reached the model
+
+Two P1s, and unlike everything before them these are not UI states. They are the definition of a
+lot and the arithmetic behind it.
+
+**A lot was identified by crop year alone.** This initiative's first rule, written at the top of
+`committedFree.ts`, is *"a lot is a commodity in a crop year"*. The lookup that resolves a farmer's
+chosen lot keyed on the year and took `order by bushels desc limit 1`. A bin that held 2025 soybeans
+and was later reused for 2025 corn has a record of both — so a ticket for the emptied soybeans would
+have been **silently stamped corn**, because corn had more bushels. The commodity now travels with
+the choice, from the picker's option value through the payload to a server that refuses an ambiguous
+year rather than picking the fuller lot.
+
+**Three places computed what a bin holds, and they disagreed.** `append_bin_movement`'s *commodity*
+balance excludes every same-commodity movement at or before the baseline. Its own *lot* balance
+excluded only the baseline's own crop year. `bin_lots` and the browser copied the narrower rule. So
+a bin with a 5,000 bushel baseline and an older 800 bushel carry-over movement **reported 5,800 and
+would release 5,000** — the farmer shown a lot they could not haul, which is the one thing this
+initiative exists to prevent.
+
+The narrower rule was wrong, and it was wrong in this ledger too. **LD-007's section 1b asserted it
+at length**, calling it "the subtlest rule in the file" and warning that a baseline for one year
+must not swallow another year's movements. That reasoning sounded careful and was backwards: a
+baseline is the farmer walking out and measuring the bin, so it covers everything of that commodity
+already in it. The assertion, its browser regression, and LD-3's own group 3 are all corrected.
+
+One rule now, in all three places, with the baseline's *bushels* still belonging to its own
+commodity and year — a separate question that LD-2 had conflated with supersession.
+
+**This changes merged LD-3 behaviour.** `isLotMovementSuperseded` ships on `main`, and its figures
+move for any bin with a pre-baseline movement of the same commodity in another year. The figures
+were wrong before and are right now, but it is a change to something already merged and is called
+out here rather than buried in a diff.
+
+**What six rounds have actually shown.** The first five found defects in this tranche's own new
+code. This one found a defect LD-2 and LD-3 already carried, which LD-4 inherited by copying the
+rule rather than checking it against the guard that enforces it. That is the difference worth
+recording: **copying a rule is not verifying it**, and the only reason this surfaced is that LD-4
+put a third evaluator beside two that already disagreed.
+
 ### Live steps
 
-**One migration to apply: `20260921180000_ld4_bin_origin_lot.sql`.** Until it is applied the
+**One migration to apply: `20260921180000_ld4_bin_origin_lot.sql`**, after LD-2's. It now also
+replaces `append_bin_movement`, for the one-line baseline correction above — every other guard,
+message and error code in that function is LD-2's, unchanged.
+
+Until it is applied the
 capability probe reports false, the form offers no crop year choice, and the derivation answers
 exactly as LD-1 did — because that is what the installed `save_grain_load` will accept. This is
 LD-006 finding 1's lesson applied in the other direction, and it is guarded and mutation-tested

@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 346')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 351')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -944,7 +944,7 @@ export function foundationStaticGuard(root = process.cwd()) {
     // them quietly stops asking. The mutation drill caught that too.
     if ((grainData.split("workspace.capabilities?.grain_load_bin_lot === false").length - 1) !== 2) errors.push('ld4:the-lot-choice-waits-for-the-migration')
     requireText(errors, grainModule, "workspace.capabilities?.grain_load_bin_lot !== false", 'ld4:the-lot-choice-waits-for-the-migration')
-    requireText(errors, grainModule, 'binLotReady ? outgoing0 : { ...outgoing0, origin_crop_year: "" }', 'ld4:a-hidden-lot-choice-is-never-sent')
+    requireText(errors, grainModule, 'binLotReady ? outgoing0 : { ...outgoing0, origin_crop_year: "", origin_commodity_id: "" }', 'ld4:a-hidden-lot-choice-is-never-sent')
     requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), "supabase.rpc('bin_lots'", 'ld4:the-lot-choice-waits-for-the-migration')
 
     // The balance question stays in append_bin_movement, under a row lock. save_grain_load asking
@@ -952,8 +952,13 @@ export function foundationStaticGuard(root = process.cwd()) {
     // finding. Comments are stripped, for the same reason the LD-3 guard above strips them: the
     // migration's own header explains the rule and would otherwise satisfy the guard.
     const ld4Migration = read(root, 'supabase/migrations/20260921180000_ld4_bin_origin_lot.sql')
+    // Bounded at both ends. This migration now also redefines append_bin_movement below, and that
+    // function legitimately raises FR001 and reads bin_inventory -- an open-ended slice would read
+    // its body as save_grain_load's and pass on the wrong evidence.
+    const saveStart = ld4Migration.indexOf('create or replace function public.save_grain_load')
+    const saveEnd = ld4Migration.indexOf('revoke all on function public.save_grain_load', saveStart)
     const saveBody = ld4Migration
-      .slice(ld4Migration.indexOf('create or replace function public.save_grain_load'))
+      .slice(saveStart, saveEnd)
       .split('\n')
       .map((line) => line.replace(/--.*$/, ''))
       .join('\n')
@@ -983,7 +988,27 @@ export function foundationStaticGuard(root = process.cwd()) {
     // The form keeps the origin for the next ticket, and a save can empty the year it named. A
     // choice the picker no longer offers has to be dropped, or the form refuses every further save
     // with no control on screen to fix it.
-    requireText(errors, grainModule, 'setDraft((current) => ({ ...current, origin_crop_year: "" }));', 'ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')
+    requireText(errors, grainModule, 'setDraft((current) => ({ ...current, origin_crop_year: "", origin_commodity_id: "" }));', 'ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')
+
+    // A lot is a commodity IN a crop year -- this initiative's first rule. The year alone does not
+    // identify one, so both halves travel with the choice and the server refuses an ambiguous year
+    // rather than picking the fuller lot.
+    requireText(errors, ld4Migration, 'select count(distinct lots.commodity_id), max(lots.commodity_id)', 'ld4:a-lot-is-a-commodity-in-a-crop-year')
+    requireText(errors, grainModule, 'const [commodity, year] = event.target.value.split(":");', 'ld4:a-lot-is-a-commodity-in-a-crop-year')
+    requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), 'if (draft.origin_commodity_id) payload.commodity_id = draft.origin_commodity_id', 'ld4:a-lot-is-a-commodity-in-a-crop-year')
+    // And one baseline rule, shared by the three places that compute what a bin holds.
+    requireText(errors, ld4Migration, 'v_baseline_covers_commodity := v_has_inventory and v_inventory.commodity_id = v_commodity;', 'ld4:one-baseline-rule-everywhere')
+    // bin_lots finds the baseline that SUPERSEDES by commodity alone. Narrowing that subselect by
+    // crop year is the exact shape of the rule this tranche got wrong first time, and it reads as
+    // more careful, so it is pinned here rather than left to whoever edits the function next. The
+    // other subselect a few lines above, which decides whose BUSHELS the baseline is, does match on
+    // the crop year -- correctly, because those are the baseline's own lot. Two questions.
+    requireText(errors, ld4Migration, 't.occurred_on > coalesce((select inv.measured_on from inv\n                                                     where inv.commodity_id = lots.commodity_id)', 'ld4:one-baseline-rule-everywhere')
+    requireText(errors, ld4Migration, '(not v_baseline_covers_commodity or occurred_on > v_inventory.measured_at::date)', 'ld4:one-baseline-rule-everywhere')
+    {
+      const superseded = committedFree.slice(committedFree.indexOf('export function isLotMovementSuperseded'))
+      if (superseded.slice(0, superseded.indexOf('}')).includes('crop_year')) errors.push('ld4:one-baseline-rule-everywhere')
+    }
     // And the lots are read again after a save, or the next load is picked against stale balances.
     requireText(errors, grainModule, 'if (originBinId) setLotsRefresh((count) => count + 1);', 'ld4:a-save-changes-what-the-bin-holds')
 

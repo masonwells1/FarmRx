@@ -255,10 +255,13 @@ export interface GrainLoadDraft {
   origin_kind: LoadOriginKind
   origin_grain_bin_id: string
   origin_crop_assignment_id: string
-  /** LD-4: which lot a bin origin is being hauled from, as a crop year. Empty means the farmer has
-   * not chosen, which is correct and common -- a bin holding one lot needs no answer. Ignored
-   * entirely for a field origin, where the crop assignment already names the lot. */
+  /** LD-4: which lot a bin origin is being hauled from. A lot is a commodity IN a crop year, so
+   * both halves travel together -- a bin that held 2025 soybeans and was reused for 2025 corn has a
+   * record of both, and the year alone does not say which. Empty means the farmer has not chosen,
+   * which is correct and common: a bin holding one lot needs no answer. Ignored entirely for a
+   * field origin, where the crop assignment already names the lot. */
   origin_crop_year: string
+  origin_commodity_id: string
   destination_kind: LoadDestinationKind
   destination_buyer: string
   destination_grain_contract_id: string
@@ -326,7 +329,7 @@ export function validateAssignedCropYear(cropYear: number): string | null {
  * than sending a guess the server would have to reject. */
 export function loadLotFor(
   workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions' | 'fields' | 'capabilities'>,
-  draft: Pick<GrainLoadDraft, 'origin_kind' | 'origin_grain_bin_id' | 'origin_crop_assignment_id' | 'origin_crop_year'>,
+  draft: Pick<GrainLoadDraft, 'origin_kind' | 'origin_grain_bin_id' | 'origin_crop_assignment_id' | 'origin_crop_year' | 'origin_commodity_id'>,
   /** LD-4 repair: the lots the DATABASE says this bin holds, when the form has them. The workspace
    * derivation below reads a movement array PostgREST may have truncated, so where the two could
    * differ this one wins -- it is the same answer save_grain_load will reach. */
@@ -353,7 +356,8 @@ export function loadLotFor(
     workspace.bin_transactions.filter((row) => row.grain_bin_id === draft.origin_grain_bin_id),
   )
   if (draft.origin_crop_year.trim()) {
-    const chosen = lots.find((lot) => lot.crop_year === Number(draft.origin_crop_year))
+    const chosen = lots.find((lot) => lot.crop_year === Number(draft.origin_crop_year)
+      && (!draft.origin_commodity_id || lot.commodity_id === draft.origin_commodity_id))
     return chosen ? { commodity_id: chosen.commodity_id, crop_year: chosen.crop_year } : null
   }
   return lots.length === 1 ? { commodity_id: lots[0].commodity_id, crop_year: lots[0].crop_year } : null

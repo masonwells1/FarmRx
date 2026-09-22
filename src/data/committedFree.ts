@@ -21,13 +21,20 @@ import type { BinInventory, BinTransaction, GrainContract, GrainContractDelivery
  * misled. The disposable assertions check both answers against the same fixture.
  */
 
-/** A baseline restates only its own lot -- its commodity in its crop year -- through its measured
- * day. A movement of a different crop year is a different lot and survives, which is the difference
- * from the commodity-level rule in `binLedger`. */
+/** A baseline restates the BIN, not one year of it, through its measured day. So every movement of
+ * the baseline's commodity dated at or before it is already inside that figure and must not be
+ * counted twice -- whatever crop year the movement names. The baseline's own bushels still belong
+ * to one lot, its own commodity in its own crop year; that is a different question, answered in
+ * `deriveBinLotOnHand`.
+ *
+ * LD-4 repair (Codex P1 on c0e40a3): this used to require the crop year to match as well, which
+ * looked more careful and was wrong. `append_bin_movement`'s commodity balance -- the guard that
+ * actually decides whether bushels may leave a bin -- has always excluded every same-commodity row
+ * at or before the baseline. Requiring the year here made the browser report carry-over bushels
+ * the database would never release, which is the exact shape this initiative exists to prevent. */
 export function isLotMovementSuperseded(inventory: BinInventory | undefined, movement: BinTransaction): boolean {
   if (!inventory) return false
   if (movement.commodity_id !== inventory.commodity_id) return false
-  if (movement.crop_year !== inventory.crop_year) return false
   return movement.occurred_on <= inventory.measured_at.slice(0, 10)
 }
 

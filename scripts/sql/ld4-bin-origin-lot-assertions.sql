@@ -76,25 +76,73 @@ begin
   if v_2026 <> 4000 then raise exception 'the 2026 lot reads % bushels, expected 4000', v_2026; end if;
 end $$;
 
--- ------------------------------------------------- 1b. a baseline restates its own lot, and only its own
--- The subtlest rule in the file, and the one a careless rewrite of bin_lots would lose silently.
--- A baseline is a measurement: it already includes everything that went into that lot before it was
--- taken, so counting those movements again would inflate the lot. But it measures ONE lot. A
--- movement of a different crop year, dated before the baseline, is not restated by it and still
--- counts -- otherwise measuring this year's crop would quietly erase last year's carry-over.
+-- ------------------------------------------------- 1b. a baseline restates the BIN, not one year
+-- The subtlest rule in the file, and the one this tranche got wrong first time. A baseline is a
+-- measurement: the farmer walked out and checked what is in the bin. So EVERY movement of that
+-- commodity dated at or before it is already inside the figure, whatever crop year it names, and
+-- counting it again would invent bushels.
 --
--- append_bin_movement and the browser's deriveBinLotOnHand both hold this rule. bin_lots is the
--- third place it has to be right, and it is checked here against figures written by hand.
+-- The first version of this assertion required the crop year to match before superseding, and said
+-- so at length -- "a baseline for one crop year must not swallow another year's movements". That
+-- reasoning was wrong, and wrong in the direction that matters: append_bin_movement's commodity
+-- balance, the guard that actually decides whether bushels may leave a bin, has always excluded
+-- every same-commodity row at or before the baseline. The narrower rule reported carry-over the
+-- database would never release. A farmer would have been shown a lot they could not haul, which is
+-- precisely what Initiative LD exists to prevent.
+--
+-- The baseline's own BUSHELS still belong to one lot, its own commodity in its own crop year. That
+-- is a different question and the 2022 row below is how the two are told apart: it stays on the
+-- record, at zero, because the bin has a record of that year and nothing left of it.
 do $$
-declare v_2023 numeric; v_2022 numeric;
+declare v_2023 numeric; v_2022 numeric; v_rows integer;
 begin
   select bushels into v_2023 from public.bin_lots('00000000-0000-4000-8000-000000000410','00000000-0000-4000-8000-000000000423') where crop_year = 2023;
   select bushels into v_2022 from public.bin_lots('00000000-0000-4000-8000-000000000410','00000000-0000-4000-8000-000000000423') where crop_year = 2022;
   if v_2023 <> 5000 then
     raise exception 'the measured lot reads % bushels, expected 5000 -- a movement the baseline already counts was counted twice', v_2023;
   end if;
-  if v_2022 <> 800 then
-    raise exception 'the other lot reads % bushels, expected 800 -- a baseline for one crop year swallowed another', v_2022;
+  if v_2022 <> 0 then
+    raise exception 'the pre-baseline carry-over reads % bushels, expected 0 -- the baseline measured the bin and already includes it', v_2022;
+  end if;
+
+  -- It is still on the record, which is what lets a ticket-only load name it.
+  select count(*) into v_rows from public.bin_lots('00000000-0000-4000-8000-000000000410','00000000-0000-4000-8000-000000000423') where crop_year = 2022;
+  if v_rows <> 1 then
+    raise exception 'the emptied carry-over year vanished from the record entirely';
+  end if;
+
+  -- And the figure agrees with the guard that binds: the whole bin is 5,000 bushels of corn, so
+  -- 5,000 may leave and 5,001 may not. Before this repair bin_lots said 5,800.
+  if (select coalesce(sum(bushels),0) from public.bin_lots('00000000-0000-4000-8000-000000000410','00000000-0000-4000-8000-000000000423')) <> 5000 then
+    raise exception 'the bin lot total disagrees with the commodity balance append_bin_movement enforces';
+  end if;
+end $$;
+
+-- ------------------------------------------------- 1c. and the guard agrees with the figure
+-- Section 1b checks what bin_lots REPORTS. This checks that append_bin_movement REFUSES the same
+-- thing, which is the half that actually protects a farmer. The two used different baseline rules
+-- until LD-4 repaired it: the commodity balance excluded every same-commodity row at or before the
+-- baseline while the lot balance excluded only the baseline's own year, so the same function
+-- disagreed with itself and bin_lots could agree with neither.
+--
+-- The bin holds 5,000 bushels of corn and its 2022 lot reads zero. One bushel of 2022 must be
+-- refused -- by the LOT guard, by name -- even though the bin is nowhere near empty of corn.
+do $$
+declare v_failed boolean := false;
+begin
+  begin
+    perform public.append_bin_movement('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+      'id',gen_random_uuid(),'grain_bin_id','00000000-0000-4000-8000-000000000423',
+      'direction','out','bushels',1,'commodity_id','corn_yellow','crop_year',2022,
+      'occurred_on','2026-03-01'));
+  exception when sqlstate 'FR001' then
+    v_failed := true;
+    if position('does not hold that many bushels of the 2022 crop' in sqlerrm) = 0 then
+      raise exception 'the empty carry-over lot was refused, but not by the lot guard: %', sqlerrm;
+    end if;
+  end;
+  if not v_failed then
+    raise exception 'a lot bin_lots reports as empty gave up a bushel, so the figure and the guard disagree';
   end if;
 end $$;
 
@@ -513,6 +561,60 @@ begin
   end;
   if not v_failed then
     raise exception 'a retry naming a different crop year was answered with the stored ticket';
+  end if;
+end $$;
+
+-- ------------------------------------------------- 10f. a lot is a commodity IN a crop year
+-- This initiative's first rule, applied where it was missing. A bin that held one crop and was
+-- later reused for another has a record of both, and if they share a crop year then the year alone
+-- names neither. The lookup used to take whichever row held more bushels, so a ticket for the
+-- emptied crop would have been stamped with the crop the bin holds now -- silently, and against
+-- the one rule everything else here protects.
+do $$
+declare v_load public.grain_loads%rowtype; v_failed boolean := false;
+begin
+  -- The baseline bin is emptied of corn and refilled with soybeans of the SAME crop year. Both
+  -- rows survive in bin_lots, which is what makes the year ambiguous.
+  perform public.save_grain_load('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+    'id','00000000-0000-4000-8000-00000000045c','load_date','2026-11-19',
+    'origin_kind','bin','origin_grain_bin_id','00000000-0000-4000-8000-000000000423',
+    'crop_year',2023,'commodity_id','corn_yellow',
+    'destination_kind','buyer','destination_buyer','LD4 Elevator','net_bushels',5000,
+    'effect_bin_out',true));
+  perform public.append_bin_movement('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+    'id','00000000-0000-4000-8000-00000000045d','grain_bin_id','00000000-0000-4000-8000-000000000423',
+    'direction','in','bushels',900,'commodity_id','soybeans','crop_year',2023,
+    'occurred_on','2026-11-20'));
+
+  -- The year alone is now ambiguous, and is refused rather than resolved to the fuller lot.
+  begin
+    perform public.save_grain_load('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+      'id',gen_random_uuid(),'load_date','2026-11-21',
+      'origin_kind','bin','origin_grain_bin_id','00000000-0000-4000-8000-000000000423',
+      'crop_year',2023,
+      'destination_kind','buyer','destination_buyer','LD4 Elevator','net_bushels',100,
+      'effect_bin_out',false));
+  exception when others then
+    v_failed := true;
+    if position('more than one crop in 2023' in sqlerrm) = 0 then
+      raise exception 'an ambiguous crop year was refused, but for the wrong reason: %', sqlerrm;
+    end if;
+  end;
+  if not v_failed then
+    raise exception 'a crop year held by two commodities was resolved without anyone saying which';
+  end if;
+
+  -- Named in full, the emptied corn is still nameable by a ticket that moves nothing -- and is NOT
+  -- silently turned into the soybeans the bin holds now.
+  perform public.save_grain_load('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+    'id','00000000-0000-4000-8000-00000000045e','load_date','2026-11-21',
+    'origin_kind','bin','origin_grain_bin_id','00000000-0000-4000-8000-000000000423',
+    'crop_year',2023,'commodity_id','corn_yellow',
+    'destination_kind','buyer','destination_buyer','LD4 Elevator','net_bushels',100,
+    'effect_bin_out',false));
+  select * into v_load from public.grain_loads where id = '00000000-0000-4000-8000-00000000045e';
+  if v_load.commodity_id <> 'corn_yellow' then
+    raise exception 'a ticket for the emptied corn was stamped %, which is the crop the bin holds now', v_load.commodity_id;
   end if;
 end $$;
 
