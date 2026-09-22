@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 385
+const expectedMutationCount = 388
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1091,14 +1091,23 @@ try {
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("  perform public.lock_farm_bins(p_farm_id, array(\n    select distinct grain_bin_id from public.bin_transactions\n     where grain_load_id = p_load_id and farm_id = p_farm_id));\n\n  select * into v_load from public.grain_loads\n    where id = p_load_id and farm_id = p_farm_id for update;\n  if not found then", "  select * into v_load from public.grain_loads\n    where id = p_load_id and farm_id = p_farm_id for update;\n\n  perform public.lock_farm_bins(p_farm_id, array(\n    select distinct grain_bin_id from public.bin_transactions\n     where grain_load_id = p_load_id and farm_id = p_farm_id));\n  if not found then"))
   detected('a perform sits between the void fence and the FOUND that reads it, so every load id looks like it belongs to this farm', 'ld4:the-void-fence-reads-its-own-select')
   reset()
-  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('const problems = validateGrainLoad(draft, workspace, lots)', 'const problems = validateGrainLoad(draft, workspace)'))
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('const problems = validateGrainLoad(resolvedDraft, workspace, lots)', 'const problems = validateGrainLoad(resolvedDraft, workspace)'))
   detected('the mock validates a save against the on-hand list, so a ticket naming an emptied lot is refused where production accepts it', 'ld4:a-save-resolves-against-the-list-the-server-uses')
   reset()
-  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('const lot = loadLotFor(workspace, draft, lots)', 'const lot = loadLotFor(workspace, draft)'))
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('const lot = loadLotFor(workspace, resolvedDraft, lots)', 'const lot = loadLotFor(workspace, resolvedDraft)'))
   detected('the mock resolves the saved lot from a different list than the one it validated against', 'ld4:a-save-resolves-against-the-list-the-server-uses')
   reset()
-  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('    const existing = workspace.grain_loads.find((row) => row.id === id)\n    if (existing) return existing\n    const problems = validateGrainLoad(draft, workspace, lots)\n    if (problems.length) throw new Error(problems[0])', '    const problems = validateGrainLoad(draft, workspace, lots)\n    if (problems.length) throw new Error(problems[0])\n    const existing = workspace.grain_loads.find((row) => row.id === id)\n    if (existing) return existing'))
-  detected('the mock validates before replaying, so a retry of a load that drained its bin is refused instead of returning the ticket already saved', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace("    const resolvedDraft = existing && draft.origin_kind === 'bin' && !draft.origin_crop_year.trim()\n      ? { ...draft, origin_crop_year: String(existing.crop_year), origin_commodity_id: existing.commodity_id }\n      : draft", "    const resolvedDraft = draft"))
+  detected('the replay no longer recovers the stored lot, so a retry of a blank-year load that drained its bin cannot resolve one at all', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace("      if (same) return existing\n      throw new Error('FARM_RX_LOAD_ID_REUSED')", '      return existing'))
+  detected('the mock replays any reused ticket id without comparing it, so a malformed retry comes back as a successful save', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('        && existing.net_bushels === saved.net_bushels\n', ''))
+  detected('the replay comparison drops a column the server compares, so a retry with different bushels replays instead of being refused', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('    const shape = validateGrainLoadShape(draft)\n    if (shape.length) throw new Error(shape[0])\n', ''))
+  detected('shape is no longer checked ahead of the replay, so a malformed payload is measured against a stored load instead of refused', 'ld4:a-save-resolves-against-the-list-the-server-uses')
   reset()
   mutate('src/data/grain.ts', (source) => source.replace("  return draft.origin_crop_year.trim()\n    ? recordedLots\n    : recordedLots.filter((lot) => lot.bushels > 0.000001)", '  return recordedLots.filter((lot) => lot.bushels > 0.000001)'))
   detected('a named crop year is resolved against what the bin still holds, so a ticket for grain already hauled cannot name its year', 'ld4:a-save-resolves-against-the-list-the-server-uses')

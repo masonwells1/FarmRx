@@ -2,7 +2,7 @@ import type { FieldsRepository } from './fields'
 import { isLotMovementSuperseded } from './committedFree'
 import type { BinTransaction, BinTransactionDirection, CashBid, FirmOffer, FuturesQuote, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, GrainRepository, GrainSaleLimit, GrainWorkspace, LoadVoidBlocker, LoadVoidResult, MarketDataService, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaMarketReport, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
-import { contractIsCorrectable, loadEffectsAvailable, loadLotFor, lotsSaveResolvesAgainst, recordedBinLots, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason } from './grain'
+import { contractIsCorrectable, loadEffectsAvailable, loadLotFor, lotsSaveResolvesAgainst, recordedBinLots, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateGrainLoadShape, validateLoadVoidReason } from './grain'
 import { localCalendarDay, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { activeBinCommodityIds, deriveBinOnHand, PRE_BASELINE_BIN_MOVEMENT_MESSAGE, validateBinTransaction, validateGrainBin } from './binLedger'
@@ -149,53 +149,93 @@ export class MockGrainRepository implements GrainRepository {
     // emptied lots. So a ticket-only load naming a lot the bin has already emptied was refused
     // here while the real RPC accepts it, and the path listBinLots had just been repaired for
     // could not be reached through the mock by any test.
-    const lots = draft.origin_kind === 'bin' && draft.origin_grain_bin_id
-      ? lotsSaveResolvesAgainst(recordedBinLots(workspace, draft.origin_grain_bin_id), draft)
-      : undefined
-    // LD-4 repair (Codex P2 on 052ba8d): the replay check comes FIRST, as it does in the real
-    // function, where the lookup happens inside the bin lock before any lot is resolved. A retry of
-    // a blank-year load that drained the bin's sole lot finds no on-hand lot to default from, so
-    // validating first refused the retry outright -- while the server recovers the stored lot and
-    // returns the ticket it already saved. That is the exact lost-response path LD-1 keeps the
-    // ticket id for, and the mock could not exercise it.
     const existing = workspace.grain_loads.find((row) => row.id === id)
-    if (existing) return existing
-    const problems = validateGrainLoad(draft, workspace, lots)
-    if (problems.length) throw new Error(problems[0])
-    const lot = loadLotFor(workspace, draft, lots)
+    // LD-4 repair (Codex P2 on bedb237): the server's order, step for step, because the previous
+    // two repairs each fixed one step and broke another.
+    //
+    // Shape first. save_grain_load checks it before anything else, and a malformed payload is
+    // malformed whether or not the ticket id is already known. Moving the replay ahead of the lot
+    // resolution had left an unconditional return that bypassed validation entirely, so a reused id
+    // with a cleared net amount came back as a successful save.
+    const shape = validateGrainLoadShape(draft)
+    if (shape.length) throw new Error(shape[0])
+    // Then the lot, with the recovery the server does inside the bin lock: a retry that names no
+    // crop year, whose ticket id is already saved, resolves to the lot that load was recorded
+    // under. That is what stops a bin the first call emptied from failing the retry.
+    const resolvedDraft = existing && draft.origin_kind === 'bin' && !draft.origin_crop_year.trim()
+      ? { ...draft, origin_crop_year: String(existing.crop_year), origin_commodity_id: existing.commodity_id }
+      : draft
+    // LD-4 repair (Codex P2 on ef8a29e): resolved against the list THAT function uses -- see
+    // lotsSaveResolvesAgainst. It passed no list at all before, and both calls below then fell
+    // through to binLotsOnHand, which drops the emptied lots.
+    const lots = resolvedDraft.origin_kind === 'bin' && resolvedDraft.origin_grain_bin_id
+      ? lotsSaveResolvesAgainst(recordedBinLots(workspace, resolvedDraft.origin_grain_bin_id), resolvedDraft)
+      : undefined
+    if (!existing) {
+      const problems = validateGrainLoad(resolvedDraft, workspace, lots)
+      if (problems.length) throw new Error(problems[0])
+    }
+    const lot = loadLotFor(workspace, resolvedDraft, lots)
     if (!lot) throw new Error('Farm Rx cannot tell which crop year this load is.')
     const stamp = now()
-    const available = loadEffectsAvailable(draft)
+    const available = loadEffectsAvailable(resolvedDraft)
     const confirmed = (key: 'bin_out' | 'bin_in' | 'contract_delivery' | 'harvest') => available.includes(key) && (
-      key === 'bin_out' ? draft.effect_bin_out
-        : key === 'bin_in' ? draft.effect_bin_in
-        : key === 'contract_delivery' ? draft.effect_contract_delivery
-        : draft.effect_harvest)
+      key === 'bin_out' ? resolvedDraft.effect_bin_out
+        : key === 'bin_in' ? resolvedDraft.effect_bin_in
+        : key === 'contract_delivery' ? resolvedDraft.effect_contract_delivery
+        : resolvedDraft.effect_harvest)
     const saved: GrainLoad = {
-      id, farm_id: workspace.fields.farm.id, load_date: draft.load_date,
-      truck_equipment_id: draft.truck_equipment_id || null,
-      truck_name: draft.truck_name.trim() || null,
-      origin_kind: draft.origin_kind,
-      origin_grain_bin_id: draft.origin_kind === 'bin' ? draft.origin_grain_bin_id : null,
-      origin_crop_assignment_id: draft.origin_kind === 'field' ? draft.origin_crop_assignment_id : null,
-      destination_kind: draft.destination_kind,
-      destination_buyer: draft.destination_kind === 'buyer' ? draft.destination_buyer.trim() : null,
-      destination_grain_contract_id: draft.destination_kind === 'contract' ? draft.destination_grain_contract_id : null,
-      destination_grain_bin_id: draft.destination_kind === 'bin' ? draft.destination_grain_bin_id : null,
+      id, farm_id: workspace.fields.farm.id, load_date: resolvedDraft.load_date,
+      truck_equipment_id: resolvedDraft.truck_equipment_id || null,
+      truck_name: resolvedDraft.truck_name.trim() || null,
+      origin_kind: resolvedDraft.origin_kind,
+      origin_grain_bin_id: resolvedDraft.origin_kind === 'bin' ? resolvedDraft.origin_grain_bin_id : null,
+      origin_crop_assignment_id: resolvedDraft.origin_kind === 'field' ? resolvedDraft.origin_crop_assignment_id : null,
+      destination_kind: resolvedDraft.destination_kind,
+      destination_buyer: resolvedDraft.destination_kind === 'buyer' ? resolvedDraft.destination_buyer.trim() : null,
+      destination_grain_contract_id: resolvedDraft.destination_kind === 'contract' ? resolvedDraft.destination_grain_contract_id : null,
+      destination_grain_bin_id: resolvedDraft.destination_kind === 'bin' ? resolvedDraft.destination_grain_bin_id : null,
       commodity_id: lot.commodity_id, crop_year: lot.crop_year,
-      gross_lbs: draft.gross_lbs.trim() ? Number(draft.gross_lbs) : null,
-      tare_lbs: draft.tare_lbs.trim() ? Number(draft.tare_lbs) : null,
-      net_bushels: Number(draft.net_bushels),
-      moisture_pct: draft.moisture_pct.trim() ? Number(draft.moisture_pct) : null,
-      ticket_number: draft.ticket_number.trim() || null,
+      gross_lbs: resolvedDraft.gross_lbs.trim() ? Number(resolvedDraft.gross_lbs) : null,
+      tare_lbs: resolvedDraft.tare_lbs.trim() ? Number(resolvedDraft.tare_lbs) : null,
+      net_bushels: Number(resolvedDraft.net_bushels),
+      moisture_pct: resolvedDraft.moisture_pct.trim() ? Number(resolvedDraft.moisture_pct) : null,
+      ticket_number: resolvedDraft.ticket_number.trim() || null,
       photo_path: null,
-      notes: draft.notes.trim() || null,
+      notes: resolvedDraft.notes.trim() || null,
       effect_bin_out: confirmed('bin_out'),
       effect_bin_in: confirmed('bin_in'),
       effect_contract_delivery: confirmed('contract_delivery'),
       effect_harvest: confirmed('harvest'),
       voided_at: null, void_reason: null,
       created_at: stamp, updated_at: stamp,
+    }
+    // And only now the replay comparison, field for field as save_grain_load makes it: the same
+    // fifteen columns, in the same order, against the load that would have been written. Equal
+    // means the earlier call committed and only its response was lost, so the ticket comes back.
+    // Anything else is one id spent on two different loads, which is a bug rather than a retry.
+    //
+    // This is written out rather than deferred because the server's definition of "different" is
+    // written out too -- I had recorded it as unknowable without checking, which it was not.
+    if (existing) {
+      const same = existing.farm_id === saved.farm_id
+        && existing.load_date === saved.load_date
+        && existing.origin_kind === saved.origin_kind
+        && existing.origin_grain_bin_id === saved.origin_grain_bin_id
+        && existing.origin_crop_assignment_id === saved.origin_crop_assignment_id
+        && existing.destination_kind === saved.destination_kind
+        && existing.destination_buyer === saved.destination_buyer
+        && existing.destination_grain_contract_id === saved.destination_grain_contract_id
+        && existing.destination_grain_bin_id === saved.destination_grain_bin_id
+        && existing.commodity_id === saved.commodity_id
+        && existing.crop_year === saved.crop_year
+        && existing.net_bushels === saved.net_bushels
+        && existing.effect_bin_out === saved.effect_bin_out
+        && existing.effect_bin_in === saved.effect_bin_in
+        && existing.effect_contract_delivery === saved.effect_contract_delivery
+        && existing.effect_harvest === saved.effect_harvest
+      if (same) return existing
+      throw new Error('FARM_RX_LOAD_ID_REUSED')
     }
     // LD-2: every effect the farmer confirmed, applied here the way the server applies it. The
     // harvest effect writes nothing -- it is the flag above, and the figure is derived from it.

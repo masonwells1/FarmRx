@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 385')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 388')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1172,16 +1172,36 @@ export function foundationStaticGuard(root = process.cwd()) {
       const mock = read(root, 'src/data/MockGrainRepository.ts')
       const save = mock.slice(mock.indexOf('async saveLoad(id: string, draft: GrainLoadDraft)'))
       const body = save.slice(0, save.indexOf('\n  async '))
-      if (body.includes('validateGrainLoad(draft, workspace)')) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
-      if (body.includes('loadLotFor(workspace, draft)')) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
-      requireText(errors, body, 'lotsSaveResolvesAgainst(recordedBinLots(workspace, draft.origin_grain_bin_id), draft)', 'ld4:a-save-resolves-against-the-list-the-server-uses')
-      // And the replay check runs BEFORE any of it, as it does in the real function inside the bin
-      // lock. A retry of a blank-year load that drained the bin's sole lot has nothing to default
-      // from, so validating first refused the very retry LD-1 keeps the ticket id for. Positional,
-      // because both lines exist either way and only their order carries the rule.
-      const replay = body.indexOf('const existing = workspace.grain_loads.find((row) => row.id === id)')
-      const validate = body.indexOf('const problems = validateGrainLoad(draft, workspace, lots)')
-      if (replay < 0 || validate < 0 || replay > validate) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
+      // Both spellings, because the draft the save resolves is now the recovered one and either
+      // name dropping its list is the same bug.
+      for (const name of ['draft', 'resolvedDraft']) {
+        if (body.includes(`validateGrainLoad(${name}, workspace)`)) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
+        if (body.includes(`loadLotFor(workspace, ${name})`)) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
+      }
+      requireText(errors, body, 'lotsSaveResolvesAgainst(recordedBinLots(workspace, resolvedDraft.origin_grain_bin_id), resolvedDraft)', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+      // And the whole sequence is the server's, step for step, because two earlier repairs each
+      // fixed one step and broke another:
+      //
+      //   shape  ->  lot (recovered from the stored load when no year is named)  ->  replay
+      //   comparison  ->  save.
+      //
+      // Positional, because every one of these lines exists whatever the order, and only the order
+      // carries the rule.
+      const shape = body.indexOf('const shape = validateGrainLoadShape(draft)')
+      const recover = body.indexOf('const resolvedDraft = existing && draft.origin_kind')
+      const compare = body.indexOf('const same = existing.farm_id === saved.farm_id')
+      if (shape < 0 || recover < 0 || compare < 0 || shape > recover || recover > compare) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
+      // The replay must COMPARE, not just return. An unconditional return was how moving the
+      // replay earlier came to bypass validation altogether -- a reused id with a cleared net
+      // amount came back as a successful save, where the server refuses it.
+      requireText(errors, body, "throw new Error('FARM_RX_LOAD_ID_REUSED')", 'ld4:a-save-resolves-against-the-list-the-server-uses')
+      // Every column the server compares, so a field quietly dropped from the check fails here.
+      for (const column of ['farm_id', 'load_date', 'origin_kind', 'origin_grain_bin_id', 'origin_crop_assignment_id',
+        'destination_kind', 'destination_buyer', 'destination_grain_contract_id', 'destination_grain_bin_id',
+        'commodity_id', 'crop_year', 'net_bushels', 'effect_bin_out', 'effect_bin_in',
+        'effect_contract_delivery', 'effect_harvest']) {
+        if (!body.includes(`existing.${column} === saved.${column}`)) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
+      }
       // And the rule itself keys on whether a year was NAMED: recorded when it was, on-hand when
       // it was not. Both branches are pinned, because collapsing either one reproduces a bug this
       // tranche has already shipped once in each direction.

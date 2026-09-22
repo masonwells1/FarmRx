@@ -1278,6 +1278,53 @@ details. Implementing that faithfully means matching the server's definition of 
 guessing at it is how every divergence on this tranche started. It belongs with the
 `MockGrainRepository` test seam that round 15 already recorded as missing, not with a 5am edit.
 
+### A twentieth round, which corrects round 19 rather than extending it
+
+One P2, and it lands on the gap round 19 named and left open. It is right, and the framing there was
+wrong twice over.
+
+**First, round 19 made the gap worse, not neutral.** Moving the replay check ahead of the lot
+resolution left it an *unconditional return* — so it now bypassed shape validation too. A reused
+ticket id with a cleared net amount, a changed origin or different effects came back as a
+**successful save**, where the server refuses the payload or raises `FARM_RX_LOAD_ID_REUSED`. Round
+19 fixed one step of the sequence and broke another, which is the third time on this tranche a
+repair has done that.
+
+**Second, the reason for deferring it does not survive contact with the file.** Round 19 recorded
+that implementing the comparison "means matching the server's definition of *different*, and
+guessing at it is how every divergence on this tranche started." But the server's definition is not
+a matter of guesswork — it is written out plainly, sixteen columns of `and v_existing.x = y`, and it
+took one `grep` to find. The deferral was reasoning from an assumption about the code instead of
+reading it, on a tranche whose entire history is that mistake.
+
+#### The whole sequence, the server's, step for step
+
+```
+shape  ->  lot (recovered from the stored load when no year is named)  ->  replay comparison  ->  save
+```
+
+Each of the last three rounds fixed one of those steps in isolation and disturbed its neighbour. The
+guard is positional across all of them now, rather than pinning any one step, and it iterates the
+sixteen compared columns so a field quietly dropped from the check fails.
+
+The recovery step is the one that matters for the farmer: a retry naming no crop year, whose ticket
+id is already saved, resolves to the lot that load was recorded under. That is what stops a bin the
+first call emptied from failing the retry, and it is why the comparison has to come after the lot
+rather than before it.
+
+### Proof observed for round 20
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
+  `git diff --check` clean.
+- **Eleven disposable SQL suites pass together.**
+- Static guards PASS; **mutation drill 388/388**. Three added — the comparison removed, a compared
+  column dropped, and the shape check removed — and **three existing mutations retargeted**, because
+  they pinned expressions this restructure renamed and would have failed to apply rather than
+  failing to detect.
+- **Browser: 129 passed, 15 skipped.**
+- **All regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
+
 ### Proof observed for round 19
 
 - `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
