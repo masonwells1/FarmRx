@@ -985,7 +985,7 @@ export function foundationStaticGuard(root = process.cwd()) {
     // with no control on screen to fix it.
     requireText(errors, grainModule, 'setDraft((current) => ({ ...current, origin_crop_year: "" }));', 'ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')
     // And the lots are read again after a save, or the next load is picked against stale balances.
-    requireText(errors, grainModule, 'ticket_number: "", notes: "" }));\n      setLotsRefresh((count) => count + 1);', 'ld4:a-save-changes-what-the-bin-holds')
+    requireText(errors, grainModule, 'if (originBinId) setLotsRefresh((count) => count + 1);', 'ld4:a-save-changes-what-the-bin-holds')
 
     // "Not answered yet" is not "answered with nothing". While the lot read is in flight the
     // derivation stands in -- the truncated list the repair exists to stop trusting -- so a farmer

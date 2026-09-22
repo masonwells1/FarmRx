@@ -4625,10 +4625,23 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       // out of one bin all afternoon should not retype them. The weights, moisture and ticket number
       // are what change per load, so only those are cleared.
       setDraft((current) => ({ ...current, gross_lbs: "", tare_lbs: "", net_bushels: "", moisture_pct: "", ticket_number: "", notes: "" }));
-      setLotsRefresh((count) => count + 1);
       setMessage(`Load saved: ${saved.net_bushels.toLocaleString()} bu of ${commodityLabel(saved.commodity_id)}, ${saved.crop_year} crop.`);
       await onSaved();
-    } catch (error) { setMessage(farmerError(error, "record this load")) } finally { lock.current.release(); setSaving(false) }
+    } catch (error) {
+      setMessage(farmerError(error, "record this load"));
+    } finally {
+      // LD-4 repair (Codex P2 on f4b614d): read the bin's lots again after ANY attempt, not only
+      // after one that worked. A save refused because another truck changed the bin is exactly the
+      // moment the form's list is known to be wrong, and refreshing only on success left the
+      // farmer retrying against the same stale list until they switched bins or reloaded.
+      //
+      // Three findings on this tranche were the same asymmetry -- refresh after a save, then also
+      // after a void, then also after a failure. One line covering every outcome replaces all
+      // three, because the rule was never "after a success": it is "after touching this bin".
+      if (originBinId) setLotsRefresh((count) => count + 1);
+      lock.current.release();
+      setSaving(false);
+    }
   };
 
   const voidLoad = async (load: GrainLoad) => {

@@ -734,6 +734,22 @@ but the authoritative lot read is separate and **wins over the workspace** — s
 offering one lot where the server now saw two, and refused the next save with no picker to fix it.
 The same refresh that follows a save now follows a void.
 
+### A fifth round, and the same asymmetry a third time
+
+**The lots were not read again after a save that failed.** (P2) A save refused because another truck
+changed the bin is *exactly* the moment the form's lot list is known to be wrong — and it was the
+one moment the list was not refreshed. The farmer retried against the same stale list until they
+switched bins or reloaded.
+
+Three findings on this tranche were this same asymmetry: refresh after a save, then also after a
+void, then also after a failure. Each was patched where it was found. **That is the wrong shape, and
+the third one made it obvious.** The rule was never "after a success" — it is *"after touching this
+bin"*, and it is now one line in `finally` that covers every outcome, replacing the three special
+cases. The void keeps its own refresh because it is a different handler touching the same bin.
+
+Worth stating plainly for whoever reads this next: **when a third finding is a variation of the
+first two, the fix is the rule, not the third case.**
+
 ### Live steps
 
 **One migration to apply: `20260921180000_ld4_bin_origin_lot.sql`.** Until it is applied the
