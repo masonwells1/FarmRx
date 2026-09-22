@@ -197,6 +197,14 @@ export class SupabaseGrainRepository implements GrainRepository, GrainOperationW
     if (!read) return null
     try {
       const raw = await read.call(this.dependencies.gateway, await this.operationFarmId(context), binId, context)
+      // LD-4 repair (Codex P2 on 1883377): the context is verified again AFTER the response lands,
+      // as every other read and write in this repository does. operationFarmId fences before the
+      // request; nothing fenced after it. So a read still in flight when the account, the selected
+      // farm or the access epoch changed could resolve into authoritativeLots and put the PREVIOUS
+      // farm's bin quantities on screen -- private financial figures, on a form that would then
+      // offer them as lots to haul. A read is not exempt from the epoch fence just because it
+      // writes nothing.
+      await this.dependencies.verifyOperationContext(context)
       // Null rather than an empty list when the function is not installed yet: "this bin holds
       // nothing" and "the database cannot answer" must not look the same to the form.
       return raw

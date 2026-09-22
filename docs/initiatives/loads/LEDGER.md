@@ -1057,6 +1057,69 @@ The journey was run against the unrepaired code, with the lot kept frozen. It fa
 refusal the retry never reaches the server at all. That is the farmer's experience of this bug, and
 it is what the test now holds.
 
+### A fourteenth round, and the one finding on this tranche that could have leaked data
+
+One P2, and it is the most serious thing review has found here.
+
+**`listBinLots` was not fenced after its response landed.** `SupabaseGrainRepository` verifies the
+operation context *before* the request, via `operationFarmId`, and then — unlike **every other read
+and write in that file** — never again. `operationWorkspace`, `appendBinTransactionOperation`,
+`recordContractDeliveryOperation`, `editContractOperation` and the rest all do the same thing after
+the gateway resolves: `await this.dependencies.verifyOperationContext(context)`.
+
+So a lot read still in flight when the account, the selected farm, or the access epoch changed could
+resolve into `authoritativeLots` and **put the previous farm's bin quantities on screen** — private
+financial figures, on a form that would then offer them as lots to haul.
+
+Nothing was written and RLS was never bypassed, so this is a display leak rather than a breach of
+the database. That is not a reason to rank it lower. Farm Rx's whole access story is that a farm's
+numbers are visible only while you are in that farm, and the epoch fence exists because a token and
+a selected farm can change mid-request. **A read is not exempt from that fence because it writes
+nothing** — and this was the only grain read that behaved as though it were.
+
+#### It had no coverage at all, which is how it survived fourteen rounds
+
+`FakeGateway` in `SupabaseGrainRepository.regression.ts` had no `listBinLots` at all. Not a weak
+test — **no test**. The method was added in this tranche and every proof around it went through the
+browser journeys and the SQL suite, so nothing ever exercised the repository layer's own contract
+for it.
+
+It has a fake and a coverage group now: the ordinary read returns every recorded lot including the
+emptied one, and a context that changes **while the read is in flight** makes the call reject rather
+than hand back the old farm's bushels. The group also asserts the context is checked *twice* — once
+before the request and once after it lands — because a fence that only ran before is exactly the bug.
+
+**Run against the unfenced code, it fails**, printing the previous farm's bushels in the failure
+message. That is the leak, reproduced.
+
+The guard is positional rather than textual: the verify call has to sit *after* the gateway read.
+Pinning the string alone would stay green with the call moved back above the request, which is the
+same shape that has now failed seven times on this tranche.
+
+### Proof observed for round 14
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
+  `git diff --check` clean.
+- **Eleven disposable SQL suites pass together**, unchanged by this round and run to confirm.
+- Static guards PASS; **mutation drill 374/374**, count changed in both files that pin it. Two
+  added: the fence removed, and the queued path reaching past the writer that carries it.
+- **A new repository coverage group**, on a method that had none, proved by reverting the fence.
+- **Browser: 125 passed, 15 skipped.**
+- **All regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
+
+#### What this round says about the tranche
+
+Fourteen rounds, twenty-four findings, twenty-three of them real. The three that matter most for
+what to do next were all found in the last four rounds, and all three were in code **this tranche
+added**: a mock that could not exercise the path it was built for, a rule of mine that stranded the
+farmer it was written to protect, and a read that skipped the fence every other read takes.
+
+The pattern is not carelessness in any one edit. It is that **new surface arrives without the
+obligations the surrounding code already has** — a new repository method that nobody thought to
+fence, a new mock method that nobody thought to cover, a new state flag whose lifecycle nobody
+thought through. Each was correct in the small and wrong in the context it joined.
+
 ### Proof observed for round 13
 
 - `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;

@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 372
+const expectedMutationCount = 374
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1116,6 +1116,12 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('        loadId.current = null;\n        setTicketOutstanding(false);\n      }', '        setTicketOutstanding(false);\n      }'))
   detected('a refused save frees its lot but keeps its ticket id, so the next attempt spends that id on a different load', 'ld4:a-refused-save-lets-its-lot-go')
+  reset()
+  mutate('src/data/SupabaseGrainRepository.ts', (source) => source.replace('      await this.dependencies.verifyOperationContext(context)\n      // Null rather than an empty list', '      // Null rather than an empty list'))
+  detected('a lot read still in flight when the farm changes resolves anyway, putting the previous farm private bin quantities on screen', 'ld4:a-lot-read-is-fenced-after-it-lands')
+  reset()
+  mutate('src/data/QueuedGrainRepository.ts', (source) => source.replace('return this.writer.listBinLots(binId)', 'return this.writer.listBinLots(binId.trim())'))
+  detected('the queued path reaches past the writer, so the fence applies to one caller and not the other', 'ld4:a-lot-read-is-fenced-after-it-lands')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('.filter((row) => row.movementCount > 0)', '.filter((row) => Math.abs(row.bushels) > 0.000001)'))
   detected('unresolved movements that cancel out today stop being named at all', 'ld3:an-unresolved-movement-is-named-however-it-nets')

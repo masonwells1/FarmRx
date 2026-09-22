@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 372')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 374')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1132,6 +1132,25 @@ export function foundationStaticGuard(root = process.cwd()) {
       const lock = bin.indexOf('for update;')
       const replay = bin.indexOf('select crop_year, commodity_id into v_replay_year')
       if (lock < 0 || replay < 0 || replay < lock) errors.push('ld4:the-replay-lookup-reads-inside-the-lock')
+    }
+    {
+      // LD-4 repair: the lot read verifies the operation context AFTER the response lands, as every
+      // other read and write in this repository does. Fencing only before the request leaves a read
+      // that is still in flight when the farm, account or access epoch changes free to resolve into
+      // the form -- putting the PREVIOUS farm's private bin quantities on screen as lots to haul.
+      // A read is not exempt from the epoch fence because it writes nothing.
+      //
+      // Positional, not textual: the call has to sit after the gateway read, and pinning the string
+      // alone would stay green with it moved back above.
+      const repository = read(root, 'src/data/SupabaseGrainRepository.ts')
+      const lots = repository.slice(repository.indexOf('async listBinLots(binId: string)'))
+      const body = lots.slice(0, lots.indexOf('\n  async '))
+      const gatewayRead = body.indexOf('await read.call(')
+      const fence = body.indexOf('await this.dependencies.verifyOperationContext(context)')
+      if (gatewayRead < 0 || fence < 0 || fence < gatewayRead) errors.push('ld4:a-lot-read-is-fenced-after-it-lands')
+      // And the queued repository forwards to that writer rather than reaching past it, or the
+      // fence above would apply to one caller and not the other.
+      requireText(errors, read(root, 'src/data/QueuedGrainRepository.ts'), 'return this.writer.listBinLots(binId)', 'ld4:a-lot-read-is-fenced-after-it-lands')
     }
     {
       // LD-4 repair: the lot freeze is only right while the save's outcome is UNKNOWN. A definitive
