@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 388')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 390')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1133,6 +1133,16 @@ export function foundationStaticGuard(root = process.cwd()) {
       const binLock = voidBody.indexOf('perform public.lock_farm_bins(')
       const rowLock = voidBody.indexOf('where id = p_load_id and farm_id = p_farm_id for update')
       if (binLock < 0 || rowLock < 0 || binLock > rowLock) errors.push('ld4:one-lock-order-for-the-module')
+      // LD-4 repair: the bin discovery and the load lookup are two statements, so under read
+      // committed they read two snapshots. A save committing between them leaves the void holding
+      // the load row having locked no bins, and append_bin_movement then waits on a bin a save
+      // retry holds while that retry waits for the load row -- the deadlock the ordering argument
+      // does not cover. Locking the missing bin then would BE the violation, so the void confirms
+      // its set instead and refuses. Positional: the confirmation is worthless before the row lock.
+      const confirm = voidBody.indexOf('not (grain_bin_id = any(v_locked_bins))')
+      if (confirm < 0 || confirm < rowLock) errors.push('ld4:the-void-confirms-the-bins-it-locked')
+      // The set it confirms is the set it locked, not a second read of the same query.
+      requireText(errors, voidBody, 'perform public.lock_farm_bins(p_farm_id, v_locked_bins);', 'ld4:the-void-confirms-the-bins-it-locked')
       // And nothing may sit between that select and the check that reads its FOUND. Moving the
       // lock in front of them is what this round did; putting it BETWEEN them is what the previous
       // round did, and FOUND then answered for the perform instead -- every load id looked like it

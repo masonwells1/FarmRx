@@ -1312,6 +1312,49 @@ id is already saved, resolves to the lot that load was recorded under. That is w
 first call emptied from failing the retry, and it is why the comparison has to come after the lot
 rather than before it.
 
+### A twenty-first round: the gap the ordering argument did not cover
+
+One P2, in `void_grain_load`, and it is the sharpest of the lock findings because it is not an
+ordering mistake at all — the order is right. The bin discovery and the load lookup are **two
+statements**, so under read committed they read **two snapshots**:
+
+```sql
+v_locked_bins := array(select ... from bin_transactions where grain_load_id = p_load_id);
+perform public.lock_farm_bins(p_farm_id, v_locked_bins);   -- snapshot A: no movements, no bins
+select * into v_load from public.grain_loads ... for update; -- snapshot B: the load is there
+```
+
+If the save commits between them, the void holds the load row having locked **nothing** — and
+`append_bin_movement` then waits for a bin that a retry of that save is holding, while that retry
+waits for the load row. Exactly the deadlock `lock_farm_bins` exists to prevent, through the one gap
+the ordering argument does not reach.
+
+**Locking the missing bin at that point is not the fix — it *is* the violation**, a bin lock taken
+while holding the load row. So the function confirms its set instead and refuses, and the farmer
+retries; the retry's discovery sees the committed movements and locks them in order.
+
+The signal is deliberately not "the set is empty": a ticket-only load legitimately moves nothing.
+What cannot be true is a movement of this load in a bin **outside** the set that was locked.
+
+Reachability is narrow — it needs a void issued for a load id whose save commits inside a
+microsecond window — and the repair is ten lines that add a refusal rather than move a lock. Given
+this module has produced four deadlocks already, a checkable invariant is worth more than an
+argument that the window is small.
+
+### Proof observed for round 21
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
+  `git diff --check` clean.
+- **Eleven disposable SQL suites pass together**, with a new **section 10l**: the confirmation
+  exists, sits after the load row is taken, and does not key on an empty set. **Run with the
+  confirmation removed it fails**, naming it.
+- Static guards PASS; **mutation drill 390/390**. Two added — the confirmation removed, and the
+  void confirming a second read rather than the set it holds — and **two retargeted**, because they
+  pinned the inline array this change replaced with a captured variable.
+- **Browser: 129 passed, 15 skipped.**
+- **All regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
+
 ### Proof observed for round 20
 
 - `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;

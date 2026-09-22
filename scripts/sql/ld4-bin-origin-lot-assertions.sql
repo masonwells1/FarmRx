@@ -758,6 +758,41 @@ begin
   end if;
 end $$;
 
+-- ------------------------------ 10l. the void's bin set is confirmed against the load it locked
+-- LD-4 repair (Codex P2 on 8250e4b). The bin discovery and the load lookup are two statements, so
+-- under read committed they read two snapshots: a save committing between them leaves the void
+-- holding the load row having locked no bins, and append_bin_movement then waits for a bin a save
+-- retry is holding while that retry waits for the load row. Locking the missing bin at that point
+-- would BE the violation, so the function refuses and the farmer retries.
+--
+-- A single-session suite cannot stage that interleaving either, so what is checked is that the
+-- confirmation exists and sits after the load row is taken -- the thing that was wrong.
+do $$
+declare v_void text; v_check int; v_lock int; v_row int;
+begin
+  select prosrc into v_void from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'void_grain_load';
+
+  v_lock := position('lock_farm_bins(p_farm_id, v_locked_bins)' in v_void);
+  v_row := position('from public.grain_loads' in v_void);
+  v_check := position('not (grain_bin_id = any(v_locked_bins))' in v_void);
+
+  if v_lock = 0 then
+    raise exception 'the void no longer locks the bin set it captured, so it cannot confirm it';
+  end if;
+  if v_check = 0 then
+    raise exception 'the void never confirms its locked bin set covers the load it found';
+  end if;
+  if v_check < v_row then
+    raise exception 'the void confirms its bin set before taking the load row, which proves nothing';
+  end if;
+  -- And an empty set is not the signal: a ticket-only load legitimately moves nothing, so the
+  -- refusal must key on a movement OUTSIDE the set rather than on the set being empty.
+  if position('cardinality(v_locked_bins) = 0' in v_void) > 0 then
+    raise exception 'the void refuses on an empty bin set, which refuses every ticket-only load';
+  end if;
+end $$;
+
 -- ------------------------------------------------- 11. a field origin is untouched
 -- LD-4 changed one branch. The field branch still takes its lot from the crop assignment and still
 -- refuses a load that disagrees with it.

@@ -850,6 +850,7 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
+  v_locked_bins uuid[];
   v_load public.grain_loads%rowtype;
   v_reason text := nullif(btrim(p_reason), '');
   v_movement public.bin_transactions%rowtype;
@@ -875,13 +876,34 @@ begin
   -- for the load row while a void held the load row and waited for the bins.
   --
   -- The read that finds the bins takes no lock; it only answers which rows to ask for.
-  perform public.lock_farm_bins(p_farm_id, array(
+  v_locked_bins := array(
     select distinct grain_bin_id from public.bin_transactions
-     where grain_load_id = p_load_id and farm_id = p_farm_id));
+     where grain_load_id = p_load_id and farm_id = p_farm_id);
+  perform public.lock_farm_bins(p_farm_id, v_locked_bins);
 
   select * into v_load from public.grain_loads
     where id = p_load_id and farm_id = p_farm_id for update;
   if not found then raise exception 'that load does not belong to this farm'; end if;
+
+  -- LD-4 repair (Codex P2 on 8250e4b): that discovery and this lookup are two statements, so under
+  -- read committed they read two snapshots. If the save committed between them, the first saw no
+  -- movements and locked no bins while the second found the load -- and the void would then hold
+  -- the load row and wait on a bin inside append_bin_movement, while a retry of that save held the
+  -- bin and waited for the load row. The deadlock lock_farm_bins exists to prevent, through the
+  -- one gap the ordering argument does not cover.
+  --
+  -- Locking the missing bins here is not the answer: that is taking a bin lock while holding the
+  -- load row, which IS the violation. So this refuses instead. The farmer is told to try again, and
+  -- the retry's discovery sees the now-committed movements and locks them in order.
+  --
+  -- An empty set is not itself the signal: a ticket-only load legitimately moves nothing. What
+  -- cannot be true is a movement of this load in a bin outside the set that was locked.
+  perform 1 from public.bin_transactions
+   where grain_load_id = p_load_id and farm_id = p_farm_id
+     and not (grain_bin_id = any(v_locked_bins));
+  if found then
+    raise exception 'this ticket was still being saved when the void started, so nothing was changed';
+  end if;
 
   -- A void is one transaction, so a load that carries voided_at has already had every effect
   -- reversed. A replay with the same reason answers; a different reason is refused rather than
