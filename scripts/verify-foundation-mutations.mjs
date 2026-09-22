@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 361
+const expectedMutationCount = 364
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1079,8 +1079,19 @@ try {
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("    if v_crop_year is null then\n      select crop_year, commodity_id into v_replay_year, v_replay_commodity\n        from public.grain_loads where id = v_id and farm_id = p_farm_id;\n      if found then\n        v_crop_year := v_replay_year;\n        if v_commodity is null then v_commodity := v_replay_commodity; end if;\n      end if;\n    end if;\n", ''))
   detected('the replay lookup leaves the lock, so an overlapping retry fails on a lot the first call emptied', 'ld4:the-replay-lookup-reads-inside-the-lock')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace("      // LD-4 repair (Codex P2 on 46d5252): a void writes compensating movements, so a lot the\n      // voided load had emptied is holding grain again. onSaved refreshes the workspace but not\n      // this read, and the stale answer wins over the workspace -- so the form would keep offering\n      // one lot where the server now sees two, and refuse the next save with no picker to fix it.\n      setLotsRefresh((count) => count + 1);\n", ''))
+  mutate('src/GrainModule.tsx', (source) => source.replace("      setLotsRefresh((count) => count + 1);\n      lock.current.release();\n      setSaving(false);", "      lock.current.release();\n      setSaving(false);"))
   detected('a void puts bushels back and the form never reads the lots again, so it keeps offering the wrong year', 'ld4:a-void-changes-what-the-bin-holds-too')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source
+    .replace("      setLotsRefresh((count) => count + 1);\n      lock.current.release();\n      setSaving(false);", "      lock.current.release();\n      setSaving(false);")
+    .replace('      setMessage("Load voided. It stays on the list with your reason, and everything it did has been reversed.");\n      await onSaved();', '      setMessage("Load voided. It stays on the list with your reason, and everything it did has been reversed.");\n      setLotsRefresh((count) => count + 1);\n      await onSaved();'))
+  detected('the void reads the lots again only when it succeeded, and a BLOCKED void -- the one case where the bins really did change -- keeps the stale list', 'ld4:a-void-changes-what-the-bin-holds-too')
+  reset()
+  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("  perform public.lock_farm_bins(p_farm_id, array(\n    select distinct grain_bin_id from public.bin_transactions\n     where grain_load_id = p_load_id and farm_id = p_farm_id));\n\n  select * into v_load from public.grain_loads\n    where id = p_load_id and farm_id = p_farm_id for update;\n  if not found then", "  select * into v_load from public.grain_loads\n    where id = p_load_id and farm_id = p_farm_id for update;\n  if not found then raise exception 'that load does not belong to this farm'; end if;\n\n  perform public.lock_farm_bins(p_farm_id, array(\n    select distinct grain_bin_id from public.bin_transactions\n     where grain_load_id = p_load_id and farm_id = p_farm_id));\n  if false then"))
+  detected('a void takes the load row before its bins, the opposite of what a save retry does, so the two deadlock', 'ld4:one-lock-order-for-the-module')
+  reset()
+  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("  perform public.lock_farm_bins(p_farm_id, array(\n    select distinct grain_bin_id from public.bin_transactions\n     where grain_load_id = p_load_id and farm_id = p_farm_id));\n\n  select * into v_load from public.grain_loads\n    where id = p_load_id and farm_id = p_farm_id for update;\n  if not found then", "  select * into v_load from public.grain_loads\n    where id = p_load_id and farm_id = p_farm_id for update;\n\n  perform public.lock_farm_bins(p_farm_id, array(\n    select distinct grain_bin_id from public.bin_transactions\n     where grain_load_id = p_load_id and farm_id = p_farm_id));\n  if not found then"))
+  detected('a perform sits between the void fence and the FOUND that reads it, so every load id looks like it belongs to this farm', 'ld4:the-void-fence-reads-its-own-select')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('.filter((row) => row.movementCount > 0)', '.filter((row) => Math.abs(row.bushels) > 0.000001)'))
   detected('unresolved movements that cancel out today stop being named at all', 'ld3:an-unresolved-movement-is-named-however-it-nets')

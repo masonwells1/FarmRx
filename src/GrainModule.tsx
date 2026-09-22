@@ -4722,13 +4722,22 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
         return;
       }
       setMessage("Load voided. It stays on the list with your reason, and everything it did has been reversed.");
-      // LD-4 repair (Codex P2 on 46d5252): a void writes compensating movements, so a lot the
-      // voided load had emptied is holding grain again. onSaved refreshes the workspace but not
-      // this read, and the stale answer wins over the workspace -- so the form would keep offering
-      // one lot where the server now sees two, and refuse the next save with no picker to fix it.
-      setLotsRefresh((count) => count + 1);
       await onSaved();
-    } catch (error) { setMessage(farmerError(error, "void this load")) } finally { lock.current.release(); setSaving(false) }
+    } catch (error) {
+      setMessage(farmerError(error, "void this load"));
+    } finally {
+      // LD-4 repair (Codex P2 on 46d5252, corrected on c231a00): a void writes compensating
+      // movements, so a lot the voided load had emptied is holding grain again -- and onSaved
+      // refreshes the workspace but not this read, whose answer wins over it.
+      //
+      // After ANY attempt, not just a successful one. A BLOCKED void returns early, and a blocked
+      // void is precisely the case where later movements changed the bins: the one outcome that
+      // most needs a fresh list was the one that skipped it. This is the same success-only
+      // asymmetry the save path had, fixed the same way rather than patched a second time.
+      setLotsRefresh((count) => count + 1);
+      lock.current.release();
+      setSaving(false);
+    }
   };
 
   if (!available) {

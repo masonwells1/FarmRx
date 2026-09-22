@@ -710,6 +710,54 @@ begin
   end if;
 end $$;
 
+-- ------------------------------------------------- 10j. a void still refuses a load that is not ours
+-- This exists because a repair BROKE it and nothing noticed. Inserting an ordered bin lock between
+-- `select ... into v_load` and its `if not found` left that check reading the FOUND of the perform
+-- rather than of the select -- so every load id, including one belonging to another farm, looked
+-- like it had been found. No suite covered it, which is the actual finding here: the farm fence on
+-- this path had never been asserted at all.
+do $$
+declare v_failed boolean := false;
+begin
+  begin
+    perform public.void_grain_load(
+      '00000000-0000-4000-8000-000000000410', gen_random_uuid(), 'a load that does not exist');
+  exception when others then
+    v_failed := true;
+    if position('does not belong to this farm' in sqlerrm) = 0 then
+      raise exception 'voiding an unknown load was refused, but for the wrong reason: %', sqlerrm;
+    end if;
+  end;
+  if not v_failed then
+    raise exception 'a void accepted a load id this farm does not own';
+  end if;
+end $$;
+
+-- ------------------------------------------------- 10k. one lock order, checked where it is taken
+-- The module's order is bins, then grain_loads, then bin_transactions. Three review rounds found
+-- three deadlocks, every one a pair of locks taken in two different orders by two functions. A
+-- single-session suite cannot stage a deadlock, so what is checked is the order in the installed
+-- bodies -- which is the thing that was actually wrong each time.
+do $$
+declare v_save text; v_void text;
+begin
+  select prosrc into v_save from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'save_grain_load';
+  select prosrc into v_void from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'void_grain_load';
+
+  if position('lock_farm_bins' in v_save) = 0 or position('lock_farm_bins' in v_void) = 0 then
+    raise exception 'a multi-bin writer does not lock its bins through the one function that orders them';
+  end if;
+  -- Bins before the load row, in both.
+  if position('lock_farm_bins' in v_save) > position('from public.grain_loads where id = v_id for update' in v_save) then
+    raise exception 'save_grain_load locks the load row before its bins';
+  end if;
+  if position('lock_farm_bins' in v_void) > position('from public.grain_loads' in v_void) then
+    raise exception 'void_grain_load locks the load row before its bins, which deadlocks against a save retry';
+  end if;
+end $$;
+
 -- ------------------------------------------------- 11. a field origin is untouched
 -- LD-4 changed one branch. The field branch still takes its lot from the crop assignment and still
 -- refuses a load that disagrees with it.

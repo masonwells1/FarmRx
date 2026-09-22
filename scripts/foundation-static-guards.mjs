@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 361')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 364')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1069,6 +1069,24 @@ export function foundationStaticGuard(root = process.cwd()) {
       const rowLock = assign.indexOf('where id = p_transaction_id and farm_id = p_farm_id for update')
       if (binLock < 0 || rowLock < 0 || binLock > rowLock) errors.push('ld4:two-locks-are-always-taken-in-one-order')
     }
+    {
+      // The void is a multi-bin writer too, so it follows the same order: bins, then grain_loads.
+      // It took the load row first once, which is the opposite of what save_grain_load does -- a
+      // retry of a save holding the bins and waiting for the load row, against a void holding the
+      // load row and waiting for the bins, is a deadlock cycle with two farmers in it.
+      const voidBody = ld4Migration.slice(ld4Migration.indexOf('function public.void_grain_load'))
+      const binLock = voidBody.indexOf('perform public.lock_farm_bins(')
+      const rowLock = voidBody.indexOf('where id = p_load_id and farm_id = p_farm_id for update')
+      if (binLock < 0 || rowLock < 0 || binLock > rowLock) errors.push('ld4:one-lock-order-for-the-module')
+      // And nothing may sit between that select and the check that reads its FOUND. Moving the
+      // lock in front of them is what this round did; putting it BETWEEN them is what the previous
+      // round did, and FOUND then answered for the perform instead -- every load id looked like it
+      // belonged to this farm. No suite noticed, because none had ever asserted the fence.
+      if (binLock >= 0 && rowLock >= 0) {
+        const fence = voidBody.slice(rowLock, voidBody.indexOf('if not found', rowLock))
+        if (/\bperform\b|\bselect\b/i.test(fence)) errors.push('ld4:the-void-fence-reads-its-own-select')
+      }
+    }
     // The mock answers with every RECORDED lot, as the real function does. A mock that dropped the
     // emptied ones would reject a path production accepts, and no mock-backed test could cover it.
     if (/originBinLots\(workspace, binId\)/.test(read(root, 'src/data/MockGrainRepository.ts'))) errors.push('ld4:the-mock-answers-like-the-database')
@@ -1092,6 +1110,23 @@ export function foundationStaticGuard(root = process.cwd()) {
     // A void puts bushels back, so the lots have to be read again -- the stale answer wins over the
     // workspace refresh and would keep offering one lot where the server now sees two.
     if ((grainModule.split('setLotsRefresh((count) => count + 1);').length - 1) !== 2) errors.push('ld4:a-void-changes-what-the-bin-holds-too')
+    {
+      // And after ANY attempt, not only a successful one. A BLOCKED void returns before the end of
+      // the try block, and a blocked void is exactly the case where something else already moved
+      // those bins -- the outcome that most needs a fresh list was the one skipping it. So the
+      // refresh has to sit in the finally, which is pinned here by its position: ahead of the lock
+      // release that only the finally performs. Counting the string alone stayed green while it sat
+      // in the success path, which is how this shipped once already.
+      const handler = grainModule.slice(grainModule.indexOf('const voidLoad = async (load: GrainLoad) => {'))
+      const voidHandler = handler.slice(0, handler.indexOf('\n  };'))
+      const fin = voidHandler.indexOf('} finally {')
+      const refresh = voidHandler.indexOf('setLotsRefresh((count) => count + 1);')
+      const release = voidHandler.indexOf('lock.current.release();')
+      // Between the finally and the release, not merely somewhere ahead of the release: a refresh
+      // moved back up into the success path is still before the release, and that is precisely the
+      // bug -- so the first way I wrote this guard passed against it.
+      if (fin < 0 || refresh < 0 || release < 0 || refresh < fin || refresh > release) errors.push('ld4:a-void-changes-what-the-bin-holds-too')
+    }
   }
   {
     // A load's harvest contribution is derived and never written into the replaceable manual total.

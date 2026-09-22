@@ -867,16 +867,20 @@ begin
     raise exception 'say why this ticket is being voided';
   end if;
 
-  select * into v_load from public.grain_loads
-    where id = p_load_id and farm_id = p_farm_id for update;
-
-  -- LD-4 repair (Codex P2 on bba6b10): every bin this void will write a compensating movement
-  -- into, locked in id order before any of them is touched. A void of a bin-to-bin transfer
-  -- reverses two movements in two bins, so without this it could hold one bin and wait for the
-  -- other while a concurrent transfer held them the opposite way round. See lock_farm_bins.
+  -- LD-4 repair (Codex P2 on bba6b10, corrected on c231a00): every bin this void will write a
+  -- compensating movement into, locked in id order BEFORE the load row. A void reverses movements
+  -- in as many as two bins, so it is a multi-bin transaction; and the module's order is bins first,
+  -- then grain_loads. The first version of this took the load row first, which is the order
+  -- save_grain_load does NOT use -- so an idempotent retry of a save could hold the bins and wait
+  -- for the load row while a void held the load row and waited for the bins.
+  --
+  -- The read that finds the bins takes no lock; it only answers which rows to ask for.
   perform public.lock_farm_bins(p_farm_id, array(
     select distinct grain_bin_id from public.bin_transactions
      where grain_load_id = p_load_id and farm_id = p_farm_id));
+
+  select * into v_load from public.grain_loads
+    where id = p_load_id and farm_id = p_farm_id for update;
   if not found then raise exception 'that load does not belong to this farm'; end if;
 
   -- A void is one transaction, so a load that carries voided_at has already had every effect

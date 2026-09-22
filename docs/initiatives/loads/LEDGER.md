@@ -912,6 +912,59 @@ Adding `lock_farm_bins` gave the string `perform 1 from public.grain_bins` a sec
 guard that pinned it stayed green while the other use disappeared. Six occurrences of one mistake on
 one tranche. It is counted now, like the other five.
 
+### An eleventh round, in which both findings broke rules written the round before
+
+Two P2s on `c231a00`, and both are violations of **the two rules round 10 had just written down.**
+That is worth saying plainly: stating a rule is not the same as following it, and the round that
+introduced `lock_farm_bins` also introduced the first code that ignored it.
+
+**The void took the load row before its bins.** (P2) `lock_farm_bins` exists so that everything
+touching more than one bin queues in one order — bins, then `grain_loads`. `void_grain_load` called
+it, but *after* its `select ... for update` on the load row. So an idempotent retry of a save held
+the bins and waited for the load row while a void held the load row and waited for the bins: the
+exact deadlock shape the helper was written to end, reintroduced in the commit that wrote it.
+
+**A blocked void skipped the lot refresh.** (P2) The blocked branch returns from inside the `try`,
+before the refresh the success path runs. This is the same success-only asymmetry the save path had
+and had already been fixed for — applied there, not carried across. And the blocked outcome is
+precisely the case that most needs a fresh list: a void is *blocked* because later movements changed
+those bins. The refresh now lives in the `finally`, so it happens after any attempt.
+
+#### A repair had silently broken a farm fence, and nothing noticed
+
+Moving the lock revealed something worse than either finding. Round 10 had inserted
+`perform public.lock_farm_bins(...)` **between** the load's `select ... into v_load` and the
+`if not found then raise exception 'that load does not belong to this farm'` that reads its result.
+`FOUND` then answered for the `perform`, which always succeeds — so **every load id looked like it
+belonged to the calling farm.** RLS still stopped the write, so nothing leaked; but the specific,
+farmer-readable refusal had become unreachable, and a void of another farm's id would have failed
+with something else entirely.
+
+No suite caught it, because **no suite had ever asserted that fence.** Ten rounds of review had
+read past it. Section 10j exists now for exactly that reason, and so does
+`ld4:the-void-fence-reads-its-own-select`, which fails if anything at all sits between that select
+and the check that reads its `FOUND`.
+
+The lesson is not "be careful near `FOUND`". It is that **a rule with no assertion behind it is a
+comment**, and the fence had been a comment for the whole tranche.
+
+### Proof observed for this tranche
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
+  `git diff --check` clean.
+- **Eleven disposable SQL suites pass together**, including
+  `LD4_BIN_ORIGIN_LOT_DISPOSABLE_PASS` with sections 10j (a void refuses a load id this farm does
+  not own) and 10k (the installed `save_grain_load` and `void_grain_load` bodies both take their
+  bins before the load row, read back from `pg_proc.prosrc`).
+- Static guards PASS; **mutation drill 364/364**, count changed in both files that pin it. Four new
+  controlled mutations, one of which — moving the void's refresh from the `finally` back into the
+  success path — **passed against the first version of its own guard.** The guard checked that the
+  refresh came before the lock release, which the bug also satisfies. It pins the refresh *between*
+  the `finally` and the release now.
+- **Browser: 123 passed, 15 skipped.**
+- **All regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
+
 ### Live steps
 
 **One migration to apply: `20260921180000_ld4_bin_origin_lot.sql`**, after LD-2's. It now also
