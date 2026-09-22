@@ -1,13 +1,14 @@
 import type { FieldsData, FieldsRepository, ReadOnlySnapshot } from './fields'
 import type { GrainDataGateway } from './GrainDataGateway'
 import type { UsdaMarketReport } from './grain'
+import type { BinLotOnHand } from './committedFree'
 import type { BinInventory, BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarryMode, GrainCarrySettings, ContractDeleteResult, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, LoadTruck, GrainRepository, GrainSaleLimit, GrainStorageLocationType, GrainWorkspace, InsuranceUnit, LoadDestinationKind, LoadOriginKind, LoadVoidBlocker, LoadVoidResult, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
 import { CONTRACT_REPAIR_PENDING, CROP_YEAR_RECONCILE_PENDING, LOAD_RECORD_PENDING, MARKETING_PLAN_PERCENT_TOLERANCE, sameScope, scopeKey, validateAssignedCropYear, validateContractCorrectionReason, validateGrainLoadShape, validateLoadVoidReason, validateGrainContract } from './grain'
 import { validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE, validateBinTransaction, validateGrainBin } from './binLedger'
-import { HARVEST_LOAD_SUM_LIMIT } from './SupabaseGrainDataGateway'
+import { functionMissing, HARVEST_LOAD_SUM_LIMIT } from './SupabaseGrainDataGateway'
 import type { FarmOperationContext } from './farmOperationContext'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -190,6 +191,38 @@ export class SupabaseGrainRepository implements GrainRepository, GrainOperationW
   async reconcileHarvestActual(value: ProductionEstimate, harvestActual: number) { await this.reconcileHarvestActualOperation(value, harvestActual, await this.dependencies.getOperationContext()) }
   async reconcileHarvestActualOperation(value: ProductionEstimate, harvestActual: number, context: FarmOperationContext): Promise<ProductionEstimate> { const farmId = await this.operationFarmId(context); const fields = await this.operationFields(context); this.validateScope(value, farmId, fields); if (!uuid.test(value.id) || !Number.isFinite(harvestActual) || harvestActual < 0) fail('Farm Rx could not reconcile this harvest total.'); const saved = production(await this.dependencies.gateway.updateProductionActual(farmId, value.id, harvestActual, value.updated_at, context)); await this.dependencies.verifyOperationContext(context); privateRow(saved, farmId, fields); if (saved.id !== value.id || !sameScope(saved, value) || saved.actual_bushels !== harvestActual || saved.drives_math !== 'actual') fail('Farm Rx could not confirm the harvest total saved.'); return saved }
   async saveContract(value: GrainContract) { await this.saveContractOperation(value, await this.dependencies.getOperationContext()) }
+  async listBinLots(binId: string): Promise<BinLotOnHand[] | null> {
+    const context = await this.dependencies.getOperationContext()
+    const read = this.dependencies.gateway.listBinLots
+    if (!read) return null
+    try {
+      const raw = await read.call(this.dependencies.gateway, await this.operationFarmId(context), binId, context)
+      // LD-4 repair (Codex P2 on 1883377): the context is verified again AFTER the response lands,
+      // as every other read and write in this repository does. operationFarmId fences before the
+      // request; nothing fenced after it. So a read still in flight when the account, the selected
+      // farm or the access epoch changed could resolve into authoritativeLots and put the PREVIOUS
+      // farm's bin quantities on screen -- private financial figures, on a form that would then
+      // offer them as lots to haul. A read is not exempt from the epoch fence just because it
+      // writes nothing.
+      await this.dependencies.verifyOperationContext(context)
+      // Null rather than an empty list when the function is not installed yet: "this bin holds
+      // nothing" and "the database cannot answer" must not look the same to the form.
+      return raw
+        .map((entry) => entry as { commodity_id?: unknown; crop_year?: unknown; bushels?: unknown })
+        .filter((entry) => typeof entry.commodity_id === 'string' && Number.isInteger(entry.crop_year) && Number.isFinite(Number(entry.bushels)))
+        .map((entry) => ({ commodity_id: entry.commodity_id as string, crop_year: entry.crop_year as number, bushels: Number(entry.bushels) }))
+        // LD-4 repair (Codex P2 on 46d5252): a lot the bin has emptied is KEPT here, at zero.
+        // public.bin_lots returns it on purpose, and save_grain_load accepts it when the farmer
+        // names it explicitly -- which is how a historical ticket that moves nothing gets recorded
+        // against the year it really was. Filtering it out here quietly removed that path, and
+        // contradicted this tranche's own written limit. Defaulting still uses positive lots only;
+        // that narrowing belongs to the caller, which knows whether the load moves bushels.
+        .sort((a, b) => b.crop_year - a.crop_year || a.commodity_id.localeCompare(b.commodity_id))
+    } catch (error) {
+      if (functionMissing(error as { code?: string })) return null
+      throw error
+    }
+  }
   async listLoadTrucks(): Promise<LoadTruck[]> {
     const context = await this.dependencies.getOperationContext()
     const read = this.dependencies.gateway.listLoadTrucks

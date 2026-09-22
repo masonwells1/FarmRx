@@ -104,6 +104,9 @@ export class QueuedGrainRepository implements GrainRepository {
   // have to pass the bin guards at the moment they run. Offline load entry is worth having and
   // belongs with those effects, not ahead of them.
   async listLoadTrucks() { if (this.dependencies.isOffline()) return []; return this.writer.listLoadTrucks() }
+  /** LD-4 repair: offline answers null, never an empty list. A load cannot be recorded offline at
+   * all (saveLoad says so), so the form only ever falls back to the workspace derivation here. */
+  async listBinLots(binId: string) { if (this.dependencies.isOffline()) return null; return this.writer.listBinLots(binId) }
   // Offline there is no answer at all, and an empty list that claimed to be complete would read as
   // "no loads contribute" rather than "not known right now".
   async listHarvestLoads() { if (this.dependencies.isOffline()) return { loads: [], complete: false }; return this.writer.listHarvestLoads() }

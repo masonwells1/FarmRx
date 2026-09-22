@@ -1,7 +1,9 @@
 import type { BinInventory, BinTransaction, GrainContract, GrainContractDelivery } from './grain'
 import {
+  binLotsOnHand,
   contractUndeliveredBushels,
   deriveBinLotOnHand,
+  deriveBinLots,
   deriveCommittedBushels,
   deriveCommittedFree,
   deriveCommittedFreeLot,
@@ -96,9 +98,12 @@ const delivery = (grain_contract_id: string, bushels: number): GrainContractDeli
   assert(!deriveCommittedFree(source).some((row) => row.crop_year === null as unknown as number), 'An unstamped movement became a crop year.')
 }
 
-// ---- 3. A baseline restates only its own lot ----
-// binLedger's commodity-level rule would supersede both of these. The lot rule supersedes only the
-// movement that is the same commodity AND the same crop year.
+// ---- 3. A baseline restates the BIN, not one year of it ----
+// Corrected on LD-4: this group used to assert that a pre-baseline movement of ANOTHER crop year
+// survived the measurement. It does not. append_bin_movement's commodity balance -- the guard that
+// decides whether bushels may actually leave -- excludes every same-commodity row at or before the
+// baseline, so keeping one here reported carry-over the database would never release. A baseline is
+// the farmer walking out and checking the bin; it covers everything of that commodity already in it.
 {
   const inventory = baseline(binA, 2026, 'corn_yellow', 5_000)
   const sameLotBefore = movement(binA, 'in', 900, 'corn_yellow', 2026, '2025-12-31')
@@ -108,7 +113,18 @@ const delivery = (grain_contract_id: string, bushels: number): GrainContractDeli
   assert(current === 5_000, `A movement already inside the baseline was re-added: ${current}.`)
 
   const carryover = deriveBinLotOnHand(inventory, [sameLotBefore, otherYearBefore], 'corn_yellow', 2025)
-  assert(carryover === 700, `A different crop year's movement was swallowed by the baseline: ${carryover}.`)
+  assert(carryover === 0, `A pre-baseline movement of the same commodity is inside the measurement: ${carryover}.`)
+
+  // A movement AFTER the baseline is a different matter entirely, whatever year it names.
+  const afterward = movement(binA, 'in', 700, 'corn_yellow', 2025, '2026-01-02')
+  const restored = deriveBinLotOnHand(inventory, [sameLotBefore, afterward], 'corn_yellow', 2025)
+  assert(restored === 700, `A post-baseline movement must survive: ${restored}.`)
+
+  // And a movement of another COMMODITY before the baseline survives, because this baseline says
+  // nothing about that crop -- the rule is per commodity, not per bin.
+  const otherCropBefore = movement(binA, 'in', 300, 'soybeans', 2025, '2025-12-31')
+  const beans = deriveBinLotOnHand(inventory, [otherCropBefore], 'soybeans', 2025)
+  assert(beans === 300, `A baseline for corn must not swallow a soybean movement: ${beans}.`)
 }
 
 // ---- 4. Deliveries reduce what is committed, and over-delivery floors at zero ----
@@ -173,4 +189,70 @@ const delivery = (grain_contract_id: string, bushels: number): GrainContractDeli
   assert(owedOnly.onHand === 0 && owedOnly.committed === 900 && owedOnly.free === -900, 'A contracted lot with no stored bushels must still be listed.')
 }
 
-console.log('Committed vs free regressions passed (7 coverage groups).')
+// ---------------------------------------------------------------- 8. LD-4: the lots a bin holds
+// deriveBinLots is the browser half of a pair -- public.bin_lots is the other -- and the disposable
+// SQL suite checks the two against the same fixture. These groups pin the browser half.
+{
+  const inventory = baseline(binA, 2025, 'corn_yellow', 6000)
+  const movements = [
+    movement(binA, 'in', 4000, 'corn_yellow', 2026, '2026-10-01'),
+    movement(binA, 'out', 1000, 'corn_yellow', 2026, '2026-11-01'),
+  ]
+  const lots = deriveBinLots(inventory, movements)
+  assert(lots.length === 2, `Expected two lots in the bin, saw ${lots.length}.`)
+  // Newest crop year first, so the year a farmer is most likely hauling is the first thing offered.
+  assert(lots[0]!.crop_year === 2026 && lots[0]!.bushels === 3000, `The 2026 lot should hold 3,000 bu, saw ${lots[0]!.bushels}.`)
+  assert(lots[1]!.crop_year === 2025 && lots[1]!.bushels === 6000, `The 2025 lot should hold 6,000 bu, saw ${lots[1]!.bushels}.`)
+
+  // The same two figures deriveBinLotOnHand gives. If these ever disagree, one of the two is wrong
+  // and the farmer is being shown a number the other half of the app does not believe.
+  assert(deriveBinLotOnHand(inventory, movements, 'corn_yellow', 2026) === lots[0]!.bushels, 'deriveBinLots and deriveBinLotOnHand must agree on the 2026 lot.')
+  assert(deriveBinLotOnHand(inventory, movements, 'corn_yellow', 2025) === lots[1]!.bushels, 'deriveBinLots and deriveBinLotOnHand must agree on the 2025 lot.')
+}
+
+// ---------------------------------------------------------------- 9. LD-4: a baseline restates the BIN
+// Corrected after Codex found this backwards on c0e40a3. A baseline is a measurement of the bin, so
+// every movement of that commodity dated at or before it is already inside the figure -- whatever
+// crop year it names. The first version of this group required the crop year to match, which
+// reported carry-over bushels that append_bin_movement's commodity balance would never release.
+{
+  const inventory = baseline(binA, 2023, 'corn_yellow', 5000)
+  const lots = deriveBinLots(inventory, [
+    // Same commodity, before the measurement: inside the 5,000 already.
+    movement(binA, 'in', 1000, 'corn_yellow', 2023, '2025-12-01'),
+    // Same commodity, before the measurement, a different year: ALSO inside the 5,000. The farmer
+    // measured the bin, not one year of it.
+    movement(binA, 'in', 800, 'corn_yellow', 2022, '2025-11-01'),
+  ])
+  assert(lots.find((lot) => lot.crop_year === 2023)!.bushels === 5000, 'A movement the baseline already counts must not be counted twice.')
+  assert(lots.find((lot) => lot.crop_year === 2022)!.bushels === 0, 'A movement of the same commodity before the baseline is inside it, whatever year it names.')
+  // The record of that year survives at zero, which is what lets a ticket-only load still name it.
+  assert(lots.some((lot) => lot.crop_year === 2022), 'The emptied year must stay on the record.')
+  // And the total is what the bin actually holds, which is what the database will let go.
+  assert(lots.reduce((total, lot) => total + lot.bushels, 0) === 5000, 'The lot totals must agree with the commodity balance the database enforces.')
+}
+
+// ---------------------------------------------------------------- 10. LD-4: what the picker offers
+{
+  const inventory = baseline(binA, 2025, 'corn_yellow', 1000)
+  const movements = [
+    movement(binA, 'in', 400, 'corn_yellow', 2026, '2026-10-01'),
+    // An emptied lot: kept by deriveBinLots at zero, never offered by binLotsOnHand.
+    movement(binA, 'in', 200, 'corn_yellow', 2024, '2026-10-02'),
+    movement(binA, 'out', 200, 'corn_yellow', 2024, '2026-10-03'),
+    // The unstamped bucket: real bushels, in no crop year, and never an answer to "which year".
+    movement(binA, 'in', 700, 'corn_yellow', null, '2026-10-04'),
+  ]
+  const all = deriveBinLots(inventory, movements)
+  assert(all.length === 4, `Expected four lots on record, saw ${all.length}.`)
+  assert(all[all.length - 1]!.crop_year === null, 'The unstamped bucket must sort last.')
+  assert(all.find((lot) => lot.crop_year === 2024)!.bushels === 0, 'An emptied lot must stay on the record at zero, not vanish.')
+
+  const offered = binLotsOnHand(inventory, movements)
+  assert(offered.length === 2, `The picker should offer two lots, saw ${offered.length}.`)
+  assert(offered.every((lot) => lot.crop_year !== null), 'The picker must never offer the unstamped bucket as a crop year.')
+  assert(!offered.some((lot) => lot.crop_year === 2024), 'The picker must not offer a lot the bin has emptied.')
+  assert(offered[0]!.crop_year === 2026 && offered[1]!.crop_year === 2025, 'The picker should list the newest crop year first.')
+}
+
+console.log('Committed vs free regressions passed (10 coverage groups).')

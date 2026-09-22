@@ -369,11 +369,54 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
       if (url.pathname.endsWith('save_grain_load')) {
         const draft = value.p_load as Record<string, unknown>
         // The server derives the lot; the fixture answers with one the browser never sent.
-        const saved = { id: draft.id, farm_id: value.p_farm_id, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id ?? null, truck_name: draft.truck_name ?? null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_grain_bin_id ?? null, origin_crop_assignment_id: draft.origin_crop_assignment_id ?? null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_buyer ?? null, destination_grain_contract_id: draft.destination_grain_contract_id ?? null, destination_grain_bin_id: draft.destination_grain_bin_id ?? null, commodity_id: commodityId, crop_year: 2026, gross_lbs: draft.gross_lbs ?? null, tare_lbs: draft.tare_lbs ?? null, net_bushels: draft.net_bushels, moisture_pct: draft.moisture_pct ?? null, ticket_number: draft.ticket_number ?? null, photo_path: null, notes: draft.notes ?? null, voided_at: null, void_reason: null, created_at: now, updated_at: now }
+        // LD-4: a confirmed bin-out really does take those bushels out of that lot, so a fixture
+        // that declares lots has to reflect it -- otherwise the next read hands the form balances
+        // the database would not agree with, and a test could pass against a bin that never empties.
+        const declaredLots = moduleRows.bin_lots as Record<string, unknown>[] | undefined
+        let savedYear = typeof draft.crop_year === 'number' ? draft.crop_year : 2026
+        if (declaredLots && draft.origin_kind === 'bin' && draft.effect_bin_out) {
+          const candidates = declaredLots.filter((lot) => lot.grain_bin_id === draft.origin_grain_bin_id && Number(lot.bushels) > 0)
+          const target = typeof draft.crop_year === 'number'
+            ? candidates.find((lot) => lot.crop_year === draft.crop_year)
+            : (candidates.length === 1 ? candidates[0] : undefined)
+          if (target) { savedYear = target.crop_year as number; target.bushels = Number(target.bushels) - Number(draft.net_bushels) }
+        }
+        const saved = { id: draft.id, farm_id: value.p_farm_id, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id ?? null, truck_name: draft.truck_name ?? null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_grain_bin_id ?? null, origin_crop_assignment_id: draft.origin_crop_assignment_id ?? null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_buyer ?? null, destination_grain_contract_id: draft.destination_grain_contract_id ?? null, destination_grain_bin_id: draft.destination_grain_bin_id ?? null, commodity_id: commodityId, crop_year: savedYear, gross_lbs: draft.gross_lbs ?? null, tare_lbs: draft.tare_lbs ?? null, net_bushels: draft.net_bushels, moisture_pct: draft.moisture_pct ?? null, ticket_number: draft.ticket_number ?? null, photo_path: null, notes: draft.notes ?? null, voided_at: null, void_reason: null, created_at: now, updated_at: now }
         await fulfillJson(route, saved); return
       }
-      await fulfillJson(route, { status: 'voided', load: { ...(moduleRows.grain_loads?.[0] as Record<string, unknown> ?? {}), voided_at: now, void_reason: value.p_reason }, blocked_by: [] }); return
+      // LD-4 repair: the void fixture answers like void_grain_load, which it did not. It used to
+      // return `voided` for moduleRows.grain_loads[0] whatever load id was asked for, always with
+      // an empty blocked_by -- so no journey could reach the BLOCKED branch at all, and the round
+      // that repaired the blocked path's lot refresh had no browser coverage for it. Fifth and last
+      // stand-in on this tranche found disagreeing with the server.
+      {
+        const loads = (moduleRows.grain_loads ?? []) as Record<string, unknown>[]
+        const target = loads.find((row) => row.id === value.p_load_id)
+        // The farm fence, which the server raises and section 10j asserts against the real function.
+        if (!target) { await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ message: 'that load does not belong to this farm', code: 'P0001', details: null, hint: null }) }); return }
+        // A blocked void changes NOTHING -- not the ledger, not the lots. Declared by the fixture
+        // rather than re-derived here: simulating the server's blocking rule would be a fourth
+        // evaluator of it, which is the mistake this tranche keeps paying for.
+        const blockers = (moduleRows.void_blocked_by ?? []) as Record<string, unknown>[]
+        if (blockers.length) { await fulfillJson(route, { status: 'blocked', load: target, blocked_by: blockers }); return }
+        // A successful void puts the bushels back, so a fixture that declares lots has to reflect
+        // it -- the same reason the save decrements them.
+        const declaredLots = moduleRows.bin_lots as Record<string, unknown>[] | undefined
+        if (declaredLots && target.origin_kind === 'bin' && target.effect_bin_out) {
+          const restored = declaredLots.find((lot) => lot.grain_bin_id === target.origin_grain_bin_id && lot.crop_year === target.crop_year)
+          if (restored) restored.bushels = Number(restored.bushels) + Number(target.net_bushels)
+        }
+        target.voided_at = now; target.void_reason = value.p_reason as string
+        await fulfillJson(route, { status: 'voided', load: target, blocked_by: [] }); return
+      }
     }
+    // LD-4: the capability probe asking whether public.bin_lots is installed. Declared by shape
+    // rather than matched by name, so a future call with a different body is still rejected.
+    // LD-4: the capability probe uses the nil bin id and reads nothing. The lot picker calls the
+    // same function with a real bin id, and the rows it gets back are the fixture's own -- NOT
+    // derived from bin_transactions here, because deriving them in the mock would make the test
+    // agree with the browser by construction and prove nothing about the repair.
+    if (url.pathname === '/rest/v1/rpc/bin_lots') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 2 || typeof value.p_farm_id !== 'string' || typeof value.p_grain_bin_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_grain_bin_id)) { await rejectShape('bin_lots body'); return }; if (value.p_grain_bin_id === '00000000-0000-0000-0000-000000000000') { await fulfillJson(route, []); return }; const declared = (moduleRows.bin_lots ?? (moduleRows.bin_inventory ?? []).map((entry) => entry as Record<string, unknown>)) as Record<string, unknown>[]; await fulfillJson(route, declared.filter((lot) => lot.grain_bin_id === value.p_grain_bin_id).map((lot) => ({ commodity_id: lot.commodity_id, crop_year: lot.crop_year, bushels: lot.bushels }))); return }
     if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks' || url.pathname === '/rest/v1/rpc/generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${url.pathname}`)
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, session(activeUserId).user); return }
@@ -1090,11 +1133,54 @@ test('a direct signed-in A to B replacement hides Farm A before B access validat
       if (url.pathname.endsWith('save_grain_load')) {
         const draft = value.p_load as Record<string, unknown>
         // The server derives the lot; the fixture answers with one the browser never sent.
-        const saved = { id: draft.id, farm_id: value.p_farm_id, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id ?? null, truck_name: draft.truck_name ?? null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_grain_bin_id ?? null, origin_crop_assignment_id: draft.origin_crop_assignment_id ?? null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_buyer ?? null, destination_grain_contract_id: draft.destination_grain_contract_id ?? null, destination_grain_bin_id: draft.destination_grain_bin_id ?? null, commodity_id: commodityId, crop_year: 2026, gross_lbs: draft.gross_lbs ?? null, tare_lbs: draft.tare_lbs ?? null, net_bushels: draft.net_bushels, moisture_pct: draft.moisture_pct ?? null, ticket_number: draft.ticket_number ?? null, photo_path: null, notes: draft.notes ?? null, voided_at: null, void_reason: null, created_at: now, updated_at: now }
+        // LD-4: a confirmed bin-out really does take those bushels out of that lot, so a fixture
+        // that declares lots has to reflect it -- otherwise the next read hands the form balances
+        // the database would not agree with, and a test could pass against a bin that never empties.
+        const declaredLots = moduleRows.bin_lots as Record<string, unknown>[] | undefined
+        let savedYear = typeof draft.crop_year === 'number' ? draft.crop_year : 2026
+        if (declaredLots && draft.origin_kind === 'bin' && draft.effect_bin_out) {
+          const candidates = declaredLots.filter((lot) => lot.grain_bin_id === draft.origin_grain_bin_id && Number(lot.bushels) > 0)
+          const target = typeof draft.crop_year === 'number'
+            ? candidates.find((lot) => lot.crop_year === draft.crop_year)
+            : (candidates.length === 1 ? candidates[0] : undefined)
+          if (target) { savedYear = target.crop_year as number; target.bushels = Number(target.bushels) - Number(draft.net_bushels) }
+        }
+        const saved = { id: draft.id, farm_id: value.p_farm_id, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id ?? null, truck_name: draft.truck_name ?? null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_grain_bin_id ?? null, origin_crop_assignment_id: draft.origin_crop_assignment_id ?? null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_buyer ?? null, destination_grain_contract_id: draft.destination_grain_contract_id ?? null, destination_grain_bin_id: draft.destination_grain_bin_id ?? null, commodity_id: commodityId, crop_year: savedYear, gross_lbs: draft.gross_lbs ?? null, tare_lbs: draft.tare_lbs ?? null, net_bushels: draft.net_bushels, moisture_pct: draft.moisture_pct ?? null, ticket_number: draft.ticket_number ?? null, photo_path: null, notes: draft.notes ?? null, voided_at: null, void_reason: null, created_at: now, updated_at: now }
         await fulfillJson(route, saved); return
       }
-      await fulfillJson(route, { status: 'voided', load: { ...(moduleRows.grain_loads?.[0] as Record<string, unknown> ?? {}), voided_at: now, void_reason: value.p_reason }, blocked_by: [] }); return
+      // LD-4 repair: the void fixture answers like void_grain_load, which it did not. It used to
+      // return `voided` for moduleRows.grain_loads[0] whatever load id was asked for, always with
+      // an empty blocked_by -- so no journey could reach the BLOCKED branch at all, and the round
+      // that repaired the blocked path's lot refresh had no browser coverage for it. Fifth and last
+      // stand-in on this tranche found disagreeing with the server.
+      {
+        const loads = (moduleRows.grain_loads ?? []) as Record<string, unknown>[]
+        const target = loads.find((row) => row.id === value.p_load_id)
+        // The farm fence, which the server raises and section 10j asserts against the real function.
+        if (!target) { await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ message: 'that load does not belong to this farm', code: 'P0001', details: null, hint: null }) }); return }
+        // A blocked void changes NOTHING -- not the ledger, not the lots. Declared by the fixture
+        // rather than re-derived here: simulating the server's blocking rule would be a fourth
+        // evaluator of it, which is the mistake this tranche keeps paying for.
+        const blockers = (moduleRows.void_blocked_by ?? []) as Record<string, unknown>[]
+        if (blockers.length) { await fulfillJson(route, { status: 'blocked', load: target, blocked_by: blockers }); return }
+        // A successful void puts the bushels back, so a fixture that declares lots has to reflect
+        // it -- the same reason the save decrements them.
+        const declaredLots = moduleRows.bin_lots as Record<string, unknown>[] | undefined
+        if (declaredLots && target.origin_kind === 'bin' && target.effect_bin_out) {
+          const restored = declaredLots.find((lot) => lot.grain_bin_id === target.origin_grain_bin_id && lot.crop_year === target.crop_year)
+          if (restored) restored.bushels = Number(restored.bushels) + Number(target.net_bushels)
+        }
+        target.voided_at = now; target.void_reason = value.p_reason as string
+        await fulfillJson(route, { status: 'voided', load: target, blocked_by: [] }); return
+      }
     }
+    // LD-4: the capability probe asking whether public.bin_lots is installed. Declared by shape
+    // rather than matched by name, so a future call with a different body is still rejected.
+    // LD-4: the capability probe uses the nil bin id and reads nothing. The lot picker calls the
+    // same function with a real bin id, and the rows it gets back are the fixture's own -- NOT
+    // derived from bin_transactions here, because deriving them in the mock would make the test
+    // agree with the browser by construction and prove nothing about the repair.
+    if (url.pathname === '/rest/v1/rpc/bin_lots') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 2 || typeof value.p_farm_id !== 'string' || typeof value.p_grain_bin_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_grain_bin_id)) { await rejectShape('bin_lots body'); return }; if (value.p_grain_bin_id === '00000000-0000-0000-0000-000000000000') { await fulfillJson(route, []); return }; const declared = (moduleRows.bin_lots ?? (moduleRows.bin_inventory ?? []).map((entry) => entry as Record<string, unknown>)) as Record<string, unknown>[]; await fulfillJson(route, declared.filter((lot) => lot.grain_bin_id === value.p_grain_bin_id).map((lot) => ({ commodity_id: lot.commodity_id, crop_year: lot.crop_year, bushels: lot.bushels }))); return }
     if (url.pathname === '/rest/v1/rpc/operational_integrity_capability_probe') { let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }; const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null; if (route.request().method() !== 'POST' || !value || Object.keys(value).length !== 1 || typeof value.p_farm_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.p_farm_id)) { await rejectShape('operational_integrity_capability_probe body'); return }; await fulfillJson(route, true); return }
     if (url.pathname === '/rest/v1/rpc/generate_due_service_tasks' || url.pathname === '/rest/v1/rpc/generate_due_program_items') throw new Error(`False due preflight unexpectedly called legacy ${url.pathname}`)
     if (url.pathname === '/auth/v1/user') { await fulfillJson(route, isUserB ? sessionB.user : session().user); return }
@@ -1677,9 +1763,12 @@ test('a load records its ticket, takes its crop year from the origin, and can on
   const sent = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
   expect(sent.net_bushels).toBe(910.5)
   expect(sent.destination_grain_contract_id).toBe('00000000-0000-4000-8000-000000000072')
-  // The browser never sends a lot. Two evaluators of one fact is the defect this tranche prevents.
-  expect('commodity_id' in sent).toBe(false)
-  expect('crop_year' in sent).toBe(false)
+  // LD-4 changed this, and the change is worth stating precisely. The browser still does not
+  // DECIDE the lot -- the server does, and refuses anything the bin has no record of. What the
+  // browser now sends is what it SHOWED the farmer, so that a bin whose lots changed between the
+  // read and the save produces a refusal rather than a ticket naming a crop nobody saw.
+  expect(sent.commodity_id).toBe(commodityId)
+  expect(sent.crop_year).toBe(2026)
   // Nothing the farmer left blank is sent as an empty value, so the server's own defaults stay in force.
   expect('gross_lbs' in sent).toBe(false)
   expect('truck_equipment_id' in sent).toBe(false)
@@ -1758,6 +1847,302 @@ test('committed and free are one farm-level figure per crop year, and carry-over
   // that number must appear nowhere on the page: a farm-level figure repeated per bin is the same
   // bushels counted twice.
   await expect(page.getByText('5,500')).toHaveCount(0)
+  expect(unexpected).toEqual([])
+})
+
+test('a bin holding two crop years asks which one a load came from, and hauls the year the farmer picks', async ({ page, context }) => {
+  await seedSession(context)
+  loadRecordCalls.length = 0
+  const farm = farms[0]!
+  const carryOverBin = '00000000-0000-4000-8000-000000000091'
+  const singleLotBin = '00000000-0000-4000-8000-000000000092'
+  // The bin from the LD-3 journey: 6,000 bushels of 2025 carry-over measured as the baseline, and
+  // 4,000 of the 2026 crop moved in on top. LD-3 shows 1,000 of the 2026 crop as free; before LD-4
+  // this form would not let a farmer record hauling any of it, because the baseline said 2025.
+  const binRows = [
+    { id: carryOverBin, farm_id: farm.id, name: 'Home bin', capacity_bu: 40_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now },
+    { id: singleLotBin, farm_id: farm.id, name: 'North dryer bin', capacity_bu: 42_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now },
+  ]
+  const inventoryRows = [
+    { id: '00000000-0000-4000-8000-000000000093', farm_id: farm.id, grain_bin_id: carryOverBin, crop_year: 2025, commodity_id: commodityId, bushels: 6_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now },
+    { id: '00000000-0000-4000-8000-000000000094', farm_id: farm.id, grain_bin_id: singleLotBin, crop_year: 2026, commodity_id: commodityId, bushels: 20_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now },
+  ]
+  // THE MOVEMENT LIST IS DELIBERATELY SHORT. It carries no 2026 row for the carry-over bin, which
+  // is what a farm past PostgREST's cap looks like: loadWorkspace reads bin_transactions newest
+  // first and unbounded, so the oldest movements -- and an older still-active crop year with them
+  // -- simply are not there. Derived from this array the carry-over bin looks like a one-lot 2025
+  // bin, and before the LD-4 repair the form would have offered no choice, sent no crop year, and
+  // had the save refused with "pick which one this load came from" and no picker to answer with.
+  const movementRows: unknown[] = []
+  // What the database actually holds, which is what public.bin_lots returns and what
+  // save_grain_load reads. The picker must believe this and not the array above.
+  const lotRows = [
+    { grain_bin_id: carryOverBin, commodity_id: commodityId, crop_year: 2026, bushels: 4_000 },
+    { grain_bin_id: carryOverBin, commodity_id: commodityId, crop_year: 2025, bushels: 6_000 },
+    { grain_bin_id: singleLotBin, commodity_id: commodityId, crop_year: 2026, bushels: 20_000 },
+  ]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: movementRows, bin_lots: lotRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
+  await page.goto('/grain/loads')
+  await expect(page.getByRole('heading', { name: 'Loads', exact: true })).toBeVisible()
+
+  // The common case first: a bin holding one crop year answers for itself and asks nothing. A
+  // farmer hauling out of it all afternoon taps the bin and nothing else.
+  await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(singleLotBin)
+  await expect(page.getByText('This bin holds one crop year')).toContainText('2026')
+  await expect(page.getByRole('combobox', { name: 'Crop year', exact: true })).toHaveCount(0)
+
+  // The carry-over bin holds two, so it asks -- with what each lot holds beside it, so the choice
+  // is made against the bin rather than from memory. Neither lot appears in the movement array, so
+  // this can only come from the database: the repair, proved.
+  await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(carryOverBin)
+  const cropYear = page.getByRole('combobox', { name: 'Crop year', exact: true })
+  await expect(cropYear).toBeVisible()
+  await expect(cropYear.getByRole('option')).toHaveText([/Pick which crop year/, /2026.*4,000 bu/, /2025.*6,000 bu/])
+
+  // Saving without answering is refused in the farmer's own words, not the database's. Everything
+  // else the form needs is filled first, so the unanswered crop year is the only thing left to
+  // complain about and the message below is provably about it.
+  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('4000')
+  await page.getByRole('button', { name: 'Save load' }).click()
+  await expect(page.getByText('That bin holds more than one crop year')).toBeVisible()
+  expect(loadRecordCalls.length).toBe(0)
+
+  // The 2026 crop: the newer lot, which before LD-4 this bin could never be hauled as. The option
+  // value is the whole lot, commodity and year, because a bin can have a record of two crops in one
+  // year and the year alone would name neither.
+  await cropYear.selectOption(`${commodityId}:2026`)
+  await page.getByRole('button', { name: 'Save load' }).click()
+
+  await expect.poll(() => loadRecordCalls.length).toBe(1)
+  const sent = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
+  expect(sent.origin_grain_bin_id).toBe(carryOverBin)
+  // The one thing LD-4 adds to what the browser sends, and only because the farmer named it. A bin
+  // holding a single lot still sends nothing at all and lets the server decide, as LD-1 required.
+  expect(sent.crop_year).toBe(2026)
+  // Both halves of the lot travel with the choice. A bin holding a single lot still sends neither
+  // and lets the server settle it, which the second save below checks.
+  expect(sent.commodity_id).toBe(commodityId)
+
+  // LD-4 repair (Codex P2 on da028bf): that save emptied the 2026 lot. The form keeps the origin
+  // and the chosen year for the next ticket, so without the repair it would sit on an emptied 2026
+  // while the picker -- now down to one lot -- stops rendering: every further save refused, and no
+  // control on screen to fix it. The bin now holds only 2025, and the form has to notice.
+  // The save took all 4,000 bushels of the 2026 lot, so the bin now holds only 2025 -- and the
+  // mock's own save did that, rather than the test reaching in to arrange it.
+  await expect(page.getByText('This bin holds one crop year')).toContainText('2025')
+  await expect(page.getByText('That bin does not hold the 2026 crop')).toHaveCount(0)
+
+  // And the next ticket saves, which is the thing the farmer could not do.
+  loadRecordCalls.length = 0
+  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('250')
+  await page.getByRole('button', { name: 'Save load' }).click()
+  await expect.poll(() => loadRecordCalls.length).toBe(1)
+  const next = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
+  // One lot left, so the form asks nothing -- but it still says which lot it was showing, because
+  // "the bin holds one crop year" is a claim about a moment and another device can change it.
+  expect(next.crop_year).toBe(2025)
+  expect(next.commodity_id).toBe(commodityId)
+  expect(unexpected).toEqual([])
+})
+
+test('a bin whose lots cannot be read refuses to save and recovers on the next try, and a refused save lets its lot go', async ({ page, context }) => {
+  await seedSession(context)
+  loadRecordCalls.length = 0
+  const farm = farms[0]!
+  const binId = '00000000-0000-4000-8000-0000000000a1'
+  const nil = '00000000-0000-0000-0000-000000000000'
+  const binRows = [
+    { id: binId, farm_id: farm.id, name: 'Home bin', capacity_bu: 40_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now },
+  ]
+  const inventoryRows = [
+    { id: '00000000-0000-4000-8000-0000000000a2', farm_id: farm.id, grain_bin_id: binId, crop_year: 2025, commodity_id: commodityId, bushels: 6_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now },
+  ]
+  // Two lots, so the form must ask -- and neither is derivable from the movement array, so every
+  // figure below can only have come from the lot read.
+  const lotRows = [
+    { grain_bin_id: binId, commodity_id: commodityId, crop_year: 2026, bushels: 4_000 },
+    { grain_bin_id: binId, commodity_id: commodityId, crop_year: 2025, bushels: 6_000 },
+  ]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: [], bin_lots: lotRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
+
+  // Registered after mockSupabase, so it runs first and hands back whatever it does not handle.
+  // The capability probe uses the nil bin id and must never fail, or the whole feature switches off
+  // and this journey would be testing the pre-migration form instead.
+  let lotsFailing = false
+  let lotReads = 0
+  await page.route('**/rest/v1/rpc/bin_lots', async (route) => {
+    let body: Record<string, unknown> | null = null
+    try { body = route.request().postDataJSON() as Record<string, unknown> } catch { body = null }
+    const target = typeof body?.p_grain_bin_id === 'string' ? body.p_grain_bin_id : null
+    if (target === null || target === nil) { await route.fallback(); return }
+    lotReads += 1
+    if (lotsFailing) { await route.abort('failed'); return }
+    await route.fallback()
+  })
+
+  // One refusal from the save RPC, shaped like a real one: a rolled-back transaction, reported with
+  // the SQLSTATE this codebase raises for "the bin physically cannot take this".
+  let refuseNextSave = false
+  await page.route('**/rest/v1/rpc/save_grain_load', async (route) => {
+    if (!refuseNextSave) { await route.fallback(); return }
+    refuseNextSave = false
+    await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: 'FR001', message: 'that bin does not hold enough of the 2026 crop', details: null, hint: null }) })
+  })
+
+  await page.goto('/grain/loads')
+  await expect(page.getByRole('heading', { name: 'Loads', exact: true })).toBeVisible()
+
+  // --- The lot read fails, and the form says so instead of guessing from the movement array.
+  lotsFailing = true
+  await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(binId)
+  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('1000')
+  await page.getByRole('button', { name: 'Save load' }).click()
+  // Both the inline notice under the bin and the save's own status say it; this is the status.
+  await expect(page.getByText('Farm Rx could not read what this bin holds. Check your signal and try again.')).toBeVisible()
+  expect(loadRecordCalls.length).toBe(0)
+
+  // And "try again" means it: pressing Save re-issues the read rather than refusing forever. The
+  // refusal returns from inside the try, so the refresh in the finally still runs, and that counter
+  // moving is the proof. Without it a farmer would be stuck until they switched bins or reloaded.
+  const readsBefore = lotReads
+  lotsFailing = false
+  await page.getByRole('button', { name: 'Save load' }).click()
+  await expect.poll(() => lotReads).toBeGreaterThan(readsBefore)
+
+  // The read landed, so the picker appears with both lots and the form asks the question again.
+  const cropYear = page.getByRole('combobox', { name: 'Crop year', exact: true })
+  await expect(cropYear).toBeVisible()
+  await expect(cropYear.getByRole('option')).toHaveText([/Pick which crop year/, /2026.*4,000 bu/, /2025.*6,000 bu/])
+
+  // --- A definitively refused save lets its lot go.
+  // The farmer picks 2026. Another truck empties it in the meantime, so the server refuses with
+  // FR001 and rolls back -- no ticket was written.
+  await cropYear.selectOption(`${commodityId}:2026`)
+  refuseNextSave = true
+  lotRows.splice(0, 1)
+  await page.getByRole('button', { name: 'Save load' }).click()
+  await expect(page.getByText('Farm Rx could not record this load right now')).toBeVisible()
+  expect(loadRecordCalls.length).toBe(0)
+
+  // The bin now holds only 2025, and the form has to follow it. Before this repair the ticket stayed
+  // "outstanding" after ANY failure, which froze the chosen lot: the screen would show the 2025 line
+  // while every retry still submitted 2026, refused each time, with no control on screen to fix it.
+  // The freeze is right only while the outcome is unknown, and a rolled-back refusal is not that.
+  await expect(page.getByText('This bin holds one crop year')).toContainText('2025')
+
+  // And the retry goes through, under the lot the screen is actually showing.
+  await page.getByRole('button', { name: 'Save load' }).click()
+  await expect.poll(() => loadRecordCalls.length).toBe(1)
+  const sent = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
+  expect(sent.crop_year).toBe(2025)
+  expect(sent.commodity_id).toBe(commodityId)
+  expect(unexpected).toEqual([])
+})
+
+test('hauling a one-lot bin dry drops the year it emptied, rather than refusing every later ticket', async ({ page, context }) => {
+  await seedSession(context)
+  loadRecordCalls.length = 0
+  const farm = farms[0]!
+  const binId = '00000000-0000-4000-8000-0000000000b1'
+  const binRows = [
+    { id: binId, farm_id: farm.id, name: 'Home bin', capacity_bu: 40_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now },
+  ]
+  const inventoryRows = [
+    { id: '00000000-0000-4000-8000-0000000000b2', farm_id: farm.id, grain_bin_id: binId, crop_year: 2026, commodity_id: commodityId, bushels: 4_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now },
+  ]
+  // ONE lot. The form shows it as a sentence and asks nothing -- and fills the year into the draft,
+  // because "this bin holds one crop year" is a claim about a moment that has to travel with the save.
+  const lotRows = [{ grain_bin_id: binId, commodity_id: commodityId, crop_year: 2026, bushels: 4_000 }]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: [], bin_lots: lotRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
+
+  await page.goto('/grain/loads')
+  await expect(page.getByRole('heading', { name: 'Loads', exact: true })).toBeVisible()
+  await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(binId)
+  await expect(page.getByText('This bin holds one crop year')).toContainText('2026')
+
+  // Haul the whole lot. The mock's own save empties it, rather than the test arranging an empty bin.
+  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('4000')
+  await page.getByRole('button', { name: 'Save load' }).click()
+  await expect.poll(() => loadRecordCalls.length).toBe(1)
+  expect((loadRecordCalls[0]!.body.p_load as Record<string, unknown>).crop_year).toBe(2026)
+
+  // The bin is empty now, and the form says so. The draft must not still be carrying 2026: that year
+  // resolves against the RECORDED list, so validation would pass and the next save would reach the
+  // server only to be refused FR001 -- with no picker on screen to repair it, because a bin offering
+  // no lots renders a sentence rather than a control. This is the farmer stuck.
+  await expect(page.getByText('This bin holds no crop with a crop year')).toBeVisible()
+
+  loadRecordCalls.length = 0
+  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('250')
+  await page.getByRole('button', { name: 'Save load' }).click()
+
+  // Refused here, in the farmer's own words, without spending a round trip on a lot the screen is
+  // not showing. The message is the local one, and the RPC is never reached.
+  await expect(page.getByText('That bin holds no crop with a crop year, so Farm Rx cannot tell which crop year this load is.')).toBeVisible()
+  expect(loadRecordCalls.length).toBe(0)
+  expect(unexpected).toEqual([])
+})
+
+test('a void the bins will not take changes nothing, and still re-reads what they hold', async ({ page, context }) => {
+  await seedSession(context)
+  loadRecordCalls.length = 0
+  const farm = farms[0]!
+  const binId = '00000000-0000-4000-8000-0000000000c1'
+  const loadId = '00000000-0000-4000-8000-0000000000c3'
+  const sourceBin = '00000000-0000-4000-8000-0000000000c4'
+  const binRows = [
+    { id: binId, farm_id: farm.id, name: 'Home bin', capacity_bu: 40_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now },
+    { id: sourceBin, farm_id: farm.id, name: 'North dryer bin', capacity_bu: 42_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now },
+  ]
+  const inventoryRows = [
+    { id: '00000000-0000-4000-8000-0000000000c2', farm_id: farm.id, grain_bin_id: binId, crop_year: 2026, commodity_id: commodityId, bushels: 5_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now },
+  ]
+  const lotRows = [{ grain_bin_id: binId, commodity_id: commodityId, crop_year: 2026, bushels: 5_000 }]
+  // A transfer already on the record, hauled INTO this bin from another one, so voiding it has to take those bushels
+  // back out -- which is the void the bin can refuse.
+  const loadRows = [
+    { id: loadId, farm_id: farm.id, load_date: '2026-11-01', truck_equipment_id: null, truck_name: null, origin_kind: 'bin', origin_grain_bin_id: sourceBin, origin_crop_assignment_id: null, destination_kind: 'bin', destination_buyer: null, destination_grain_contract_id: null, destination_grain_bin_id: binId, commodity_id: commodityId, crop_year: 2026, gross_lbs: null, tare_lbs: null, net_bushels: 1_000, moisture_pct: null, ticket_number: 'T-1', photo_path: null, notes: null, effect_bin_out: true, effect_bin_in: true, effect_contract_delivery: false, effect_harvest: false, voided_at: null, void_reason: null, created_at: now, updated_at: now },
+  ]
+  // The bins have moved on since, so the compensating movement cannot be written. The server's
+  // answer to that is BLOCKED: nothing changes at all, and the movements in the way are named.
+  const blockers = [{ id: '00000000-0000-4000-8000-0000000000c5', grain_bin_id: binId, direction: 'out', bushels: 4_500, commodity_id: commodityId, crop_year: 2026, occurred_on: '2026-11-05', source_kind: null }]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: [], bin_lots: lotRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: loadRows, void_blocked_by: blockers })
+
+  page.on('pageerror', (e) => console.log('PAGEERROR:', e.message))
+  page.on('console', (m) => { if (m.type() === 'error') console.log('CONSOLE:', m.text()) })
+  await page.goto('/grain/loads')
+  await expect(page.getByRole('heading', { name: 'Loads', exact: true })).toBeVisible()
+
+  // The form reads the bin's lots once and holds that answer.
+  await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(binId)
+  await expect(page.getByText('This bin holds one crop year')).toContainText('5,000 bu')
+  loadRecordCalls.length = 0
+
+  // Another truck empties most of the bin -- which is WHY the void below is blocked. The form is
+  // now holding a figure it has no way to know is wrong, and only a re-read can correct it.
+  lotRows[0]!.bushels = 500
+
+  // The reason prompt is the app's own dialog, not the browser's, and no journey had ever answered
+  // it -- the void path had no browser coverage at all before this one.
+  await page.getByRole('button', { name: 'Void', exact: true }).first().click()
+  await page.getByRole('textbox', { name: 'Reason' }).fill('entered twice')
+  await page.getByRole('button', { name: 'Void this load' }).click()
+
+  // The refusal names what is in the way, in the farmer's words, and says nothing was changed.
+  await expect(page.getByText('This ticket cannot be voided yet')).toContainText('4,500 bu')
+  await expect.poll(() => loadRecordCalls.filter((call) => call.rpc === 'void_grain_load').length).toBe(1)
+
+  // And the lots are read AGAIN, so the screen stops showing 5,000 bu that are not there. A blocked
+  // void is precisely the case where later movements changed those bins, so it is the outcome that
+  // most needs a fresh list -- and it was the one outcome that skipped the refresh until round 11,
+  // with no journey able to reach it at all until this fixture could answer `blocked`.
+  //
+  // The figure is what makes this an assertion rather than a decoration: without the refresh the
+  // form keeps the answer it already had, and 5,000 stays on screen.
+  await expect(page.getByText('This bin holds one crop year')).toContainText('500 bu')
   expect(unexpected).toEqual([])
 })
 

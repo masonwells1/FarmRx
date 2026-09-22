@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 329')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 392')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -860,7 +860,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, ld1Migration, "raise exception using errcode = 'P0001', message = 'FARM_RX_LOAD_ID_REUSED';", 'ld1:a-lost-response-is-not-a-lost-ticket')
   requireText(errors, ld1Migration, "raise exception using errcode = 'P0001', message = 'FARM_RX_LOAD_ALREADY_VOIDED';", 'ld1:a-lost-response-is-not-a-lost-ticket')
   requireText(errors, grainModule, 'loadId.current ??= services.createGrainId();', 'ld1:a-lost-response-is-not-a-lost-ticket')
-  requireText(errors, grainModule, 'const redraft = () => { loadId.current = null };', 'ld1:a-lost-response-is-not-a-lost-ticket')
+  requireText(errors, grainModule, 'const redraft = () => { loadId.current = null; setTicketOutstanding(false) };', 'ld1:a-lost-response-is-not-a-lost-ticket')
   // Every field change drops the held ticket id: the same id standing for different content is the
   // one thing the server refuses outright.
   const loadsTabBody = grainModule.slice(grainModule.indexOf('export function LoadsTab'))
@@ -918,6 +918,406 @@ export function foundationStaticGuard(root = process.cwd()) {
     // empty state meant unknown movements existed -- and "Nothing stored or contracted yet" was
     // printed directly above a list of stored bushels. It can never be true here.
     if (grainModule.includes('Nothing stored or contracted yet')) errors.push('ld3:the-empty-state-that-could-never-be-true')
+  }
+  {
+    // LD-4: a bin origin hauls the lot the farmer names, and the rules that decide which lot are
+    // the ones the amendment wrote. These four are the ones a plausible rewrite would lose.
+    const committedFree = read(root, 'src/data/committedFree.ts')
+    const grainData = read(root, 'src/data/grain.ts')
+
+    // The lot list comes from the baseline AND the movements. Reading the baseline alone is the
+    // LD-1 defect this initiative closed, and it is a one-line regression away.
+    // Pinned as the movements read inside loadLotFor, not as a bare binLotsOnHand( call: that call
+    // appears twice, so a guard on the name alone stays satisfied by originBinLots while the
+    // origin quietly goes back to the baseline. The mutation drill caught exactly that.
+    requireText(errors, grainData, 'workspace.bin_transactions.filter((row) => row.grain_bin_id === draft.origin_grain_bin_id)', 'ld4:a-bin-origin-reads-its-lots-not-its-baseline')
+    // Defaulting happens only for a bin holding exactly one lot. The amendment's words.
+    requireText(errors, grainData, 'lots.length === 1 ?', 'ld4:only-a-single-lot-bin-defaults')
+    // Bushels with no crop year are never offered as one, and never defaulted to.
+    requireText(errors, committedFree, "lot.crop_year !== null && lot.bushels > 0.000001", 'ld4:the-unstamped-bucket-is-never-a-crop-year')
+
+    // The same merge-before-migration window as LD-2's effects, and the reason LD-006 finding 1
+    // existed: while the capability is false the form offers no choice and the derivation answers
+    // as LD-1 did, because that is what the installed RPC will accept.
+    // Counted, not merely present. Two places consult this capability -- the derivation and the
+    // validation -- and a guard that only asks whether the string appears stays green while one of
+    // them quietly stops asking. The mutation drill caught that too.
+    if ((grainData.split("workspace.capabilities?.grain_load_bin_lot === false").length - 1) !== 2) errors.push('ld4:the-lot-choice-waits-for-the-migration')
+    requireText(errors, grainModule, "workspace.capabilities?.grain_load_bin_lot !== false", 'ld4:the-lot-choice-waits-for-the-migration')
+    requireText(errors, grainModule, '!binLotReady\n        ? { ...outgoing0, origin_crop_year: "", origin_commodity_id: "" }', 'ld4:a-hidden-lot-choice-is-never-sent')
+    // And when the capability IS there, the lot on the wire is the one this render resolved, not a
+    // draft field an effect fills in after the render commits. Between the read landing and that
+    // effect flushing the screen named a lot while the payload carried none, and the server
+    // defaulted -- which is the silent guess this whole initiative exists to stop.
+    requireText(errors, grainModule, 'draft.origin_kind === "bin" && lot\n          ? { ...outgoing0, origin_crop_year: String(lot.crop_year), origin_commodity_id: lot.commodity_id }', 'ld4:the-form-states-the-lot-it-showed')
+    requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), "supabase.rpc('bin_lots'", 'ld4:the-lot-choice-waits-for-the-migration')
+
+    // The balance question stays in append_bin_movement, under a row lock. save_grain_load asking
+    // it too would make two guards that can disagree -- the defect shape this initiative keeps
+    // finding. Comments are stripped, for the same reason the LD-3 guard above strips them: the
+    // migration's own header explains the rule and would otherwise satisfy the guard.
+    const ld4Migration = read(root, 'supabase/migrations/20260921180000_ld4_bin_origin_lot.sql')
+    // Bounded at both ends. This migration now also redefines append_bin_movement below, and that
+    // function legitimately raises FR001 and reads bin_inventory -- an open-ended slice would read
+    // its body as save_grain_load's and pass on the wrong evidence.
+    const saveStart = ld4Migration.indexOf('create or replace function public.save_grain_load')
+    const saveEnd = ld4Migration.indexOf('revoke all on function public.save_grain_load', saveStart)
+    const saveBody = ld4Migration
+      .slice(saveStart, saveEnd)
+      .split('\n')
+      .map((line) => line.replace(/--.*$/, ''))
+      .join('\n')
+    if (saveBody.includes('FR001')) errors.push('ld4:the-balance-question-has-one-answer')
+    if (saveBody.includes('bin_inventory')) errors.push('ld4:a-bin-origin-reads-its-lots-not-its-baseline')
+    // A lot the farmer names has to be one the bin has a record of. Without this the server would
+    // take any year on trust and stamp a ticket with a crop the bin has never held.
+    requireText(errors, ld4Migration, "raise exception 'this bin has no record of the % crop', v_crop_year;", 'ld4:save-grain-load-checks-the-lot-is-real')
+
+    // LD-4 repair: the picker asks the database what the bin holds. Deriving it from the workspace
+    // array is what made a truncated movement list look like a one-lot bin -- the form then offered
+    // no choice, sent no crop year, and the save was refused with a message the form had no control
+    // to answer. A load the farmer could not record at all.
+    requireText(errors, grainModule, 'authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id)', 'ld4:the-picker-asks-the-database-what-the-bin-holds')
+    requireText(errors, grainData, 'authoritativeLots ?? binLotsOnHand(', 'ld4:the-picker-asks-the-database-what-the-bin-holds')
+    // And when it cannot get that answer it says so rather than falling back to a list that may be
+    // short: a short movement list is indistinguishable from a one-lot bin.
+    requireText(errors, grainModule, "const lotsUnavailable = lotsState === 'unavailable';", 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
+    {
+      // LD-4 repair: the lot answer is stored WITH the bin it is about and the refresh it was
+      // fetched for, so a stale one cannot be read at all. As two independent pieces of state the
+      // lots and the status could disagree for a render after the bin changed -- status still
+      // 'ready', lots still the previous bin's -- and the form auto-selected a lot from ANOTHER
+      // BIN's list. That is this feature's own defect, one layer up from the truncation it was
+      // built for, and it was invisible until a journey refused to go red against it.
+      requireText(errors, grainModule, 'const [lotRead, setLotRead] = useState<{ binId: string; refresh: number; lots: BinLotOnHand[] | null } | null>(null);', 'ld4:the-lot-answer-is-keyed-to-its-bin')
+      // BOTH halves of the key. Either one dropped is a different stale answer becoming readable,
+      // and a requireText on the whole line stays green while the comparison under it is cut.
+      requireText(errors, grainModule, 'lotRead.binId === originBinId && lotRead.refresh === lotsRefresh', 'ld4:the-lot-answer-is-keyed-to-its-bin')
+      // And the status is DERIVED from that one piece of state, never set beside it. A second
+      // setter is how the two drift back out of step.
+      if (grainModule.includes('setLotsState(')) errors.push('ld4:the-lot-answer-is-keyed-to-its-bin')
+      if (grainModule.includes('setAuthoritativeLots(')) errors.push('ld4:the-lot-answer-is-keyed-to-its-bin')
+    }
+    requireText(errors, grainModule, 'Farm Rx could not read what this bin holds', 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
+
+    // LD-1's replay guarantee, which LD-4 broke for one case: a one-lot bin hauled to exactly zero
+    // has no lot left, so a retry after a lost response was refused seventy lines before it reached
+    // the replay check -- telling a farmer their load failed when it was already recorded. The
+    // stored lot is adopted only when the caller named none, so a retry naming a different lot is
+    // still a reused id.
+    requireText(errors, ld4Migration, 'select crop_year, commodity_id into v_replay_year, v_replay_commodity', 'ld4:a-retry-still-returns-the-ticket-it-saved')
+    // The form keeps the origin for the next ticket, and a save can empty the year it named. A
+    // choice the picker no longer offers has to be dropped, or the form refuses every further save
+    // with no control on screen to fix it.
+    requireText(errors, grainModule, 'setDraft((current) => ({ ...current, origin_crop_year: "", origin_commodity_id: "" }));', 'ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')
+
+    // A lot is a commodity IN a crop year -- this initiative's first rule. The year alone does not
+    // identify one, so both halves travel with the choice and the server refuses an ambiguous year
+    // rather than picking the fuller lot.
+    requireText(errors, ld4Migration, 'select count(distinct lots.commodity_id), max(lots.commodity_id)', 'ld4:a-lot-is-a-commodity-in-a-crop-year')
+    requireText(errors, grainModule, 'const [commodity, year] = event.target.value.split(":");', 'ld4:a-lot-is-a-commodity-in-a-crop-year')
+    requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), 'if (draft.origin_commodity_id) payload.commodity_id = draft.origin_commodity_id', 'ld4:a-lot-is-a-commodity-in-a-crop-year')
+    // And one baseline rule, shared by the three places that compute what a bin holds.
+    requireText(errors, ld4Migration, 'v_baseline_covers_commodity := v_has_inventory and v_inventory.commodity_id = v_commodity;', 'ld4:one-baseline-rule-everywhere')
+    // bin_lots finds the baseline that SUPERSEDES by commodity alone. Narrowing that subselect by
+    // crop year is the exact shape of the rule this tranche got wrong first time, and it reads as
+    // more careful, so it is pinned here rather than left to whoever edits the function next. The
+    // other subselect a few lines above, which decides whose BUSHELS the baseline is, does match on
+    // the crop year -- correctly, because those are the baseline's own lot. Two questions.
+    requireText(errors, ld4Migration, 't.occurred_on > coalesce((select inv.measured_on from inv\n                                                     where inv.commodity_id = lots.commodity_id)', 'ld4:one-baseline-rule-everywhere')
+    // Counted, not merely present. Two functions in this migration ask this question -- the lot
+    // balance and the crop-year assignment -- and a guard that only asks whether the predicate
+    // appears stays green while one of them reverts. That is the fourth time this shape has
+    // slipped through on this tranche, so it is counted every time now.
+    if ((ld4Migration.split('(not v_baseline_covers_commodity or occurred_on > v_inventory.measured_at::date)').length - 1) !== 2) errors.push('ld4:one-baseline-rule-everywhere')
+    {
+      const superseded = committedFree.slice(committedFree.indexOf('export function isLotMovementSuperseded'))
+      if (superseded.slice(0, superseded.indexOf('}')).includes('crop_year')) errors.push('ld4:one-baseline-rule-everywhere')
+    }
+    // And the lots are read again after a save, or the next load is picked against stale balances.
+    requireText(errors, grainModule, 'if (originBinId) setLotsRefresh((count) => count + 1);', 'ld4:a-save-changes-what-the-bin-holds')
+
+    // "Not answered yet" is not "answered with nothing". While the lot read is in flight the
+    // derivation stands in -- the truncated list the repair exists to stop trusting -- so a farmer
+    // who saves in that window gets the original defect back. The save waits for a settled answer.
+    requireText(errors, grainModule, "if (binLotReady && originBinId && lotsState !== 'ready') {", 'ld4:a-save-waits-for-a-settled-lot-list')
+
+    // The form states the lot it displayed, even when it displayed it as a sentence rather than a
+    // picker. Sending nothing let the server resolve the lot a second time at save time, and
+    // between the read and the save another device can empty that lot and add a different one --
+    // so the ticket would record a crop the screen never named, with no error to notice it by.
+    requireText(errors, grainModule, "setDraft((current) => ({ ...current, origin_crop_year: String(only.crop_year), origin_commodity_id: only.commodity_id }));", 'ld4:the-form-states-the-lot-it-showed')
+    // And it states it only from a settled list, or it answers from the fallback it exists to replace.
+    // BOTH effects that touch the chosen lot wait for a settled list, not just the one that fills
+    // it in. The clearing twin guessed around an unsettled list instead, with an early return on an
+    // empty one -- so hauling a one-lot bin dry left the emptied year in the draft, resolvable
+    // against the recorded list, refused by the server, and unreachable on screen. Counted, because
+    // a requireText here stays green with either one of the two gates removed.
+    if ((grainModule.split("if (!binLotReady || lotsState !== 'ready' || ticketOutstanding) return;").length - 1) !== 2) errors.push('ld4:the-form-states-the-lot-it-showed')
+    // And the hole itself is checked as an absence: an empty list is the case that matters most.
+    if (grainModule.includes('originLots.length === 0) return;')) errors.push('ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')
+    {
+      // The browser fixture answers like public.bin_lots, which KEEPS a lot the bin has emptied, at
+      // zero. It filtered those rows out -- the fourth place on this tranche where a stand-in
+      // disagreed with the server, and the worst kind: it made a journey written for this very bug
+      // pass against the broken code. A fixture that is wrong in the same direction as the code
+      // does not test the code, it agrees with it.
+      const journeys = read(root, 'tests/e2e/foundation-shell.spec.ts')
+      // Scoped to the bin_lots ROUTE, because the save mock beside it narrows to positive lots
+      // legitimately -- that is what the server's own default does. Both mock blocks are checked.
+      let from = 0
+      let routes = 0
+      for (;;) {
+        const start = journeys.indexOf("url.pathname === '/rest/v1/rpc/bin_lots'", from)
+        if (start < 0) break
+        routes += 1
+        const handler = journeys.slice(start, journeys.indexOf('\n', start))
+        if (/bushels\)?\s*>/.test(handler)) errors.push('ld4:the-browser-fixture-answers-like-the-database')
+        from = start + 1
+      }
+      if (routes !== 2) errors.push('ld4:the-browser-fixture-answers-like-the-database')
+      // The void fixture answers like void_grain_load too: it used to return `voided` for
+      // grain_loads[0] whatever id was asked for, always with an empty blocked_by, so the BLOCKED
+      // branch was unreachable in every journey and the round that repaired its lot refresh had no
+      // browser coverage. Fifth stand-in on this tranche found disagreeing with the server.
+      if ((journeys.split("const target = loads.find((row) => row.id === value.p_load_id)").length - 1) !== 2) errors.push('ld4:the-browser-fixture-answers-like-the-database')
+      if ((journeys.split("if (blockers.length) { await fulfillJson(route, { status: 'blocked', load: target, blocked_by: blockers }); return }").length - 1) !== 2) errors.push('ld4:the-browser-fixture-answers-like-the-database')
+    }
+    // The bin is locked before its lots are read, so this function's lot decision and
+    // append_bin_movement's balance check are inside one serialised window.
+    requireText(errors, ld4Migration, 'where id = v_origin_bin and farm_id = p_farm_id for update;', 'ld4:the-bin-is-locked-before-its-lots-decide-anything')
+    // And that list is read once on the defaulting path: counting and then selecting was two
+    // snapshots, and a SELECT INTO over two rows takes whichever came first.
+    requireText(errors, ld4Migration, 'select count(*), max(lots.commodity_id), max(lots.crop_year)', 'ld4:the-lot-list-is-read-once-when-it-defaults')
+
+    // A lot the bin has emptied is still a lot it has a record of. The server accepts one when the
+    // farmer names it, which is how a ticket that moves nothing is filed against the year it really
+    // was -- so the repository must not drop it on the way to the form. Defaulting still uses only
+    // what the bin holds, and that narrowing belongs where the load's effects are known.
+    if (/\.filter\(\(lot\) => lot\.bushels > 0\.000001\)/.test(read(root, 'src/data/SupabaseGrainRepository.ts'))) errors.push('ld4:an-emptied-lot-can-still-be-named')
+    requireText(errors, grainModule, 'const originLots = movesBushels ? onHandLots : recordedLots;', 'ld4:an-emptied-lot-can-still-be-named')
+    requireText(errors, grainModule, "const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : originLots;", 'ld4:an-emptied-lot-can-still-be-named')
+
+    // Everything that can change which lots a bin has takes the same row lock, so counting them and
+    // acting on that count cannot be interleaved. Naming a crop year CREATES a lot, so it queues
+    // there too -- it locked only the movement row before.
+    // Counted: twice, once inside lock_farm_bins and once where naming a crop year takes its bin.
+    // Asking only whether the string appears would stay green while the second one went away --
+    // the sixth time that shape has slipped through on this tranche.
+    if ((ld4Migration.split('perform 1 from public.grain_bins').length - 1) !== 2) errors.push('ld4:everything-that-changes-a-bin-queues-behind-it')
+    // And in the SAME ORDER append_bin_movement takes them: bin, then movement row. Two functions
+    // taking two locks in opposite orders is a deadlock cycle, and PostgreSQL resolves it by
+    // aborting a farmer's save for a reason they can neither see nor act on.
+    // One lock order for the module, stated once and used by everything that touches more than one
+    // bin. Three review rounds found three deadlocks, each a different pair taken in a different
+    // order, because there was no order to follow. Both multi-bin writers call this.
+    requireText(errors, ld4Migration, 'create or replace function public.lock_farm_bins(p_farm_id uuid, p_bin_ids uuid[])', 'ld4:one-lock-order-for-the-module')
+    if ((ld4Migration.split('perform public.lock_farm_bins(').length - 1) !== 2) errors.push('ld4:one-lock-order-for-the-module')
+    requireText(errors, ld4Migration, 'order by id', 'ld4:one-lock-order-for-the-module')
+    // And the draft's chosen lot is frozen while a ticket id is outstanding, or a retry can reach
+    // the server under a different lot and be refused as a reused id -- for a load already saved.
+    requireText(errors, grainModule, 'const [ticketOutstanding, setTicketOutstanding] = useState(false);', 'ld4:an-outstanding-ticket-keeps-its-lot')
+    if ((grainModule.split('ticketOutstanding) return;').length - 1) !== 2) errors.push('ld4:an-outstanding-ticket-keeps-its-lot')
+    {
+      const assign = ld4Migration.slice(ld4Migration.indexOf('function public.assign_bin_movement_crop_year'))
+      const binLock = assign.indexOf('perform 1 from public.grain_bins')
+      const rowLock = assign.indexOf('where id = p_transaction_id and farm_id = p_farm_id for update')
+      if (binLock < 0 || rowLock < 0 || binLock > rowLock) errors.push('ld4:two-locks-are-always-taken-in-one-order')
+    }
+    {
+      // The void is a multi-bin writer too, so it follows the same order: bins, then grain_loads.
+      // It took the load row first once, which is the opposite of what save_grain_load does -- a
+      // retry of a save holding the bins and waiting for the load row, against a void holding the
+      // load row and waiting for the bins, is a deadlock cycle with two farmers in it.
+      const voidBody = ld4Migration.slice(ld4Migration.indexOf('function public.void_grain_load'))
+      const binLock = voidBody.indexOf('perform public.lock_farm_bins(')
+      const rowLock = voidBody.indexOf('where id = p_load_id and farm_id = p_farm_id for update')
+      if (binLock < 0 || rowLock < 0 || binLock > rowLock) errors.push('ld4:one-lock-order-for-the-module')
+      // LD-4 repair: the bin discovery and the load lookup are two statements, so under read
+      // committed they read two snapshots. A save committing between them leaves the void holding
+      // the load row having locked no bins, and append_bin_movement then waits on a bin a save
+      // retry holds while that retry waits for the load row -- the deadlock the ordering argument
+      // does not cover. Locking the missing bin then would BE the violation, so the void confirms
+      // its set instead and refuses. Positional: the confirmation is worthless before the row lock.
+      const confirm = voidBody.indexOf('not (grain_bin_id = any(v_locked_bins))')
+      if (confirm < 0 || confirm < rowLock) errors.push('ld4:the-void-confirms-the-bins-it-locked')
+      // The set it confirms is the set it locked, not a second read of the same query.
+      requireText(errors, voidBody, 'perform public.lock_farm_bins(p_farm_id, v_locked_bins);', 'ld4:the-void-confirms-the-bins-it-locked')
+      // And nothing may sit between that select and the check that reads its FOUND. Moving the
+      // lock in front of them is what this round did; putting it BETWEEN them is what the previous
+      // round did, and FOUND then answered for the perform instead -- every load id looked like it
+      // belonged to this farm. No suite noticed, because none had ever asserted the fence.
+      if (binLock >= 0 && rowLock >= 0) {
+        const fence = voidBody.slice(rowLock, voidBody.indexOf('if not found', rowLock))
+        if (/\bperform\b|\bselect\b/i.test(fence)) errors.push('ld4:the-void-fence-reads-its-own-select')
+      }
+    }
+    // The mock answers with every RECORDED lot, as the real function does. A mock that dropped the
+    // emptied ones would reject a path production accepts, and no mock-backed test could cover it.
+    if (/originBinLots\(workspace, binId\)/.test(read(root, 'src/data/MockGrainRepository.ts'))) errors.push('ld4:the-mock-answers-like-the-database')
+    {
+      // Checked as an ABSENCE inside listBinLots, not as a string the filter starts with: appending
+      // a balance test to that predicate leaves the pinned text intact and reads as compliance.
+      // That is the fifth time a requireText on a shared idiom has passed while the rule under it
+      // changed, so this one is written the other way round.
+      const mock = read(root, 'src/data/MockGrainRepository.ts')
+      const body = mock.slice(mock.indexOf('async listBinLots('))
+      if (body.slice(0, body.indexOf('\n  }')).includes('bushels >')) errors.push('ld4:the-mock-answers-like-the-database')
+      // The derivation moved into recordedBinLots, so the absence check follows it. Left on the
+      // mock alone it would have been guarding an empty shell -- green, and checking nothing.
+      const recorded = grainData.slice(grainData.indexOf('export function recordedBinLots('))
+      if (recorded.slice(0, recorded.indexOf('\n}')).includes('bushels >')) errors.push('ld4:the-mock-answers-like-the-database')
+      requireText(errors, mock, 'return [...recordedBinLots(workspace, binId)]', 'ld4:the-mock-answers-like-the-database')
+    }
+    {
+      // LD-4 repair: the mock stands in for save_grain_load, so it resolves a draft against the
+      // list THAT function uses. It passed no list at all, and both calls then fell through to
+      // binLotsOnHand -- so a ticket-only load naming an emptied lot was refused by the mock while
+      // production accepts it, and no mock-backed test could reach the path the round before had
+      // just repaired.
+      //
+      // Written as an ABSENCE of the no-list calls, not as the presence of the two-argument ones.
+      // Either call reverting on its own is the bug, and a requireText on one of them stays green
+      // while the other goes back -- the seventh time that shape would have slipped through here.
+      const mock = read(root, 'src/data/MockGrainRepository.ts')
+      const save = mock.slice(mock.indexOf('async saveLoad(id: string, draft: GrainLoadDraft)'))
+      const body = save.slice(0, save.indexOf('\n  async '))
+      // Both spellings, because the draft the save resolves is now the recovered one and either
+      // name dropping its list is the same bug.
+      for (const name of ['draft', 'resolvedDraft']) {
+        if (body.includes(`validateGrainLoad(${name}, workspace)`)) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
+        if (body.includes(`loadLotFor(workspace, ${name})`)) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
+      }
+      requireText(errors, body, 'lotsSaveResolvesAgainst(recordedBinLots(workspace, resolvedDraft.origin_grain_bin_id), resolvedDraft)', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+      // And the whole sequence is the server's, step for step, because two earlier repairs each
+      // fixed one step and broke another:
+      //
+      //   shape  ->  lot (recovered from the stored load when no year is named)  ->  replay
+      //   comparison  ->  save.
+      //
+      // Positional, because every one of these lines exists whatever the order, and only the order
+      // carries the rule.
+      const shape = body.indexOf('const shape = validateGrainLoadShape(draft)')
+      const recover = body.indexOf('const resolvedDraft = existing && draft.origin_kind')
+      const compare = body.indexOf('const same = existing.farm_id === saved.farm_id')
+      if (shape < 0 || recover < 0 || compare < 0 || shape > recover || recover > compare) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
+      // The replay must COMPARE, not just return. An unconditional return was how moving the
+      // replay earlier came to bypass validation altogether -- a reused id with a cleared net
+      // amount came back as a successful save, where the server refuses it.
+      requireText(errors, body, "throw new Error('FARM_RX_LOAD_ID_REUSED')", 'ld4:a-save-resolves-against-the-list-the-server-uses')
+      // Every column the server compares, so a field quietly dropped from the check fails here.
+      for (const column of ['farm_id', 'load_date', 'origin_kind', 'origin_grain_bin_id', 'origin_crop_assignment_id',
+        'destination_kind', 'destination_buyer', 'destination_grain_contract_id', 'destination_grain_bin_id',
+        'commodity_id', 'crop_year', 'net_bushels', 'effect_bin_out', 'effect_bin_in',
+        'effect_contract_delivery', 'effect_harvest']) {
+        if (!body.includes(`existing.${column} === saved.${column}`)) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
+      }
+      // And the rule itself keys on whether a year was NAMED: recorded when it was, on-hand when
+      // it was not. Both branches are pinned, because collapsing either one reproduces a bug this
+      // tranche has already shipped once in each direction.
+      requireText(errors, grainData, "return draft.origin_crop_year.trim()\n    ? recordedLots\n    : recordedLots.filter((lot) => lot.bushels > 0.000001)", 'ld4:a-save-resolves-against-the-list-the-server-uses')
+    }
+    // And the replay lookup reads INSIDE that lock. Before it, an overlapping retry could read "no
+    // such ticket", wait on the lock while the first call emptied the lot, and fail anyway.
+    {
+      const bin = ld4Migration.slice(ld4Migration.indexOf('if v_origin_bin is null then raise exception'))
+      const lock = bin.indexOf('for update;')
+      const replay = bin.indexOf('select crop_year, commodity_id into v_replay_year')
+      if (lock < 0 || replay < 0 || replay < lock) errors.push('ld4:the-replay-lookup-reads-inside-the-lock')
+    }
+    {
+      // LD-4 repair: every refusal append_bin_movement makes lives in ONE function, and BOTH
+      // writers of a movement go through it. The load's bin-out effect was pushed straight into
+      // bin_transactions with no balance check at all, so a mock-backed workflow could name an
+      // emptied lot and create negative inventory -- a save production answers with FR001. Sixth
+      // stand-in on this tranche found disagreeing with the server, and the first in a write path.
+      const mock = read(root, 'src/data/MockGrainRepository.ts')
+      // Two CALL SITES -- the manual movement and the load's effects. The definition spells it
+      // `workspace:` and so does not match, which is what makes this a count of writers.
+      if ((mock.split('binMovementRefusal(workspace,').length - 1) !== 2) errors.push('ld4:one-refusal-path-for-a-movement')
+      // Including the lot balance, which neither writer had: the commodity balance is the server's
+      // guard immediately before it, and stopping there is what let an emptied lot through.
+      requireText(errors, mock, 'lotBalance(workspace, movement.grain_bin_id, movement.commodity_id, movement.crop_year) + signed < 0', 'ld4:one-refusal-path-for-a-movement')
+      // The load checks BEFORE anything is written, not after.
+      const save = mock.slice(mock.indexOf('async saveLoad(id: string, draft: GrainLoadDraft)'))
+      const body = save.slice(0, save.indexOf('\n  async '))
+      const check = body.indexOf('const refusal = binMovementRefusal(workspace, movement)')
+      const write = body.indexOf('persist({')
+      if (check < 0 || write < 0 || check > write) errors.push('ld4:one-refusal-path-for-a-movement')
+      // And neither writer keeps a private copy of the arithmetic.
+      if (body.includes('rawOnHand')) errors.push('ld4:one-refusal-path-for-a-movement')
+    }
+    {
+      // LD-4 repair: the mock's lot balance applies the SAME baseline cutoff the server does --
+      // a movement the baseline already measured is not counted a second time. It had no cutoff at
+      // all, so an older outbound movement was subtracted twice and the mock refused a crop-year
+      // assignment the real assign_bin_movement_crop_year accepts. Third occurrence of the mock
+      // disagreeing with the server on this tranche, so it is pinned to the ONE predicate rather
+      // than to a copy of the rule: isLotMovementSuperseded is what bin_lots derives through too.
+      const mock = read(root, 'src/data/MockGrainRepository.ts')
+      const balance = mock.slice(mock.indexOf('function lotBalance('))
+      const body = balance.slice(0, balance.indexOf('\n}'))
+      requireText(errors, body, '.filter((row) => !isLotMovementSuperseded(baseline, row))', 'ld4:the-mock-balance-uses-the-server-baseline-rule')
+      // Written as an absence too: a second, inline copy of the predicate here is the way this
+      // would drift back apart, and it would leave the pinned line above perfectly intact.
+      if (/measured_at/.test(body)) errors.push('ld4:the-mock-balance-uses-the-server-baseline-rule')
+    }
+    {
+      // LD-4 repair: the lot read verifies the operation context AFTER the response lands, as every
+      // other read and write in this repository does. Fencing only before the request leaves a read
+      // that is still in flight when the farm, account or access epoch changes free to resolve into
+      // the form -- putting the PREVIOUS farm's private bin quantities on screen as lots to haul.
+      // A read is not exempt from the epoch fence because it writes nothing.
+      //
+      // Positional, not textual: the call has to sit after the gateway read, and pinning the string
+      // alone would stay green with it moved back above.
+      const repository = read(root, 'src/data/SupabaseGrainRepository.ts')
+      const lots = repository.slice(repository.indexOf('async listBinLots(binId: string)'))
+      const body = lots.slice(0, lots.indexOf('\n  async '))
+      const gatewayRead = body.indexOf('await read.call(')
+      const fence = body.indexOf('await this.dependencies.verifyOperationContext(context)')
+      if (gatewayRead < 0 || fence < 0 || fence < gatewayRead) errors.push('ld4:a-lot-read-is-fenced-after-it-lands')
+      // And the queued repository forwards to that writer rather than reaching past it, or the
+      // fence above would apply to one caller and not the other.
+      requireText(errors, read(root, 'src/data/QueuedGrainRepository.ts'), 'return this.writer.listBinLots(binId)', 'ld4:a-lot-read-is-fenced-after-it-lands')
+    }
+    {
+      // LD-4 repair: the lot freeze is only right while the save's outcome is UNKNOWN. A definitive
+      // refusal rolled the transaction back, so no ticket exists, and staying frozen strands the
+      // farmer -- the refresh shows the lot that replaced theirs while every retry resubmits the
+      // stale one. Pinned as the NEGATION of the codebase's existing transport test, so a second
+      // classifier cannot quietly grow here: that is the mistake this tranche has already made.
+      requireText(errors, grainModule, "if (!isTransportFailure(error, typeof navigator !== 'undefined' && navigator.onLine === false)) {", 'ld4:a-refused-save-lets-its-lot-go')
+      const save = grainModule.slice(grainModule.indexOf('const save = async () => {'))
+      const body = save.slice(0, save.indexOf('\n  const voidLoad'))
+      const clear = body.indexOf('setTicketOutstanding(false);\n      }')
+      const message = body.indexOf('setMessage(farmerError(error, "record this load"));')
+      // Before the message, and therefore inside the catch rather than after it.
+      if (clear < 0 || message < 0 || clear > message) errors.push('ld4:a-refused-save-lets-its-lot-go')
+      // And the ticket id goes with it: a retry that may reuse an id whose load was never written
+      // is a new ticket, not a replay.
+      requireText(errors, body, 'loadId.current = null;\n        setTicketOutstanding(false);', 'ld4:a-refused-save-lets-its-lot-go')
+    }
+    // A void puts bushels back, so the lots have to be read again -- the stale answer wins over the
+    // workspace refresh and would keep offering one lot where the server now sees two.
+    if ((grainModule.split('setLotsRefresh((count) => count + 1);').length - 1) !== 2) errors.push('ld4:a-void-changes-what-the-bin-holds-too')
+    {
+      // And after ANY attempt, not only a successful one. A BLOCKED void returns before the end of
+      // the try block, and a blocked void is exactly the case where something else already moved
+      // those bins -- the outcome that most needs a fresh list was the one skipping it. So the
+      // refresh has to sit in the finally, which is pinned here by its position: ahead of the lock
+      // release that only the finally performs. Counting the string alone stayed green while it sat
+      // in the success path, which is how this shipped once already.
+      const handler = grainModule.slice(grainModule.indexOf('const voidLoad = async (load: GrainLoad) => {'))
+      const voidHandler = handler.slice(0, handler.indexOf('\n  };'))
+      const fin = voidHandler.indexOf('} finally {')
+      const refresh = voidHandler.indexOf('setLotsRefresh((count) => count + 1);')
+      const release = voidHandler.indexOf('lock.current.release();')
+      // Between the finally and the release, not merely somewhere ahead of the release: a refresh
+      // moved back up into the success path is still before the release, and that is precisely the
+      // bug -- so the first way I wrote this guard passed against it.
+      if (fin < 0 || refresh < 0 || release < 0 || refresh < fin || refresh > release) errors.push('ld4:a-void-changes-what-the-bin-holds-too')
+    }
   }
   {
     // A load's harvest contribution is derived and never written into the replaceable manual total.

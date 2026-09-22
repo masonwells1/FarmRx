@@ -61,6 +61,7 @@ try {
   # Initiative LD-3 (committed vs free): the database's own answer for the same fixture the browser
   # derivation uses, and the proof that a "free" bushel is one the bin will actually let go.
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/ld3-committed-free-assertions.sql')) 'LD3_COMMITTED_FREE_DISPOSABLE_PASS' 'LD-3 committed vs free assertions failed.'
+  Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/ld4-bin-origin-lot-assertions.sql')) 'LD4_BIN_ORIGIN_LOT_DISPOSABLE_PASS' 'LD-4 bin origin lot assertions failed.'
 
   $passed = $true
 } finally {

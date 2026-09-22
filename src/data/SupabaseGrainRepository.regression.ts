@@ -96,6 +96,13 @@ class FakeGateway implements GrainDataGateway {
   async upsertGrainSaleLimit(_farm: string, row: GrainSaleLimit) { this.guard(); this.state.bundle.grain_sale_limits = [...(this.state.bundle.grain_sale_limits as GrainSaleLimit[]).filter((item) => item.id !== row.id), structuredClone(row)]; return structuredClone(row) }
   async upsertGrainCarrySettings(_farm: string, row: GrainCarrySettings) { this.guard(); this.state.bundle.grain_carry_settings = structuredClone(row); return structuredClone(row) }
   async upsertGrainCarryGrid(_farm: string, row: GrainCarryGrid) { this.guard(); this.state.bundle.grain_carry_grids = [...(this.state.bundle.grain_carry_grids as GrainCarryGrid[]).filter((item) => item.id !== row.id), structuredClone(row)]; return structuredClone(row) }
+  // LD-4: the lot read had no fake and therefore no repository-level coverage at all, which is how
+  // a missing epoch fence on it survived to review. beforeBinLots stands in for the delay: it runs
+  // while the read is in flight, which is exactly when the farm can change underneath it.
+  binLotRows: Array<{ commodity_id: string; crop_year: number; bushels: number }> = []
+  beforeBinLots: (() => Promise<void>) | null = null
+  binLotError: Error | null = null
+  async listBinLots(_farm: string, _binId: string) { this.guard(); if (this.beforeBinLots) await this.beforeBinLots(); if (this.binLotError) throw this.binLotError; return this.binLotRows.map((row) => structuredClone(row)) }
 }
 function repository(gateway: FakeGateway, verifyOperationContext: (context: ReturnType<typeof operationContext>) => Promise<void> = async () => undefined, fieldsRepository?: FieldsRepository) { const fields = gateway.state.fields; const configuredFields = fieldsRepository ?? { getData: async () => structuredClone(fields), getSnapshot: async (_context: FarmOperationContext) => ({ data: structuredClone(fields), source: 'live' as const, capturedAt: stamp }), saveField: async () => { throw new Error('not used') } }; return new SupabaseGrainRepository({ gateway, fieldsRepository: configuredFields, getFarmId: async () => fields.farm.id, getOperationContext: async () => operationContext(fields.farm.id), verifyOperationContext, createId: () => uid(99), clock: () => stamp }) }
 async function run() {
@@ -560,7 +567,7 @@ async function run() {
   {
     const loadGateway = new FakeGateway()
     const loadRepo = repository(loadGateway)
-    const draft: GrainLoadDraft = { load_date: '2026-10-01', truck_equipment_id: '', truck_name: 'Red semi', origin_kind: 'bin', origin_grain_bin_id: uid(90), origin_crop_assignment_id: '', destination_kind: 'buyer', destination_buyer: '  Riverside Elevator  ', destination_grain_contract_id: '', destination_grain_bin_id: '', gross_lbs: '', tare_lbs: '', net_bushels: '910.5', moisture_pct: '', ticket_number: 'A-1001', notes: '', effect_bin_out: false, effect_bin_in: false, effect_contract_delivery: false, effect_harvest: false }
+    const draft: GrainLoadDraft = { load_date: '2026-10-01', truck_equipment_id: '', truck_name: 'Red semi', origin_kind: 'bin', origin_grain_bin_id: uid(90), origin_crop_assignment_id: '', origin_crop_year: '', origin_commodity_id: '', destination_kind: 'buyer', destination_buyer: '  Riverside Elevator  ', destination_grain_contract_id: '', destination_grain_bin_id: '', gross_lbs: '', tare_lbs: '', net_bushels: '910.5', moisture_pct: '', ticket_number: 'A-1001', notes: '', effect_bin_out: false, effect_bin_in: false, effect_contract_delivery: false, effect_harvest: false }
     const ticketId = uid(91)
     const saved = await loadRepo.saveLoad(ticketId, draft)
     assert(saved.id === ticketId, 'LD-1: the saved ticket must be the one the caller named.')
@@ -603,6 +610,35 @@ async function run() {
     try { await preLoadRepo.saveLoad(uid(92), draft) } catch (error) { pendingSave = error instanceof Error ? error.message : '' }
     try { await preLoadRepo.voidLoad(uid(92), 'entered twice') } catch (error) { pendingVoid = error instanceof Error ? error.message : '' }
     assert(pendingSave === LOAD_RECORD_PENDING && pendingVoid === LOAD_RECORD_PENDING, `LD-1: a pre-migration database must say so plainly (saw ${pendingSave} / ${pendingVoid}).`)
+  }
+
+  // ------------------------------------------------ LD-4: a read is not exempt from the epoch fence
+  // Codex P2 on 1883377. Every other read and write here verifies the operation context AFTER the
+  // response lands; listBinLots verified only before the request. A read still in flight when the
+  // account, the selected farm or the access epoch changed could therefore resolve into the form's
+  // authoritative lot list and put the PREVIOUS farm's bin quantities on screen -- private
+  // financial figures, offered as lots to haul.
+  {
+    const lotGateway = new FakeGateway()
+    lotGateway.binLotRows = [
+      { commodity_id: 'corn_yellow', crop_year: 2026, bushels: 4_000 },
+      { commodity_id: 'corn_yellow', crop_year: 2025, bushels: 0 },
+    ]
+
+    // The ordinary path still works, and still keeps the emptied lot the server deliberately returns.
+    const lotRepo = repository(lotGateway)
+    const lots = await lotRepo.listBinLots(uid(70))
+    assert(lots !== null && lots.length === 2, `LD-4: the lot read must return every recorded lot (saw ${JSON.stringify(lots)}).`)
+    assert(lots!.some((lot) => lot.crop_year === 2025 && lot.bushels === 0), 'LD-4: an emptied lot is still a recorded lot.')
+
+    // Now the farm changes while the read is in flight. The fence must refuse the answer.
+    let fenced = 0
+    const fencedRepo = repository(lotGateway, async () => { fenced += 1; if (fenced > 1) throw new Error('Access to this farm changed while data was loading.') })
+    let leaked: unknown = 'not rejected'
+    try { leaked = await fencedRepo.listBinLots(uid(70)) } catch (error) { leaked = error instanceof Error ? error.message : String(error) }
+    assert(leaked === 'Access to this farm changed while data was loading.',
+      `LD-4: a lot read whose context changed must reject, not hand back the previous farm's bushels (saw ${JSON.stringify(leaked)}).`)
+    assert(fenced === 2, `LD-4: the context must be checked both before the request and after it lands (saw ${fenced} checks).`)
   }
 
   console.log('SupabaseGrainRepository regressions passed.')

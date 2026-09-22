@@ -43,6 +43,7 @@ export interface GrainDataGateway {
   finalizeContractPriceLegRpc?(farmId: string, contractId: string, leg: 'futures_price' | 'basis', value: number, context: FarmOperationContext): Promise<unknown>
   editContractRpc?(farmId: string, contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, operationId: string, context: FarmOperationContext): Promise<unknown>
   deleteContractRpc?(farmId: string, contractId: string, reason: string, expectedUpdatedAt: string, operationId: string, context: FarmOperationContext): Promise<unknown>
+  listBinLots?(farmId: string, binId: string, context: FarmOperationContext): Promise<unknown[]>
   listLoadTrucks?(farmId: string, context: FarmOperationContext): Promise<unknown[]>
   listHarvestLoads?(farmId: string, context: FarmOperationContext): Promise<unknown[]>
   assignBinMovementCropYearRpc?(farmId: string, transactionId: string, cropYear: number, context: FarmOperationContext): Promise<unknown>

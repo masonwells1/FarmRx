@@ -59,3 +59,8 @@ echo LD2_LOAD_EFFECTS_DISPOSABLE_PASS
 # derivation uses, and the proof that a "free" bushel is one the bin will actually let go.
 psql_ -d farmrx_disposable -f "$root/scripts/sql/ld3-committed-free-assertions.sql" | grep -q LD3_COMMITTED_FREE_DISPOSABLE_PASS || { echo "LD-3 committed vs free assertions failed" >&2; exit 1; }
 echo LD3_COMMITTED_FREE_DISPOSABLE_PASS
+# Initiative LD-4 (the bin origin's lot): the list of lots a bin actually holds, a farmer's choice
+# among them, the single-lot default that keeps the common case tap-free, and the proof that the
+# balance question is still answered in exactly one place.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/ld4-bin-origin-lot-assertions.sql" | grep -q LD4_BIN_ORIGIN_LOT_DISPOSABLE_PASS || { echo "LD-4 bin origin lot assertions failed" >&2; exit 1; }
+echo LD4_BIN_ORIGIN_LOT_DISPOSABLE_PASS

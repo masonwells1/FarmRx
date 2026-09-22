@@ -7,6 +7,7 @@ import { MarketQuoteSection, quoteCropYear } from "./components/MarketQuote";
 import { confirmDialog, promptDialog } from "./components/ConfirmDialog";
 import { SectionTabs } from "./SectionTabs";
 import { farmerError } from "./lib/farmerErrors";
+import { isTransportFailure } from "./data/QueuedFieldsRepository";
 import { currentFarmContext } from "./auth/farmContext";
 import { beginPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_CONTEXT_CHANGED } from "./data/pendingSettingsWork";
 import { clearSettingsDraft, readSettingsDrafts, writeSettingsDraft, type SettingsDraftScope } from "./data/settingsDrafts";
@@ -31,7 +32,8 @@ import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceip
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOfferType, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainContractType, GrainLoad, GrainLoadDraft, GrainServices, GrainWorkspace, LoadTruck, MarketingAlertRule, MarketingAlertRuleType, MarketingPlanTarget, PositionScope, ProductionEstimate } from "./data/grain";
 import { deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
-import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
+import type { BinLotOnHand } from "./data/committedFree";
+import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, originBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -224,6 +226,8 @@ const emptyLoadDraft = (): GrainLoadDraft => ({
   origin_kind: "bin",
   origin_grain_bin_id: "",
   origin_crop_assignment_id: "",
+  origin_crop_year: "",
+  origin_commodity_id: "",
   destination_kind: "buyer",
   destination_buyer: "",
   destination_grain_contract_id: "",
@@ -4478,14 +4482,94 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
     void services.grainRepository.listLoadTrucks().then((rows) => { if (current) setTrucks(rows) }).catch(() => { if (current) setTrucks([]) });
     return () => { current = false };
   }, [services]);
-  const redraft = () => { loadId.current = null };
+  // LD-4 repair (Codex P1 on ba64007): ask the database what THIS bin holds, rather than deriving
+  // it from workspace.bin_transactions -- which loadWorkspace reads unbounded, so PostgREST's row
+  // cap can drop the oldest movements and an older still-active crop year with them. The browser
+  // would then see one lot where save_grain_load sees two, offer no choice, send no crop year, and
+  // the save would be refused with "pick which one this load came from" while the form shows no
+  // picker to answer with: a load the farmer simply cannot record.
+  //
+  // `undefined` means not asked yet or not answerable (offline, or the migration is not applied);
+  // the derivation below is the fallback for exactly those cases, and it is the right answer there
+  // because the pre-migration server reads the bin's baseline alone anyway.
+  // LD-4 repair (Codex P2 on b8d5087, found by a journey that would not go green against the bug):
+  // the answer is stored WITH the bin it is about, and with the refresh it was fetched for.
+  //
+  // It used to be two pieces of state -- the lots, and a status -- and they could disagree for a
+  // render. Selecting a different bin changed originBinId immediately, while the status still said
+  // 'ready' and the lots still belonged to the bin just left, because both are only corrected in an
+  // effect that runs after the render. In that window the form auto-selected a lot from ANOTHER
+  // BIN's list. That is the same defect this whole feature exists to prevent -- a lot chosen from a
+  // list that is not the bin's -- one layer up from the truncation it was built for.
+  //
+  // Keyed this way a stale answer cannot be read at all, rather than merely being corrected soon.
+  // The refresh count is part of the key for the same reason: after a save the list is known to be
+  // out of date, and 'ready' must not be true again until the new read lands.
+  const [lotRead, setLotRead] = useState<{ binId: string; refresh: number; lots: BinLotOnHand[] | null } | null>(null);
+  const [lotsRefresh, setLotsRefresh] = useState(0);
+  const originBinId = draft.origin_kind === "bin" ? draft.origin_grain_bin_id : "";
+  const lotsForThisBin = lotRead && lotRead.binId === originBinId && lotRead.refresh === lotsRefresh ? lotRead : null;
+  const lotsState: 'idle' | 'loading' | 'ready' | 'unavailable' = !originBinId ? 'idle'
+    : !lotsForThisBin ? 'loading'
+    : lotsForThisBin.lots ? 'ready' : 'unavailable';
+  const authoritativeLots = lotsForThisBin?.lots ?? undefined;
+  const lotsUnavailable = lotsState === 'unavailable';
+  useEffect(() => {
+    if (!originBinId) return;
+    let current = true;
+    const forBin = originBinId;
+    const forRefresh = lotsRefresh;
+    void services.grainRepository.listBinLots(forBin)
+      // Null is "the database could not say" -- the function is not installed, or there is no
+      // signal. Either way it is not an empty bin, and it must not be read as one.
+      .then((lots) => { if (current) setLotRead({ binId: forBin, refresh: forRefresh, lots }) })
+      .catch(() => { if (current) setLotRead({ binId: forBin, refresh: forRefresh, lots: null }) });
+    return () => { current = false };
+  }, [services, originBinId, lotsRefresh]);
+  // LD-4 repair (Codex P1 on bba6b10): while a ticket id is outstanding -- a save whose outcome is
+  // unknown, which LD-1 keeps deliberately so a retry replays rather than duplicating -- THE LOT
+  // MUST NOT MOVE. Three separate mechanisms were free to change it: the post-attempt refresh, the
+  // effect that drops a vanished year, and the effect that fills in a lone one. Together they could
+  // retry the same ticket id under a different crop year, and save_grain_load would answer
+  // FARM_RX_LOAD_ID_REUSED -- refusing a load that was already recorded.
+  //
+  // The list still refreshes, because the picker should show the truth. What is frozen is the
+  // DRAFT'S CHOICE, which is what the outstanding ticket was sent with. A ref cannot be watched by
+  // an effect, so it is mirrored here.
+  const [ticketOutstanding, setTicketOutstanding] = useState(false);
+  const redraft = () => { loadId.current = null; setTicketOutstanding(false) };
   // The effect flags are a preference and deliberately survive a change of shape: a box the farmer
   // never touched keeps its default, and one they unticked stays unticked. What a load will
   // actually do is narrowed once, where it is sent.
   const update = (patch: Partial<GrainLoadDraft>) => { redraft(); setDraft((current) => ({ ...current, ...patch })) };
 
-  const lot = loadLotFor(workspace, draft);
-  const problems = validateGrainLoad(draft, workspace);
+  const effectsReady = workspace.capabilities?.grain_load_effects !== false;
+  const binLotReady = workspace.capabilities?.grain_load_bin_lot !== false;
+  const recordedLots = draft.origin_kind === "bin" && binLotReady
+    ? (authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id))
+    : [];
+  // What the bin can actually give up today. Defaulting uses only these, exactly as the server
+  // does: a lot at zero is a real lot with nothing left in it, and is no answer to "which year".
+  const onHandLots = recordedLots.filter((binLot) => binLot.bushels > 0.000001);
+  // LD-4 repair (Codex P2 on 46d5252): what a farmer may NAME is a wider list than what the form
+  // may default to. A load that moves no bushels is a record of something that already happened,
+  // so an emptied lot is a legitimate answer for it, and save_grain_load accepts one. A load that
+  // does move bushels would be refused by the bin, so those years are not offered at all.
+  const movesBushels = effectsReady && draft.origin_kind === "bin" && draft.effect_bin_out;
+  const originLots = movesBushels ? onHandLots : recordedLots;
+  // The same split decides the lot itself: a year the farmer named is resolved against everything
+  // the bin has a record of, and a year nobody named is defaulted from whatever this load could
+  // legitimately have been offered.
+  //
+  // LD-4 repair (Codex P2 on 2e7e6d4): that second list is originLots, not onHandLots. A bin whose
+  // only record is an emptied lot shows one line rather than a picker -- correctly, there is
+  // nothing to choose between -- and defaulting against what the bin still HOLDS would then find
+  // nothing, so a ticket that moves no bushels was refused with no control on screen to answer
+  // with. Defaulting against the same list the form offered keeps the two in step: when the load
+  // moves bushels, originLots is onHandLots and nothing changes.
+  const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : originLots;
+  const lot = loadLotFor(workspace, draft, binLotReady ? lotsForResolution : undefined);
+  const problems = validateGrainLoad(draft, workspace, binLotReady ? lotsForResolution : undefined);
   const cropAssignments = workspace.fields.crop_assignments;
   const commodityLabel = (id: string) => workspace.fields.commodities.find((item) => item.id === id)?.name ?? id;
   const binName = (id: string | null) => workspace.grain_bins.find((bin) => bin.id === id)?.name ?? "a bin";
@@ -4502,7 +4586,57 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // LD-2: the effects this load's shape can reach, and the ones the farmer has actually ticked.
   // While the migration is not applied the columns do not exist, so no effect is offered at all --
   // ticking one would produce a database error rather than a moved bushel.
-  const effectsReady = workspace.capabilities?.grain_load_effects !== false;
+  // LD-4: the lots this bin actually holds. While the migration is not applied the installed RPC
+  // still reads the bin's baseline alone, so no choice is offered -- offering one would let a
+  // farmer pick a year and be refused on save, which is LD-006 finding 1 with the roles reversed.
+
+  // LD-4 repair (Codex P1 on 1b441f6): when the bin offers exactly one lot the form shows it as a
+  // sentence and asks nothing -- and used to send nothing, leaving the server to work the lot out
+  // again at save time. Between the read and the save another device can empty that lot and add a
+  // different one, and the server would then resolve to the NEW sole lot: the ticket records a crop
+  // the screen never named, with no error and nothing to undo it.
+  //
+  // So the form now states what it showed. This is not the browser deciding the lot -- LD-1 was
+  // right that it must not -- it is the browser asserting what the farmer was looking at, exactly
+  // as a contract edit sends the updated_at it was shown. The server still decides: it refuses a
+  // lot the bin has no record of, and append_bin_movement still refuses to draw bushels that are
+  // not there. A stale expectation becomes a loud refusal instead of a quiet wrong ticket.
+  // Only from a SETTLED list. While the read is in flight originLots falls back to the workspace
+  // derivation -- the truncated list this whole repair exists to stop trusting -- and a bin that
+  // really holds two lots can look like one for those few hundred milliseconds. Filling the draft
+  // from that would silently answer a question the farmer was about to be asked. Caught by the
+  // browser journey, not by reading: the picker still appeared, but with a choice already made.
+  useEffect(() => {
+    if (!binLotReady || lotsState !== 'ready' || ticketOutstanding) return;
+    if (draft.origin_crop_year.trim() || originLots.length !== 1) return;
+    const only = originLots[0]!;
+    setDraft((current) => ({ ...current, origin_crop_year: String(only.crop_year), origin_commodity_id: only.commodity_id }));
+  }, [binLotReady, lotsState, ticketOutstanding, draft.origin_crop_year, originLots]);
+
+  // LD-4 repair (Codex P2 on da028bf): the form keeps the origin and the chosen crop year for the
+  // next ticket, and a save can empty the lot that year names. The picker then drops to one lot and
+  // stops rendering, while the draft still holds the emptied year -- so validation refuses every
+  // further save and the control that could fix it is no longer on screen. Dropping a year the bin
+  // no longer offers puts the form back in a state the farmer can actually act on.
+  //
+  // LD-4 repair (Codex P2 on a05ee47): and an EMPTY list is the case that matters most, not the one
+  // to skip. Hauling the last bushels out of a one-lot bin leaves originLots empty, the screen
+  // saying the bin holds no crop year, and the draft still naming the year it just emptied -- which
+  // resolves against the recorded list, passes validation, and reaches the RPC only to come back
+  // FR001, with no picker on screen to repair it. The early return on length 0 was the hole.
+  //
+  // It was there to stop a transient empty list from wiping a real choice, and that danger is real:
+  // every refresh clears authoritativeLots first, so the fallback derivation -- the truncated one --
+  // stands in for a moment. The answer is the gate its twin already had. Waiting for a SETTLED list
+  // makes an empty one mean what it says, and the two effects now read the same list under the same
+  // condition instead of one trusting it and the other guessing around it.
+  useEffect(() => {
+    if (!binLotReady || lotsState !== 'ready' || ticketOutstanding) return;
+    if (!draft.origin_crop_year.trim()) return;
+    if (originLots.some((binLot) => String(binLot.crop_year) === draft.origin_crop_year.trim()
+      && (!draft.origin_commodity_id || binLot.commodity_id === draft.origin_commodity_id))) return;
+    setDraft((current) => ({ ...current, origin_crop_year: "", origin_commodity_id: "" }));
+  }, [binLotReady, lotsState, ticketOutstanding, draft.origin_crop_year, draft.origin_commodity_id, originLots]);
   const availableEffects = effectsReady ? loadEffectsAvailable(draft) : [];
   const confirmedEffects = confirmedLoadEffects(draft);
   const typedNet = Number(draft.net_bushels);
@@ -4526,27 +4660,88 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
     try {
       // These speak to the farmer directly about the form in front of them. Routing them through the
       // error taxonomy would turn "pick the bin" into "Farm Rx could not record this load right now".
+      // LD-4 repair: the capability says the server reads lots, but this bin's lots could not be
+      // read. Falling back to the workspace derivation here would be the guess that causes the
+      // defect -- a short movement list looks exactly like a one-lot bin. Fail closed instead.
+      if (binLotReady && originBinId && lotsState !== 'ready') {
+        setMessage(lotsState === 'loading'
+          ? "Still reading what this bin holds. Try again in a moment."
+          : "Farm Rx could not read what this bin holds. Check your signal and try again.");
+        return;
+      }
       if (problems.length) { setMessage(problems[0]); return }
       setSaving(true);
       loadId.current ??= services.createGrainId();
+      setTicketOutstanding(true);
       // The effect flags are a preference that survives a change of shape, and they default to
       // ticked. While the migration is not applied this page shows no effects at all and says the
       // save records only the ticket -- but the flags are still true underneath. If the migration
       // lands while this page stays open, the very next save would reach the new RPC and perform
       // bin, contract and harvest effects the farmer was never shown. What the screen says it will
       // do is what gets sent, so the flags are cleared here rather than trusted.
-      const outgoing = effectsReady
+      const outgoing0 = effectsReady
         ? draft
         : { ...draft, effect_bin_out: false, effect_bin_in: false, effect_contract_delivery: false, effect_harvest: false };
+      // LD-4, for the same reason as the line above: while the capability is false the form shows no
+      // crop year choice, so it must send none either. A stale value surviving in the draft would
+      // reach an RPC that reads the baseline alone and be refused.
+      // LD-4 repair (Codex P2 on 85074fb): the lot that goes on the wire is the one THIS RENDER
+      // resolved, taken straight from `lot` rather than from a draft field an effect has to fill in
+      // afterwards.
+      //
+      // "The form states the lot it showed" was already the rule, but it was implemented by an
+      // effect that runs after the render commits -- so between the read landing and that effect
+      // flushing, the screen said "this bin holds one crop year" while Save was enabled and the
+      // payload still carried nothing. Saving in that window let the server default instead: to a
+      // replacement lot if another device had swapped it, recording a crop the screen never named,
+      // or to nothing at all for a lone emptied lot, refusing a ticket the screen was offering.
+      //
+      // `lot` is what loadLotFor resolved from the same list the screen rendered, so this cannot
+      // disagree with what the farmer was looking at, and it no longer depends on effect timing.
+      const outgoing = !binLotReady
+        ? { ...outgoing0, origin_crop_year: "", origin_commodity_id: "" }
+        : draft.origin_kind === "bin" && lot
+          ? { ...outgoing0, origin_crop_year: String(lot.crop_year), origin_commodity_id: lot.commodity_id }
+          : outgoing0;
       const saved = await services.grainRepository.saveLoad(loadId.current, outgoing);
       loadId.current = null;
+      setTicketOutstanding(false);
       // The next ticket almost always shares the date, the truck and the origin -- a farmer hauling
       // out of one bin all afternoon should not retype them. The weights, moisture and ticket number
       // are what change per load, so only those are cleared.
       setDraft((current) => ({ ...current, gross_lbs: "", tare_lbs: "", net_bushels: "", moisture_pct: "", ticket_number: "", notes: "" }));
       setMessage(`Load saved: ${saved.net_bushels.toLocaleString()} bu of ${commodityLabel(saved.commodity_id)}, ${saved.crop_year} crop.`);
       await onSaved();
-    } catch (error) { setMessage(farmerError(error, "record this load")) } finally { lock.current.release(); setSaving(false) }
+    } catch (error) {
+      // LD-4 repair (Codex P2 on c6790ca): a DEFINITIVE refusal rolled the transaction back, so no
+      // ticket exists and the lot must be free to move again. Leaving it frozen after, say, an
+      // FR001 stranded the farmer: the refresh below shows the lot that replaced theirs, the
+      // auto-select and clear-vanished effects stay disabled, and every retry resubmits the stale
+      // one until they switch bins. The freeze is only ever right while the outcome is UNKNOWN.
+      //
+      // isTransportFailure is the codebase's existing answer to exactly this question -- it is what
+      // decides "confirmation needed" from "needs attention" on a bin movement or a delivery. A
+      // second classifier here would be a second thing to keep in step, which is the mistake this
+      // tranche has now made twice. Offline counts as unknown: the queued repository refuses before
+      // sending, so nothing was committed, but the lot has nowhere to go until the signal is back.
+      if (!isTransportFailure(error, typeof navigator !== 'undefined' && navigator.onLine === false)) {
+        loadId.current = null;
+        setTicketOutstanding(false);
+      }
+      setMessage(farmerError(error, "record this load"));
+    } finally {
+      // LD-4 repair (Codex P2 on f4b614d): read the bin's lots again after ANY attempt, not only
+      // after one that worked. A save refused because another truck changed the bin is exactly the
+      // moment the form's list is known to be wrong, and refreshing only on success left the
+      // farmer retrying against the same stale list until they switched bins or reloaded.
+      //
+      // Three findings on this tranche were the same asymmetry -- refresh after a save, then also
+      // after a void, then also after a failure. One line covering every outcome replaces all
+      // three, because the rule was never "after a success": it is "after touching this bin".
+      if (originBinId) setLotsRefresh((count) => count + 1);
+      lock.current.release();
+      setSaving(false);
+    }
   };
 
   const voidLoad = async (load: GrainLoad) => {
@@ -4581,7 +4776,21 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       }
       setMessage("Load voided. It stays on the list with your reason, and everything it did has been reversed.");
       await onSaved();
-    } catch (error) { setMessage(farmerError(error, "void this load")) } finally { lock.current.release(); setSaving(false) }
+    } catch (error) {
+      setMessage(farmerError(error, "void this load"));
+    } finally {
+      // LD-4 repair (Codex P2 on 46d5252, corrected on c231a00): a void writes compensating
+      // movements, so a lot the voided load had emptied is holding grain again -- and onSaved
+      // refreshes the workspace but not this read, whose answer wins over it.
+      //
+      // After ANY attempt, not just a successful one. A BLOCKED void returns early, and a blocked
+      // void is precisely the case where later movements changed the bins: the one outcome that
+      // most needs a fresh list was the one that skipped it. This is the same success-only
+      // asymmetry the save path had, fixed the same way rather than patched a second time.
+      setLotsRefresh((count) => count + 1);
+      lock.current.release();
+      setSaving(false);
+    }
   };
 
   if (!available) {
@@ -4608,13 +4817,46 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
 
         <fieldset className="load-origin">
           <legend>Where it came from</legend>
-          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "bin"} onChange={() => update({ origin_kind: "bin", origin_crop_assignment_id: "" })} /> Out of a bin</label>
-          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "field"} onChange={() => update({ origin_kind: "field", origin_grain_bin_id: "" })} /> Off a field</label>
+          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "bin"} onChange={() => update({ origin_kind: "bin", origin_crop_assignment_id: "", origin_crop_year: "", origin_commodity_id: "" })} /> Out of a bin</label>
+          <label><input type="radio" name="load-origin" checked={draft.origin_kind === "field"} onChange={() => update({ origin_kind: "field", origin_grain_bin_id: "", origin_crop_year: "", origin_commodity_id: "" })} /> Off a field</label>
           {draft.origin_kind === "bin" ? (
-            <label>Bin<select value={draft.origin_grain_bin_id} onChange={(event) => update({ origin_grain_bin_id: event.target.value })}>
-              <option value="">Pick a bin</option>
-              {workspace.grain_bins.map((bin) => <option key={bin.id} value={bin.id}>{bin.name}</option>)}
-            </select></label>
+            <>
+              {/* A year chosen for one bin means nothing in another, so picking a bin clears it. */}
+              <label>Bin<select value={draft.origin_grain_bin_id} onChange={(event) => update({ origin_grain_bin_id: event.target.value, origin_crop_year: "", origin_commodity_id: "" })}>
+                <option value="">Pick a bin</option>
+                {workspace.grain_bins.map((bin) => <option key={bin.id} value={bin.id}>{bin.name}</option>)}
+              </select></label>
+              {/* LD-4: the amendment's rule, on screen. A bin holding one lot answers for itself and
+                  the farmer taps nothing; a bin holding several asks, because guessing between a
+                  carry-over lot and this year's crop is the defect the whole initiative exists to
+                  stop. The bushels beside each year are what that lot holds, so the choice is made
+                  against the bin rather than from memory. */}
+              {binLotReady && draft.origin_grain_bin_id && lotsUnavailable ? (
+                <p className="load-lot">Farm Rx could not read what this bin holds right now, so it cannot say which crop year this load is.</p>
+              ) : binLotReady && draft.origin_grain_bin_id ? (
+                originLots.length === 0 ? (
+                  <p className="load-lot">This bin holds no crop with a crop year, so a load cannot say which crop year it is yet.</p>
+                ) : originLots.length === 1 ? (
+                  <p className="load-lot">This bin holds one crop year: <strong>{originLots[0].crop_year} {commodityLabel(originLots[0].commodity_id)}</strong>, {Math.round(originLots[0].bushels).toLocaleString()} bu.</p>
+                ) : (
+                  <label>Crop year<select
+                    value={draft.origin_crop_year ? `${draft.origin_commodity_id}:${draft.origin_crop_year}` : ""}
+                    onChange={(event) => {
+                      // LD-4 repair: the value is the whole lot, not half of it. A bin can have a
+                      // record of 2025 soybeans and 2025 corn, so a year on its own names neither.
+                      const [commodity, year] = event.target.value.split(":");
+                      update({ origin_commodity_id: commodity ?? "", origin_crop_year: year ?? "" });
+                    }}>
+                    <option value="">Pick which crop year</option>
+                    {originLots.map((binLot) => (
+                      <option key={`${binLot.commodity_id}:${binLot.crop_year}`} value={`${binLot.commodity_id}:${binLot.crop_year}`}>
+                        {binLot.crop_year} {commodityLabel(binLot.commodity_id)} &middot; {Math.round(binLot.bushels).toLocaleString()} bu
+                      </option>
+                    ))}
+                  </select></label>
+                )
+              ) : null}
+            </>
           ) : (
             <label>Field crop<select value={draft.origin_crop_assignment_id} onChange={(event) => update({ origin_crop_assignment_id: event.target.value })}>
               <option value="">Pick a field crop</option>
