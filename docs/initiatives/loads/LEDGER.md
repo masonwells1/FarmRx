@@ -1223,6 +1223,55 @@ Worth recording, because each one is the system working:
 That fourth one is the same mistake as round 16's, made again one round later, and caught only
 because reverting the repair is now a step rather than an afterthought.
 
+### An eighteenth round: the rule was right, the mechanism was a render late
+
+One P2, and it is a good one. **"The form states the lot it showed"** has been the rule since round
+"a bin holding a single lot sends nothing and lets the server decide" was found to be wrong. But it
+was implemented by an *effect* that writes the resolved year into the draft, and an effect runs
+after its render commits.
+
+So between the authoritative read landing and that effect flushing, the screen said *"this bin holds
+one crop year: 2026 Corn"*, Save was enabled, and the payload still carried **nothing**. A farmer
+saving in that window let the server default instead:
+
+- to a **replacement lot**, if another device had swapped it before the RPC took its bin lock --
+  recording a crop the screen never named, which is the silent guess this initiative exists to stop;
+- or to **nothing at all** for a lone emptied lot, refusing a ticket the screen was offering, since
+  the server defaults only from lots with bushels in them.
+
+The fix puts the lot on the wire from the render that resolved it. `lot` is already computed during
+render by `loadLotFor`, from the same list the screen drew, so the payload cannot disagree with what
+the farmer was looking at and no longer depends on effect timing at all. The effect still fills the
+picker in; it is simply no longer load-bearing.
+
+#### Proved by deleting the effect
+
+The proof is the shape of the claim: **disable the auto-fill effect entirely and the payload must
+still carry the lot.**
+
+- With the effect disabled and the OLD payload: the two-crop-year journey fails on
+  `expect(next.crop_year).toBe(2025)` with **`Received: undefined`** -- the payload carried no lot,
+  exactly as the finding says.
+- With the effect disabled and the new payload: the journey passes.
+
+That is the race made deterministic. The window itself is a few milliseconds and could not be
+reproduced honestly in a browser; removing the thing the payload used to depend on tests the same
+property without pretending to time it.
+
+### Proof observed for round 18
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
+  `git diff --check` clean.
+- **Eleven disposable SQL suites pass together.**
+- Static guards PASS; **mutation drill 384/384**. One added for the synchronous payload; one
+  existing mutation rewritten, because it pinned the old expression and would otherwise have failed
+  to apply rather than failing to detect.
+- **Browser: 128 passed, 15 skipped**, plus one rerun. The phone journey "two tabs append
+  notification work" failed once and passed on rerun -- the notification-queue flake recorded
+  earlier in this initiative, not Grain, and not the Soil Rx one.
+- **All regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
+
 ### Proof observed for round 17
 
 - `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;

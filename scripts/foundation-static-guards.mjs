@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 383')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 384')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -944,7 +944,12 @@ export function foundationStaticGuard(root = process.cwd()) {
     // them quietly stops asking. The mutation drill caught that too.
     if ((grainData.split("workspace.capabilities?.grain_load_bin_lot === false").length - 1) !== 2) errors.push('ld4:the-lot-choice-waits-for-the-migration')
     requireText(errors, grainModule, "workspace.capabilities?.grain_load_bin_lot !== false", 'ld4:the-lot-choice-waits-for-the-migration')
-    requireText(errors, grainModule, 'binLotReady ? outgoing0 : { ...outgoing0, origin_crop_year: "", origin_commodity_id: "" }', 'ld4:a-hidden-lot-choice-is-never-sent')
+    requireText(errors, grainModule, '!binLotReady\n        ? { ...outgoing0, origin_crop_year: "", origin_commodity_id: "" }', 'ld4:a-hidden-lot-choice-is-never-sent')
+    // And when the capability IS there, the lot on the wire is the one this render resolved, not a
+    // draft field an effect fills in after the render commits. Between the read landing and that
+    // effect flushing the screen named a lot while the payload carried none, and the server
+    // defaulted -- which is the silent guess this whole initiative exists to stop.
+    requireText(errors, grainModule, 'draft.origin_kind === "bin" && lot\n          ? { ...outgoing0, origin_crop_year: String(lot.crop_year), origin_commodity_id: lot.commodity_id }', 'ld4:the-form-states-the-lot-it-showed')
     requireText(errors, read(root, 'src/data/SupabaseGrainDataGateway.ts'), "supabase.rpc('bin_lots'", 'ld4:the-lot-choice-waits-for-the-migration')
 
     // The balance question stays in append_bin_movement, under a row lock. save_grain_load asking

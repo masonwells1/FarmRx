@@ -4685,7 +4685,24 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       // LD-4, for the same reason as the line above: while the capability is false the form shows no
       // crop year choice, so it must send none either. A stale value surviving in the draft would
       // reach an RPC that reads the baseline alone and be refused.
-      const outgoing = binLotReady ? outgoing0 : { ...outgoing0, origin_crop_year: "", origin_commodity_id: "" };
+      // LD-4 repair (Codex P2 on 85074fb): the lot that goes on the wire is the one THIS RENDER
+      // resolved, taken straight from `lot` rather than from a draft field an effect has to fill in
+      // afterwards.
+      //
+      // "The form states the lot it showed" was already the rule, but it was implemented by an
+      // effect that runs after the render commits -- so between the read landing and that effect
+      // flushing, the screen said "this bin holds one crop year" while Save was enabled and the
+      // payload still carried nothing. Saving in that window let the server default instead: to a
+      // replacement lot if another device had swapped it, recording a crop the screen never named,
+      // or to nothing at all for a lone emptied lot, refusing a ticket the screen was offering.
+      //
+      // `lot` is what loadLotFor resolved from the same list the screen rendered, so this cannot
+      // disagree with what the farmer was looking at, and it no longer depends on effect timing.
+      const outgoing = !binLotReady
+        ? { ...outgoing0, origin_crop_year: "", origin_commodity_id: "" }
+        : draft.origin_kind === "bin" && lot
+          ? { ...outgoing0, origin_crop_year: String(lot.crop_year), origin_commodity_id: lot.commodity_id }
+          : outgoing0;
       const saved = await services.grainRepository.saveLoad(loadId.current, outgoing);
       loadId.current = null;
       setTicketOutstanding(false);

@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 383
+const expectedMutationCount = 384
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -996,7 +996,7 @@ try {
   mutate('src/data/committedFree.ts', (source) => source.replace("lot.crop_year !== null && lot.bushels > 0.000001", "lot.bushels > 0.000001"))
   detected('bushels with no crop year are offered as a crop year', 'ld4:the-unstamped-bucket-is-never-a-crop-year')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('binLotReady ? outgoing0 : { ...outgoing0, origin_crop_year: "", origin_commodity_id: "" }', 'outgoing0'))
+  mutate('src/GrainModule.tsx', (source) => source.replace('? { ...outgoing0, origin_crop_year: "", origin_commodity_id: "" }\n        : draft.origin_kind === "bin"', '? outgoing0\n        : draft.origin_kind === "bin"'))
   detected('a page left open across the migration sends a crop year the installed save cannot honour', 'ld4:a-hidden-lot-choice-is-never-sent')
   reset()
   mutate('src/data/grain.ts', (source) => source.replace("if (workspace.capabilities?.grain_load_bin_lot === false) {", "if (false) {"))
@@ -1138,6 +1138,9 @@ try {
   reset()
   mutate('tests/e2e/foundation-shell.spec.ts', (source) => source.replace("if (blockers.length) { await fulfillJson(route, { status: 'blocked', load: target, blocked_by: blockers }); return }", ''))
   detected('the void fixture can only ever answer voided, so the blocked branch is unreachable in every journey', 'ld4:the-browser-fixture-answers-like-the-database')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace("      const outgoing = !binLotReady\n        ? { ...outgoing0, origin_crop_year: \"\", origin_commodity_id: \"\" }\n        : draft.origin_kind === \"bin\" && lot\n          ? { ...outgoing0, origin_crop_year: String(lot.crop_year), origin_commodity_id: lot.commodity_id }\n          : outgoing0;", "      const outgoing = binLotReady ? outgoing0 : { ...outgoing0, origin_crop_year: \"\", origin_commodity_id: \"\" };"))
+  detected('the lot on the wire comes from a draft field an effect fills in after the render, so a save in that window sends none and lets the server guess', 'ld4:the-form-states-the-lot-it-showed')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace("    if (!draft.origin_crop_year.trim()) return;\n", "    if (!draft.origin_crop_year.trim() || originLots.length === 0) return;\n"))
   detected('hauling a one-lot bin dry keeps the year it emptied, so every later ticket is refused by the server with no picker to fix it', 'ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')
