@@ -369,7 +369,19 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
       if (url.pathname.endsWith('save_grain_load')) {
         const draft = value.p_load as Record<string, unknown>
         // The server derives the lot; the fixture answers with one the browser never sent.
-        const saved = { id: draft.id, farm_id: value.p_farm_id, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id ?? null, truck_name: draft.truck_name ?? null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_grain_bin_id ?? null, origin_crop_assignment_id: draft.origin_crop_assignment_id ?? null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_buyer ?? null, destination_grain_contract_id: draft.destination_grain_contract_id ?? null, destination_grain_bin_id: draft.destination_grain_bin_id ?? null, commodity_id: commodityId, crop_year: 2026, gross_lbs: draft.gross_lbs ?? null, tare_lbs: draft.tare_lbs ?? null, net_bushels: draft.net_bushels, moisture_pct: draft.moisture_pct ?? null, ticket_number: draft.ticket_number ?? null, photo_path: null, notes: draft.notes ?? null, voided_at: null, void_reason: null, created_at: now, updated_at: now }
+        // LD-4: a confirmed bin-out really does take those bushels out of that lot, so a fixture
+        // that declares lots has to reflect it -- otherwise the next read hands the form balances
+        // the database would not agree with, and a test could pass against a bin that never empties.
+        const declaredLots = moduleRows.bin_lots as Record<string, unknown>[] | undefined
+        let savedYear = typeof draft.crop_year === 'number' ? draft.crop_year : 2026
+        if (declaredLots && draft.origin_kind === 'bin' && draft.effect_bin_out) {
+          const candidates = declaredLots.filter((lot) => lot.grain_bin_id === draft.origin_grain_bin_id && Number(lot.bushels) > 0)
+          const target = typeof draft.crop_year === 'number'
+            ? candidates.find((lot) => lot.crop_year === draft.crop_year)
+            : (candidates.length === 1 ? candidates[0] : undefined)
+          if (target) { savedYear = target.crop_year as number; target.bushels = Number(target.bushels) - Number(draft.net_bushels) }
+        }
+        const saved = { id: draft.id, farm_id: value.p_farm_id, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id ?? null, truck_name: draft.truck_name ?? null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_grain_bin_id ?? null, origin_crop_assignment_id: draft.origin_crop_assignment_id ?? null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_buyer ?? null, destination_grain_contract_id: draft.destination_grain_contract_id ?? null, destination_grain_bin_id: draft.destination_grain_bin_id ?? null, commodity_id: commodityId, crop_year: savedYear, gross_lbs: draft.gross_lbs ?? null, tare_lbs: draft.tare_lbs ?? null, net_bushels: draft.net_bushels, moisture_pct: draft.moisture_pct ?? null, ticket_number: draft.ticket_number ?? null, photo_path: null, notes: draft.notes ?? null, voided_at: null, void_reason: null, created_at: now, updated_at: now }
         await fulfillJson(route, saved); return
       }
       await fulfillJson(route, { status: 'voided', load: { ...(moduleRows.grain_loads?.[0] as Record<string, unknown> ?? {}), voided_at: now, void_reason: value.p_reason }, blocked_by: [] }); return
@@ -1097,7 +1109,19 @@ test('a direct signed-in A to B replacement hides Farm A before B access validat
       if (url.pathname.endsWith('save_grain_load')) {
         const draft = value.p_load as Record<string, unknown>
         // The server derives the lot; the fixture answers with one the browser never sent.
-        const saved = { id: draft.id, farm_id: value.p_farm_id, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id ?? null, truck_name: draft.truck_name ?? null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_grain_bin_id ?? null, origin_crop_assignment_id: draft.origin_crop_assignment_id ?? null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_buyer ?? null, destination_grain_contract_id: draft.destination_grain_contract_id ?? null, destination_grain_bin_id: draft.destination_grain_bin_id ?? null, commodity_id: commodityId, crop_year: 2026, gross_lbs: draft.gross_lbs ?? null, tare_lbs: draft.tare_lbs ?? null, net_bushels: draft.net_bushels, moisture_pct: draft.moisture_pct ?? null, ticket_number: draft.ticket_number ?? null, photo_path: null, notes: draft.notes ?? null, voided_at: null, void_reason: null, created_at: now, updated_at: now }
+        // LD-4: a confirmed bin-out really does take those bushels out of that lot, so a fixture
+        // that declares lots has to reflect it -- otherwise the next read hands the form balances
+        // the database would not agree with, and a test could pass against a bin that never empties.
+        const declaredLots = moduleRows.bin_lots as Record<string, unknown>[] | undefined
+        let savedYear = typeof draft.crop_year === 'number' ? draft.crop_year : 2026
+        if (declaredLots && draft.origin_kind === 'bin' && draft.effect_bin_out) {
+          const candidates = declaredLots.filter((lot) => lot.grain_bin_id === draft.origin_grain_bin_id && Number(lot.bushels) > 0)
+          const target = typeof draft.crop_year === 'number'
+            ? candidates.find((lot) => lot.crop_year === draft.crop_year)
+            : (candidates.length === 1 ? candidates[0] : undefined)
+          if (target) { savedYear = target.crop_year as number; target.bushels = Number(target.bushels) - Number(draft.net_bushels) }
+        }
+        const saved = { id: draft.id, farm_id: value.p_farm_id, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id ?? null, truck_name: draft.truck_name ?? null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_grain_bin_id ?? null, origin_crop_assignment_id: draft.origin_crop_assignment_id ?? null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_buyer ?? null, destination_grain_contract_id: draft.destination_grain_contract_id ?? null, destination_grain_bin_id: draft.destination_grain_bin_id ?? null, commodity_id: commodityId, crop_year: savedYear, gross_lbs: draft.gross_lbs ?? null, tare_lbs: draft.tare_lbs ?? null, net_bushels: draft.net_bushels, moisture_pct: draft.moisture_pct ?? null, ticket_number: draft.ticket_number ?? null, photo_path: null, notes: draft.notes ?? null, voided_at: null, void_reason: null, created_at: now, updated_at: now }
         await fulfillJson(route, saved); return
       }
       await fulfillJson(route, { status: 'voided', load: { ...(moduleRows.grain_loads?.[0] as Record<string, unknown> ?? {}), voided_at: now, void_reason: value.p_reason }, blocked_by: [] }); return
@@ -1828,7 +1852,7 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
   // else the form needs is filled first, so the unanswered crop year is the only thing left to
   // complain about and the message below is provably about it.
   await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('1000')
+  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('4000')
   await page.getByRole('button', { name: 'Save load' }).click()
   await expect(page.getByText('That bin holds more than one crop year')).toBeVisible()
   expect(loadRecordCalls.length).toBe(0)
@@ -1844,6 +1868,24 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
   // holding a single lot still sends nothing at all and lets the server decide, as LD-1 required.
   expect(sent.crop_year).toBe(2026)
   expect('commodity_id' in sent).toBe(false)
+
+  // LD-4 repair (Codex P2 on da028bf): that save emptied the 2026 lot. The form keeps the origin
+  // and the chosen year for the next ticket, so without the repair it would sit on an emptied 2026
+  // while the picker -- now down to one lot -- stops rendering: every further save refused, and no
+  // control on screen to fix it. The bin now holds only 2025, and the form has to notice.
+  // The save took all 4,000 bushels of the 2026 lot, so the bin now holds only 2025 -- and the
+  // mock's own save did that, rather than the test reaching in to arrange it.
+  await expect(page.getByText('This bin holds one crop year')).toContainText('2025')
+  await expect(page.getByText('That bin does not hold the 2026 crop')).toHaveCount(0)
+
+  // And the next ticket saves, which is the thing the farmer could not do.
+  loadRecordCalls.length = 0
+  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('250')
+  await page.getByRole('button', { name: 'Save load' }).click()
+  await expect.poll(() => loadRecordCalls.length).toBe(1)
+  const next = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
+  // One lot left, so the form asks nothing and lets the server settle it, exactly as LD-1 required.
+  expect('crop_year' in next).toBe(false)
   expect(unexpected).toEqual([])
 })
 

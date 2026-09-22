@@ -4492,6 +4492,9 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // because the pre-migration server reads the bin's baseline alone anyway.
   const [authoritativeLots, setAuthoritativeLots] = useState<BinLotOnHand[] | undefined>(undefined);
   const [lotsUnavailable, setLotsUnavailable] = useState(false);
+  // A save changes what the bin holds, and the form keeps the origin for the next ticket -- so the
+  // lots have to be read again afterwards or the next load is picked against stale balances.
+  const [lotsRefresh, setLotsRefresh] = useState(0);
   const originBinId = draft.origin_kind === "bin" ? draft.origin_grain_bin_id : "";
   useEffect(() => {
     setAuthoritativeLots(undefined);
@@ -4502,7 +4505,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       .then((lots) => { if (!current) return; if (lots) setAuthoritativeLots(lots); })
       .catch(() => { if (current) setLotsUnavailable(true) });
     return () => { current = false };
-  }, [services, originBinId]);
+  }, [services, originBinId, lotsRefresh]);
   const redraft = () => { loadId.current = null };
   // The effect flags are a preference and deliberately survive a change of shape: a box the farmer
   // never touched keeps its default, and one they unticked stays unticked. What a load will
@@ -4535,6 +4538,17 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   const originLots = draft.origin_kind === "bin" && binLotReady
     ? (authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id))
     : [];
+
+  // LD-4 repair (Codex P2 on da028bf): the form keeps the origin and the chosen crop year for the
+  // next ticket, and a save can empty the lot that year names. The picker then drops to one lot and
+  // stops rendering, while the draft still holds the emptied year -- so validation refuses every
+  // further save and the control that could fix it is no longer on screen. Dropping a year the bin
+  // no longer offers puts the form back in a state the farmer can actually act on.
+  useEffect(() => {
+    if (!draft.origin_crop_year.trim() || originLots.length === 0) return;
+    if (originLots.some((binLot) => String(binLot.crop_year) === draft.origin_crop_year.trim())) return;
+    setDraft((current) => ({ ...current, origin_crop_year: "" }));
+  }, [draft.origin_crop_year, originLots]);
   const availableEffects = effectsReady ? loadEffectsAvailable(draft) : [];
   const confirmedEffects = confirmedLoadEffects(draft);
   const typedNet = Number(draft.net_bushels);
@@ -4587,6 +4601,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       // out of one bin all afternoon should not retype them. The weights, moisture and ticket number
       // are what change per load, so only those are cleared.
       setDraft((current) => ({ ...current, gross_lbs: "", tare_lbs: "", net_bushels: "", moisture_pct: "", ticket_number: "", notes: "" }));
+      setLotsRefresh((count) => count + 1);
       setMessage(`Load saved: ${saved.net_bushels.toLocaleString()} bu of ${commodityLabel(saved.commodity_id)}, ${saved.crop_year} crop.`);
       await onSaved();
     } catch (error) { setMessage(farmerError(error, "record this load")) } finally { lock.current.release(); setSaving(false) }

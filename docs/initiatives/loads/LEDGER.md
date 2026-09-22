@@ -581,8 +581,8 @@ edit cannot quietly weaken it back.
   answering the balance question a second time.
 - **Nineteen browser regression groups** across two files — ten in `committedFree.regression.ts`,
   nine in the new `loadOriginLot.regression.ts`, the ninth covering the repair below.
-- Static guards PASS with **ten new LD-4 guards** (eight, plus two for the repair below);
-  **mutation drill 337/337** after merging the LD-3 repair and adding the two repair mutations,
+- Static guards PASS with **thirteen new LD-4 guards** (eight, plus five for the repairs below);
+  **mutation drill 340/340** after merging the LD-3 repair and adding five repair mutations,
   count changed in both files that pin it.
 - **Browser: 119 passed, 15 skipped** on desktop and phone, including a new LD-4 journey that reads
   both lots off the picker, is refused for not answering, and then proves the chosen year is what
@@ -650,6 +650,37 @@ one-lot bin are indistinguishable, and guessing between them is the defect.
 The browser journey was rewritten to prove it: its `bin_transactions` fixture is **deliberately
 empty** for the carry-over bin while `bin_lots` declares both lots. The picker can only get its two
 lots from the database. **Reverting the one-line change makes that journey fail.**
+
+### Two more, from the review of the merge commit
+
+Codex reviewed `da028bf` and found two more. Both are LD-4's own, and one is the more serious of
+everything found on this tranche.
+
+**A retry after a lost response stopped returning the ticket it had already saved.** (P1)
+
+LD-1 guaranteed that a retry is the same ticket, not a second one and not a failure. LD-4 broke it
+for exactly one case: **a one-lot bin hauled to exactly zero.** The first call commits the ticket
+and its bin-out. The retry then finds no lot with anything left in it and is refused at *"that bin
+holds no crop with a crop year"* — **seventy lines before the replay check it needed to reach.** The
+farmer is told the load failed when it is already recorded, and retrying again never helps.
+
+Before LD-4 this could not happen, because the bin's baseline row answered and movements never
+remove it. The fix adopts the stored ticket's lot when the caller named none. Nothing is taken on
+trust: the stored lot must still be one the bin has a record of, and the field-by-field replay
+comparison still decides same-ticket versus reused-id.
+
+**A crop year the save emptied was kept while the picker stopped offering it.** (P2)
+
+The form deliberately keeps the origin for the next ticket. If that save emptied the chosen lot, the
+picker drops to one lot and stops rendering — while the draft still holds the emptied year. Every
+further save is then refused, and **the control that could fix it is no longer on screen.** A year
+the bin no longer offers is now dropped, and the lots are read again after each save, because a save
+changes what the bin holds.
+
+**One mutation survives, and it is worth naming rather than hiding.** Removing `farm_id = p_farm_id`
+from the replay lookup changes nothing observable: the replay comparison's first condition is
+already `v_existing.farm_id = p_farm_id`, so a cross-farm id is refused either way. The filter is
+defence in depth, not the thing that holds the rule, and no honest assertion can distinguish it.
 
 ### Live steps
 

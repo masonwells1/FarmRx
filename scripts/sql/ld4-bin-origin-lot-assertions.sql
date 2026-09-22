@@ -367,6 +367,109 @@ begin
   end if;
 end $$;
 
+-- ------------------------------------------------- 10b. a retry still returns the same ticket
+-- LD-1's guarantee: a retry after a lost response is the SAME ticket, not a second one, and not a
+-- failure. LD-4 broke it for exactly one case and this pins the repair. A one-lot bin hauled to
+-- exactly zero has no lot left holding anything, so the retry used to be refused at "that bin
+-- holds no crop with a crop year" -- seventy lines before the replay check it needed to reach.
+-- The farmer would be told the load failed when it was already recorded.
+do $$
+declare v_first public.grain_loads%rowtype; v_again jsonb; v_movements integer;
+begin
+  -- The never-measured bin holds 2026 corn: 2,000 in, 700 hauled in section 6 and 100 in section
+  -- 10, so 1,200 empties the lot exactly. Its unstamped 400 bushels stay where they are: they are
+  -- in no lot, so they cannot keep a crop year alive.
+  perform public.save_grain_load('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+    'id','00000000-0000-4000-8000-000000000459','load_date','2026-11-14',
+    'origin_kind','bin','origin_grain_bin_id','00000000-0000-4000-8000-000000000421',
+    'destination_kind','buyer','destination_buyer','LD4 Elevator','net_bushels',1200,
+    'effect_bin_out',true));
+  select * into v_first from public.grain_loads where id = '00000000-0000-4000-8000-000000000459';
+  if v_first.crop_year <> 2026 then
+    raise exception 'the first attempt stamped the % crop, expected 2026', v_first.crop_year;
+  end if;
+  if (select coalesce(sum(bushels),0) from public.bin_lots('00000000-0000-4000-8000-000000000410','00000000-0000-4000-8000-000000000421') where crop_year is not null and bushels > 0.000001) <> 0 then
+    raise exception 'the fixture no longer empties the lot, so this proves nothing about the retry';
+  end if;
+
+  -- The response was lost. The same ticket id, the same details, and deliberately no crop year --
+  -- which is what the form sends for a bin it saw as holding a single lot.
+  v_again := public.save_grain_load('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+    'id','00000000-0000-4000-8000-000000000459','load_date','2026-11-14',
+    'origin_kind','bin','origin_grain_bin_id','00000000-0000-4000-8000-000000000421',
+    'destination_kind','buyer','destination_buyer','LD4 Elevator','net_bushels',1200,
+    'effect_bin_out',true));
+  if (v_again->>'id') <> '00000000-0000-4000-8000-000000000459' then
+    raise exception 'the retry returned a different ticket';
+  end if;
+  if (v_again->>'crop_year')::integer <> 2026 then
+    raise exception 'the retry returned the % crop, expected the stored 2026', (v_again->>'crop_year')::integer;
+  end if;
+
+  -- And it moved nothing a second time.
+  select count(*) into v_movements from public.bin_transactions
+   where grain_load_id = '00000000-0000-4000-8000-000000000459';
+  if v_movements <> 1 then
+    raise exception 'the retry left % movements behind, expected 1', v_movements;
+  end if;
+end $$;
+
+-- ------------------------------------------------- 10c. a reused id is still refused
+-- The replay adoption above must not become a way to overwrite a ticket. Same id, different load.
+do $$
+declare v_failed boolean := false;
+begin
+  begin
+    perform public.save_grain_load('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+      'id','00000000-0000-4000-8000-000000000459','load_date','2026-11-15',
+      'origin_kind','bin','origin_grain_bin_id','00000000-0000-4000-8000-000000000421',
+      'destination_kind','buyer','destination_buyer','LD4 Elevator','net_bushels',42,
+      'effect_bin_out',false));
+  exception when others then
+    v_failed := true;
+    if position('FARM_RX_LOAD_ID_REUSED' in sqlerrm) = 0 then
+      raise exception 'a reused id was refused, but for the wrong reason: %', sqlerrm;
+    end if;
+  end;
+  if not v_failed then
+    raise exception 'a different load reused a saved ticket id and was accepted';
+  end if;
+end $$;
+
+-- ------------------------------------------------- 10d. a retry naming a DIFFERENT lot is refused
+-- The sharp edge of the replay adoption above. It fills in the stored lot only when the caller
+-- named none; a caller who names a different one is asking for a different load and must be told
+-- the id is taken. Adopting the stored year unconditionally would look identical on every other
+-- test -- the rest of the ticket matches -- and would quietly return the wrong load. Both lots
+-- below are real lots of this bin, so the refusal can only come from the replay comparison.
+do $$
+declare v_failed boolean := false;
+begin
+  perform public.save_grain_load('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+    'id','00000000-0000-4000-8000-00000000045a','load_date','2026-11-16',
+    'origin_kind','bin','origin_grain_bin_id','00000000-0000-4000-8000-000000000420',
+    'crop_year',2025,
+    'destination_kind','buyer','destination_buyer','LD4 Elevator','net_bushels',100,
+    'effect_bin_out',true));
+
+  begin
+    perform public.save_grain_load('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+      'id','00000000-0000-4000-8000-00000000045a','load_date','2026-11-16',
+      'origin_kind','bin','origin_grain_bin_id','00000000-0000-4000-8000-000000000420',
+      'crop_year',2026,
+      'destination_kind','buyer','destination_buyer','LD4 Elevator','net_bushels',100,
+      'effect_bin_out',true));
+  exception when others then
+    v_failed := true;
+    if position('FARM_RX_LOAD_ID_REUSED' in sqlerrm) = 0 then
+      raise exception 'a retry naming another lot was refused, but for the wrong reason: %', sqlerrm;
+    end if;
+  end;
+  if not v_failed then
+    raise exception 'a retry naming a different crop year was answered with the stored ticket';
+  end if;
+end $$;
+
 -- ------------------------------------------------- 11. a field origin is untouched
 -- LD-4 changed one branch. The field branch still takes its lot from the crop assignment and still
 -- refuses a load that disagrees with it.

@@ -136,6 +136,8 @@ declare
   v_crop_year integer;
   v_lot_commodity text;
   v_on_hand_lots integer;
+  v_replay_year integer;
+  v_replay_commodity text;
   v_load_date date;
   v_gross numeric;
   v_tare numeric;
@@ -195,6 +197,26 @@ begin
   end if;
   if v_truck_equipment is not null and v_truck_name is not null then
     raise exception 'name the truck or pick one from equipment, not both';
+  end if;
+
+  -- LD-4 repair (Codex P1 on da028bf): a retry after a lost response has to return the ticket the
+  -- first attempt already committed. LD-1 guaranteed that and LD-4 broke it for one case -- a
+  -- one-lot bin hauled to exactly zero. The first call commits the ticket and its bin-out; the
+  -- retry then finds no lot with anything left in it and is refused at "that bin holds no crop
+  -- with a crop year", seventy lines before the replay check below ever runs. The farmer is told
+  -- their load failed when it is already recorded, and retrying again never helps.
+  --
+  -- Before LD-4 this could not happen: the bin's baseline row answered, and movements never remove
+  -- it. So the replay's own lot is adopted here when the caller named none. Nothing is taken on
+  -- trust -- the stored lot still has to be one the bin has a record of, and the field-by-field
+  -- replay comparison below still decides whether this is the same ticket or a reused id.
+  if v_crop_year is null and v_origin_kind = 'bin' then
+    select crop_year, commodity_id into v_replay_year, v_replay_commodity
+      from public.grain_loads where id = v_id and farm_id = p_farm_id;
+    if found then
+      v_crop_year := v_replay_year;
+      if v_commodity is null then v_commodity := v_replay_commodity; end if;
+    end if;
   end if;
 
   -- The origin decides the commodity and the crop year. Nothing else may.

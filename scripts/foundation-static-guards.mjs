@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 337')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 340')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -972,6 +972,19 @@ export function foundationStaticGuard(root = process.cwd()) {
     // And when it cannot get that answer it says so rather than falling back to a list that may be
     // short: a short movement list is indistinguishable from a one-lot bin.
     requireText(errors, grainModule, 'if (binLotReady && originBinId && lotsUnavailable) {', 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
+
+    // LD-1's replay guarantee, which LD-4 broke for one case: a one-lot bin hauled to exactly zero
+    // has no lot left, so a retry after a lost response was refused seventy lines before it reached
+    // the replay check -- telling a farmer their load failed when it was already recorded. The
+    // stored lot is adopted only when the caller named none, so a retry naming a different lot is
+    // still a reused id.
+    requireText(errors, ld4Migration, "if v_crop_year is null and v_origin_kind = 'bin' then", 'ld4:a-retry-still-returns-the-ticket-it-saved')
+    // The form keeps the origin for the next ticket, and a save can empty the year it named. A
+    // choice the picker no longer offers has to be dropped, or the form refuses every further save
+    // with no control on screen to fix it.
+    requireText(errors, grainModule, 'setDraft((current) => ({ ...current, origin_crop_year: "" }));', 'ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')
+    // And the lots are read again after a save, or the next load is picked against stale balances.
+    requireText(errors, grainModule, 'setLotsRefresh((count) => count + 1);', 'ld4:a-save-changes-what-the-bin-holds')
   }
   {
     // A load's harvest contribution is derived and never written into the replaceable manual total.
