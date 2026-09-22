@@ -4570,6 +4570,29 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // still reads the bin's baseline alone, so no choice is offered -- offering one would let a
   // farmer pick a year and be refused on save, which is LD-006 finding 1 with the roles reversed.
 
+  // LD-4 repair (Codex P1 on 1b441f6): when the bin offers exactly one lot the form shows it as a
+  // sentence and asks nothing -- and used to send nothing, leaving the server to work the lot out
+  // again at save time. Between the read and the save another device can empty that lot and add a
+  // different one, and the server would then resolve to the NEW sole lot: the ticket records a crop
+  // the screen never named, with no error and nothing to undo it.
+  //
+  // So the form now states what it showed. This is not the browser deciding the lot -- LD-1 was
+  // right that it must not -- it is the browser asserting what the farmer was looking at, exactly
+  // as a contract edit sends the updated_at it was shown. The server still decides: it refuses a
+  // lot the bin has no record of, and append_bin_movement still refuses to draw bushels that are
+  // not there. A stale expectation becomes a loud refusal instead of a quiet wrong ticket.
+  // Only from a SETTLED list. While the read is in flight originLots falls back to the workspace
+  // derivation -- the truncated list this whole repair exists to stop trusting -- and a bin that
+  // really holds two lots can look like one for those few hundred milliseconds. Filling the draft
+  // from that would silently answer a question the farmer was about to be asked. Caught by the
+  // browser journey, not by reading: the picker still appeared, but with a choice already made.
+  useEffect(() => {
+    if (!binLotReady || lotsState !== 'ready') return;
+    if (draft.origin_crop_year.trim() || originLots.length !== 1) return;
+    const only = originLots[0]!;
+    setDraft((current) => ({ ...current, origin_crop_year: String(only.crop_year), origin_commodity_id: only.commodity_id }));
+  }, [binLotReady, lotsState, draft.origin_crop_year, originLots]);
+
   // LD-4 repair (Codex P2 on da028bf): the form keeps the origin and the chosen crop year for the
   // next ticket, and a save can empty the lot that year names. The picker then drops to one lot and
   // stops rendering, while the draft still holds the emptied year -- so validation refuses every

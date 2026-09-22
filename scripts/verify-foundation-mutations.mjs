@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 354
+const expectedMutationCount = 356
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1021,6 +1021,12 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace("if (binLotReady && originBinId && lotsState !== 'ready') {", "if (binLotReady && originBinId && lotsState === 'unavailable') {"))
   detected('a load can be saved while the bin lot read is still in flight, against the list it was meant to replace', 'ld4:a-save-waits-for-a-settled-lot-list')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace("    setDraft((current) => ({ ...current, origin_crop_year: String(only.crop_year), origin_commodity_id: only.commodity_id }));\n", ''))
+  detected('a single-lot bin sends no lot, so a bin that changed underneath records a crop the screen never named', 'ld4:the-form-states-the-lot-it-showed')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace("    if (!binLotReady || lotsState !== 'ready') return;\n", ''))
+  detected('the form states a lot from a list that has not landed yet, answering a question it was about to ask', 'ld4:the-form-states-the-lot-it-showed')
   reset()
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('where id = v_origin_bin and farm_id = p_farm_id for update;', 'where id = v_origin_bin and farm_id = p_farm_id;'))
   detected('a bin origin decides its lot without locking the bin, so another truck can change it mid-decision', 'ld4:the-bin-is-locked-before-its-lots-decide-anything')

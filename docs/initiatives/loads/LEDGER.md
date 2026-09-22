@@ -582,7 +582,7 @@ edit cannot quietly weaken it back.
 - **Nineteen browser regression groups** across two files — ten in `committedFree.regression.ts`,
   nine in the new `loadOriginLot.regression.ts`, the ninth covering the repair below.
 - Static guards PASS with **twenty-three new LD-4 guards** (eight, plus fifteen for the repairs below);
-  **mutation drill 354/354** after merging the LD-3 repair and adding the repair mutations,
+  **mutation drill 356/356** after merging the LD-3 repair and adding the repair mutations,
   count changed in both files that pin it.
 - **Browser: 119 passed, 15 skipped** on desktop and phone, including a new LD-4 journey that reads
   both lots off the picker, is refused for not answering, and then proves the chosen year is what
@@ -818,6 +818,33 @@ functions, and the guard pinning it passed while one of them reverted. That is t
 on this tranche where *a guard asked whether a string appears when the string appears twice*. It is
 counted now, and the comment says why — but the honest lesson is that `requireText` on a shared
 idiom is a weak guard by construction, and the drill is what keeps finding it.
+
+### An eighth round, and it overturns something LD-1 wrote down
+
+**A single-lot bin sent no lot at all.** (P1) When the bin offers one lot the form shows it as a
+sentence and asks nothing — and sent nothing, leaving the server to work the lot out again at save
+time. Between the read and the save another device can empty that lot and add a different one. The
+server then resolves to the **new** sole lot, and the ticket records a crop the screen never named,
+with no error and nothing to undo it.
+
+This overturns a principle LD-1 stated plainly and this ledger repeated: *"the browser never sends
+a lot; two evaluators of one fact is the defect this tranche prevents."* That was right about the
+danger and wrong about the remedy. **The browser still does not decide the lot** — the server
+refuses any lot the bin has no record of, and `append_bin_movement` still refuses bushels that are
+not there. What the browser now sends is *what it showed the farmer*, exactly as a contract edit
+sends the `updated_at` it was shown. A stale expectation becomes a loud refusal instead of a quiet
+wrong ticket.
+
+**And the fix had the same flaw as the thing it fixed.** The first version filled the draft from
+`originLots` whenever it held one lot — including while the authoritative read was still in flight,
+when that list is the workspace derivation this repair exists to stop trusting. A bin that really
+holds two lots looks like one for a few hundred milliseconds, so the form answered a question it was
+about to ask. **The browser journey caught it; reading the code did not.** The picker still appeared,
+which is why it looked right — it simply had a choice already made in it.
+
+That is the second time on this tranche that acting on an unsettled list was the bug, after the save
+guard in round five. The rule is now explicit in both places: **nothing reads `originLots` for a
+decision unless `lotsState` is `ready`.**
 
 ### Live steps
 

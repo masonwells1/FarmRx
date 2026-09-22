@@ -1715,9 +1715,12 @@ test('a load records its ticket, takes its crop year from the origin, and can on
   const sent = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
   expect(sent.net_bushels).toBe(910.5)
   expect(sent.destination_grain_contract_id).toBe('00000000-0000-4000-8000-000000000072')
-  // The browser never sends a lot. Two evaluators of one fact is the defect this tranche prevents.
-  expect('commodity_id' in sent).toBe(false)
-  expect('crop_year' in sent).toBe(false)
+  // LD-4 changed this, and the change is worth stating precisely. The browser still does not
+  // DECIDE the lot -- the server does, and refuses anything the bin has no record of. What the
+  // browser now sends is what it SHOWED the farmer, so that a bin whose lots changed between the
+  // read and the save produces a refusal rather than a ticket naming a crop nobody saw.
+  expect(sent.commodity_id).toBe(commodityId)
+  expect(sent.crop_year).toBe(2026)
   // Nothing the farmer left blank is sent as an empty value, so the server's own defaults stay in force.
   expect('gross_lbs' in sent).toBe(false)
   expect('truck_equipment_id' in sent).toBe(false)
@@ -1888,9 +1891,10 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
   await page.getByRole('button', { name: 'Save load' }).click()
   await expect.poll(() => loadRecordCalls.length).toBe(1)
   const next = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
-  // One lot left, so the form asks nothing and lets the server settle it, exactly as LD-1 required.
-  expect('crop_year' in next).toBe(false)
-  expect('commodity_id' in next).toBe(false)
+  // One lot left, so the form asks nothing -- but it still says which lot it was showing, because
+  // "the bin holds one crop year" is a claim about a moment and another device can change it.
+  expect(next.crop_year).toBe(2025)
+  expect(next.commodity_id).toBe(commodityId)
   expect(unexpected).toEqual([])
 })
 
