@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 376')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 381')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -977,6 +977,22 @@ export function foundationStaticGuard(root = process.cwd()) {
     // And when it cannot get that answer it says so rather than falling back to a list that may be
     // short: a short movement list is indistinguishable from a one-lot bin.
     requireText(errors, grainModule, "const lotsUnavailable = lotsState === 'unavailable';", 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
+    {
+      // LD-4 repair: the lot answer is stored WITH the bin it is about and the refresh it was
+      // fetched for, so a stale one cannot be read at all. As two independent pieces of state the
+      // lots and the status could disagree for a render after the bin changed -- status still
+      // 'ready', lots still the previous bin's -- and the form auto-selected a lot from ANOTHER
+      // BIN's list. That is this feature's own defect, one layer up from the truncation it was
+      // built for, and it was invisible until a journey refused to go red against it.
+      requireText(errors, grainModule, 'const [lotRead, setLotRead] = useState<{ binId: string; refresh: number; lots: BinLotOnHand[] | null } | null>(null);', 'ld4:the-lot-answer-is-keyed-to-its-bin')
+      // BOTH halves of the key. Either one dropped is a different stale answer becoming readable,
+      // and a requireText on the whole line stays green while the comparison under it is cut.
+      requireText(errors, grainModule, 'lotRead.binId === originBinId && lotRead.refresh === lotsRefresh', 'ld4:the-lot-answer-is-keyed-to-its-bin')
+      // And the status is DERIVED from that one piece of state, never set beside it. A second
+      // setter is how the two drift back out of step.
+      if (grainModule.includes('setLotsState(')) errors.push('ld4:the-lot-answer-is-keyed-to-its-bin')
+      if (grainModule.includes('setAuthoritativeLots(')) errors.push('ld4:the-lot-answer-is-keyed-to-its-bin')
+    }
     requireText(errors, grainModule, 'Farm Rx could not read what this bin holds', 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
 
     // LD-1's replay guarantee, which LD-4 broke for one case: a one-lot bin hauled to exactly zero
@@ -1027,7 +1043,35 @@ export function foundationStaticGuard(root = process.cwd()) {
     // so the ticket would record a crop the screen never named, with no error to notice it by.
     requireText(errors, grainModule, "setDraft((current) => ({ ...current, origin_crop_year: String(only.crop_year), origin_commodity_id: only.commodity_id }));", 'ld4:the-form-states-the-lot-it-showed')
     // And it states it only from a settled list, or it answers from the fallback it exists to replace.
-    requireText(errors, grainModule, "if (!binLotReady || lotsState !== 'ready' || ticketOutstanding) return;", 'ld4:the-form-states-the-lot-it-showed')
+    // BOTH effects that touch the chosen lot wait for a settled list, not just the one that fills
+    // it in. The clearing twin guessed around an unsettled list instead, with an early return on an
+    // empty one -- so hauling a one-lot bin dry left the emptied year in the draft, resolvable
+    // against the recorded list, refused by the server, and unreachable on screen. Counted, because
+    // a requireText here stays green with either one of the two gates removed.
+    if ((grainModule.split("if (!binLotReady || lotsState !== 'ready' || ticketOutstanding) return;").length - 1) !== 2) errors.push('ld4:the-form-states-the-lot-it-showed')
+    // And the hole itself is checked as an absence: an empty list is the case that matters most.
+    if (grainModule.includes('originLots.length === 0) return;')) errors.push('ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')
+    {
+      // The browser fixture answers like public.bin_lots, which KEEPS a lot the bin has emptied, at
+      // zero. It filtered those rows out -- the fourth place on this tranche where a stand-in
+      // disagreed with the server, and the worst kind: it made a journey written for this very bug
+      // pass against the broken code. A fixture that is wrong in the same direction as the code
+      // does not test the code, it agrees with it.
+      const journeys = read(root, 'tests/e2e/foundation-shell.spec.ts')
+      // Scoped to the bin_lots ROUTE, because the save mock beside it narrows to positive lots
+      // legitimately -- that is what the server's own default does. Both mock blocks are checked.
+      let from = 0
+      let routes = 0
+      for (;;) {
+        const start = journeys.indexOf("url.pathname === '/rest/v1/rpc/bin_lots'", from)
+        if (start < 0) break
+        routes += 1
+        const handler = journeys.slice(start, journeys.indexOf('\n', start))
+        if (/bushels\)?\s*>/.test(handler)) errors.push('ld4:the-browser-fixture-answers-like-the-database')
+        from = start + 1
+      }
+      if (routes !== 2) errors.push('ld4:the-browser-fixture-answers-like-the-database')
+    }
     // The bin is locked before its lots are read, so this function's lot decision and
     // append_bin_movement's balance check are inside one serialised window.
     requireText(errors, ld4Migration, 'where id = v_origin_bin and farm_id = p_farm_id for update;', 'ld4:the-bin-is-locked-before-its-lots-decide-anything')

@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 376
+const expectedMutationCount = 381
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -28,6 +28,7 @@ const files = [
   'src/data/QueuedFieldsRepository.ts', 'src/data/QueuedGrainRepository.ts', 'src/data/QueuedHarvestRepository.ts',
   'src/data/QueuedInventoryRepository.ts', 'src/data/QueuedNotificationsRepository.ts', 'src/data/QueuedProfitabilityRepository.ts',
   'src/data/QueuedProgramsRepository.ts', 'src/data/QueuedScoutingRepository.ts',
+  'tests/e2e/foundation-shell.spec.ts',
 ]
 const reset = () => { for (const path of files) { const target = join(temporary, path); mkdirSync(dirname(target), { recursive: true }); cpSync(join(root, path), target) } }
 const mutate = (path, replace) => {
@@ -1128,6 +1129,21 @@ try {
   reset()
   mutate('src/data/MockGrainRepository.ts', (source) => source.replace('    .filter((row) => !isLotMovementSuperseded(baseline, row))', '    .filter((row) => !baseline || row.commodity_id !== baseline.commodity_id || row.occurred_on > baseline.measured_at.slice(0, 10))'))
   detected('the mock inlines its own copy of the baseline predicate, which is how the two drift apart again', 'ld4:the-mock-balance-uses-the-server-baseline-rule')
+  reset()
+  mutate('tests/e2e/foundation-shell.spec.ts', (source) => source.replace('declared.filter((lot) => lot.grain_bin_id === value.p_grain_bin_id)', 'declared.filter((lot) => lot.grain_bin_id === value.p_grain_bin_id && Number(lot.bushels) > 0)'))
+  detected('the browser fixture drops the emptied lots public.bin_lots keeps, so a journey written for that path passes against broken code', 'ld4:the-browser-fixture-answers-like-the-database')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace("    if (!draft.origin_crop_year.trim()) return;\n", "    if (!draft.origin_crop_year.trim() || originLots.length === 0) return;\n"))
+  detected('hauling a one-lot bin dry keeps the year it emptied, so every later ticket is refused by the server with no picker to fix it', 'ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => replaceExactlyOne(source, /if \(!binLotReady \|\| lotsState !== 'ready' \|\| ticketOutstanding\) return;\n    if \(!draft\.origin_crop_year\.trim\(\)\) return;/g, "if (ticketOutstanding) return;\n    if (!draft.origin_crop_year.trim()) return;", 'clear-vanished gate'))
+  detected('the clearing effect stops waiting for a settled lot list, so a transient empty one wipes a choice the farmer just made', 'ld4:the-form-states-the-lot-it-showed')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('lotRead.binId === originBinId && lotRead.refresh === lotsRefresh', 'lotRead.refresh === lotsRefresh'))
+  detected('the lot answer is no longer tied to its bin, so switching bins reads the previous one list and can auto-select a lot from it', 'ld4:the-lot-answer-is-keyed-to-its-bin')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('lotRead.binId === originBinId && lotRead.refresh === lotsRefresh', 'lotRead.binId === originBinId'))
+  detected('the lot answer survives the refresh that follows a save, so the list is ready again before the new read has landed', 'ld4:the-lot-answer-is-keyed-to-its-bin')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('.filter((row) => row.movementCount > 0)', '.filter((row) => Math.abs(row.bushels) > 0.000001)'))
   detected('unresolved movements that cancel out today stop being named at all', 'ld3:an-unresolved-movement-is-named-however-it-nets')

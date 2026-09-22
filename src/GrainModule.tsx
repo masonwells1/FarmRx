@@ -4492,30 +4492,38 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // `undefined` means not asked yet or not answerable (offline, or the migration is not applied);
   // the derivation below is the fallback for exactly those cases, and it is the right answer there
   // because the pre-migration server reads the bin's baseline alone anyway.
-  const [authoritativeLots, setAuthoritativeLots] = useState<BinLotOnHand[] | undefined>(undefined);
-  // LD-4 repair (Codex P1 on 35d7bdb): "not answered yet" is not "answered with nothing". While
-  // the read is in flight authoritativeLots is undefined and the derivation stands in -- which is
-  // the truncated list the repair exists to stop trusting. A farmer who types fast enough to save
-  // in that window gets the original defect back. So the save waits for a settled answer.
-  const [lotsState, setLotsState] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
-  const lotsUnavailable = lotsState === 'unavailable';
-  // A save changes what the bin holds, and the form keeps the origin for the next ticket -- so the
-  // lots have to be read again afterwards or the next load is picked against stale balances.
+  // LD-4 repair (Codex P2 on b8d5087, found by a journey that would not go green against the bug):
+  // the answer is stored WITH the bin it is about, and with the refresh it was fetched for.
+  //
+  // It used to be two pieces of state -- the lots, and a status -- and they could disagree for a
+  // render. Selecting a different bin changed originBinId immediately, while the status still said
+  // 'ready' and the lots still belonged to the bin just left, because both are only corrected in an
+  // effect that runs after the render. In that window the form auto-selected a lot from ANOTHER
+  // BIN's list. That is the same defect this whole feature exists to prevent -- a lot chosen from a
+  // list that is not the bin's -- one layer up from the truncation it was built for.
+  //
+  // Keyed this way a stale answer cannot be read at all, rather than merely being corrected soon.
+  // The refresh count is part of the key for the same reason: after a save the list is known to be
+  // out of date, and 'ready' must not be true again until the new read lands.
+  const [lotRead, setLotRead] = useState<{ binId: string; refresh: number; lots: BinLotOnHand[] | null } | null>(null);
   const [lotsRefresh, setLotsRefresh] = useState(0);
   const originBinId = draft.origin_kind === "bin" ? draft.origin_grain_bin_id : "";
+  const lotsForThisBin = lotRead && lotRead.binId === originBinId && lotRead.refresh === lotsRefresh ? lotRead : null;
+  const lotsState: 'idle' | 'loading' | 'ready' | 'unavailable' = !originBinId ? 'idle'
+    : !lotsForThisBin ? 'loading'
+    : lotsForThisBin.lots ? 'ready' : 'unavailable';
+  const authoritativeLots = lotsForThisBin?.lots ?? undefined;
+  const lotsUnavailable = lotsState === 'unavailable';
   useEffect(() => {
-    setAuthoritativeLots(undefined);
-    if (!originBinId) { setLotsState('idle'); return }
-    setLotsState('loading');
+    if (!originBinId) return;
     let current = true;
-    void services.grainRepository.listBinLots(originBinId)
-      .then((lots) => {
-        if (!current) return;
-        // Null is "the database could not say" -- the function is not installed, or there is no
-        // signal. Either way it is not an empty bin, and it must not be read as one.
-        if (lots) { setAuthoritativeLots(lots); setLotsState('ready') } else { setLotsState('unavailable') }
-      })
-      .catch(() => { if (current) setLotsState('unavailable') });
+    const forBin = originBinId;
+    const forRefresh = lotsRefresh;
+    void services.grainRepository.listBinLots(forBin)
+      // Null is "the database could not say" -- the function is not installed, or there is no
+      // signal. Either way it is not an empty bin, and it must not be read as one.
+      .then((lots) => { if (current) setLotRead({ binId: forBin, refresh: forRefresh, lots }) })
+      .catch(() => { if (current) setLotRead({ binId: forBin, refresh: forRefresh, lots: null }) });
     return () => { current = false };
   }, [services, originBinId, lotsRefresh]);
   // LD-4 repair (Codex P1 on bba6b10): while a ticket id is outstanding -- a save whose outcome is
@@ -4610,13 +4618,25 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // stops rendering, while the draft still holds the emptied year -- so validation refuses every
   // further save and the control that could fix it is no longer on screen. Dropping a year the bin
   // no longer offers puts the form back in a state the farmer can actually act on.
+  //
+  // LD-4 repair (Codex P2 on a05ee47): and an EMPTY list is the case that matters most, not the one
+  // to skip. Hauling the last bushels out of a one-lot bin leaves originLots empty, the screen
+  // saying the bin holds no crop year, and the draft still naming the year it just emptied -- which
+  // resolves against the recorded list, passes validation, and reaches the RPC only to come back
+  // FR001, with no picker on screen to repair it. The early return on length 0 was the hole.
+  //
+  // It was there to stop a transient empty list from wiping a real choice, and that danger is real:
+  // every refresh clears authoritativeLots first, so the fallback derivation -- the truncated one --
+  // stands in for a moment. The answer is the gate its twin already had. Waiting for a SETTLED list
+  // makes an empty one mean what it says, and the two effects now read the same list under the same
+  // condition instead of one trusting it and the other guessing around it.
   useEffect(() => {
-    if (ticketOutstanding) return;
-    if (!draft.origin_crop_year.trim() || originLots.length === 0) return;
+    if (!binLotReady || lotsState !== 'ready' || ticketOutstanding) return;
+    if (!draft.origin_crop_year.trim()) return;
     if (originLots.some((binLot) => String(binLot.crop_year) === draft.origin_crop_year.trim()
       && (!draft.origin_commodity_id || binLot.commodity_id === draft.origin_commodity_id))) return;
     setDraft((current) => ({ ...current, origin_crop_year: "", origin_commodity_id: "" }));
-  }, [ticketOutstanding, draft.origin_crop_year, draft.origin_commodity_id, originLots]);
+  }, [binLotReady, lotsState, ticketOutstanding, draft.origin_crop_year, draft.origin_commodity_id, originLots]);
   const availableEffects = effectsReady ? loadEffectsAvailable(draft) : [];
   const confirmedEffects = confirmedLoadEffects(draft);
   const typedNet = Number(draft.net_bushels);

@@ -1127,6 +1127,73 @@ and is not done here. The two mutations do cover both directions (the cutoff rem
 predicate inlined), and every one of the six earlier divergences of this shape was caught by the
 drill rather than by a test.
 
+### A sixteenth round, in which writing the test found two more bugs than the review did
+
+One P2 came in: hauling a one-lot bin dry left the emptied year in the draft. `originLots` goes
+empty, the screen says the bin holds no crop year, and the draft still names the year just emptied --
+which resolves against the **recorded** list, passes validation, and reaches the RPC only to come
+back `FR001`, with no picker on screen to repair it. The early return on `originLots.length === 0`
+was the hole.
+
+That return existed to stop a transient empty list from wiping a real choice, and that danger is
+real: every refresh clears the stored answer first, so the truncated fallback derivation stands in
+for a moment. The fix is the gate its twin already had — **wait for a settled list**, and then an
+empty one means what it says. The two effects now read the same list under the same condition
+instead of one trusting it and the other guessing around it.
+
+#### The journey passed against the bug, and that was the real finding
+
+The browser journey written for this repair **went green on the unrepaired code**. It is the trap
+this tranche has been producing all along, and this time it was mine.
+
+The cause: the browser fixture's `bin_lots` mock filtered to `bushels > 0`, dropping exactly the
+emptied rows `public.bin_lots` keeps on purpose. So after the save the fixture reported *no* lots,
+validation refused for a different reason, and the assertion passed either way.
+
+**That is the fourth stand-in on this tranche that disagreed with the server**, after the repository
+mock's `listBinLots`, its `saveLoad`, and its `lotBalance` — and the worst of the four, because the
+other three produced wrong behaviour while this one produced *false confidence*. A fixture that is
+wrong in the same direction as the code does not test the code; it agrees with it.
+
+With the fixture corrected the journey fails against the bug, as it should have from the start.
+
+#### And correcting the fixture exposed a defect nothing had ever seen
+
+With emptied lots present, an **older journey started failing** — the two-crop-year one. Not a
+fixture problem: it had been passing for the wrong reason, and the reason was a real bug.
+
+`authoritativeLots` and `lotsState` were two independent pieces of state. Selecting a different bin
+changes `originBinId` immediately, but both of those are only corrected in an effect that runs
+*after* the render. For that one render the status still said `ready` and the lots still belonged to
+the bin just left — so **the form auto-selected a lot from another bin's list.** The old journey had
+been passing because the ungated clearing effect happened to wipe that selection using the truncated
+fallback list, which is the very list this feature exists to stop trusting.
+
+So: a bug hidden by a second bug, and both invisible while a third (the fixture) kept the evidence
+away.
+
+The answer is not another gate. The lot answer is now stored **with the bin it is about and the
+refresh it was fetched for**, and the status is derived from that single piece of state rather than
+set beside it. A stale answer cannot be read at all, rather than being corrected soon afterwards.
+That is the same move round 10 made with the lock order: replace a timing rule with a structural one.
+
+It is the defect this whole feature exists to prevent — a lot chosen from a list that is not the
+bin's — one layer above the truncation it was built for.
+
+### Proof observed for round 16
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
+  `git diff --check` clean.
+- **Eleven disposable SQL suites pass together.**
+- Static guards PASS; **mutation drill 381/381**, count changed in both files that pin it. Five
+  added, including both halves of the new key and the fixture filter itself — the browser spec is in
+  the drill's file set now, which it was not before.
+- **Browser: 127 passed, 15 skipped.** The new journey was run against the unrepaired code and
+  **fails there**; the two-crop-year journey was run against the unkeyed state and **fails there**.
+  Neither is a test that passes beside its repair.
+- **All regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
+
 ### Proof observed for round 15
 
 - `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
