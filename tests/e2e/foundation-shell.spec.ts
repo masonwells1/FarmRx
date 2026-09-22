@@ -1825,6 +1825,37 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
   expect(unexpected).toEqual([])
 })
 
+test('movements with no crop year are named even when they cancel out, and an empty bin is never called empty', async ({ page, context }) => {
+  await seedSession(context)
+  const farm = farms[0]!
+  const binId = '00000000-0000-4000-8000-000000000096'
+  // A bin with no baseline and no contracts, holding only two pre-LD-2 movements that net to zero:
+  // 1,000 bushels in and 1,000 out, neither carrying a crop year. Both Codex findings on #52 live
+  // here. Filtering the unknown bucket by its NET hid these two rows entirely, and the empty state
+  // that then rendered said "Nothing stored or contracted yet" about a farm with unresolved grain.
+  const binRows = [{ id: binId, farm_id: farm.id, name: 'Legacy bin', capacity_bu: 40_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now }]
+  const movementRows = [
+    { id: '00000000-0000-4000-8000-000000000097', farm_id: farm.id, grain_bin_id: binId, direction: 'in', bushels: 1_000, commodity_id: commodityId, crop_year: null, occurred_on: '2026-09-01', note: null, source_kind: null, grain_load_id: null, created_at: now },
+    { id: '00000000-0000-4000-8000-000000000098', farm_id: farm.id, grain_bin_id: binId, direction: 'out', bushels: 1_000, commodity_id: commodityId, crop_year: null, occurred_on: '2026-09-02', note: null, source_kind: null, grain_load_id: null, created_at: now },
+  ]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: [], bin_transactions: movementRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
+  await page.goto('/grain/storage')
+
+  const summary = page.getByRole('region', { name: 'Committed and free bushels' })
+  await expect(summary).toBeVisible()
+
+  // The two movements are named, and named as movements rather than as a net of zero. Their crop
+  // years are still unassigned, and assigning them can move two different years' figures.
+  await expect(summary).toContainText('2 movements that cancel out today')
+  await expect(summary).toContainText('can change the figures above even where the movements cancel out today')
+
+  // There are no crop-year figures to show, and that is not the same as nothing being stored. The
+  // sentence that said so could never be true here, because this component renders nothing at all
+  // when it has neither lots nor unresolved movements.
+  await expect(page.getByText('Nothing stored or contracted yet')).toHaveCount(0)
+  expect(unexpected).toEqual([])
+})
+
 test('Today shows a worker without financial access no grain tile and no grain line, and reads no grain table', async ({ page, context }) => {
   await seedSession(context)
   const reads: string[] = []

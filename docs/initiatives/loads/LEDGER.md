@@ -629,3 +629,97 @@ capability probe reports false, the form offers no crop year choice, and the der
 exactly as LD-1 did — because that is what the installed `save_grain_load` will accept. This is
 LD-006 finding 1's lesson applied in the other direction, and it is guarded and mutation-tested
 rather than assumed.
+
+## LD-008 — three more findings Codex raised on the merged LD-3
+
+**Branch:** `claude/ld3-codex-fixes`, cut from `main` `8716da0`.
+**Numbering:** LD-007 is LD-4 (`claude/ld4-bin-origin-lot`, PR #54), open at the same time as this.
+It landed on `main` first, as #55, and LD-007 followed in the merge that resolved
+their conflict -- so the numbers read in order here and out of order in the history.
+**Context:** Codex reviewed PR #52 twice — once when the draft was marked ready, once on the merge
+commit — and both reviews finished after the merge. **This is the second time in one evening that
+findings have landed on `main` rather than on an open PR**, and the cause is the same: marking a PR
+ready is part of merging it, so the review has no window in which to gate. LD-006 recorded this as
+a process note. It is now a pattern, and the remedy is the same: mark a PR ready several minutes
+before merging it.
+
+All three findings were verified against the code rather than taken at face value. **All three are
+real.** Two are fixed here. The third is a P1 that needs its own tranche and is recorded with a
+proposal rather than half-fixed.
+
+### Fixed here
+
+**1. Unresolved movements that cancel out stopped being named at all.** (P2)
+
+`CommittedFreeLine` filtered the unknown-crop-year bucket on its **net bushels**. An unresolved
+1,000 bushels in and 1,000 out net to zero, so the bucket vanished — but those are still two
+movements with no crop year, and naming their years can put a thousand bushels into one year and
+take a thousand out of another. **The filter hid exactly the rows whose resolution moves the figures
+most.** A member who cannot open the owner-and-manager reconciliation screen got no hint they
+existed.
+
+The bucket is now kept by `movementCount`, which `UnknownCropYearBushels` has carried since LD-3 —
+the right field was already there and the wrong one was being read. The sentence names movements
+rather than a net: *"Corn in 2 movements that cancel out today"*, and it now says plainly that
+naming their crop year **can change the figures above even where the movements cancel out today**.
+
+**2. An empty state that could never be true.** (P2)
+
+When there were no crop-year figures the component printed *"Nothing stored or contracted yet."* —
+directly above a paragraph listing unresolved bushels. A farmer whose bin was filled entirely by
+pre-LD-2 movements was told their farm held nothing.
+
+The finding is sharper than it was reported. This component **returns null when it has neither lots
+nor unknown movements**, so reaching that branch always meant unknown movements existed. The
+sentence was not merely sometimes wrong: **it could never be right.** It is deleted rather than
+reworded, and a guard keeps the string out of the file.
+
+### Not fixed here, and why
+
+**3. Farm totals are derived from a workspace that may be truncated.** (P1)
+
+`loadWorkspace` reads `bin_transactions`, `grain_contracts` and `grain_contract_deliveries` with no
+bound and no pagination. PostgREST caps rows, and this codebase already knows it: the cash-bid slice
+carries a comment saying so, and **GL-2's defect was this exact shape.** `bin_transactions` is
+ordered newest-first, so under a cap **the oldest movements drop first** — and an old post-baseline
+movement is precisely what a lot balance depends on. A farm with enough history would be shown
+wrong stored, committed and free bushels, silently.
+
+Verified as real. Two things worth stating precisely:
+
+- **It is older than LD-3.** `binLedger` and the per-bin figures have always read this table the
+  same way. LD-3 did not introduce the exposure; it widened what depends on it, and LD-4 widens it
+  again by feeding the load form's lot picker from the same rows.
+- **The database is still the authority.** `save_grain_load` reads `public.bin_lots` server-side and
+  `append_bin_movement` guards the balance under a row lock, so a truncated browser view can show a
+  wrong figure but cannot write a wrong movement. That bounds the damage to display, which is bad
+  enough — showing a farmer bushels they do not have is what this initiative exists to stop.
+- **Whether the cap actually bites on this project is unverified.** The sandbox cannot reach
+  Supabase, so `db-max-rows` could not be read. The finding stands on the codebase's own recorded
+  experience of the cap, not on a measurement.
+
+**Proposed fix, for its own tranche.** Paging the whole ledger into the browser on every workspace
+load is the wrong shape: `bin_transactions` is append-only and grows forever, and this runs on a
+phone in a truck. The lot figures should be computed **in the database** — a farm-level aggregate
+beside `public.bin_lots`, behind a capability probe, with the current derivation kept as the
+offline fallback and the disposable suite proving the two agree. That is a migration, a gateway
+read, a capability and its proof: a tranche, not a repair.
+
+### Proof observed
+
+- `npx tsc -b --force`; `npm run build`; `git diff --check` clean.
+- **Ten disposable suites pass together** (unchanged by this branch; run to confirm).
+- Static guards PASS with **two new guards**; **mutation drill 329/329**, count changed in both
+  files that pin it.
+- **A new browser journey** on a bin with no baseline, no contracts and two unresolved movements
+  that net to zero. **Both fixes were reverted in the working tree and the journey failed**, so it
+  proves the repair rather than merely passing beside it.
+- **Browser: 120 passed, 15 skipped.** One unrelated phone journey — "two tabs append notification
+  work" — failed once and passed on rerun. It touches the notification queue, not Grain, and is not
+  the Soil Rx flake.
+- **All 65 regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`.
+
+### Live steps
+
+**None.** This is display-only: no migration, no write path, no schema. Merging deploys the client.
