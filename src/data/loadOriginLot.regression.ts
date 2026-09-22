@@ -1,5 +1,5 @@
 import type { GrainLoadDraft, GrainWorkspace } from './grain'
-import { loadLotFor, originBinLots, validateGrainLoad } from './grain'
+import { loadLotFor, lotsSaveResolvesAgainst, originBinLots, recordedBinLots, validateGrainLoad } from './grain'
 
 /** LD-4: which lot a bin origin is hauling, and what the farmer is told when it cannot be settled.
  *
@@ -202,4 +202,58 @@ function draftFrom(patch: Partial<GrainLoadDraft>): GrainLoadDraft {
   assert(loadLotFor(truncated, draftFrom({ origin_crop_year: '2019' }), authoritative) === null, 'The database list is a list, not a licence: an unheld year must still be refused.')
 }
 
-console.log('Load origin lot regressions passed (9 coverage groups).')
+// --------------------------------------------- 10. the list a SAVE resolves against, which is not one list
+// LD-4 repair (Codex P2 on ef8a29e). save_grain_load keys on whether a crop year was NAMED and on
+// nothing else: a named year is looked up among every lot the bin has a RECORD of, and an unnamed
+// one is defaulted from what the bin still HOLDS. MockGrainRepository.saveLoad stands in for that
+// function and passed neither list, so both of its calls fell through to binLotsOnHand -- on-hand
+// for both cases. A ticket-only load naming an emptied lot was refused by the mock while the real
+// RPC accepts it, so the path the previous round repaired could not be reached by any mock-backed
+// test at all. These assertions pin the rule itself, in the one place it is now written down.
+{
+  // The bin has a record of two lots. The 2025 corn was hauled away to the bushel; the 2026 corn
+  // is still there. deriveBinLots keeps the emptied row at zero on purpose.
+  const workspace = workspaceWith(
+    [baseline(binA, 2025, 'corn_yellow', 6000)],
+    [
+      movement(binA, 'out', 6000, 'corn_yellow', 2025, '2026-10-01'),
+      movement(binA, 'in', 4000, 'corn_yellow', 2026, '2026-10-02'),
+    ],
+  )
+
+  const recorded = recordedBinLots(workspace, binA)
+  assert(recorded.length === 2, `The bin has a record of two lots, saw ${JSON.stringify(recorded)}.`)
+  const emptied = recorded.find((lot) => lot.crop_year === 2025)
+  assert(emptied !== undefined && Math.abs(emptied.bushels) < 0.000001, 'The emptied lot must still be recorded, at zero.')
+  // originBinLots is the on-hand twin, and the difference between them is the whole point.
+  assert(originBinLots(workspace, binA).length === 1, 'The on-hand list must hold only the 2026 lot.')
+
+  // A NAMED year resolves against every recorded lot, emptied ones included.
+  const named = draftFrom({ origin_crop_year: '2025', origin_commodity_id: 'corn_yellow', effect_bin_out: false })
+  const namedLots = lotsSaveResolvesAgainst(recorded, named)
+  assert(namedLots.length === 2, 'A named year is resolved against the recorded list, not the on-hand one.')
+  const namedLot = loadLotFor(workspace, named, namedLots)
+  assert(namedLot !== null && namedLot.crop_year === 2025, `A ticket for grain already hauled must name the year it really was, saw ${JSON.stringify(namedLot)}.`)
+  assert(validateGrainLoad(named, workspace, namedLots).length === 0, `Naming an emptied lot must leave nothing to fix, saw ${JSON.stringify(validateGrainLoad(named, workspace, namedLots))}.`)
+
+  // This is the assertion that fails without the repair: binLotsOnHand drops the 2025 row, so the
+  // same draft is refused with a message about a crop the bin demonstrably has a record of.
+  const withoutRepair = validateGrainLoad(named, workspace)
+  assert(withoutRepair.some((problem) => problem.includes('does not hold the 2025 crop')),
+    'This pins the behaviour being replaced: resolving a named year against the on-hand list alone refuses a lot the server accepts.')
+
+  // An UNNAMED year defaults from what the bin still holds, exactly as the server does. The emptied
+  // lot is a real lot with nothing left in it, and is no answer to "which crop year is this".
+  const unnamed = draftFrom({})
+  const unnamedLots = lotsSaveResolvesAgainst(recorded, unnamed)
+  assert(unnamedLots.length === 1 && unnamedLots[0]!.crop_year === 2026, 'An unnamed year must default from the on-hand list.')
+  const defaulted = loadLotFor(workspace, unnamed, unnamedLots)
+  assert(defaulted !== null && defaulted.crop_year === 2026, `A bin holding one lot still answers for itself, saw ${JSON.stringify(defaulted)}.`)
+
+  // And the wider list is a list, not a licence: a year the bin has no record of is still refused.
+  const unheld = draftFrom({ origin_crop_year: '2019', origin_commodity_id: 'corn_yellow' })
+  assert(loadLotFor(workspace, unheld, lotsSaveResolvesAgainst(recorded, unheld)) === null,
+    'A year the bin never held must be refused however the list was built.')
+}
+
+console.log('Load origin lot regressions passed (10 coverage groups).')

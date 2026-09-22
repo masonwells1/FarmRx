@@ -948,6 +948,53 @@ and the check that reads its `FOUND`.
 The lesson is not "be careful near `FOUND`". It is that **a rule with no assertion behind it is a
 comment**, and the fence had been a comment for the whole tranche.
 
+### A twelfth round: the stand-in did not stand in
+
+Two P2s, both raised against `ef8a29e` while round 11 was being written. **One of them was the
+farm fence** — Codex found independently what moving the lock had already revealed, which is a
+useful cross-check on that repair rather than new work.
+
+**The other is real and was not fixed by round 11.** `MockGrainRepository.saveLoad` stands in for
+`save_grain_load`, and it passed **no lot list at all** to either `validateGrainLoad` or
+`loadLotFor`. Both therefore fell through to `binLotsOnHand`, which drops emptied lots. So a
+ticket-only load naming a lot the bin has already emptied was **refused by the mock while the real
+RPC accepts it** — and the path repaired two rounds earlier, for exactly that case, could not be
+reached by any mock-backed test. The repair to `listBinLots` in round 9 had fixed the reader and
+left the writer beside it still narrowing the list on its own.
+
+#### Reading the server settled a rule nobody had written down
+
+The fix needed the server's actual rule, so `save_grain_load` was read rather than recalled. It
+keys on **whether a crop year was named, and on nothing else**:
+
+- **A named year** is looked up among every lot the bin has a *record* of — `where lots.crop_year =
+  v_crop_year`, no balance filter. That is why `bin_lots` keeps emptied rows at all.
+- **An unnamed year** is defaulted from what the bin still *holds* — the count reads
+  `bushels > 0.000001`.
+
+That is two lists, chosen between by one property of the draft, and it existed only as a shape
+inside a PL/pgSQL function. It is now `lotsSaveResolvesAgainst` in `src/data/grain.ts`, with
+`recordedBinLots` beside `originBinLots` as the unfiltered twin of `public.bin_lots`.
+
+**The form's list is deliberately wider than the server's, and that is not a defect.** For display
+and defaulting the form uses `movesBushels ? onHand : recorded`, so a bin whose only record is an
+emptied lot shows one line rather than an empty picker. It closes the gap by always naming the year
+it showed, so what reaches the server is a *named* year and resolves against the recorded list.
+Three lists across two layers is more than anyone wants; the reason there are three is written at
+each one, and the regression pins all of them against one fixture.
+
+#### And a seventh guard that would have passed while its rule changed
+
+Moving the filter out of the mock and into `recordedBinLots` left the mock's absence check —
+written two rounds ago precisely *because* `requireText` keeps failing this way — **guarding an
+empty shell.** It stayed green on a body that no longer contained the thing it was checking for.
+The check now follows the derivation into `grain.ts` and additionally pins that the mock delegates
+rather than re-deriving.
+
+The new save guard is written the same way round for the same reason: as the **absence** of the
+no-list calls, not the presence of the two-argument ones. Either call reverting alone is the bug,
+and a `requireText` on one stays green while the other goes back.
+
 ### Proof observed for this tranche
 
 - `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
@@ -961,6 +1008,24 @@ comment**, and the fence had been a comment for the whole tranche.
   success path — **passed against the first version of its own guard.** The guard checked that the
   refresh came before the lock release, which the bug also satisfies. It pins the refresh *between*
   the `finally` and the release now.
+- **Browser: 123 passed, 15 skipped.**
+- **All regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
+
+### Proof observed for round 12
+
+Re-run in full rather than assumed, because this round changed a derivation the form shares.
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
+  `git diff --check` clean.
+- **Eleven disposable SQL suites pass together**, unchanged by this round and run to confirm.
+- Static guards PASS; **mutation drill 369/369**, count changed in both files that pin it. Six new
+  controlled mutations, and **one earlier mutation removed rather than kept**: its rule moved out of
+  the mock into `grain.ts`, and it is mutated there now in both directions — dropping the emptied
+  lots, and collapsing either branch of the named/unnamed split.
+- **Twenty browser regression groups**, the twentieth pinning the server's two-list rule. It
+  includes an assertion on the behaviour being replaced, so it fails against the old code rather
+  than passing beside it.
 - **Browser: 123 passed, 15 skipped.**
 - **All regression files run individually.** Only `programInventoryCW2` fails, identically to
   `origin/main`; the three PowerShell lanes are not runnable in this sandbox.

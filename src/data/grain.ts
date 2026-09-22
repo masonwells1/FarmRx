@@ -2,7 +2,7 @@ import { farmCalendarDate } from './farmDates'
 import type { Commodity, FieldsData, ReadOnlySnapshot } from './fields'
 import type { FarmOperationContext } from './farmOperationContext'
 import type { ProfitabilityRepository } from './profitability'
-import { binLotsOnHand, type BinLotOnHand } from './committedFree'
+import { binLotsOnHand, deriveBinLots, type BinLotOnHand } from './committedFree'
 
 export type ProductionMathBasis = 'projected' | 'actual'
 export type GrainContractType = 'cash_spot' | 'forward_cash' | 'basis' | 'hta'
@@ -370,6 +370,43 @@ export function originBinLots(workspace: Pick<GrainWorkspace, 'bin_inventory' | 
     workspace.bin_inventory.find((row) => row.grain_bin_id === binId),
     workspace.bin_transactions.filter((row) => row.grain_bin_id === binId),
   )
+}
+
+/** LD-4 repair (Codex P2 on ef8a29e): every lot the bin has a RECORD of, emptied ones included --
+ * the browser's twin of `public.bin_lots`, where `originBinLots` above is the twin of that function
+ * filtered to what the bin still holds. Both exist because the two lists answer different
+ * questions, and using one where the other belongs is the mistake this tranche kept making. */
+export function recordedBinLots(workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions'>, binId: string): BinLotOnHand[] {
+  if (!binId) return []
+  return deriveBinLots(
+    workspace.bin_inventory.find((row) => row.grain_bin_id === binId),
+    workspace.bin_transactions.filter((row) => row.grain_bin_id === binId),
+  ).filter((lot): lot is BinLotOnHand => lot.crop_year !== null)
+}
+
+/** LD-4 repair (Codex P2 on ef8a29e): the list `save_grain_load` itself resolves a draft against,
+ * stated once so a stand-in for that function cannot quietly use a different one.
+ *
+ * The server keys on whether a year was NAMED, and on nothing else:
+ *
+ * - A named year is looked up among every recorded lot. That is how a ticket for grain already
+ *   hauled away names the year it really was, and it is why `bin_lots` keeps emptied rows at all.
+ * - An unnamed year is defaulted from what the bin still HOLDS, because a lot at zero is no answer
+ *   to "which crop year is this load". The server's own default reads `bushels > 0.000001`.
+ *
+ * `MockGrainRepository.saveLoad` stands in for that function and passed NEITHER list, so both
+ * `validateGrainLoad` and `loadLotFor` fell through to `binLotsOnHand` -- on-hand for both cases.
+ * A ticket-only load naming an emptied lot was therefore refused by the mock while production
+ * accepted it, which meant the path two earlier repairs had opened could not be covered by any
+ * mock-backed test. The form's own list is deliberately wider than this for DISPLAY, and closes
+ * the gap by always naming the year it showed; this is the server's rule, not the form's. */
+export function lotsSaveResolvesAgainst(
+  recordedLots: readonly BinLotOnHand[],
+  draft: Pick<GrainLoadDraft, 'origin_crop_year'>,
+): readonly BinLotOnHand[] {
+  return draft.origin_crop_year.trim()
+    ? recordedLots
+    : recordedLots.filter((lot) => lot.bushels > 0.000001)
 }
 
 /** LD-1: a load that has been voided still shows on the ledger, and still must not count toward

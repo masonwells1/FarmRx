@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 364
+const expectedMutationCount = 369
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1064,9 +1064,6 @@ try {
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('  select grain_bin_id into v_bin_id from public.bin_transactions\n    where id = p_transaction_id and farm_id = p_farm_id;\n  if not found then raise exception \'that movement does not belong to this farm\'; end if;\n\n  perform 1 from public.grain_bins\n    where id = v_bin_id and farm_id = p_farm_id for update;\n\n  select * into v_movement from public.bin_transactions\n    where id = p_transaction_id and farm_id = p_farm_id for update;\n  if not found then raise exception \'that movement does not belong to this farm\'; end if;', '  select * into v_movement from public.bin_transactions\n    where id = p_transaction_id and farm_id = p_farm_id for update;\n  if not found then raise exception \'that movement does not belong to this farm\'; end if;\n\n  perform 1 from public.grain_bins\n    where id = v_movement.grain_bin_id and farm_id = p_farm_id for update;'))
   detected('two functions take the same two locks in opposite orders, so a farmer save dies on a deadlock', 'ld4:two-locks-are-always-taken-in-one-order')
   reset()
-  mutate('src/data/MockGrainRepository.ts', (source) => source.replace("(lot): lot is BinLotOnHand => lot.crop_year !== null", "(lot): lot is BinLotOnHand => lot.crop_year !== null && lot.bushels > 0.000001"))
-  detected('the mock drops the emptied lots the real function keeps, so no mock-backed test can cover a ticket-only load', 'ld4:the-mock-answers-like-the-database')
-  reset()
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('    perform public.lock_farm_bins(p_farm_id, array_remove(array[v_origin_bin, v_destination_bin], null));\n', ''))
   detected('a transfer locks only its origin, so two transfers in opposite directions deadlock', 'ld4:one-lock-order-for-the-module')
   reset()
@@ -1092,6 +1089,24 @@ try {
   reset()
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("  perform public.lock_farm_bins(p_farm_id, array(\n    select distinct grain_bin_id from public.bin_transactions\n     where grain_load_id = p_load_id and farm_id = p_farm_id));\n\n  select * into v_load from public.grain_loads\n    where id = p_load_id and farm_id = p_farm_id for update;\n  if not found then", "  select * into v_load from public.grain_loads\n    where id = p_load_id and farm_id = p_farm_id for update;\n\n  perform public.lock_farm_bins(p_farm_id, array(\n    select distinct grain_bin_id from public.bin_transactions\n     where grain_load_id = p_load_id and farm_id = p_farm_id));\n  if not found then"))
   detected('a perform sits between the void fence and the FOUND that reads it, so every load id looks like it belongs to this farm', 'ld4:the-void-fence-reads-its-own-select')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('const problems = validateGrainLoad(draft, workspace, lots)', 'const problems = validateGrainLoad(draft, workspace)'))
+  detected('the mock validates a save against the on-hand list, so a ticket naming an emptied lot is refused where production accepts it', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('const lot = loadLotFor(workspace, draft, lots)', 'const lot = loadLotFor(workspace, draft)'))
+  detected('the mock resolves the saved lot from a different list than the one it validated against', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+  reset()
+  mutate('src/data/grain.ts', (source) => source.replace("  return draft.origin_crop_year.trim()\n    ? recordedLots\n    : recordedLots.filter((lot) => lot.bushels > 0.000001)", '  return recordedLots.filter((lot) => lot.bushels > 0.000001)'))
+  detected('a named crop year is resolved against what the bin still holds, so a ticket for grain already hauled cannot name its year', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+  reset()
+  mutate('src/data/grain.ts', (source) => source.replace("  return draft.origin_crop_year.trim()\n    ? recordedLots\n    : recordedLots.filter((lot) => lot.bushels > 0.000001)", '  return recordedLots'))
+  detected('an unnamed crop year is defaulted from emptied lots too, so a bin out of this year answers for itself anyway', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+  reset()
+  mutate('src/data/grain.ts', (source) => source.replace("  ).filter((lot): lot is BinLotOnHand => lot.crop_year !== null)\n}", "  ).filter((lot): lot is BinLotOnHand => lot.crop_year !== null && lot.bushels > 0.000001)\n}"))
+  detected('the recorded-lot derivation drops the emptied lots, so the mock and the picker both lose the rows public.bin_lots keeps', 'ld4:the-mock-answers-like-the-database')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('return [...recordedBinLots(workspace, binId)]', 'return [...recordedBinLots(workspace, binId)].filter((lot) => lot.bushels > 0.000001)'))
+  detected('the mock re-narrows the recorded list on its way out, so it answers unlike the database again', 'ld4:the-mock-answers-like-the-database')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('.filter((row) => row.movementCount > 0)', '.filter((row) => Math.abs(row.bushels) > 0.000001)'))
   detected('unresolved movements that cancel out today stop being named at all', 'ld3:an-unresolved-movement-is-named-however-it-nets')

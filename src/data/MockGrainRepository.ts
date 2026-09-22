@@ -1,8 +1,7 @@
 import type { FieldsRepository } from './fields'
-import { deriveBinLots, type BinLotOnHand } from './committedFree'
 import type { BinTransaction, BinTransactionDirection, CashBid, FirmOffer, FuturesQuote, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, GrainRepository, GrainSaleLimit, GrainWorkspace, LoadVoidBlocker, LoadVoidResult, MarketDataService, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaMarketReport, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
-import { contractIsCorrectable, loadEffectsAvailable, loadLotFor, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason } from './grain'
+import { contractIsCorrectable, loadEffectsAvailable, loadLotFor, lotsSaveResolvesAgainst, recordedBinLots, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason } from './grain'
 import { localCalendarDay, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { activeBinCommodityIds, deriveBinOnHand, PRE_BASELINE_BIN_MOVEMENT_MESSAGE, validateBinTransaction, validateGrainBin } from './binLedger'
@@ -108,11 +107,7 @@ export class MockGrainRepository implements GrainRepository {
    * the form, which knows whether the load moves anything. */
   async listBinLots(binId: string) {
     const workspace = await load(this.fieldsRepository)
-    return deriveBinLots(
-      workspace.bin_inventory.find((row) => row.grain_bin_id === binId),
-      workspace.bin_transactions.filter((row) => row.grain_bin_id === binId),
-    )
-      .filter((lot): lot is BinLotOnHand => lot.crop_year !== null)
+    return [...recordedBinLots(workspace, binId)]
       .sort((a, b) => b.crop_year - a.crop_year || a.commodity_id.localeCompare(b.commodity_id))
   }
   async listHarvestLoads(): Promise<{ loads: GrainLoad[]; complete: boolean }> { const workspace = await load(this.fieldsRepository); return { loads: workspace.grain_loads.filter((row) => row.effect_harvest && row.voided_at === null), complete: true } }
@@ -138,11 +133,20 @@ export class MockGrainRepository implements GrainRepository {
   }
   async saveLoad(id: string, draft: GrainLoadDraft) {
     const workspace = await load(this.fieldsRepository)
-    const problems = validateGrainLoad(draft, workspace)
+    // LD-4 repair (Codex P2 on ef8a29e): this method stands in for save_grain_load, so it resolves
+    // the draft against the list THAT function uses -- see lotsSaveResolvesAgainst. It passed no
+    // list at all before, and both calls below then fell through to binLotsOnHand, which drops the
+    // emptied lots. So a ticket-only load naming a lot the bin has already emptied was refused
+    // here while the real RPC accepts it, and the path listBinLots had just been repaired for
+    // could not be reached through the mock by any test.
+    const lots = draft.origin_kind === 'bin' && draft.origin_grain_bin_id
+      ? lotsSaveResolvesAgainst(recordedBinLots(workspace, draft.origin_grain_bin_id), draft)
+      : undefined
+    const problems = validateGrainLoad(draft, workspace, lots)
     if (problems.length) throw new Error(problems[0])
     const existing = workspace.grain_loads.find((row) => row.id === id)
     if (existing) return existing
-    const lot = loadLotFor(workspace, draft)
+    const lot = loadLotFor(workspace, draft, lots)
     if (!lot) throw new Error('Farm Rx cannot tell which crop year this load is.')
     const stamp = now()
     const available = loadEffectsAvailable(draft)

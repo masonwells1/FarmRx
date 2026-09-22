@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 364')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 369')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1098,6 +1098,32 @@ export function foundationStaticGuard(root = process.cwd()) {
       const mock = read(root, 'src/data/MockGrainRepository.ts')
       const body = mock.slice(mock.indexOf('async listBinLots('))
       if (body.slice(0, body.indexOf('\n  }')).includes('bushels >')) errors.push('ld4:the-mock-answers-like-the-database')
+      // The derivation moved into recordedBinLots, so the absence check follows it. Left on the
+      // mock alone it would have been guarding an empty shell -- green, and checking nothing.
+      const recorded = grainData.slice(grainData.indexOf('export function recordedBinLots('))
+      if (recorded.slice(0, recorded.indexOf('\n}')).includes('bushels >')) errors.push('ld4:the-mock-answers-like-the-database')
+      requireText(errors, mock, 'return [...recordedBinLots(workspace, binId)]', 'ld4:the-mock-answers-like-the-database')
+    }
+    {
+      // LD-4 repair: the mock stands in for save_grain_load, so it resolves a draft against the
+      // list THAT function uses. It passed no list at all, and both calls then fell through to
+      // binLotsOnHand -- so a ticket-only load naming an emptied lot was refused by the mock while
+      // production accepts it, and no mock-backed test could reach the path the round before had
+      // just repaired.
+      //
+      // Written as an ABSENCE of the no-list calls, not as the presence of the two-argument ones.
+      // Either call reverting on its own is the bug, and a requireText on one of them stays green
+      // while the other goes back -- the seventh time that shape would have slipped through here.
+      const mock = read(root, 'src/data/MockGrainRepository.ts')
+      const save = mock.slice(mock.indexOf('async saveLoad(id: string, draft: GrainLoadDraft)'))
+      const body = save.slice(0, save.indexOf('\n  async '))
+      if (body.includes('validateGrainLoad(draft, workspace)')) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
+      if (body.includes('loadLotFor(workspace, draft)')) errors.push('ld4:a-save-resolves-against-the-list-the-server-uses')
+      requireText(errors, body, 'lotsSaveResolvesAgainst(recordedBinLots(workspace, draft.origin_grain_bin_id), draft)', 'ld4:a-save-resolves-against-the-list-the-server-uses')
+      // And the rule itself keys on whether a year was NAMED: recorded when it was, on-hand when
+      // it was not. Both branches are pinned, because collapsing either one reproduces a bug this
+      // tranche has already shipped once in each direction.
+      requireText(errors, grainData, "return draft.origin_crop_year.trim()\n    ? recordedLots\n    : recordedLots.filter((lot) => lot.bushels > 0.000001)", 'ld4:a-save-resolves-against-the-list-the-server-uses')
     }
     // And the replay lookup reads INSIDE that lock. Before it, an overlapping retry could read "no
     // such ticket", wait on the lock while the first call emptied the lot, and fail anyway.
