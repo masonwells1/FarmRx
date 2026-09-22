@@ -581,8 +581,8 @@ edit cannot quietly weaken it back.
   answering the balance question a second time.
 - **Nineteen browser regression groups** across two files — ten in `committedFree.regression.ts`,
   nine in the new `loadOriginLot.regression.ts`, the ninth covering the repair below.
-- Static guards PASS with **eighteen new LD-4 guards** (eight, plus ten for the repairs below);
-  **mutation drill 343/343** after merging the LD-3 repair and adding the repair mutations,
+- Static guards PASS with **twenty-three new LD-4 guards** (eight, plus fifteen for the repairs below);
+  **mutation drill 346/346** after merging the LD-3 repair and adding the repair mutations,
   count changed in both files that pin it.
 - **Browser: 119 passed, 15 skipped** on desktop and phone, including a new LD-4 journey that reads
   both lots off the picker, is refused for not answering, and then proves the chosen year is what
@@ -712,6 +712,27 @@ the count is one.
 `prosrc`, and both mutations are caught. **The race itself is not reproduced** — staging it needs two
 concurrent connections and the disposable suite is one session. That limit is stated here rather
 than left for a reader to discover.
+
+### A fourth round, and one of them was a contradiction this ledger had already written down
+
+**An emptied lot stopped being nameable.** (P2) This entry's own limits say that a lot with a zero
+balance can still be chosen when the bin-out effect is unticked — a ticket that moves no bushels is
+a record of something that already happened, and it should be filed under the year it really was.
+`save_grain_load` was written to allow exactly that. **The browser repair then filtered zero-balance
+lots out of the authoritative list before the form ever saw them**, so the path this entry promised
+no longer existed. The repository now keeps every lot the bin has a record of, and the narrowing
+moved to where the load's effects are known: **what a farmer may NAME is a wider list than what the
+form may DEFAULT to**, and a year that moves bushels is only offered when the bin still holds some.
+
+That is worth noticing as a pattern rather than a one-off. A repair aimed at one rule walked into
+another rule written three sections higher in the same document. Prose in a ledger is not a guard;
+the emptied-lot path now has an assertion.
+
+**A void puts bushels back, and nobody told the form.** (P2) A void writes compensating movements,
+so a lot the voided load had emptied is holding grain again. `onSaved()` refreshes the workspace,
+but the authoritative lot read is separate and **wins over the workspace** — so the form kept
+offering one lot where the server now saw two, and refused the next save with no picker to fix it.
+The same refresh that follows a save now follows a void.
 
 ### Live steps
 

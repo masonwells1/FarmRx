@@ -436,6 +436,52 @@ begin
   end if;
 end $$;
 
+-- ------------------------------------------------- 10e. an emptied lot can still be named
+-- The written limit of this tranche, checked rather than asserted in prose: a ticket that moves no
+-- bushels is a record of something that already happened, so it may name a lot the bin has emptied.
+-- The browser repair that stopped trusting a truncated movement list had quietly dropped emptied
+-- lots on the way to the form; this pins the server half so the two halves cannot drift apart.
+do $$
+declare v_load public.grain_loads%rowtype; v_failed boolean := false; v_movements integer;
+begin
+  -- The one-lot bin was hauled to zero in section 9b. Its 2024 lot is still on the record.
+  if (select bushels from public.bin_lots('00000000-0000-4000-8000-000000000410','00000000-0000-4000-8000-000000000422') where crop_year = 2024) <> 0 then
+    raise exception 'the fixture no longer has an emptied 2024 lot, so this proves nothing';
+  end if;
+
+  -- Moving nothing: accepted, and filed under the year it really was.
+  perform public.save_grain_load('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+    'id','00000000-0000-4000-8000-00000000045b','load_date','2026-11-17',
+    'origin_kind','bin','origin_grain_bin_id','00000000-0000-4000-8000-000000000422',
+    'crop_year',2024,
+    'destination_kind','buyer','destination_buyer','LD4 Elevator','net_bushels',500,
+    'effect_bin_out',false));
+  select * into v_load from public.grain_loads where id = '00000000-0000-4000-8000-00000000045b';
+  if v_load.crop_year <> 2024 then
+    raise exception 'a ticket-only load on an emptied lot was filed under %, expected 2024', v_load.crop_year;
+  end if;
+  select count(*) into v_movements from public.bin_transactions where grain_load_id = '00000000-0000-4000-8000-00000000045b';
+  if v_movements <> 0 then
+    raise exception 'a load with the bin-out unticked moved % bushels anyway', v_movements;
+  end if;
+
+  -- And the same lot with the bin-out ticked is still refused, by the guard that owns that
+  -- question. Naming an empty lot is allowed; drawing bushels out of one is not.
+  begin
+    perform public.save_grain_load('00000000-0000-4000-8000-000000000410', jsonb_build_object(
+      'id',gen_random_uuid(),'load_date','2026-11-18',
+      'origin_kind','bin','origin_grain_bin_id','00000000-0000-4000-8000-000000000422',
+      'crop_year',2024,
+      'destination_kind','buyer','destination_buyer','LD4 Elevator','net_bushels',1,
+      'effect_bin_out',true));
+  exception when sqlstate 'FR001' then
+    v_failed := true;
+  end;
+  if not v_failed then
+    raise exception 'an emptied lot gave up a bushel because the ticket named it';
+  end if;
+end $$;
+
 -- ------------------------------------------------- 10d. a retry naming a DIFFERENT lot is refused
 -- The sharp edge of the replay adoption above. It fills in the stored lot only when the caller
 -- named none; a caller who names a different one is asking for a different load and must be told

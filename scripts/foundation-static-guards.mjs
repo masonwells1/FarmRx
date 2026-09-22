@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 343')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 346')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -985,7 +985,7 @@ export function foundationStaticGuard(root = process.cwd()) {
     // with no control on screen to fix it.
     requireText(errors, grainModule, 'setDraft((current) => ({ ...current, origin_crop_year: "" }));', 'ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')
     // And the lots are read again after a save, or the next load is picked against stale balances.
-    requireText(errors, grainModule, 'setLotsRefresh((count) => count + 1);', 'ld4:a-save-changes-what-the-bin-holds')
+    requireText(errors, grainModule, 'ticket_number: "", notes: "" }));\n      setLotsRefresh((count) => count + 1);', 'ld4:a-save-changes-what-the-bin-holds')
 
     // "Not answered yet" is not "answered with nothing". While the lot read is in flight the
     // derivation stands in -- the truncated list the repair exists to stop trusting -- so a farmer
@@ -997,6 +997,17 @@ export function foundationStaticGuard(root = process.cwd()) {
     // And that list is read once on the defaulting path: counting and then selecting was two
     // snapshots, and a SELECT INTO over two rows takes whichever came first.
     requireText(errors, ld4Migration, 'select count(*), max(lots.commodity_id), max(lots.crop_year)', 'ld4:the-lot-list-is-read-once-when-it-defaults')
+
+    // A lot the bin has emptied is still a lot it has a record of. The server accepts one when the
+    // farmer names it, which is how a ticket that moves nothing is filed against the year it really
+    // was -- so the repository must not drop it on the way to the form. Defaulting still uses only
+    // what the bin holds, and that narrowing belongs where the load's effects are known.
+    if (/\.filter\(\(lot\) => lot\.bushels > 0\.000001\)/.test(read(root, 'src/data/SupabaseGrainRepository.ts'))) errors.push('ld4:an-emptied-lot-can-still-be-named')
+    requireText(errors, grainModule, 'const originLots = movesBushels ? onHandLots : recordedLots;', 'ld4:an-emptied-lot-can-still-be-named')
+    requireText(errors, grainModule, "const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : onHandLots;", 'ld4:an-emptied-lot-can-still-be-named')
+    // A void puts bushels back, so the lots have to be read again -- the stale answer wins over the
+    // workspace refresh and would keep offering one lot where the server now sees two.
+    if ((grainModule.split('setLotsRefresh((count) => count + 1);').length - 1) !== 2) errors.push('ld4:a-void-changes-what-the-bin-holds-too')
   }
   {
     // A load's harvest contribution is derived and never written into the replaceable manual total.

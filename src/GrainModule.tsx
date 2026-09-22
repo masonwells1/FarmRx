@@ -4522,8 +4522,25 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // actually do is narrowed once, where it is sent.
   const update = (patch: Partial<GrainLoadDraft>) => { redraft(); setDraft((current) => ({ ...current, ...patch })) };
 
-  const lot = loadLotFor(workspace, draft, authoritativeLots);
-  const problems = validateGrainLoad(draft, workspace, authoritativeLots);
+  const effectsReady = workspace.capabilities?.grain_load_effects !== false;
+  const binLotReady = workspace.capabilities?.grain_load_bin_lot !== false;
+  const recordedLots = draft.origin_kind === "bin" && binLotReady
+    ? (authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id))
+    : [];
+  // What the bin can actually give up today. Defaulting uses only these, exactly as the server
+  // does: a lot at zero is a real lot with nothing left in it, and is no answer to "which year".
+  const onHandLots = recordedLots.filter((binLot) => binLot.bushels > 0.000001);
+  // LD-4 repair (Codex P2 on 46d5252): what a farmer may NAME is a wider list than what the form
+  // may default to. A load that moves no bushels is a record of something that already happened,
+  // so an emptied lot is a legitimate answer for it, and save_grain_load accepts one. A load that
+  // does move bushels would be refused by the bin, so those years are not offered at all.
+  const movesBushels = effectsReady && draft.origin_kind === "bin" && draft.effect_bin_out;
+  const originLots = movesBushels ? onHandLots : recordedLots;
+  // The same split decides the lot itself: a year the farmer named is resolved against everything
+  // the bin has a record of, and a year nobody named is defaulted only from what it still holds.
+  const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : onHandLots;
+  const lot = loadLotFor(workspace, draft, binLotReady ? lotsForResolution : undefined);
+  const problems = validateGrainLoad(draft, workspace, binLotReady ? lotsForResolution : undefined);
   const cropAssignments = workspace.fields.crop_assignments;
   const commodityLabel = (id: string) => workspace.fields.commodities.find((item) => item.id === id)?.name ?? id;
   const binName = (id: string | null) => workspace.grain_bins.find((bin) => bin.id === id)?.name ?? "a bin";
@@ -4540,14 +4557,9 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // LD-2: the effects this load's shape can reach, and the ones the farmer has actually ticked.
   // While the migration is not applied the columns do not exist, so no effect is offered at all --
   // ticking one would produce a database error rather than a moved bushel.
-  const effectsReady = workspace.capabilities?.grain_load_effects !== false;
   // LD-4: the lots this bin actually holds. While the migration is not applied the installed RPC
   // still reads the bin's baseline alone, so no choice is offered -- offering one would let a
   // farmer pick a year and be refused on save, which is LD-006 finding 1 with the roles reversed.
-  const binLotReady = workspace.capabilities?.grain_load_bin_lot !== false;
-  const originLots = draft.origin_kind === "bin" && binLotReady
-    ? (authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id))
-    : [];
 
   // LD-4 repair (Codex P2 on da028bf): the form keeps the origin and the chosen crop year for the
   // next ticket, and a save can empty the lot that year names. The picker then drops to one lot and
@@ -4650,6 +4662,11 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
         return;
       }
       setMessage("Load voided. It stays on the list with your reason, and everything it did has been reversed.");
+      // LD-4 repair (Codex P2 on 46d5252): a void writes compensating movements, so a lot the
+      // voided load had emptied is holding grain again. onSaved refreshes the workspace but not
+      // this read, and the stale answer wins over the workspace -- so the form would keep offering
+      // one lot where the server now sees two, and refuse the next save with no picker to fix it.
+      setLotsRefresh((count) => count + 1);
       await onSaved();
     } catch (error) { setMessage(farmerError(error, "void this load")) } finally { lock.current.release(); setSaving(false) }
   };

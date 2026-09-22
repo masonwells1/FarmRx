@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 343
+const expectedMutationCount = 346
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1016,7 +1016,7 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace('setDraft((current) => ({ ...current, origin_crop_year: "" }));', ''))
   detected('a crop year the save emptied is kept, so the form refuses every further save with no picker to fix it', 'ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('setLotsRefresh((count) => count + 1);', ''))
+  mutate('src/GrainModule.tsx', (source) => source.replace('ticket_number: "", notes: "" }));\n      setLotsRefresh((count) => count + 1);', 'ticket_number: "", notes: "" }));'))
   detected('the lots are never read again after a save, so the next load is picked against stale balances', 'ld4:a-save-changes-what-the-bin-holds')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace("if (binLotReady && originBinId && lotsState !== 'ready') {", "if (binLotReady && originBinId && lotsState === 'unavailable') {"))
@@ -1027,6 +1027,15 @@ try {
   reset()
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('select count(*), max(lots.commodity_id), max(lots.crop_year)', 'select count(*), max(lots.commodity_id), min(lots.crop_year)'))
   detected('the default lot is read from a second query, so two snapshots can disagree about how many lots there are', 'ld4:the-lot-list-is-read-once-when-it-defaults')
+  reset()
+  mutate('src/data/SupabaseGrainRepository.ts', (source) => source.replace('        .sort((a, b) => b.crop_year - a.crop_year || a.commodity_id.localeCompare(b.commodity_id))', '        .filter((lot) => lot.bushels > 0.000001)\n        .sort((a, b) => b.crop_year - a.crop_year || a.commodity_id.localeCompare(b.commodity_id))'))
+  detected('an emptied lot is dropped before the form sees it, so a ticket that moves nothing cannot name its year', 'ld4:an-emptied-lot-can-still-be-named')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('const originLots = movesBushels ? onHandLots : recordedLots;', 'const originLots = onHandLots;'))
+  detected('the picker offers only what the bin still holds, even for a load that moves nothing', 'ld4:an-emptied-lot-can-still-be-named')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace("      // LD-4 repair (Codex P2 on 46d5252): a void writes compensating movements, so a lot the\n      // voided load had emptied is holding grain again. onSaved refreshes the workspace but not\n      // this read, and the stale answer wins over the workspace -- so the form would keep offering\n      // one lot where the server now sees two, and refuse the next save with no picker to fix it.\n      setLotsRefresh((count) => count + 1);\n", ''))
+  detected('a void puts bushels back and the form never reads the lots again, so it keeps offering the wrong year', 'ld4:a-void-changes-what-the-bin-holds-too')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('.filter((row) => row.movementCount > 0)', '.filter((row) => Math.abs(row.bushels) > 0.000001)'))
   detected('unresolved movements that cancel out today stop being named at all', 'ld3:an-unresolved-movement-is-named-however-it-nets')

@@ -203,7 +203,12 @@ export class SupabaseGrainRepository implements GrainRepository, GrainOperationW
         .map((entry) => entry as { commodity_id?: unknown; crop_year?: unknown; bushels?: unknown })
         .filter((entry) => typeof entry.commodity_id === 'string' && Number.isInteger(entry.crop_year) && Number.isFinite(Number(entry.bushels)))
         .map((entry) => ({ commodity_id: entry.commodity_id as string, crop_year: entry.crop_year as number, bushels: Number(entry.bushels) }))
-        .filter((lot) => lot.bushels > 0.000001)
+        // LD-4 repair (Codex P2 on 46d5252): a lot the bin has emptied is KEPT here, at zero.
+        // public.bin_lots returns it on purpose, and save_grain_load accepts it when the farmer
+        // names it explicitly -- which is how a historical ticket that moves nothing gets recorded
+        // against the year it really was. Filtering it out here quietly removed that path, and
+        // contradicted this tranche's own written limit. Defaulting still uses positive lots only;
+        // that narrowing belongs to the caller, which knows whether the load moves bushels.
         .sort((a, b) => b.crop_year - a.crop_year || a.commodity_id.localeCompare(b.commodity_id))
     } catch (error) {
       if (functionMissing(error as { code?: string })) return null
