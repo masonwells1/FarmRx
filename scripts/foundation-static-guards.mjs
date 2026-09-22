@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 381')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 383')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1071,6 +1071,12 @@ export function foundationStaticGuard(root = process.cwd()) {
         from = start + 1
       }
       if (routes !== 2) errors.push('ld4:the-browser-fixture-answers-like-the-database')
+      // The void fixture answers like void_grain_load too: it used to return `voided` for
+      // grain_loads[0] whatever id was asked for, always with an empty blocked_by, so the BLOCKED
+      // branch was unreachable in every journey and the round that repaired its lot refresh had no
+      // browser coverage. Fifth stand-in on this tranche found disagreeing with the server.
+      if ((journeys.split("const target = loads.find((row) => row.id === value.p_load_id)").length - 1) !== 2) errors.push('ld4:the-browser-fixture-answers-like-the-database')
+      if ((journeys.split("if (blockers.length) { await fulfillJson(route, { status: 'blocked', load: target, blocked_by: blockers }); return }").length - 1) !== 2) errors.push('ld4:the-browser-fixture-answers-like-the-database')
     }
     // The bin is locked before its lots are read, so this function's lot decision and
     // append_bin_movement's balance check are inside one serialised window.

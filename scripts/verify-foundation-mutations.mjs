@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 381
+const expectedMutationCount = 383
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1132,6 +1132,12 @@ try {
   reset()
   mutate('tests/e2e/foundation-shell.spec.ts', (source) => source.replace('declared.filter((lot) => lot.grain_bin_id === value.p_grain_bin_id)', 'declared.filter((lot) => lot.grain_bin_id === value.p_grain_bin_id && Number(lot.bushels) > 0)'))
   detected('the browser fixture drops the emptied lots public.bin_lots keeps, so a journey written for that path passes against broken code', 'ld4:the-browser-fixture-answers-like-the-database')
+  reset()
+  mutate('tests/e2e/foundation-shell.spec.ts', (source) => source.replace('const target = loads.find((row) => row.id === value.p_load_id)', 'const target = loads[0]'))
+  detected('the void fixture voids whichever load is first rather than the one asked for, so no journey can prove the farm fence', 'ld4:the-browser-fixture-answers-like-the-database')
+  reset()
+  mutate('tests/e2e/foundation-shell.spec.ts', (source) => source.replace("if (blockers.length) { await fulfillJson(route, { status: 'blocked', load: target, blocked_by: blockers }); return }", ''))
+  detected('the void fixture can only ever answer voided, so the blocked branch is unreachable in every journey', 'ld4:the-browser-fixture-answers-like-the-database')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace("    if (!draft.origin_crop_year.trim()) return;\n", "    if (!draft.origin_crop_year.trim() || originLots.length === 0) return;\n"))
   detected('hauling a one-lot bin dry keeps the year it emptied, so every later ticket is refused by the server with no picker to fix it', 'ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')

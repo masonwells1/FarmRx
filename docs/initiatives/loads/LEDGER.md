@@ -1180,6 +1180,74 @@ That is the same move round 10 made with the lock order: replace a timing rule w
 It is the defect this whole feature exists to prevent — a lot chosen from a list that is not the
 bin's — one layer above the truncation it was built for.
 
+### A seventeenth round: the audit, rather than waiting for the fifth one to be reported
+
+No review finding drove this one. Round 16 ended with four stand-ins found disagreeing with the
+server, one per round, each discovered only when it happened to break something. That is not a
+process; it is luck with a good hit rate. So the remaining grain stand-ins were read against the
+server deliberately.
+
+**The audit found one more, and it was the one holding a repair's only possible coverage.**
+
+`void_grain_load`'s browser fixture returned `status: 'voided'` for `moduleRows.grain_loads[0]`
+**whatever load id was asked for**, always with `blocked_by: []`. Two consequences:
+
+- The **blocked** branch was unreachable in every journey that could ever be written. So round 11's
+  repair — a blocked void must re-read the bin's lots, because a blocked void is *precisely* the
+  case where later movements changed those bins — had no browser coverage and could not have had
+  any.
+- The farm fence could not be exercised either, since the id was ignored.
+
+The fixture answers like the function now: it finds the load by `p_load_id`, refuses one this farm
+does not own, returns `blocked` when the fixture declares blockers, and on a successful void puts
+the bushels back into the declared lots — the mirror of the save decrementing them. The blocking
+*rule* stays declared by each test rather than re-derived in the mock, because simulating it here
+would be a fourth evaluator of it, which is the mistake this tranche has paid for repeatedly.
+
+#### Writing that journey took four attempts, and each failure was the fixture being honest
+
+Worth recording, because each one is the system working:
+
+1. The seeded load used a **field origin with no crop assignment**, which the client rejects — it
+   mirrors a real check constraint. The workspace refused to load at all.
+2. The **reason prompt is the app's own dialog**, not the browser's. No journey had ever answered
+   it: the void path had *no* browser coverage before this one, not merely no blocked-path coverage.
+3. The blocker rows carried **no `id`**, so the parser dropped them and the generic message appeared
+   instead of the named one. The parser drops anything not in the expected shape rather than
+   guessing, which is exactly right.
+4. **The journey passed without the repair.** The lot figures never changed in the fixture, so
+   "the lots were read again" was unobservable — a decoration, not an assertion. The fixture now has
+   another truck empty the bin to 500 bu *before* the void, which is also why the void is blocked.
+   Without the refresh the screen keeps showing 5,000 bu that are not there, and the journey fails.
+
+That fourth one is the same mistake as round 16's, made again one round later, and caught only
+because reverting the repair is now a step rather than an afterthought.
+
+### Proof observed for round 17
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
+  `git diff --check` clean.
+- **Eleven disposable SQL suites pass together.**
+- Static guards PASS; **mutation drill 383/383**, count changed in both files that pin it. Two
+  added: the fixture voiding the first load rather than the one asked for, and the fixture unable to
+  answer `blocked` at all.
+- **Browser: 129 passed, 15 skipped.** The new journey was run with the blocked-void refresh removed
+  and **fails there**, showing the stale 5,000 bu.
+- **All regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
+
+#### The audit's standing result
+
+Five grain stand-ins have now been found disagreeing with the server on this tranche, and all five
+are fixed and guarded: `MockGrainRepository.listBinLots`, its `saveLoad`, its `lotBalance`, the
+browser fixture's `bin_lots`, and the browser fixture's `void_grain_load`. The remaining grain RPC
+fixtures — `save_grain_load`, `edit_grain_contract`, `delete_grain_contract` — were read in the same
+pass and **do** mirror their functions on the points this tranche depends on.
+
+The rule this leaves behind, and the reason the count is written down: **a stand-in is part of the
+contract, not scaffolding around it.** Four of the five were found by accident. The fifth was found
+by looking.
+
 ### Proof observed for round 16
 
 - `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;

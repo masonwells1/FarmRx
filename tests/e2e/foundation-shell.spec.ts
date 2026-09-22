@@ -384,7 +384,31 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
         const saved = { id: draft.id, farm_id: value.p_farm_id, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id ?? null, truck_name: draft.truck_name ?? null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_grain_bin_id ?? null, origin_crop_assignment_id: draft.origin_crop_assignment_id ?? null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_buyer ?? null, destination_grain_contract_id: draft.destination_grain_contract_id ?? null, destination_grain_bin_id: draft.destination_grain_bin_id ?? null, commodity_id: commodityId, crop_year: savedYear, gross_lbs: draft.gross_lbs ?? null, tare_lbs: draft.tare_lbs ?? null, net_bushels: draft.net_bushels, moisture_pct: draft.moisture_pct ?? null, ticket_number: draft.ticket_number ?? null, photo_path: null, notes: draft.notes ?? null, voided_at: null, void_reason: null, created_at: now, updated_at: now }
         await fulfillJson(route, saved); return
       }
-      await fulfillJson(route, { status: 'voided', load: { ...(moduleRows.grain_loads?.[0] as Record<string, unknown> ?? {}), voided_at: now, void_reason: value.p_reason }, blocked_by: [] }); return
+      // LD-4 repair: the void fixture answers like void_grain_load, which it did not. It used to
+      // return `voided` for moduleRows.grain_loads[0] whatever load id was asked for, always with
+      // an empty blocked_by -- so no journey could reach the BLOCKED branch at all, and the round
+      // that repaired the blocked path's lot refresh had no browser coverage for it. Fifth and last
+      // stand-in on this tranche found disagreeing with the server.
+      {
+        const loads = (moduleRows.grain_loads ?? []) as Record<string, unknown>[]
+        const target = loads.find((row) => row.id === value.p_load_id)
+        // The farm fence, which the server raises and section 10j asserts against the real function.
+        if (!target) { await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ message: 'that load does not belong to this farm', code: 'P0001', details: null, hint: null }) }); return }
+        // A blocked void changes NOTHING -- not the ledger, not the lots. Declared by the fixture
+        // rather than re-derived here: simulating the server's blocking rule would be a fourth
+        // evaluator of it, which is the mistake this tranche keeps paying for.
+        const blockers = (moduleRows.void_blocked_by ?? []) as Record<string, unknown>[]
+        if (blockers.length) { await fulfillJson(route, { status: 'blocked', load: target, blocked_by: blockers }); return }
+        // A successful void puts the bushels back, so a fixture that declares lots has to reflect
+        // it -- the same reason the save decrements them.
+        const declaredLots = moduleRows.bin_lots as Record<string, unknown>[] | undefined
+        if (declaredLots && target.origin_kind === 'bin' && target.effect_bin_out) {
+          const restored = declaredLots.find((lot) => lot.grain_bin_id === target.origin_grain_bin_id && lot.crop_year === target.crop_year)
+          if (restored) restored.bushels = Number(restored.bushels) + Number(target.net_bushels)
+        }
+        target.voided_at = now; target.void_reason = value.p_reason as string
+        await fulfillJson(route, { status: 'voided', load: target, blocked_by: [] }); return
+      }
     }
     // LD-4: the capability probe asking whether public.bin_lots is installed. Declared by shape
     // rather than matched by name, so a future call with a different body is still rejected.
@@ -1124,7 +1148,31 @@ test('a direct signed-in A to B replacement hides Farm A before B access validat
         const saved = { id: draft.id, farm_id: value.p_farm_id, load_date: draft.load_date, truck_equipment_id: draft.truck_equipment_id ?? null, truck_name: draft.truck_name ?? null, origin_kind: draft.origin_kind, origin_grain_bin_id: draft.origin_grain_bin_id ?? null, origin_crop_assignment_id: draft.origin_crop_assignment_id ?? null, destination_kind: draft.destination_kind, destination_buyer: draft.destination_buyer ?? null, destination_grain_contract_id: draft.destination_grain_contract_id ?? null, destination_grain_bin_id: draft.destination_grain_bin_id ?? null, commodity_id: commodityId, crop_year: savedYear, gross_lbs: draft.gross_lbs ?? null, tare_lbs: draft.tare_lbs ?? null, net_bushels: draft.net_bushels, moisture_pct: draft.moisture_pct ?? null, ticket_number: draft.ticket_number ?? null, photo_path: null, notes: draft.notes ?? null, voided_at: null, void_reason: null, created_at: now, updated_at: now }
         await fulfillJson(route, saved); return
       }
-      await fulfillJson(route, { status: 'voided', load: { ...(moduleRows.grain_loads?.[0] as Record<string, unknown> ?? {}), voided_at: now, void_reason: value.p_reason }, blocked_by: [] }); return
+      // LD-4 repair: the void fixture answers like void_grain_load, which it did not. It used to
+      // return `voided` for moduleRows.grain_loads[0] whatever load id was asked for, always with
+      // an empty blocked_by -- so no journey could reach the BLOCKED branch at all, and the round
+      // that repaired the blocked path's lot refresh had no browser coverage for it. Fifth and last
+      // stand-in on this tranche found disagreeing with the server.
+      {
+        const loads = (moduleRows.grain_loads ?? []) as Record<string, unknown>[]
+        const target = loads.find((row) => row.id === value.p_load_id)
+        // The farm fence, which the server raises and section 10j asserts against the real function.
+        if (!target) { await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ message: 'that load does not belong to this farm', code: 'P0001', details: null, hint: null }) }); return }
+        // A blocked void changes NOTHING -- not the ledger, not the lots. Declared by the fixture
+        // rather than re-derived here: simulating the server's blocking rule would be a fourth
+        // evaluator of it, which is the mistake this tranche keeps paying for.
+        const blockers = (moduleRows.void_blocked_by ?? []) as Record<string, unknown>[]
+        if (blockers.length) { await fulfillJson(route, { status: 'blocked', load: target, blocked_by: blockers }); return }
+        // A successful void puts the bushels back, so a fixture that declares lots has to reflect
+        // it -- the same reason the save decrements them.
+        const declaredLots = moduleRows.bin_lots as Record<string, unknown>[] | undefined
+        if (declaredLots && target.origin_kind === 'bin' && target.effect_bin_out) {
+          const restored = declaredLots.find((lot) => lot.grain_bin_id === target.origin_grain_bin_id && lot.crop_year === target.crop_year)
+          if (restored) restored.bushels = Number(restored.bushels) + Number(target.net_bushels)
+        }
+        target.voided_at = now; target.void_reason = value.p_reason as string
+        await fulfillJson(route, { status: 'voided', load: target, blocked_by: [] }); return
+      }
     }
     // LD-4: the capability probe asking whether public.bin_lots is installed. Declared by shape
     // rather than matched by name, so a future call with a different body is still rejected.
@@ -2035,6 +2083,66 @@ test('hauling a one-lot bin dry drops the year it emptied, rather than refusing 
   // not showing. The message is the local one, and the RPC is never reached.
   await expect(page.getByText('That bin holds no crop with a crop year, so Farm Rx cannot tell which crop year this load is.')).toBeVisible()
   expect(loadRecordCalls.length).toBe(0)
+  expect(unexpected).toEqual([])
+})
+
+test('a void the bins will not take changes nothing, and still re-reads what they hold', async ({ page, context }) => {
+  await seedSession(context)
+  loadRecordCalls.length = 0
+  const farm = farms[0]!
+  const binId = '00000000-0000-4000-8000-0000000000c1'
+  const loadId = '00000000-0000-4000-8000-0000000000c3'
+  const sourceBin = '00000000-0000-4000-8000-0000000000c4'
+  const binRows = [
+    { id: binId, farm_id: farm.id, name: 'Home bin', capacity_bu: 40_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now },
+    { id: sourceBin, farm_id: farm.id, name: 'North dryer bin', capacity_bu: 42_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now },
+  ]
+  const inventoryRows = [
+    { id: '00000000-0000-4000-8000-0000000000c2', farm_id: farm.id, grain_bin_id: binId, crop_year: 2026, commodity_id: commodityId, bushels: 5_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now },
+  ]
+  const lotRows = [{ grain_bin_id: binId, commodity_id: commodityId, crop_year: 2026, bushels: 5_000 }]
+  // A transfer already on the record, hauled INTO this bin from another one, so voiding it has to take those bushels
+  // back out -- which is the void the bin can refuse.
+  const loadRows = [
+    { id: loadId, farm_id: farm.id, load_date: '2026-11-01', truck_equipment_id: null, truck_name: null, origin_kind: 'bin', origin_grain_bin_id: sourceBin, origin_crop_assignment_id: null, destination_kind: 'bin', destination_buyer: null, destination_grain_contract_id: null, destination_grain_bin_id: binId, commodity_id: commodityId, crop_year: 2026, gross_lbs: null, tare_lbs: null, net_bushels: 1_000, moisture_pct: null, ticket_number: 'T-1', photo_path: null, notes: null, effect_bin_out: true, effect_bin_in: true, effect_contract_delivery: false, effect_harvest: false, voided_at: null, void_reason: null, created_at: now, updated_at: now },
+  ]
+  // The bins have moved on since, so the compensating movement cannot be written. The server's
+  // answer to that is BLOCKED: nothing changes at all, and the movements in the way are named.
+  const blockers = [{ id: '00000000-0000-4000-8000-0000000000c5', grain_bin_id: binId, direction: 'out', bushels: 4_500, commodity_id: commodityId, crop_year: 2026, occurred_on: '2026-11-05', source_kind: null }]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: [], bin_lots: lotRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: loadRows, void_blocked_by: blockers })
+
+  page.on('pageerror', (e) => console.log('PAGEERROR:', e.message))
+  page.on('console', (m) => { if (m.type() === 'error') console.log('CONSOLE:', m.text()) })
+  await page.goto('/grain/loads')
+  await expect(page.getByRole('heading', { name: 'Loads', exact: true })).toBeVisible()
+
+  // The form reads the bin's lots once and holds that answer.
+  await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(binId)
+  await expect(page.getByText('This bin holds one crop year')).toContainText('5,000 bu')
+  loadRecordCalls.length = 0
+
+  // Another truck empties most of the bin -- which is WHY the void below is blocked. The form is
+  // now holding a figure it has no way to know is wrong, and only a re-read can correct it.
+  lotRows[0]!.bushels = 500
+
+  // The reason prompt is the app's own dialog, not the browser's, and no journey had ever answered
+  // it -- the void path had no browser coverage at all before this one.
+  await page.getByRole('button', { name: 'Void', exact: true }).first().click()
+  await page.getByRole('textbox', { name: 'Reason' }).fill('entered twice')
+  await page.getByRole('button', { name: 'Void this load' }).click()
+
+  // The refusal names what is in the way, in the farmer's words, and says nothing was changed.
+  await expect(page.getByText('This ticket cannot be voided yet')).toContainText('4,500 bu')
+  await expect.poll(() => loadRecordCalls.filter((call) => call.rpc === 'void_grain_load').length).toBe(1)
+
+  // And the lots are read AGAIN, so the screen stops showing 5,000 bu that are not there. A blocked
+  // void is precisely the case where later movements changed those bins, so it is the outcome that
+  // most needs a fresh list -- and it was the one outcome that skipped the refresh until round 11,
+  // with no journey able to reach it at all until this fixture could answer `blocked`.
+  //
+  // The figure is what makes this an assertion rather than a decoration: without the refresh the
+  // form keeps the answer it already had, and 5,000 stays on screen.
+  await expect(page.getByText('This bin holds one crop year')).toContainText('500 bu')
   expect(unexpected).toEqual([])
 })
 
