@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 358')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 361')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -860,7 +860,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, ld1Migration, "raise exception using errcode = 'P0001', message = 'FARM_RX_LOAD_ID_REUSED';", 'ld1:a-lost-response-is-not-a-lost-ticket')
   requireText(errors, ld1Migration, "raise exception using errcode = 'P0001', message = 'FARM_RX_LOAD_ALREADY_VOIDED';", 'ld1:a-lost-response-is-not-a-lost-ticket')
   requireText(errors, grainModule, 'loadId.current ??= services.createGrainId();', 'ld1:a-lost-response-is-not-a-lost-ticket')
-  requireText(errors, grainModule, 'const redraft = () => { loadId.current = null };', 'ld1:a-lost-response-is-not-a-lost-ticket')
+  requireText(errors, grainModule, 'const redraft = () => { loadId.current = null; setTicketOutstanding(false) };', 'ld1:a-lost-response-is-not-a-lost-ticket')
   // Every field change drops the held ticket id: the same id standing for different content is the
   // one thing the server refuses outright.
   const loadsTabBody = grainModule.slice(grainModule.indexOf('export function LoadsTab'))
@@ -1027,7 +1027,7 @@ export function foundationStaticGuard(root = process.cwd()) {
     // so the ticket would record a crop the screen never named, with no error to notice it by.
     requireText(errors, grainModule, "setDraft((current) => ({ ...current, origin_crop_year: String(only.crop_year), origin_commodity_id: only.commodity_id }));", 'ld4:the-form-states-the-lot-it-showed')
     // And it states it only from a settled list, or it answers from the fallback it exists to replace.
-    requireText(errors, grainModule, "if (!binLotReady || lotsState !== 'ready') return;", 'ld4:the-form-states-the-lot-it-showed')
+    requireText(errors, grainModule, "if (!binLotReady || lotsState !== 'ready' || ticketOutstanding) return;", 'ld4:the-form-states-the-lot-it-showed')
     // The bin is locked before its lots are read, so this function's lot decision and
     // append_bin_movement's balance check are inside one serialised window.
     requireText(errors, ld4Migration, 'where id = v_origin_bin and farm_id = p_farm_id for update;', 'ld4:the-bin-is-locked-before-its-lots-decide-anything')
@@ -1046,10 +1046,23 @@ export function foundationStaticGuard(root = process.cwd()) {
     // Everything that can change which lots a bin has takes the same row lock, so counting them and
     // acting on that count cannot be interleaved. Naming a crop year CREATES a lot, so it queues
     // there too -- it locked only the movement row before.
-    requireText(errors, ld4Migration, 'perform 1 from public.grain_bins', 'ld4:everything-that-changes-a-bin-queues-behind-it')
+    // Counted: twice, once inside lock_farm_bins and once where naming a crop year takes its bin.
+    // Asking only whether the string appears would stay green while the second one went away --
+    // the sixth time that shape has slipped through on this tranche.
+    if ((ld4Migration.split('perform 1 from public.grain_bins').length - 1) !== 2) errors.push('ld4:everything-that-changes-a-bin-queues-behind-it')
     // And in the SAME ORDER append_bin_movement takes them: bin, then movement row. Two functions
     // taking two locks in opposite orders is a deadlock cycle, and PostgreSQL resolves it by
     // aborting a farmer's save for a reason they can neither see nor act on.
+    // One lock order for the module, stated once and used by everything that touches more than one
+    // bin. Three review rounds found three deadlocks, each a different pair taken in a different
+    // order, because there was no order to follow. Both multi-bin writers call this.
+    requireText(errors, ld4Migration, 'create or replace function public.lock_farm_bins(p_farm_id uuid, p_bin_ids uuid[])', 'ld4:one-lock-order-for-the-module')
+    if ((ld4Migration.split('perform public.lock_farm_bins(').length - 1) !== 2) errors.push('ld4:one-lock-order-for-the-module')
+    requireText(errors, ld4Migration, 'order by id', 'ld4:one-lock-order-for-the-module')
+    // And the draft's chosen lot is frozen while a ticket id is outstanding, or a retry can reach
+    // the server under a different lot and be refused as a reused id -- for a load already saved.
+    requireText(errors, grainModule, 'const [ticketOutstanding, setTicketOutstanding] = useState(false);', 'ld4:an-outstanding-ticket-keeps-its-lot')
+    if ((grainModule.split('ticketOutstanding) return;').length - 1) !== 2) errors.push('ld4:an-outstanding-ticket-keeps-its-lot')
     {
       const assign = ld4Migration.slice(ld4Migration.indexOf('function public.assign_bin_movement_crop_year'))
       const binLock = assign.indexOf('perform 1 from public.grain_bins')

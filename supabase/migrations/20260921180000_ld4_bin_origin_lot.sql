@@ -109,6 +109,48 @@ comment on function public.bin_lots(uuid, uuid) is
   'bushels -- append_bin_movement decides that under a row lock.';
 
 -- ---------------------------------------------------------------------------
+-- 1b. lock_farm_bins: one lock order for the whole module
+-- ---------------------------------------------------------------------------
+--
+-- LD-4 repair (Codex P2 on bba6b10). Three rounds of this tranche's review found deadlocks, each
+-- a different pair of locks taken in a different order, and each was patched where it was found.
+-- The third one made the shape obvious: the module had no stated lock order at all, so every new
+-- function invented one.
+--
+-- It has one now, and this is it. A transaction that will touch more than one bin locks ALL of
+-- them here first, in ascending id order, before it decides anything. Two transfers running in
+-- opposite directions -- A to B and B to A -- then queue instead of deadlocking, because both ask
+-- for the lower id first. After the bins, the order is grain_loads, then bin_transactions, then
+-- grain_contracts, then grain_contract_deliveries; every function below follows it.
+--
+-- No grant. Only the SECURITY DEFINER functions that already checked their caller's permission
+-- reach this, and they run as the owner.
+create or replace function public.lock_farm_bins(p_farm_id uuid, p_bin_ids uuid[])
+returns void
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_bin_id uuid;
+begin
+  for v_bin_id in
+    select distinct id from public.grain_bins
+     where farm_id = p_farm_id and id = any(p_bin_ids)
+     order by id
+  loop
+    perform 1 from public.grain_bins where id = v_bin_id for update;
+  end loop;
+end $$;
+
+revoke all on function public.lock_farm_bins(uuid, uuid[]) from public, anon, authenticated;
+
+comment on function public.lock_farm_bins(uuid, uuid[]) is
+  'LD-4: locks every named bin of one farm in ascending id order. Any transaction touching more '
+  'than one bin calls this before it decides anything, so two transfers in opposite directions '
+  'queue rather than deadlock.';
+
+-- ---------------------------------------------------------------------------
 -- 2. save_grain_load, now letting the farmer name the lot
 -- ---------------------------------------------------------------------------
 --
@@ -223,6 +265,10 @@ begin
     v_origin_bin := null;
   else
     if v_origin_bin is null then raise exception 'pick the bin this load came from'; end if;
+    -- Both bins, in id order, before anything is decided. A bin-to-bin transfer locks its origin
+    -- here and its destination when the bin-in movement is appended; without this, A-to-B and
+    -- B-to-A would each hold the other's next lock. See lock_farm_bins for the module's order.
+    perform public.lock_farm_bins(p_farm_id, array_remove(array[v_origin_bin, v_destination_bin], null));
     -- LD-4 repair (Codex P1 on 35d7bdb): FOR UPDATE, and it is not decoration. append_bin_movement
     -- locks this same row before it touches a balance, so taking the lock here puts this function's
     -- lot decision and that movement inside one serialised window. Without it, another truck's
@@ -787,3 +833,134 @@ end $$;
 
 revoke all on function public.assign_bin_movement_crop_year(uuid, uuid, integer) from public, anon;
 grant execute on function public.assign_bin_movement_crop_year(uuid, uuid, integer) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 5. void_grain_load, taking its bins in the module's order
+-- ---------------------------------------------------------------------------
+--
+-- Replaces LD-2's definition. The only change is the ordered bin lock described inside: a void
+-- writes compensating movements into every bin the load touched, so it is a multi-bin transaction
+-- and follows the same rule as save_grain_load. Every guard, message and blocked-void answer is
+-- LD-2's, unchanged.
+
+create or replace function public.void_grain_load(p_farm_id uuid, p_load_id uuid, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_load public.grain_loads%rowtype;
+  v_reason text := nullif(btrim(p_reason), '');
+  v_movement public.bin_transactions%rowtype;
+  v_opposite public.bin_transaction_direction;
+  v_blocked jsonb;
+  v_refusal text;
+begin
+  if auth.uid() is null
+     or public.request_uses_service_role()
+     or not public.can_edit_farm(p_farm_id)
+     or not public.can_read_private_financials(p_farm_id) then
+    raise exception 'you do not have permission to void a load for this farm';
+  end if;
+  if v_reason is null or length(v_reason) < 3 or length(v_reason) > 2000 then
+    raise exception 'say why this ticket is being voided';
+  end if;
+
+  select * into v_load from public.grain_loads
+    where id = p_load_id and farm_id = p_farm_id for update;
+
+  -- LD-4 repair (Codex P2 on bba6b10): every bin this void will write a compensating movement
+  -- into, locked in id order before any of them is touched. A void of a bin-to-bin transfer
+  -- reverses two movements in two bins, so without this it could hold one bin and wait for the
+  -- other while a concurrent transfer held them the opposite way round. See lock_farm_bins.
+  perform public.lock_farm_bins(p_farm_id, array(
+    select distinct grain_bin_id from public.bin_transactions
+     where grain_load_id = p_load_id and farm_id = p_farm_id));
+  if not found then raise exception 'that load does not belong to this farm'; end if;
+
+  -- A void is one transaction, so a load that carries voided_at has already had every effect
+  -- reversed. A replay with the same reason answers; a different reason is refused rather than
+  -- overwriting the reason on the record.
+  if v_load.voided_at is not null then
+    if v_load.void_reason is not distinct from v_reason then
+      return jsonb_build_object('status', 'voided', 'load', to_jsonb(v_load), 'blocked_by', '[]'::jsonb);
+    end if;
+    raise exception using errcode = 'P0001', message = 'FARM_RX_LOAD_ALREADY_VOIDED';
+  end if;
+
+  begin
+    -- A delivery is a claim about a contract rather than a physical event, so it is removed
+    -- outright. Every existing reader of delivered bushels is then correct with no second rule
+    -- about voided deliveries to learn; the voided load keeps the history of what it did.
+    delete from public.grain_contract_deliveries
+     where grain_load_id = p_load_id and farm_id = p_farm_id;
+
+    -- The bin ledger is a physical record and is append-only, so each movement is answered by
+    -- its opposite rather than erased.
+    for v_movement in
+      select * from public.bin_transactions
+       where grain_load_id = p_load_id
+         and farm_id = p_farm_id
+         and source_kind = 'grain_load'
+       order by created_at, id
+    loop
+      v_opposite := case when v_movement.direction = 'in' then 'out' else 'in' end;
+      perform public.append_bin_movement(p_farm_id, jsonb_build_object(
+        'id', gen_random_uuid(),
+        'grain_bin_id', v_movement.grain_bin_id,
+        'direction', v_opposite,
+        'bushels', v_movement.bushels,
+        'commodity_id', v_movement.commodity_id,
+        'crop_year', v_movement.crop_year,
+        'occurred_on', current_date,
+        'note', format('Reversing a voided load: %s', v_reason),
+        'source_kind', 'grain_load_void',
+        'grain_load_id', p_load_id
+      ));
+    end loop;
+  exception when sqlstate 'FR001' then
+    -- The bin cannot take the reversal. Nothing above survived this rollback.
+    v_refusal := sqlerrm;
+    select coalesce(jsonb_agg(jsonb_build_object(
+             'id', t.id,
+             'grain_bin_id', t.grain_bin_id,
+             'direction', t.direction::text,
+             'bushels', t.bushels,
+             'commodity_id', t.commodity_id,
+             'crop_year', t.crop_year,
+             'occurred_on', t.occurred_on,
+             'source_kind', t.source_kind
+           ) order by t.occurred_on, t.created_at), '[]'::jsonb)
+      into v_blocked
+      from public.bin_transactions t
+     where t.farm_id = p_farm_id
+       and t.grain_load_id is distinct from p_load_id
+       and exists (
+         select 1 from public.bin_transactions mine
+          where mine.grain_load_id = p_load_id
+            and mine.farm_id = p_farm_id
+            and mine.source_kind = 'grain_load'
+            and mine.grain_bin_id = t.grain_bin_id
+            and mine.commodity_id = t.commodity_id
+            and mine.crop_year is not distinct from t.crop_year
+            and (t.occurred_on, t.created_at) > (mine.occurred_on, mine.created_at)
+       );
+    return jsonb_build_object(
+      'status', 'blocked',
+      'load', to_jsonb(v_load),
+      'blocked_by', v_blocked,
+      'reason', v_refusal
+    );
+  end;
+
+  update public.grain_loads
+     set voided_at = now(), void_reason = v_reason, voided_by = auth.uid(), updated_at = now()
+   where id = p_load_id and farm_id = p_farm_id
+  returning * into v_load;
+
+  return jsonb_build_object('status', 'voided', 'load', to_jsonb(v_load), 'blocked_by', '[]'::jsonb);
+end $$;
+
+revoke all on function public.void_grain_load(uuid, uuid, text) from public, anon;
+grant execute on function public.void_grain_load(uuid, uuid, text) to authenticated;

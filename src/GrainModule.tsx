@@ -4517,7 +4517,18 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       .catch(() => { if (current) setLotsState('unavailable') });
     return () => { current = false };
   }, [services, originBinId, lotsRefresh]);
-  const redraft = () => { loadId.current = null };
+  // LD-4 repair (Codex P1 on bba6b10): while a ticket id is outstanding -- a save whose outcome is
+  // unknown, which LD-1 keeps deliberately so a retry replays rather than duplicating -- THE LOT
+  // MUST NOT MOVE. Three separate mechanisms were free to change it: the post-attempt refresh, the
+  // effect that drops a vanished year, and the effect that fills in a lone one. Together they could
+  // retry the same ticket id under a different crop year, and save_grain_load would answer
+  // FARM_RX_LOAD_ID_REUSED -- refusing a load that was already recorded.
+  //
+  // The list still refreshes, because the picker should show the truth. What is frozen is the
+  // DRAFT'S CHOICE, which is what the outstanding ticket was sent with. A ref cannot be watched by
+  // an effect, so it is mirrored here.
+  const [ticketOutstanding, setTicketOutstanding] = useState(false);
+  const redraft = () => { loadId.current = null; setTicketOutstanding(false) };
   // The effect flags are a preference and deliberately survive a change of shape: a box the farmer
   // never touched keeps its default, and one they unticked stays unticked. What a load will
   // actually do is narrowed once, where it is sent.
@@ -4587,11 +4598,11 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // from that would silently answer a question the farmer was about to be asked. Caught by the
   // browser journey, not by reading: the picker still appeared, but with a choice already made.
   useEffect(() => {
-    if (!binLotReady || lotsState !== 'ready') return;
+    if (!binLotReady || lotsState !== 'ready' || ticketOutstanding) return;
     if (draft.origin_crop_year.trim() || originLots.length !== 1) return;
     const only = originLots[0]!;
     setDraft((current) => ({ ...current, origin_crop_year: String(only.crop_year), origin_commodity_id: only.commodity_id }));
-  }, [binLotReady, lotsState, draft.origin_crop_year, originLots]);
+  }, [binLotReady, lotsState, ticketOutstanding, draft.origin_crop_year, originLots]);
 
   // LD-4 repair (Codex P2 on da028bf): the form keeps the origin and the chosen crop year for the
   // next ticket, and a save can empty the lot that year names. The picker then drops to one lot and
@@ -4599,11 +4610,12 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // further save and the control that could fix it is no longer on screen. Dropping a year the bin
   // no longer offers puts the form back in a state the farmer can actually act on.
   useEffect(() => {
+    if (ticketOutstanding) return;
     if (!draft.origin_crop_year.trim() || originLots.length === 0) return;
     if (originLots.some((binLot) => String(binLot.crop_year) === draft.origin_crop_year.trim()
       && (!draft.origin_commodity_id || binLot.commodity_id === draft.origin_commodity_id))) return;
     setDraft((current) => ({ ...current, origin_crop_year: "", origin_commodity_id: "" }));
-  }, [draft.origin_crop_year, draft.origin_commodity_id, originLots]);
+  }, [ticketOutstanding, draft.origin_crop_year, draft.origin_commodity_id, originLots]);
   const availableEffects = effectsReady ? loadEffectsAvailable(draft) : [];
   const confirmedEffects = confirmedLoadEffects(draft);
   const typedNet = Number(draft.net_bushels);
@@ -4639,6 +4651,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       if (problems.length) { setMessage(problems[0]); return }
       setSaving(true);
       loadId.current ??= services.createGrainId();
+      setTicketOutstanding(true);
       // The effect flags are a preference that survives a change of shape, and they default to
       // ticked. While the migration is not applied this page shows no effects at all and says the
       // save records only the ticket -- but the flags are still true underneath. If the migration
@@ -4654,6 +4667,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       const outgoing = binLotReady ? outgoing0 : { ...outgoing0, origin_crop_year: "", origin_commodity_id: "" };
       const saved = await services.grainRepository.saveLoad(loadId.current, outgoing);
       loadId.current = null;
+      setTicketOutstanding(false);
       // The next ticket almost always shares the date, the truck and the origin -- a farmer hauling
       // out of one bin all afternoon should not retype them. The weights, moisture and ticket number
       // are what change per load, so only those are cleared.

@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 358
+const expectedMutationCount = 361
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -914,7 +914,7 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace('loadId.current ??= services.createGrainId();', 'loadId.current = services.createGrainId();'))
   detected('a retried load takes a fresh id and writes a second ticket', 'ld1:a-lost-response-is-not-a-lost-ticket')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('const redraft = () => { loadId.current = null };', 'const redraft = () => { /* keep the id */ };'))
+  mutate('src/GrainModule.tsx', (source) => source.replace('const redraft = () => { loadId.current = null; setTicketOutstanding(false) };', 'const redraft = () => { /* keep the id */ };'))
   detected('editing the load form after a lost response reuses the previous ticket id', 'ld1:a-lost-response-is-not-a-lost-ticket')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('What saving this will do', 'Extras'))
@@ -1025,7 +1025,7 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace("    setDraft((current) => ({ ...current, origin_crop_year: String(only.crop_year), origin_commodity_id: only.commodity_id }));\n", ''))
   detected('a single-lot bin sends no lot, so a bin that changed underneath records a crop the screen never named', 'ld4:the-form-states-the-lot-it-showed')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace("    if (!binLotReady || lotsState !== 'ready') return;\n", ''))
+  mutate('src/GrainModule.tsx', (source) => source.replace("    if (!binLotReady || lotsState !== 'ready' || ticketOutstanding) return;\n", ''))
   detected('the form states a lot from a list that has not landed yet, answering a question it was about to ask', 'ld4:the-form-states-the-lot-it-showed')
   reset()
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('where id = v_origin_bin and farm_id = p_farm_id for update;', 'where id = v_origin_bin and farm_id = p_farm_id;'))
@@ -1066,6 +1066,15 @@ try {
   reset()
   mutate('src/data/MockGrainRepository.ts', (source) => source.replace("(lot): lot is BinLotOnHand => lot.crop_year !== null", "(lot): lot is BinLotOnHand => lot.crop_year !== null && lot.bushels > 0.000001"))
   detected('the mock drops the emptied lots the real function keeps, so no mock-backed test can cover a ticket-only load', 'ld4:the-mock-answers-like-the-database')
+  reset()
+  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('    perform public.lock_farm_bins(p_farm_id, array_remove(array[v_origin_bin, v_destination_bin], null));\n', ''))
+  detected('a transfer locks only its origin, so two transfers in opposite directions deadlock', 'ld4:one-lock-order-for-the-module')
+  reset()
+  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('     order by id\n  loop', '  loop'))
+  detected('the bins are locked in whatever order the table returns them, which is no order at all', 'ld4:one-lock-order-for-the-module')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace("    if (!binLotReady || lotsState !== 'ready' || ticketOutstanding) return;", "    if (!binLotReady || lotsState !== 'ready') return;"))
+  detected('a retry of an unknown save reaches the server under a different lot and is refused as a reused id', 'ld4:an-outstanding-ticket-keeps-its-lot')
   reset()
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("    if v_crop_year is null then\n      select crop_year, commodity_id into v_replay_year, v_replay_commodity\n        from public.grain_loads where id = v_id and farm_id = p_farm_id;\n      if found then\n        v_crop_year := v_replay_year;\n        if v_commodity is null then v_commodity := v_replay_commodity; end if;\n      end if;\n    end if;\n", ''))
   detected('the replay lookup leaves the lock, so an overlapping retry fails on a lot the first call emptied', 'ld4:the-replay-lookup-reads-inside-the-lock')

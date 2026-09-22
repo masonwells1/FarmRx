@@ -582,7 +582,7 @@ edit cannot quietly weaken it back.
 - **Nineteen browser regression groups** across two files — ten in `committedFree.regression.ts`,
   nine in the new `loadOriginLot.regression.ts`, the ninth covering the repair below.
 - Static guards PASS with **twenty-three new LD-4 guards** (eight, plus fifteen for the repairs below);
-  **mutation drill 358/358** after merging the LD-3 repair and adding the repair mutations,
+  **mutation drill 361/361** after merging the LD-3 repair and adding the repair mutations,
   count changed in both files that pin it.
 - **Browser: 119 passed, 15 skipped** on desktop and phone, including a new LD-4 journey that reads
   both lots off the picker, is refused for not answering, and then proves the chosen year is what
@@ -870,10 +870,52 @@ with*, so appending a balance test left the pinned string intact. It is written 
 now. Five occurrences on one tranche is no longer a run of bad luck: **`requireText` on a string
 another edit can extend is not a guard**, and every one of the five was found by the drill.
 
+### A tenth round, and the point at which patching stopped being the answer
+
+Two findings, and both were in the previous rounds' fixes again — the third consecutive round of
+that. I had written down, before this round arrived, that a third fix-of-a-fix in this area would
+mean stepping back rather than patching once more. **This is that round, and this entry is what the
+step back produced.**
+
+**A bin-to-bin transfer locked only its origin.** (P2) The destination is locked later, when the
+bin-in movement is appended. So A→B held A and waited for B while B→A held B and waited for A, and
+PostgreSQL aborted one farmer's save.
+
+**A retry could change its own lot.** (P1) LD-1 keeps the ticket id after a failed save so a retry
+replays rather than duplicating. But the post-attempt lot refresh, the effect that drops a vanished
+year, and the effect that fills in a lone one were all free to run in between — so a retry could
+reach the server under a *different* crop year, and `save_grain_load` would answer
+`FARM_RX_LOAD_ID_REUSED`: **refusing a load that had already been recorded.**
+
+#### What the step back actually changed
+
+The two findings above are instances. What made them possible is that this module had **no stated
+lock order and no stated rule about when a draft may change.** Ten rounds of review found three
+deadlocks and three staleness bugs, each patched where it was found, each patch correct and each
+one creating the conditions for the next.
+
+So both are now rules with one home rather than fixes with several:
+
+- **`public.lock_farm_bins`** is the only place bins are locked for a multi-bin write, and it locks
+  them in **ascending id order**. `save_grain_load` and `void_grain_load` both call it before they
+  decide anything. The module's full order is written there: bins, then `grain_loads`, then
+  `bin_transactions`, then `grain_contracts`, then `grain_contract_deliveries`.
+- **A draft's chosen lot is frozen while a ticket id is outstanding.** One flag, checked by both
+  effects. The lot *list* still refreshes, because the picker should show the truth; what is frozen
+  is the choice the outstanding ticket was sent with.
+
+Three earlier patches are subsumed by these two rules rather than sitting beside them.
+
+#### And a sixth guard passed while its rule changed
+
+Adding `lock_farm_bins` gave the string `perform 1 from public.grain_bins` a second home, and the
+guard that pinned it stayed green while the other use disappeared. Six occurrences of one mistake on
+one tranche. It is counted now, like the other five.
+
 ### Live steps
 
 **One migration to apply: `20260921180000_ld4_bin_origin_lot.sql`**, after LD-2's. It now also
-replaces `append_bin_movement` and `assign_bin_movement_crop_year`, for the baseline and locking corrections above — every other guard,
+replaces `append_bin_movement`, `assign_bin_movement_crop_year` and `void_grain_load`, and adds `lock_farm_bins`, for the baseline and locking corrections above — every other guard,
 message and error code in that function is LD-2's, unchanged.
 
 Until it is applied the
