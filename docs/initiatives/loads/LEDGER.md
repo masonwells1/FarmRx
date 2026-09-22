@@ -1096,6 +1096,47 @@ The guard is positional rather than textual: the verify call has to sit *after* 
 Pinning the string alone would stay green with the call moved back above the request, which is the
 same shape that has now failed seven times on this tranche.
 
+### A fifteenth round: the third mock-against-server divergence
+
+One P2. `MockGrainRepository.lotBalance` summed **every** matching movement, with no baseline cutoff
+at all, while `assign_bin_movement_crop_year` excludes movements the baseline already measured:
+
+```sql
+and (not v_baseline_covers_commodity or occurred_on > v_inventory.measured_at::date)
+```
+
+So an older outbound movement was subtracted twice in the mock, and it refused a crop-year
+assignment the real function accepts.
+
+This is the **third** time on this tranche the mock has disagreed with the server, after
+`listBinLots` dropping emptied lots (round 9) and `saveLoad` resolving against the wrong list
+(round 12). The rule was already written down once — `isLotMovementSuperseded`, which `bin_lots`
+derives through — and `lotBalance` was simply never pointed at it. So the fix points it there rather
+than adding a fourth copy of the predicate.
+
+The guard is written **both ways** for the same reason: it requires the delegation, and it fails if
+the string `measured_at` appears anywhere in `lotBalance` at all. An inline copy of the rule is how
+these drift apart again, and it would leave the required line perfectly intact — the shape that has
+now failed seven times here.
+
+**On proof, stated plainly rather than implied:** this repair is held by the guard and two drill
+mutations, not by a behavioural test. `MockGrainRepository.regression.ts` does not instantiate the
+repository — the mock reads and writes `localStorage`, which Node does not have — so exercising
+`assignBinMovementCropYear` end to end would mean standing up that seam first. That is worth doing
+and is not done here. The two mutations do cover both directions (the cutoff removed, and the
+predicate inlined), and every one of the six earlier divergences of this shape was caught by the
+drill rather than by a test.
+
+### Proof observed for round 15
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
+  `git diff --check` clean.
+- **Eleven disposable SQL suites pass together**, unchanged by this round and run to confirm.
+- Static guards PASS; **mutation drill 376/376**, count changed in both files that pin it.
+- **Browser: 125 passed, 15 skipped.**
+- **All regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
+
 ### Proof observed for round 14
 
 - `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;

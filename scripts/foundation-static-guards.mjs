@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 374')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 376')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1132,6 +1132,21 @@ export function foundationStaticGuard(root = process.cwd()) {
       const lock = bin.indexOf('for update;')
       const replay = bin.indexOf('select crop_year, commodity_id into v_replay_year')
       if (lock < 0 || replay < 0 || replay < lock) errors.push('ld4:the-replay-lookup-reads-inside-the-lock')
+    }
+    {
+      // LD-4 repair: the mock's lot balance applies the SAME baseline cutoff the server does --
+      // a movement the baseline already measured is not counted a second time. It had no cutoff at
+      // all, so an older outbound movement was subtracted twice and the mock refused a crop-year
+      // assignment the real assign_bin_movement_crop_year accepts. Third occurrence of the mock
+      // disagreeing with the server on this tranche, so it is pinned to the ONE predicate rather
+      // than to a copy of the rule: isLotMovementSuperseded is what bin_lots derives through too.
+      const mock = read(root, 'src/data/MockGrainRepository.ts')
+      const balance = mock.slice(mock.indexOf('function lotBalance('))
+      const body = balance.slice(0, balance.indexOf('\n}'))
+      requireText(errors, body, '.filter((row) => !isLotMovementSuperseded(baseline, row))', 'ld4:the-mock-balance-uses-the-server-baseline-rule')
+      // Written as an absence too: a second, inline copy of the predicate here is the way this
+      // would drift back apart, and it would leave the pinned line above perfectly intact.
+      if (/measured_at/.test(body)) errors.push('ld4:the-mock-balance-uses-the-server-baseline-rule')
     }
     {
       // LD-4 repair: the lot read verifies the operation context AFTER the response lands, as every

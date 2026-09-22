@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 374
+const expectedMutationCount = 376
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1122,6 +1122,12 @@ try {
   reset()
   mutate('src/data/QueuedGrainRepository.ts', (source) => source.replace('return this.writer.listBinLots(binId)', 'return this.writer.listBinLots(binId.trim())'))
   detected('the queued path reaches past the writer, so the fence applies to one caller and not the other', 'ld4:a-lot-read-is-fenced-after-it-lands')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('    .filter((row) => !isLotMovementSuperseded(baseline, row))\n', ''))
+  detected('the mock counts movements the baseline already measured, so it refuses a crop-year assignment the server accepts', 'ld4:the-mock-balance-uses-the-server-baseline-rule')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('    .filter((row) => !isLotMovementSuperseded(baseline, row))', '    .filter((row) => !baseline || row.commodity_id !== baseline.commodity_id || row.occurred_on > baseline.measured_at.slice(0, 10))'))
+  detected('the mock inlines its own copy of the baseline predicate, which is how the two drift apart again', 'ld4:the-mock-balance-uses-the-server-baseline-rule')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('.filter((row) => row.movementCount > 0)', '.filter((row) => Math.abs(row.bushels) > 0.000001)'))
   detected('unresolved movements that cancel out today stop being named at all', 'ld3:an-unresolved-movement-is-named-however-it-nets')

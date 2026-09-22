@@ -1,4 +1,5 @@
 import type { FieldsRepository } from './fields'
+import { isLotMovementSuperseded } from './committedFree'
 import type { BinTransaction, BinTransactionDirection, CashBid, FirmOffer, FuturesQuote, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, GrainRepository, GrainSaleLimit, GrainWorkspace, LoadVoidBlocker, LoadVoidResult, MarketDataService, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaMarketReport, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
 import { contractIsCorrectable, loadEffectsAvailable, loadLotFor, lotsSaveResolvesAgainst, recordedBinLots, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason } from './grain'
@@ -80,6 +81,15 @@ function lotBalance(workspace: GrainWorkspace, binId: string, commodityId: strin
   const base = baseline && baseline.commodity_id === commodityId && baseline.crop_year === cropYear ? baseline.bushels : 0
   return workspace.bin_transactions
     .filter((row) => row.grain_bin_id === binId && row.commodity_id === commodityId && row.crop_year === cropYear)
+    // LD-4 repair (Codex P2 on ceb547b): a movement the baseline already measured is not counted
+    // again, which is the rule assign_bin_movement_crop_year applies and the rule this function
+    // was missing entirely. Without it an older outbound movement is subtracted twice and the mock
+    // refuses a crop-year assignment the server accepts -- the same mock-against-server divergence
+    // found two rounds ago in saveLoad, in the one helper that had not been checked against it.
+    //
+    // isLotMovementSuperseded, not a fourth copy of the predicate: it is the browser's single
+    // statement of "the baseline already covers this", and bin_lots derives through it too.
+    .filter((row) => !isLotMovementSuperseded(baseline, row))
     .reduce((total, row) => total + (row.direction === 'in' ? row.bushels : -row.bushels), base)
 }
 
