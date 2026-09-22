@@ -1012,6 +1012,64 @@ and a `requireText` on one stays green while the other goes back.
 - **All regression files run individually.** Only `programInventoryCW2` fails, identically to
   `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
 
+### A thirteenth round, and the first finding that was wrong
+
+Two more P2s. **One of them does not reproduce**, and saying so is part of the record.
+
+**"Retry the lot read after a transient failure" — not a defect.** The claim was that pressing Save
+while the lot read is unavailable "always returns here without incrementing `lotsRefresh`", stranding
+the farmer behind a message that says to try again. But that refusal returns from *inside the try*,
+and the refresh sits in the `finally` — put there two rounds ago, for this exact class of problem.
+So Save does re-issue the read.
+
+That said, "I read the code and it looked fine" is the reasoning this tranche has punished eleven
+times. A browser journey now proves it instead: the lot read is made to fail, the form refuses and
+says so, the read is allowed to succeed, and **the test asserts the read counter moved** on the next
+Save. The claim is evidence now rather than my assertion.
+
+**"Unfreeze the lot after a definitive save rejection" — real, and mine.** `ticketOutstanding` is
+round 10's rule: a draft's chosen lot is frozen while a ticket id is outstanding, so a retry cannot
+reach the server under a different lot and be refused as a reused id. It was cleared only on
+success. But a **definitive** refusal — an `FR001`, say — rolled the transaction back, so no ticket
+exists and nothing needs protecting. Staying frozen then strands the farmer in the way the rule was
+invented to prevent: the refreshed list shows the lot that replaced theirs, the auto-select and
+clear-vanished effects are both disabled, and every retry resubmits the stale lot until they switch
+bins.
+
+The freeze is only ever right while the outcome is **unknown**.
+
+#### The classifier already existed, which is the whole point
+
+The first fix I wrote was a new `serverRefusedDefinitively` that sniffed SQLSTATEs. It was thrown
+away unused, because the codebase already answers exactly this question: `isTransportFailure`, which
+decides "confirmation needed" from "needs attention" on a bin movement and on a delivery. A second
+classifier would have been a second thing to keep in step — the mistake this tranche has now made
+twice, once with the lot lists and once here. There is one classifier, and the catch clause is the
+negation of it.
+
+One consequence is accepted deliberately: offline counts as unknown, so the lot stays frozen even
+though the queued repository refused before sending and nothing was committed. It costs nothing —
+there is nowhere for that lot to go until the signal is back.
+
+#### Proved by reverting it
+
+The journey was run against the unrepaired code, with the lot kept frozen. It fails there: after the
+refusal the retry never reaches the server at all. That is the farmer's experience of this bug, and
+it is what the test now holds.
+
+### Proof observed for round 13
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
+  `git diff --check` clean.
+- **Eleven disposable SQL suites pass together**, unchanged by this round and run to confirm.
+- Static guards PASS; **mutation drill 372/372**, count changed in both files that pin it. Three
+  added, including both directions of the rule: a refusal that keeps its lot frozen, and a lost
+  response that lets it go.
+- **Browser: 125 passed, 15 skipped** — one new journey, on desktop and phone, covering both
+  findings. **Run against the unrepaired code first, where it fails.**
+- **All regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
+
 ### Proof observed for round 12
 
 Re-run in full rather than assumed, because this round changed a derivation the form shares.

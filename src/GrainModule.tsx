@@ -7,6 +7,7 @@ import { MarketQuoteSection, quoteCropYear } from "./components/MarketQuote";
 import { confirmDialog, promptDialog } from "./components/ConfirmDialog";
 import { SectionTabs } from "./SectionTabs";
 import { farmerError } from "./lib/farmerErrors";
+import { isTransportFailure } from "./data/QueuedFieldsRepository";
 import { currentFarmContext } from "./auth/farmContext";
 import { beginPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_CONTEXT_CHANGED } from "./data/pendingSettingsWork";
 import { clearSettingsDraft, readSettingsDrafts, writeSettingsDraft, type SettingsDraftScope } from "./data/settingsDrafts";
@@ -4675,6 +4676,21 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       setMessage(`Load saved: ${saved.net_bushels.toLocaleString()} bu of ${commodityLabel(saved.commodity_id)}, ${saved.crop_year} crop.`);
       await onSaved();
     } catch (error) {
+      // LD-4 repair (Codex P2 on c6790ca): a DEFINITIVE refusal rolled the transaction back, so no
+      // ticket exists and the lot must be free to move again. Leaving it frozen after, say, an
+      // FR001 stranded the farmer: the refresh below shows the lot that replaced theirs, the
+      // auto-select and clear-vanished effects stay disabled, and every retry resubmits the stale
+      // one until they switch bins. The freeze is only ever right while the outcome is UNKNOWN.
+      //
+      // isTransportFailure is the codebase's existing answer to exactly this question -- it is what
+      // decides "confirmation needed" from "needs attention" on a bin movement or a delivery. A
+      // second classifier here would be a second thing to keep in step, which is the mistake this
+      // tranche has now made twice. Offline counts as unknown: the queued repository refuses before
+      // sending, so nothing was committed, but the lot has nowhere to go until the signal is back.
+      if (!isTransportFailure(error, typeof navigator !== 'undefined' && navigator.onLine === false)) {
+        loadId.current = null;
+        setTicketOutstanding(false);
+      }
       setMessage(farmerError(error, "record this load"));
     } finally {
       // LD-4 repair (Codex P2 on f4b614d): read the bin's lots again after ANY attempt, not only

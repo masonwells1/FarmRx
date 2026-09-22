@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 369
+const expectedMutationCount = 372
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1107,6 +1107,15 @@ try {
   reset()
   mutate('src/data/MockGrainRepository.ts', (source) => source.replace('return [...recordedBinLots(workspace, binId)]', 'return [...recordedBinLots(workspace, binId)].filter((lot) => lot.bushels > 0.000001)'))
   detected('the mock re-narrows the recorded list on its way out, so it answers unlike the database again', 'ld4:the-mock-answers-like-the-database')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace("      if (!isTransportFailure(error, typeof navigator !== 'undefined' && navigator.onLine === false)) {\n        loadId.current = null;\n        setTicketOutstanding(false);\n      }\n", ''))
+  detected('a definitively refused save keeps its lot frozen, so the farmer retries the stale lot forever against a bin that has moved on', 'ld4:a-refused-save-lets-its-lot-go')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace("      if (!isTransportFailure(error, typeof navigator !== 'undefined' && navigator.onLine === false)) {", '      if (true) {'))
+  detected('a save whose response was lost releases its lot, so the retry sends the same ticket id under a different crop year', 'ld4:a-refused-save-lets-its-lot-go')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('        loadId.current = null;\n        setTicketOutstanding(false);\n      }', '        setTicketOutstanding(false);\n      }'))
+  detected('a refused save frees its lot but keeps its ticket id, so the next attempt spends that id on a different load', 'ld4:a-refused-save-lets-its-lot-go')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('.filter((row) => row.movementCount > 0)', '.filter((row) => Math.abs(row.bushels) > 0.000001)'))
   detected('unresolved movements that cancel out today stop being named at all', 'ld3:an-unresolved-movement-is-named-however-it-nets')

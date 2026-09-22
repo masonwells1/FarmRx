@@ -1898,6 +1898,101 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
   expect(unexpected).toEqual([])
 })
 
+test('a bin whose lots cannot be read refuses to save and recovers on the next try, and a refused save lets its lot go', async ({ page, context }) => {
+  await seedSession(context)
+  loadRecordCalls.length = 0
+  const farm = farms[0]!
+  const binId = '00000000-0000-4000-8000-0000000000a1'
+  const nil = '00000000-0000-0000-0000-000000000000'
+  const binRows = [
+    { id: binId, farm_id: farm.id, name: 'Home bin', capacity_bu: 40_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now },
+  ]
+  const inventoryRows = [
+    { id: '00000000-0000-4000-8000-0000000000a2', farm_id: farm.id, grain_bin_id: binId, crop_year: 2025, commodity_id: commodityId, bushels: 6_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now },
+  ]
+  // Two lots, so the form must ask -- and neither is derivable from the movement array, so every
+  // figure below can only have come from the lot read.
+  const lotRows = [
+    { grain_bin_id: binId, commodity_id: commodityId, crop_year: 2026, bushels: 4_000 },
+    { grain_bin_id: binId, commodity_id: commodityId, crop_year: 2025, bushels: 6_000 },
+  ]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: [], bin_lots: lotRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
+
+  // Registered after mockSupabase, so it runs first and hands back whatever it does not handle.
+  // The capability probe uses the nil bin id and must never fail, or the whole feature switches off
+  // and this journey would be testing the pre-migration form instead.
+  let lotsFailing = false
+  let lotReads = 0
+  await page.route('**/rest/v1/rpc/bin_lots', async (route) => {
+    let body: Record<string, unknown> | null = null
+    try { body = route.request().postDataJSON() as Record<string, unknown> } catch { body = null }
+    const target = typeof body?.p_grain_bin_id === 'string' ? body.p_grain_bin_id : null
+    if (target === null || target === nil) { await route.fallback(); return }
+    lotReads += 1
+    if (lotsFailing) { await route.abort('failed'); return }
+    await route.fallback()
+  })
+
+  // One refusal from the save RPC, shaped like a real one: a rolled-back transaction, reported with
+  // the SQLSTATE this codebase raises for "the bin physically cannot take this".
+  let refuseNextSave = false
+  await page.route('**/rest/v1/rpc/save_grain_load', async (route) => {
+    if (!refuseNextSave) { await route.fallback(); return }
+    refuseNextSave = false
+    await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: 'FR001', message: 'that bin does not hold enough of the 2026 crop', details: null, hint: null }) })
+  })
+
+  await page.goto('/grain/loads')
+  await expect(page.getByRole('heading', { name: 'Loads', exact: true })).toBeVisible()
+
+  // --- The lot read fails, and the form says so instead of guessing from the movement array.
+  lotsFailing = true
+  await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(binId)
+  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('1000')
+  await page.getByRole('button', { name: 'Save load' }).click()
+  // Both the inline notice under the bin and the save's own status say it; this is the status.
+  await expect(page.getByText('Farm Rx could not read what this bin holds. Check your signal and try again.')).toBeVisible()
+  expect(loadRecordCalls.length).toBe(0)
+
+  // And "try again" means it: pressing Save re-issues the read rather than refusing forever. The
+  // refusal returns from inside the try, so the refresh in the finally still runs, and that counter
+  // moving is the proof. Without it a farmer would be stuck until they switched bins or reloaded.
+  const readsBefore = lotReads
+  lotsFailing = false
+  await page.getByRole('button', { name: 'Save load' }).click()
+  await expect.poll(() => lotReads).toBeGreaterThan(readsBefore)
+
+  // The read landed, so the picker appears with both lots and the form asks the question again.
+  const cropYear = page.getByRole('combobox', { name: 'Crop year', exact: true })
+  await expect(cropYear).toBeVisible()
+  await expect(cropYear.getByRole('option')).toHaveText([/Pick which crop year/, /2026.*4,000 bu/, /2025.*6,000 bu/])
+
+  // --- A definitively refused save lets its lot go.
+  // The farmer picks 2026. Another truck empties it in the meantime, so the server refuses with
+  // FR001 and rolls back -- no ticket was written.
+  await cropYear.selectOption(`${commodityId}:2026`)
+  refuseNextSave = true
+  lotRows.splice(0, 1)
+  await page.getByRole('button', { name: 'Save load' }).click()
+  await expect(page.getByText('Farm Rx could not record this load right now')).toBeVisible()
+  expect(loadRecordCalls.length).toBe(0)
+
+  // The bin now holds only 2025, and the form has to follow it. Before this repair the ticket stayed
+  // "outstanding" after ANY failure, which froze the chosen lot: the screen would show the 2025 line
+  // while every retry still submitted 2026, refused each time, with no control on screen to fix it.
+  // The freeze is right only while the outcome is unknown, and a rolled-back refusal is not that.
+  await expect(page.getByText('This bin holds one crop year')).toContainText('2025')
+
+  // And the retry goes through, under the lot the screen is actually showing.
+  await page.getByRole('button', { name: 'Save load' }).click()
+  await expect.poll(() => loadRecordCalls.length).toBe(1)
+  const sent = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
+  expect(sent.crop_year).toBe(2025)
+  expect(sent.commodity_id).toBe(commodityId)
+  expect(unexpected).toEqual([])
+})
+
 test('movements with no crop year are named even when they cancel out, and an empty bin is never called empty', async ({ page, context }) => {
   await seedSession(context)
   const farm = farms[0]!

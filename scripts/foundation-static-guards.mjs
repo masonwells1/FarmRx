@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 369')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 372')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1132,6 +1132,23 @@ export function foundationStaticGuard(root = process.cwd()) {
       const lock = bin.indexOf('for update;')
       const replay = bin.indexOf('select crop_year, commodity_id into v_replay_year')
       if (lock < 0 || replay < 0 || replay < lock) errors.push('ld4:the-replay-lookup-reads-inside-the-lock')
+    }
+    {
+      // LD-4 repair: the lot freeze is only right while the save's outcome is UNKNOWN. A definitive
+      // refusal rolled the transaction back, so no ticket exists, and staying frozen strands the
+      // farmer -- the refresh shows the lot that replaced theirs while every retry resubmits the
+      // stale one. Pinned as the NEGATION of the codebase's existing transport test, so a second
+      // classifier cannot quietly grow here: that is the mistake this tranche has already made.
+      requireText(errors, grainModule, "if (!isTransportFailure(error, typeof navigator !== 'undefined' && navigator.onLine === false)) {", 'ld4:a-refused-save-lets-its-lot-go')
+      const save = grainModule.slice(grainModule.indexOf('const save = async () => {'))
+      const body = save.slice(0, save.indexOf('\n  const voidLoad'))
+      const clear = body.indexOf('setTicketOutstanding(false);\n      }')
+      const message = body.indexOf('setMessage(farmerError(error, "record this load"));')
+      // Before the message, and therefore inside the catch rather than after it.
+      if (clear < 0 || message < 0 || clear > message) errors.push('ld4:a-refused-save-lets-its-lot-go')
+      // And the ticket id goes with it: a retry that may reuse an id whose load was never written
+      // is a new ticket, not a replay.
+      requireText(errors, body, 'loadId.current = null;\n        setTicketOutstanding(false);', 'ld4:a-refused-save-lets-its-lot-go')
     }
     // A void puts bushels back, so the lots have to be read again -- the stale answer wins over the
     // workspace refresh and would keep offering one lot where the server now sees two.
