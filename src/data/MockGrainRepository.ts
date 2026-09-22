@@ -93,6 +93,40 @@ function lotBalance(workspace: GrainWorkspace, binId: string, commodityId: strin
     .reduce((total, row) => total + (row.direction === 'in' ? row.bushels : -row.bushels), base)
 }
 
+/** LD-4 repair (Codex P2 on 849959d): every refusal append_bin_movement makes, in ONE place, so
+ * both writers of a movement enforce the same ones.
+ *
+ * A load's bin-out effect was pushed straight into bin_transactions with no balance check at all,
+ * so a mock-backed workflow could name an emptied lot and create negative inventory -- a save the
+ * real RPC refuses with FR001. Sixth stand-in on this tranche found disagreeing with the server,
+ * and the first in a WRITE path rather than a read: the round-17 audit checked what the stand-ins
+ * returned, not what they refused.
+ *
+ * The lot balance -- the same arithmetic narrowed to one crop year -- is checked here too. The
+ * manual movement path never had it either; it stopped at the commodity balance, which is the
+ * server's guard immediately before it. */
+function binMovementRefusal(workspace: GrainWorkspace, movement: BinTransaction): string | null {
+  const bin = workspace.grain_bins.find((item) => item.id === movement.grain_bin_id)
+  const inventory = workspace.bin_inventory.find((item) => item.grain_bin_id === movement.grain_bin_id)
+  const prior = workspace.bin_transactions.filter((item) => item.grain_bin_id === movement.grain_bin_id)
+  if (!bin || !workspace.fields.commodities.some((commodity) => commodity.id === movement.commodity_id)) return 'Choose a bin and commodity from this farm.'
+  if (inventory && movement.occurred_on <= inventory.measured_at.slice(0, 10)) return PRE_BASELINE_BIN_MOVEMENT_MESSAGE
+  const active = activeBinCommodityIds(inventory, prior)
+  if (active.length && !active.includes(movement.commodity_id)) return `This bin still holds ${active.join(' and ')}. Empty those lots before storing another crop.`
+  const signed = movement.direction === 'in' ? movement.bushels : -movement.bushels
+  const lotInventory = inventory?.commodity_id === movement.commodity_id ? inventory : undefined
+  const next = deriveBinOnHand(lotInventory, prior.filter((item) => item.commodity_id === movement.commodity_id)).rawOnHand + signed
+  if (next < 0) return 'This movement would make the bin balance negative.'
+  // Rows carrying no crop year are their own bucket and are never credited to a named year, so a
+  // movement without one is answered by the commodity balance above and nothing further.
+  if (movement.crop_year !== null && lotBalance(workspace, movement.grain_bin_id, movement.commodity_id, movement.crop_year) + signed < 0) {
+    return `That bin does not hold enough of the ${movement.crop_year} crop.`
+  }
+  const total = active.reduce((sum, commodity) => sum + deriveBinOnHand(inventory?.commodity_id === commodity ? inventory : undefined, prior.filter((item) => item.commodity_id === commodity)).rawOnHand, 0) + signed
+  if (total > bin.capacity_bu) return 'This movement would put more grain in the bin than it holds.'
+  return null
+}
+
 function grainSlice(workspace: GrainWorkspace): GrainData { const { fields: _fields, ...grain } = workspace; return grain }
 
 export class MockMarketDataService implements MarketDataService {
@@ -243,6 +277,13 @@ export class MockGrainRepository implements GrainRepository {
     const movements: BinTransaction[] = []
     if (saved.effect_bin_out && saved.origin_grain_bin_id) movements.push(loadMovement(saved, saved.origin_grain_bin_id, 'out', note, 'grain_load'))
     if (saved.effect_bin_in && saved.destination_grain_bin_id) movements.push(loadMovement(saved, saved.destination_grain_bin_id, 'in', note, 'grain_load'))
+    // The same refusals a manual movement gets. append_bin_movement makes them under a row lock on
+    // the real thing; without them here a load could name an emptied lot with the bin-out effect on
+    // and quietly create negative inventory, which production answers with FR001.
+    for (const movement of movements) {
+      const refusal = binMovementRefusal(workspace, movement)
+      if (refusal) throw new Error(refusal)
+    }
     const deliveries: GrainContractDelivery[] = saved.effect_contract_delivery && saved.destination_grain_contract_id
       ? [{ id: createGrainId(), farm_id: saved.farm_id, grain_contract_id: saved.destination_grain_contract_id, bushels: saved.net_bushels, delivered_on: saved.load_date, note, grain_load_id: saved.id, created_at: stamp }]
       : []
@@ -321,7 +362,7 @@ export class MockGrainRepository implements GrainRepository {
   }
   async deleteFirmOffer(id: string) { const workspace = await load(this.fieldsRepository); const current = workspace.firm_offers.find((offer) => offer.id === id); if (current && (current.status === 'filled' || current.filled_contract_id !== null)) throw new Error(FILLED_OFFER_DELETE_MESSAGE); persist({ ...grainSlice(workspace), firm_offers: workspace.firm_offers.filter((offer) => offer.id !== id) }); }
   async upsertGrainBin(bin: GrainBin) { if (validateGrainBin(bin).length) throw new Error('Check the bin name, capacity, and moisture reading.'); const workspace = await load(this.fieldsRepository); const rows = workspace.grain_bins.some((row) => row.id === bin.id) ? workspace.grain_bins.map((row) => row.id === bin.id ? { ...bin, updated_at: now() } : row) : [...workspace.grain_bins, bin]; persist({ ...grainSlice(workspace), grain_bins: rows }); }
-  async appendBinTransaction(transaction: BinTransaction) { if (validateBinTransaction(transaction).length) throw new Error('Check the direction, bushels, and movement date.'); const workspace = await load(this.fieldsRepository); const bin = workspace.grain_bins.find((item) => item.id === transaction.grain_bin_id); const inventory = workspace.bin_inventory.find((item) => item.grain_bin_id === transaction.grain_bin_id); const prior = workspace.bin_transactions.filter((item) => item.grain_bin_id === transaction.grain_bin_id); if (!bin || !workspace.fields.commodities.some((commodity) => commodity.id === transaction.commodity_id)) throw new Error('Choose a bin and commodity from this farm.'); if (inventory && transaction.occurred_on <= inventory.measured_at.slice(0, 10)) throw new Error(PRE_BASELINE_BIN_MOVEMENT_MESSAGE); const existing = workspace.bin_transactions.find((row) => row.id === transaction.id); if (existing) { if (existing.grain_bin_id === transaction.grain_bin_id && existing.direction === transaction.direction && existing.bushels === transaction.bushels && existing.commodity_id === transaction.commodity_id && existing.occurred_on === transaction.occurred_on) return; throw new Error('Movement id was already used with different content.'); } const active = activeBinCommodityIds(inventory, prior); if (active.length && !active.includes(transaction.commodity_id)) throw new Error(`This bin still holds ${active.join(' and ')}. Empty those lots before storing another crop.`); const lotInventory = inventory?.commodity_id === transaction.commodity_id ? inventory : undefined; const next = deriveBinOnHand(lotInventory, prior.filter((item) => item.commodity_id === transaction.commodity_id)).rawOnHand + (transaction.direction === 'in' ? transaction.bushels : -transaction.bushels); if (next < 0) throw new Error('This movement would make the bin balance negative.'); const total = active.reduce((sum, commodity) => sum + deriveBinOnHand(inventory?.commodity_id === commodity ? inventory : undefined, prior.filter((item) => item.commodity_id === commodity)).rawOnHand, 0) + (transaction.direction === 'in' ? transaction.bushels : -transaction.bushels); if (total > bin.capacity_bu) throw new Error('This movement would put more grain in the bin than it holds.'); persist({ ...grainSlice(workspace), bin_transactions: [...workspace.bin_transactions, transaction] }); }
+  async appendBinTransaction(transaction: BinTransaction) { if (validateBinTransaction(transaction).length) throw new Error('Check the direction, bushels, and movement date.'); const workspace = await load(this.fieldsRepository); const existing = workspace.bin_transactions.find((row) => row.id === transaction.id); if (existing) { if (existing.grain_bin_id === transaction.grain_bin_id && existing.direction === transaction.direction && existing.bushels === transaction.bushels && existing.commodity_id === transaction.commodity_id && existing.occurred_on === transaction.occurred_on) return; throw new Error('Movement id was already used with different content.'); } const refusal = binMovementRefusal(workspace, transaction); if (refusal) throw new Error(refusal); persist({ ...grainSlice(workspace), bin_transactions: [...workspace.bin_transactions, transaction] }); }
   async saveGrainSaleLimit(value: GrainSaleLimit) { const limit = normalizeGrainSaleLimit(value); if (validateGrainSaleLimit(limit).length) throw new Error('Enter a sale limit of zero or more bushels.'); const workspace = await load(this.fieldsRepository); const existing = workspace.grain_sale_limits.find((row) => row.id === limit.id || sameScope(row, limit)); if (existing && existing.id !== limit.id) throw new Error('This position already has a sale limit. Reload to see it.'); const saved = existing ? { ...limit, created_at: existing.created_at, updated_at: now() } : { ...limit, created_at: now(), updated_at: now() }; persist({ ...grainSlice(workspace), grain_sale_limits: existing ? workspace.grain_sale_limits.map((row) => row.id === existing.id ? saved : row) : [...workspace.grain_sale_limits, saved] }); return saved }
   async saveGrainCarrySettings(value: GrainCarrySettings) { const settings = normalizeGrainCarrySettings(value); if (validateGrainCarrySettings(settings).length) throw new Error('Storage costs and rates must be zero or more.'); const workspace = await load(this.fieldsRepository); const saved = { ...settings, updated_at: now() }; persist({ ...grainSlice(workspace), grain_carry_settings: saved }); return saved }
   async saveGrainCarryGrid(value: GrainCarryGrid) { const grid = normalizeGrainCarryGrid(value); if (validateGrainCarryGrid(grid).length) throw new Error('Each price and basis must be a number or blank.'); const workspace = await load(this.fieldsRepository); const existing = workspace.grain_carry_grids.find((row) => row.id === grid.id || row.production_estimate_id === grid.production_estimate_id); if (existing && existing.id !== grid.id) throw new Error('This crop already has a carry grid. Reload to see it.'); const saved = { ...grid, updated_at: now() }; persist({ ...grainSlice(workspace), grain_carry_grids: existing ? workspace.grain_carry_grids.map((row) => row.id === existing.id ? saved : row) : [...workspace.grain_carry_grids, saved] }); return saved }

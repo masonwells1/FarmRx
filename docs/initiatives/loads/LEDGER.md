@@ -1341,6 +1341,54 @@ microsecond window — and the repair is ten lines that add a refusal rather tha
 this module has produced four deadlocks already, a checkable invariant is worth more than an
 argument that the window is small.
 
+### A twenty-second round, which corrects the round-17 audit
+
+One P2: a load's bin-out effect was pushed straight into `bin_transactions` with **no balance check
+at all**. Name an emptied lot with the effect on, and a mock-backed workflow creates negative
+inventory — a save the real `append_bin_movement` refuses with `FR001`.
+
+**This is the sixth stand-in found disagreeing with the server, and it corrects what round 17
+claimed.** That round audited the grain stand-ins and reported the remaining ones "read and sound".
+It checked what they *return*. It did not check what they *refuse*. A read that answers correctly
+and a write that enforces nothing are different kinds of fidelity, and only one of them was looked
+at. The audit's conclusion was too broad, and this finding is the proof.
+
+#### One refusal path, rather than a second copy of four guards
+
+`append_bin_movement` makes four refusals before it writes. The mock's *manual* movement path had
+three of them; the *load* path had none. Writing the missing ones into the load path would have
+been a second copy of arithmetic that has already drifted three times on this tranche.
+
+So they now live in one function, `binMovementRefusal`, and both writers go through it. The guard
+counts the **call sites**, not the string, so a writer that stops using it fails.
+
+The fourth refusal — the **lot** balance, the same arithmetic narrowed to one crop year — was
+missing from the manual path too. It is in the shared function now, so the manual movement form
+gained a guard it never had, matching the server. Nothing broke when it did: the browser suite and
+all regression files pass unchanged, which is the evidence that the manual path had simply never
+exercised the case.
+
+### Proof observed for round 22
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;
+  `git diff --check` clean.
+- **Eleven disposable SQL suites pass together.**
+- Static guards PASS; **mutation drill 392/392**. Two added: the load writing its movements
+  unchecked, and the refusal path stopping at the commodity balance.
+- **Browser: 129 passed, 15 skipped**, unchanged by giving the manual path a guard it lacked.
+- **All regression files run individually.** Only `programInventoryCW2` fails, identically to
+  `origin/main`; the three PowerShell lanes are not runnable in this sandbox.
+
+#### What the corrected audit now says
+
+Six stand-ins found disagreeing with the server on this tranche, all fixed: `listBinLots`,
+`saveLoad`'s lot list, `lotBalance`, the browser fixture's `bin_lots`, its `void_grain_load`, and
+now the load's movement writes. **Five were reads or returns. The sixth was a refusal**, and it was
+the one the audit's method could not have found.
+
+An audit of what stand-ins refuse — every write path in the grain mock against its RPC's guards —
+has not been done. It is the obvious next thing, and it is not done here.
+
 ### Proof observed for round 21
 
 - `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high` — 0 vulnerabilities;

@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 390
+const expectedMutationCount = 392
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1147,6 +1147,12 @@ try {
   reset()
   mutate('src/data/MockGrainRepository.ts', (source) => source.replace('    .filter((row) => !isLotMovementSuperseded(baseline, row))', '    .filter((row) => !baseline || row.commodity_id !== baseline.commodity_id || row.occurred_on > baseline.measured_at.slice(0, 10))'))
   detected('the mock inlines its own copy of the baseline predicate, which is how the two drift apart again', 'ld4:the-mock-balance-uses-the-server-baseline-rule')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('    for (const movement of movements) {\n      const refusal = binMovementRefusal(workspace, movement)\n      if (refusal) throw new Error(refusal)\n    }\n', ''))
+  detected('a load writes its bin movements with no balance check, so naming an emptied lot creates negative inventory the server refuses', 'ld4:one-refusal-path-for-a-movement')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('  if (movement.crop_year !== null && lotBalance(workspace, movement.grain_bin_id, movement.commodity_id, movement.crop_year) + signed < 0) {\n    return `That bin does not hold enough of the ${movement.crop_year} crop.`\n  }\n', ''))
+  detected('the refusal path stops at the commodity balance, so a lot drawn below zero inside a bin that still holds the crop passes', 'ld4:one-refusal-path-for-a-movement')
   reset()
   mutate('tests/e2e/foundation-shell.spec.ts', (source) => source.replace('declared.filter((lot) => lot.grain_bin_id === value.p_grain_bin_id)', 'declared.filter((lot) => lot.grain_bin_id === value.p_grain_bin_id && Number(lot.bushels) > 0)'))
   detected('the browser fixture drops the emptied lots public.bin_lots keeps, so a journey written for that path passes against broken code', 'ld4:the-browser-fixture-answers-like-the-database')

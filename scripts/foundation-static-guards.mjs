@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 390')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 392')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1224,6 +1224,28 @@ export function foundationStaticGuard(root = process.cwd()) {
       const lock = bin.indexOf('for update;')
       const replay = bin.indexOf('select crop_year, commodity_id into v_replay_year')
       if (lock < 0 || replay < 0 || replay < lock) errors.push('ld4:the-replay-lookup-reads-inside-the-lock')
+    }
+    {
+      // LD-4 repair: every refusal append_bin_movement makes lives in ONE function, and BOTH
+      // writers of a movement go through it. The load's bin-out effect was pushed straight into
+      // bin_transactions with no balance check at all, so a mock-backed workflow could name an
+      // emptied lot and create negative inventory -- a save production answers with FR001. Sixth
+      // stand-in on this tranche found disagreeing with the server, and the first in a write path.
+      const mock = read(root, 'src/data/MockGrainRepository.ts')
+      // Two CALL SITES -- the manual movement and the load's effects. The definition spells it
+      // `workspace:` and so does not match, which is what makes this a count of writers.
+      if ((mock.split('binMovementRefusal(workspace,').length - 1) !== 2) errors.push('ld4:one-refusal-path-for-a-movement')
+      // Including the lot balance, which neither writer had: the commodity balance is the server's
+      // guard immediately before it, and stopping there is what let an emptied lot through.
+      requireText(errors, mock, 'lotBalance(workspace, movement.grain_bin_id, movement.commodity_id, movement.crop_year) + signed < 0', 'ld4:one-refusal-path-for-a-movement')
+      // The load checks BEFORE anything is written, not after.
+      const save = mock.slice(mock.indexOf('async saveLoad(id: string, draft: GrainLoadDraft)'))
+      const body = save.slice(0, save.indexOf('\n  async '))
+      const check = body.indexOf('const refusal = binMovementRefusal(workspace, movement)')
+      const write = body.indexOf('persist({')
+      if (check < 0 || write < 0 || check > write) errors.push('ld4:one-refusal-path-for-a-movement')
+      // And neither writer keeps a private copy of the arithmetic.
+      if (body.includes('rawOnHand')) errors.push('ld4:one-refusal-path-for-a-movement')
     }
     {
       // LD-4 repair: the mock's lot balance applies the SAME baseline cutoff the server does --
