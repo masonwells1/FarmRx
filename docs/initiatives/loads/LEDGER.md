@@ -581,8 +581,8 @@ edit cannot quietly weaken it back.
   answering the balance question a second time.
 - **Nineteen browser regression groups** across two files — ten in `committedFree.regression.ts`,
   nine in the new `loadOriginLot.regression.ts`, the ninth covering the repair below.
-- Static guards PASS with **thirteen new LD-4 guards** (eight, plus five for the repairs below);
-  **mutation drill 340/340** after merging the LD-3 repair and adding five repair mutations,
+- Static guards PASS with **eighteen new LD-4 guards** (eight, plus ten for the repairs below);
+  **mutation drill 343/343** after merging the LD-3 repair and adding the repair mutations,
   count changed in both files that pin it.
 - **Browser: 119 passed, 15 skipped** on desktop and phone, including a new LD-4 journey that reads
   both lots off the picker, is refused for not answering, and then proves the chosen year is what
@@ -681,6 +681,37 @@ changes what the bin holds.
 from the replay lookup changes nothing observable: the replay comparison's first condition is
 already `v_existing.farm_id = p_farm_id`, so a cross-farm id is refused either way. The filter is
 defence in depth, not the thing that holds the rule, and no honest assertion can distinguish it.
+
+### And two more, from the review of the first repair
+
+The repair itself drew a third round. Both findings are about the same thing from opposite sides:
+**a decision made against a bin that is not standing still.**
+
+**The save was allowed while the lot read was still in flight.** (P1) `authoritativeLots` is
+undefined until the answer lands, and the fallback while it is undefined is the derivation — the
+truncated list the repair exists to stop trusting. The save guard only asked whether the read had
+*failed*, not whether it had *finished*, so a farmer typing quickly could save inside that window
+and get the original defect back. "Not answered yet" is not "answered with nothing", and the form
+now distinguishes the four states rather than two. A null answer — no signal, or the function not
+installed — is unavailable, not an empty bin.
+
+**The bin was not locked while its lots decided anything.** (P1) `save_grain_load` counted the
+on-hand lots and then, on the defaulting path, selected the single one — **two statements, two
+snapshots, under read committed.** Another truck's movement committing in between meant the count
+could say one lot while the select returned two, and a plain `SELECT INTO` over two rows takes
+whichever arrives first. The load would then be filed under a crop year nobody chose: the silent
+guess the amendment forbids, arriving through a door nobody had checked.
+
+Fixed twice over, because each fix is worth having alone. The bin row is now taken `for update`
+before its lots are read — the same row `append_bin_movement` locks — so the lot decision and the
+movement sit in one serialised window. And the count and the default lot come from **one aggregate**,
+which cannot disagree with itself, with `max()` returning the single lot's own values precisely when
+the count is one.
+
+**What is proved, and what is not.** The lock and the single read are asserted against the installed
+`prosrc`, and both mutations are caught. **The race itself is not reproduced** — staging it needs two
+concurrent connections and the disposable suite is one session. That limit is stated here rather
+than left for a reader to discover.
 
 ### Live steps
 

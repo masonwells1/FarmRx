@@ -4491,19 +4491,29 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // the derivation below is the fallback for exactly those cases, and it is the right answer there
   // because the pre-migration server reads the bin's baseline alone anyway.
   const [authoritativeLots, setAuthoritativeLots] = useState<BinLotOnHand[] | undefined>(undefined);
-  const [lotsUnavailable, setLotsUnavailable] = useState(false);
+  // LD-4 repair (Codex P1 on 35d7bdb): "not answered yet" is not "answered with nothing". While
+  // the read is in flight authoritativeLots is undefined and the derivation stands in -- which is
+  // the truncated list the repair exists to stop trusting. A farmer who types fast enough to save
+  // in that window gets the original defect back. So the save waits for a settled answer.
+  const [lotsState, setLotsState] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
+  const lotsUnavailable = lotsState === 'unavailable';
   // A save changes what the bin holds, and the form keeps the origin for the next ticket -- so the
   // lots have to be read again afterwards or the next load is picked against stale balances.
   const [lotsRefresh, setLotsRefresh] = useState(0);
   const originBinId = draft.origin_kind === "bin" ? draft.origin_grain_bin_id : "";
   useEffect(() => {
     setAuthoritativeLots(undefined);
-    setLotsUnavailable(false);
-    if (!originBinId) return;
+    if (!originBinId) { setLotsState('idle'); return }
+    setLotsState('loading');
     let current = true;
     void services.grainRepository.listBinLots(originBinId)
-      .then((lots) => { if (!current) return; if (lots) setAuthoritativeLots(lots); })
-      .catch(() => { if (current) setLotsUnavailable(true) });
+      .then((lots) => {
+        if (!current) return;
+        // Null is "the database could not say" -- the function is not installed, or there is no
+        // signal. Either way it is not an empty bin, and it must not be read as one.
+        if (lots) { setAuthoritativeLots(lots); setLotsState('ready') } else { setLotsState('unavailable') }
+      })
+      .catch(() => { if (current) setLotsState('unavailable') });
     return () => { current = false };
   }, [services, originBinId, lotsRefresh]);
   const redraft = () => { loadId.current = null };
@@ -4575,8 +4585,10 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       // LD-4 repair: the capability says the server reads lots, but this bin's lots could not be
       // read. Falling back to the workspace derivation here would be the guess that causes the
       // defect -- a short movement list looks exactly like a one-lot bin. Fail closed instead.
-      if (binLotReady && originBinId && lotsUnavailable) {
-        setMessage("Farm Rx could not read what this bin holds. Check your signal and try again.");
+      if (binLotReady && originBinId && lotsState !== 'ready') {
+        setMessage(lotsState === 'loading'
+          ? "Still reading what this bin holds. Try again in a moment."
+          : "Farm Rx could not read what this bin holds. Check your signal and try again.");
         return;
       }
       if (problems.length) { setMessage(problems[0]); return }

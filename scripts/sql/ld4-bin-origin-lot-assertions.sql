@@ -518,6 +518,23 @@ begin
   select prosrc into v_body from pg_proc p
     join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname = 'save_grain_load';
+
+  -- LD-4 repair (Codex P1 on 35d7bdb): the bin row is locked before its lots are read, so this
+  -- function's lot decision and append_bin_movement's balance check sit inside one serialised
+  -- window. A single-session suite cannot stage the race this prevents -- that needs two
+  -- connections -- so what is checked here is that the lock is installed at all.
+  if position('from public.grain_bins where id = v_origin_bin and farm_id = p_farm_id for update' in v_body) = 0 then
+    raise exception 'the installed save_grain_load reads a bin origin without locking the bin';
+  end if;
+  -- And the lot list is read ONCE on the defaulting path. Counting and then selecting was two
+  -- statements and two snapshots: the count could say one lot while the select returned two, and a
+  -- plain SELECT INTO over two rows takes whichever came first.
+  if (length(v_body) - length(replace(v_body, 'from public.bin_lots(p_farm_id, v_origin_bin)', ''))) / length('from public.bin_lots(p_farm_id, v_origin_bin)') <> 2 then
+    raise exception 'the installed save_grain_load no longer reads the bin lot list exactly twice (once to default, once to check a chosen lot)';
+  end if;
+  if position('select count(*), max(lots.commodity_id), max(lots.crop_year)' in v_body) = 0 then
+    raise exception 'the installed save_grain_load counts and selects its default lot separately';
+  end if;
   if position('public.bin_lots(p_farm_id, v_origin_bin)' in v_body) = 0 then
     raise exception 'the installed save_grain_load does not read the bin lot list';
   end if;

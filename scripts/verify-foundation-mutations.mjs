@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 340
+const expectedMutationCount = 343
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1007,8 +1007,8 @@ try {
   mutate('src/GrainModule.tsx', (source) => source.replace('authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id)', 'originBinLots(workspace, draft.origin_grain_bin_id)'))
   detected('the picker goes back to a movement list the row cap can truncate, so a two-lot bin can look like one', 'ld4:the-picker-asks-the-database-what-the-bin-holds')
   reset()
-  mutate('src/GrainModule.tsx', (source) => source.replace('if (binLotReady && originBinId && lotsUnavailable) {', 'if (false) {'))
-  detected('a bin whose lots could not be read is guessed at from a list that may be short', 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
+  mutate('src/GrainModule.tsx', (source) => source.replace("const lotsUnavailable = lotsState === 'unavailable';", 'const lotsUnavailable = false;'))
+  detected('a bin whose lots could not be read stops saying so, and is guessed at from a list that may be short', 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
   reset()
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("  if v_crop_year is null and v_origin_kind = 'bin' then", '  if false then'))
   detected('a retry after a lost response is refused once the bin it emptied has no lot left', 'ld4:a-retry-still-returns-the-ticket-it-saved')
@@ -1018,6 +1018,15 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('setLotsRefresh((count) => count + 1);', ''))
   detected('the lots are never read again after a save, so the next load is picked against stale balances', 'ld4:a-save-changes-what-the-bin-holds')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace("if (binLotReady && originBinId && lotsState !== 'ready') {", "if (binLotReady && originBinId && lotsState === 'unavailable') {"))
+  detected('a load can be saved while the bin lot read is still in flight, against the list it was meant to replace', 'ld4:a-save-waits-for-a-settled-lot-list')
+  reset()
+  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('where id = v_origin_bin and farm_id = p_farm_id for update;', 'where id = v_origin_bin and farm_id = p_farm_id;'))
+  detected('a bin origin decides its lot without locking the bin, so another truck can change it mid-decision', 'ld4:the-bin-is-locked-before-its-lots-decide-anything')
+  reset()
+  mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace('select count(*), max(lots.commodity_id), max(lots.crop_year)', 'select count(*), max(lots.commodity_id), min(lots.crop_year)'))
+  detected('the default lot is read from a second query, so two snapshots can disagree about how many lots there are', 'ld4:the-lot-list-is-read-once-when-it-defaults')
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('.filter((row) => row.movementCount > 0)', '.filter((row) => Math.abs(row.bushels) > 0.000001)'))
   detected('unresolved movements that cancel out today stop being named at all', 'ld3:an-unresolved-movement-is-named-however-it-nets')

@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 340')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 343')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -971,7 +971,8 @@ export function foundationStaticGuard(root = process.cwd()) {
     requireText(errors, grainData, 'authoritativeLots ?? binLotsOnHand(', 'ld4:the-picker-asks-the-database-what-the-bin-holds')
     // And when it cannot get that answer it says so rather than falling back to a list that may be
     // short: a short movement list is indistinguishable from a one-lot bin.
-    requireText(errors, grainModule, 'if (binLotReady && originBinId && lotsUnavailable) {', 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
+    requireText(errors, grainModule, "const lotsUnavailable = lotsState === 'unavailable';", 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
+    requireText(errors, grainModule, 'Farm Rx could not read what this bin holds', 'ld4:a-lot-list-that-could-not-be-read-is-never-guessed')
 
     // LD-1's replay guarantee, which LD-4 broke for one case: a one-lot bin hauled to exactly zero
     // has no lot left, so a retry after a lost response was refused seventy lines before it reached
@@ -985,6 +986,17 @@ export function foundationStaticGuard(root = process.cwd()) {
     requireText(errors, grainModule, 'setDraft((current) => ({ ...current, origin_crop_year: "" }));', 'ld4:a-crop-year-the-bin-no-longer-offers-is-dropped')
     // And the lots are read again after a save, or the next load is picked against stale balances.
     requireText(errors, grainModule, 'setLotsRefresh((count) => count + 1);', 'ld4:a-save-changes-what-the-bin-holds')
+
+    // "Not answered yet" is not "answered with nothing". While the lot read is in flight the
+    // derivation stands in -- the truncated list the repair exists to stop trusting -- so a farmer
+    // who saves in that window gets the original defect back. The save waits for a settled answer.
+    requireText(errors, grainModule, "if (binLotReady && originBinId && lotsState !== 'ready') {", 'ld4:a-save-waits-for-a-settled-lot-list')
+    // The bin is locked before its lots are read, so this function's lot decision and
+    // append_bin_movement's balance check are inside one serialised window.
+    requireText(errors, ld4Migration, 'where id = v_origin_bin and farm_id = p_farm_id for update;', 'ld4:the-bin-is-locked-before-its-lots-decide-anything')
+    // And that list is read once on the defaulting path: counting and then selecting was two
+    // snapshots, and a SELECT INTO over two rows takes whichever came first.
+    requireText(errors, ld4Migration, 'select count(*), max(lots.commodity_id), max(lots.crop_year)', 'ld4:the-lot-list-is-read-once-when-it-defaults')
   }
   {
     // A load's harvest contribution is derived and never written into the replaceable manual total.

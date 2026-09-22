@@ -137,6 +137,7 @@ declare
   v_lot_commodity text;
   v_on_hand_lots integer;
   v_replay_year integer;
+  v_crop_year_default integer;
   v_replay_commodity text;
   v_load_date date;
   v_gross numeric;
@@ -236,7 +237,12 @@ begin
     v_origin_bin := null;
   else
     if v_origin_bin is null then raise exception 'pick the bin this load came from'; end if;
-    select * into v_bin from public.grain_bins where id = v_origin_bin and farm_id = p_farm_id;
+    -- LD-4 repair (Codex P1 on 35d7bdb): FOR UPDATE, and it is not decoration. append_bin_movement
+    -- locks this same row before it touches a balance, so taking the lock here puts this function's
+    -- lot decision and that movement inside one serialised window. Without it, another truck's
+    -- movement can commit between the read below and the write, and the crop year this load is
+    -- filed under would be decided against a bin that had already changed.
+    select * into v_bin from public.grain_bins where id = v_origin_bin and farm_id = p_farm_id for update;
     if not found then raise exception 'that bin does not belong to this farm'; end if;
 
     -- LD-4: the bin's lots, not its baseline. Until now this branch read bin_inventory alone, so a
@@ -246,7 +252,15 @@ begin
     -- would then refuse to move -- and LD-2 added the crop_year column that makes the lots
     -- enumerable. Movements with no crop year join no lot, exactly as LD-3's figures treat them,
     -- so they are excluded here rather than silently assigned to whichever year is being hauled.
-    select count(*) into v_on_hand_lots
+    --
+    -- ONE read, not two. Counting the lots and then selecting the single one was two statements,
+    -- and under read committed the second sees a newer snapshot than the first: the count could
+    -- say one while the select returned two. A plain SELECT INTO over two rows takes whichever
+    -- arrives first, so the load would be filed under a crop year nobody chose -- the exact silent
+    -- guess this whole initiative exists to prevent. The aggregate below cannot disagree with
+    -- itself, and max() is the single lot's own value precisely when the count is one.
+    select count(*), max(lots.commodity_id), max(lots.crop_year)
+      into v_on_hand_lots, v_lot_commodity, v_crop_year_default
       from public.bin_lots(p_farm_id, v_origin_bin) lots
      where lots.crop_year is not null and lots.bushels > 0.000001;
 
@@ -260,9 +274,7 @@ begin
       if v_on_hand_lots > 1 then
         raise exception 'this bin holds more than one crop year, so pick which one this load came from';
       end if;
-      select lots.commodity_id, lots.crop_year into v_lot_commodity, v_crop_year
-        from public.bin_lots(p_farm_id, v_origin_bin) lots
-       where lots.crop_year is not null and lots.bushels > 0.000001;
+      v_crop_year := v_crop_year_default;
     else
       -- A chosen lot has to be one the bin has a record of. Whether the bin still holds enough of
       -- it is append_bin_movement's question, asked under a row lock at the moment the movement is
