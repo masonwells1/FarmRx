@@ -1,0 +1,215 @@
+name: Database migrations
+
+# Applying a migration to the live Farm Rx database, from CI rather than by hand.
+#
+# WHY THIS EXISTS. Migrations were applied by pasting them into the Supabase SQL Editor. That
+# works, but it leaves no record of what ran or when, it cannot be done by an agent, and a long
+# file pasted into a browser is one mis-selection away from a half-applied schema change.
+#
+# WHY IT IS DISPATCH-ONLY AND NEVER AUTOMATIC. Merging a pull request must not change the live
+# database. LD-006 finding 1 and LD-2's own deploy-skew finding are both about the window between
+# a client deploying and a migration applying; the fix for both is that the client tolerates
+# either order. That tolerance is what makes a manual, deliberate apply safe -- and automating
+# this on merge would throw it away for no gain.
+#
+# THE HISTORY TABLE IS THE THING TO BE CAREFUL ABOUT. `supabase db push` applies whatever is in
+# supabase/migrations that the remote `supabase_migrations.schema_migrations` table does not
+# already list. Migrations applied by hand do not write that table. So on a database whose
+# history was built by pasting, the remote table can be empty while the schema is fully migrated,
+# and a push would try to re-run everything -- which fails on the first `add column` and, worse,
+# could half-apply something if any file were written to tolerate re-running.
+#
+# Hence three modes, and `status` is the default:
+#
+#   status  Read only. Touches nothing. Prints what the remote history table lists, what a push
+#           would do (--dry-run), and the live schema facts LD-2 and LD-4 actually depend on.
+#           ALWAYS RUN THIS FIRST, and read it, before either other mode.
+#   repair  Writes the history table ONLY. Marks named versions as already applied, for schema
+#           changes that are genuinely present but were applied by hand. Changes no schema.
+#   apply   Runs the migrations. The only mode that changes the database.
+#
+# Both writing modes refuse to start unless `confirm` is typed as the project ref, so a stray
+# click on "Run workflow" cannot reach the database.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'status = read only (start here) · repair = fix the history table · apply = run the migrations'
+        required: true
+        default: status
+        type: choice
+        options:
+          - status
+          - repair
+          - apply
+      repair_versions:
+        description: 'repair only — space-separated versions to mark as already applied, e.g. "20260810223508 20260812135210"'
+        required: false
+        type: string
+      confirm:
+        description: 'repair and apply only — type the project ref to confirm you mean the live database'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# A second run must never overlap a first: two pushes against one history table is exactly the
+# race the history table exists to prevent. Queue, never cancel -- cancelling mid-apply is worse
+# than waiting.
+concurrency:
+  group: farm-rx-database-migrations
+  cancel-in-progress: false
+
+jobs:
+  migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # The SESSION pooler connection string, percent-encoded. It must be the session pooler and
+      # not the direct connection: db.<ref>.supabase.co resolves to IPv6 only, and GitHub-hosted
+      # runners have no IPv6, so a direct URL fails here with a bare connection error that looks
+      # like a wrong password. It must not be the TRANSACTION pooler either -- migrations take
+      # advisory locks and run multi-statement transactions, which transaction mode does not hold.
+      DB_URL: ${{ secrets.FARM_RX_SUPABASE_DB_URL }}
+      PROJECT_REF: agvsozfbstpekuqxpqjr
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Refuse a write without the typed confirmation
+        if: inputs.mode != 'status'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRM" != "$PROJECT_REF" ]; then
+            echo "::error::Mode '$MODE' writes to the live database. Re-run it with the confirm box set to the project ref."
+            exit 1
+          fi
+          echo "Confirmed for $PROJECT_REF."
+
+      - name: Check the connection string is present and shaped right
+        run: |
+          set -euo pipefail
+          if [ -z "${DB_URL:-}" ]; then
+            echo "::error::Repository secret FARM_RX_SUPABASE_DB_URL is not set. See docs/database-migrations.md."
+            exit 1
+          fi
+          # Shape only -- never print the value. A direct-connection or transaction-pooler URL is
+          # the most likely mistake and gives a misleading error later, so it is caught here.
+          case "$DB_URL" in
+            *"db.$PROJECT_REF.supabase.co"*)
+              echo "::error::That is the direct connection string. GitHub runners are IPv4-only and that host is IPv6-only. Use the SESSION pooler string instead."
+              exit 1 ;;
+            *pooler.supabase.com:6543*)
+              echo "::error::That is the TRANSACTION pooler (port 6543). Migrations need session mode. Use the SESSION pooler string (port 5432)."
+              exit 1 ;;
+            postgresql://*|postgres://*) : ;;
+            *)
+              echo "::error::FARM_RX_SUPABASE_DB_URL does not look like a postgres connection string."
+              exit 1 ;;
+          esac
+          echo "Connection string shape looks right."
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.117.0
+
+      - name: What the remote history table already lists
+        run: supabase migration list --db-url "$DB_URL"
+
+      - name: What a push would do, without doing it
+        run: supabase db push --db-url "$DB_URL" --skip-vault --dry-run
+
+      - name: Live schema facts LD-2 and LD-4 depend on
+        run: |
+          set -euo pipefail
+          psql "$DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          \echo '--- LD-2 schema (added by 20260921120000) ---'
+          select
+            (select count(*) from information_schema.columns
+               where table_schema = 'public' and table_name = 'bin_transactions'
+                 and column_name = 'crop_year')                    as bin_transactions_crop_year,
+            (select count(*) from information_schema.columns
+               where table_schema = 'public' and table_name = 'bin_transactions'
+                 and column_name = 'grain_load_id')                as bin_transactions_grain_load_id,
+            (select count(*) from information_schema.columns
+               where table_schema = 'public' and table_name = 'grain_loads'
+                 and column_name like 'effect\_%')                 as grain_loads_effect_columns,
+            (select count(*) from pg_trigger
+               where tgname = 'bin_transactions_append_only')      as append_only_trigger;
+          \echo '--- LD-4 functions (replaced by 20260921180000) ---'
+          select proname,
+                 case when prosecdef then 'definer' else 'invoker' end as security,
+                 md5(prosrc) as body_fingerprint
+            from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public'
+             and proname in ('bin_lots','lock_farm_bins','save_grain_load',
+                             'append_bin_movement','assign_bin_movement_crop_year',
+                             'void_grain_load')
+           order by proname;
+          SQL
+          echo
+          echo "Expected once BOTH are applied: the four LD-2 counts read 1, 1, 4, 1;"
+          echo "and six LD-4 rows come back, with bin_lots and lock_farm_bins reading 'invoker'."
+
+      - name: Record named versions as already applied
+        if: inputs.mode == 'repair'
+        env:
+          VERSIONS: ${{ inputs.repair_versions }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERSIONS// /}" ]; then
+            echo "::error::repair mode needs repair_versions."
+            exit 1
+          fi
+          # Validate before use: these reach a command line, and a version is always 14 digits.
+          for version in $VERSIONS; do
+            case "$version" in
+              [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) : ;;
+              *) echo "::error::'$version' is not a 14-digit migration version."; exit 1 ;;
+            esac
+            if ! ls supabase/migrations/"${version}"_*.sql >/dev/null 2>&1; then
+              echo "::error::No migration file in this checkout has version $version."
+              exit 1
+            fi
+          done
+          echo "Marking as applied: $VERSIONS"
+          # shellcheck disable=SC2086
+          supabase migration repair --status applied --db-url "$DB_URL" $VERSIONS
+          echo
+          echo "History table after the repair:"
+          supabase migration list --db-url "$DB_URL"
+
+      - name: Apply the migrations
+        if: inputs.mode == 'apply'
+        run: |
+          set -euo pipefail
+          supabase db push --db-url "$DB_URL" --skip-vault --yes
+
+      - name: Prove what is installed now
+        if: inputs.mode == 'apply'
+        run: |
+          set -euo pipefail
+          supabase migration list --db-url "$DB_URL"
+          psql "$DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          \echo '--- after the apply ---'
+          select
+            (select count(*) from information_schema.columns
+               where table_schema = 'public' and table_name = 'bin_transactions'
+                 and column_name = 'crop_year')            as bin_transactions_crop_year,
+            (select count(*) from information_schema.columns
+               where table_schema = 'public' and table_name = 'grain_loads'
+                 and column_name like 'effect\_%')         as grain_loads_effect_columns,
+            (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+               where n.nspname = 'public'
+                 and proname in ('bin_lots','lock_farm_bins','save_grain_load',
+                                 'append_bin_movement','assign_bin_movement_crop_year',
+                                 'void_grain_load'))       as ld4_functions_present;
+          SQL
+          echo
+          echo "Both applied reads: 1, 4, 6."
