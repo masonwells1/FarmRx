@@ -22,8 +22,14 @@ Copy the URI. It looks like:
 postgresql://postgres.agvsozfbstpekuqxpqjr:[YOUR-PASSWORD]@aws-0-<region>.pooler.supabase.com:5432/postgres
 ```
 
-Replace `[YOUR-PASSWORD]` with the database password (dashboard → Settings → Database → reset it if
-you do not have it; resetting is safe and affects nothing else).
+The green **Connect** button sits near the top of the project page, and the panel it opens has
+three nearly identical boxes. **Session pooler** is the one.
+
+Replace `[YOUR-PASSWORD]`, square brackets included, with the database password.
+
+If you do not have it: dashboard → **Settings → Database → Database password → Reset**. Resetting
+is safe and breaks nothing, because **Farm Rx itself never uses this password** — the app connects
+with the anon key and the edge functions use the service role key. The new password is shown once.
 
 Three things that will otherwise waste an afternoon:
 
@@ -32,22 +38,43 @@ Three things that will otherwise waste an afternoon:
   that reads like a wrong password.
 - **It must be the *session* pooler, not the *transaction* pooler on port 6543.** Migrations take
   advisory locks and run multi-statement transactions; transaction mode does not hold them.
-- **The password must be percent-encoded** if it contains punctuation. `@` becomes `%40`, `#`
-  becomes `%23`, `/` becomes `%2F`, `:` becomes `%3A`, `?` becomes `%3F`. A raw `@` in the
-  password splits the URL in the wrong place and the error will not say so.
+- **The password must be percent-encoded** if it contains punctuation. A raw `@` splits the URL at
+  the wrong place and the error will not say so.
+
+  | in the password | write instead |
+  | --- | --- |
+  | `@` | `%40` |
+  | `#` | `%23` |
+  | `/` | `%2F` |
+  | `:` | `%3A` |
+  | `?` | `%3F` |
+  | `&` | `%26` |
+  | `%` | `%25` |
+
+  Letters and digits need nothing. A freshly reset password is usually letters and digits only,
+  in which case none of this applies.
 
 The workflow checks the first two of those and refuses with a plain-English message rather than
 letting them turn into a confusing failure later.
 
 ### 2. Store it as a repository secret
 
-GitHub → this repository → Settings → Secrets and variables → Actions → **New repository secret**.
+Straight to the form:
+<https://github.com/masonwells1/FarmRx/settings/secrets/actions/new>
+(or: repository → Settings → Secrets and variables → Actions → **New repository secret**).
 
-- Name: `FARM_RX_SUPABASE_DB_URL`
-- Value: the string from step 1
+| box | value |
+| --- | --- |
+| **Name** | `FARM_RX_SUPABASE_DB_URL` — exactly, capitals and underscores |
+| **Secret** | the string from step 1 |
 
-GitHub masks it in every log. It can be replaced or deleted at any time, and deleting it is the
-complete off-switch for everything described here.
+The connection string goes from Supabase into that box directly. It should not be pasted into a
+chat, an issue, or a commit on the way.
+
+GitHub encrypts it on submission and masks it in every log; nobody, including whoever set it, can
+read it back afterwards. Deleting it at
+<https://github.com/masonwells1/FarmRx/settings/secrets/actions> is the complete off-switch for
+everything described here.
 
 ---
 
