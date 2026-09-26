@@ -1,5 +1,5 @@
 import type { GrainLoadDraft, GrainWorkspace } from './grain'
-import { loadLotFor, lotsSaveResolvesAgainst, originBinLots, recordedBinLots, validateGrainLoad } from './grain'
+import { loadLotFor, lotsSaveResolvesAgainst, manualMovementCropYears, originBinLots, recordedBinLots, validateGrainLoad } from './grain'
 
 /** LD-4: which lot a bin origin is hauling, and what the farmer is told when it cannot be settled.
  *
@@ -256,4 +256,29 @@ function draftFrom(patch: Partial<GrainLoadDraft>): GrainLoadDraft {
     'A year the bin never held must be refused however the list was built.')
 }
 
-console.log('Load origin lot regressions passed (10 coverage groups).')
+// 11. LD-5: the manual movement form's crop years, under the same rules as the load form's origin.
+{
+  const lots = [
+    { commodity_id: 'corn_yellow', crop_year: 2026, bushels: 800 },
+    { commodity_id: 'corn_yellow', crop_year: 2025, bushels: 0 },
+    { commodity_id: 'soybeans', crop_year: 2026, bushels: 300 },
+  ]
+  const out = manualMovementCropYears('out', 'corn_yellow', lots, [2024], 2026)
+  assert(JSON.stringify(out.years) === '[2026]' && out.defaultYear === 2026,
+    'Out offers only the lots this crop still holds, and fills in the one lot there is.')
+  const intoBin = manualMovementCropYears('in', 'corn_yellow', lots, [2024, 2026], 2026)
+  assert(JSON.stringify(intoBin.years) === '[2026,2025,2024]' && intoBin.defaultYear === 2026,
+    'In offers the bin’s own lots, the planted years and this year and last, newest first, without repeats.')
+  const twoLots = [...lots, { commodity_id: 'corn_yellow', crop_year: 2024, bushels: 50 }]
+  const outOfTwo = manualMovementCropYears('out', 'corn_yellow', twoLots, [], 2026)
+  assert(JSON.stringify(outOfTwo.years) === '[2026,2024]' && outOfTwo.defaultYear === null,
+    'A bin holding two lots of this crop fills nothing in: the farmer picks which one.')
+  const empty = manualMovementCropYears('out', 'corn_yellow', [{ commodity_id: 'corn_yellow', crop_year: 2025, bushels: 0 }], [2026], 2026)
+  assert(empty.years.length === 0 && empty.defaultYear === null,
+    'An emptied lot is no answer for grain going out, and no year may be offered in its place.')
+  const newCrop = manualMovementCropYears('in', 'wheat_srw', lots, [], 2026)
+  assert(JSON.stringify(newCrop.years) === '[2026,2025]' && newCrop.defaultYear === null,
+    'Grain of a crop the bin has never held is offered this year and last, and nothing is filled in.')
+}
+
+console.log('Load origin lot regressions passed (11 coverage groups).')

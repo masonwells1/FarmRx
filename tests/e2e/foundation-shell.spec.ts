@@ -361,6 +361,24 @@ async function mockSupabase(page: Page, accessible = farms, notifications: unkno
       contractRepairCalls.push({ rpc: url.pathname.split('/').pop()!, body: value })
       await fulfillJson(route, url.pathname.endsWith('edit_grain_contract') ? { id: value.p_contract_id } : { deleted: true, reopened_firm_offer_id: null, already_deleted: false }); return
     }
+    // LD-5: a hand-entered bin movement. Recorded with the load calls so a journey can read exactly
+    // what the browser sent, and applied to the declared lots the way append_bin_movement applies it,
+    // so the next bin_lots read agrees with the database rather than with the browser.
+    if (url.pathname === '/rest/v1/rpc/append_bin_movement') {
+      let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
+      const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
+      const movement = value?.p_transaction as Record<string, unknown> | undefined
+      if (route.request().method() !== 'POST' || !value || typeof value.p_farm_id !== 'string' || !movement || typeof movement !== 'object') { await rejectShape('append_bin_movement body'); return }
+      loadRecordCalls.push({ rpc: 'append_bin_movement', body: value })
+      const declaredLots = moduleRows.bin_lots as Record<string, unknown>[] | undefined
+      if (declaredLots && typeof movement.crop_year === 'number') {
+        const signed = movement.direction === 'in' ? Number(movement.bushels) : -Number(movement.bushels)
+        const lot = declaredLots.find((row) => row.grain_bin_id === movement.grain_bin_id && row.commodity_id === movement.commodity_id && row.crop_year === movement.crop_year)
+        if (lot) lot.bushels = Number(lot.bushels) + signed
+        else declaredLots.push({ grain_bin_id: movement.grain_bin_id, commodity_id: movement.commodity_id, crop_year: movement.crop_year, bushels: signed })
+      }
+      await fulfillJson(route, { ...movement, farm_id: value.p_farm_id, grain_load_id: null, created_at: now }); return
+    }
     if (url.pathname === '/rest/v1/rpc/save_grain_load' || url.pathname === '/rest/v1/rpc/void_grain_load') {
       let body: unknown = null; try { body = route.request().postDataJSON() } catch { /* rejected below */ }
       const value = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null
@@ -1943,6 +1961,49 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
   // "the bin holds one crop year" is a claim about a moment and another device can change it.
   expect(next.crop_year).toBe(2025)
   expect(next.commodity_id).toBe(commodityId)
+  expect(unexpected).toEqual([])
+})
+
+test('a hand-entered bin movement names its crop year, chosen from the lots the bin really holds', async ({ page, context }) => {
+  await seedSession(context)
+  loadRecordCalls.length = 0
+  const farm = farms[0]!
+  const binId = '00000000-0000-4000-8000-000000000095'
+  const binRows = [{ id: binId, farm_id: farm.id, name: 'Home bin', capacity_bu: 40_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: now, updated_at: now }]
+  const inventoryRows = [{ id: '00000000-0000-4000-8000-000000000096', farm_id: farm.id, grain_bin_id: binId, crop_year: 2025, commodity_id: commodityId, bushels: 6_000, committed_bushels: 0, measured_at: now, notes: null, created_at: now, updated_at: now }]
+  // The movement list is empty, as it is past PostgREST's cap: only public.bin_lots knows this bin
+  // also holds 4,000 bushels of the 2026 crop. The form has to believe the database.
+  const lotRows = [
+    { grain_bin_id: binId, commodity_id: commodityId, crop_year: 2026, bushels: 4_000 },
+    { grain_bin_id: binId, commodity_id: commodityId, crop_year: 2025, bushels: 6_000 },
+  ]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: [], bin_lots: lotRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
+  await page.goto('/grain/storage')
+  const bin = page.locator('article.bin-card').filter({ hasText: 'Home bin' })
+  await bin.getByText('Movement ledger (0)', { exact: true }).click()
+  const form = bin.locator('form.movement-form')
+  await form.getByLabel('Direction').selectOption('out')
+  await form.getByLabel('Bushels').fill('1000')
+  await form.getByLabel('Date').fill('2026-07-20')
+
+  // Grain going out can only come from a lot the bin holds, and with two there is nothing to guess.
+  const cropYear = form.getByLabel('Crop year')
+  await expect(cropYear.locator('option')).toHaveText(['Pick a crop year', '2026', '2025'])
+  await expect(cropYear).toHaveValue('')
+
+  // Before LD-5 this saved with no crop year and the bushels joined the unknown bucket. Now it asks.
+  await form.getByRole('button', { name: 'Add movement' }).click()
+  await expect(form.getByText('Pick the crop year of this grain.')).toBeVisible()
+  expect(loadRecordCalls.length).toBe(0)
+
+  await cropYear.selectOption('2025')
+  await form.getByRole('button', { name: 'Add movement' }).click()
+  await expect.poll(() => loadRecordCalls.length).toBe(1)
+  expect(loadRecordCalls[0]!.rpc).toBe('append_bin_movement')
+  const sent = loadRecordCalls[0]!.body.p_transaction as Record<string, unknown>
+  expect(sent.grain_bin_id).toBe(binId)
+  expect(sent.direction).toBe('out')
+  expect(sent.crop_year).toBe(2025)
   expect(unexpected).toEqual([])
 })
 
