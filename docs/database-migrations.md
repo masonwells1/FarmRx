@@ -8,9 +8,45 @@ has deployed against an unapplied migration probes for what the database can do 
 the old behaviour. That tolerance is what makes a manual apply safe, and it is why applying is not
 automated on merge.
 
+The Supabase connector is the route when an agent applies one; the GitHub workflow further down is
+the fallback for a session that has no connector. Either way it is a live migration, and the
+approval rule in `AGENTS.md` applies.
+
 ---
 
-## One-time setup
+## Primary route: the Supabase connector
+
+An agent with the Supabase connector (`execute_sql` on project `agvsozfbstpekuqxpqjr`) needs no
+password and no secret. `scripts/live-migration-sql.mjs` prints the exact SQL; the agent runs it.
+
+1. **Status.** `node scripts/live-migration-sql.mjs status` prints a query listing every file in
+   `supabase/migrations/` beside whether the live history records it. Run it. On 2026-09-26 all 60
+   files were recorded, so after that date anything unrecorded is a genuinely new migration.
+2. **Apply, oldest first, one per call.** For each unrecorded version,
+   `node scripts/live-migration-sql.mjs apply <version>` prints one `do` block. Run it. Stop at the
+   first error and report it; do not skip ahead.
+3. **Check.** Run status again, then the connector's security and performance advisors, and read
+   any finding that names an object the migration created.
+
+What the printed block guarantees, so none of it has to be re-derived by hand:
+
+- **The file is run exactly as committed.** The block carries the file's md5 and refuses to run
+  unless the text that reached the database has the same one, so a transcription slip changes
+  nothing.
+- **All or nothing.** The file and its history row run in one transaction; a failure leaves the
+  database as it was.
+- **Recorded under its real version.** Do not use the connector's `apply_migration` tool. It
+  records the time it ran rather than the file's version, and the live history then disagrees with
+  the repository forever.
+- **Never twice.** A version the history already records is refused before anything runs.
+
+A migration whose file must run outside a transaction (`create index concurrently`,
+`alter type ... add value`) cannot go through this block. None does today; one that does is
+applied by the workflow below instead.
+
+---
+
+## Fallback: one-time setup for the GitHub workflow
 
 ### 1. Get the session pooler connection string
 
