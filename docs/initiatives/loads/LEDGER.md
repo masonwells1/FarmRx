@@ -1649,3 +1649,73 @@ read, a capability and its proof: a tranche, not a repair.
 ### Live steps
 
 **None.** This is display-only: no migration, no write path, no schema. Merging deploys the client.
+
+## LD-009 — LD-5: a hand-entered bin movement names its crop year
+
+**Branch:** `claude/app-improvement-strategy-kzqk6s`, on `main` `daef330`.
+**Authority:** the limit LD-004, LD-005 and LD-007 each recorded and each called the recommended next
+change. Mason asked for it to be built on 2026-09-26.
+
+### What was actually wrong
+
+The form was not the only gap. **`binTransactionColumns` in `SupabaseGrainDataGateway.ts` never sent
+`crop_year`**, although `append_bin_movement` has read it since LD-2. So even a form that asked would
+have saved every hand-entered movement into the unknown-year bucket. Both are fixed here.
+
+### What changed
+
+- **The movement form asks "Crop year".** Out offers only the lots the bin still holds for that crop;
+  in offers the bin's own lots, the years the crop is planted, and this year and last. A year is
+  filled in only when the bin holds exactly one lot of that crop, and only from a settled read.
+  Saving without one is refused before any id is spent, in the farmer's words.
+- **The rule is one pure function**, `manualMovementCropYears` in `src/data/grain.ts`.
+- **The bin's lots are asked of `public.bin_lots`**, with the answer keyed to its bin and refresh --
+  the load form's LD-4 repairs, reused rather than rediscovered. Out fails closed while that read is
+  loading or unavailable, as the load form does.
+- **A bin holding only pre-LD-2 grain offers nothing to take out**, and says to name those movements
+  under "Which crop year were these?" first. That is the load form's rule too; neither guesses.
+- **The repository refuses a response that lost the crop year** ("could not confirm the movement
+  saved"), so an old server silently dropping the key is not reported as a save.
+- **The mock compares crop year on a replayed id**, as the server does.
+- **Gated on both `grain_load_effects` and `grain_load_bin_lot`.** Written with `??` rather than
+  `!== false` because the load form's identical checks are pinned by exact text; a second copy above
+  them shadowed an existing mutation, which the drill caught.
+- **Season fence:** `bin_lots` added to `readOnlySeasonAccessRpcs`. The Grain page has probed it on
+  load since LD-4, so the season lanes would already have flagged it; the maple and harvest-ridge
+  journeys now pick 2027 on their inbound movements and wait for the lone lot on their outbound ones.
+
+### Proof observed
+
+- `npx tsc -b --force`; `npm run build`; `git diff --check` clean.
+- Static guards PASS with **three new guards**; **mutation drill 395/395**, count changed in both
+  files that pin it.
+- **A new browser journey** on a bin whose second lot exists only in `bin_lots`. It passes on desktop
+  and phone. **With `crop_year` removed from the gateway column list it fails** — *Expected 2025,
+  Received undefined* — so it proves the gateway fix, not only the form.
+- **Browser: 130 passed, 15 skipped, 1 failed** with the new journey included, against the
+  sandbox's Chromium 1194 through a throwaway config, as in LD-004. The failure was the known Soil Rx
+  custody flake ("drains custody after lost Storage and row-delete responses", desktop); it touches
+  no Grain code and **passed 6 of 6** when rerun three times on each project.
+- **All 67 non-PowerShell regression files run.** Only `programInventoryCW2` fails, identically to
+  `main`. The receipt regression now proves an unanswered year saves nothing and every saved
+  movement carries its year; `loadOriginLot` gains a coverage group for the rule.
+- **Season lanes not run**: they need PowerShell and Docker, which this sandbox has neither of.
+
+### Live state, recorded because the ledger said otherwise
+
+On 2026-09-26 the live database was found **eight migrations behind** `main` (Soil Rx storage,
+FS persist, GL-1, GL-2, GL-3, LD-1, LD-2, LD-4), not two. All eight were applied that day under
+Mason's approval through the Supabase connector, each fingerprinted and recorded under its real
+version (`scripts/live-migration-sql.mjs`, PR #58); the live history now lists all 60 files.
+`deliver-grain-alert` was redeployed as version 7 so its re-check uses `latest_eligible_cash_bid`.
+
+### Live steps
+
+**None.** No migration. `append_bin_movement` already stores `crop_year`. Merging deploys the client.
+
+### Limits, stated rather than implied
+
+- **Existing unknown-year movements stay unknown** until an owner or manager names them. This stops
+  the bucket growing; it does not empty it.
+- **"In" to an empty bin always asks**, even at harvest when the answer is usually this year. That is
+  one tap, and the alternative is the guess this initiative exists to prevent.

@@ -12,6 +12,9 @@ export const readOnlySeasonAccessRpcs = new Set([
   // authorization response proves the capability boundary; the security-definer
   // probe is read-only and has no business write path.
   'operational_integrity_capability_probe',
+  // LD-4/LD-5: what a bin holds, by crop year. A security-invoker SQL read the Grain page probes on
+  // load and the load and movement forms ask before offering a crop year; it writes nothing.
+  'bin_lots',
 ])
 
 type RequestKind = 'pre-auth' | 'password-auth' | 'safe-read' | 'read-only-rpc' | 'target-mutation-rpc' | 'target-mutation-path' | 'unexpected-rpc' | 'unexpected-non-read'

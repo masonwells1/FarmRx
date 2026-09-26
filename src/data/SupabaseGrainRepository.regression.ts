@@ -306,6 +306,14 @@ async function run() {
   const absentMovementGateway = new FakeGateway(); Object.defineProperty(absentMovementGateway, 'appendBinTransactionRpc', { value: undefined }); let absentMovement = ''
   try { await repository(absentMovementGateway).appendBinTransaction({ ...movement, id: uid(994) }) } catch (error) { absentMovement = error instanceof Error ? error.message : '' }
   assert(absentMovement === 'Bin movements arrive with the next database update.' && absentMovementGateway.movementInputs.length === 0 && farmerError(new Error(absentMovement), 'add this movement') === absentMovement, 'Absent movement RPC must disable the unsafe fallback with the exact message.')
+  // LD-5: a manual movement's crop year reaches the gateway, and a response that lost it is not a saved movement.
+  const yearGateway = new FakeGateway(); const yearRepo = repository(yearGateway)
+  await yearRepo.appendBinTransaction({ ...movement, id: uid(9981), crop_year: 2026 })
+  assert(yearGateway.movementInputs.length === 1 && yearGateway.movementInputs[0]?.crop_year === 2026, 'A manual movement must send the crop year the farmer picked.')
+  const droppingGateway = new FakeGateway(); const droppingAppend = droppingGateway.appendBinTransactionRpc.bind(droppingGateway)
+  Object.defineProperty(droppingGateway, 'appendBinTransactionRpc', { value: async (farm: string, row: BinTransaction) => ({ ...(await droppingAppend(farm, row)), crop_year: null }) })
+  let droppedYear = ''; try { await repository(droppingGateway).appendBinTransaction({ ...movement, id: uid(9982), crop_year: 2026 }) } catch (error) { droppedYear = error instanceof Error ? error.message : '' }
+  assert(droppedYear === 'Farm Rx could not confirm the movement saved.', 'A server that did not keep the crop year must not be reported as a saved movement.')
   const absentDeliveryGateway = new FakeGateway(); Object.defineProperty(absentDeliveryGateway, 'appendContractDeliveryRpc', { value: undefined }); let absentDelivery = ''
   try { await repository(absentDeliveryGateway).recordContractDelivery({ id: uid(995), farm_id: data.fields.farm.id, grain_contract_id: data.grain_contracts[0].id, bushels: 1, delivered_on: '2026-07-12', note: null, created_at: stamp }) } catch (error) { absentDelivery = error instanceof Error ? error.message : '' }
   assert(absentDelivery === 'Delivery tracking arrives with the next database update.' && farmerError(new Error(absentDelivery), 'record this delivery') === absentDelivery, 'Missing delivery table/RPC must never leak a retryable generic error.')
