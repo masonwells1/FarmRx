@@ -1719,3 +1719,89 @@ version (`scripts/live-migration-sql.mjs`, PR #58); the live history now lists a
   the bucket growing; it does not empty it.
 - **"In" to an empty bin always asks**, even at harvest when the answer is usually this year. That is
   one tap, and the alternative is the guess this initiative exists to prevent.
+
+## LD-010 — Refusal audit: the grain mock refuses what production refuses
+
+**Branch:** `claude/app-improvement-strategy-kzqk6s`, on `main` `824cfbb` (LD-5, PR #59, merged by
+Mason).
+**Authority:** Mason asked for the audit on 2026-09-27 ("Go"). The mock stands in for the live
+repository **and** the database behind it, and six earlier disagreements were each found by accident.
+This audit went looking instead: every write in `MockGrainRepository` was compared with
+`SupabaseGrainRepository` and the final SQL guard it reaches.
+
+### What was actually wrong
+
+- **One production bug.** The contract repair panel offered **Delete** on a contract a load ticket
+  names. `grain_loads` references the contract `on delete restrict`, voided ticket or not, so that
+  delete could only ever fail. The panel now asks the shared `contractIsDeletable` and, when a load
+  names the contract, says it can be corrected but not deleted.
+- **One demo bug, found by the new test.** The demo's stored reader (`readGrain`) projected every
+  grain array except `grain_loads`. The first reload dropped every load ticket, and the next load
+  save or void failed on an undefined list. No browser journey caught it because they all run
+  against the live repository with a simulated server.
+- **The mock accepted about thirty things production refuses**, and in three places was stricter
+  than production. The fixes, by write:
+  - **Contracts:** a price leg finalizes only when the other is set (the mock read a missing leg as
+    zero and wrote a cash price nobody agreed to); a firm-offer fill never replaces a contract that
+    already holds the id; an empty or no-op correction is refused; an existing id is accepted only
+    as an identical retry; unknown commodity or entity scope and an over-long enterprise label are
+    refused.
+  - **Deliveries:** the note is trimmed and capped at 4,000 characters, the date must be a real one,
+    and a load's delivery effect runs the same over-delivery guard as a manual delivery.
+  - **Production estimates:** a new id is **inserted**. The mock dropped it, so a new estimate in the
+    demo silently vanished. A duplicate scope, a crop year outside 1900–2200 and an unknown scope
+    are refused.
+  - **Marketing plan:** targets go through the shared `validateTarget` (moved out of the live
+    repository, not copied). Ids and months are unique, and an id cannot be taken from another scope.
+  - **Cash bids, alert rules, firm offers:** an elevator of 1–200 characters and a real bid date are
+    required, and a USDA feed row is not editable. Text is trimmed as production trims it. A delete
+    of a row that is not there gets production's message.
+  - **Bins and movements:** bin names are unique. A movement retry is compared on every column the
+    server compares, note included, and the baseline refusal comes before the retry check as it does
+    live. A crop year outside 1900–2200 is refused in the shared validator.
+  - **Sale limits and carry grids:** a limit cannot move onto another limit's scope. A grid needs an
+    estimate that exists, and there is one grid per estimate.
+  - **Loads:** the destination bin must exist, and a bin that held two crops in the year has to be
+    told which. **A void runs each reversal through the same movement refusal**, dated today as
+    the server dates it, and answers `blocked` with the loads in the way, not a partial void.
+- **Shared, not copied:** `isCalendarDate`, `contractIsDeletable` and `validateTarget` live in
+  `src/data/grain.ts`. `validateGrainLoadShape` gained the real-date check and the column lengths.
+
+### Proof observed
+
+- `npx tsc -b --force`; `npm run build`; `npm audit --audit-level=high`; `git diff --check` clean.
+- **New regression `src/data/MockGrainRefusals.regression.ts`, 15 coverage groups**, one per fix
+  family. It is in the `regression` script. **With the `grain_loads` projection removed it fails**
+  (`Cannot read properties of undefined (reading 'find')`), so it proves the demo fix and does not
+  just pass beside it.
+- Static guards PASS with **five new `ld10:` guards**. **Mutation drill 401/401** (six new
+  mutations), with the count changed in both files that pin it.
+- **Browser: 131 passed, 15 skipped, 0 failed**, against the sandbox's Chromium 1194 through a
+  throwaway config, as in LD-004.
+- **Regressions: 66 of the 71 commands pass.** `programInventoryCW2` fails identically without these
+  changes. The four PowerShell regressions need `pwsh`, which this sandbox does not have; CI runs
+  them.
+
+### Live steps
+
+**None.** No migration and no edge function. Merging deploys the client.
+
+### Limits, stated rather than implied
+
+Found by the audit and deliberately **not** modelled, because each needs machinery the demo does not
+have, or matters only on a live server:
+
+- **No optimistic concurrency on row saves** other than contracts (which GL-3 already fences). A
+  stale `updated_at` saves in the demo.
+- **No UUID-format, numeric-overflow or two-decimal rounding checks.** The live repository refuses
+  malformed ids before they are sent, and the demo only makes well-formed ones.
+- **Deleting a missing or already-deleted contract succeeds in the demo.** There is no audit table
+  to answer a replay from.
+- **A lost-response retry of a contract correction is refused in the demo** rather than replayed by
+  operation id. The demo is stricter here, not looser.
+- **Firm offers:** the fill does not re-validate the offer the caller passes or compare its scope,
+  a delete is not blocked by a contract's `firm_offer_id` reference, and the expiry check has no
+  clock-skew window.
+- **Truck equipment references and `reconcileHarvestActual` scope** are not checked in the demo.
+- **The contract enterprise-label check lives in the mock only.** It is not yet in the shared
+  `validateGrainContract`. Moving it there is the recommended next small change.

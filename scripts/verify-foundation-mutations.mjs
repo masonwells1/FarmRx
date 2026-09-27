@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 395
+const expectedMutationCount = 401
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1096,6 +1096,24 @@ try {
   reset()
   mutate('supabase/migrations/20260921180000_ld4_bin_origin_lot.sql', (source) => source.replace("  v_locked_bins := array(\n    select distinct grain_bin_id from public.bin_transactions\n     where grain_load_id = p_load_id and farm_id = p_farm_id);\n  perform public.lock_farm_bins(p_farm_id, v_locked_bins);\n\n  select * into v_load from public.grain_loads\n    where id = p_load_id and farm_id = p_farm_id for update;\n  if not found then raise exception 'that load does not belong to this farm'; end if;", "  select * into v_load from public.grain_loads\n    where id = p_load_id and farm_id = p_farm_id for update;\n\n  v_locked_bins := array(\n    select distinct grain_bin_id from public.bin_transactions\n     where grain_load_id = p_load_id and farm_id = p_farm_id);\n  perform public.lock_farm_bins(p_farm_id, v_locked_bins);\n  if not found then raise exception 'that load does not belong to this farm'; end if;"))
   detected('a perform sits between the void fence and the FOUND that reads it, so every load id looks like it belongs to this farm', 'ld4:the-void-fence-reads-its-own-select')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace(' grain_loads: Array.isArray(value.grain_loads) ? value.grain_loads as GrainLoad[] : [],', ''))
+  detected('the demo reader drops grain_loads, so every load ticket vanishes on the first reload', 'ld10:the-demo-keeps-its-load-tickets')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace('    if (!contractIsDeletable(workspace, contractId)) throw new Error(CONTRACT_NAMED_BY_A_LOAD)\n', ''))
+  detected('the mock deletes a contract a load ticket names, which the database refuses', 'ld10:a-contract-a-load-names-is-not-deleted')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => source.replace('{deletable && <button className="text-action destructive"', '{<button className="text-action destructive"'))
+  detected('the repair panel offers Delete on a contract a load names, a delete the server always refuses', 'ld10:a-contract-a-load-names-is-not-deleted')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace("    if (leg === 'futures_price' && current.basis === null) throw new Error('Set the basis before finalizing the futures price.')\n", ''))
+  detected('the mock finalizes futures with no basis and writes a cash price nobody agreed to', 'ld10:a-price-leg-finalizes-only-beside-the-other')
+  reset()
+  mutate('src/data/MockGrainRepository.ts', (source) => source.replace("    if (workspace.grain_contracts.some((row) => row.id === contract.id)) throw new Error('Farm Rx could not record this grain contract.');\n", ''))
+  detected('filling a firm offer replaces another contract that already holds the id', 'ld10:a-fill-never-replaces-another-contract')
+  reset()
+  mutate('package.json', (source) => source.replace(' && tsx src/data/MockGrainRefusals.regression.ts', ''))
+  detected('the refusal regression is dropped from the regression run', 'ld10:the-refusal-regression-runs')
   reset()
   mutate('src/data/MockGrainRepository.ts', (source) => source.replace('const problems = validateGrainLoad(resolvedDraft, workspace, lots)', 'const problems = validateGrainLoad(resolvedDraft, workspace)'))
   detected('the mock validates a save against the on-hand list, so a ticket naming an emptied lot is refused where production accepts it', 'ld4:a-save-resolves-against-the-list-the-server-uses')

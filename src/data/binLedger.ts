@@ -24,6 +24,8 @@ export function validateBinTransaction(value: BinTransaction): string[] {
   if (!Number.isFinite(value.bushels) || value.bushels <= 0) errors.push('Bushels must be greater than zero.')
   if (!value.commodity_id.trim()) errors.push('Choose a commodity.')
   if (!validDate(value.occurred_on)) errors.push('Choose a real movement date.')
+  // Refusal audit (LD-010): append_bin_movement refuses anything but a whole year in 1900-2200.
+  if (value.crop_year !== null && (!Number.isInteger(value.crop_year) || value.crop_year < 1900 || value.crop_year > 2200)) errors.push('That is not a crop year.')
   if (value.note !== null && (!value.note.trim() || value.note.trim().length > 4000)) errors.push('A movement note must be 1 to 4,000 characters when present.')
   if (value.source_kind !== null && (!value.source_kind.trim() || value.source_kind.trim().length > 80)) errors.push('A movement source must be 1 to 80 characters when present.')
   return errors
