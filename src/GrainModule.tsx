@@ -33,7 +33,7 @@ import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOfferType, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainContractType, GrainLoad, GrainLoadDraft, GrainServices, GrainWorkspace, LoadTruck, MarketingAlertRule, MarketingAlertRuleType, MarketingPlanTarget, PositionScope, ProductionEstimate } from "./data/grain";
 import { deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
 import type { BinLotOnHand } from "./data/committedFree";
-import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, originBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
+import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, manualMovementCropYears, originBinLots, recordedBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -3938,6 +3938,63 @@ function MovementForm({
   useEffect(() => {
     if (activeCommodityIds.length) setCommodity(activeCommodityIds[0]);
   }, [commodityId, activeCommodityIds.join("|")]);
+  // LD-5: which crop year this grain is. Until now this form never asked, so every hand-entered
+  // movement joined the unknown-year bucket that LD-3's committed and free figures leave out, and
+  // it was the last place in Grain where bushels moved without naming a lot.
+  //
+  // It follows the load form's bin origin rather than inventing its own rules, because that form
+  // took many review rounds to get right:
+  // - the bin's lots are asked of the database (public.bin_lots), since the workspace read is capped
+  //   and can drop an older lot that still holds grain;
+  // - the answer is kept WITH the bin and refresh it was read for, so a stale list is never read;
+  // - a year is filled in only from a settled list, and only when the bin holds exactly one lot.
+  // Both capabilities, because the server needs LD-2 to store a movement's crop year and LD-4 to
+  // answer what the bin holds.
+  // Written with ?? rather than !== false on purpose: the load form's own checks are pinned by
+  // exact text in the foundation guards, and a second identical line here would shadow them.
+  const cropYearReady = (workspace.capabilities?.grain_load_effects ?? true)
+    && (workspace.capabilities?.grain_load_bin_lot ?? true);
+  const [cropYear, setCropYear] = useState("");
+  const [lotRead, setLotRead] = useState<{ binId: string; refresh: number; lots: BinLotOnHand[] | null } | null>(null);
+  const [lotsRefresh, setLotsRefresh] = useState(0);
+  const lotsForThisBin = lotRead && lotRead.binId === bin.id && lotRead.refresh === lotsRefresh ? lotRead : null;
+  const lotsState: "loading" | "ready" | "unavailable" = !lotsForThisBin ? "loading" : lotsForThisBin.lots ? "ready" : "unavailable";
+  useEffect(() => {
+    if (!cropYearReady) return;
+    let current = true;
+    const forBin = bin.id;
+    const forRefresh = lotsRefresh;
+    // Started inside a promise so a repository without the read fails into "unavailable" rather
+    // than throwing out of the effect.
+    void Promise.resolve()
+      .then(() => services.grainRepository.listBinLots(forBin))
+      .then((lots) => { if (current) setLotRead({ binId: forBin, refresh: forRefresh, lots }) })
+      .catch(() => { if (current) setLotRead({ binId: forBin, refresh: forRefresh, lots: null }) });
+    const cancel = () => { current = false };
+    return cancel;
+  }, [services, bin.id, lotsRefresh, cropYearReady]);
+  const binLots = lotsForThisBin?.lots ?? recordedBinLots(workspace, bin.id);
+  const plantedYears = workspace.fields.crop_assignments
+    .filter((assignment) => assignment.commodity_id === commodity)
+    .map((assignment) => assignment.crop_year);
+  const thisYear = Number(localCalendarDay(new Date()).slice(0, 4));
+  const { years: cropYears, defaultYear } = manualMovementCropYears(direction, commodity, binLots, plantedYears, thisYear);
+  const commodityName = workspace.fields.commodities.find((item) => item.id === commodity)?.name ?? "this crop";
+  const noLotToTakeOut = `This bin has no ${commodityName} with a crop year on record to take out. If it holds grain from before crop years were recorded, name those movements under \u201cWhich crop year were these?\u201d first.`;
+  // Fill in a lone lot, from a settled list only, and never under a retry: the outstanding draft
+  // already carries the year it was sent with.
+  useEffect(() => {
+    if (!cropYearReady || lotsState !== "ready" || movementUnconfirmed) return;
+    if (cropYear || defaultYear === null) return;
+    setCropYear(String(defaultYear));
+  }, [cropYearReady, lotsState, movementUnconfirmed, cropYear, defaultYear]);
+  // Drop a year the form no longer offers -- after a change of direction or crop, or once a save
+  // has emptied that lot -- so the picker can always repair the draft it is showing. Only against a
+  // settled list: while a re-read is in flight the fallback can lack a lot the farmer just chose.
+  useEffect(() => {
+    if (!cropYearReady || movementUnconfirmed || !cropYear || lotsState !== "ready") return;
+    if (!cropYears.includes(Number(cropYear))) setCropYear("");
+  }, [cropYearReady, movementUnconfirmed, cropYear, lotsState, cropYears.join("|")]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!submitLock.current.acquire()) return;
@@ -3946,6 +4003,19 @@ function MovementForm({
       if (activeCommodityIds.length && !activeCommodityIds.includes(commodity)) {
         setError("This bin still holds another commodity. Empty its active lot before storing a different crop.");
         return;
+      }
+      // A retry resends its outstanding draft unchanged, so these checks are for a new movement only.
+      if (cropYearReady && !movementDraft.current) {
+        if (direction === "out" && lotsState !== "ready") {
+          setError(lotsState === "loading"
+            ? "Still reading what this bin holds. Try again in a moment."
+            : "Farm Rx could not read what this bin holds. Check your signal and try again.");
+          return;
+        }
+        if (!cropYear || !cropYears.includes(Number(cropYear))) {
+          setError(direction === "out" && !cropYears.length ? noLotToTakeOut : "Pick the crop year of this grain.");
+          return;
+        }
       }
       const transaction: BinTransaction = movementDraft.current ?? {
         id: services.createGrainId(),
@@ -3957,7 +4027,7 @@ function MovementForm({
         occurred_on: occurredOn,
         note: note.trim() || null,
         source_kind: "manual entry",
-        crop_year: null, grain_load_id: null, created_at: new Date().toISOString(),
+        crop_year: cropYearReady ? Number(cropYear) : null, grain_load_id: null, created_at: new Date().toISOString(),
       };
       const errors = validateBinTransaction(transaction);
       if (errors.length) {
@@ -3969,6 +4039,8 @@ function MovementForm({
         await onSave(transaction);
         movementDraft.current = null;
         setMovementUnconfirmed(false);
+        // What the bin holds has changed, so the list is re-read before it is trusted again.
+        setLotsRefresh((value) => value + 1);
         setBushelsValue("");
         setNote("");
         setError("");
@@ -4028,6 +4100,23 @@ function MovementForm({
           ))}
         </select>
       </label>
+      {cropYearReady && (
+        <label>
+          Crop year
+          <select
+            value={cropYear}
+            disabled={movementUnconfirmed}
+            onChange={(event) => setCropYear(event.target.value)}
+          >
+            <option value="">Pick a crop year</option>
+            {cropYears.map((year) => (
+              <option key={year} value={String(year)}>
+                {year}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <label>
         Date
         <input
@@ -4055,6 +4144,7 @@ function MovementForm({
       )}
       {!workspace.capabilities?.bin_movements && <p className="form-error">Bin movements arrive with the next database update. Reload the app after the update.</p>}
       {direction === "out" && <p className="panel-note">Bin-out changes this bin only. It does not mark a contract delivered.</p>}
+      {cropYearReady && direction === "out" && lotsState === "ready" && !cropYears.length && <p className="panel-note">{noLotToTakeOut}</p>}
       <button className="secondary-action" type="submit" disabled={saving || !workspace.capabilities?.bin_movements}>
         {saving ? "Saving…" : movementUnconfirmed ? "Retry movement" : "Add movement"}
       </button>

@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 392
+const expectedMutationCount = 395
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1192,6 +1192,15 @@ try {
   reset()
   mutate('src/GrainModule.tsx', (source) => source.replace('    "contracts",\n    "loads",\n    "storage",', '    "contracts",\n    "storage",'))
   detected('a tab in the Grain header has no route and silently opens Overview', 'grain:every-tab-has-a-route')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => replaceExactlyOne(source, /return \{ id, farm_id, grain_bin_id, direction, bushels, commodity_id, crop_year, occurred_on,/g, 'return { id, farm_id, grain_bin_id, direction, bushels, commodity_id, occurred_on,', 'LD-5 column list'))
+  detected('the gateway stops sending a manual movement\u2019s crop year, so every hand-entered bushel joins the unknown bucket again', 'ld5:a-manual-movement-sends-its-crop-year')
+  reset()
+  mutate('src/data/SupabaseGrainRepository.ts', (source) => replaceExactlyOne(source, / \|\| saved\.crop_year !== \(normalized\.crop_year \?\? null\)/g, '', 'LD-5 confirmation'))
+  detected('a server that dropped the crop year is reported as a saved movement', 'ld5:a-manual-movement-sends-its-crop-year')
+  reset()
+  mutate('src/GrainModule.tsx', (source) => replaceExactlyOne(source, /lotRead\.binId === bin\.id && lotRead\.refresh === lotsRefresh/g, 'lotRead.refresh === lotsRefresh', 'LD-5 lot answer'))
+  detected('the movement form reads another bin\u2019s lot list and can fill in a crop year from it', 'ld5:the-movement-lot-answer-is-keyed-to-its-bin')
   if (mutationCount !== expectedMutationCount) throw new Error(`Foundation mutation count drifted: expected ${expectedMutationCount}, observed ${mutationCount}.`)
   console.log(`Foundation mutation drill: PASS (${mutationCount}/${expectedMutationCount} controlled mutations turned the gate red)`)
 } finally {

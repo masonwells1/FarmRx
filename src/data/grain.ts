@@ -384,6 +384,39 @@ export function recordedBinLots(workspace: Pick<GrainWorkspace, 'bin_inventory' 
   ).filter((lot): lot is BinLotOnHand => lot.crop_year !== null)
 }
 
+/** LD-5: the crop years the manual bin movement form offers, and the one it may fill in unasked.
+ *
+ * Every hand-entered movement used to carry no crop year, so each one joined the unknown bucket
+ * that LD-3's committed and free figures exclude. The form now asks, under the same rules the load
+ * form's bin origin follows:
+ *
+ * - **Out** can only name a lot the bin still holds for this crop. `append_bin_movement` refuses to
+ *   draw a lot below zero, so offering an empty year would only offer a refusal.
+ * - **In** can name a lot already in the bin, a year this crop is planted in the farm's fields, or
+ *   this year and last. Grain arriving is new to the bin, so its year cannot be read off the bin.
+ * - The form fills a year in only when the bin holds exactly one lot of this crop -- the amendment's
+ *   "defaulting only when the bin holds a single lot". Otherwise the farmer picks; nothing guesses.
+ *
+ * `lots` is what `public.bin_lots` returns: every recorded lot, emptied ones at zero. */
+export function manualMovementCropYears(
+  direction: BinTransaction['direction'],
+  commodityId: string,
+  lots: readonly BinLotOnHand[],
+  plantedYears: readonly number[],
+  thisYear: number,
+): { years: number[]; defaultYear: number | null } {
+  const forCrop = lots.filter((lot) => lot.commodity_id === commodityId)
+  const onHand = forCrop.filter((lot) => lot.bushels > 0.000001)
+  const defaultYear = onHand.length === 1 ? onHand[0]!.crop_year : null
+  const candidates = direction === 'out'
+    ? onHand.map((lot) => lot.crop_year)
+    : [...forCrop.map((lot) => lot.crop_year), ...plantedYears, thisYear, thisYear - 1]
+  const years = [...new Set(candidates)]
+    .filter((year) => Number.isInteger(year) && year >= 1900 && year <= 2200)
+    .sort((a, b) => b - a)
+  return { years, defaultYear }
+}
+
 /** LD-4 repair (Codex P2 on ef8a29e): the list `save_grain_load` itself resolves a draft against,
  * stated once so a stand-in for that function cannot quietly use a different one.
  *

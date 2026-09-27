@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 392')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 395')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1387,6 +1387,20 @@ export function foundationStaticGuard(root = process.cwd()) {
     'create index grain_loads_destination_contract_idx on public.grain_loads (destination_grain_contract_id, farm_id',
   ]) requireText(errors, ld1Migration, leading, 'ld1:every-foreign-key-has-a-covering-index')
   if (/create index[^;]*on public\.grain_loads[^;]*\bwhere\b/i.test(ld1Migration)) errors.push('ld1:every-foreign-key-has-a-covering-index')
+  {
+    // LD-5: a hand-entered bin movement names its crop year. append_bin_movement had read crop_year
+    // since LD-2, but the gateway's column list never carried it, so every manual movement joined
+    // the unknown-year bucket no matter what the form did. The list is the one place that can drop it.
+    const gateway = read(root, 'src/data/SupabaseGrainDataGateway.ts')
+    const columns = gateway.slice(gateway.indexOf('function binTransactionColumns('))
+    requireText(errors, columns.slice(0, columns.indexOf('\n')), 'return { id, farm_id, grain_bin_id, direction, bushels, commodity_id, crop_year, occurred_on,', 'ld5:a-manual-movement-sends-its-crop-year')
+    // And a response that lost the year is not a saved movement: an old server ignores the key.
+    requireText(errors, read(root, 'src/data/SupabaseGrainRepository.ts'), 'saved.crop_year !== (normalized.crop_year ?? null)', 'ld5:a-manual-movement-sends-its-crop-year')
+    // The movement form reads its bin's lots the way the load form learned to: the answer is kept
+    // with the bin and the refresh it was read for, so a list from another bin, or from before the
+    // save that changed it, can never fill in a year.
+    requireText(errors, grainModule, 'lotRead.binId === bin.id && lotRead.refresh === lotsRefresh', 'ld5:the-movement-lot-answer-is-keyed-to-its-bin')
+  }
   return errors
 }
 
