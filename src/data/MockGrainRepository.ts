@@ -2,9 +2,10 @@ import type { FieldsRepository } from './fields'
 import { isLotMovementSuperseded } from './committedFree'
 import type { BinTransaction, BinTransactionDirection, CashBid, FirmOffer, FuturesQuote, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, GrainRepository, GrainSaleLimit, GrainWorkspace, LoadVoidBlocker, LoadVoidResult, MarketDataService, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaMarketReport, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
-import { contractIsCorrectable, loadEffectsAvailable, loadLotFor, lotsSaveResolvesAgainst, recordedBinLots, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateGrainLoadShape, validateLoadVoidReason } from './grain'
+import { contractIsCorrectable, contractIsDeletable, isCalendarDate, MARKETING_PLAN_PERCENT_TOLERANCE, validateTarget, loadEffectsAvailable, loadLotFor, lotsSaveResolvesAgainst, recordedBinLots, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateGrainLoadShape, validateLoadVoidReason } from './grain'
 import { localCalendarDay, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
+import { DELETE_PERMISSION_MESSAGE } from './saveDurability'
 import { activeBinCommodityIds, deriveBinOnHand, PRE_BASELINE_BIN_MOVEMENT_MESSAGE, validateBinTransaction, validateGrainBin } from './binLedger'
 
 const STORAGE_KEY = 'farm-rx-local-data'
@@ -21,7 +22,7 @@ const requiredGrainArrays: Array<'production_estimates' | 'grain_contracts' | 'm
 export function readGrain(value: unknown): GrainData | null {
   if (!isRecord(value) || !requiredGrainArrays.every((key) => Array.isArray(value[key]))) return null
   // Explicit projection discards the old bad nested `fields` copy on read.
-  return { ...Object.fromEntries(requiredGrainArrays.map((key) => [key, value[key]])), grain_contract_deliveries: Array.isArray(value.grain_contract_deliveries) ? value.grain_contract_deliveries as GrainContractDelivery[] : [], bin_transactions: Array.isArray(value.bin_transactions) ? value.bin_transactions as BinTransaction[] : [], usda_market_reports: Array.isArray(value.usda_market_reports) ? value.usda_market_reports as UsdaMarketReport[] : [], firm_offers: Array.isArray(value.firm_offers) ? value.firm_offers as FirmOffer[] : [], usda_report_dates: Array.isArray(value.usda_report_dates) ? value.usda_report_dates : [], grain_alert_settings: value.grain_alert_settings && isRecord(value.grain_alert_settings) ? value.grain_alert_settings as unknown as GrainAlertSettings : null, grain_sale_limits: Array.isArray(value.grain_sale_limits) ? value.grain_sale_limits as GrainSaleLimit[] : [], grain_carry_settings: value.grain_carry_settings && isRecord(value.grain_carry_settings) ? value.grain_carry_settings as unknown as GrainCarrySettings : null, grain_carry_grids: Array.isArray(value.grain_carry_grids) ? value.grain_carry_grids as GrainCarryGrid[] : [], capabilities: { bin_movements: true, contract_price_finalization: true, contract_deliveries: true, persisted_settings: true } } as GrainData
+  return { ...Object.fromEntries(requiredGrainArrays.map((key) => [key, value[key]])), grain_contract_deliveries: Array.isArray(value.grain_contract_deliveries) ? value.grain_contract_deliveries as GrainContractDelivery[] : [], grain_loads: Array.isArray(value.grain_loads) ? value.grain_loads as GrainLoad[] : [], bin_transactions: Array.isArray(value.bin_transactions) ? value.bin_transactions as BinTransaction[] : [], usda_market_reports: Array.isArray(value.usda_market_reports) ? value.usda_market_reports as UsdaMarketReport[] : [], firm_offers: Array.isArray(value.firm_offers) ? value.firm_offers as FirmOffer[] : [], usda_report_dates: Array.isArray(value.usda_report_dates) ? value.usda_report_dates : [], grain_alert_settings: value.grain_alert_settings && isRecord(value.grain_alert_settings) ? value.grain_alert_settings as unknown as GrainAlertSettings : null, grain_sale_limits: Array.isArray(value.grain_sale_limits) ? value.grain_sale_limits as GrainSaleLimit[] : [], grain_carry_settings: value.grain_carry_settings && isRecord(value.grain_carry_settings) ? value.grain_carry_settings as unknown as GrainCarrySettings : null, grain_carry_grids: Array.isArray(value.grain_carry_grids) ? value.grain_carry_grids as GrainCarryGrid[] : [], capabilities: { bin_movements: true, contract_price_finalization: true, contract_deliveries: true, persisted_settings: true } } as GrainData
 }
 
 function seedGrain(farmId: string): Omit<GrainData, 'bin_transactions' | 'grain_contract_deliveries'> {
@@ -127,6 +128,30 @@ function binMovementRefusal(workspace: GrainWorkspace, movement: BinTransaction)
   return null
 }
 
+/** Refusal audit (LD-010): small statements of what the live path refuses, shared by the methods
+ * below so each one does not grow its own copy. */
+const INVALID_GRAIN_DATA = 'Farm Rx found invalid grain data. Please contact support.'
+const OVER_DELIVERY_MESSAGE = 'Delivery would exceed the remaining contract bushels; confirm over-delivery to record it.'
+const CONTRACT_NAMED_BY_A_LOAD = 'A load ticket names this contract, so it can be corrected but not deleted.'
+/** A label the enterprise_label columns accept: absent, or 1-160 characters once trimmed. */
+const enterpriseLabelFits = (label: string | null) => label === null || (label.trim().length >= 1 && label.trim().length <= 160)
+/** The live repository's privateRow: the crop and the entity must be this farm's. */
+function knownScope(workspace: GrainWorkspace, value: { commodity_id: string; operating_entity_id: string | null }): boolean {
+  return workspace.fields.commodities.some((commodity) => commodity.id === value.commodity_id)
+    && (value.operating_entity_id === null || workspace.fields.entities.some((entity) => entity.id === value.operating_entity_id))
+}
+/** record_grain_contract_delivery's guard, used by the manual delivery and by a load's delivery effect. */
+function overDelivers(workspace: GrainWorkspace, contract: GrainContract, bushels: number): boolean {
+  const delivered = workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((sum, item) => sum + item.bushels, 0)
+  return delivered + bushels > contract.bushels
+}
+/** Whether a retried contract insert is the same contract, ignoring the timestamps the server sets. */
+function sameContractContent(a: GrainContract, b: GrainContract): boolean {
+  const { created_at: _ac, updated_at: _au, ...left } = a
+  const { created_at: _bc, updated_at: _bu, ...right } = b
+  return JSON.stringify(Object.entries(left).sort()) === JSON.stringify(Object.entries(right).sort())
+}
+
 function grainSlice(workspace: GrainWorkspace): GrainData { const { fields: _fields, ...grain } = workspace; return grain }
 
 export class MockMarketDataService implements MarketDataService {
@@ -136,10 +161,61 @@ export class MockMarketDataService implements MarketDataService {
 export class MockGrainRepository implements GrainRepository {
   constructor(private readonly fieldsRepository: FieldsRepository) {}
   async getData() { return load(this.fieldsRepository) }
-  async saveProductionEstimate(estimate: ProductionEstimate) { if (!Number.isFinite(estimate.aph_yield) || estimate.aph_yield <= 0 || (estimate.actual_bushels !== null && (!Number.isFinite(estimate.actual_bushels) || estimate.actual_bushels < 0)) || (estimate.drives_math === 'actual' && estimate.actual_bushels === null)) throw new Error('APH must be above zero and actual bushels must be available before using actual production.'); const workspace = await load(this.fieldsRepository); const rows = workspace.production_estimates.map((row) => row.id === estimate.id ? { ...estimate, updated_at: now() } : row); persist({ ...grainSlice(workspace), production_estimates: rows }); }
+  async saveProductionEstimate(estimate: ProductionEstimate) {
+    if (!Number.isFinite(estimate.aph_yield) || estimate.aph_yield <= 0 || (estimate.actual_bushels !== null && (!Number.isFinite(estimate.actual_bushels) || estimate.actual_bushels < 0)) || (estimate.drives_math === 'actual' && estimate.actual_bushels === null)) throw new Error('APH must be above zero and actual bushels must be available before using actual production.')
+    // Refusal audit (LD-010): the live repository refuses an enterprise scope outright (reconcile),
+    // the column refuses a crop year outside 1900-2200, and the scope must name this farm's crop and entity.
+    if (estimate.enterprise_label !== null) throw new Error('Farm Rx cannot verify acreage for this enterprise yet. Choose the whole farm or an operating entity.')
+    if (!Number.isInteger(estimate.crop_year) || estimate.crop_year < 1900 || estimate.crop_year > 2200) throw new Error(INVALID_GRAIN_DATA)
+    const workspace = await load(this.fieldsRepository)
+    if (!knownScope(workspace, estimate)) throw new Error(INVALID_GRAIN_DATA)
+    // production_estimates_scope_unique: one estimate per scope, nulls equal.
+    if (workspace.production_estimates.some((row) => row.id !== estimate.id && sameScope(row, estimate))) throw new Error('This crop already has a production estimate. Reload to see it.')
+    // A new estimate is inserted, as the live upsert does. This used to map over existing rows only,
+    // so "Add a first estimate" saved nothing at all in practice mode.
+    const exists = workspace.production_estimates.some((row) => row.id === estimate.id)
+    const rows = exists
+      ? workspace.production_estimates.map((row) => row.id === estimate.id ? { ...estimate, updated_at: now() } : row)
+      : [...workspace.production_estimates, { ...estimate, updated_at: now() }]
+    persist({ ...grainSlice(workspace), production_estimates: rows })
+  }
   async reconcileHarvestActual(estimate: ProductionEstimate, harvestActual: number) { if (!Number.isFinite(harvestActual) || harvestActual < 0) throw new Error('Farm Rx could not reconcile this harvest total.'); const workspace = await load(this.fieldsRepository); const current = workspace.production_estimates.find((row) => row.id === estimate.id); if (!current) throw new Error('This production estimate is no longer available. Reload before trying again.'); persist({ ...grainSlice(workspace), production_estimates: workspace.production_estimates.map((row) => row.id === estimate.id ? { ...row, actual_bushels: harvestActual, drives_math: 'actual', updated_at: now() } : row) }); }
-  async saveContract(contract: GrainContract) { const workspace = await load(this.fieldsRepository); const errors = validateGrainContract(contract, new Set(workspace.fields.commodities.map((commodity) => commodity.id))); if (errors.length) throw new Error(errors.join(' ')); const rows = workspace.grain_contracts.some((row) => row.id === contract.id) ? workspace.grain_contracts.map((row) => row.id === contract.id ? { ...contract, updated_at: now() } : row) : [...workspace.grain_contracts, contract]; persist({ ...grainSlice(workspace), grain_contracts: rows }); }
-  async editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, _operationId: string) { const problem = validateContractCorrectionReason(reason); if (problem) throw new Error(problem); const workspace = await load(this.fieldsRepository); const current = workspace.grain_contracts.find((row) => row.id === contractId); if (!current) throw new Error('This contract is no longer available. Reload before trying again.'); if (current.updated_at !== expectedUpdatedAt) throw new Error('FARM_RX_STALE_WRITE'); if (!contractIsCorrectable(workspace, contractId)) throw new Error('This contract already has delivered bushels and can no longer be changed.'); const next = { ...current, ...(changes.buyer !== undefined ? { buyer: changes.buyer.trim() } : {}), ...(changes.bushels !== undefined ? { bushels: changes.bushels } : {}), ...(changes.delivery_start !== undefined ? { delivery_start: changes.delivery_start || null } : {}), ...(changes.delivery_end !== undefined ? { delivery_end: changes.delivery_end || null } : {}), ...(changes.contract_number !== undefined ? { contract_number: changes.contract_number?.trim() || null } : {}), ...(changes.notes !== undefined ? { notes: changes.notes?.trim() || null } : {}), updated_at: now() }; const errors = validateGrainContract(next, new Set(workspace.fields.commodities.map((commodity) => commodity.id))); if (errors.length) throw new Error(errors.join(' ')); persist({ ...grainSlice(workspace), grain_contracts: workspace.grain_contracts.map((row) => row.id === contractId ? next : row) }); return next }
+  async saveContract(contract: GrainContract) {
+    const workspace = await load(this.fieldsRepository)
+    const errors = validateGrainContract(contract, new Set(workspace.fields.commodities.map((commodity) => commodity.id)))
+    if (errors.length) throw new Error(errors.join(' '))
+    // Refusal audit (LD-010): the enterprise label column is 1-160 characters once trimmed, and the
+    // entity must be this farm's.
+    if (!enterpriseLabelFits(contract.enterprise_label) || !knownScope(workspace, contract)) throw new Error(INVALID_GRAIN_DATA)
+    // GL-3b revoked UPDATE on grain_contracts, so the live path can only insert a contract or accept
+    // an identical retry of one. A changed contract under an existing id is refused; corrections go
+    // through editContract.
+    const existing = workspace.grain_contracts.find((row) => row.id === contract.id)
+    if (existing) {
+      if (sameContractContent(existing, contract)) return
+      throw new Error('FARM_RX_STALE_WRITE')
+    }
+    persist({ ...grainSlice(workspace), grain_contracts: [...workspace.grain_contracts, contract] })
+  }
+  async editContract(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, _operationId: string) {
+    const problem = validateContractCorrectionReason(reason)
+    if (problem) throw new Error(problem)
+    // Refusal audit (LD-010): the live repository refuses an empty correction before sending it.
+    if (!Object.keys(changes).length) throw new Error('Change something before saving this correction.')
+    const workspace = await load(this.fieldsRepository)
+    const current = workspace.grain_contracts.find((row) => row.id === contractId)
+    if (!current) throw new Error('This contract is no longer available. Reload before trying again.')
+    if (current.updated_at !== expectedUpdatedAt) throw new Error('FARM_RX_STALE_WRITE')
+    if (!contractIsCorrectable(workspace, contractId)) throw new Error('This contract already has delivered bushels and can no longer be changed.')
+    const next = { ...current, ...(changes.buyer !== undefined ? { buyer: changes.buyer.trim() } : {}), ...(changes.bushels !== undefined ? { bushels: changes.bushels } : {}), ...(changes.delivery_start !== undefined ? { delivery_start: changes.delivery_start || null } : {}), ...(changes.delivery_end !== undefined ? { delivery_end: changes.delivery_end || null } : {}), ...(changes.contract_number !== undefined ? { contract_number: changes.contract_number?.trim() || null } : {}), ...(changes.notes !== undefined ? { notes: changes.notes?.trim() || null } : {}), updated_at: now() }
+    // edit_grain_contract refuses a correction that names fields but changes none of them: a no-op
+    // must not move updated_at and turn every other member's open draft stale.
+    if (next.buyer === current.buyer && next.bushels === current.bushels && next.delivery_start === current.delivery_start && next.delivery_end === current.delivery_end && next.contract_number === current.contract_number && next.notes === current.notes) throw new Error('A correction must change something.')
+    const errors = validateGrainContract(next, new Set(workspace.fields.commodities.map((commodity) => commodity.id)))
+    if (errors.length) throw new Error(errors.join(' '))
+    persist({ ...grainSlice(workspace), grain_contracts: workspace.grain_contracts.map((row) => row.id === contractId ? next : row) })
+    return next
+  }
   async listLoadTrucks() { return [{ id: seedId(1201), name: 'Red semi' }, { id: seedId(1202), name: 'Blue tandem' }] }
   /** LD-4 repair: the mock's workspace is complete by construction, so deriving here IS the
    * authoritative answer -- there is no row cap in front of an in-memory array.
@@ -208,6 +284,15 @@ export class MockGrainRepository implements GrainRepository {
     if (!existing) {
       const problems = validateGrainLoad(resolvedDraft, workspace, lots)
       if (problems.length) throw new Error(problems[0])
+      // Refusal audit (LD-010): grain_loads references the destination bin whether or not the load
+      // puts anything in it, so a bin that is not this farm's is refused even with bin-in off.
+      if (resolvedDraft.destination_kind === 'bin' && !workspace.grain_bins.some((bin) => bin.id === resolvedDraft.destination_grain_bin_id)) throw new Error('That bin does not belong to this farm.')
+    }
+    // Refusal audit (LD-010): a lot is a crop IN a year. save_grain_load refuses a named year the bin
+    // has held two crops in when the load does not say which; loadLotFor would take the first.
+    if (resolvedDraft.origin_kind === 'bin' && resolvedDraft.origin_crop_year.trim() && !resolvedDraft.origin_commodity_id) {
+      const crops = new Set(recordedBinLots(workspace, resolvedDraft.origin_grain_bin_id).filter((binLot) => String(binLot.crop_year) === resolvedDraft.origin_crop_year.trim()).map((binLot) => binLot.commodity_id))
+      if (crops.size > 1) throw new Error('This bin has held more than one crop in that year, so this load has to say which one.')
     }
     const lot = loadLotFor(workspace, resolvedDraft, lots)
     if (!lot) throw new Error('Farm Rx cannot tell which crop year this load is.')
@@ -284,6 +369,13 @@ export class MockGrainRepository implements GrainRepository {
       const refusal = binMovementRefusal(workspace, movement)
       if (refusal) throw new Error(refusal)
     }
+    // Refusal audit (LD-010): the delivery effect goes through record_grain_contract_delivery, which
+    // refuses an over-delivery -- and the browser never sends allow_overdelivery for a load.
+    if (saved.effect_contract_delivery && saved.destination_grain_contract_id) {
+      const contract = workspace.grain_contracts.find((row) => row.id === saved.destination_grain_contract_id)
+      if (!contract) throw new Error('Farm Rx could not record this delivery.')
+      if (overDelivers(workspace, contract, saved.net_bushels)) throw new Error(OVER_DELIVERY_MESSAGE)
+    }
     const deliveries: GrainContractDelivery[] = saved.effect_contract_delivery && saved.destination_grain_contract_id
       ? [{ id: createGrainId(), farm_id: saved.farm_id, grain_contract_id: saved.destination_grain_contract_id, bushels: saved.net_bushels, delivered_on: saved.load_date, note, grain_load_id: saved.id, created_at: stamp }]
       : []
@@ -307,34 +399,42 @@ export class MockGrainRepository implements GrainRepository {
     }
 
     // LD-2: the rows this load created, found by link rather than guesswork.
-    const created = workspace.bin_transactions.filter((row) => row.grain_load_id === loadId && row.source_kind === 'grain_load')
+    const created = workspace.bin_transactions
+      .filter((row) => row.grain_load_id === loadId && row.source_kind === 'grain_load')
+      .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
 
-    // A compensating out cannot take grain that has since left the bin. When it cannot, nothing
-    // changes at all and the later movements standing in the way are named.
-    const blockedBy: LoadVoidBlocker[] = []
-    for (const movement of created) {
-      if (movement.direction !== 'in') continue
-      if (lotBalance(workspace, movement.grain_bin_id, movement.commodity_id, movement.crop_year) >= movement.bushels) continue
-      for (const later of workspace.bin_transactions) {
-        if (later.grain_load_id === loadId) continue
-        if (later.grain_bin_id !== movement.grain_bin_id) continue
-        if (later.commodity_id !== movement.commodity_id || later.crop_year !== movement.crop_year) continue
-        if (later.created_at <= movement.created_at) continue
-        blockedBy.push({ id: later.id, grain_bin_id: later.grain_bin_id, direction: later.direction, bushels: later.bushels, commodity_id: later.commodity_id, crop_year: later.crop_year, occurred_on: later.occurred_on, source_kind: later.source_kind })
-      }
-    }
-    if (blockedBy.length) {
-      return { status: 'blocked', load: existing, blockedBy, reason: 'This bin no longer holds the bushels this load put in.' }
-    }
-
+    // Refusal audit (LD-010): each reversal goes through the SAME refusals a movement gets, in order,
+    // each one seeing the reversals before it -- which is what void_grain_load does by calling
+    // append_bin_movement in a loop. This used to check only that a bin-in's lot still held the
+    // bushels, so a void could overfill a bin, put a crop into a bin holding another, draw a
+    // commodity below zero, or undercut a newer baseline -- and it voided whenever no later
+    // movement happened to be found, leaving a negative lot. The reversal is dated today, as the
+    // server dates it (current_date), not on the load's own date.
     const reversalNote = `Reversing a voided load: ${reason.trim()}`
-    const compensating = created.map((movement) => loadMovement(
-      existing,
-      movement.grain_bin_id,
-      movement.direction === 'in' ? 'out' : 'in',
-      reversalNote,
-      'grain_load_void',
-    ))
+    const today = new Date().toISOString().slice(0, 10)
+    let working = workspace
+    const compensating: BinTransaction[] = []
+    for (const movement of created) {
+      const reversal: BinTransaction = {
+        ...loadMovement(existing, movement.grain_bin_id, movement.direction === 'in' ? 'out' : 'in', reversalNote, 'grain_load_void'),
+        bushels: movement.bushels, commodity_id: movement.commodity_id, crop_year: movement.crop_year, occurred_on: today,
+      }
+      const refusal = binMovementRefusal(working, reversal)
+      if (refusal) {
+        // Blocked: nothing changes, and the later movements standing in the way are named with the
+        // server's own query -- same bin, crop and year, after this load's movement.
+        const blockedBy: LoadVoidBlocker[] = workspace.bin_transactions
+          .filter((later) => later.grain_load_id !== loadId && created.some((mine) => mine.grain_bin_id === later.grain_bin_id
+            && mine.commodity_id === later.commodity_id && mine.crop_year === later.crop_year
+            && (later.occurred_on > mine.occurred_on || (later.occurred_on === mine.occurred_on && later.created_at > mine.created_at))))
+          .sort((a, b) => a.occurred_on.localeCompare(b.occurred_on) || a.created_at.localeCompare(b.created_at))
+          .map((later) => ({ id: later.id, grain_bin_id: later.grain_bin_id, direction: later.direction, bushels: later.bushels, commodity_id: later.commodity_id, crop_year: later.crop_year, occurred_on: later.occurred_on, source_kind: later.source_kind }))
+        return { status: 'blocked', load: existing, blockedBy, reason: refusal }
+      }
+      compensating.push(reversal)
+      working = { ...working, bin_transactions: [reversal, ...working.bin_transactions] }
+    }
+
     const voided: GrainLoad = { ...existing, voided_at: now(), void_reason: reason.trim(), updated_at: now() }
     persist({
       ...grainSlice(workspace),
@@ -346,25 +446,171 @@ export class MockGrainRepository implements GrainRepository {
     })
     return { status: 'voided', load: voided, blockedBy: [], reason: null }
   }
-  async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string, _operationId: string) { const problem = validateContractCorrectionReason(reason); if (problem) throw new Error(problem); const workspace = await load(this.fieldsRepository); const existing = workspace.grain_contracts.find((row) => row.id === contractId); if (!existing) return { reopenedFirmOfferId: null, reopenedFirmOfferStatus: null }; if (existing.updated_at !== expectedUpdatedAt) throw new Error('FARM_RX_STALE_WRITE'); if (!contractIsCorrectable(workspace, contractId)) throw new Error('This contract already has delivered bushels and can no longer be deleted.'); const reopenedOffer = workspace.firm_offers.find((row) => row.filled_contract_id === contractId); const reopened = reopenedOffer?.id ?? null; persist({ ...grainSlice(workspace), grain_contracts: workspace.grain_contracts.filter((row) => row.id !== contractId), firm_offers: workspace.firm_offers.map((row) => row.filled_contract_id === contractId ? { ...row, status: 'open' as const, filled_contract_id: null, updated_at: now() } : row) }); return { reopenedFirmOfferId: reopened, reopenedFirmOfferStatus: reopened ? 'open' : null } }
-  async finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number) { if (!Number.isFinite(value) || (leg === 'futures_price' && value <= 0)) throw new Error(leg === 'basis' ? 'Enter a valid basis.' : 'Enter a futures price above zero.'); const workspace = await load(this.fieldsRepository); const current = workspace.grain_contracts.find((row) => row.id === contractId); if (!current) throw new Error('This contract is no longer available. Reload before trying again.'); if (current[leg] !== null) throw new Error('This price leg is already finalized. Add a contract note for a correction.'); const next = { ...current, [leg]: value, cash_price: (leg === 'basis' ? current.futures_price! + value : value + current.basis!) + current.premium_cents_per_bu / 100, updated_at: now() }; persist({ ...grainSlice(workspace), grain_contracts: workspace.grain_contracts.map((row) => row.id === contractId ? next : row) }); }
-  async recordContractDelivery(delivery: GrainContractDelivery) { if (!Number.isFinite(delivery.bushels) || delivery.bushels <= 0) throw new Error('Delivered bushels must be greater than zero.'); const workspace = await load(this.fieldsRepository); const contract = workspace.grain_contracts.find((item) => item.id === delivery.grain_contract_id); const existing = workspace.grain_contract_deliveries.find((item) => item.id === delivery.id); if (existing) { if (existing.grain_contract_id === delivery.grain_contract_id && existing.bushels === delivery.bushels && existing.delivered_on === delivery.delivered_on && existing.note === delivery.note) return; throw new Error('Delivery id was already used with different content.'); } if (!contract) throw new Error('Farm Rx could not record this delivery.'); const delivered = workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((sum, item) => sum + item.bushels, 0); if (delivered + delivery.bushels > contract.bushels && delivery.allow_overdelivery !== true) throw new Error('Delivery would exceed the remaining contract bushels; confirm over-delivery to record it.'); persist({ ...grainSlice(workspace), grain_contract_deliveries: [...workspace.grain_contract_deliveries, delivery] }); }
+  async deleteContract(contractId: string, reason: string, expectedUpdatedAt: string, _operationId: string) {
+    const problem = validateContractCorrectionReason(reason)
+    if (problem) throw new Error(problem)
+    const workspace = await load(this.fieldsRepository)
+    const existing = workspace.grain_contracts.find((row) => row.id === contractId)
+    if (!existing) return { reopenedFirmOfferId: null, reopenedFirmOfferStatus: null }
+    if (existing.updated_at !== expectedUpdatedAt) throw new Error('FARM_RX_STALE_WRITE')
+    if (!contractIsCorrectable(workspace, contractId)) throw new Error('This contract already has delivered bushels and can no longer be deleted.')
+    // Refusal audit (LD-010): grain_loads references the contract `on delete restrict`, voided
+    // tickets included, so the live delete fails for any contract a load names.
+    if (!contractIsDeletable(workspace, contractId)) throw new Error(CONTRACT_NAMED_BY_A_LOAD)
+    const reopenedOffer = workspace.firm_offers.find((row) => row.filled_contract_id === contractId)
+    const reopened = reopenedOffer?.id ?? null
+    persist({ ...grainSlice(workspace), grain_contracts: workspace.grain_contracts.filter((row) => row.id !== contractId), firm_offers: workspace.firm_offers.map((row) => row.filled_contract_id === contractId ? { ...row, status: 'open' as const, filled_contract_id: null, updated_at: now() } : row) })
+    return { reopenedFirmOfferId: reopened, reopenedFirmOfferStatus: reopened ? 'open' : null }
+  }
+  async finalizeContractPriceLeg(contractId: string, leg: 'futures_price' | 'basis', value: number) {
+    if (!Number.isFinite(value) || (leg === 'futures_price' && value <= 0)) throw new Error(leg === 'basis' ? 'Enter a valid basis.' : 'Enter a futures price above zero.')
+    const workspace = await load(this.fieldsRepository)
+    const current = workspace.grain_contracts.find((row) => row.id === contractId)
+    if (!current) throw new Error('This contract is no longer available. Reload before trying again.')
+    if (current[leg] !== null) throw new Error('This price leg is already finalized. Add a contract note for a correction.')
+    // Refusal audit (LD-010): finalize_contract_price_leg prices one leg only once the other is set.
+    // Without this the mock read the missing leg as zero and wrote a cash price nobody agreed to.
+    if (leg === 'futures_price' && current.basis === null) throw new Error('Set the basis before finalizing the futures price.')
+    if (leg === 'basis' && current.futures_price === null) throw new Error('Set the futures price before finalizing the basis.')
+    const next = { ...current, [leg]: value, cash_price: (leg === 'basis' ? current.futures_price! + value : value + current.basis!) + current.premium_cents_per_bu / 100, updated_at: now() }
+    persist({ ...grainSlice(workspace), grain_contracts: workspace.grain_contracts.map((row) => row.id === contractId ? next : row) })
+  }
+  async recordContractDelivery(value: GrainContractDelivery) {
+    // Refusal audit (LD-010): the live repository trims the note to null before sending, and the
+    // server compares the trimmed note on a retry, so a whitespace difference is the same delivery.
+    const delivery = { ...value, note: value.note?.trim() || null }
+    if (!Number.isFinite(delivery.bushels) || delivery.bushels <= 0) throw new Error('Delivered bushels must be greater than zero.')
+    if (!isCalendarDate(delivery.delivered_on)) throw new Error('Enter the date these bushels were delivered.')
+    if (delivery.note !== null && delivery.note.length > 4000) throw new Error('Keep the delivery note under 4,000 characters.')
+    const workspace = await load(this.fieldsRepository)
+    const contract = workspace.grain_contracts.find((item) => item.id === delivery.grain_contract_id)
+    const existing = workspace.grain_contract_deliveries.find((item) => item.id === delivery.id)
+    if (existing) { if (existing.grain_contract_id === delivery.grain_contract_id && existing.bushels === delivery.bushels && existing.delivered_on === delivery.delivered_on && existing.note === delivery.note) return; throw new Error('Delivery id was already used with different content.') }
+    if (!contract) throw new Error('Farm Rx could not record this delivery.')
+    if (overDelivers(workspace, contract, delivery.bushels) && delivery.allow_overdelivery !== true) throw new Error(OVER_DELIVERY_MESSAGE)
+    persist({ ...grainSlice(workspace), grain_contract_deliveries: [...workspace.grain_contract_deliveries, delivery] })
+  }
   async saveMarketingPlanTarget(target: MarketingPlanTarget) { const workspace = await load(this.fieldsRepository); const scope = scopeOf(target); const unchanged = workspace.marketing_plan_targets.filter((row) => !sameScope(row, scope) || row.id !== target.id); const replacement = [...unchanged, { ...target, updated_at: now() }]; await this.replaceMarketingPlanTargets(scope, replacement.filter((row) => sameScope(row, scope))) }
-  async replaceMarketingPlanTargets(scope: PositionScope, targets: MarketingPlanTarget[]) { const total = targets.reduce((sum, target) => sum + target.target_pct_of_production, 0); if (!Number.isFinite(total) || total > 100.0001 || targets.some((target) => !sameScope(target, scope) || target.target_pct_of_production <= 0 || target.target_pct_of_production > 100)) throw new Error('Marketing plan totals must be greater than 0% per month and no more than 100% for this crop scope.'); const workspace = await load(this.fieldsRepository); persist({ ...grainSlice(workspace), marketing_plan_targets: [...workspace.marketing_plan_targets.filter((row) => !sameScope(row, scope)), ...targets.map((target) => ({ ...target, updated_at: now() }))] }); }
-  async saveCashBid(bid: CashBid) { if (!Number.isFinite(bid.basis) || (bid.cash_price !== null && (!Number.isFinite(bid.cash_price) || bid.cash_price < 0)) || (bid.delivery_start && bid.delivery_end && bid.delivery_end < bid.delivery_start)) throw new Error('Enter a valid basis, cash price, and delivery window.'); const workspace = await load(this.fieldsRepository); if (!workspace.fields.commodities.some((commodity) => commodity.id === bid.commodity_id)) throw new Error('Choose a valid commodity.'); const rows = workspace.cash_bids.some((row) => row.id === bid.id) ? workspace.cash_bids.map((row) => row.id === bid.id ? { ...bid, updated_at: now() } : row) : [...workspace.cash_bids, bid]; persist({ ...grainSlice(workspace), cash_bids: rows }); }
-  async saveMarketingAlertRule(rule: MarketingAlertRule) { if (validateMarketingAlertRule(rule).length) throw new Error('Enter a complete alert rule with the right price, percent, or date.'); const workspace = await load(this.fieldsRepository); const rows = workspace.marketing_alert_rules.some((row) => row.id === rule.id) ? workspace.marketing_alert_rules.map((row) => row.id === rule.id ? { ...rule, updated_at: now() } : row) : [...workspace.marketing_alert_rules, rule]; persist({ ...grainSlice(workspace), marketing_alert_rules: rows }); }
-  async deleteMarketingAlertRule(id: string) { const workspace = await load(this.fieldsRepository); persist({ ...grainSlice(workspace), marketing_alert_rules: workspace.marketing_alert_rules.filter((rule) => rule.id !== id) }); }
-  async saveFirmOffer(offer: FirmOffer) { if (validateFirmOffer(offer).length) throw new Error('Enter a complete firm offer with the right price or basis.'); const workspace = await load(this.fieldsRepository); const rows = workspace.firm_offers.some((row) => row.id === offer.id) ? workspace.firm_offers.map((row) => row.id === offer.id ? { ...offer, updated_at: now() } : row) : [...workspace.firm_offers, offer]; persist({ ...grainSlice(workspace), firm_offers: rows }); }
+  async replaceMarketingPlanTargets(scope: PositionScope, targets: MarketingPlanTarget[]) {
+    const total = targets.reduce((sum, target) => sum + target.target_pct_of_production, 0)
+    // The same tolerance the live repository and replace_marketing_plan_targets use.
+    if (!Number.isFinite(total) || total > MARKETING_PLAN_PERCENT_TOLERANCE || targets.some((target) => !sameScope(target, scope) || target.target_pct_of_production <= 0 || target.target_pct_of_production > 100)) throw new Error('Marketing plan totals must be greater than 0% per month and no more than 100% for this crop scope.')
+    // Refusal audit (LD-010): every rule the live path applies to a target, stated once in grain.ts,
+    // then the list rules replace_marketing_plan_targets enforces: no id twice, no month twice, the
+    // scope's labels well formed, and an id that belongs to another scope is not taken over.
+    for (const target of targets) validateTarget(target)
+    if (new Set(targets.map((target) => target.id)).size !== targets.length || new Set(targets.map((target) => target.target_month)).size !== targets.length) throw new Error('Farm Rx found an invalid marketing plan target.')
+    if (scope.enterprise_label !== null && (scope.enterprise_label !== scope.enterprise_label.trim() || !enterpriseLabelFits(scope.enterprise_label))) throw new Error('Farm Rx found an invalid marketing plan target.')
+    const workspace = await load(this.fieldsRepository)
+    if (!knownScope(workspace, scope)) throw new Error(INVALID_GRAIN_DATA)
+    const ids = new Set(targets.map((target) => target.id))
+    if (workspace.marketing_plan_targets.some((row) => ids.has(row.id) && !sameScope(row, scope))) throw new Error('Farm Rx found an invalid marketing plan target.')
+    persist({ ...grainSlice(workspace), marketing_plan_targets: [...workspace.marketing_plan_targets.filter((row) => !sameScope(row, scope)), ...targets.map((target) => ({ ...target, updated_at: now() }))] })
+  }
+  async saveCashBid(bid: CashBid) {
+    if (!Number.isFinite(bid.basis) || (bid.cash_price !== null && (!Number.isFinite(bid.cash_price) || bid.cash_price < 0)) || (bid.delivery_start && bid.delivery_end && bid.delivery_end < bid.delivery_start)) throw new Error('Enter a valid basis, cash price, and delivery window.')
+    // Refusal audit (LD-010): an elevator is required (1-200 characters) and the bid needs a real date.
+    const elevator = bid.elevator.trim()
+    if (!elevator || elevator.length > 200 || !isCalendarDate(bid.bid_date)) throw new Error('Enter the elevator and the date of this bid.')
+    const workspace = await load(this.fieldsRepository)
+    if (!workspace.fields.commodities.some((commodity) => commodity.id === bid.commodity_id)) throw new Error('Choose a valid commodity.')
+    // cash_bids policies admit a client row only while feed_source is null: a USDA feed row can be
+    // neither written nor turned into a manual bid from the browser.
+    const existing = workspace.cash_bids.find((row) => row.id === bid.id)
+    if (bid.feed_source !== null || (existing && existing.feed_source !== null)) throw new Error('USDA feed prices cannot be edited here.')
+    const rows = existing ? workspace.cash_bids.map((row) => row.id === bid.id ? { ...bid, updated_at: now() } : row) : [...workspace.cash_bids, bid]
+    persist({ ...grainSlice(workspace), cash_bids: rows })
+  }
+  async saveMarketingAlertRule(value: MarketingAlertRule) {
+    // Refusal audit (LD-010): the live repository trims a blank message to null before validating,
+    // so a message of spaces is "no message", not a refusal.
+    const rule = { ...value, message: value.message?.trim() || null }
+    if (validateMarketingAlertRule(rule).length) throw new Error('Enter a complete alert rule with the right price, percent, or date.')
+    const workspace = await load(this.fieldsRepository)
+    if (!enterpriseLabelFits(rule.enterprise_label) || !knownScope(workspace, rule)) throw new Error(INVALID_GRAIN_DATA)
+    const rows = workspace.marketing_alert_rules.some((row) => row.id === rule.id) ? workspace.marketing_alert_rules.map((row) => row.id === rule.id ? { ...rule, updated_at: now() } : row) : [...workspace.marketing_alert_rules, rule]
+    persist({ ...grainSlice(workspace), marketing_alert_rules: rows })
+  }
+  async deleteMarketingAlertRule(id: string) {
+    const workspace = await load(this.fieldsRepository)
+    // Refusal audit (LD-010): the live delete confirms a row went, and says so when none did.
+    if (!workspace.marketing_alert_rules.some((rule) => rule.id === id)) throw new Error(DELETE_PERMISSION_MESSAGE)
+    persist({ ...grainSlice(workspace), marketing_alert_rules: workspace.marketing_alert_rules.filter((rule) => rule.id !== id) })
+  }
+  async saveFirmOffer(value: FirmOffer) {
+    // Refusal audit (LD-010): the same trimming the live repository does before validating, so a
+    // blank optional field is empty rather than refused.
+    const offer = { ...value, buyer: value.buyer.trim(), contract_month: value.contract_month?.trim() || null, delivery_location: value.delivery_location?.trim() || null, notes: value.notes?.trim() || null }
+    if (validateFirmOffer(offer).length) throw new Error('Enter a complete firm offer with the right price or basis.')
+    const workspace = await load(this.fieldsRepository)
+    if (!knownScope(workspace, offer)) throw new Error(INVALID_GRAIN_DATA)
+    if (offer.filled_contract_id !== null && !workspace.grain_contracts.some((row) => row.id === offer.filled_contract_id)) throw new Error(INVALID_GRAIN_DATA)
+    const rows = workspace.firm_offers.some((row) => row.id === offer.id) ? workspace.firm_offers.map((row) => row.id === offer.id ? { ...offer, updated_at: now() } : row) : [...workspace.firm_offers, offer]
+    persist({ ...grainSlice(workspace), firm_offers: rows })
+  }
   async fillFirmOffer(offer: FirmOffer, contract: GrainContract) { const workspace = await load(this.fieldsRepository); const current = workspace.firm_offers.find((row) => row.id === offer.id); if (!current) throw new Error('This firm offer is no longer available. Reload before trying again.'); if (current.status === 'filled' && current.filled_contract_id) { const existing = workspace.grain_contracts.find((row) => row.id === current.filled_contract_id); if (existing) return { contract: existing, offer: current }; throw new Error('This firm offer is marked filled but its contract cannot be found. Reload before retrying.'); }
     if (current.status !== 'open' || mockFirmOfferIsExpired(current)) throw new Error('This firm offer is no longer open. Reload before trying again.');
     if (validateGrainContract(contract, new Set(workspace.fields.commodities.map((commodity) => commodity.id))).length) throw new Error('Farm Rx could not record this grain contract.');
-    const savedOffer = { ...current, status: 'filled' as const, filled_contract_id: contract.id, updated_at: now() }; persist({ ...grainSlice(workspace), grain_contracts: [...workspace.grain_contracts.filter((row) => row.id !== contract.id), contract], firm_offers: workspace.firm_offers.map((row) => row.id === current.id ? savedOffer : row) }); return { contract, offer: savedOffer }
+    // Refusal audit (LD-010): fill_firm_offer inserts the contract, and its on-conflict clause covers
+    // firm_offer_id only, so an id another contract already holds is a primary-key refusal.
+    if (workspace.grain_contracts.some((row) => row.id === contract.id)) throw new Error('Farm Rx could not record this grain contract.');
+    const savedOffer = { ...current, status: 'filled' as const, filled_contract_id: contract.id, updated_at: now() }; persist({ ...grainSlice(workspace), grain_contracts: [...workspace.grain_contracts, contract], firm_offers: workspace.firm_offers.map((row) => row.id === current.id ? savedOffer : row) }); return { contract, offer: savedOffer }
   }
-  async deleteFirmOffer(id: string) { const workspace = await load(this.fieldsRepository); const current = workspace.firm_offers.find((offer) => offer.id === id); if (current && (current.status === 'filled' || current.filled_contract_id !== null)) throw new Error(FILLED_OFFER_DELETE_MESSAGE); persist({ ...grainSlice(workspace), firm_offers: workspace.firm_offers.filter((offer) => offer.id !== id) }); }
-  async upsertGrainBin(bin: GrainBin) { if (validateGrainBin(bin).length) throw new Error('Check the bin name, capacity, and moisture reading.'); const workspace = await load(this.fieldsRepository); const rows = workspace.grain_bins.some((row) => row.id === bin.id) ? workspace.grain_bins.map((row) => row.id === bin.id ? { ...bin, updated_at: now() } : row) : [...workspace.grain_bins, bin]; persist({ ...grainSlice(workspace), grain_bins: rows }); }
-  async appendBinTransaction(transaction: BinTransaction) { if (validateBinTransaction(transaction).length) throw new Error('Check the direction, bushels, and movement date.'); const workspace = await load(this.fieldsRepository); const existing = workspace.bin_transactions.find((row) => row.id === transaction.id); if (existing) { if (existing.grain_bin_id === transaction.grain_bin_id && existing.direction === transaction.direction && existing.bushels === transaction.bushels && existing.commodity_id === transaction.commodity_id && existing.crop_year === transaction.crop_year && existing.occurred_on === transaction.occurred_on) return; throw new Error('Movement id was already used with different content.'); } const refusal = binMovementRefusal(workspace, transaction); if (refusal) throw new Error(refusal); persist({ ...grainSlice(workspace), bin_transactions: [...workspace.bin_transactions, transaction] }); }
-  async saveGrainSaleLimit(value: GrainSaleLimit) { const limit = normalizeGrainSaleLimit(value); if (validateGrainSaleLimit(limit).length) throw new Error('Enter a sale limit of zero or more bushels.'); const workspace = await load(this.fieldsRepository); const existing = workspace.grain_sale_limits.find((row) => row.id === limit.id || sameScope(row, limit)); if (existing && existing.id !== limit.id) throw new Error('This position already has a sale limit. Reload to see it.'); const saved = existing ? { ...limit, created_at: existing.created_at, updated_at: now() } : { ...limit, created_at: now(), updated_at: now() }; persist({ ...grainSlice(workspace), grain_sale_limits: existing ? workspace.grain_sale_limits.map((row) => row.id === existing.id ? saved : row) : [...workspace.grain_sale_limits, saved] }); return saved }
+  async deleteFirmOffer(id: string) { const workspace = await load(this.fieldsRepository); const current = workspace.firm_offers.find((offer) => offer.id === id); if (!current) throw new Error(DELETE_PERMISSION_MESSAGE); if (current && (current.status === 'filled' || current.filled_contract_id !== null)) throw new Error(FILLED_OFFER_DELETE_MESSAGE); persist({ ...grainSlice(workspace), firm_offers: workspace.firm_offers.filter((offer) => offer.id !== id) }); }
+  async upsertGrainBin(bin: GrainBin) {
+    if (validateGrainBin(bin).length) throw new Error('Check the bin name, capacity, and moisture reading.')
+    const workspace = await load(this.fieldsRepository)
+    // Refusal audit (LD-010): grain_bins is unique on (farm_id, name).
+    if (workspace.grain_bins.some((row) => row.id !== bin.id && row.name.trim() === bin.name.trim())) throw new Error('Another bin already has that name.')
+    const rows = workspace.grain_bins.some((row) => row.id === bin.id) ? workspace.grain_bins.map((row) => row.id === bin.id ? { ...bin, updated_at: now() } : row) : [...workspace.grain_bins, bin]
+    persist({ ...grainSlice(workspace), grain_bins: rows })
+  }
+  async appendBinTransaction(value: BinTransaction) {
+    // Refusal audit (LD-010): the note and source are trimmed to null as the live repository does,
+    // and a retry is compared on every column append_bin_movement compares, not six of them.
+    const transaction = { ...value, note: value.note?.trim() || null, source_kind: value.source_kind?.trim() || null }
+    if (validateBinTransaction(transaction).length) throw new Error('Check the direction, bushels, crop year, and movement date.')
+    const workspace = await load(this.fieldsRepository)
+    // The live repository refuses a movement at or before the bin's baseline before it calls the
+    // server, retry or not, so this comes ahead of the replay.
+    const baseline = workspace.bin_inventory.find((row) => row.grain_bin_id === transaction.grain_bin_id)
+    if (baseline && transaction.occurred_on <= baseline.measured_at.slice(0, 10)) throw new Error(PRE_BASELINE_BIN_MOVEMENT_MESSAGE)
+    const existing = workspace.bin_transactions.find((row) => row.id === transaction.id)
+    if (existing) {
+      if (existing.grain_bin_id === transaction.grain_bin_id && existing.direction === transaction.direction && existing.bushels === transaction.bushels && existing.commodity_id === transaction.commodity_id && existing.crop_year === transaction.crop_year && existing.grain_load_id === transaction.grain_load_id && existing.occurred_on === transaction.occurred_on && existing.note === transaction.note && existing.source_kind === transaction.source_kind) return
+      throw new Error('Movement id was already used with different content.')
+    }
+    const refusal = binMovementRefusal(workspace, transaction)
+    if (refusal) throw new Error(refusal)
+    persist({ ...grainSlice(workspace), bin_transactions: [...workspace.bin_transactions, transaction] })
+  }
+  async saveGrainSaleLimit(value: GrainSaleLimit) {
+    const limit = normalizeGrainSaleLimit(value)
+    if (validateGrainSaleLimit(limit).length) throw new Error('Enter a sale limit of zero or more bushels.')
+    const workspace = await load(this.fieldsRepository)
+    if (!knownScope(workspace, limit)) throw new Error(INVALID_GRAIN_DATA)
+    // Refusal audit (LD-010): grain_sale_limits_scope_unique, checked against every OTHER row. The
+    // single find() this replaced stopped at the row's own id when it came first, so moving a limit
+    // onto another limit's scope was accepted.
+    if (workspace.grain_sale_limits.some((row) => row.id !== limit.id && sameScope(row, limit))) throw new Error('This position already has a sale limit. Reload to see it.')
+    const existing = workspace.grain_sale_limits.find((row) => row.id === limit.id)
+    const saved = existing ? { ...limit, created_at: existing.created_at, updated_at: now() } : { ...limit, created_at: now(), updated_at: now() }
+    persist({ ...grainSlice(workspace), grain_sale_limits: existing ? workspace.grain_sale_limits.map((row) => row.id === existing.id ? saved : row) : [...workspace.grain_sale_limits, saved] })
+    return saved
+  }
   async saveGrainCarrySettings(value: GrainCarrySettings) { const settings = normalizeGrainCarrySettings(value); if (validateGrainCarrySettings(settings).length) throw new Error('Storage costs and rates must be zero or more.'); const workspace = await load(this.fieldsRepository); const saved = { ...settings, updated_at: now() }; persist({ ...grainSlice(workspace), grain_carry_settings: saved }); return saved }
-  async saveGrainCarryGrid(value: GrainCarryGrid) { const grid = normalizeGrainCarryGrid(value); if (validateGrainCarryGrid(grid).length) throw new Error('Each price and basis must be a number or blank.'); const workspace = await load(this.fieldsRepository); const existing = workspace.grain_carry_grids.find((row) => row.id === grid.id || row.production_estimate_id === grid.production_estimate_id); if (existing && existing.id !== grid.id) throw new Error('This crop already has a carry grid. Reload to see it.'); const saved = { ...grid, updated_at: now() }; persist({ ...grainSlice(workspace), grain_carry_grids: existing ? workspace.grain_carry_grids.map((row) => row.id === existing.id ? saved : row) : [...workspace.grain_carry_grids, saved] }); return saved }
+  async saveGrainCarryGrid(value: GrainCarryGrid) {
+    const grid = normalizeGrainCarryGrid(value)
+    if (validateGrainCarryGrid(grid).length) throw new Error('Each price and basis must be a number or blank.')
+    const workspace = await load(this.fieldsRepository)
+    // Refusal audit (LD-010): the grid references its production estimate, and is unique per
+    // estimate -- checked against every OTHER grid, for the same reason as the sale limit above.
+    if (!workspace.production_estimates.some((row) => row.id === grid.production_estimate_id)) throw new Error('This production estimate is no longer available. Reload before trying again.')
+    if (workspace.grain_carry_grids.some((row) => row.id !== grid.id && row.production_estimate_id === grid.production_estimate_id)) throw new Error('This crop already has a carry grid. Reload to see it.')
+    const existing = workspace.grain_carry_grids.find((row) => row.id === grid.id)
+    const saved = { ...grid, updated_at: now() }
+    persist({ ...grainSlice(workspace), grain_carry_grids: existing ? workspace.grain_carry_grids.map((row) => row.id === existing.id ? saved : row) : [...workspace.grain_carry_grids, saved] })
+    return saved
+  }
   async saveGrainAlertSettings(settings: GrainAlertSettings) { const emails = settings.alert_emails.map((email) => email.trim()); if (validateAlertEmails(emails).length) throw new Error('Enter up to three complete email addresses.'); const workspace = await load(this.fieldsRepository); persist({ ...grainSlice(workspace), grain_alert_settings: { ...settings, alert_emails: emails, updated_at: now() } }); }
 }

@@ -118,6 +118,20 @@ export const CONTRACT_REPAIR_PENDING = 'Correcting a contract arrives with the n
 
 /** GL-3b: a contract with any delivery recorded against it is history, not a draft. The same test the
  * server applies under a row lock, so the screen offers a control the database will honour. */
+/** One statement of a valid marketing plan target, used by the live repository before
+ * replace_marketing_plan_targets and by the mock that stands in for it (refusal audit, LD-010). */
+const invalidTarget = (): never => { throw new Error('Farm Rx found an invalid marketing plan target.') }
+export function validateTarget(value: MarketingPlanTarget) { if (!Number.isInteger(value.crop_year) || value.crop_year < 1900 || value.crop_year > 2200 || !Number.isFinite(value.target_pct_of_production) || value.target_pct_of_production <= 0 || value.target_pct_of_production > 100 || (value.target_price !== null && (!Number.isFinite(value.target_price) || value.target_price < 0)) || (value.breakeven_relative_pct !== null && !Number.isFinite(value.breakeven_relative_pct))) invalidTarget(); if (!/^\d{4}-\d{2}-01$/.test(value.target_month) || Number(value.target_month.slice(0, 4)) < value.crop_year - 1 || Number(value.target_month.slice(0, 4)) > value.crop_year + 1 || (value.deadline !== null && Number.isNaN(Date.parse(`${value.deadline}T00:00:00Z`)))) invalidTarget() }
+
+/** Refusal audit (LD-010): a contract a load ticket names cannot be deleted. grain_loads references
+ * it `on delete restrict`, and a voided ticket keeps its row, so the reference outlives the load's
+ * effects. contractIsCorrectable answers whether it may be corrected; this answers whether it may
+ * also be removed, so the screen never offers a Delete the database will refuse. */
+export function contractIsDeletable(workspace: Pick<GrainWorkspace, 'grain_contract_deliveries' | 'grain_loads'>, contractId: string): boolean {
+  return contractIsCorrectable(workspace, contractId)
+    && !workspace.grain_loads.some((load) => load.destination_grain_contract_id === contractId)
+}
+
 export function contractIsCorrectable(workspace: Pick<GrainWorkspace, 'grain_contract_deliveries'>, contractId: string): boolean {
   return !workspace.grain_contract_deliveries.some((delivery) => delivery.grain_contract_id === contractId)
 }
@@ -459,9 +473,24 @@ export function validateLoadVoidReason(reason: string): string | null {
 /** LD-1: everything the form can tell the farmer before the network is involved. The server checks
  * all of it again under a row lock -- this exists so a farmer in a truck with one bar of signal is
  * told what is wrong immediately, not after a round trip. */
+/** A real calendar day written YYYY-MM-DD -- 2026-02-30 is not one. Shared by the load form and the
+ * mock that stands in for the database's date casts (refusal audit, LD-010). */
+export function isCalendarDate(value: string | null | undefined): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = Date.parse(`${value}T00:00:00Z`)
+  return !Number.isNaN(parsed) && new Date(parsed).toISOString().slice(0, 10) === value
+}
+
 export function validateGrainLoadShape(draft: GrainLoadDraft): string[] {
   const problems: string[] = []
+  // Refusal audit (LD-010): save_grain_load casts load_date to a date, so it has to be a real one.
   if (!draft.load_date) problems.push('Pick the date this load was hauled.')
+  else if (!isCalendarDate(draft.load_date)) problems.push('Pick a real date for this load.')
+  // And the grain_loads text columns carry length limits the form should meet before the database does.
+  if (draft.truck_name.trim().length > 200) problems.push('Keep the truck name to 200 characters.')
+  if (draft.destination_kind === 'buyer' && draft.destination_buyer.trim().length > 200) problems.push('Keep the buyer name to 200 characters.')
+  if (draft.ticket_number.trim().length > 120) problems.push('Keep the ticket number to 120 characters.')
+  if (draft.notes.trim().length > 4000) problems.push('Keep the notes to 4,000 characters.')
 
   const net = Number(draft.net_bushels)
   if (!draft.net_bushels.trim() || !Number.isFinite(net) || net <= 0) problems.push('Net bushels must be more than zero.')

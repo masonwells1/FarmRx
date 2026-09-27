@@ -33,7 +33,7 @@ import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOfferType, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainContractType, GrainLoad, GrainLoadDraft, GrainServices, GrainWorkspace, LoadTruck, MarketingAlertRule, MarketingAlertRuleType, MarketingPlanTarget, PositionScope, ProductionEstimate } from "./data/grain";
 import { deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
 import type { BinLotOnHand } from "./data/committedFree";
-import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, loadEffectsAvailable, loadLotFor, manualMovementCropYears, originBinLots, recordedBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
+import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, contractIsDeletable, loadEffectsAvailable, loadLotFor, manualMovementCropYears, originBinLots, recordedBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -3357,6 +3357,10 @@ export function ContractRepair({ contract, workspace, services, onSaved, onDelet
   const current = savedRow ?? contract;
   const available = workspace.capabilities?.contract_edit_delete !== false;
   if (!available || !contractIsCorrectable(workspace, contract.id)) return null;
+  // Refusal audit (LD-010): grain_loads references a contract `on delete restrict`, and a voided
+  // ticket keeps its row, so the database refuses this delete for good. Offering the button would
+  // only lead to a failure the farmer cannot act on.
+  const deletable = contractIsDeletable(workspace, contract.id);
   const correct = async () => {
     if (!lock.current.acquire()) return;
     try {
@@ -3425,10 +3429,12 @@ export function ContractRepair({ contract, workspace, services, onSaved, onDelet
           correction". Without this field that instruction had nowhere to land. */}
       <label>Contract note<textarea value={notes} rows={2} onChange={(event) => { redraft(); setNotes(event.target.value) }} /></label>
       <label>Why are you changing this?<textarea value={reason} rows={2} onChange={(event) => { redraft(); setReason(event.target.value) }} /></label>
-      <small>Crop year, commodity, type and price cannot be corrected here. Delete the contract and enter it again if one of those is wrong.</small>
+      {deletable
+        ? <small>Crop year, commodity, type and price cannot be corrected here. Delete the contract and enter it again if one of those is wrong.</small>
+        : <small>A load ticket names this contract, so it can be corrected but not deleted. Crop year, commodity, type and price cannot be corrected here.</small>}
       <div className="contract-repair-buttons">
         <button className="text-action" type="button" disabled={saving} onClick={() => void correct()}>Save correction</button>
-        <button className="text-action destructive" type="button" disabled={saving} onClick={() => void remove()}>Delete contract</button>
+        {deletable && <button className="text-action destructive" type="button" disabled={saving} onClick={() => void remove()}>Delete contract</button>}
       </div>
       {message && <small>{message}</small>}
     </div>}
