@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 401')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 402')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1420,6 +1420,9 @@ export function foundationStaticGuard(root = process.cwd()) {
     requireText(errors, mock, "if (leg === 'basis' && current.futures_price === null) throw new Error('Set the futures price before finalizing the basis.')", 'ld10:a-price-leg-finalizes-only-beside-the-other')
     // fill_firm_offer inserts; its on-conflict covers firm_offer_id only, so a taken id is refused.
     requireText(errors, mock, "if (workspace.grain_contracts.some((row) => row.id === contract.id)) throw new Error('Farm Rx could not record this grain contract.');", 'ld10:a-fill-never-replaces-another-contract')
+    // The enterprise label rule is shared, so the live repository refuses a label the column refuses
+    // before sending it. It lived in the mock alone, and the live path learned of it from Postgres.
+    requireText(errors, read(root, 'src/data/grain.ts'), "if (!enterpriseLabelFits(contract.enterprise_label)) errors.push('Enterprise label must be 1 to 160 characters.')", 'ld10:the-label-rule-is-shared')
     // And the regression that exercises all of it runs with the others.
     requireText(errors, read(root, 'package.json'), 'tsx src/data/MockGrainRefusals.regression.ts', 'ld10:the-refusal-regression-runs')
   }

@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 401
+const expectedMutationCount = 402
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -1111,6 +1111,9 @@ try {
   reset()
   mutate('src/data/MockGrainRepository.ts', (source) => source.replace("    if (workspace.grain_contracts.some((row) => row.id === contract.id)) throw new Error('Farm Rx could not record this grain contract.');\n", ''))
   detected('filling a firm offer replaces another contract that already holds the id', 'ld10:a-fill-never-replaces-another-contract')
+  reset()
+  mutate('src/data/grain.ts', (source) => source.replace("  if (!enterpriseLabelFits(contract.enterprise_label)) errors.push('Enterprise label must be 1 to 160 characters.')\n", ''))
+  detected('the shared contract validator drops the label rule, so the live app sends a label the column refuses', 'ld10:the-label-rule-is-shared')
   reset()
   mutate('package.json', (source) => source.replace(' && tsx src/data/MockGrainRefusals.regression.ts', ''))
   detected('the refusal regression is dropped from the regression run', 'ld10:the-refusal-regression-runs')
