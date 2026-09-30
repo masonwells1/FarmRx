@@ -23,6 +23,11 @@ export interface PositionScope {
   enterprise_label: string | null
 }
 
+/** A label every enterprise_label column accepts: absent, or 1-160 characters once trimmed. */
+export function enterpriseLabelFits(label: string | null): boolean {
+  return label === null || (label.trim().length >= 1 && label.trim().length <= 160)
+}
+
 /** The one join identity for every crop-year grain record. */
 export function scopeKey(scope: PositionScope): string {
   return [scope.farm_id, scope.crop_year, scope.commodity_id, scope.operating_entity_id ?? '', scope.enterprise_label ?? ''].join('|')
@@ -732,6 +737,7 @@ export function validateGrainContract(contract: GrainContract, commodityIds: Set
   if (!commodityIds.has(contract.commodity_id)) errors.push('Choose a valid commodity.')
   if (!Object.values<GrainContractType>({ cash_spot: 'cash_spot', forward_cash: 'forward_cash', basis: 'basis', hta: 'hta' }).includes(contract.contract_type)) errors.push('Choose a valid contract type.')
   if (contract.buyer.trim().length < 1 || contract.buyer.trim().length > 200) errors.push('Buyer is required and must be 200 characters or fewer.')
+  if (!enterpriseLabelFits(contract.enterprise_label)) errors.push('Enterprise label must be 1 to 160 characters.')
   if (!Number.isFinite(contract.bushels) || contract.bushels <= 0) errors.push('Bushels must be greater than zero.')
   if (!finite(contract.cash_price) || !finite(contract.futures_price) || !finite(contract.basis) || (contract.cash_price !== null && contract.cash_price < 0) || (contract.futures_price !== null && contract.futures_price < 0)) errors.push('Prices and basis must be finite; cash and futures prices cannot be negative.')
   if (!Number.isFinite(contract.premium_cents_per_bu) || contract.premium_cents_per_bu < 0) errors.push('Premium must be a finite value of zero or more cents per bushel.')

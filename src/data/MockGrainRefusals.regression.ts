@@ -1,7 +1,7 @@
 import type { FieldsRepository } from './fields'
 import { fieldsSeedForRegression } from './MockFieldsRepository'
 import { MockGrainRepository } from './MockGrainRepository'
-import { contractIsDeletable, type BinTransaction, type FirmOffer, type GrainContract, type GrainData, type GrainLoadDraft, type MarketingAlertRule } from './grain'
+import { contractIsDeletable, enterpriseLabelFits, validateGrainContract, type BinTransaction, type FirmOffer, type GrainContract, type GrainData, type GrainLoadDraft, type MarketingAlertRule } from './grain'
 import { DELETE_PERMISSION_MESSAGE } from './saveDurability'
 
 /** Refusal audit (LD-010): the grain mock stands in for the live repository AND the database behind
@@ -217,4 +217,19 @@ await fresh()
   assert((await repo.listHarvestLoads()).complete, 'Harvest loads still list after a reload.')
 }
 
-console.log('Mock grain refusal regressions passed (15 coverage groups).')
+// 16. The enterprise label rule is shared: every enterprise_label column takes nothing, or 1-160
+//     characters once trimmed. It lived in the mock alone, so the live repository sent a label the
+//     column refuses and learned of it from the database.
+await fresh()
+{
+  assert(enterpriseLabelFits(null) && enterpriseLabelFits('x'.repeat(160)) && enterpriseLabelFits(' North farm '), 'A label the column accepts must fit.')
+  assert(!enterpriseLabelFits('') && !enterpriseLabelFits('   ') && !enterpriseLabelFits('x'.repeat(161)), 'A label the column refuses must not fit.')
+  const contract = (await data()).grain_contracts.find((row) => row.id === seed(601))!
+  const commodities = new Set(fields.commodities.map((row) => row.id))
+  assert(validateGrainContract({ ...contract, enterprise_label: 'x'.repeat(161) }, commodities).includes('Enterprise label must be 1 to 160 characters.'), 'The shared contract validator must refuse an over-long label.')
+  assert(validateGrainContract({ ...contract, enterprise_label: 'x'.repeat(160) }, commodities).length === 0, 'The shared contract validator must accept a 160-character label.')
+  await refused(() => repo.saveContract({ ...contract, id: uid(160), enterprise_label: 'x'.repeat(161) }), 'Enterprise label must be 1 to 160 characters.', 'a contract with an over-long enterprise label')
+  assert(!(await data()).grain_contracts.some((row) => row.id === uid(160)), 'A refused label must save nothing.')
+}
+
+console.log('Mock grain refusal regressions passed (16 coverage groups).')

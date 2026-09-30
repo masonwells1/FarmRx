@@ -2,7 +2,7 @@ import type { FieldsRepository } from './fields'
 import { isLotMovementSuperseded } from './committedFree'
 import type { BinTransaction, BinTransactionDirection, CashBid, FirmOffer, FuturesQuote, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, GrainRepository, GrainSaleLimit, GrainWorkspace, LoadVoidBlocker, LoadVoidResult, MarketDataService, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaMarketReport, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
-import { contractIsCorrectable, contractIsDeletable, isCalendarDate, MARKETING_PLAN_PERCENT_TOLERANCE, validateTarget, loadEffectsAvailable, loadLotFor, lotsSaveResolvesAgainst, recordedBinLots, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateGrainLoadShape, validateLoadVoidReason } from './grain'
+import { contractIsCorrectable, contractIsDeletable, enterpriseLabelFits, isCalendarDate, MARKETING_PLAN_PERCENT_TOLERANCE, validateTarget, loadEffectsAvailable, loadLotFor, lotsSaveResolvesAgainst, recordedBinLots, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateGrainLoadShape, validateLoadVoidReason } from './grain'
 import { localCalendarDay, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { DELETE_PERMISSION_MESSAGE } from './saveDurability'
@@ -133,8 +133,6 @@ function binMovementRefusal(workspace: GrainWorkspace, movement: BinTransaction)
 const INVALID_GRAIN_DATA = 'Farm Rx found invalid grain data. Please contact support.'
 const OVER_DELIVERY_MESSAGE = 'Delivery would exceed the remaining contract bushels; confirm over-delivery to record it.'
 const CONTRACT_NAMED_BY_A_LOAD = 'A load ticket names this contract, so it can be corrected but not deleted.'
-/** A label the enterprise_label columns accept: absent, or 1-160 characters once trimmed. */
-const enterpriseLabelFits = (label: string | null) => label === null || (label.trim().length >= 1 && label.trim().length <= 160)
 /** The live repository's privateRow: the crop and the entity must be this farm's. */
 function knownScope(workspace: GrainWorkspace, value: { commodity_id: string; operating_entity_id: string | null }): boolean {
   return workspace.fields.commodities.some((commodity) => commodity.id === value.commodity_id)
@@ -184,9 +182,9 @@ export class MockGrainRepository implements GrainRepository {
     const workspace = await load(this.fieldsRepository)
     const errors = validateGrainContract(contract, new Set(workspace.fields.commodities.map((commodity) => commodity.id)))
     if (errors.length) throw new Error(errors.join(' '))
-    // Refusal audit (LD-010): the enterprise label column is 1-160 characters once trimmed, and the
-    // entity must be this farm's.
-    if (!enterpriseLabelFits(contract.enterprise_label) || !knownScope(workspace, contract)) throw new Error(INVALID_GRAIN_DATA)
+    // Refusal audit (LD-010): the entity must be this farm's. The enterprise label is checked by the
+    // shared validateGrainContract above, which the live repository runs too.
+    if (!knownScope(workspace, contract)) throw new Error(INVALID_GRAIN_DATA)
     // GL-3b revoked UPDATE on grain_contracts, so the live path can only insert a contract or accept
     // an identical retry of one. A changed contract under an existing id is refused; corrections go
     // through editContract.

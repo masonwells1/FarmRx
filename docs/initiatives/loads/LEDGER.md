@@ -1805,3 +1805,43 @@ have, or matters only on a live server:
 - **Truck equipment references and `reconcileHarvestActual` scope** are not checked in the demo.
 - **The contract enterprise-label check lives in the mock only.** It is not yet in the shared
   `validateGrainContract`. Moving it there is the recommended next small change.
+
+## LD-011 — The enterprise label rule is shared, and the fast-uri advisory is patched
+
+**Branch:** `claude/app-improvement-strategy-kzqk6s`, on `main` after LD-010 (PR #60, merged by Mason).
+**Authority:** the change LD-010 named as its recommended next step. Mason said "go" on 2026-09-29.
+
+### What changed
+
+- **`enterpriseLabelFits` lives in `src/data/grain.ts`**, and `validateGrainContract` uses it. Every
+  `enterprise_label` column in the schema checks the same thing: null, or 1–160 characters once
+  trimmed. The rule used to live only in the mock. So the live repository sent a label the column
+  refuses and learned of it from Postgres. Now it refuses before anything is sent, and so does the
+  firm-offer fill, which runs the same validator. The mock imports the shared function and no longer
+  has a copy.
+- **No farmer-visible change today.** The Grain screen takes the label from the chosen scope and
+  never lets anyone type one. This is a safety net, not a fix for something a farmer could hit.
+- **`fast-uri` override 3.1.6 → 3.1.8.** A high-severity advisory (GHSA-qw65-cvwx-89v3,
+  GHSA-58mr-gqgx-xq4g) was published after LD-010 against 3.0.0–3.1.6, and it turned
+  `npm audit --audit-level=high` red on `main` too. It is build-time only: `vite-plugin-pwa` →
+  `workbox-build` → `ajv` → `fast-uri`. Nothing ships to the browser. This is the same override an
+  earlier commit (`1f4af05`) moved for the previous advisory. The lock file was regenerated with
+  npm 11 so it keeps its `libc` fields. npm 10 drops them, which would have changed which native
+  builds CI installs. The lock file diff is the three `fast-uri` lines and nothing else.
+
+### Proof observed
+
+- `npx tsc -b --force`; `npm run build`; `git diff --check` clean. `npm ci` from the new lock file
+  installs cleanly, and **`npm audit --audit-level=high` finds 0 vulnerabilities** (2 high before).
+- **Two new tests, each failing without the fix:**
+  - `MockGrainRefusals` group 16 covers the shared rule, the validator and the mock save.
+  - A `SupabaseGrainRepository` case proves an over-long or blank label never reaches the server.
+- Static guards PASS with one new guard, `ld10:the-label-rule-is-shared`. **Mutation drill
+  402/402**, count changed in both files that pin it.
+- **Browser: 131 passed, 15 skipped, 0 failed.**
+- **Regressions: 66 of 71 commands pass.** The same five as LD-010: `programInventoryCW2` fails
+  identically on `main`, and four need PowerShell, which this sandbox lacks. CI runs them.
+
+### Live steps
+
+**None.** No migration and no edge function. Merging deploys the client.
