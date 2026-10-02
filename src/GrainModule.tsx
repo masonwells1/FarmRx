@@ -206,7 +206,7 @@ function CropYearReconciliation({ workspace, services, canManageFarm, onSaved }:
           ))}
         </tbody>
       </table>
-      <p className="panel-note">A crop year can be named only once. If you pick the wrong one, fix it with a new bin movement.</p>
+      <p className="panel-note">A crop year can be named only once. If you pick the wrong one, fix it with new bin movements.</p>
     </section>
   );
 }
@@ -828,6 +828,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
                 <div>
                   <span className="eyebrow">Grain alerts</span>
                   <h2>Items to review</h2>
+                  <p>An alert already sent to your phone today is not shown again here.</p>
 
                 </div>
               </div>
@@ -1296,8 +1297,11 @@ function MarketingAlerts({
           <div>
             <h2>Marketing alerts</h2>
             <p>
-              Checked about every 15 minutes, even when Grain is closed. Turn on
-              phone alerts to get them on your phone.
+              Farm Rx checks these on the server about every 15 minutes, even
+              when Grain is closed, and
+              sends the alert to your phone, if you have turned notifications on.
+              A USDA cash price can reach your target, but USDA prices never
+              change your position or revenue numbers.
             </p>
           </div>
           <label className="commodity-picker">
@@ -1372,7 +1376,7 @@ function MarketingAlerts({
                   {rule.message && <span>{rule.message}</span>}
                   {rule.last_triggered_at && (
                     <small>
-                      Last sent{" "}
+                      Last reached{" "}
                       {new Date(rule.last_triggered_at).toLocaleDateString(
                         "en-US",
                         { month: "short", day: "numeric" },
@@ -2257,8 +2261,9 @@ function AlertEmailSettings({
           <span className="eyebrow">Delivery</span>
           <h2>Email these alerts</h2>
           <p>
-            Add up to three addresses. If email is unavailable, your in-app
-            alert stays here.
+            Emails go out only for plan-target and USDA report reminders, and
+            only when the farm owner opens Grain. Marketing alerts go to your
+            phone instead. Add up to three addresses.
           </p>
         </div>
       </div>
@@ -2714,7 +2719,7 @@ export function PositionCard({
           note={
             plannedRevenue === null
               ? "add a cash price target"
-              : "at your target price"
+              : "contracts as signed, the rest at your target"
           }
         />
       </div>
@@ -3654,7 +3659,7 @@ export function Bins({
                   {moisture.message}
                 </p>
               )}
-               {position.lots.map((lot) => lot.inventory && <p className="bin-reconciliation" key={`${lot.commodityId}-baseline`}>Last count · {new Date(`${lot.baselineDate}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: {bushels.format(lot.recordedInventory)} bu, plus {lot.movementsSinceBaseline.length} movement{lot.movementsSinceBaseline.length === 1 ? "" : "s"} since = {bushels.format(lot.onHand)} bu now.</p>)}
+               {position.lots.map((lot) => lot.inventory && <p className="bin-reconciliation" key={`${lot.commodityId}-baseline`}>Starting amount · {new Date(`${lot.baselineDate}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: {bushels.format(lot.recordedInventory)} bu, plus {lot.movementsSinceBaseline.length} movement{lot.movementsSinceBaseline.length === 1 ? "" : "s"} since = {bushels.format(lot.onHand)} bu now.</p>)}
               <div className="bin-fill">
                 <div>
                   <strong className="numeric">
@@ -4977,7 +4982,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
         {/* An Equipment truck or a typed name, never both -- the database refuses a ticket carrying
             two answers, so choosing one here clears the other rather than letting the save fail. */}
         <label>Truck<select value={draft.truck_equipment_id} onChange={(event) => update({ truck_equipment_id: event.target.value, truck_name: event.target.value ? "" : draft.truck_name })}>
-          <option value="">Someone else's truck</option>
+          <option value="">Other truck (type its name)</option>
           {trucks.map((truck) => <option key={truck.id} value={truck.id}>{truck.name}</option>)}
         </select></label>
         {!draft.truck_equipment_id && (

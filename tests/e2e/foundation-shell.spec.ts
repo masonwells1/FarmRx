@@ -1667,6 +1667,10 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   const positionCard = page.locator('article.position-card').first()
   await expect(positionCard.getByText('35% priced', { exact: true })).toBeVisible()
   await expect(positionCard.getByText('Fully priced', { exact: true })).toBeVisible()
+  // The second tile counts basis-only and futures-only contracts; it must never be labelled as unpriced grain.
+  await expect(positionCard.getByText('Partly priced', { exact: true })).toBeVisible()
+  await expect(positionCard.getByText('basis or futures still open', { exact: true })).toBeVisible()
+  await expect(positionCard.getByText('Still needs a price')).toHaveCount(0)
   await expect(positionCard.getByText('Already contracted')).toBeHidden()
   await positionCard.getByRole('button', { name: 'More details' }).click()
   await expect(positionCard.getByText('Already contracted')).toBeVisible()
