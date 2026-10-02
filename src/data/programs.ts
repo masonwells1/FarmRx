@@ -84,9 +84,9 @@ export function programApplyConfirmation(choice: ProgramApplyRecordChoice, confi
       : ''
     return `This marks the pass done without adding an application record. ${confirmedInventoryMatches} exact ${confirmedInventoryMatches === 1 ? 'Inventory match will' : 'Inventory matches will'} reduce on hand by the quantities you confirm.${summary} Free-typed and unmatched lines will not change Inventory.`
   }
-  if (choice === 'none') return 'Progress only: this marks the pass done in your program plan. It does NOT create a spray/application record and does NOT change inventory on hand.'
-  if (choice === 'create') return 'This marks the pass done AND creates a new draft application record. Inventory on hand still does not change — products here are free-typed, not matched to your shelf.'
-  return 'This marks the pass done and links it to the application record you chose. Inventory on hand does not change here.'
+  if (choice === 'none') return 'This marks the pass done. It does not create a spray record and does not change inventory on hand.'
+  if (choice === 'create') return 'This marks the pass done and creates a new draft spray record. Inventory on hand does not change, because these products are not matched to your inventory.'
+  return 'This marks the pass done and links it to the spray record you picked. Inventory on hand does not change here.'
 }
 export function validDate(value: string) { if (!date.test(value)) return false; const parsed = new Date(`${value}T00:00:00.000Z`); return !Number.isNaN(parsed.getTime()) && `${parsed.getUTCFullYear()}-${String(parsed.getUTCMonth() + 1).padStart(2, '0')}-${String(parsed.getUTCDate()).padStart(2, '0')}` === value }
 export function validateProgramDraft(value: ProgramDraft | Record<string, unknown>): string | null {

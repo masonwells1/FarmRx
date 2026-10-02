@@ -126,7 +126,7 @@ test('@march-write receives the exact Maple product through the real local UI', 
 
   await signIn(page)
   await page.getByRole('link', { name: 'Inventory' }).click()
-  await expect(page.getByRole('heading', { name: 'Your shed, your records.' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Inventory', exact: true })).toBeVisible()
   await expect(page.getByText('Synthetic Herbicide 41 — Maple')).toBeVisible()
   expect(requests.observedTargetMutationRpcs, 'target mutation RPC ran before the March write action').toEqual([])
   expect(requests.unexpectedRpcs, 'unexpected RPC ran after password authentication').toEqual([])
@@ -140,14 +140,14 @@ test('@march-write receives the exact Maple product through the real local UI', 
   await form.getByLabel('Received date').fill('2027-03-22')
   await form.getByLabel('Vendor (optional)').fill('Synthetic Ag Supply')
   await form.getByLabel('Status').selectOption('received')
-  await form.getByRole('button', { name: 'Save receipt' }).click()
+  await form.getByRole('button', { name: 'Save delivery' }).click()
 
-  await expect(page.locator('.inventory-success')).toHaveText('Receipt received and added to on-hand.')
+  await expect(page.locator('.inventory-success')).toHaveText('Delivery added to your on-hand count.')
   const history = page.locator('.receipt-history article').filter({ hasText: 'Synthetic Herbicide 41 — Maple' })
   await expect(history.getByText('Synthetic Herbicide 41 — Maple · 100 gal')).toBeVisible()
   await expect(history.getByText('received · 2027-03-22')).toBeVisible()
 
-  await page.getByRole('button', { name: 'On-hand shelf' }).click()
+  await page.getByRole('button', { name: 'On hand' }).click()
   const shelf = page.locator('.shelf-card').filter({ hasText: 'Synthetic Herbicide 41 — Maple' })
   await expect(shelf.getByText('100')).toBeVisible()
   await expect(shelf.getByText('gal')).toBeVisible()
