@@ -107,12 +107,6 @@ const navigation: NavigationItem[] = [
     icon: <NavGlyph d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4M8 12a4 4 0 1 0 8 0 4 4 0 1 0-8 0" />,
   },
   {
-    label: "Soil Rx",
-    path: "/soil-rx",
-    module: "soil_rx",
-    icon: <NavGlyph d="M4 19c4-8 12-8 16 0M7 14c2-4 8-4 10 0M12 3v8" />,
-  },
-  {
     label: "Fields",
     path: "/fields",
     module: "fields",
@@ -123,42 +117,6 @@ const navigation: NavigationItem[] = [
     path: "/grain",
     module: "grain",
     icon: <NavGlyph d="M3 20h18M6 20V8l6-4 6 4v12" />,
-  },
-  {
-    label: "Farm settings",
-    path: "/privacy",
-    module: "fields",
-    icon: <NavGlyph d="M12 3l8 4v5c0 5-3.4 8.2-8 9-4.6-.8-8-4-8-9V7l8-4zM9 12l2 2 4-4" />,
-  },
-  {
-    label: "Inventory",
-    path: "/inventory",
-    module: "inventory",
-    icon: <NavGlyph d="M21 8v13H3V8M1 3h22v5H1zM10 12h4" />,
-  },
-  {
-    label: "Profitability",
-    path: "/profitability",
-    module: "profitability",
-    icon: (
-      <NavGlyph d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-    ),
-  },
-  {
-    label: "Equipment",
-    path: "/equipment",
-    module: "equipment",
-    icon: (
-      <NavGlyph d="M7 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM17 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM10 16h4M4 13V7h9l3 5h4v4" />
-    ),
-  },
-  {
-    label: "Tasks",
-    path: "/tasks",
-    module: "tasks",
-    icon: (
-      <NavGlyph d="M9 11l3 3 8-8M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
-    ),
   },
   {
     label: "Weather",
@@ -183,6 +141,18 @@ const navigation: NavigationItem[] = [
     ),
   },
   {
+    label: "Programs",
+    path: "/programs",
+    module: "programs",
+    icon: <NavGlyph d="M8 4h12M8 12h12M8 20h12M4 4h.01M4 12h.01M4 20h.01" />,
+  },
+  {
+    label: "Inventory",
+    path: "/inventory",
+    module: "inventory",
+    icon: <NavGlyph d="M21 8v13H3V8M1 3h22v5H1zM10 12h4" />,
+  },
+  {
     label: "Harvest",
     path: "/harvest",
     module: "harvest",
@@ -191,10 +161,34 @@ const navigation: NavigationItem[] = [
     ),
   },
   {
-    label: "Programs",
-    path: "/programs",
-    module: "programs",
-    icon: <NavGlyph d="M8 4h12M8 12h12M8 20h12M4 4h.01M4 12h.01M4 20h.01" />,
+    label: "Tasks",
+    path: "/tasks",
+    module: "tasks",
+    icon: (
+      <NavGlyph d="M9 11l3 3 8-8M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
+    ),
+  },
+  {
+    label: "Equipment",
+    path: "/equipment",
+    module: "equipment",
+    icon: (
+      <NavGlyph d="M7 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM17 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM10 16h4M4 13V7h9l3 5h4v4" />
+    ),
+  },
+  {
+    label: "Profitability",
+    path: "/profitability",
+    module: "profitability",
+    icon: (
+      <NavGlyph d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+    ),
+  },
+  {
+    label: "Soil Rx",
+    path: "/soil-rx",
+    module: "soil_rx",
+    icon: <NavGlyph d="M4 19c4-8 12-8 16 0M7 14c2-4 8-4 10 0M12 3v8" />,
   },
   {
     label: "Alerts",
@@ -203,6 +197,12 @@ const navigation: NavigationItem[] = [
     icon: (
       <NavGlyph d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" />
     ),
+  },
+  {
+    label: "Farm settings",
+    path: "/privacy",
+    module: "fields",
+    icon: <NavGlyph d="M12 3l8 4v5c0 5-3.4 8.2-8 9-4.6-.8-8-4-8-9V7l8-4zM9 12l2 2 4-4" />,
   },
 ];
 
@@ -287,7 +287,6 @@ function AppLayout() {
       <aside className="sidebar" aria-label="Farm Rx navigation">
         <div className="farm-lockup">
           <div className="farm-name">{farmName}</div>
-          <div className="farm-logo-note">Your farm</div>
         </div>
         <Navigation className="sidebar-nav" items={navigation.filter((item) => canAccessFarmModule(profile, item.module))} />
         <div className="powered-by">
@@ -437,31 +436,30 @@ export function SyncNotice() {
         </button>
       </div>
     );
+  // Online and fully saved is the normal state, so it is announced to screen readers but not drawn as a bar.
   if (notice.kind === "synced")
     return (
-      <div className="sync-notice synced" role="status">
-        {source === "offline" ? <><span>Working offline. Saved changes stay on this device.</span><button type="button" onClick={() => void retry()}>Check signal</button></> : "All changes synced."}
+      <div className={source === "offline" ? "sync-notice synced" : "sync-notice synced quiet"} role="status">
+        {source === "offline" ? <><span>Offline. Anything you save stays on this phone until you have signal.</span><button type="button" onClick={() => void retry()}>Check signal</button></> : "All changes saved."}
       </div>
     );
   if (notice.kind === "pending")
     return (
       <div className="sync-notice pending" role="status">
-        <span>Saved on this device — waiting for signal. {notice.pending} change
-        {notice.pending === 1 ? "" : "s"} pending.</span>
+        <span>Saved on this phone. {notice.pending} change{notice.pending === 1 ? "" : "s"} will send when you have signal.</span>
         {source === "offline" && <button type="button" onClick={() => void retry()}>Check signal</button>}
       </div>
     );
   if (notice.kind === "syncing")
     return (
       <div className="sync-notice syncing" role="status">
-        Sending saved changes…
+        Sending your changes…
       </div>
     );
   return (
     <div className="sync-notice blocked" role="alert">
       <span>
-        {notice.pending} saved change{notice.pending === 1 ? "" : "s"} needs
-        attention. Nothing was deleted.
+        {notice.pending} saved change{notice.pending === 1 ? " didn't" : "s didn't"} send. Nothing was lost.
       </span>
       <button type="button" onClick={() => void retry()}>
         Try again
@@ -474,7 +472,7 @@ function OfflineDataNotice() {
   const notices = useSyncExternalStore(subscribeWorkspaceCacheNotices, getWorkspaceCacheNotices, getWorkspaceCacheNotices);
   if (!notices.length) return null;
   const oldest = notices[0];
-  return <div className="offline-data-notice" role="status">Showing an offline copy from {new Date(oldest.cachedAt).toLocaleString()}. Saved changes stay on this device until Farm Rx reconnects.</div>;
+  return <div className="offline-data-notice" role="status">Offline. Showing your farm as of {new Date(oldest.cachedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.</div>;
 }
 
 function FarmAccessGate({ children }: { children: ReactNode }) {
@@ -791,7 +789,7 @@ export function FarmAccessGateForUser({ children, user, dependencies = defaultFa
   if (state === "setup")
     return <InitialFarmSetup onComplete={completeInitialFarmSetup} />;
   if (state === "choose" && access?.userId === user.id)
-    return <main className="login-page"><section className="login-panel farm-choice" aria-labelledby="farm-choice-title"><h1 id="farm-choice-title">Choose a farm</h1><p>Your records and saved offline work stay separated by farm.</p><div className="farm-choice-list">{access.farms.map((farm) => <button className="primary-action" type="button" key={farm.id} onClick={() => { void selectFarm(user.id, farm.id).then(() => window.location.assign('/today')).catch((error) => { setMessage(farmerError(error, 'open this farm')); setState('blocked') }) }}>{farm.name}</button>)}</div><RevokedFarmRecovery userId={user.id} /></section></main>;
+    return <main className="login-page"><section className="login-panel farm-choice" aria-labelledby="farm-choice-title"><h1 id="farm-choice-title">Choose a farm</h1><div className="farm-choice-list">{access.farms.map((farm) => <button className="primary-action" type="button" key={farm.id} onClick={() => { void selectFarm(user.id, farm.id).then(() => window.location.assign('/today')).catch((error) => { setMessage(farmerError(error, 'open this farm')); setState('blocked') }) }}>{farm.name}</button>)}</div><RevokedFarmRecovery userId={user.id} /></section></main>;
   if (state === "blocked")
     return (
       <main className="login-page">
@@ -884,19 +882,19 @@ function InitialFarmSetup({ onComplete }: { onComplete: () => Promise<void> }) {
       <section className="login-panel" aria-labelledby="setup-title">
         <div className="login-brand">
           <h1 id="setup-title">Set up your farm</h1>
-          <p>Tell us the farm and operating name to get started.</p>
+          <p>Name your farm to get started.</p>
         </div>
         <form className="login-card" onSubmit={submit}>
           <label htmlFor="farmName">Farm name</label>
           <input id="farmName" name="farmName" required disabled={submitting} />
-          <label htmlFor="entityName">Operating name</label>
+          <label htmlFor="entityName">Business name (as on your tax forms)</label>
           <input
             id="entityName"
             name="entityName"
             required
             disabled={submitting}
           />
-          <label htmlFor="entityType">Entity type</label>
+          <label htmlFor="entityType">Business type</label>
           <select
             id="entityType"
             name="entityType"

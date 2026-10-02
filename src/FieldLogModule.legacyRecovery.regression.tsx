@@ -26,7 +26,7 @@ const container = document.createElement('div'); document.body.append(container)
 try {
   await act(async () => { root.render(createElement(MemoryRouter, null, createElement(FieldLogPage, { fieldLogRepository, fieldsRepository }))); await new Promise((resolve) => setTimeout(resolve, 0)) })
   const text = container.textContent ?? ''
-  for (const expected of ['Saved changes that need attention', 'Field log entry', '2027-08-04 · Synthetic legacy note', '2027-08-05 · 0 in', 'cannot be sent automatically', 'Re-enter this change manually if needed, then dismiss it.', 'Review only', 'Dismiss']) assert(text.includes(expected), `Missing legacy recovery detail: ${expected}`)
+  for (const expected of ["Changes that didn't send", 'Field log entry', '2027-08-04 · Synthetic legacy note', '2027-08-05 · 0 in', 'cannot be sent automatically', 'Re-enter this change manually if needed, then dismiss it.', 'Review only', 'Dismiss']) assert(text.includes(expected), `Missing legacy recovery detail: ${expected}`)
   const recoveryRows = [...container.querySelectorAll('[aria-label="Saves that need attention"] article')].map((row) => row.textContent ?? '')
   assert(recoveryRows.some((row) => row.includes('2027-08-04 · Synthetic legacy note') && row.includes('Pine North 60') && !row.includes('Pine South 40')), 'Legacy note recovery did not show its own field name.')
   assert(recoveryRows.some((row) => row.includes('2027-08-05 · 0 in') && row.includes('Pine South 40') && !row.includes('Pine North 60')), 'Legacy zero-rain recovery did not show its own field name.')

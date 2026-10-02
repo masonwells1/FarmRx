@@ -54,7 +54,7 @@ try {
   await act(async () => { await Promise.resolve() }); await act(async () => { rapidRoot.unmount() }); rapidContainer.remove()
 
   const queued = await renderCase('queued')
-  assert(queued.saves.length === 1 && queued.notices[0]?.includes('not confirmed on Farm Rx yet') && queued.container.textContent?.includes('Queued offline'), 'A safely queued spray must never use confirmed-save wording and must retain the queued receipt.')
+  assert(queued.saves.length === 1 && queued.notices[0]?.includes('not confirmed on Farm Rx yet') && queued.container.textContent?.includes('will send when you have signal'), 'A safely queued spray must never use confirmed-save wording and must retain the queued receipt.')
   await act(async () => { queued.root.unmount() }); queued.container.remove()
 
   const attention = await renderCase('needs-attention')

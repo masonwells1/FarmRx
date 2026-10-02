@@ -582,24 +582,26 @@ export function FieldsPage() {
       if (next) setCropFilter("all");
       return next;
     });
+  // A one-business farm with a handful of fields gains nothing from these columns and filters.
+  const showEntity = data.entities.length > 1;
+  const showFilters = activeFields.length > 5;
   return (
     <section className="page fields-page">
       <div className="page-heading">
         <div>
           <h1>Fields</h1>
-          <p>Every acre in one clear view.</p>
         </div>
-        <Link className="secondary-action" to="/fields/new">
-          Full field details
+        <Link className="primary-action" to="/fields/new">
+          Add field
         </Link>
       </div>
       <div className="stats-grid" aria-label="Farm totals">
         <StatCard
-          label="Total fields"
+          label="Fields"
           value={number.format(activeFields.length)}
         />
         <StatCard
-          label="Total acres"
+          label="Acres"
           value={number.format(totalAcres)}
           unit="ac"
         />
@@ -609,24 +611,21 @@ export function FieldsPage() {
           onClick={toggleMissingCrop}
           aria-pressed={missingCropOnly}
         >
-          <span className="stat-label">Crops assigned</span>
+          <span className="stat-label">Crops set</span>
           <strong className="stat-value numeric">
             {assigned}/{activeFields.length}
           </strong>
           <span className="stat-note">
             {missingCropOnly
-              ? "Showing fields missing a crop · tap to clear"
+              ? "Showing fields with no crop. Tap to clear."
               : assigned < activeFields.length
-                ? "Tap to finish setup"
-                : "All current fields assigned"}
+                ? "Tap to see"
+                : "All set"}
           </span>
         </button>
       </div>
-      <section className="data-card" aria-labelledby="field-list-heading">
-        <div className="card-heading" id="field-list-heading">
-          Field list
-        </div>
-        <div className="filter-bar" aria-label="Filter fields">
+      <section className="data-card" aria-label="Field list">
+        {showFilters && <div className="filter-bar" aria-label="Filter fields">
           <FilterSelect
             label="Crop"
             value={cropFilter}
@@ -639,31 +638,31 @@ export function FieldsPage() {
               </option>
             ))}
           </FilterSelect>
-          <FilterSelect
-            label="Entity"
+          {showEntity && <FilterSelect
+            label="Business"
             value={entityFilter}
             onChange={setEntityFilter}
           >
-            <option value="all">All entities</option>
+            <option value="all">All businesses</option>
             {data.entities.map((entity) => (
               <option key={entity.id} value={entity.id}>
                 {entity.name}
               </option>
             ))}
-          </FilterSelect>
+          </FilterSelect>}
           <FilterSelect
-            label="Arrangement"
+            label="Land"
             value={arrangementFilter}
             onChange={setArrangementFilter}
           >
-            <option value="all">All arrangements</option>
+            <option value="all">Owned and rented</option>
             {arrangementOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
             ))}
           </FilterSelect>
-        </div>
+        </div>}
         <div className="table-scroll">
           <table>
             <thead>
@@ -674,12 +673,12 @@ export function FieldsPage() {
                   ascending={sortAscending}
                   onClick={() => changeSort("name")}
                 />
-                <SortHeader
-                  label="Entity"
+                {showEntity && <SortHeader
+                  label="Business"
                   active={sortKey === "entity"}
                   ascending={sortAscending}
                   onClick={() => changeSort("entity")}
-                />
+                />}
                 <SortHeader
                   label="This year"
                   active={sortKey === "crop"}
@@ -687,7 +686,8 @@ export function FieldsPage() {
                   onClick={() => changeSort("crop")}
                 />
                 <SortHeader
-                  label="Agreement"
+                  label="Land"
+                  className="col-land"
                   active={sortKey === "arrangement"}
                   ascending={sortAscending}
                   onClick={() => changeSort("arrangement")}
@@ -707,17 +707,17 @@ export function FieldsPage() {
                   key={field.id}
                   data={data}
                   field={field}
+                  showEntity={showEntity}
                   onOpen={() => navigate(`/fields/${field.id}`)}
                 />
               ))}
-              <InlineAddRow data={data} onSaved={refresh} />
+              <InlineAddRow data={data} showEntity={showEntity} onSaved={refresh} />
             </tbody>
           </table>
         </div>
         {visibleFields.length === 0 && (
           <div className="filter-empty">
-            No fields match those filters. Add one below or clear the crop setup
-            filter.
+            No fields match. Clear a filter or add a field.
           </div>
         )}
         <div className="table-total">
@@ -739,10 +739,12 @@ export function FieldsPage() {
 function FieldListRow({
   data,
   field,
+  showEntity,
   onOpen,
 }: {
   data: FieldsData;
   field: Field;
+  showEntity: boolean;
   onOpen: () => void;
 }) {
   const entity = data.entities.find(
@@ -759,13 +761,13 @@ function FieldListRow({
       }}
     >
       <td className="field-name">{field.name}</td>
-      <td>{entity?.name ?? "Unknown entity"}</td>
+      {showEntity && <td>{entity?.name ?? "Unknown business"}</td>}
       <td>
         {cropNames(data, field.id).join(" + ") || (
           <span className="status-chip not-started">Needs crop</span>
         )}
       </td>
-      <td>
+      <td className="col-land">
         {arrangementText(currentArrangement(data.arrangements, field.id))}
       </td>
       <td className="align-right numeric">{formatAcres(field.total_acres)}</td>
@@ -774,9 +776,11 @@ function FieldListRow({
 }
 function InlineAddRow({
   data,
+  showEntity,
   onSaved,
 }: {
   data: FieldsData;
+  showEntity: boolean;
   onSaved: () => Promise<unknown>;
 }) {
   const [name, setName] = useState("");
@@ -801,7 +805,7 @@ function InlineAddRow({
     }
     const entity = data.entities.find((item) => item.is_active);
     if (!entity) {
-      setError("Add an operating entity before adding a field.");
+      setError("Set up your farm business before adding a field.");
       return;
     }
     if (!submitLock.current.acquire()) return;
@@ -876,10 +880,10 @@ function InlineAddRow({
           </span>
         )}
       </td>
-      <td className="inline-add-note" colSpan={2}>
-        Quick add · details later
+      <td className="inline-add-note" colSpan={showEntity ? 2 : 1}>
+        Quick add
       </td>
-      <td>
+      <td className="col-land">
         <input
           aria-label="New field county or location"
           placeholder="County / location"
@@ -973,7 +977,7 @@ export function FieldDetailPage({ readHarvestLoads }: { readHarvestLoads?: () =>
           ← All fields
         </Link>
         <Link className="secondary-action" to={`/fields/${field.id}/edit`}>
-          Full editor
+          Edit field
         </Link>
       </div>
       <div className="page-heading compact-heading">
@@ -1184,7 +1188,7 @@ function BasicsCard({
             }
           />
           <Info
-            label="Operating entity"
+            label="Business"
             value={
               data.entities.find(
                 (entity) => entity.id === field.operating_entity_id,
@@ -1381,7 +1385,7 @@ function AgreementCard({
     >
       {editing ? (
         <div className="card-form">
-          <FormControl label="Arrangement type">
+          <FormControl label="Owned or rented">
             <select
               value={values.type}
               onChange={(event) =>
@@ -1398,7 +1402,7 @@ function AgreementCard({
               ))}
             </select>
           </FormControl>
-          <FormControl label="Terms effective from">
+          <FormControl label="Since">
             <input
               type="date"
               value={values.effective}
@@ -1517,7 +1521,7 @@ function AgreementCard({
                           setInputShare(key, event.target.value)
                         }
                       />
-                      {key === "landlord_other_input_pct" && <small>Not used yet — budgets don't have an 'Other' cost category. Custom work is now shared under Labor & custom work.</small>}
+                      {key === "landlord_other_input_pct" && <small>Not used yet. Custom work is under Labor &amp; custom work.</small>}
                     </FormControl>
                   ))}
                 </div>
@@ -1541,7 +1545,7 @@ function AgreementCard({
             <strong>
               {arrangement.arrangement_type === "cash_rent"
                 ? "Field cash rent"
-                : "Field equivalent cash rent"}
+                : "Works out to cash rent of"}
             </strong>
             {arrangement.arrangement_type === "owned" ? (
               <span>— · Owned ground has no rent estimate.</span>
@@ -1560,8 +1564,7 @@ function AgreementCard({
                 {equivalent !== null &&
                   arrangement.arrangement_type !== "cash_rent" && (
                     <small>
-                      Base rent is counted once; crop components are weighted by
-                      planted acres. Prices use the manual planned price.
+                      Uses your planned price and planted acres.
                     </small>
                   )}
                 {arrangement.arrangement_type === "flex_cash_rent" &&
@@ -1831,7 +1834,7 @@ function RecordsCard({
   };
   return (
     <Card
-      title="Records"
+      title="Crops by year"
       editing={editing}
       onEdit={() => {
         if (!editing) {
@@ -1849,8 +1852,8 @@ function RecordsCard({
             return (
               <div className="assignment-edit-row" key={row.id}>
                 <strong>
-                  {row.crop_year} · {cropName(data, row.commodity_id)} · #
-                  {row.planting_sequence}
+                  {row.crop_year} · {cropName(data, row.commodity_id)}
+                  {row.planting_sequence > 1 ? ` · planting ${row.planting_sequence}` : ""}
                 </strong>
                 <FormControl label="Planted acres">
                   <input
@@ -1944,7 +1947,7 @@ function RecordsCard({
         </div>
       ) : rows.length === 0 ? (
         <p className="card-empty">
-          No crop assignments recorded yet. Tap Edit to add a crop record.
+          No crops yet. Tap Edit to add this year's crop.
         </p>
       ) : (
         <div className="record-list">
@@ -1954,8 +1957,8 @@ function RecordsCard({
             .map((row) => (
               <div key={row.id}>
                 <strong>
-                  {row.crop_year} · {cropName(data, row.commodity_id)} · #
-                  {row.planting_sequence}
+                  {row.crop_year} · {cropName(data, row.commodity_id)}
+                  {row.planting_sequence > 1 ? ` · planting ${row.planting_sequence}` : ""}
                 </strong>
                 <span className="numeric">
                   {formatAcres(row.planted_acres)}
@@ -1975,7 +1978,7 @@ function RecordsCard({
                     <span className="numeric field-from-loads">
                       {loadsComplete ? "" : "at least "}{number.format(fromLoads.fromLoads)} bu from loads
                       {loadsComplete && fromLoads.difference !== null && fromLoads.difference !== 0
-                        ? ` · ${fromLoads.difference > 0 ? "+" : "−"}${number.format(Math.abs(fromLoads.difference))} bu vs typed`
+                        ? ` · ${fromLoads.difference > 0 ? "+" : "−"}${number.format(Math.abs(fromLoads.difference))} bu vs. your total`
                         : ""}
                     </span>
                   );
@@ -2027,12 +2030,12 @@ export function FieldFormPage() {
         arrangement = currentArrangementForFieldEdit(data, formResolution);
       } catch {
         setError(
-          "This field's current agreement is missing. Farm Rx will not guess that it is owned. Ask your Farm Rx administrator to repair it.",
+          "This field is missing whether it is owned or rented. Call your Crop RX rep to fix it.",
         );
         return;
       }
       if (!entity) {
-        setError("No active operating entity is available.");
+        setError("Set up your farm business before adding a field.");
         return;
       }
       const base: Field = existing ?? {
@@ -2220,15 +2223,17 @@ function SortHeader({
   ascending,
   onClick,
   align,
+  className,
 }: {
   label: string;
   active?: boolean;
   ascending?: boolean;
   onClick?: () => void;
   align?: "right";
+  className?: string;
 }) {
   return (
-    <th className={align === "right" ? "align-right" : undefined} scope="col">
+    <th className={[align === "right" ? "align-right" : "", className ?? ""].join(" ").trim() || undefined} scope="col">
       <button
         className={`sort-button${active ? " active" : ""}`}
         onClick={onClick}
@@ -2279,12 +2284,11 @@ function MissingArrangementState({ field }: { field: Field }) {
   return (
     <section className="page">
       <div className="empty-state">
-        <h1>Current agreement missing</h1>
+        <h1>Owned or rented?</h1>
         <p>
-          {field.name} is still on your farm. Farm Rx kept it read-only so it
-          does not guess that you own this ground.
+          {field.name} is missing whether it is owned or rented, so it is view
+          only for now. Call your Crop RX rep to fix it.
         </p>
-        <p>Ask your Farm Rx administrator to repair the land agreement.</p>
         <Link className="primary-action" to="/fields">
           Back to fields
         </Link>

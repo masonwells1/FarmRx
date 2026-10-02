@@ -95,7 +95,7 @@ function assertSoilReportGuideContract(source: string) {
 function assertNutrientRemovalContract(source: string) {
   expect(source).toContain("key={estimate.id}")
   expect(source).toContain("{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence}")
-  expect(source).toContain("Farm Rx does not combine years or planting sequences.")
+  expect(source).toContain("one line per crop and year. Not a fertilizer recommendation")
   expect(source).toContain("cornNitrogen: { label: 'Illinois Agronomy Handbook, Nitrogen Management for Corn'")
   expect(source).toContain("soybeanNitrogen: { label: 'University of Delaware Cooperative Extension, Nitrogen Removal by Delaware Crops'")
   expect(source).not.toContain('soybeanWheatNitrogen')
@@ -198,7 +198,7 @@ test('Soil Rx preserves archived history while creation remains active-field onl
   await page.getByRole('button', { name: /North Forty \(Archived\)/ }).click()
   await expect(page.getByRole('heading', { name: 'North Forty history' })).toBeVisible()
   await expect(page.getByText('Old Lab')).toBeVisible()
-  await expect(page.getByText('This field is archived. Its Soil Rx history remains available, but new tests can only be added to active fields.', { exact: true })).toBeVisible()
+  await expect(page.getByText('This field is archived. You can see its past tests, but not add new ones.', { exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Add a soil test' })).toHaveCount(0)
   await expect(page.getByText('Add a field before saving a soil test.', { exact: true })).toHaveCount(0)
 
@@ -254,7 +254,7 @@ test('Soil Rx opens a safe placeholder synchronously and handles blocked and fai
 })
 
 test('Soil Rx report guide binds populated, missing, and zero lab values to their labels', async ({ page }) => {
-  const populatedState = historyState(); populatedState.tests[0]!.ph = 6.4; populatedState.tests[0]!.organic_matter_pct = 3.1; populatedState.tests[0]!.cec_meq_100g = 14.2; populatedState.tests[0]!.base_saturation_calcium_pct = 61.1; populatedState.tests[0]!.base_saturation_magnesium_pct = 17.2; populatedState.tests[0]!.base_saturation_potassium_pct = 3.3; populatedState.tests[0]!.base_saturation_sodium_pct = 0.4; populatedState.tests[0]!.base_saturation_hydrogen_pct = 18.5; const populatedUnexpected = await open(page, false, populatedState); const removal = page.getByRole('region', { name: 'Harvest nutrient removal estimate' }); await expect(removal).toContainText('Corn · 2026 · planting 1 · 8,000 bu on 40 ac'); await expect(removal).toContainText('4,800 lb total · 120 lb/ac'); await expect(removal).toContainText('2,960 lb total · 74 lb/ac'); await expect(removal).toContainText('1,920 lb total · 48 lb/ac'); await expect(removal).toContainText('not a fertilizer recommendation'); const guide = page.getByRole('region', { name: 'Understand this report' }); const guideValue = (label: string) => guide.locator('dt', { hasText: new RegExp(`^${label}$`) }).locator('xpath=..').locator('dd'); const baseSaturation = page.getByRole('region', { name: 'Base saturation lab values' }); const baseSaturationValue = (label: string) => baseSaturation.locator('dt', { hasText: new RegExp(`^${label}$`) }).locator('xpath=..').locator('dd'); await expect(guide.getByText('These are descriptions of the values reported by your lab, not agronomic advice, target ranges, or a fertilizer recommendation.', { exact: true })).toBeVisible(); await expect(guide.getByText('Ask your Crop RX agronomist for recommendations specific to your farm.', { exact: true })).toBeVisible(); await expect(guideValue('pH')).toHaveText('pH describes how acidic or alkaline the lab found this sample. Lab result: 6.4'); await expect(guideValue('pH')).not.toContainText('%'); await expect(guideValue('Organic matter')).toHaveText('Organic matter is the portion of the sample made from decomposed plant and animal material. Lab result: 3.1 %'); await expect(guideValue('CEC')).toHaveText('CEC describes the sample’s measured capacity to hold positively charged nutrients. Lab result: 14.2 meq/100g'); await expect(baseSaturationValue('Calcium')).toHaveText('61.1%'); await expect(baseSaturationValue('Magnesium')).toHaveText('17.2%'); await expect(baseSaturationValue('Potassium')).toHaveText('3.3%'); await expect(baseSaturationValue('Sodium')).toHaveText('0.4%'); await expect(baseSaturationValue('Hydrogen')).toHaveText('18.5%'); expect(populatedUnexpected).toEqual([])
+  const populatedState = historyState(); populatedState.tests[0]!.ph = 6.4; populatedState.tests[0]!.organic_matter_pct = 3.1; populatedState.tests[0]!.cec_meq_100g = 14.2; populatedState.tests[0]!.base_saturation_calcium_pct = 61.1; populatedState.tests[0]!.base_saturation_magnesium_pct = 17.2; populatedState.tests[0]!.base_saturation_potassium_pct = 3.3; populatedState.tests[0]!.base_saturation_sodium_pct = 0.4; populatedState.tests[0]!.base_saturation_hydrogen_pct = 18.5; const populatedUnexpected = await open(page, false, populatedState); const removal = page.getByRole('region', { name: 'Harvest nutrient removal estimate' }); await expect(removal).toContainText('Corn · 2026 · planting 1 · 8,000 bu on 40 ac'); await expect(removal).toContainText('4,800 lb total · 120 lb/ac'); await expect(removal).toContainText('2,960 lb total · 74 lb/ac'); await expect(removal).toContainText('1,920 lb total · 48 lb/ac'); await expect(removal).toContainText('not a fertilizer recommendation'); const guide = page.getByRole('region', { name: 'Understand this report' }); const guideValue = (label: string) => guide.locator('dt', { hasText: new RegExp(`^${label}$`) }).locator('xpath=..').locator('dd'); const baseSaturation = page.getByRole('region', { name: 'Base saturation lab values' }); const baseSaturationValue = (label: string) => baseSaturation.locator('dt', { hasText: new RegExp(`^${label}$`) }).locator('xpath=..').locator('dd'); await expect(guide.getByText('This explains what your lab reported. It is not agronomic advice or a fertilizer recommendation.', { exact: true })).toBeVisible(); await expect(guide.getByText('Ask your Crop RX agronomist for recommendations specific to your farm.', { exact: true })).toBeVisible(); await expect(guideValue('pH')).toHaveText('pH describes how acidic or alkaline the lab found this sample. Lab result: 6.4'); await expect(guideValue('pH')).not.toContainText('%'); await expect(guideValue('Organic matter')).toHaveText('Organic matter is the portion of the sample made from decomposed plant and animal material. Lab result: 3.1 %'); await expect(guideValue('CEC')).toHaveText('CEC describes the sample’s measured capacity to hold positively charged nutrients. Lab result: 14.2 meq/100g'); await expect(baseSaturationValue('Calcium')).toHaveText('61.1%'); await expect(baseSaturationValue('Magnesium')).toHaveText('17.2%'); await expect(baseSaturationValue('Potassium')).toHaveText('3.3%'); await expect(baseSaturationValue('Sodium')).toHaveText('0.4%'); await expect(baseSaturationValue('Hydrogen')).toHaveText('18.5%'); expect(populatedUnexpected).toEqual([])
 })
 
 test('Soil Rx keeps recorded harvest assignments separate across years and plantings', async ({ page }) => {
@@ -304,7 +304,7 @@ test('Soil Rx is phone-safe and shows newest history, partial measurements, priv
   const formField = page.locator('.soil-rx-form select'); await expect(formField).toHaveValue(field); await page.getByRole('button', { name: /South Forty/ }).click(); await expect(formField).toHaveValue(secondField); await expect(page.getByText('No soil tests saved for this field yet.')).toBeVisible(); await page.getByRole('button', { name: /North Forty/ }).click(); await expect(formField).toHaveValue(field); await formField.selectOption(secondField); await expect(page.getByRole('heading', { name: 'South Forty history' })).toBeVisible(); await formField.selectOption(field); await expect(page.getByRole('heading', { name: 'North Forty history' })).toBeVisible()
   await installReportPopup(page); await page.getByRole('button', { name: 'Open lab report' }).click(); await expect(page.locator('body')).toHaveAttribute('data-opened-soil-report', /soil-test-reports/)
   if (testInfo.project.name === 'chromium-phone') { await page.getByRole('button', { name: 'More' }).click(); await page.getByRole('region', { name: 'More Farm Rx destinations' }).getByRole('link', { name: 'Farm settings' }).click() } else await page.getByRole('link', { name: 'Farm settings' }).click();
-  await expect(page.getByText('Grain, financial, and Soil Rx information stays private')).toBeVisible(); expect(ownerUnexpected).toEqual([]); expectProtectedNonwrite(ownerState, ownerProtectedBefore)
+  await expect(page.getByText("Who can see your farm's numbers")).toBeVisible(); expect(ownerUnexpected).toEqual([]); expectProtectedNonwrite(ownerState, ownerProtectedBefore)
   const readOnlyState = historyState(); const readOnlyProtectedBefore = protectedSnapshot(readOnlyState); const readOnlyUnexpected = await open(page, true, readOnlyState); await expect(page.getByRole('heading', { name: 'Add a soil test' })).toHaveCount(0); await expect(page.getByRole('button', { name: 'Save soil test' })).toHaveCount(0); await expect(page.getByText('Old Lab')).toBeVisible(); await expect(page.getByRole('button', { name: 'Open lab report' })).toBeEnabled(); expect(readOnlyUnexpected).toEqual([]); expectProtectedNonwrite(readOnlyState, readOnlyProtectedBefore)
   if (testInfo.project.name === 'chromium-phone') await expect(page.locator('body')).toHaveJSProperty('scrollWidth', await page.locator('body').evaluate((node) => node.clientWidth));
 })
@@ -422,11 +422,11 @@ test('Soil Rx keeps cached Fields available for a text-only first offline save w
   if (testInfo.project.name === 'chromium-phone') { await page.getByRole('button', { name: 'More' }).click(); await page.getByRole('region', { name: 'More Farm Rx destinations' }).getByRole('link', { name: 'Soil Rx' }).click() }
   else await page.getByRole('link', { name: 'Soil Rx' }).click()
   await expect(page.getByRole('heading', { name: 'Soil Rx' })).toBeVisible()
-  await expect(page.getByRole('alert')).toHaveText('Soil Rx history is not available on this device yet. Connect once to load it. You can still save a text-only test for an active field.')
+  await expect(page.getByRole('alert')).toHaveText('Past soil tests will show once you have signal. You can still save a new test now.')
   await expect(page.getByRole('heading', { name: 'Add a soil test' })).toBeVisible()
   const reportInput = page.getByLabel(/Lab report/)
   await expect(reportInput).toBeDisabled()
-  await expect(page.getByText('Attachments need a connection. Text-only tests can still save now.', { exact: true })).toBeVisible()
+  await expect(page.getByText('No signal: you can save the numbers now and attach the report later.', { exact: true })).toBeVisible()
 
   await page.getByLabel('Lab name').fill('Offline First Load Lab')
   await page.getByLabel('Sample date').fill('2027-01-15')
@@ -445,7 +445,7 @@ test('Soil Rx visibly retains failed attachment cleanup until matching-context r
   await page.getByLabel(/Lab report/).setInputFiles({ name: 'cleanup.pdf', mimeType: 'application/pdf', buffer: Buffer.from('cleanup report') })
   await page.getByRole('button', { name: 'Save soil test' }).click()
   await expect(page.locator('.auth-error')).toContainText('could not save this soil test')
-  await expect(page.locator('.sync-notice.blocked')).toContainText('needs attention. Nothing was deleted')
+  await expect(page.locator('.sync-notice.blocked')).toContainText("didn't send. Nothing was lost.")
   await expect(page.locator('.sync-notice.blocked').getByRole('button', { name: 'Try again' })).toBeVisible()
   const failedId = state.writes.find((entry) => entry.startsWith('soil_tests:upsert:'))?.split(':').at(-1)
   const failedPath = [...state.uploaded].find((path) => path.split('/')[2] === failedId)
@@ -458,7 +458,7 @@ test('Soil Rx visibly retains failed attachment cleanup until matching-context r
   expectProtectedNonwrite(state, protectedBefore); expect(unexpected).toEqual([])
 
   await page.locator('.sync-notice.blocked').getByRole('button', { name: 'Try again' }).click()
-  await expect(page.locator('.sync-notice.synced')).toHaveText('All changes synced.')
+  await expect(page.locator('.sync-notice.synced')).toHaveText('All changes saved.')
   expect(state.uploaded.has(failedPath!)).toBe(false)
   const drained = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), cleanupKey) as { version: number; entries: unknown[] }
   expect(drained).toEqual({ version: 2, entries: [] })
@@ -473,7 +473,7 @@ test('Soil Rx drains never-created attachment custody only after terminal absenc
   await page.getByLabel(/Lab report/).setInputFiles({ name: 'never-uploaded.pdf', mimeType: 'application/pdf', buffer: Buffer.from('never uploaded') })
   await page.getByRole('button', { name: 'Save soil test' }).click()
   await expect(page.locator('.auth-error')).toHaveText('Check the field details and try again.')
-  await expect(page.locator('.sync-notice.blocked')).toContainText('needs attention. Nothing was deleted')
+  await expect(page.locator('.sync-notice.blocked')).toContainText("didn't send. Nothing was lost.")
   const cleanupKey = `farm-rx-soil-rx-cleanup:v1:${project}:${user}`
   const retained = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), cleanupKey) as { version: number; entries: Array<{ testId?: string; paths?: string[] }> }
   const failedId = retained.entries[0]?.testId; const failedPath = retained.entries[0]?.paths?.[0]
@@ -483,7 +483,7 @@ test('Soil Rx drains never-created attachment custody only after terminal absenc
   expect(state.writes).toContain(`storage:verify-terminal-absence:${failedPath}`)
 
   await page.locator('.sync-notice.blocked').getByRole('button', { name: 'Try again' }).click()
-  await expect(page.locator('.sync-notice.synced')).toHaveText('All changes synced.')
+  await expect(page.locator('.sync-notice.synced')).toHaveText('All changes saved.')
   const drained = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), cleanupKey)
   expect(drained).toEqual({ version: 2, entries: [] })
   expect(state.writes.filter((entry) => entry === `storage:verify-terminal-absence:${failedPath}`)).toHaveLength(2)
@@ -498,7 +498,7 @@ test('Soil Rx drains custody after lost Storage and row-delete responses without
   await page.getByLabel('Sample date').fill('2027-01-19')
   await page.getByLabel(/Lab report/).setInputFiles({ name: 'lost-response.pdf', mimeType: 'application/pdf', buffer: Buffer.from('lost response report') })
   await page.getByRole('button', { name: 'Save soil test' }).click()
-  await expect(page.locator('.sync-notice.blocked')).toContainText('needs attention. Nothing was deleted')
+  await expect(page.locator('.sync-notice.blocked')).toContainText("didn't send. Nothing was lost.")
   const failedId = state.writes.find((entry) => entry.startsWith('soil_tests:upsert:'))?.split(':').at(-1)
   const failedPath = state.writes.find((entry) => entry.startsWith('storage:upload:'))?.slice('storage:upload:'.length)
   expect(failedId).toBeTruthy(); expect(failedPath).toBeTruthy(); expect(state.uploaded.has(failedPath!)).toBe(false); expect(state.tests.some((row) => row.id === failedId)).toBe(true)
@@ -509,7 +509,7 @@ test('Soil Rx drains custody after lost Storage and row-delete responses without
   expect(state.tests.some((row) => row.id === failedId)).toBe(false)
 
   await page.locator('.sync-notice.blocked').getByRole('button', { name: 'Try again' }).click()
-  await expect(page.locator('.sync-notice.synced')).toHaveText('All changes synced.')
+  await expect(page.locator('.sync-notice.synced')).toHaveText('All changes saved.')
   expect(state.writes).toContain(`soil_tests:verify-absent:${failedId}`)
   const cleanupKey = `farm-rx-soil-rx-cleanup:v1:${project}:${user}`
   const drained = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), cleanupKey)

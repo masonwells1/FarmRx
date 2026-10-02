@@ -79,7 +79,7 @@ export function FarmPrivacyPage({ repository, settingsRepository }: { repository
       try {
         await checkSignal()
       } catch {
-        setRefreshWarning('The privacy change was saved, but Farm Rx could not refresh this screen. Check the current setting when your connection is steady.')
+        setRefreshWarning('Saved. Tap Check current setting to confirm it.')
       }
     }
     setSaving(false)
@@ -98,12 +98,12 @@ export function FarmPrivacyPage({ repository, settingsRepository }: { repository
       savedOnServer = true
       setConfirmedFarm(saved)
       setRegionDraft(saved.market_region ?? '')
-      setRegionMessage(next === null ? 'Market region cleared. This farm receives no USDA cash bids.' : `Market region saved: ${marketRegionName(next) ?? next}. USDA cash bids for ${marketRegionName(next) ?? next} will appear in Grain once a verified report covers it.`)
+      setRegionMessage(next === null ? 'Cleared. Grain will not show USDA cash bids.' : `Saved. Grain will show USDA cash bids for ${marketRegionName(next) ?? next} once USDA publishes them.`)
     } catch (caught) {
       setRegionError(farmerError(caught, 'change the market region'))
     }
     if (savedOnServer) {
-      try { await checkSignal() } catch { setRefreshWarning('The market region was saved, but Farm Rx could not refresh this screen. Check the current setting when your connection is steady.') }
+      try { await checkSignal() } catch { setRefreshWarning('Saved. Tap Check current setting to confirm it.') }
     }
     setRegionSaving(false)
     regionLock.current.release()
@@ -116,9 +116,8 @@ export function FarmPrivacyPage({ repository, settingsRepository }: { repository
     <section className="page farm-privacy-page" aria-labelledby="farm-privacy-title">
       <header className="page-header">
         <div>
-          <p className="eyebrow">{confirmedFarm.name}</p>
           <h1 id="farm-privacy-title">Farm settings</h1>
-          <p>Grain, financial, and Soil Rx information stays private unless you choose to share it. This page also sets which state's USDA cash bids the farm receives.</p>
+          <p>Who can see your farm's numbers, and which state's cash bids you see.</p>
         </div>
       </header>
 
@@ -156,7 +155,7 @@ export function FarmPrivacyPage({ repository, settingsRepository }: { repository
           <p className="privacy-read-only">Only a farm owner or manager can change this setting.</p>
         )}
 
-        {offline && canManage && <p className="privacy-offline">Connect to the internet to change this setting. Privacy changes are never queued offline.</p>}
+        {offline && canManage && <p className="privacy-offline">You need signal to change this.</p>}
         {message && <p className="save-success" role="status">{message}</p>}
         {refreshWarning && <p className="privacy-warning" role="alert">{refreshWarning}</p>}
         {error && <p className="auth-error" role="alert">{error}</p>}
@@ -169,12 +168,12 @@ export function FarmPrivacyPage({ repository, settingsRepository }: { repository
             <p className="privacy-kicker">USDA cash bids</p>
             <h2 id="market-region-title">Market region</h2>
           </div>
-          <span className="privacy-status" aria-live="polite">{currentRegion ?? 'NOT SET'}</span>
+          <span className="privacy-status" aria-live="polite">{currentRegion ?? 'Not set'}</span>
         </div>
         <p className="privacy-explanation">
           {currentRegion
-            ? `This farm receives USDA cash-grain bids for ${marketRegionName(currentRegion) ?? currentRegion}, from verified USDA reports only. They are shown as history in Grain and never change your contracts, plan, or bins.`
-            : 'Pick the state whose USDA cash-grain bids this farm should receive. Nothing is guessed from your fields; with no state set, no feed bids are written.'}
+            ? `Grain shows USDA cash bids for ${marketRegionName(currentRegion) ?? currentRegion}.`
+            : 'Pick your state to see USDA cash bids in Grain.'}
         </p>
         {canManage ? (
           <div className="privacy-control market-region-control">
@@ -190,7 +189,7 @@ export function FarmPrivacyPage({ repository, settingsRepository }: { repository
         ) : (
           <p className="privacy-read-only">Only a farm owner or manager can change this setting.</p>
         )}
-        {offline && canManage && <p className="privacy-offline">Connect to the internet to change this setting. It is never queued offline.</p>}
+        {offline && canManage && <p className="privacy-offline">You need signal to change this.</p>}
         {regionMessage && <p className="save-success" role="status">{regionMessage}</p>}
         {regionError && <p className="auth-error" role="alert">{regionError}</p>}
       </article>
