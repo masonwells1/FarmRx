@@ -137,7 +137,7 @@ async function addNote(page: Page, operation: string, noteId: string, note: stri
   await form.getByLabel('Note').fill(note)
   await form.getByRole('button', { name: 'Save entry' }).click()
   await expect(card.getByText('Not sent yet')).toBeVisible()
-  await expect(page.getByText(/Saved on this phone\. \d+ changes? will send when you have signal/)).toBeVisible()
+  await expect(page.getByText(/Waiting for signal\. \d+ changes? (is|are) kept on this device/)).toBeVisible()
 }
 
 function exactQueue(operation: string, noteId: string, note: string, enqueuedAt: string) {

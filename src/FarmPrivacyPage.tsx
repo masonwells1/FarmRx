@@ -79,7 +79,7 @@ export function FarmPrivacyPage({ repository, settingsRepository }: { repository
       try {
         await checkSignal()
       } catch {
-        setRefreshWarning('Saved. Tap Check current setting to confirm it.')
+        setRefreshWarning('Sharing setting saved. Tap Check current setting to confirm it.')
       }
     }
     setSaving(false)
@@ -98,12 +98,12 @@ export function FarmPrivacyPage({ repository, settingsRepository }: { repository
       savedOnServer = true
       setConfirmedFarm(saved)
       setRegionDraft(saved.market_region ?? '')
-      setRegionMessage(next === null ? 'Cleared. Grain will not show USDA cash bids.' : `Saved. Grain will show USDA cash bids for ${marketRegionName(next) ?? next} once USDA publishes them.`)
+      setRegionMessage(next === null ? 'Cleared. Grain will not show USDA cash bids.' : `Saved. Grain will show USDA cash bids for ${marketRegionName(next) ?? next} once a verified USDA report covers it.`)
     } catch (caught) {
       setRegionError(farmerError(caught, 'change the market region'))
     }
     if (savedOnServer) {
-      try { await checkSignal() } catch { setRefreshWarning('Saved. Tap Check current setting to confirm it.') }
+      try { await checkSignal() } catch { setRefreshWarning('Market region saved. Tap Check current setting to confirm it.') }
     }
     setRegionSaving(false)
     regionLock.current.release()

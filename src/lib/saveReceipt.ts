@@ -34,7 +34,7 @@ export function useSaveReceipt(id: string | null) {
 export const saveReceiptMessage: Record<SaveReceiptState, string> = {
   saving: "Saving…",
   saved: "Saved",
-  "queued offline": "Saved on this phone. It will send when you have signal.",
+  "queued offline": "Waiting for signal. Kept on this device until it sends.",
   "needs attention": "Needs attention: this didn't save. Open it again to check it.",
   "confirmation needed": "Confirmation needed: this may already be recorded. Reload to check before trying again.",
 };

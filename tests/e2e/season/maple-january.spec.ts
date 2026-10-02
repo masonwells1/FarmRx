@@ -148,7 +148,7 @@ test('@desktop-write creates the exact Maple January field through the real loca
   await expect(agreement.locator('dd').filter({ hasText: /^Owned$/ })).toBeVisible()
   expect(fieldWrites).toBe(3)
 
-  const records = card(page, 'Records')
+  const records = card(page, 'Crops by year')
   await records.getByRole('button', { name: 'Edit' }).click()
   await records.getByRole('combobox').selectOption('corn_yellow')
   await expect(records.getByLabel('Crop year')).toHaveValue('2027')

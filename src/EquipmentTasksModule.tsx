@@ -234,7 +234,7 @@ function EquipmentCards({
                     {due && <em className="due-chip">Service due</em>}
                     {warranty && (
                       <em className="warranty-chip">
-                        Warranty ends {formatFarmDate(machine.warranty_expires_on ?? "")}
+                        Warranty {(machine.warranty_expires_on ?? "") < today() ? "ended" : "ends"} {formatFarmDate(machine.warranty_expires_on ?? "")}
                       </em>
                     )}
                   </div>

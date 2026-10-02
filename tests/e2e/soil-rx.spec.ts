@@ -95,7 +95,7 @@ function assertSoilReportGuideContract(source: string) {
 function assertNutrientRemovalContract(source: string) {
   expect(source).toContain("key={estimate.id}")
   expect(source).toContain("{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence}")
-  expect(source).toContain("one line per crop and year. This is not a fertilizer recommendation")
+  expect(source).toContain("one line per crop, year, and planting. This is not a fertilizer recommendation")
   expect(source).toContain("cornNitrogen: { label: 'Illinois Agronomy Handbook, Nitrogen Management for Corn'")
   expect(source).toContain("soybeanNitrogen: { label: 'University of Delaware Cooperative Extension, Nitrogen Removal by Delaware Crops'")
   expect(source).not.toContain('soybeanWheatNitrogen')
@@ -381,7 +381,7 @@ test('Soil Rx offline replay surfaces guarded Retry and Dismiss', async ({ page,
   await page.getByLabel('Lab name').fill('Offline Lab')
   await page.getByLabel('Sample date').fill('2027-01-15')
   await page.getByRole('button', { name: 'Save soil test' }).click()
-  await expect(page.locator('.save-success')).toContainText('Saved on this phone')
+  await expect(page.locator('.save-success')).toContainText('Kept on this device')
   expect(state.writes.filter((entry) => entry.startsWith('soil_tests:'))).toEqual([])
   state.failSoilSaves = 1
   await context.setOffline(false); await page.evaluate(() => window.dispatchEvent(new Event('online')))
@@ -396,7 +396,7 @@ test('Soil Rx offline replay surfaces guarded Retry and Dismiss', async ({ page,
   await page.getByLabel('Lab name').fill('Dismiss Lab')
   await page.getByLabel('Sample date').fill('2027-01-16')
   await page.getByRole('button', { name: 'Save soil test' }).click()
-  await expect(page.locator('.save-success')).toContainText('Saved on this phone')
+  await expect(page.locator('.save-success')).toContainText('Kept on this device')
   state.failSoilSaves = 1
   await context.setOffline(false); await page.evaluate(() => window.dispatchEvent(new Event('online')))
   await expect(attention).toBeVisible()
@@ -426,12 +426,12 @@ test('Soil Rx keeps cached Fields available for a text-only first offline save w
   await expect(page.getByRole('heading', { name: 'Add a soil test' })).toBeVisible()
   const reportInput = page.getByLabel(/Lab report/)
   await expect(reportInput).toBeDisabled()
-  await expect(page.getByText('No signal: you can save the numbers now and attach the report later.', { exact: true })).toBeVisible()
+  await expect(page.getByText('No signal: you can save the numbers, but not attach the lab report.', { exact: true })).toBeVisible()
 
   await page.getByLabel('Lab name').fill('Offline First Load Lab')
   await page.getByLabel('Sample date').fill('2027-01-15')
   await page.getByRole('button', { name: 'Save soil test' }).click()
-  await expect(page.locator('.save-success')).toContainText('Saved on this phone')
+  await expect(page.locator('.save-success')).toContainText('Kept on this device')
   await expect(page.locator('.soil-test-summary').filter({ hasText: 'Offline First Load Lab' })).toContainText('Saved offline')
   expect(state.writes.filter((entry) => entry.startsWith('soil_tests:upsert:') || entry.startsWith('soil_test_attachments:') || entry.startsWith('storage:upload:'))).toEqual([])
   expectProtectedNonwrite(state, protectedBefore); expect(unexpected).toEqual([])
@@ -445,7 +445,7 @@ test('Soil Rx visibly retains failed attachment cleanup until matching-context r
   await page.getByLabel(/Lab report/).setInputFiles({ name: 'cleanup.pdf', mimeType: 'application/pdf', buffer: Buffer.from('cleanup report') })
   await page.getByRole('button', { name: 'Save soil test' }).click()
   await expect(page.locator('.auth-error')).toContainText('could not save this soil test')
-  await expect(page.locator('.sync-notice.blocked')).toContainText("didn't send. Nothing was lost.")
+  await expect(page.locator('.sync-notice.blocked')).toContainText('attention. Nothing was lost.')
   await expect(page.locator('.sync-notice.blocked').getByRole('button', { name: 'Try again' })).toBeVisible()
   const failedId = state.writes.find((entry) => entry.startsWith('soil_tests:upsert:'))?.split(':').at(-1)
   const failedPath = [...state.uploaded].find((path) => path.split('/')[2] === failedId)
@@ -458,7 +458,7 @@ test('Soil Rx visibly retains failed attachment cleanup until matching-context r
   expectProtectedNonwrite(state, protectedBefore); expect(unexpected).toEqual([])
 
   await page.locator('.sync-notice.blocked').getByRole('button', { name: 'Try again' }).click()
-  await expect(page.locator('.sync-notice.synced')).toHaveText('All changes saved.')
+  await expect(page.locator('.sync-notice.synced')).toHaveText('✓ All changes saved')
   expect(state.uploaded.has(failedPath!)).toBe(false)
   const drained = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), cleanupKey) as { version: number; entries: unknown[] }
   expect(drained).toEqual({ version: 2, entries: [] })
@@ -473,7 +473,7 @@ test('Soil Rx drains never-created attachment custody only after terminal absenc
   await page.getByLabel(/Lab report/).setInputFiles({ name: 'never-uploaded.pdf', mimeType: 'application/pdf', buffer: Buffer.from('never uploaded') })
   await page.getByRole('button', { name: 'Save soil test' }).click()
   await expect(page.locator('.auth-error')).toHaveText('Check the field details and try again.')
-  await expect(page.locator('.sync-notice.blocked')).toContainText("didn't send. Nothing was lost.")
+  await expect(page.locator('.sync-notice.blocked')).toContainText('attention. Nothing was lost.')
   const cleanupKey = `farm-rx-soil-rx-cleanup:v1:${project}:${user}`
   const retained = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), cleanupKey) as { version: number; entries: Array<{ testId?: string; paths?: string[] }> }
   const failedId = retained.entries[0]?.testId; const failedPath = retained.entries[0]?.paths?.[0]
@@ -483,7 +483,7 @@ test('Soil Rx drains never-created attachment custody only after terminal absenc
   expect(state.writes).toContain(`storage:verify-terminal-absence:${failedPath}`)
 
   await page.locator('.sync-notice.blocked').getByRole('button', { name: 'Try again' }).click()
-  await expect(page.locator('.sync-notice.synced')).toHaveText('All changes saved.')
+  await expect(page.locator('.sync-notice.synced')).toHaveText('✓ All changes saved')
   const drained = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), cleanupKey)
   expect(drained).toEqual({ version: 2, entries: [] })
   expect(state.writes.filter((entry) => entry === `storage:verify-terminal-absence:${failedPath}`)).toHaveLength(2)
@@ -498,7 +498,7 @@ test('Soil Rx drains custody after lost Storage and row-delete responses without
   await page.getByLabel('Sample date').fill('2027-01-19')
   await page.getByLabel(/Lab report/).setInputFiles({ name: 'lost-response.pdf', mimeType: 'application/pdf', buffer: Buffer.from('lost response report') })
   await page.getByRole('button', { name: 'Save soil test' }).click()
-  await expect(page.locator('.sync-notice.blocked')).toContainText("didn't send. Nothing was lost.")
+  await expect(page.locator('.sync-notice.blocked')).toContainText('attention. Nothing was lost.')
   const failedId = state.writes.find((entry) => entry.startsWith('soil_tests:upsert:'))?.split(':').at(-1)
   const failedPath = state.writes.find((entry) => entry.startsWith('storage:upload:'))?.slice('storage:upload:'.length)
   expect(failedId).toBeTruthy(); expect(failedPath).toBeTruthy(); expect(state.uploaded.has(failedPath!)).toBe(false); expect(state.tests.some((row) => row.id === failedId)).toBe(true)
@@ -509,7 +509,7 @@ test('Soil Rx drains custody after lost Storage and row-delete responses without
   expect(state.tests.some((row) => row.id === failedId)).toBe(false)
 
   await page.locator('.sync-notice.blocked').getByRole('button', { name: 'Try again' }).click()
-  await expect(page.locator('.sync-notice.synced')).toHaveText('All changes saved.')
+  await expect(page.locator('.sync-notice.synced')).toHaveText('✓ All changes saved')
   expect(state.writes).toContain(`soil_tests:verify-absent:${failedId}`)
   const cleanupKey = `farm-rx-soil-rx-cleanup:v1:${project}:${user}`
   const drained = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), cleanupKey)

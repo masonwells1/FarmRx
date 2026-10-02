@@ -81,14 +81,14 @@ async function signIn(page: Page) {
 
 function recordsCard(page: Page) {
   return page.locator('section.detail-card').filter({
-    has: page.locator('.card-heading', { hasText: /^Records/ }),
+    has: page.locator('.card-heading', { hasText: /^Crops by year/ }),
   })
 }
 
 async function assertAprilRecordEditor(page: Page) {
   const records = recordsCard(page)
   await records.getByRole('button', { name: 'Edit' }).click()
-  const existing = records.locator('.assignment-edit-row').filter({ hasText: '2027 · Yellow Corn · #1' })
+  const existing = records.locator('.assignment-edit-row').filter({ hasText: '2027 · Yellow Corn' })
   await expect(existing.getByLabel('Planted acres')).toHaveValue('160')
   await expect(existing.getByLabel('Harvested bushels')).toHaveValue('')
   await expect(records.getByLabel(/planting date/i)).toHaveCount(0)

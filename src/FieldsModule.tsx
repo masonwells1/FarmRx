@@ -499,6 +499,12 @@ export function FieldsPage() {
   const [missingCropOnly, setMissingCropOnly] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortAscending, setSortAscending] = useState(true);
+  // A one-business farm with a handful of fields gains nothing from these columns and filters. A hidden filter never applies.
+  const showEntity = (data?.entities.length ?? 0) > 1;
+  const showFilters = (data?.fields.filter((field) => field.is_active).length ?? 0) > 5;
+  const appliedEntityFilter = showFilters && showEntity ? entityFilter : "all";
+  const appliedArrangementFilter = showFilters ? arrangementFilter : "all";
+  const appliedCropFilter = showFilters ? cropFilter : "all";
   const visibleFields = useMemo(
     () =>
       !data
@@ -507,21 +513,21 @@ export function FieldsPage() {
             .filter((field) => field.is_active)
             .filter(
               (field) =>
-                entityFilter === "all" ||
-                field.operating_entity_id === entityFilter,
+                appliedEntityFilter === "all" ||
+                field.operating_entity_id === appliedEntityFilter,
             )
             .filter(
               (field) =>
-                arrangementFilter === "all" ||
+                appliedArrangementFilter === "all" ||
                 currentArrangement(data.arrangements, field.id)
-                  ?.arrangement_type === arrangementFilter,
+                  ?.arrangement_type === appliedArrangementFilter,
             )
             .filter((field) =>
               missingCropOnly
                 ? cropRows(data, field.id, moduleYear).length === 0
-                : cropFilter === "all" ||
+                : appliedCropFilter === "all" ||
                   cropRows(data, field.id, moduleYear).some(
-                    (crop) => crop.commodity_id === cropFilter,
+                    (crop) => crop.commodity_id === appliedCropFilter,
                   ),
             )
             .slice()
@@ -551,10 +557,10 @@ export function FieldsPage() {
               return sortAscending ? compared : -compared;
             }),
     [
-      arrangementFilter,
-      cropFilter,
+      appliedArrangementFilter,
+      appliedCropFilter,
       data,
-      entityFilter,
+      appliedEntityFilter,
       missingCropOnly,
       sortAscending,
       sortKey,
@@ -582,9 +588,6 @@ export function FieldsPage() {
       if (next) setCropFilter("all");
       return next;
     });
-  // A one-business farm with a handful of fields gains nothing from these columns and filters.
-  const showEntity = data.entities.length > 1;
-  const showFilters = activeFields.length > 5;
   return (
     <section className="page fields-page">
       <div className="page-heading">
@@ -717,7 +720,7 @@ export function FieldsPage() {
         </div>
         {visibleFields.length === 0 && (
           <div className="filter-empty">
-            No fields match. Clear a filter or add a field.
+            {activeFields.length === 0 ? "No fields yet. Tap Add field to start." : "No fields match. Clear a filter to see them all."}
           </div>
         )}
         <div className="table-total">
@@ -1545,7 +1548,7 @@ function AgreementCard({
             <strong>
               {arrangement.arrangement_type === "cash_rent"
                 ? "Field cash rent"
-                : "Works out to cash rent of"}
+                : "Equivalent cash rent"}
             </strong>
             {arrangement.arrangement_type === "owned" ? (
               <span>— · Owned ground has no rent estimate.</span>
@@ -2030,12 +2033,12 @@ export function FieldFormPage() {
         arrangement = currentArrangementForFieldEdit(data, formResolution);
       } catch {
         setError(
-          "This field is missing whether it is owned or rented. Call your Crop RX rep to fix it.",
+          "This field has no owned-or-rented record. Ask your Farm Rx administrator to fix it.",
         );
         return;
       }
       if (!entity) {
-        setError("Set up your farm business before adding a field.");
+        setError("No active farm business was found. Ask your Farm Rx administrator to fix it.");
         return;
       }
       const base: Field = existing ?? {
@@ -2284,10 +2287,10 @@ function MissingArrangementState({ field }: { field: Field }) {
   return (
     <section className="page">
       <div className="empty-state">
-        <h1>Owned or rented?</h1>
+        <h1>Owned or rented details missing</h1>
         <p>
-          {field.name} is missing whether it is owned or rented, so it is view
-          only for now. Call your Crop RX rep to fix it.
+          {field.name} has no owned-or-rented record, so it is view only for
+          now. Ask your Farm Rx administrator to fix it.
         </p>
         <Link className="primary-action" to="/fields">
           Back to fields

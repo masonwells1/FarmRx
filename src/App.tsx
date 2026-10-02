@@ -436,17 +436,17 @@ export function SyncNotice() {
         </button>
       </div>
     );
-  // Online and fully saved is the normal state, so it is announced to screen readers but not drawn as a bar.
+  // Online and fully saved is the normal state, so it is a slim line rather than a coloured bar.
   if (notice.kind === "synced")
     return (
       <div className={source === "offline" ? "sync-notice synced" : "sync-notice synced quiet"} role="status">
-        {source === "offline" ? <><span>Offline. Anything you save stays on this phone until you have signal.</span><button type="button" onClick={() => void retry()}>Check signal</button></> : "All changes saved."}
+        {source === "offline" ? <><span>Offline. Most saves wait on this device until you have signal.</span><button type="button" onClick={() => void retry()}>Check signal</button></> : "✓ All changes saved"}
       </div>
     );
   if (notice.kind === "pending")
     return (
       <div className="sync-notice pending" role="status">
-        <span>Saved on this phone. {notice.pending} change{notice.pending === 1 ? "" : "s"} will send when you have signal.</span>
+        <span>Waiting for signal. {notice.pending} change{notice.pending === 1 ? " is" : "s are"} kept on this device and will send when you have signal.</span>
         {source === "offline" && <button type="button" onClick={() => void retry()}>Check signal</button>}
       </div>
     );
@@ -459,7 +459,7 @@ export function SyncNotice() {
   return (
     <div className="sync-notice blocked" role="alert">
       <span>
-        {notice.pending} saved change{notice.pending === 1 ? " didn't" : "s didn't"} send. Nothing was lost.
+        {notice.pending === 0 ? "Saved changes need" : notice.pending === 1 ? "1 saved change needs" : `${notice.pending} saved changes need`} attention. Nothing was lost.
       </span>
       <button type="button" onClick={() => void retry()}>
         Try again
@@ -472,7 +472,7 @@ function OfflineDataNotice() {
   const notices = useSyncExternalStore(subscribeWorkspaceCacheNotices, getWorkspaceCacheNotices, getWorkspaceCacheNotices);
   if (!notices.length) return null;
   const oldest = notices[0];
-  return <div className="offline-data-notice" role="status">Offline. Showing your farm as of {new Date(oldest.cachedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.</div>;
+  return <div className="offline-data-notice" role="status">Offline. Showing your farm as of {new Date(oldest.cachedAt).toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}.</div>;
 }
 
 function FarmAccessGate({ children }: { children: ReactNode }) {
@@ -882,7 +882,7 @@ function InitialFarmSetup({ onComplete }: { onComplete: () => Promise<void> }) {
       <section className="login-panel" aria-labelledby="setup-title">
         <div className="login-brand">
           <h1 id="setup-title">Set up your farm</h1>
-          <p>Name your farm to get started.</p>
+          <p>Tell us about your farm to get started.</p>
         </div>
         <form className="login-card" onSubmit={submit}>
           <label htmlFor="farmName">Farm name</label>
