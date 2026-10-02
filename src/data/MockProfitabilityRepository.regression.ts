@@ -168,7 +168,7 @@ async function regression_fieldYearLandResolverAndReportPath() {
   const reportRow = calculateReportFieldRows(oneBound, budgetA, oneBound.cost_lines).at(0)
   assert(reportRow?.blockedReason === null && reportRow.costPerAcre !== null, 'The report path must use exactly one explicit budget-field allocation, without an entity fallback.')
   const multipleBound = { ...oneBound, allocations: [...oneBound.allocations, { ...allocationB, id: 'binding-allocation-c', budget_id: budgetA.id }] }
-  assert(calculateReportFieldRows(multipleBound, budgetA, multipleBound.cost_lines).at(0)?.blockedReason?.includes('More than one budget plan'), 'The report path must block, not substitute, when a crop has multiple budget allocations.')
+  assert(calculateReportFieldRows(multipleBound, budgetA, multipleBound.cost_lines).at(0)?.blockedReason?.includes('This field is in more than one budget'), 'The report path must block, not substitute, when a crop has multiple budget allocations.')
   const partialOverride = { ...oneBound, allocations: [{ ...allocationA, allocated_acres: 25, expected_price_override: 11 }, allocationB] }
   assert(calculateReportFieldRows(partialOverride, budgetA, partialOverride.cost_lines).at(0)?.blockedReason?.includes('covers only part'), 'A partial allocation with an override must block rather than invent a whole-assignment scenario.')
 

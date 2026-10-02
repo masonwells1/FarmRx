@@ -371,7 +371,7 @@ export function ProfitabilityPage() {
             {error}
           </p>
         )}
-        <p>Start a budget to see what every acre needs to earn.</p>
+        <p>No budgets yet. Start one to see what each acre needs to earn.</p>
         <button
           className="primary-action"
           type="button"
@@ -499,7 +499,6 @@ export function ProfitabilityPage() {
       <div className="page-heading profitability-heading">
         <div>
           <h1>Profitability</h1>
-          <p>Put the price and yield together before you make the call.</p>
         </div>
         <div className="profitability-heading-actions">
           <SaveReceipt state={receipt} />
@@ -581,7 +580,7 @@ export function ProfitabilityPage() {
               aria-label={`${currentOverviewYear} whole-farm results`}
             >
               <WholeFarmKpi
-                label="Total allocated acres"
+                label="Acres in budgets"
                 value={`${decimal.format(wholeFarm.acres)} ac`}
               />
               <WholeFarmKpi
@@ -606,8 +605,7 @@ export function ProfitabilityPage() {
             <div className="overview-budgets-heading">
               <div>
                 <span className="eyebrow">Crop budgets</span>
-                <h2 id="overview-budgets-title">How the year looks</h2>
-                <p>Choose a crop to see its price and yield picture below.</p>
+                <h2 id="overview-budgets-title">Budgets by crop</h2>
               </div>
               <label>
                 Crop year
@@ -698,11 +696,9 @@ export function ProfitabilityPage() {
         >
           <div className="section-heading">
             <div>
-              <span className="eyebrow">Profitability matrix</span>
-              <h2 id="matrix-title">See the whole picture</h2>
+              <h2 id="matrix-title">Profit at each price and yield</h2>
               <p>
-                Showing {budget.name}. Tap any square for the plain-English
-                answer.
+                Showing {budget.name}. Tap any square to see what it means.
               </p>
             </div>
           </div>
@@ -752,9 +748,8 @@ export function ProfitabilityPage() {
           >
             <div className="section-heading">
               <div>
-                <span className="eyebrow">Per-acre costs</span>
-                <h2 id="cost-title">What each bushel has to cover</h2>
-                <p>Add your seed cost to see bushels to cover.</p>
+                <h2 id="cost-title">Costs per acre</h2>
+                <p>"Bushels to cover" is how many bushels at your expected price pay for each cost.</p>
               </div>
             </div>
             <div className="table-scroll">
@@ -1015,10 +1010,10 @@ export function EquipmentCostImporter({
     <section className="profitability-card" aria-labelledby="equipment-cost-import-title">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">Equipment snapshot</span>
+          <span className="eyebrow">Machine costs</span>
           <h3 id="equipment-cost-import-title">Bring service costs into {budget.name}</h3>
           <p>
-            Farm Rx sums the selected machine&apos;s dated service-log costs on the server. Purchase price is never included. Later service-log changes do not change a saved snapshot.
+            Adds up the repair and service costs logged for one machine between the dates you pick. The purchase price is not included. A total you save here stays the same even if the service log changes later.
           </p>
         </div>
         <button className="secondary-action" type="button" disabled={busy === "save"} onClick={() => { setOpen(false); clearPreview(); }}>
@@ -1050,7 +1045,7 @@ export function EquipmentCostImporter({
             <input inputMode="decimal" value={allocationAcres} disabled={busy === "save"} onChange={(event) => { setAllocationAcres(event.target.value); clearPreview(); }} />
           </label>
           <button className="primary-action" type="button" disabled={busy !== null} onClick={() => void review()}>
-            {busy === "review" ? "Checking…" : "Review server total"}
+            {busy === "review" ? "Adding up…" : "Add up repair costs"}
           </button>
         </div>
       )}
@@ -1061,26 +1056,26 @@ export function EquipmentCostImporter({
       )}
       {reviewed && (
         <div className="profitability-card" role="status">
-          <h4>{reviewed.preview.existing ? "Old snapshot vs current server total" : "Review this snapshot"}</h4>
+          <h4>{reviewed.preview.existing ? "Saved total vs. today's total" : "Check this total"}</h4>
           {reviewed.preview.existing?.equipment_snapshot && (
             <p>
-              <strong>Saved snapshot:</strong> {money.format(reviewed.preview.existing.equipment_snapshot.total_source_amount)} total across {decimal.format(reviewed.preview.existing.equipment_snapshot.allocation_acres)} acres = {money.format(reviewed.preview.existing.amount_per_acre)}/ac, captured {new Date(reviewed.preview.existing.equipment_snapshot.captured_at).toLocaleString()}.
+              <strong>Saved total:</strong> {money.format(reviewed.preview.existing.equipment_snapshot.total_source_amount)} total across {decimal.format(reviewed.preview.existing.equipment_snapshot.allocation_acres)} acres = {money.format(reviewed.preview.existing.amount_per_acre)}/ac, saved {new Date(reviewed.preview.existing.equipment_snapshot.captured_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}.
             </p>
           )}
           <p>
-            <strong>Current server total:</strong> {money.format(Number(reviewed.preview.candidate.total_source_amount))} from {reviewed.preview.candidate.included_row_count} costed service {reviewed.preview.candidate.included_row_count === 1 ? "entry" : "entries"}; {reviewed.preview.candidate.excluded_null_cost_count} {reviewed.preview.candidate.excluded_null_cost_count === 1 ? "entry has" : "entries have"} no cost and {reviewed.preview.candidate.excluded_null_cost_count === 1 ? "is" : "are"} excluded.
+            <strong>Today's total:</strong> {money.format(Number(reviewed.preview.candidate.total_source_amount))} from {reviewed.preview.candidate.included_row_count} costed service {reviewed.preview.candidate.included_row_count === 1 ? "entry" : "entries"}; {reviewed.preview.candidate.excluded_null_cost_count} {reviewed.preview.candidate.excluded_null_cost_count === 1 ? "entry has" : "entries have"} no cost and {reviewed.preview.candidate.excluded_null_cost_count === 1 ? "is" : "are"} excluded.
           </p>
           <p>
-            Spread across {decimal.format(Number(reviewed.preview.candidate.allocation_acres))} acres: <strong>{money.format(Number(reviewed.preview.candidate.amount_per_acre))}/ac</strong>. The source total and acres stay recorded; the per-acre cost is stored to four decimals and dollars display rounded to cents.
+            Spread across {decimal.format(Number(reviewed.preview.candidate.allocation_acres))} acres: <strong>{money.format(Number(reviewed.preview.candidate.amount_per_acre))}/ac</strong>.
           </p>
           <div className="cost-add-row">
             {reviewed.preview.existing ? (
               <>
-                <button className="primary-action" type="button" disabled={busy !== null} onClick={() => void confirm("replace")}>Replace old snapshot</button>
-                <button className="secondary-action" type="button" disabled={busy !== null} onClick={clearPreview}>Keep old</button>
+                <button className="primary-action" type="button" disabled={busy !== null} onClick={() => void confirm("replace")}>Use today's total</button>
+                <button className="secondary-action" type="button" disabled={busy !== null} onClick={clearPreview}>Keep the saved total</button>
               </>
             ) : (
-              <button className="primary-action" type="button" disabled={busy !== null} onClick={() => void confirm("insert")}>Add this snapshot</button>
+              <button className="primary-action" type="button" disabled={busy !== null} onClick={() => void confirm("insert")}>Add to budget</button>
             )}
           </div>
         </div>
@@ -1311,7 +1306,7 @@ function OverviewBudgetCard({
       </div>
       <footer>
         <span>
-          {decimal.format(allocatedAcres)} ac allocated ·{" "}
+          {decimal.format(allocatedAcres)} ac in this budget ·{" "}
           {decimal.format(budget.expected_yield_per_acre)} bu/ac ·{" "}
           {money.format(budget.expected_price_per_bushel)}/bu
         </span>
@@ -1665,10 +1660,10 @@ function InsuranceCalculator({
       <div className="section-heading">
         <div>
           <span className="eyebrow">Crop insurance</span>
-          <h2 id="insurance-title">Entered Revenue Protection arithmetic</h2>
+          <h2 id="insurance-title">Revenue Protection guarantee</h2>
           <p>
-            These are the numbers you entered and the resulting arithmetic. They
-            are not a coverage recommendation or payment estimate.
+            Math on the numbers you enter. Not a coverage recommendation or a
+            payment estimate.
           </p>
         </div>
       </div>
@@ -1712,7 +1707,7 @@ function InsuranceCalculator({
           />
           <small>
             {pricePlaceholder.startsWith("2026")
-              ? "Placeholder only — it is not used until you enter or accept it."
+              ? "Example only. It is not used until you enter a price."
               : "Enter the price you want this calculation to use."}
           </small>
         </label>
@@ -1733,38 +1728,38 @@ function InsuranceCalculator({
       </div>
       {draft.rp_coverage_pct !== null && draft.rp_coverage_pct > 85 && (
         <p className="insurance-area-warning" role="alert">
-          Coverage above 85% is a county SCO/ECO product Farm Rx doesn't model
-          yet — set 50–85% individual coverage.
+          Farm Rx works with 50–85% individual coverage only. Coverage above
+          85% (SCO/ECO) is not supported.
         </p>
       )}
       {draft.rp_premium_per_acre !== null && (
         <p className="insurance-fact">
-          Premium you entered: {money.format(draft.rp_premium_per_acre)}/ac —
-          reference only; your Crop insurance cost line drives the risk math.
+          Premium you entered: {money.format(draft.rp_premium_per_acre)}/ac. For
+          your reference; the budget uses your Crop insurance cost line.
         </p>
       )}
       {insurance ? (
         <div className="insurance-results" aria-live="polite">
           <div>
-            <span>Entered bushel floor / ac</span>
+            <span>Guaranteed bushels per acre</span>
             <strong>
               {decimal.format(insurance.bushelGuaranteePerAcre)} bu
             </strong>
           </div>
           <div>
-            <span>Entered revenue floor / ac</span>
+            <span>Guaranteed revenue per acre</span>
             <strong>
               {money.format(insurance.minimumRevenueGuaranteePerAcre)}
             </strong>
             <small>
-              At your entered numbers:{" "}
+              Your numbers:{" "}
               {decimal.format(insurance.bushelGuaranteePerAcre)} bu/ac ×{" "}
               {money.format(budget.rp_projected_price!)}.
             </small>
           </div>
           <div>
             <span>
-              Entered coverage arithmetic
+              Total guarantee
               {insurance.incomeGuarantee === null
                 ? ""
                 : ` · ${decimal.format(allocatedAcres)} ac`}
@@ -1776,10 +1771,10 @@ function InsuranceCalculator({
             </strong>
           </div>
           <div>
-            <span>Budget cost gap / ac</span>
+            <span>Gap to your costs per acre</span>
             <strong>{money.format(insurance.dollarsAtRiskPerAcre)}</strong>
             <small>
-              At your entered numbers, this revenue floor is{" "}
+              The guaranteed revenue is{" "}
               {insurance.costsFullyCovered ? "at or above" : "below"} this
               budget’s cost per acre.
             </small>
@@ -1793,16 +1788,15 @@ function InsuranceCalculator({
             </strong>
             <small>
               {insurance.insuranceBackedMarketingEstimateBushels === null
-                ? "Add a field allocation first."
+                ? "Add fields to this budget first."
                 : `From your entered coverage: ${decimal.format(insurance.bushelGuaranteePerAcre)} bu/ac × ${decimal.format(allocatedAcres)} ac.`}
             </small>
           </div>
         </div>
       ) : (
         <p className="insurance-empty">
-          Enter coverage, APH yield, and projected price to see this
-          entered-number arithmetic. A displayed RMA price is a labeled
-          placeholder, never an assumed input.
+          Enter coverage, APH yield, and projected price to see your
+          guarantee.
         </p>
       )}
     </section>
@@ -1849,7 +1843,7 @@ function MatrixControls({
   );
   return (
     <div className="matrix-controls">
-      <span>Price range</span>
+      <span>Price range ($/bu)</span>
       <input
         aria-label="Lowest price"
         value={values.pMin}
@@ -1874,7 +1868,7 @@ function MatrixControls({
           setValues({ ...values, pStep: numberValue(event.target.value) })
         }
       />
-      <span>Yield range</span>
+      <span>Yield range (bu/ac)</span>
       <input
         aria-label="Lowest yield"
         value={values.yMin}
@@ -2024,7 +2018,7 @@ function ProfitabilityMatrix({
       </div>
       {minimumRevenueGuaranteePerAcre !== null && (
         <p className="matrix-insurance-legend">
-          Shaded: price × yield is below your entered revenue-floor arithmetic.
+          Shaded squares earn less than your insurance guarantee.
         </p>
       )}
     </>
@@ -2185,12 +2179,8 @@ function FieldAllocation({
     >
       <div className="section-heading">
         <div>
-          <span className="eyebrow">Field allocation</span>
           <h2 id="field-cost-title">Cost per acre by field</h2>
-          <p>
-            Land in the budget is replaced by the field agreement here, so it is
-            never counted twice.
-          </p>
+          <p>Each field uses its own rent in place of the budget's land cost.</p>
         </div>
       </div>
       {plantedAcres > allocatedAcres + 0.01 && (
@@ -2235,7 +2225,7 @@ function FieldAllocation({
                     });
                   }}
                 >
-                  {saving ? "Saving…" : "Allocate field"}
+                  {saving ? "Saving…" : "Add field"}
                 </button>
               </div>
             );
@@ -2252,7 +2242,7 @@ function FieldAllocation({
               <div className="field-edit">
                 <strong>{field.name}</strong>
                 <span>
-                  {decimal.format(allocation.allocated_acres)} ac allocated
+                  {decimal.format(allocation.allocated_acres)} ac in this budget
                 </span>
                 <label>
                   Acres
@@ -2343,7 +2333,7 @@ function FieldAllocation({
       </div>
       {allocations.length > 0 && (
         <div className="total-bar">
-          <span>Total cost across allocated acres</span>
+          <span>Total cost for these acres</span>
           <strong>{money.format(allocatedTotalCost)}</strong>
         </div>
       )}
@@ -2598,8 +2588,8 @@ function PlanComparison({
       </div>
       <p className="plan-compare-note">
         Cushion = how far price or yield can fall from your expectation before
-        that plan loses money. Arrangement columns swap each plan's land line
-        for that agreement's equivalent rent, so land is never counted twice.
+        that plan loses money. Each lease column uses that lease's rent in
+        place of the plan's land cost.
       </p>
     </section>
   );
@@ -2676,7 +2666,7 @@ function RoiAnalyzer({
     >
       <div className="section-heading">
         <div>
-          <span className="eyebrow">Input ROI</span>
+          <span className="eyebrow">Is it worth it?</span>
           <h2 id="roi-title">Is the bigger program worth it?</h2>
           <p>
             How many extra bushels the spend-more plan needs before it beats the
@@ -2878,9 +2868,9 @@ function ArrangementComparison({
   ];
   return (
     <details className="arrangement-comparison">
-      <summary>Compare land arrangements in equivalent cash rent</summary>
+      <summary>Compare owned, cash rent, and share leases</summary>
       <p>
-        {row?.blockedReason ?? "The one field-year agreement replaces the budget land line; it is not added on top."}
+        {row?.blockedReason ?? "This field's lease replaces the budget's land cost."}
       </p>
       <div>
         {rows.map(([type, value]) => (
