@@ -42,13 +42,13 @@ try {
   assert(acres?.value === '125', 'Equipment snapshot importer did not default allocation acres from the budget.')
   await act(async () => { root.render(createElement(EquipmentCostImporter, { budget, equipment, budgetAcres: 100, onSaved: async () => undefined, onError: () => undefined, repository })); await flush() })
   assert(container.textContent?.includes("more than this budget's 100 allocated acres"), 'Allocation acres above budget acres must warn without blocking review.')
-  await act(async () => { button('Add up repair costs')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+  await act(async () => { button('Add up service costs')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
   assert(previews === 1 && saveCount() === 0, 'Reviewing the server total must not write a snapshot.')
-  assert(container.textContent?.includes("Saved total vs. today's total") && container.textContent.includes('1 entry has no cost and is excluded') && button("Use today's total") && button('Keep the saved total'), 'Re-import must show old versus current, the excluded-null count, and explicit Replace/Keep old actions.')
+  assert(container.textContent?.includes('Saved total vs. current total') && container.textContent.includes('1 entry has no cost and is excluded') && button('Use the current total') && button('Keep the saved total'), 'Re-import must show old versus current, the excluded-null count, and explicit Replace/Keep old actions.')
   await act(async () => { button('Keep the saved total')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
-  assert(saveCount() === 0 && !container.textContent?.includes("Saved total vs. today's total"), 'Keep old must make no write.')
-  await act(async () => { button('Add up repair costs')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
-  await act(async () => { button("Use today's total")!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+  assert(saveCount() === 0 && !container.textContent?.includes('Saved total vs. current total'), 'Keep old must make no write.')
+  await act(async () => { button('Add up service costs')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+  await act(async () => { button('Use the current total')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
   assert(saveCount() === 1 && saves[0]?.action === 'replace' && saves[0]?.request.line_id === lineId && saves[0]?.request.budget_id === budgetId && saves[0]?.request.equipment_id === equipmentId && saves[0]?.request.period_start === '2027-01-01' && saves[0]?.request.period_end === '2027-12-31' && saves[0]?.request.allocation_acres === 125 && saves[0]?.request.expected?.total_source_amount === '300.75' && saves[0]?.request.expected.included_row_count === 2 && saves[0]?.request.expected.excluded_null_cost_count === 1, 'Replace must carry only the exact reviewed budget, machine, period, acres, server totals, and existing line id.')
   assert(container.textContent?.includes('The purchase price is not included') && container.textContent.includes('stays the same even if the service log changes later'), 'Snapshot truth and purchase-price exclusion must stay visible.')
 } finally {
@@ -74,14 +74,14 @@ const deferredButton = (label: string) => [...deferredContainer.querySelectorAll
 try {
   await act(async () => { deferredRoot.render(createElement(EquipmentCostImporter, deferredProps(budget))); await flush() })
   await act(async () => { deferredButton('Import equipment service costs')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
-  await act(async () => { deferredButton('Add up repair costs')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+  await act(async () => { deferredButton('Add up service costs')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
   assert(deferredRequestCount() === 1 && deferredResolvers.length === 1, 'Deferred preview did not begin from the first budget.')
   await act(async () => { deferredRoot.render(createElement(EquipmentCostImporter, deferredProps(otherBudget))); await flush() })
   await act(async () => { deferredResolvers.shift()!(preview); await flush() })
-  assert(!deferredContainer.textContent?.includes("Saved total vs. today's total") && deferredSaves.length === 0, 'A preview resolving after the selected budget changed must be discarded without a write.')
+  assert(!deferredContainer.textContent?.includes('Saved total vs. current total') && deferredSaves.length === 0, 'A preview resolving after the selected budget changed must be discarded without a write.')
 
   await act(async () => { deferredRoot.render(createElement(EquipmentCostImporter, deferredProps(budget))); await flush() })
-  await act(async () => { deferredButton('Add up repair costs')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+  await act(async () => { deferredButton('Add up service costs')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
   assert(deferredRequestCount() === 2 && deferredResolvers.length === 1, 'Deferred preview did not restart after returning to the first budget.')
   const deferredMachine = deferredContainer.querySelector('select') as HTMLSelectElement
   const valueSetter = Object.getOwnPropertyDescriptor(win.HTMLSelectElement.prototype, 'value')?.set
@@ -89,7 +89,7 @@ try {
   await act(async () => { valueSetter.call(deferredMachine, otherEquipmentId); deferredMachine.dispatchEvent(new Event('change', { bubbles: true, composed: true })); await flush() })
   assert(deferredMachine.value === otherEquipmentId, 'Deferred preview regression did not change the selected machine through React.')
   await act(async () => { deferredResolvers.shift()!(preview); await flush() })
-  assert(!deferredContainer.textContent?.includes("Saved total vs. today's total") && deferredSaves.length === 0, 'A preview resolving after reviewed inputs changed must be discarded without a write.')
+  assert(!deferredContainer.textContent?.includes('Saved total vs. current total') && deferredSaves.length === 0, 'A preview resolving after reviewed inputs changed must be discarded without a write.')
 } finally {
   await act(async () => deferredRoot.unmount()); deferredContainer.remove(); win.close()
 }
