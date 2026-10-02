@@ -95,7 +95,7 @@ function assertSoilReportGuideContract(source: string) {
 function assertNutrientRemovalContract(source: string) {
   expect(source).toContain("key={estimate.id}")
   expect(source).toContain("{estimate.crop} · {estimate.cropYear} · planting {estimate.plantingSequence}")
-  expect(source).toContain("one line per crop and year. Not a fertilizer recommendation")
+  expect(source).toContain("one line per crop and year. This is not a fertilizer recommendation")
   expect(source).toContain("cornNitrogen: { label: 'Illinois Agronomy Handbook, Nitrogen Management for Corn'")
   expect(source).toContain("soybeanNitrogen: { label: 'University of Delaware Cooperative Extension, Nitrogen Removal by Delaware Crops'")
   expect(source).not.toContain('soybeanWheatNitrogen')
@@ -119,7 +119,7 @@ function assertArchivedFieldHistoryContract(source: string) {
   expect(source).toContain("canEdit && selectedField?.isActive")
   expect(source).toContain('{canEdit && <NeedsAttentionList module="soilRx"')
   expect(source).toContain("{activeFields.map((field) => <option")
-  expect(source).toContain('Its Soil Rx history remains available, but new tests can only be added to active fields.')
+  expect(source).toContain('You can see its past tests, but not add new ones.')
 }
 
 test.use({ serviceWorkers: 'block' })
@@ -381,7 +381,7 @@ test('Soil Rx offline replay surfaces guarded Retry and Dismiss', async ({ page,
   await page.getByLabel('Lab name').fill('Offline Lab')
   await page.getByLabel('Sample date').fill('2027-01-15')
   await page.getByRole('button', { name: 'Save soil test' }).click()
-  await expect(page.locator('.save-success')).toContainText('Saved on this device')
+  await expect(page.locator('.save-success')).toContainText('Saved on this phone')
   expect(state.writes.filter((entry) => entry.startsWith('soil_tests:'))).toEqual([])
   state.failSoilSaves = 1
   await context.setOffline(false); await page.evaluate(() => window.dispatchEvent(new Event('online')))
@@ -396,7 +396,7 @@ test('Soil Rx offline replay surfaces guarded Retry and Dismiss', async ({ page,
   await page.getByLabel('Lab name').fill('Dismiss Lab')
   await page.getByLabel('Sample date').fill('2027-01-16')
   await page.getByRole('button', { name: 'Save soil test' }).click()
-  await expect(page.locator('.save-success')).toContainText('Saved on this device')
+  await expect(page.locator('.save-success')).toContainText('Saved on this phone')
   state.failSoilSaves = 1
   await context.setOffline(false); await page.evaluate(() => window.dispatchEvent(new Event('online')))
   await expect(attention).toBeVisible()
@@ -431,7 +431,7 @@ test('Soil Rx keeps cached Fields available for a text-only first offline save w
   await page.getByLabel('Lab name').fill('Offline First Load Lab')
   await page.getByLabel('Sample date').fill('2027-01-15')
   await page.getByRole('button', { name: 'Save soil test' }).click()
-  await expect(page.locator('.save-success')).toContainText('Saved on this device')
+  await expect(page.locator('.save-success')).toContainText('Saved on this phone')
   await expect(page.locator('.soil-test-summary').filter({ hasText: 'Offline First Load Lab' })).toContainText('Saved offline')
   expect(state.writes.filter((entry) => entry.startsWith('soil_tests:upsert:') || entry.startsWith('soil_test_attachments:') || entry.startsWith('storage:upload:'))).toEqual([])
   expectProtectedNonwrite(state, protectedBefore); expect(unexpected).toEqual([])
