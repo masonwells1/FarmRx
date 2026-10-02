@@ -1007,6 +1007,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .section-tabs a { display: inline-flex; align-items: center; min-height: 48px; padding: 10px 18px; border-bottom: 3px solid transparent; margin-bottom: -2px; color: var(--matte-gray); font-size: 18px; font-weight: 700; text-decoration: none; white-space: nowrap; }
 .section-tabs a:hover { color: var(--deep-green); }
 .section-tabs a.active { color: var(--deep-green); border-bottom-color: var(--crx-green); }
+@media (max-width: 767px) { .section-tabs { flex-wrap: wrap; gap: 6px; overflow-x: visible; padding-bottom: 12px; border-bottom: 1px solid var(--hairline); }.section-tabs a { margin-bottom: 0; padding: 8px 12px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); }.section-tabs a.active { border-color: var(--deep-green); background: var(--deep-green); color: var(--on-dark); }.grain-page .position-top { flex-wrap: wrap; } }
 .overview-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 16px 20px; }
 .overview-picker label { display: grid; gap: 6px; font-weight: 700; }
 .overview-picker select { min-height: 48px; min-width: 240px; }

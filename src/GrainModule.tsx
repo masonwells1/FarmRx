@@ -206,7 +206,7 @@ function CropYearReconciliation({ workspace, services, canManageFarm, onSaved }:
           ))}
         </tbody>
       </table>
-      <p className="panel-note">A crop year can be named once. If you name the wrong one, correct it the way the ledger corrects everything else &mdash; with a movement, not by rewriting the past.</p>
+      <p className="panel-note">A crop year can be named only once. If you pick the wrong one, fix it with a new bin movement.</p>
     </section>
   );
 }
@@ -256,7 +256,7 @@ const templates: Record<
 > = {
   balanced: {
     name: "Balanced Seller",
-    description: "60% planned; 40% deliberately unplanned.",
+    description: "Plan to sell 60%; keep 40% flexible.",
     total: 60,
     schedule: [
       [3, 10],
@@ -268,7 +268,7 @@ const templates: Record<
   },
   harvest: {
     name: "Harvest Heavy",
-    description: "65% planned; 35% deliberately unplanned.",
+    description: "Plan to sell 65%; keep 35% flexible.",
     total: 65,
     schedule: [
       [6, 8],
@@ -279,7 +279,7 @@ const templates: Record<
   },
   storage: {
     name: "Storage Heavy",
-    description: "70% planned; 30% deliberately unplanned.",
+    description: "Plan to sell 70%; keep 30% flexible.",
     total: 70,
     schedule: [
       [5, 10],
@@ -291,7 +291,7 @@ const templates: Record<
   },
   conservative: {
     name: "Conservative Pre-Harvest",
-    description: "55% planned; 45% deliberately unplanned.",
+    description: "Plan to sell 55%; keep 45% flexible.",
     total: 55,
     schedule: [
       [2, 10],
@@ -302,7 +302,7 @@ const templates: Record<
   },
   seasonal: {
     name: "Seasonal Seller",
-    description: "60% planned; 40% deliberately unplanned.",
+    description: "Plan to sell 60%; keep 40% flexible.",
     total: 60,
     schedule: [
       [2, 10],
@@ -815,10 +815,6 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
       <div className="page-heading grain-heading">
         <div>
           <h1>Grain</h1>
-          <p>
-            Your position, your targets, and nothing more.{" "}
-            <span className="delayed-label">Market quotes are delayed.</span>
-          </p>
         </div>
       </div>
       <NeedsAttentionList module="grain" queueKey={attentionQueueKey} onChanged={refresh} />
@@ -832,13 +828,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
                 <div>
                   <span className="eyebrow">Grain alerts</span>
                   <h2>Items to review</h2>
-                  <p>
-                    Marketing alerts are checked on the server about every
-                    fifteen minutes; one already sent to your phone today is not
-                    repeated in this list. Plan-target and USDA report reminders
-                    are checked when the owner opens Grain, and those are the
-                    ones Farm Rx emails.
-                  </p>
+
                 </div>
               </div>
               {alerts.map((alert) => (
@@ -853,7 +843,6 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
               {deliveryNotice}
             </p>
           )}
-          <MarketQuoteSection cropYear={quoteCropYear(workspace.production_estimates.map((estimate) => estimate.crop_year))} />
           <section aria-label="Commodity positions" className="position-grid">
             {workspace.production_estimates.map((estimate) => (
               <PositionCard
@@ -899,6 +888,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
             onReceipt={setLastReceiptId}
             receipt={receipt}
           />
+          <MarketQuoteSection cropYear={quoteCropYear(workspace.production_estimates.map((estimate) => estimate.crop_year))} />
         </>
       )}
       {tabPath === "plan" && (
@@ -906,12 +896,8 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
           <section className="grain-section plan-card">
             <div className="section-heading">
               <div>
-                <span className="eyebrow">Primary plan</span>
                 <h2>Monthly marketing plan</h2>
-                <p>
-                  Set coverage by month. A plan can intentionally leave bushels
-                  unplanned.
-                </p>
+                <p>How much of the crop you plan to sell by each month.</p>
               </div>
               <label className="commodity-picker">
                 <span>Commodity</span>
@@ -1031,9 +1017,8 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
         <section className="grain-section contracts-card">
           <div className="section-heading">
             <div>
-              <span className="eyebrow">15-second entry</span>
               <h2>Contracts</h2>
-              <p>{deliveryIntent ? "Record the bushels delivered on a contract." : "Record a sale; the position updates from it."}</p>
+              {deliveryIntent && <p>Record the bushels delivered on a contract.</p>}
             </div>
             <SaveReceipt state={receipt} />
           </div>
@@ -1188,12 +1173,8 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
       )}
       {tabPath === "" && <UsdaCalendar reports={workspace.usda_report_dates} />}
       <aside className="compliance-note">
-        <strong>For your records.</strong> Farm Rx shows your numbers and your
-        targets. It does not give marketing advice.{" "}
-        <span>
-          Plan-target alerts are best-effort notices checked when the owner
-          opens Grain. Saved marketing alerts are checked on the server.
-        </span>
+        Farm Rx shows your numbers and your targets. It does not give marketing
+        advice.
       </aside>
       {editingTarget && (
         <TargetEditor
@@ -1313,14 +1294,10 @@ function MarketingAlerts({
       <section className="grain-section alerts-card">
         <div className="section-heading">
           <div>
-            <span className="eyebrow">Checked for you</span>
             <h2>Marketing alerts</h2>
             <p>
-              Farm Rx checks these on the server about every fifteen minutes and
-              sends the alert to your phone, if you have turned notifications on.
-              You do not have to keep Grain open. A USDA market price can reach a
-              target; feed prices are never used in your position or revenue
-              numbers.
+              Checked about every 15 minutes, even when Grain is closed. Turn on
+              phone alerts to get them on your phone.
             </p>
           </div>
           <label className="commodity-picker">
@@ -1395,7 +1372,7 @@ function MarketingAlerts({
                   {rule.message && <span>{rule.message}</span>}
                   {rule.last_triggered_at && (
                     <small>
-                      Last fired{" "}
+                      Last sent{" "}
                       {new Date(rule.last_triggered_at).toLocaleDateString(
                         "en-US",
                         { month: "short", day: "numeric" },
@@ -2407,14 +2384,14 @@ export function FirstEstimate({
           {compact ? <h2>Add another crop</h2> : <h1>Start your grain estimate</h1>}
           <p>
             {compact
-              ? "These crop assignments have no grain estimate yet. Add an expected yield to start one."
-              : "Your live crop assignments are ready. Add an expected yield to create the first estimate."}
+              ? "These crops are not tracked in Grain yet. Enter an expected yield to add one."
+              : "Enter your expected yield to start tracking what you have sold."}
           </p>
         </div>
       </div>
       <SaveReceipt state={receipt} />
       <label>
-        APH / expected yield
+        Expected yield (bu/ac)
         <input
           required
           type="number"
@@ -2435,7 +2412,7 @@ export function FirstEstimate({
                 (item) => item.id === assignment.commodity_id,
               )?.name ?? assignment.commodity_id}
             </h2>
-            <p>{assignment.crop_year} crop assignment</p>
+            <p>{assignment.crop_year} crop</p>
             <button
               className="primary-action"
               type="button"
@@ -2727,9 +2704,9 @@ export function PositionCard({
           note={`${Math.round(pricedPct)}%`}
         />
         <Metric
-          label="Still needs a price"
+          label="Partly priced"
           value={`${bushels.format(partiallyPricedBushels)} bu`}
-          note="valued at your estimate"
+          note="basis or futures still open"
         />
         <Metric
           label="Planned revenue"
@@ -2737,7 +2714,7 @@ export function PositionCard({
           note={
             plannedRevenue === null
               ? "add a cash price target"
-              : "cash-target plan estimate"
+              : "at your target price"
           }
         />
       </div>
@@ -2825,7 +2802,7 @@ export function PositionCard({
             </strong>
           </label>
           <label>
-            APH / expected yield
+            Expected yield (bu/ac)
             <input
               type="number"
               min="0.01"
@@ -2943,7 +2920,7 @@ function PlanStatus({
         <span>Plan progress through {months[month - 1]}</span>
         <strong>
           {Math.round(actualPct)}% contracted / {Math.round(targetPct)}% planned
-          · {Math.max(0, 100 - totalPlanned).toFixed(0)}% unplanned remainder
+          · {Math.max(0, 100 - totalPlanned).toFixed(0)}% not in the plan
         </strong>
         <small className="numeric">
           {bushels.format(inBins)} bu in bins
@@ -3597,7 +3574,6 @@ export function Bins({
         <div>
           <span className="eyebrow">Storage</span>
           <h2>Grain bins</h2>
-          <p>A dated measurement is the baseline; only later movements change it.</p>
         </div>
         <button
           className="primary-action"
@@ -3678,7 +3654,7 @@ export function Bins({
                   {moisture.message}
                 </p>
               )}
-               {position.lots.map((lot) => lot.inventory && <p className="bin-reconciliation" key={`${lot.commodityId}-baseline`}>Current baseline · {new Date(`${lot.baselineDate}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: {bushels.format(lot.recordedInventory)} bu + {lot.movementsSinceBaseline.length} movements since = {bushels.format(lot.onHand)} bu.</p>)}
+               {position.lots.map((lot) => lot.inventory && <p className="bin-reconciliation" key={`${lot.commodityId}-baseline`}>Last count · {new Date(`${lot.baselineDate}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: {bushels.format(lot.recordedInventory)} bu, plus {lot.movementsSinceBaseline.length} movement{lot.movementsSinceBaseline.length === 1 ? "" : "s"} since = {bushels.format(lot.onHand)} bu now.</p>)}
               <div className="bin-fill">
                 <div>
                   <strong className="numeric">
@@ -3707,7 +3683,7 @@ export function Bins({
                   farm-level figure per commodity and crop year, shown once at the top of this card. */}
               <details className="bin-ledger">
                 <summary>
-                  Movement ledger ({position.transactions.length})
+                  Bin history ({position.transactions.length})
                 </summary>
                 <p>
                   Movements can’t be edited. To fix a mistake, add an opposite
@@ -3888,10 +3864,6 @@ function BinForm({
           onChange={(event) => setCheckedOn(event.target.value)}
         />
       </label>
-      <p className="bin-form-fact">
-        Commodity is stored with inventory and movements, keeping IP grain
-        separated.
-      </p>
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -4386,12 +4358,8 @@ function UsdaCalendar({
     <section className="grain-section usda-calendar">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">USDA calendar</span>
-          <h2>Market-moving report dates</h2>
-          <p>
-            2026 WASDE, Grain Stocks, Prospective Plantings, and Crop Progress
-            dates.
-          </p>
+          <h2>USDA report dates</h2>
+          <p>WASDE, Grain Stocks, Prospective Plantings, and Crop Progress.</p>
         </div>
       </div>
       <div className="report-grid">
@@ -4870,7 +4838,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
         await onSaved();
         return;
       }
-      setMessage("Load voided. It stays on the list with your reason, and everything it did has been reversed.");
+      setMessage("Load voided. Everything it did has been undone, and it stays on the list with your reason.");
       await onSaved();
     } catch (error) {
       setMessage(farmerError(error, "void this load"));
@@ -4904,7 +4872,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
         <div>
           <span className="eyebrow">Scale tickets</span>
           <h2>Loads</h2>
-          <p>Record each load as it is hauled. A saved ticket is never edited &mdash; void it with a reason and enter the right one.</p>
+          <p>Enter each load as it is hauled. To fix a saved ticket, void it and enter it again.</p>
         </div>
       </div>
 
@@ -5009,7 +4977,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
         {/* An Equipment truck or a typed name, never both -- the database refuses a ticket carrying
             two answers, so choosing one here clears the other rather than letting the save fail. */}
         <label>Truck<select value={draft.truck_equipment_id} onChange={(event) => update({ truck_equipment_id: event.target.value, truck_name: event.target.value ? "" : draft.truck_name })}>
-          <option value="">Not one of ours</option>
+          <option value="">Someone else's truck</option>
           {trucks.map((truck) => <option key={truck.id} value={truck.id}>{truck.name}</option>)}
         </select></label>
         {!draft.truck_equipment_id && (
