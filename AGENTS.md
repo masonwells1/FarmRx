@@ -51,6 +51,8 @@ Agents may push branches and open, update, label, and comment on pull requests w
 
 Get Mason's explicit approval in the current conversation before merge; deploy; live migration or live data change; secrets, authentication, or permissions change; customer account action; customer communication; destructive action; purchase; or binding commitment. Local edits, tests, verification, commits, branch pushes, and pull-request work do not authorize a later hard-gated action.
 
+Standing approval (Mason, 2026-09-30): an agent may, without asking again, (a) apply a migration already merged to main to the live database using the fingerprinted route in docs/database-migrations.md, and (b) merge its own pull request once CI is green, it has no merge conflict, and no review thread is open. Everything else in the paragraph above still needs approval in the conversation.
+
 Never expose secrets, bypass hooks or required checks, force-push, push directly to `main`, use destructive recovery, or infer approval from silence. Before protected delivery or another outward action, follow `docs/agent-delivery.md` and recheck the current state.
 
 ## Keep this file lean
