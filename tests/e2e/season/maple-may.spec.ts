@@ -78,7 +78,7 @@ test('@may-write marks the Maple pass applied and exposes its draft Inventory re
   await pass.getByLabel('Applied date').fill('2027-05-20')
   await pass.getByLabel('Applied acres').fill('160')
   await pass.getByLabel('Application record (optional)').selectOption('create')
-  await expect(pass.getByText(/creates a new draft application record/i)).toBeVisible()
+  await expect(pass.getByText(/creates a new draft spray record/i)).toBeVisible()
   await pass.getByLabel('Product').fill('Free-Typed Program Herbicide')
   await expect(pass.getByText('A created or linked application record keeps its own Inventory accounting. Choose “Do not add an application record” to confirm a Program-to-Inventory draw-down.')).toBeVisible()
   await expect(pass.getByRole('checkbox', { name: /Confirm exact Inventory product/ })).toHaveCount(0)

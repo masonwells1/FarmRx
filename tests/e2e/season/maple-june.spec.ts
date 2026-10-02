@@ -101,7 +101,7 @@ test('@june-write records one exact manual Maple application after a read-only W
   await form.getByLabel('Target pest').fill('Synthetic broadleaf')
   const product = form.locator('.spray-product-row').first(); await product.getByLabel('Product').selectOption({ label: 'Synthetic Herbicide 41 — Maple' })
   await product.getByRole('spinbutton', { name: 'Rate', exact: true }).fill('0.0625'); await product.getByLabel('Rate unit').selectOption('gal'); await product.getByLabel('Rate basis').selectOption('acre')
-  await product.getByLabel('Total used').fill('10.00'); await product.getByLabel('Total unit').selectOption('gal'); await expect(product.getByLabel('Units per package (if needed)')).toHaveValue('')
+  await product.getByLabel('Total used').fill('10.00'); await product.getByLabel('Total unit').selectOption('gal'); await expect(product.getByLabel('Size of one package, in the unit you track it in (if needed)')).toHaveValue('')
   await form.getByLabel('Applicator name').fill('Scenario Operator'); await form.getByLabel('License no.').fill('PRESENCE-ONLY-2027')
   await form.getByLabel('Wind mph').fill('8.0'); await form.getByLabel('Wind direction').selectOption('SW'); await form.getByLabel('Temperature °F').fill('74.0'); await form.getByLabel('Relative humidity %').fill('52')
   await expect(form.getByLabel('Status')).toHaveValue('completed')
@@ -113,10 +113,10 @@ test('@june-write records one exact manual Maple application after a read-only W
   }
   await expect(page.locator('.inventory-success')).toHaveText('Spray record saved.')
   await page.evaluate(() => window.__farmRxJuneLockManifestIds())
-  await page.getByRole('button', { name: 'On hand' }).click(); await expect(page.getByText('90 gal', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'On hand', exact: true }).click(); await expect(page.getByText('90 gal', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Spray record' }).click()
   const records = page.locator('section.inventory-panel').filter({ hasText: 'Spray records from Programs' }); await expect(records.getByText(/May 20, 2027 · 160 acres · Draft/)).toBeVisible(); await records.getByRole('button', { name: 'Open record' }).click()
-  await expect(records.getByText('Free-Typed Program Herbicide · 10.00 gal total · $7/ac')).toBeVisible(); await expect(records.getByText('These did not change your on-hand count.')).toBeVisible()
+  await expect(records.getByText('Free-Typed Program Herbicide · 10.00 gal total · $7/ac')).toBeVisible(); await expect(records).not.toContainText('Inventory reduced'); await expect(records.getByText('These did not change your on-hand count.')).toBeVisible()
   expect(requests.observedTargetMutationRpcs).toEqual(['save_inventory_application_bundle'])
   expect(requests.unexpectedRpcs, 'unexpected RPC ran after password authentication').toEqual([])
   expect(requests.blockedNonReadRequests, 'unexpected non-read request ran after password authentication').toEqual([])
@@ -128,7 +128,7 @@ test('@june-write records one exact manual Maple application after a read-only W
 
 test('@june-write-phone shows 90 gallons and completed compliance without writing', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); const requests = createSeasonRequestClassifier({ blockUnexpectedNonReadRequests: true }); const network = await installDeterminismAndFence(page, requests); await signIn(page)
-  await page.getByRole('navigation').getByRole('button', { name: 'More' }).click(); await page.getByRole('link', { name: 'Inventory' }).click(); await page.getByRole('button', { name: 'On hand' }).click(); await expect(page.getByText('90 gal', { exact: true })).toBeVisible()
+  await page.getByRole('navigation').getByRole('button', { name: 'More' }).click(); await page.getByRole('link', { name: 'Inventory' }).click(); await page.getByRole('button', { name: 'On hand', exact: true }).click(); await expect(page.getByText('90 gal', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Compliance' }).click(); const record = page.locator('article').filter({ hasText: 'Maple East 160 · 2027-06-18' })
   await expect(record.getByText('Synthetic Herbicide 41 — Maple · 160 acres')).toBeVisible()
   await expect(record.getByText('No restricted-use product in this record.')).toBeVisible()

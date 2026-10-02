@@ -87,8 +87,8 @@ setModuleSyncStatus('inventory', { kind: 'synced', pending: 0 })
 assert(defaultProgramApplyRecordChoice('spray') === 'create', 'A spray pass must default to a new draft application record so it is visible in Inventory.')
 assert(defaultProgramApplyRecordChoice('fertility') === 'none', 'A fertility pass must retain progress-only as its default application-record choice.')
 assert(defaultProgramApplyRecordChoice('other') === 'none', 'An other pass must retain progress-only as its default application-record choice.')
-assert(programApplyConfirmation('none').includes('does not create a spray record') && programApplyConfirmation('none').includes('inventory on hand'), 'Progress-only confirmation must say no record and no on-hand change.')
-assert(programApplyConfirmation('create').includes('creates a new draft spray record') && programApplyConfirmation('create').includes('not matched'), 'Create-record confirmation must say a draft record is created and products are unmatched.')
+assert(programApplyConfirmation('none').includes('does not create a spray record') && programApplyConfirmation('none').includes('does not change inventory on hand'), 'Progress-only confirmation must say no record and no on-hand change.')
+assert(programApplyConfirmation('create').includes('creates a new draft spray record') && programApplyConfirmation('create').includes('Inventory on hand does not change') && programApplyConfirmation('create').includes('not matched'), 'Create-record confirmation must say a draft record is created and products are unmatched.')
 assert(programApplyConfirmation('link').includes('links it to the spray record') && programApplyConfirmation('link').includes('does not change'), 'Link confirmation must name the linked record and the unchanged inventory.')
 
 // ---- 5. P2-09: durable photo cleanup outbox ----

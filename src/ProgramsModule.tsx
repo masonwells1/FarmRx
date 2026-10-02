@@ -806,7 +806,7 @@ function PassEditor({
         </select>
       </label>
       <label>
-        When (for example, V5 or pre-plant)
+        Crop stage (for example, V5 or pre-plant)
         <input
           value={draft.timing_label ?? ""}
           maxLength={160}
@@ -1119,7 +1119,7 @@ function AssignmentPicker({
         >
           {saving
             ? "Assigning…"
-            : selected.length ? `Assign to ${selected.length} field${selected.length === 1 ? "" : "s"}` : "Assign to fields"}
+            : selected.length ? `Assign to ${selected.length} field${selected.length === 1 ? "" : "s"}` : "Pick fields first"}
         </button>
       )}
     </form>

@@ -145,9 +145,9 @@ test('@march-write receives the exact Maple product through the real local UI', 
   await expect(page.locator('.inventory-success')).toHaveText('Delivery added to your on-hand count.')
   const history = page.locator('.receipt-history article').filter({ hasText: 'Synthetic Herbicide 41 — Maple' })
   await expect(history.getByText('Synthetic Herbicide 41 — Maple · 100 gal')).toBeVisible()
-  await expect(history.getByText('received · 2027-03-22')).toBeVisible()
+  await expect(history.getByText('Received · Mar 22, 2027')).toBeVisible()
 
-  await page.getByRole('button', { name: 'On hand' }).click()
+  await page.getByRole('button', { name: 'On hand', exact: true }).click()
   const shelf = page.locator('.shelf-card').filter({ hasText: 'Synthetic Herbicide 41 — Maple' })
   await expect(shelf.getByText('100')).toBeVisible()
   await expect(shelf.getByText('gal')).toBeVisible()
