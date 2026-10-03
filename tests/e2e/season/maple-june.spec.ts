@@ -115,7 +115,7 @@ test('@june-write records one exact manual Maple application after a read-only W
   await page.evaluate(() => window.__farmRxJuneLockManifestIds())
   await page.getByRole('button', { name: 'On hand', exact: true }).click(); await expect(page.getByText('90 gal', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Spray record' }).click()
-  const records = page.locator('section.inventory-panel').filter({ hasText: 'Spray records from Programs' }); await expect(records.getByText(/May 20, 2027 · 160 acres · Draft/)).toBeVisible(); await records.getByRole('button', { name: 'Open record' }).click()
+  const records = page.locator('section.inventory-panel').filter({ hasText: 'Records from Programs' }); await expect(records.getByText(/May 20, 2027 · 160 acres · Draft/)).toBeVisible(); await records.getByRole('button', { name: 'Open record' }).click()
   await expect(records.getByText('Free-Typed Program Herbicide · 10.00 gal total · $7/ac')).toBeVisible(); await expect(records).not.toContainText('Inventory reduced'); await expect(records.getByText('These did not change your on-hand count.')).toBeVisible()
   expect(requests.observedTargetMutationRpcs).toEqual(['save_inventory_application_bundle'])
   expect(requests.unexpectedRpcs, 'unexpected RPC ran after password authentication').toEqual([])
