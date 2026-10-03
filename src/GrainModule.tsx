@@ -2720,7 +2720,7 @@ export function PositionCard({
           note={
             plannedRevenue === null
               ? "add a cash price target"
-              : "contracts as signed, the rest at your target"
+              : "priced contracts as signed; HTAs at your latest basis; basis contracts and unpriced grain at your target"
           }
         />
       </div>
