@@ -445,7 +445,7 @@ test('Soil Rx visibly retains failed attachment cleanup until matching-context r
   await page.getByLabel(/Lab report/).setInputFiles({ name: 'cleanup.pdf', mimeType: 'application/pdf', buffer: Buffer.from('cleanup report') })
   await page.getByRole('button', { name: 'Save soil test' }).click()
   await expect(page.locator('.auth-error')).toContainText('could not save this soil test')
-  await expect(page.locator('.sync-notice.blocked')).toContainText('attention. Nothing was lost.')
+  await expect(page.locator('.sync-notice.blocked')).toContainText('attention. Check them before leaving this page.')
   await expect(page.locator('.sync-notice.blocked').getByRole('button', { name: 'Try again' })).toBeVisible()
   const failedId = state.writes.find((entry) => entry.startsWith('soil_tests:upsert:'))?.split(':').at(-1)
   const failedPath = [...state.uploaded].find((path) => path.split('/')[2] === failedId)
@@ -473,7 +473,7 @@ test('Soil Rx drains never-created attachment custody only after terminal absenc
   await page.getByLabel(/Lab report/).setInputFiles({ name: 'never-uploaded.pdf', mimeType: 'application/pdf', buffer: Buffer.from('never uploaded') })
   await page.getByRole('button', { name: 'Save soil test' }).click()
   await expect(page.locator('.auth-error')).toHaveText('Check the field details and try again.')
-  await expect(page.locator('.sync-notice.blocked')).toContainText('attention. Nothing was lost.')
+  await expect(page.locator('.sync-notice.blocked')).toContainText('attention. Check them before leaving this page.')
   const cleanupKey = `farm-rx-soil-rx-cleanup:v1:${project}:${user}`
   const retained = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), cleanupKey) as { version: number; entries: Array<{ testId?: string; paths?: string[] }> }
   const failedId = retained.entries[0]?.testId; const failedPath = retained.entries[0]?.paths?.[0]
@@ -498,7 +498,7 @@ test('Soil Rx drains custody after lost Storage and row-delete responses without
   await page.getByLabel('Sample date').fill('2027-01-19')
   await page.getByLabel(/Lab report/).setInputFiles({ name: 'lost-response.pdf', mimeType: 'application/pdf', buffer: Buffer.from('lost response report') })
   await page.getByRole('button', { name: 'Save soil test' }).click()
-  await expect(page.locator('.sync-notice.blocked')).toContainText('attention. Nothing was lost.')
+  await expect(page.locator('.sync-notice.blocked')).toContainText('attention. Check them before leaving this page.')
   const failedId = state.writes.find((entry) => entry.startsWith('soil_tests:upsert:'))?.split(':').at(-1)
   const failedPath = state.writes.find((entry) => entry.startsWith('storage:upload:'))?.slice('storage:upload:'.length)
   expect(failedId).toBeTruthy(); expect(failedPath).toBeTruthy(); expect(state.uploaded.has(failedPath!)).toBe(false); expect(state.tests.some((row) => row.id === failedId)).toBe(true)

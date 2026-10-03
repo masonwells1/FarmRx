@@ -1567,7 +1567,9 @@ function AgreementCard({
                 {equivalent !== null &&
                   arrangement.arrangement_type !== "cash_rent" && (
                     <small>
-                      Uses your planned price and planted acres.
+                      {arrangement.arrangement_type === "flex_cash_rent" && !savedLegacyFormula
+                        ? "Uses your expected yield, planned price, and planted acres."
+                        : "Uses your planned price and planted acres."}
                     </small>
                   )}
                 {arrangement.arrangement_type === "flex_cash_rent" &&
