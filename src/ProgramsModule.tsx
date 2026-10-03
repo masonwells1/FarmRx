@@ -976,7 +976,7 @@ function PassEditor({
 }
 
 function cropLabel(crop: CropAssignmentChoice | ProgramAssignment) {
-  return `${crop.field_name} — ${crop.commodity_name} — ${crop.crop_year}${crop.planting_sequence > 1 ? `, planting ${crop.planting_sequence}` : ""}`;
+  return `${crop.field_name} — ${crop.commodity_name} — ${crop.crop_year}, planting ${crop.planting_sequence}`;
 }
 function AssignmentPicker({
   programs,

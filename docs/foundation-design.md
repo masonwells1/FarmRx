@@ -470,7 +470,7 @@ A small global notice in the app wrapper subscribes via `useSyncExternalStore` a
 - `synced`: **“All changes synced.”** (may disappear after a short delay)
 - `pending`: **“Saved on this device — waiting for signal. 1 change pending.”**
 - `syncing`: **“Sending saved changes…”**
-- `blocked`: **“1 saved change needs attention. Nothing was deleted.”** plus a 48px **“Try again”** action.
+- `blocked`: **“1 change needs attention. Check before leaving this page.”** plus a 48px **“Try again”** action.
 
 The existing inline word **“Saved”** means accepted durably; the global notice supplies the required synced-versus-pending truth. Terra should update any new success copy to **“Synced”** only when the status store confirms remote receipt.
 
