@@ -1794,7 +1794,7 @@ function TrackerPass({
       )}
       {pass.status === "applied" && !pass.pending && (
         <div className="pass-detail">
-          <p>Applied {formatFarmDate(pass.applied_on ?? "")} · {pass.applied_acres} acres{pass.application_record_id ? " · Spray record linked" : ""} · {appliedInventoryMatches.length ? `${appliedInventoryMatches.length} confirmed ${appliedInventoryMatches.length === 1 ? 'Inventory match reduced' : 'Inventory matches reduced'} on hand.${appliedUnmatchedCount ? ` ${appliedUnmatchedCount} unmatched ${appliedUnmatchedCount === 1 ? 'line did' : 'lines did'} not change Inventory.` : ''}` : "Products were left unmatched; Inventory on hand did not change."}</p>
+          <p>Applied {formatFarmDate(pass.applied_on ?? "")} · {pass.applied_acres} acres{pass.application_record_id ? (pass.activity_type === "spray" ? " · Spray record linked" : " · Application record linked") : ""} · {appliedInventoryMatches.length ? `${appliedInventoryMatches.length} confirmed ${appliedInventoryMatches.length === 1 ? 'Inventory match reduced' : 'Inventory matches reduced'} on hand.${appliedUnmatchedCount ? ` ${appliedUnmatchedCount} unmatched ${appliedUnmatchedCount === 1 ? 'line did' : 'lines did'} not change Inventory.` : ''}` : "Products were left unmatched; Inventory on hand did not change."}</p>
           {appliedInventoryMatches.length > 0 && <ul>{appliedInventoryMatches.map((product) => <li key={product.id}>{product.actual_product_name} · Inventory reduced by {formatProgramInventoryQuantity(product.inventory_match!.quantity_in_inventory_unit)} {product.inventory_match!.inventory_unit_snapshot}</li>)}</ul>}
         </div>
       )}
@@ -1846,10 +1846,9 @@ function TrackerPass({
                 </option>
               ))}
               <option value="create">
-                Start a new draft spray record
                 {pass.activity_type === "spray"
-                  ? " (recommended)"
-                  : ""}
+                  ? "Start a new draft spray record (recommended)"
+                  : "Start a new draft application record"}
               </option>
             </select>
           </label>
@@ -1862,6 +1861,7 @@ function TrackerPass({
                   : "link",
               confirmedInventoryMatches,
               confirmedInventorySummary,
+              pass.activity_type === "spray" ? "spray record" : "application record",
             )}
           </p>
           {actuals.map((product, index) => (

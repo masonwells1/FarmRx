@@ -2261,9 +2261,10 @@ function AlertEmailSettings({
           <span className="eyebrow">Delivery</span>
           <h2>Email these alerts</h2>
           <p>
-            Emails go out only for plan-target and USDA report reminders, and
-            only when the farm owner opens Grain. Marketing alerts go to your
-            phone instead. Add up to three addresses.
+            Emails go out only when the farm owner opens Grain: for plan
+            targets, USDA report reminders, and any marketing alert reached at
+            that moment. Alerts the server finds while Grain is closed go to
+            your phone, not email. Add up to three addresses.
           </p>
         </div>
       </div>

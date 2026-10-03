@@ -75,7 +75,9 @@ export type ProgramApplyRecordChoice = 'none' | 'create' | 'link'
 export function defaultProgramApplyRecordChoice(activityType: ProgramActivityType): ProgramApplyRecordChoice {
   return activityType === 'spray' ? 'create' : 'none'
 }
-export function programApplyConfirmation(choice: ProgramApplyRecordChoice, confirmedInventoryMatches = 0, confirmedInventorySummary?: string): string {
+/** `recordName` is what the farmer calls the linked record: a spray pass makes a spray record; fertility and other passes
+ * make the same application record under its general name. */
+export function programApplyConfirmation(choice: ProgramApplyRecordChoice, confirmedInventoryMatches = 0, confirmedInventorySummary?: string, recordName: 'spray record' | 'application record' = 'spray record'): string {
   if (!Number.isInteger(confirmedInventoryMatches) || confirmedInventoryMatches < 0) return 'Check the confirmed Inventory products and quantities before saving.'
   if (confirmedInventoryMatches > 0) {
     if (choice !== 'none') return 'Choose “Do not add an application record” before confirming an Inventory draw-down.'
@@ -84,9 +86,9 @@ export function programApplyConfirmation(choice: ProgramApplyRecordChoice, confi
       : ''
     return `This marks the pass done without adding an application record. ${confirmedInventoryMatches} exact ${confirmedInventoryMatches === 1 ? 'Inventory match will' : 'Inventory matches will'} reduce on hand by the quantities you confirm.${summary} Free-typed and unmatched lines will not change Inventory.`
   }
-  if (choice === 'none') return 'This marks the pass done. It does not create a spray record and does not change inventory on hand.'
-  if (choice === 'create') return 'This marks the pass done and creates a new draft spray record. Inventory on hand does not change, because these products are not matched to your inventory.'
-  return 'This marks the pass done and links it to the spray record you picked. Inventory on hand does not change here.'
+  if (choice === 'none') return `This marks the pass done. It does not create a ${recordName} and does not change inventory on hand.`
+  if (choice === 'create') return `This marks the pass done and creates a new draft ${recordName}. Inventory on hand does not change, because these products are not matched to your inventory.`
+  return `This marks the pass done and links it to the ${recordName} you picked. Inventory on hand does not change here.`
 }
 export function validDate(value: string) { if (!date.test(value)) return false; const parsed = new Date(`${value}T00:00:00.000Z`); return !Number.isNaN(parsed.getTime()) && `${parsed.getUTCFullYear()}-${String(parsed.getUTCMonth() + 1).padStart(2, '0')}-${String(parsed.getUTCDate()).padStart(2, '0')}` === value }
 export function validateProgramDraft(value: ProgramDraft | Record<string, unknown>): string | null {
