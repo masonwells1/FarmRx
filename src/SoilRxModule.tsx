@@ -94,7 +94,7 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
       const saved = await repository.saveTest(draft, report ?? undefined)
       setTests((current) => sortSoilTestsNewestFirst([saved, ...current.filter((test) => test.id !== saved.id)]))
       setSelectedFieldId(saved.field_id); setForm(initialForm(saved.field_id, farmLocalCalendarDate())); setReport(null); setOpenTests(new Set([saved.id]))
-      setMessage(saved.pending ? 'Kept on this device. It will send when you have signal.' : 'Soil test saved.')
+      setMessage(saved.pending ? 'Kept on this device. Farm Rx checks your access before sending it.' : 'Soil test saved.')
     } catch (caught) { setError(farmerError(caught, 'save this soil test')) }
     finally { setSaving(false); lock.current.release() }
   }
