@@ -90,7 +90,7 @@ test('@may-write marks the Maple pass applied and exposes its draft Inventory re
   await expect(pass.getByText(/Spray record linked/)).toBeVisible()
   await page.getByRole('link', { name: 'Inventory' }).click()
   await page.getByRole('button', { name: 'Spray record' }).click()
-  const records = page.locator('section.inventory-panel').filter({ hasText: 'Spray records from Programs' })
+  const records = page.locator('section.inventory-panel').filter({ hasText: 'Records from Programs' })
   await expect(records.getByText(/May 20, 2027 · 160 acres · Draft/)).toBeVisible()
   await records.getByRole('button', { name: 'Open record' }).click()
   await expect(records.getByText('Free-Typed Program Herbicide · 10.00 gal total · $7/ac')).toBeVisible()
