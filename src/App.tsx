@@ -446,7 +446,7 @@ export function SyncNotice() {
   if (notice.kind === "pending")
     return (
       <div className="sync-notice pending" role="status">
-        <span>Waiting for signal. {notice.pending} change{notice.pending === 1 ? " is" : "s are"} kept on this device and will send when you have signal.</span>
+        <span>Waiting for signal. {notice.pending} change{notice.pending === 1 ? " is" : "s are"} kept on this device. Farm Rx checks your access before sending.</span>
         {source === "offline" && <button type="button" onClick={() => void retry()}>Check signal</button>}
       </div>
     );
