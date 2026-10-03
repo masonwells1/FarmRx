@@ -305,7 +305,7 @@ function UnassignedFieldsPage({ workspace, budget }: { workspace: ProfitabilityW
   if (!fields.length) return null
   return <article className="banker-report landlord-report-page">
     <header className="report-head"><div><h1>{workspace.fields.farm.name}</h1><p className="report-subject">Unassigned fields · {budget.crop_year}</p></div></header>
-    <section className="landlord-field"><p className="report-note">These fields need one lease for this year before they can be settled.</p><ul>{fields.map(({ field, reason }) => <li key={field.id}><strong>{field.name}</strong> — {reason}</li>)}</ul></section>
+    <section className="landlord-field"><p className="report-note">These fields need their land setup fixed for this year before they can be settled. The reason is listed under each field.</p><ul>{fields.map(({ field, reason }) => <li key={field.id}><strong>{field.name}</strong> — {reason}</li>)}</ul></section>
   </article>
 }
 

@@ -1741,7 +1741,7 @@ function InsuranceCalculator({
       {insurance ? (
         <div className="insurance-results" aria-live="polite">
           <div>
-            <span>Guaranteed yield per acre (APH × coverage)</span>
+            <span>Bushel equivalent of coverage per acre (APH × coverage, not bushels you are guaranteed to harvest)</span>
             <strong>
               {decimal.format(insurance.bushelGuaranteePerAcre)} bu
             </strong>
