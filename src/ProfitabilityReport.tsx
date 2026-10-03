@@ -200,7 +200,7 @@ function landlordFields(workspace: ProfitabilityWorkspace, selectedBudget: CropB
     if (!names.includes(normalizedLandlordName(landlordName))) return []
     const arrangement = arrangementResolution.status === 'resolved' ? arrangementResolution.arrangement : null
     const arrangementMessage = arrangementResolution.status === 'blocked'
-      ? `Two agreements cover ${selectedBudget.crop_year} on this field (for example, a mid-year change). Farm Rx can't split them. Settle this field from your written leases, or set an end date on the old agreement if it ended.`
+      ? `More than one agreement covers ${selectedBudget.crop_year} on this field (for example, a mid-year change). Farm Rx can't split them. Settle this field from your written leases, or set end dates on any agreements that ended.`
       : arrangementResolution.status === 'missing'
         ? `No lease covers ${selectedBudget.crop_year}. Add it on the field's page before using this report.`
         : null

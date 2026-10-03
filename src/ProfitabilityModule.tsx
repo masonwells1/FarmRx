@@ -1759,7 +1759,7 @@ function InsuranceCalculator({
           </div>
           <div>
             <span>
-              Minimum guarantee for budget acres
+              Estimated minimum for budget acres (not your policy's total)
               {insurance.incomeGuarantee === null
                 ? ""
                 : ` · ${decimal.format(allocatedAcres)} ac`}
