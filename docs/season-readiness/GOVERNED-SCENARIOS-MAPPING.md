@@ -266,7 +266,7 @@ provider-shaped response inside the test process; no packet leaves the process.
 The weather service normalizes and stores key
 `farm-rx-weather:v1:38.210:-89.120` with outer and bundle `fetched_at =
 2027-07-07T18:20:00.000Z`; runtime adds `stale = false`. UI must show the exact
-74°F, 8 mph SW, 10-mph gust, 52% humidity, 0.00-in rain, **Good / Spray now**,
+74°F, 8 mph SW, 10-mph gust, 52% humidity, 0.00-in rain, **Good / OK to spray**,
 and five good hourly samples.
 
 The owner manually transcribes those values into Inventory's Spray record for
@@ -342,8 +342,8 @@ states that work will never send automatically and supports export and explicit
 dismissal.
 
 PH-1 saves connected note `Synthetic north fence washed out` offline with the
-manifest note and operation IDs. UI must show **Saved on this device — waiting
-for signal**, one pending row, and exact operation-era user/farm/generation/
+manifest note and operation IDs. UI must show **Waiting for signal. 1 change is kept
+on this device**, one pending row, and exact operation-era user/farm/generation/
 token/epoch custody while the database remains unchanged. PH-2 reconnects at
 epoch `1`, writes that row exactly once, clears only its matching queue head,
 and proves two more retries are no-ops.
