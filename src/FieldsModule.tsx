@@ -1858,7 +1858,7 @@ function RecordsCard({
               <div className="assignment-edit-row" key={row.id}>
                 <strong>
                   {row.crop_year} · {cropName(data, row.commodity_id)}
-                  {row.planting_sequence > 1 ? ` · planting ${row.planting_sequence}` : ""}
+                  {row.planting_sequence > 1 || rows.some((other) => other.id !== row.id && other.crop_year === row.crop_year && other.commodity_id === row.commodity_id) ? ` · planting ${row.planting_sequence}` : ""}
                 </strong>
                 <FormControl label="Planted acres">
                   <input
@@ -1963,7 +1963,7 @@ function RecordsCard({
               <div key={row.id}>
                 <strong>
                   {row.crop_year} · {cropName(data, row.commodity_id)}
-                  {row.planting_sequence > 1 ? ` · planting ${row.planting_sequence}` : ""}
+                  {row.planting_sequence > 1 || rows.some((other) => other.id !== row.id && other.crop_year === row.crop_year && other.commodity_id === row.commodity_id) ? ` · planting ${row.planting_sequence}` : ""}
                 </strong>
                 <span className="numeric">
                   {formatAcres(row.planted_acres)}
