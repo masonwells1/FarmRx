@@ -459,7 +459,7 @@ export function SyncNotice() {
   return (
     <div className="sync-notice blocked" role="alert">
       <span>
-        {notice.pending === 0 ? "Saved changes need" : notice.pending === 1 ? "1 saved change needs" : `${notice.pending} saved changes need`} attention. Nothing was lost.
+        {notice.pending === 0 ? "Saved changes need" : notice.pending === 1 ? "1 saved change needs" : `${notice.pending} saved changes need`} attention. Check them before leaving this page.
       </span>
       <button type="button" onClick={() => void retry()}>
         Try again
