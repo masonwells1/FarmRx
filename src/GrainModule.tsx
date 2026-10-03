@@ -898,7 +898,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
             <div className="section-heading">
               <div>
                 <h2>Monthly marketing plan</h2>
-                <p>How much of the crop you plan to sell by each month.</p>
+                <p>How much of the crop you plan to sell in each month. Each month adds to the ones before it.</p>
               </div>
               <label className="commodity-picker">
                 <span>Commodity</span>
