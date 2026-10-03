@@ -130,7 +130,7 @@ function SprayFormContents({ workspace, assignments, repository, done, failed, p
       setLines([newSprayLine(workspace.products[0]?.id)])
       setFormVersion((current) => current + 1)
       onPrefillConsumed()
-      done(result.kind === 'confirmed' ? 'Spray record saved.' : 'Spray record is kept on this device and will send when you have signal. It is not saved to your farm yet.')
+      done(result.kind === 'confirmed' ? 'Spray record saved.' : 'Spray record is kept on this device. It is not saved to your farm yet; Farm Rx checks your access before sending it.')
     } catch (caught) {
       setSaveReceipt(applicationId, 'needs attention')
       setAttentionNotice('Needs attention: this spray record may already be recorded. Check the list above and Compliance before trying again. What you typed is still here.')
