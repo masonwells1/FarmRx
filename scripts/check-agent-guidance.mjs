@@ -38,7 +38,7 @@ export function validateGuidanceText({ agents, claude, development, delivery }) 
   for (const phrase of ['fewest moving parts', '18px base', 'Row Level Security', 'expected_bushels', 'npx tsc -b --force']) {
     requireText(failures, 'docs/agent-development-guide.md', development, phrase, `missing development invariant: ${phrase}`)
   }
-  for (const phrase of ['may push a feature branch and manage its pull request without asking', 'READY FOR APPROVAL', 'The delivering agent posts exactly `@coderabbitai review`', 'Never ask Mason to post it', 'Do not apply a trigger label or use a workflow', 'Foundation and Vercel', '--match-head-commit <sha>', 'formal CodeRabbit review is `APPROVED`']) {
+  for (const phrase of ['may push a feature branch and manage its pull request without asking', 'READY FOR APPROVAL', 'The delivering agent posts exactly `@coderabbitai review` on the pull request once per candidate freeze', 'Never ask Mason to post it', 'Do not apply a trigger label or use a workflow', 'Foundation and Vercel', '--match-head-commit <sha>', 'formal CodeRabbit review is `APPROVED`']) {
     requireText(failures, 'docs/agent-delivery.md', delivery, phrase, `missing delivery gate: ${phrase}`)
   }
 
