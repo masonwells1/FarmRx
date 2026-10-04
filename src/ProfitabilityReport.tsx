@@ -175,7 +175,7 @@ function applicationInputsByCropAssignment(programs: ProgramsData | null) {
   }
   for (const record of programs?.applicationRecords ?? []) {
     if (record.status !== 'completed') continue
-    add(record.crop_assignment_id, `record:${record.id}`, [{ product: 'Completed spray record', rate: `${decimal.format(record.applied_acres)} ac applied`, appliedOn: record.application_date }])
+    add(record.crop_assignment_id, `record:${record.id}`, [{ product: 'Completed application record', rate: `${decimal.format(record.applied_acres)} ac applied`, appliedOn: record.application_date }])
   }
   for (const assignment of programs?.assignments ?? []) {
     for (const pass of assignment.passes.filter((item) => item.status === 'applied' && item.applied_on)) {
