@@ -117,7 +117,7 @@ test('@desktop-write creates the exact Maple January field through the real loca
   await expectExactSeasonClockConsumption(page)
   expect(fieldWrites).toBe(0)
 
-  await page.getByRole('link', { name: 'Full field details' }).click()
+  await page.getByRole('link', { name: 'Add field' }).click()
   await expect(page.getByRole('heading', { name: 'Add a field' })).toBeVisible()
   expect(fieldWrites).toBe(0)
 
@@ -141,14 +141,14 @@ test('@desktop-write creates the exact Maple January field through the real loca
 
   const agreement = card(page, 'Land agreement')
   await agreement.getByRole('button', { name: 'Edit' }).click()
-  await expect(agreement.getByLabel('Arrangement type')).toHaveValue('owned')
-  await agreement.getByLabel('Terms effective from').fill('2027-01-01')
+  await expect(agreement.getByLabel('Owned or rented')).toHaveValue('owned')
+  await agreement.getByLabel('Since').fill('2027-01-01')
   await agreement.getByRole('button', { name: 'Save' }).click()
   await expect(agreement.getByRole('button', { name: 'Edit' })).toBeVisible()
   await expect(agreement.locator('dd').filter({ hasText: /^Owned$/ })).toBeVisible()
   expect(fieldWrites).toBe(3)
 
-  const records = card(page, 'Records')
+  const records = card(page, 'Crops by year')
   await records.getByRole('button', { name: 'Edit' }).click()
   await records.getByRole('combobox').selectOption('corn_yellow')
   await expect(records.getByLabel('Crop year')).toHaveValue('2027')

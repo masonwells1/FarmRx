@@ -102,7 +102,7 @@ export function TodayPage({ fieldsRepository, equipmentTasksRepository, notifica
   const sectionErrors = [snapshots.fields, snapshots.equipment, snapshots.notifications, snapshots.inventory, snapshots.programs, snapshots.grain].flatMap((section) => section.status === 'failed' ? [section.message] : [])
 
   return <section className="page today-page" aria-labelledby="today-title">
-    <header className="page-heading today-heading"><div><p className="eyebrow">{activeFarm.name}</p><h1 id="today-title">{canEdit ? 'What are you recording?' : 'Your farm today'}</h1><p>{canEdit ? 'Tap an option to get started.' : 'You can view records here. Adding records is turned off for your access.'}</p></div></header>
+    <header className="page-heading today-heading"><div><h1 id="today-title">{canEdit ? 'What are you recording?' : 'Your farm today'}</h1>{!canEdit && <p>You can view records. Ask the farm owner if you need to add them.</p>}</div></header>
     {canEdit && tiles.length > 0 && <ul className="today-record-grid" aria-label="Record">{tiles.map((tile) => <li key={tile.kind}><button type="button" className="today-record-tile" data-record={tile.kind} onClick={() => navigate(tile.to, { state: tile.state })}><span className="today-record-icon" aria-hidden="true">{tileGlyph(tile.kind)}</span><span className="today-record-label">{tile.label}</span></button></li>)}</ul>}
     {showWeather && <SprayCard card={sprayCard} fieldsLoaded={fields !== null} />}
     {grainLine && <GrainLine line={grainLine} />}
