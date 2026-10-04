@@ -566,7 +566,7 @@ try {
     await act(async () => { await new Promise<void>((resolve) => setImmediate(resolve)) })
     const replayAfterDueFailure = `save=${noticeCalls.save}; due=${noticeCalls.due}; queued=${noticeQueue.read().entries.length}; status=${JSON.stringify(getSyncStatus())}`
     assert(noticeCalls.save === 1 && noticeCalls.due === 1 && noticeQueue.read().entries.length === 0 && getSyncStatus().kind === 'synced', `The real Equipment retry action did not preserve the replayed queue state after its late due-generation failure (${replayAfterDueFailure}).`)
-    assert(container.textContent?.includes(expectedNoticeError) && !container.textContent.includes('All changes synced') && container.textContent.includes('Try again'), 'The mounted SyncNotice hid a late retry failure or removed its recovery action.')
+    assert(container.textContent?.includes(expectedNoticeError) && !container.textContent.includes('All changes saved') && container.textContent.includes('Try again'), 'The mounted SyncNotice hid a late retry failure or removed its recovery action.')
     assert(noticeUnhandled.length === 0, 'The mounted retry click or background cancellation leaked an unhandled rejection.')
   } finally {
     failNoticeDue(new Error('Equipment retry fixture cleanup released the controlled due-generation failure.'))

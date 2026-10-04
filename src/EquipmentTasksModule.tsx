@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { confirmDialog } from "./components/ConfirmDialog";
 import { useLocation, useNavigate } from "react-router";
 import { parseTodayRecordIntent } from "./data/todayIntents";
+import { formatFarmDate } from "./lib/farmDate";
 import type {
   Equipment,
   EquipmentCategory,
@@ -38,6 +39,7 @@ const categories: EquipmentCategory[] = [
   "utility",
   "other",
 ];
+const capitalize = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
 const categoryLabel = (v: string) =>
   v.replace("_", " ").replace(/\b\w/g, (x) => x.toUpperCase());
 function useWorkspace(repository: EquipmentTasksRepository) {
@@ -101,8 +103,7 @@ export function EquipmentPage({
     <section className="page equipment-page">
       <header className="equipment-heading">
         <div>
-          <p className="eyebrow">Equipment</p>
-          <h1>Keep every machine ready to work.</h1>
+          <h1>Equipment</h1>
         </div>
         {canManage && (
           <button
@@ -229,11 +230,11 @@ function EquipmentCards({
                     <b>{money.format(cost)} service cost</b>
                   </div>
                   <div className="chip-row">
-                    <em className="status-chip">{machine.status}</em>
+                    {machine.status !== "active" && <em className="status-chip">{capitalize(machine.status)}</em>}
                     {due && <em className="due-chip">Service due</em>}
                     {warranty && (
                       <em className="warranty-chip">
-                        Warranty {machine.warranty_expires_on}
+                        Warranty {(machine.warranty_expires_on ?? "") < today() ? "ended" : "ends"} {formatFarmDate(machine.warranty_expires_on ?? "")}
                       </em>
                     )}
                   </div>
@@ -300,7 +301,7 @@ function EquipmentForm({
         Category
         <select name="category" defaultValue={equipment?.category ?? "tractor"}>
           {categories.map((x) => (
-            <option key={x}>{x}</option>
+            <option key={x} value={x}>{categoryLabel(x)}</option>
           ))}
         </select>
       </label>
@@ -616,7 +617,7 @@ function EquipmentDetail({
           <p>
             Latest:{" "}
             {readings[0]
-              ? `${number.format(readings[0].reading)} ${equipment.meter_unit} on ${readings[0].read_on}`
+              ? `${number.format(readings[0].reading)} ${equipment.meter_unit} on ${formatFarmDate(readings[0].read_on)}`
               : "Not entered"}
           </p>
         </section>
@@ -652,11 +653,11 @@ function EquipmentDetail({
                 <input name="name" placeholder="Oil change" required />
               </label>
               <label>
-                Every {equipment.meter_unit}
+                Every how many {equipment.meter_unit}
                 <input name="meter" type="number" min="0.01" step="any" />
               </label>
               <label>
-                Every months
+                Or every how many months
                 <input name="months" type="number" min="1" />
               </label>
               <button className="primary-action">Add reminder</button>
@@ -692,7 +693,7 @@ function EquipmentDetail({
             <input name="reading" type="number" min="0" step="any" />
           </label>
           <label>
-            Completes reminder
+            Reset a reminder
             <select name="interval">
               <option value="">No reminder</option>
               {intervals.map((x) => (
@@ -800,8 +801,7 @@ export function TasksPage({
     <section className="page tasks-page">
       <header className="equipment-heading">
         <div>
-          <p className="eyebrow">Tasks</p>
-          <h1>Keep the next job clear for everyone.</h1>
+          <h1>Tasks</h1>
         </div>
         <button
           className="primary-action"
@@ -1006,11 +1006,11 @@ function TaskColumn({
                 <h3>{task.title}</h3>
               )}
               {task.priority !== "normal" && (
-                <em className="priority-chip">{task.priority}</em>
+                <em className="priority-chip">{capitalize(task.priority)}</em>
               )}
               <p>
                 {member?.display_name.split(/\s+/)[0] ?? "Unassigned"}
-                {task.due_on ? ` · Due ${task.due_on}` : ""}
+                {task.due_on ? ` · Due ${formatFarmDate(task.due_on)}` : ""}
               </p>
               <div className="chip-row">
                 {field && (
@@ -1032,7 +1032,7 @@ function TaskColumn({
                   )?.display_name ?? "farm member"}{" "}
                   ·{" "}
                   {task.completed_at
-                    ? new Date(task.completed_at).toLocaleDateString()
+                    ? new Date(task.completed_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
                     : ""}
                 </small>
               )}
@@ -1159,7 +1159,7 @@ function TaskForm({
     <form className="equipment-form task-form" onSubmit={submit}>
       <h2>{task ? "Edit task" : "Add task"}</h2>
       <label className="wide">
-        Job
+        Task
         <input name="title" defaultValue={task?.title} required />
       </label>
       <label className="wide">

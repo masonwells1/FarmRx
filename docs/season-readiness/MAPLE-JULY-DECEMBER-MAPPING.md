@@ -246,7 +246,7 @@ Required focused repair proof:
 - Chain from November without reset.
 - Before first navigation, after every full reload, and at the end, capture canonical ordered rows and counts for access state; Fields; Inventory/applications; Programs; Scouting; Tasks; Grain/cash bids/contracts/deliveries/bins/movements; notifications; equipment/service; marketing alerts/transitions; and `repository_write_receipts`.
 - Every snapshot must match byte-for-byte. A UI-only request counter is insufficient because read-shaped startup RPCs use POST and hidden server writes are possible.
-- Run desktop and phone-sized projects with local-only traffic. Assert no `Saving`, `Queued offline`, or `Needs attention` receipt remains in a fresh read-only browser.
+- Run desktop and phone-sized projects with local-only traffic. Assert no `Saving`, `Waiting for signal`, or `Needs attention` receipt remains in a fresh read-only browser.
 - Do not create a finalization row, rollover row, sync row, or other December product artifact merely to mark the scenario complete.
 
 ## Cross-month implementation and proof order
