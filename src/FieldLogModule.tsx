@@ -27,7 +27,63 @@ export function FieldLogPage({ fieldLogRepository, fieldsRepository }: { fieldLo
   const activeFields = fieldsData.fields.filter((field) => field.is_active)
   const fieldNames = new Map(fieldsData.fields.map((field) => [field.id, field.name]))
   const legacyFieldName = (entry: unknown) => { const draft = entry && typeof entry === 'object' ? (entry as { draft?: unknown }).draft : null; const fieldId = draft && typeof draft === 'object' ? (draft as { field_id?: unknown }).field_id : null; return typeof fieldId === 'string' ? fieldNames.get(fieldId) ?? null : null }
-  return <section className="page field-log-page"><header className="page-heading"><div><h1>Field Log</h1><p>Rain totals and notes, by field.</p></div></header>{error && <p className="form-error">{error}</p>}<NeedsAttentionList module="fieldLog" queueKey={attentionQueueKey} onChanged={reload} legacyFieldName={legacyFieldName} />{!activeFields.length ? <section className="empty-state"><h2>Add your first field to start a field log.</h2>{editable(role) && <Link className="primary-action" to="/fields">Add a field</Link>}</section> : <div className="field-log-list">{activeFields.map((field, index) => <FieldCard key={field.id} field={field} entries={entries.filter((entry) => entry.field_id === field.id)} assignments={fieldsData.crop_assignments} canEdit={editable(role)} initialMode={openRainfallOnFirstField && index === 0 && editable(role) ? 'rainfall' : null} repository={fieldLogRepository} refresh={reload} />)}</div>}</section>
+  return <section className="page field-log-page"><header className="page-heading"><div><h1>Field Log</h1><p>Rain totals and notes, by field.</p></div></header>{error && <p className="form-error">{error}</p>}<NeedsAttentionList module="fieldLog" queueKey={attentionQueueKey} onChanged={reload} legacyFieldName={legacyFieldName} />{editable(role) && activeFields.length > 1 && <MultiFieldRain fields={activeFields} repository={fieldLogRepository} refresh={reload} />}{!activeFields.length ? <section className="empty-state"><h2>Add your first field to start a field log.</h2>{editable(role) && <Link className="primary-action" to="/fields">Add a field</Link>}</section> : <div className="field-log-list">{activeFields.map((field, index) => <FieldCard key={field.id} field={field} entries={entries.filter((entry) => entry.field_id === field.id)} assignments={fieldsData.crop_assignments} canEdit={editable(role)} initialMode={openRainfallOnFirstField && index === 0 && editable(role) ? 'rainfall' : null} repository={fieldLogRepository} refresh={reload} />)}</div>}</section>
+}
+
+/** One rain total for several fields at once. Each chosen field gets its own ordinary rainfall entry through the same
+ * repository save as the per-field form, one after another, so a field that fails is named and the rest are kept. */
+function MultiFieldRain({ fields, repository, refresh }: { fields: Field[]; repository: FieldLogRepository; refresh: () => Promise<void> }) {
+  const submitLock = useRef(createSubmitLock())
+  const [open, setOpen] = useState(false)
+  const [chosen, setChosen] = useState<Set<string>>(() => new Set())
+  const [submitting, setSubmitting] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const [result, setResult] = useState<string | null>(null)
+  const toggle = (id: string) => setChosen((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!submitLock.current.acquire()) return
+    const form = new FormData(event.currentTarget)
+    const rainfall = String(form.get('rainfall') ?? '').trim()
+    const note = String(form.get('note') ?? '').trim()
+    const targets = fields.filter((field) => chosen.has(field.id))
+    if (!targets.length) { setMessage('Pick at least one field.'); submitLock.current.release(); return }
+    const drafts: Array<{ field: Field; draft: FieldLogEntryDraft }> = targets.map((field) => ({ field, draft: { field_id: field.id, entry_type: 'rainfall', observed_on: String(form.get('date')), rainfall_in: rainfall === '' ? null : Number(rainfall), note: note || null } }))
+    const validation = validateFieldLogDraft(drafts[0].draft)
+    if (validation) { setMessage(validation); submitLock.current.release(); return }
+    setSubmitting(true); setMessage(null); setResult(null)
+    const saved: string[] = []; const queued: string[] = []; const failed: string[] = []
+    try {
+      for (const { field, draft } of drafts) {
+        try { const entry = await repository.saveEntry(draft); (entry.pending ? queued : saved).push(field.name) }
+        catch { failed.push(field.name) }
+      }
+      const parts = [
+        saved.length ? `Saved for ${saved.join(', ')}.` : '',
+        queued.length ? `Kept on this device for ${queued.join(', ')}; Farm Rx checks your access before sending.` : '',
+        failed.length ? `Not saved for ${failed.join(', ')}. Try those again.` : '',
+      ].filter(Boolean)
+      setResult(parts.join(' '))
+      if (!failed.length) { setChosen(new Set()); setOpen(false) } else setChosen(new Set(fields.filter((field) => failed.includes(field.name)).map((field) => field.id)))
+      await refresh().catch(() => undefined)
+    } finally { setSubmitting(false); submitLock.current.release() }
+  }
+  return <section className="multi-rain">
+    {!open && <button className="secondary-action" type="button" onClick={() => { setOpen(true); setResult(null) }}>Add rain to several fields</button>}
+    {result && <p className="field-log-pending" role="status">{result}</p>}
+    {open && <form className="field-log-form multi-rain-form" onSubmit={submit}>
+      <h3>Add rain to several fields</h3>
+      <fieldset className="wide multi-rain-fields"><legend>Fields</legend>
+        <div className="multi-rain-picks">{fields.map((field) => <label key={field.id} className="check-label"><input type="checkbox" checked={chosen.has(field.id)} onChange={() => toggle(field.id)} /> {field.name}</label>)}</div>
+        <button type="button" className="secondary-action" onClick={() => setChosen(chosen.size === fields.length ? new Set() : new Set(fields.map((field) => field.id)))}>{chosen.size === fields.length ? 'Clear all' : 'Pick all fields'}</button>
+      </fieldset>
+      <label>Date<input name="date" type="date" max={fieldLogMaximumObservedOn()} defaultValue={today()} required /></label>
+      <label>Rainfall (inches)<input name="rainfall" type="number" min="0" max="100" step="0.01" required /></label>
+      <label className="wide">Optional note<textarea name="note" maxLength={500} /></label>
+      {message && <p className="form-error">{message}</p>}
+      <div><button className="primary-action" disabled={submitting}>{submitting ? 'Saving…' : chosen.size ? `Save rain for ${chosen.size} field${chosen.size === 1 ? '' : 's'}` : 'Save rain'}</button><button type="button" className="secondary-action" onClick={() => { setOpen(false); setMessage(null) }}>Cancel</button></div>
+    </form>}
+  </section>
 }
 
 function FieldCard({ field, entries, assignments, canEdit, initialMode = null, repository, refresh }: { field: Field; entries: FieldLogEntry[]; assignments: FieldsData['crop_assignments']; canEdit: boolean; initialMode?: 'rainfall' | 'note' | null; repository: FieldLogRepository; refresh: () => Promise<void> }) {

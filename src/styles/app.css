@@ -307,6 +307,13 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .rain-total span { color: var(--matte-gray); font-size: 18px; font-weight: 700; }
 .rain-total strong { color: var(--deep-green); font-family: var(--brand-font); font-size: 28px; }
 .field-log-actions { display: flex; flex-wrap: wrap; gap: 12px; padding: 18px 20px 0; }
+.multi-rain { display: grid; gap: 12px; margin-bottom: 20px; }
+.multi-rain-form { margin: 0; }
+.multi-rain-fields { display: grid; gap: 12px; margin: 0; padding: 0; border: 0; }
+.multi-rain-fields legend { margin-bottom: 6px; color: var(--matte-gray); font-weight: 700; }
+.multi-rain-picks { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.multi-rain-picks .check-label { display: flex; align-items: center; gap: 10px; min-height: 48px; color: var(--charcoal); }
+.field-log-form .multi-rain-picks input { width: 24px; height: 24px; padding: 0; flex: 0 0 auto; }
 .gdd-line, .gdd-prompt { display: grid; gap: 3px; margin: 0; padding: 16px 20px 0; color: var(--deep-green); }
 .gdd-line small, .gdd-prompt { color: var(--matte-gray); font-size: 18px; }
 .field-log-timeline { margin-top: 20px; border-top: 1px solid var(--hairline); }
@@ -1278,3 +1285,6 @@ tbody tr:nth-child(even) td { background: var(--cream); }
   .load-form fieldset, .load-form > button, .load-form > .load-message { grid-column: 1 / -1; }
 }
 .contract-repair .destructive { color: var(--alert-red, #a4262c); }
+.town-search { display: grid; gap: 10px; margin-top: 12px; }
+.town-matches { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.town-matches button { width: 100%; justify-content: flex-start; text-align: left; }
