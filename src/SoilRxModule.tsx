@@ -105,7 +105,7 @@ export function SoilRxPage({ repository, fieldsRepository }: { repository: SoilR
   return <section className="page soil-rx-page" aria-labelledby="soil-rx-title">
     <header className="page-header"><div><h1 id="soil-rx-title">Soil Rx</h1><p>Lab results by field. Your Crop RX rep sees them only if you turn on sharing in Farm settings.</p></div></header>
     {error && <p className="auth-error" role="alert">{error}</p>}
-    {historyUnavailableOffline && <p className="auth-error" role="alert">Past soil tests will show once you have signal. You can still save a new test now.</p>}
+    {historyUnavailableOffline && <p className="auth-error" role="alert">Past soil tests will show once you have signal.{selectedField?.isActive && canEdit ? ' You can still save a new test now.' : ''}</p>}
     {message && <p className="save-success" role="status">{message}</p>}
     {canEdit && <NeedsAttentionList module="soilRx" queueKey={attentionQueueKey} onRetry={(row) => repository.retryNeedsAttention?.(row.queueKey, row.id)} onDismiss={(row) => repository.dismissNeedsAttention?.(row.queueKey, row.id)} onChanged={refresh} />}
     {loading ? <p className="loading-state">Loading Soil Rx…</p> : <>
