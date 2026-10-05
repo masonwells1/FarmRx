@@ -135,7 +135,7 @@ test('@prairie-spray phone-sized Compliance shows saved facts without writing or
   await page.getByRole('navigation').getByRole('button', { name: 'More' }).click(); await page.getByRole('link', { name: 'Inventory' }).click(); await page.getByRole('button', { name: 'Compliance' }).click()
   const record = page.locator('article').filter({ hasText: 'Prairie South 120 · 2027-06-15' })
   await expect(record.getByText('Synthetic Herbicide 41 · 120 acres')).toBeVisible()
-  for (const fact of ['Application time', '14:10:00', 'Target pest', 'Synthetic broadleaf', 'Applicator', 'Scenario Operator', 'License number entered', 'PRESENCE-ONLY-2027', '8 mph · SW', '74 °F', '52%', '0.0625 gal per acre', '7.5 gal', '00000-000', 'caution', '12 hr', '0 hr', '0.125 gal per acre']) await expect(record.getByText(fact, { exact: true })).toBeVisible()
+  for (const fact of ['Application time', '14:10:00', 'Target pest', 'Synthetic broadleaf', 'Applicator', 'Scenario Operator', 'License or certification number entered', 'PRESENCE-ONLY-2027', '8 mph · SW', '74 °F', '52%', '0.0625 gal per acre', '7.5 gal', '00000-000', 'caution', '12 hr', '0 hr', '0.125 gal per acre']) await expect(record.getByText(fact, { exact: true })).toBeVisible()
   await expect(record.getByText('Restricted-entry interval (REI)', { exact: true })).toBeVisible(); await expect(record.getByText('Preharvest interval (PHI)', { exact: true })).toBeVisible(); await expect(record.getByText('Maximum label rate', { exact: true })).toBeVisible()
   const rendered = await record.innerText()
   expect(rendered).not.toMatch(/(?:license|certification).{0,40}\b(?:valid|verified|approved|eligible|unexpired|expired)\b/i)
