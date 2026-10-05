@@ -53,17 +53,15 @@ function MarketQuote({ symbol, label, detail }: MarketQuoteSpec) {
       onLoad={() => setFailed(false)}
       onError={() => setFailed(true)}
     />
-    {failed && <p className="market-quote__fallback" role="status">Market quotes unavailable — your plan and contracts are unaffected.</p>}
+    {failed && <p className="market-quote__fallback" role="status">Futures prices are not available right now.</p>}
   </article>
 }
 
 export function MarketQuoteSection({ cropYear }: { cropYear: number }) {
   return <section className="grain-section market-data-section" aria-labelledby="market-data-heading">
     <div className="section-heading">
-      <div><span className="eyebrow">Market data</span><h2 id="market-data-heading">Delayed market quotes</h2><p>10-minute delayed CME data, displayed by TradingView.</p></div>
-      <span className="delayed-label">Delayed market data</span>
+      <div><h2 id="market-data-heading">Futures prices</h2><p>CME quotes from TradingView, 10 minutes delayed. For display only: your numbers use the prices you enter.</p></div>
     </div>
-    <p className="market-data-note">Quotes are for display only. Your plan and revenue estimates use the manual prices and basis you enter.</p>
     <div className="market-quote-grid">{marketQuotes(cropYear).map((quote) => <MarketQuote key={quote.symbol} {...quote} />)}</div>
   </section>
 }
