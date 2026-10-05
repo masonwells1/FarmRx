@@ -50,6 +50,11 @@ mustFail('branch and pull-request authority removal', (files) => ({
   agents: files.agents.replace('Agents may push branches and open, update, label, and comment on pull requests without asking', 'Agents must ask before publishing work'),
 }), 'standing branch and pull-request authority')
 
+mustFail('review-per-freeze rule weakening', (files) => ({
+  ...files,
+  delivery: files.delivery.replace('once per candidate freeze', 'only when needed'),
+}), 'once per candidate freeze')
+
 mustFail('bloated shared contract', (files) => ({
   ...files,
   agents: `${files.agents}${'\nextra'.repeat(101)}`,
