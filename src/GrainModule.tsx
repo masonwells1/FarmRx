@@ -2264,8 +2264,8 @@ function AlertEmailSettings({
             Add up to three addresses. Emails go out while the farm owner has
             Grain open: plan targets, USDA report reminders, and marketing
             alerts reached then. Alerts the server finds while Grain is closed
-            are never emailed; they go to your phone only if you have turned
-            notifications on, and otherwise wait here in Grain.
+            are never emailed; they show in Alerts, and also go to your phone
+            if you have turned notifications on.
           </p>
         </div>
       </div>
