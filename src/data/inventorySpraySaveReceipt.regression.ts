@@ -36,7 +36,7 @@ async function renderCase(kind: ApplicationSaveDisposition['kind'] | 'reject') {
 
 try {
   const confirmed = await renderCase('confirmed')
-  assert(confirmed.saves.length === 1 && confirmed.notices[0]?.startsWith('Spray record confirmed on Farm Rx.') && confirmed.container.textContent?.includes('Saved'), 'A confirmed save must show confirmed wording and the existing Saved receipt.')
+  assert(confirmed.saves.length === 1 && confirmed.notices[0]?.startsWith('Spray record saved.') && confirmed.container.textContent?.includes('Saved'), 'A confirmed save must show confirmed wording and the existing Saved receipt.')
   const confirmedForm = confirmed.container.querySelector('form') as HTMLFormElement
   assert(confirmedForm.querySelector<HTMLSelectElement>('select[name="field"]')!.value === '' && !confirmedForm.checkValidity(), 'A confirmed spray must retire the submitted form instead of leaving a valid duplicate ready to submit.')
   confirmedForm.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
@@ -54,7 +54,7 @@ try {
   await act(async () => { await Promise.resolve() }); await act(async () => { rapidRoot.unmount() }); rapidContainer.remove()
 
   const queued = await renderCase('queued')
-  assert(queued.saves.length === 1 && queued.notices[0]?.includes('not confirmed on Farm Rx yet') && queued.container.textContent?.includes('Waiting for signal'), 'A safely queued spray must never use confirmed-save wording and must retain the queued receipt.')
+  assert(queued.saves.length === 1 && queued.notices[0]?.includes('It is not saved to your farm yet') && !queued.notices[0]?.startsWith('Spray record saved.') && queued.container.textContent?.includes('Waiting for signal'), 'A safely queued spray must never use confirmed-save wording and must retain the queued receipt.')
   await act(async () => { queued.root.unmount() }); queued.container.remove()
 
   const attention = await renderCase('needs-attention')

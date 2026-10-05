@@ -34,6 +34,7 @@ import {
 import { farmerError } from "./lib/farmerErrors";
 import { farmLocalCalendarDate } from "./data/farmDates";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
+import { formatFarmDate } from "./lib/farmDate";
 import { evaluateSprayWindow, isActionablyFresh, weatherService } from "./data/weatherService";
 const emptyProgram = (): ProgramDraft => ({
   id: null,
@@ -121,7 +122,7 @@ export function ProgramsPage({
     return (
       <section className="page programs-page">
         <p className="loading-state" role="status">
-          Loading your programs. This should only take a moment.
+          Loading programs…
         </p>
       </section>
     );
@@ -214,10 +215,7 @@ export function ProgramsPage({
         <header className="page-heading">
           <div>
             <h1>Assign to fields</h1>
-            <p>
-              Choose a saved program, then choose the field crops that should
-              use it.
-            </p>
+            <p>Pick a program, then pick the fields that get it.</p>
           </div>
         </header>
         {tabs}
@@ -238,9 +236,7 @@ export function ProgramsPage({
         <header className="page-heading">
           <div>
             <h1>Season progress</h1>
-            <p>
-              See what is planned, done, skipped, or moved for every field crop.
-            </p>
+
           </div>
         </header>
         {tabs}
@@ -263,10 +259,7 @@ export function ProgramsPage({
       <header className="page-heading programs-heading">
         <div>
           <h1>Programs</h1>
-          <p>
-            Set up planned passes once, then use them when you are ready in the
-            field.
-          </p>
+          <p>Plan your passes once, then mark them done in the field.</p>
         </div>
         {editable && (
           <button
@@ -813,7 +806,7 @@ function PassEditor({
         </select>
       </label>
       <label>
-        Timing label
+        Crop stage (for example, V5 or pre-plant)
         <input
           value={draft.timing_label ?? ""}
           maxLength={160}
@@ -852,7 +845,7 @@ function PassEditor({
         />
       </label>
       <label>
-        Reminder lead days
+        Remind me this many days before
         <input
           type="number"
           min="0"
@@ -1126,7 +1119,7 @@ function AssignmentPicker({
         >
           {saving
             ? "Assigning…"
-            : `Assign to ${selected.length || ""} field${selected.length === 1 ? "" : "s"}`}
+            : selected.length ? `Assign to ${selected.length} field${selected.length === 1 ? "" : "s"}` : "Pick fields first"}
         </button>
       )}
     </form>
@@ -1424,8 +1417,7 @@ function SeasonTracker({
                     assignment.template_revision &&
                     assignment.assignment_status === "active" && (
                       <p className="template-update">
-                        This program has updates you can bring into this field
-                        crop.
+                        This program changed since you assigned it.
                       </p>
                     )}
                 </div>
@@ -1587,7 +1579,7 @@ function ProgramInventoryMatchOffer({ product, candidate, quantityText, onChange
   if (!candidate) return <p className="panel-note wide">No single active Inventory product exactly matches this product name. Inventory on hand will not change for this line.</p>
   const match = product.inventory_match
   const confirmedMatch = match && match.inventory_product_id === candidate.id && match.inventory_unit === candidate.inventory_unit ? match : null
-  return <fieldset className="wide"><legend>Inventory draw-down (optional)</legend><label className="check-label"><input type="checkbox" checked={confirmedMatch !== null} onChange={(event) => { onQuantityTextChange(''); onChange(event.target.checked ? { ...product, inventory_match: { inventory_product_id: candidate.id, quantity_in_inventory_unit: Number.NaN, inventory_unit: candidate.inventory_unit } } : { ...product, inventory_match: null }) }} />Confirm exact Inventory product: {candidate.name}</label>{confirmedMatch && <label>Quantity to remove ({candidate.inventory_unit})<input type="number" min="0.00000001" max={PROGRAM_INVENTORY_QUANTITY_MAX} step="0.00000001" required value={quantityText} onChange={(event) => { const raw = event.target.value; const quantity = parseProgramInventoryQuantityInput(raw); onQuantityTextChange(raw); onChange({ ...product, inventory_match: { inventory_product_id: candidate.id, quantity_in_inventory_unit: quantity ?? Number.NaN, inventory_unit: candidate.inventory_unit } }) }} /></label>}<p className="panel-note">Enter a plain decimal from 0.00000001 through {PROGRAM_INVENTORY_QUANTITY_MAX.toLocaleString('en-US')} {candidate.inventory_unit}, using no more than eight decimal places. Farm Rx will not convert the Program rate or unit.</p></fieldset>
+  return <fieldset className="wide"><legend>Take out of inventory (optional)</legend><label className="check-label"><input type="checkbox" checked={confirmedMatch !== null} onChange={(event) => { onQuantityTextChange(''); onChange(event.target.checked ? { ...product, inventory_match: { inventory_product_id: candidate.id, quantity_in_inventory_unit: Number.NaN, inventory_unit: candidate.inventory_unit } } : { ...product, inventory_match: null }) }} />Confirm exact Inventory product: {candidate.name}</label>{confirmedMatch && <label>Quantity to remove ({candidate.inventory_unit})<input type="number" min="0.00000001" max={PROGRAM_INVENTORY_QUANTITY_MAX} step="0.00000001" required value={quantityText} onChange={(event) => { const raw = event.target.value; const quantity = parseProgramInventoryQuantityInput(raw); onQuantityTextChange(raw); onChange({ ...product, inventory_match: { inventory_product_id: candidate.id, quantity_in_inventory_unit: quantity ?? Number.NaN, inventory_unit: candidate.inventory_unit } }) }} /></label>}<p className="panel-note">Enter the amount in {candidate.inventory_unit}. Farm Rx will not convert the Program rate or unit.</p></fieldset>
 }
 
 function TrackerPass({
@@ -1760,7 +1752,7 @@ function TrackerPass({
               {pass.status[0].toUpperCase()}
               {pass.status.slice(1)}
             </span>
-            {pass.due_on ? ` · Due ${pass.due_on}` : " · No due date set"}
+            {pass.due_on ? ` · Due ${formatFarmDate(pass.due_on)}` : " · No due date"}
             {pass.timing_label ? ` · ${pass.timing_label}` : ""}
           </p>
         </div>
@@ -1802,7 +1794,7 @@ function TrackerPass({
       )}
       {pass.status === "applied" && !pass.pending && (
         <div className="pass-detail">
-          <p>Applied {pass.applied_on} · {pass.applied_acres} acres{pass.application_record_id ? " · Application record linked" : ""} · {appliedInventoryMatches.length ? `${appliedInventoryMatches.length} confirmed ${appliedInventoryMatches.length === 1 ? 'Inventory match reduced' : 'Inventory matches reduced'} on hand.${appliedUnmatchedCount ? ` ${appliedUnmatchedCount} unmatched ${appliedUnmatchedCount === 1 ? 'line did' : 'lines did'} not change Inventory.` : ''}` : "Products were left unmatched; Inventory on hand did not change."}</p>
+          <p>Applied {formatFarmDate(pass.applied_on ?? "")} · {pass.applied_acres} acres{pass.application_record_id ? (pass.activity_type === "spray" ? " · Spray record linked" : " · Application record linked") : ""} · {appliedInventoryMatches.length ? `${appliedInventoryMatches.length} confirmed ${appliedInventoryMatches.length === 1 ? 'Inventory match reduced' : 'Inventory matches reduced'} on hand.${appliedUnmatchedCount ? ` ${appliedUnmatchedCount} unmatched ${appliedUnmatchedCount === 1 ? 'line did' : 'lines did'} not change Inventory.` : ''}` : "Products were left unmatched; Inventory on hand did not change."}</p>
           {appliedInventoryMatches.length > 0 && <ul>{appliedInventoryMatches.map((product) => <li key={product.id}>{product.actual_product_name} · Inventory reduced by {formatProgramInventoryQuantity(product.inventory_match!.quantity_in_inventory_unit)} {product.inventory_match!.inventory_unit_snapshot}</li>)}</ul>}
         </div>
       )}
@@ -1849,15 +1841,14 @@ function TrackerPass({
               <option value="none">Do not add an application record</option>
               {records.map((record) => (
                 <option key={record.id} value={record.id}>
-                  Use {record.application_date} · {record.applied_acres} ac ·{" "}
-                  {record.status}
+                  Use {formatFarmDate(record.application_date)} · {record.applied_acres} ac ·{" "}
+                  {record.status === "draft" ? "Draft" : "Completed"}
                 </option>
               ))}
               <option value="create">
-                Create a new draft record
                 {pass.activity_type === "spray"
-                  ? " (recommended for spray records)"
-                  : ""}
+                  ? "Start a new draft spray record (recommended)"
+                  : "Start a new draft application record"}
               </option>
             </select>
           </label>
@@ -1870,6 +1861,7 @@ function TrackerPass({
                   : "link",
               confirmedInventoryMatches,
               confirmedInventorySummary,
+              pass.activity_type === "spray" ? "spray record" : "application record",
             )}
           </p>
           {actuals.map((product, index) => (
