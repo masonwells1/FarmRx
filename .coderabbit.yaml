@@ -13,7 +13,8 @@ reviews:
   request_changes_workflow: true
   high_level_summary: true
   poem: false
-  # Stay silent when a pull request opens; Mason will request a review manually.
+  # Stay silent when a pull request opens; the delivering agent requests the
+  # review by posting the command on the frozen head.
   review_status: false
   collapse_walkthrough: false
 
@@ -76,15 +77,15 @@ reviews:
     - "!**/*.eot"
 
   auto_review:
-    # Mason alone starts a review by personally posting `@coderabbitai review`
-    # on the frozen pull request. PR creation, pushes, labels, descriptions,
+    # The delivering agent starts a review by posting `@coderabbitai review`
+    # once on the frozen pull request. PR creation, pushes, labels, descriptions,
     # and GitHub workflows must never start a review automatically.
     enabled: false
     auto_incremental_review: false
     drafts: false
     # An empty list prevents any label from opting a pull request into review.
     labels: []
-    # Keep description opt-in disabled; the owner's PR comment is the only trigger.
+    # Keep description opt-in disabled; the agent's PR comment is the only trigger.
     description_keyword: ""
 
   # Project-specific review guidance so CodeRabbit flags Farm Rx's real risk

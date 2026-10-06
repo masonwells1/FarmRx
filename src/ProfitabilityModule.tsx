@@ -1795,8 +1795,8 @@ function InsuranceCalculator({
         </div>
       ) : (
         <p className="insurance-empty">
-          Enter coverage, APH yield, and projected price to see your
-          guarantee.
+          Enter coverage, APH yield, and projected price to see an estimate
+          from those numbers. It is not your policy's guarantee.
         </p>
       )}
     </section>
@@ -2003,7 +2003,7 @@ function ProfitabilityMatrix({
                               yield: yieldStep.value,
                             })
                           }
-                          aria-label={`At ${money.format(price.value)} and ${whole.format(yieldStep.value)} bushels per acre, ${profit >= 0 ? "profit" : "loss"} ${money.format(Math.abs(profit))} per acre${belowInsurance ? ", below your minimum insurance revenue" : ""}`}
+                          aria-label={`At ${money.format(price.value)} and ${whole.format(yieldStep.value)} bushels per acre, ${profit >= 0 ? "profit" : "loss"} ${money.format(Math.abs(profit))} per acre${belowInsurance ? ", below the insurance estimate from your entered numbers" : ""}`}
                         >
                           {profit < 0 ? "−" : ""}
                           {money.format(Math.abs(profit))}
@@ -2018,7 +2018,7 @@ function ProfitabilityMatrix({
       </div>
       {minimumRevenueGuaranteePerAcre !== null && (
         <p className="matrix-insurance-legend">
-          Outlined squares: price × yield (before costs) is below your minimum insurance revenue at the projected price.
+          Outlined squares: price × yield (before costs) is below the insurance estimate from your entered numbers (APH × coverage × projected price). It is not your policy's actual minimum.
         </p>
       )}
     </>

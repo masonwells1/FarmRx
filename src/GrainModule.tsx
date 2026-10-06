@@ -2261,10 +2261,11 @@ function AlertEmailSettings({
           <span className="eyebrow">Delivery</span>
           <h2>Email these alerts</h2>
           <p>
-            Emails go out only when the farm owner opens Grain: for plan
-            targets, USDA report reminders, and any marketing alert reached at
-            that moment. Alerts the server finds while Grain is closed go to
-            your phone, not email. Add up to three addresses.
+            Add up to three addresses. Emails go out while the farm owner has
+            Grain open: plan targets, USDA report reminders, and marketing
+            alerts reached then. Alerts the server finds while Grain is closed
+            are never emailed; they show in Alerts, and also go to your phone
+            if you have turned notifications on.
           </p>
         </div>
       </div>
@@ -3660,7 +3661,7 @@ export function Bins({
                   {moisture.message}
                 </p>
               )}
-               {position.lots.map((lot) => lot.inventory && <p className="bin-reconciliation" key={`${lot.commodityId}-baseline`}>Starting amount · {new Date(`${lot.baselineDate}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: {bushels.format(lot.recordedInventory)} bu, plus {lot.movementsSinceBaseline.length} movement{lot.movementsSinceBaseline.length === 1 ? "" : "s"} since = {bushels.format(lot.onHand)} bu now.</p>)}
+               {position.lots.map((lot) => lot.inventory && <p className="bin-reconciliation" key={`${lot.commodityId}-baseline`}>Starting amount · {new Date(`${lot.baselineDate}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: {bushels.format(lot.recordedInventory)} bu, after {lot.movementsSinceBaseline.length} movement{lot.movementsSinceBaseline.length === 1 ? "" : "s"} in or out since, {bushels.format(lot.onHand)} bu now.</p>)}
               <div className="bin-fill">
                 <div>
                   <strong className="numeric">
