@@ -118,9 +118,15 @@ export function createWeatherService(deps: Deps) {
     const name = text.trim()
     if (name.length < 2 || name.length > 80) throw new Error('Type a town name or a 5-digit ZIP code.')
     const query = new URLSearchParams({ name, count: '5', language: 'en', format: 'json', countryCode: 'US' })
-    const response = await deps.fetch(`https://geocoding-api.open-meteo.com/v1/search?${query}`)
-    if (!response.ok) throw new Error('Town search did not respond. Check your signal and try again.')
-    return parsePlaceMatches(await response.json())
+    const noReply = 'Town search did not respond. Check your signal and try again.'
+    // Offline, DNS, and CORS failures reject with browser text such as "Failed to fetch"; the farmer sees the plain message.
+    let body: unknown
+    try {
+      const response = await deps.fetch(`https://geocoding-api.open-meteo.com/v1/search?${query}`)
+      if (!response.ok) throw new Error(noReply)
+      body = await response.json()
+    } catch { throw new Error(noReply) }
+    return parsePlaceMatches(body)
   }
   return { fetchForecast, fetchDailyHistory, searchPlaces }
 }

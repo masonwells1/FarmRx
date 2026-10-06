@@ -73,7 +73,7 @@ function MultiFieldRain({ fields, repository, refresh }: { fields: Field[]; repo
     {result && <p className="field-log-pending" role="status">{result}</p>}
     {open && <form className="field-log-form multi-rain-form" onSubmit={submit}>
       <h3>Add rain to several fields</h3>
-      <fieldset className="wide multi-rain-fields"><legend>Fields</legend>
+      <fieldset className="wide multi-rain-fields" disabled={submitting}><legend>Fields</legend>
         <div className="multi-rain-picks">{fields.map((field) => <label key={field.id} className="check-label"><input type="checkbox" checked={chosen.has(field.id)} onChange={() => toggle(field.id)} /> {field.name}</label>)}</div>
         <button type="button" className="secondary-action" onClick={() => setChosen(chosen.size === fields.length ? new Set() : new Set(fields.map((field) => field.id)))}>{chosen.size === fields.length ? 'Clear all' : 'Pick all fields'}</button>
       </fieldset>
@@ -81,7 +81,7 @@ function MultiFieldRain({ fields, repository, refresh }: { fields: Field[]; repo
       <label>Rainfall (inches)<input name="rainfall" type="number" min="0" max="100" step="0.01" required /></label>
       <label className="wide">Optional note<textarea name="note" maxLength={500} /></label>
       {message && <p className="form-error">{message}</p>}
-      <div><button className="primary-action" disabled={submitting}>{submitting ? 'Saving…' : chosen.size ? `Save rain for ${chosen.size} field${chosen.size === 1 ? '' : 's'}` : 'Save rain'}</button><button type="button" className="secondary-action" onClick={() => { setOpen(false); setMessage(null) }}>Cancel</button></div>
+      <div><button className="primary-action" disabled={submitting}>{submitting ? 'Saving…' : chosen.size ? `Save rain for ${chosen.size} field${chosen.size === 1 ? '' : 's'}` : 'Save rain'}</button><button type="button" className="secondary-action" disabled={submitting} onClick={() => { setOpen(false); setMessage(null) }}>Cancel</button></div>
     </form>}
   </section>
 }
