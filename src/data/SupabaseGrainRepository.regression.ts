@@ -11,6 +11,7 @@ import { getSaveReceipt } from '../lib/saveReceipt'
 import { readNeedsAttention } from './needsAttentionStore'
 import { isMarsBid, knownCounterparties, latestBasis, marsBidLabel } from './basisMath'
 import { farmerError } from '../lib/farmerErrors'
+import { isTransportFailure } from './QueuedFieldsRepository'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from './binLedger'
 import { deriveBinOnHand } from './binLedger'
 import { FILLED_OFFER_DELETE_MESSAGE } from './firmOffers'
@@ -619,6 +620,22 @@ async function run() {
     try { await preLoadRepo.saveLoad(uid(92), draft) } catch (error) { pendingSave = error instanceof Error ? error.message : '' }
     try { await preLoadRepo.voidLoad(uid(92), 'entered twice') } catch (error) { pendingVoid = error instanceof Error ? error.message : '' }
     assert(pendingSave === LOAD_RECORD_PENDING && pendingVoid === LOAD_RECORD_PENDING, `LD-1: a pre-migration database must say so plainly (saw ${pendingSave} / ${pendingVoid}).`)
+
+    // PostgREST reports errors as plain objects. Turned into "[object Object]", a lost connection
+    // was not recognised as one -- so the ticket id a safe retry needs was dropped -- and a final
+    // refusal lost the words that say what to change.
+    for (const [raw, transport, words] of [
+      [{ message: 'TypeError: Failed to fetch', details: '', hint: '', code: '' }, true, 'We could not reach Farm Rx. Check your signal and try again.'],
+      [{ message: 'delivery would exceed the remaining contract bushels; confirm over-delivery to record it', details: null, hint: null, code: 'P0001' }, false, 'This load is more than what is left on the contract.'],
+    ] as const) {
+      const plainErrorGateway = new FakeGateway()
+      Object.defineProperty(plainErrorGateway, 'saveGrainLoadRpc', { value: async () => { throw raw } })
+      let caught: unknown = null
+      try { await repository(plainErrorGateway).saveLoad(uid(93), draft) } catch (error) { caught = error }
+      assert(caught instanceof Error && caught.message === raw.message, `A plain PostgREST error must keep its message (saw ${caught instanceof Error ? caught.message : String(caught)}).`)
+      assert(isTransportFailure(caught, false) === transport, `"${raw.message}" must ${transport ? '' : 'not '}read as a lost connection.`)
+      assert(farmerError(caught, 'record this load').startsWith(words), `"${raw.message}" must reach the farmer as "${words}" (saw ${farmerError(caught, 'record this load')}).`)
+    }
   }
 
   // ------------------------------------------------ LD-4: a read is not exempt from the epoch fence

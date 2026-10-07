@@ -45,6 +45,11 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (/connect to the internet before filling this offer|firm offer must be filled while connected/.test(message)) return 'Connect to the internet before filling this offer.'
   if (/offline copy is too old/.test(message)) return 'This offline copy is too old to show safely. Connect to update it.'
   if (/unreadable or mismatched saved work.*nothing was cleared/.test(message)) return 'Farm Rx found unreadable or mismatched saved work for a farm you can no longer open. Nothing was cleared.'
+  // Final refusals from the delivery and bin-movement functions. Retrying the same thing can never
+  // work, so the farmer is told what to change instead of "try again".
+  if (/would exceed the remaining contract bushels/.test(message)) return 'This load is more than what is left on the contract. Untick the "delivered against" box, or save again and confirm the over-delivery.'
+  if (/would make the bin balance negative/.test(message)) return 'That bin does not hold that many bushels of this crop and crop year. Check the bushels or the bin’s history.'
+  if (/would put more grain in the bin than it holds/.test(message)) return 'That would put more grain in the bin than it holds. Check the bushels or the bin’s capacity.'
   if (/network|fetch|timeout|connection|econn/.test(message)) return 'We could not reach Farm Rx. Check your signal and try again.'
   if (/sign-in ended|jwt|auth|unauthori[sz]ed|\b401\b/.test(message)) return 'Your sign-in ended. Please sign in again.'
   if (/permission|rls|forbidden|\b403\b/.test(message)) return 'You do not have permission to make that change.'

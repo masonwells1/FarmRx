@@ -368,11 +368,12 @@ export class MockGrainRepository implements GrainRepository {
       if (refusal) throw new Error(refusal)
     }
     // Refusal audit (LD-010): the delivery effect goes through record_grain_contract_delivery, which
-    // refuses an over-delivery -- and the browser never sends allow_overdelivery for a load.
+    // refuses an over-delivery -- unless the farmer confirmed it, in which case save_grain_load passes
+    // allow_overdelivery through exactly as a contract's own delivery does.
     if (saved.effect_contract_delivery && saved.destination_grain_contract_id) {
       const contract = workspace.grain_contracts.find((row) => row.id === saved.destination_grain_contract_id)
       if (!contract) throw new Error('Farm Rx could not record this delivery.')
-      if (overDelivers(workspace, contract, saved.net_bushels)) throw new Error(OVER_DELIVERY_MESSAGE)
+      if (overDelivers(workspace, contract, saved.net_bushels) && resolvedDraft.allow_overdelivery !== true) throw new Error(OVER_DELIVERY_MESSAGE)
     }
     const deliveries: GrainContractDelivery[] = saved.effect_contract_delivery && saved.destination_grain_contract_id
       ? [{ id: createGrainId(), farm_id: saved.farm_id, grain_contract_id: saved.destination_grain_contract_id, bushels: saved.net_bushels, delivered_on: saved.load_date, note, grain_load_id: saved.id, created_at: stamp }]

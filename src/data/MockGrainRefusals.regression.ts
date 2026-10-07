@@ -182,6 +182,11 @@ await fresh()
   if (crop) {
     await refused(() => repo.saveLoad(uid(23), draft({ origin_kind: 'field', origin_crop_assignment_id: crop.id, destination_kind: 'contract', destination_buyer: '', destination_grain_contract_id: contract.id, net_bushels: '100', effect_contract_delivery: true })), 'Delivery would exceed the remaining contract bushels; confirm over-delivery to record it.', 'a load that over-delivers its contract')
     assert(!(await data()).grain_loads.some((row) => row.id === uid(23)), 'A refused load must not be saved.')
+    // Confirmed by the farmer, the same load is recorded and the contract shows over-delivered, as
+    // save_grain_load does when it passes allow_overdelivery through.
+    await repo.saveLoad(uid(23), draft({ origin_kind: 'field', origin_crop_assignment_id: crop.id, destination_kind: 'contract', destination_buyer: '', destination_grain_contract_id: contract.id, net_bushels: '100', effect_contract_delivery: true, allow_overdelivery: true }))
+    const delivered = (await data()).grain_contract_deliveries.filter((row) => row.grain_contract_id === contract.id).reduce((sum, row) => sum + row.bushels, 0)
+    assert(delivered === contract.bushels + 50, `A confirmed over-delivery must be recorded (delivered ${delivered} of ${contract.bushels}).`)
   }
 }
 
