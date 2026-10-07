@@ -6,7 +6,7 @@ import { SaveReceipt } from "./components/SaveReceipt";
 import { MarketQuoteSection, quoteCropYear } from "./components/MarketQuote";
 import { confirmDialog, promptDialog } from "./components/ConfirmDialog";
 import { SectionTabs } from "./SectionTabs";
-import { farmerError } from "./lib/farmerErrors";
+import { farmerError, isOverdeliveryRefusal } from "./lib/farmerErrors";
 import { isTransportFailure } from "./data/QueuedFieldsRepository";
 import { currentFarmContext } from "./auth/farmContext";
 import { beginPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_CONTEXT_CHANGED } from "./data/pendingSettingsWork";
@@ -31,13 +31,10 @@ const isSaleLimitDraft = (key: string, payload: unknown): payload is SaleLimitDr
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOfferType, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainContractType, GrainLoad, GrainLoadDraft, GrainServices, GrainWorkspace, LoadTruck, MarketingAlertRule, MarketingAlertRuleType, MarketingPlanTarget, PositionScope, ProductionEstimate } from "./data/grain";
-import { deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
+import { contractUndeliveredBushels, deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
 import type { BinLotOnHand } from "./data/committedFree";
-// Grain usability (bins and loads): what is left on a contract, scale-ticket maths and date display.
-import { contractUndeliveredBushels } from "./data/committedFree";
-import { activeLoads, basisCentsPrompt, basisLooksLikeCents, loadDateInFutureProblem, netBushelsFromWeights, normalizeLoadEffects, STANDARD_BUSHEL_LBS } from "./data/grain";
 import { formatFarmDate } from "./lib/farmDate";
-import { confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, contractIsDeletable, loadEffectsAvailable, loadLotFor, manualMovementCropYears, originBinLots, recordedBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
+import { activeLoads, basisCentsPrompt, basisLooksLikeCents, loadDateInFutureProblem, netBushelsFromWeights, normalizeLoadEffects, STANDARD_BUSHEL_LBS, confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, contractIsDeletable, loadEffectsAvailable, loadLotFor, manualMovementCropYears, originBinLots, recordedBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planMonthFor, plannedPercentThroughMonth, validateContractCorrectionReason, validateGrainLoad, validateLoadVoidReason } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -59,6 +56,7 @@ import {
   deriveCommodityBinTotal,
   isBinTransactionSuperseded,
   moistureStatus,
+  safeStorageMoisture,
   validateBinTransaction,
   validateGrainBin,
 } from "./data/binLedger";
@@ -111,7 +109,8 @@ export const movementSourceLabel = (kind: string | null | undefined) =>
   kind === "grain_load" ? "From a load ticket"
     : kind === "grain_load_void" ? "Undone by a voided load ticket"
     : !kind || /^manual/i.test(kind) ? "Entered by hand"
-    : "Other";
+    // Any other code is shown as words rather than hidden behind "Other".
+    : kind.replace(/[_-]+/g, " ").trim().replace(/^\w/, (letter) => letter.toUpperCase());
 
 /** Keeps the harvest-total action from accidentally saving a stale text-input value. */
 export function buildProductionSaveInput(estimate: ProductionEstimate, aphValue: string, actualValue: string, drives_math = estimate.drives_math, actualOverride?: number): ProductionEstimate {
@@ -3638,7 +3637,10 @@ export function Bins({
           const position = binPosition(workspace, bin);
           // Only crops the bin still holds. A crop emptied out of the bin is history, not a badge.
           const heldLots = position.lots.filter((lot) => Math.abs(lot.onHand) > 0.000001);
-          const heldFamily = workspace.fields.commodities.find((item) => item.id === heldLots[0]?.commodityId)?.crop_family ?? null;
+          // A bin holding two crops is held to the stricter safe moisture of the two.
+          const heldFamily = heldLots
+            .map((lot) => workspace.fields.commodities.find((item) => item.id === lot.commodityId)?.crop_family ?? null)
+            .reduce<Parameters<typeof safeStorageMoisture>[0]>((strictest, family) => family && (!strictest || safeStorageMoisture(family) < safeStorageMoisture(strictest)) ? family : strictest, null);
           const moisture = moistureStatus(bin, new Date(), heldFamily);
           const moistureText =
             bin.moisture_pct === null
@@ -3736,11 +3738,13 @@ export function Bins({
                 className="secondary-action bin-move-toggle"
                 type="button"
                 aria-expanded={movingBinId === bin.id}
+                aria-controls={`bin-move-${bin.id}`}
+                aria-label={movingBinId === bin.id ? `Close add or take out grain for ${bin.name}` : undefined}
                 onClick={() => setMovingBinId(movingBinId === bin.id ? null : bin.id)}
               >
                 {movingBinId === bin.id ? "Close" : "Add or take out grain"}
               </button>
-              <div className="bin-move" hidden={movingBinId !== bin.id}>
+              <div className="bin-move" id={`bin-move-${bin.id}`} hidden={movingBinId !== bin.id}>
                 <p className="panel-note">
                   Movements can’t be edited. To fix a mistake, add an opposite
                   movement.
@@ -3831,7 +3835,8 @@ function BinForm({
   const formRef = useRef<HTMLFormElement>(null);
   useEffect(() => {
     formRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
-    formRef.current?.querySelector("input")?.focus();
+    // preventScroll, so the jump to the input does not cut the smooth scroll short under the header.
+    formRef.current?.querySelector("input")?.focus({ preventScroll: true });
   }, []);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -4039,7 +4044,7 @@ function MovementForm({
     ? "name those movements under \u201cWhich crop year were these?\u201d first."
     : canManageFarm === false
       ? "ask the farm owner to name the crop year of those older movements first."
-      : "the farm owner names those movements under \u201cWhich crop year were these?\u201d first.";
+      : "name those movements under \u201cWhich crop year were these?\u201d first, or ask the farm owner to.";
   const noLotToTakeOut = `This bin has no ${commodityName} with a crop year on record to take out. If it holds grain from before crop years were recorded, ${nameOlderMovements}`;
   // Fill in a lone lot, from a settled list only, and never under a retry: the outstanding draft
   // already carries the year it was sent with.
@@ -4060,6 +4065,11 @@ function MovementForm({
     if (!submitLock.current.acquire()) return;
     setSaving(true);
     try {
+      // A word in the box would otherwise reach the bushel check as "must be greater than zero".
+      if (!movementDraft.current && bushelsValue.trim() && !Number.isFinite(Number(bushelsValue))) {
+        setError("Type bushels as a number, like 1000.");
+        return;
+      }
       if (activeCommodityIds.length && !activeCommodityIds.includes(commodity)) {
         setError("This bin still holds another commodity. Empty its active lot before storing a different crop.");
         return;
@@ -4275,6 +4285,8 @@ export function Basis({
       });
       setBasis("");
       setCashPrice("");
+      // Back to today, so the next bid is not quietly saved under the date of the last one.
+      setBidDate(farmLocalCalendarDate());
       setError("");
       await onSaved();
     } catch (exception) {
@@ -4378,11 +4390,14 @@ export function Basis({
             type="number"
             step="any"
             placeholder="Basis $/bu (e.g. -0.35)"
+            aria-describedby="basis-sign-hint"
             value={basis}
             onChange={(event) => setBasis(event.target.value)}
           />
-          <small>Under futures is negative. Type -0.35 for 35&cent; under, 0.10 for 10&cent; over.</small>
         </label>
+        {/* Outside the label, so it is not read as part of the box's name and does not push the
+            Basis box out of line with its neighbours. It runs the full width under this row. */}
+        <p className="basis-hint" id="basis-sign-hint">Under futures is negative. Type -0.35 for 35&cent; under, 0.10 for 10&cent; over.</p>
         <label>
           Cash price ($/bu) <small>optional</small>
           <input
@@ -4413,11 +4428,16 @@ export function Basis({
           {error}
         </p>
       )}
+      {/* Bars side by side read as one elevator's trend, so the chart waits for an elevator. Until
+          then the list below names each bid's elevator. */}
+      {allElevators ? (
+        history.length > 0 && <p className="panel-note basis-chart-note">Latest bids from every elevator. Type an elevator to see its trend.</p>
+      ) : (
       <svg
         className="basis-chart"
         viewBox="0 0 320 150"
         role="img"
-        aria-label={allElevators ? "Basis history from every elevator" : `Basis history for ${elevator}`}
+        aria-label={`Basis history for ${elevator}`}
       >
         <line x1="0" x2="320" y1="75" y2="75" className="basis-zero" />
         {history.map((bid, index) => {
@@ -4440,6 +4460,7 @@ export function Basis({
           );
         })}
       </svg>
+      )}
       <div className="basis-list">
         {history
           .slice()
@@ -4455,10 +4476,10 @@ export function Basis({
               </span>
               <strong>
                 {bid.basis > 0 ? "+" : ""}
-                {money.format(bid.basis)}
+                {pricePerBu.format(bid.basis)}
               </strong>
               {bid.cash_price !== null && (
-                <small>Cash {money.format(bid.cash_price)}</small>
+                <small>Cash {pricePerBu.format(bid.cash_price)}</small>
               )}
             </div>
           ))}
@@ -4652,12 +4673,20 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   const [draft, setDraft] = useState<GrainLoadDraft>(() => ({ ...emptyLoadDraft(), origin_kind: workspace.grain_bins.length ? "bin" : "field" }));
   const [message, setMessage] = useState("");
   // Every problem with the form at once, listed beside the Save button, rather than one per tap.
-  const [shownProblems, setShownProblems] = useState<string[]>([]);
+  // Turned on by a Save that found problems and off by one that worked. While it is on, the list is
+  // the live one, so a problem the farmer fixes drops off and the rest stay where they are.
+  const [showProblems, setShowProblems] = useState(false);
   // What happened to a void, shown beside the Recent loads list where the Void button was tapped.
   const [voidMessage, setVoidMessage] = useState("");
   // The net bushels Farm Rx last filled in from the scale weights. While the box still holds exactly
   // that figure it follows the weights; once the farmer types their own, it is left alone.
   const netAuto = useRef<string | null>(null);
+  // The contract the server last refused an over-delivery on. This screen's delivery list can be
+  // behind (another device, or the capped list), and then it would never ask; the next Save on that
+  // contract asks regardless, so the farmer is not refused the same way forever.
+  const overdeliveryRefusedFor = useRef<string | null>(null);
+  // Whether the ticket waiting on a retry failed with no signal at all, so letting it go can say so.
+  const outstandingOffline = useRef(false);
   const formTop = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
   const lock = useRef(createSubmitLock());
@@ -4735,10 +4764,9 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
   // The effect flags are a preference and deliberately survive a change of shape: a box the farmer
   // never touched keeps its default, and one they unticked stays unticked. What a load will
   // actually do is narrowed once, where it is sent.
-  // Any edit starts a new ticket, so the last ticket's "Load saved" and the last list of problems
-  // go with it. While a ticket is outstanding every input is disabled, so an edit can never drop
-  // the id a retry needs.
-  const update = (patch: Partial<GrainLoadDraft>) => { redraft(); setMessage(""); setShownProblems([]); setDraft((current) => ({ ...current, ...patch })) };
+  // Any edit starts a new ticket, so the last ticket's "Load saved" goes with it. While a ticket is
+  // outstanding every input is disabled, so an edit can never drop the id a retry needs.
+  const update = (patch: Partial<GrainLoadDraft>) => { redraft(); setMessage(""); setDraft((current) => ({ ...current, ...patch })) };
 
   const effectsReady = workspace.capabilities?.grain_load_effects !== false;
   const binLotReady = workspace.capabilities?.grain_load_bin_lot !== false;
@@ -4782,6 +4810,22 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       update({ ...patch, net_bushels: worked });
     } else update(patch);
   };
+  // The figure the weights give for the crop this load is now. The hint is judged against this,
+  // not against what was filled in earlier, so it never vouches for a figure worked at another
+  // crop's lb/bu.
+  const workedNet = lbsPerBushel ? netBushelsFromWeights(draft.gross_lbs, draft.tare_lbs, lbsPerBushel) : null;
+  // When the crop changes under typed weights -- another field crop, another bin, or the bin's lot
+  // read landing after the weights were typed -- the filled-in figure is worked again. A net the
+  // farmer typed is left alone, and a ticket waiting on a retry is never touched.
+  const lastLbsPerBushel = useRef(lbsPerBushel);
+  useEffect(() => {
+    if (lastLbsPerBushel.current === lbsPerBushel) return;
+    lastLbsPerBushel.current = lbsPerBushel;
+    if (ticketOutstanding || workedNet === null || draft.net_bushels === workedNet) return;
+    if (draft.net_bushels.trim() && draft.net_bushels !== netAuto.current) return;
+    netAuto.current = workedNet;
+    setDraft((current) => ({ ...current, net_bushels: workedNet }));
+  }, [lbsPerBushel, workedNet, ticketOutstanding, draft.net_bushels]);
   const numberTyped = (value: string) => value.replace(/[,\s]/g, "");
   const contractLeft = (contract: GrainContract) => contractUndeliveredBushels(contract, workspace.grain_contract_deliveries);
   // The contracts this load could go against, with what is still left to deliver on each. The one
@@ -4801,7 +4845,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       .map((contract) => ({ contract, left: contractLeft(contract) }))
       .find((option) => option.left > 0) ?? null
     : null;
-  const problemAbout = (pattern: RegExp) => shownProblems.some((problem) => pattern.test(problem)) || undefined;
+  const problemAbout = (pattern: RegExp) => (showProblems && problems.some((problem) => pattern.test(problem))) || undefined;
   const commodityLabel = (id: string) => workspace.fields.commodities.find((item) => item.id === id)?.name ?? id;
   const binName = (id: string | null) => workspace.grain_bins.find((bin) => bin.id === id)?.name ?? "a bin";
   const fieldName = (assignmentId: string | null) => {
@@ -4875,16 +4919,17 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
     ? `${typedNet.toLocaleString()} bu`
     : "these bushels";
   // The same four effects said as a sentence, so what is about to happen reads as English rather
-  // than as a column of ticked boxes.
-  const effectPhrases = confirmedEffects.map((key) => {
-    if (key === "bin_out") return `takes ${bushelLabel} out of ${binName(draft.origin_grain_bin_id)}`;
-    if (key === "bin_in") return `puts ${bushelLabel} into ${binName(draft.destination_grain_bin_id)}`;
-    if (key === "contract_delivery") return `records ${bushelLabel} delivered against ${contractLabel(draft.destination_grain_contract_id)}`;
-    return `counts ${bushelLabel} toward ${fieldName(draft.origin_crop_assignment_id)}\u2019s harvest`;
-  });
-  const effectSentence = effectPhrases.length <= 1
-    ? effectPhrases.join("")
-    : `${effectPhrases.slice(0, -1).join(", ")} and ${effectPhrases[effectPhrases.length - 1]}`;
+  // than as a column of ticked boxes -- and, once saved, as what already happened.
+  const effectWords = (past: boolean) => {
+    const phrases = confirmedEffects.map((key) => {
+      if (key === "bin_out") return `${past ? "took" : "takes"} ${bushelLabel} out of ${binName(draft.origin_grain_bin_id)}`;
+      if (key === "bin_in") return `${past ? "put" : "puts"} ${bushelLabel} into ${binName(draft.destination_grain_bin_id)}`;
+      if (key === "contract_delivery") return `${past ? "recorded" : "records"} ${bushelLabel} delivered against ${contractLabel(draft.destination_grain_contract_id)}`;
+      return `${past ? "counted" : "counts"} ${bushelLabel} toward ${fieldName(draft.origin_crop_assignment_id)}\u2019s harvest`;
+    });
+    return phrases.length <= 1 ? phrases.join("") : `${phrases.slice(0, -1).join(", ")} and ${phrases[phrases.length - 1]}`;
+  };
+  const effectSentence = effectWords(false);
 
   const save = async () => {
     if (!lock.current.acquire()) return;
@@ -4900,8 +4945,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
           : "Farm Rx could not read what this bin holds. Check your signal and try again.");
         return;
       }
-      if (problems.length) { setMessage(""); setShownProblems(problems); return }
-      setShownProblems([]);
+      if (problems.length) { setMessage(""); setShowProblems(true); return }
       // The same scale ticket entered twice is the classic double count. Asked only for a fresh
       // ticket: a retry is the same ticket by definition. Best effort, because the recent-loads list
       // is capped, and never a hard stop, because two elevators can use the same ticket number.
@@ -4921,10 +4965,15 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       if (effectsReady && normalizeLoadEffects(draft).effect_contract_delivery) {
         const contract = workspace.grain_contracts.find((row) => row.id === draft.destination_grain_contract_id);
         const excess = contract ? Number(draft.net_bushels) - contractLeft(contract) : 0;
-        if (excess > 0.000001) {
+        const refusedBefore = !!contract && overdeliveryRefusedFor.current === contract.id;
+        if (excess > 0.000001 || refusedBefore) {
           if (!(await confirmDialog({
-            title: `This load is ${preciseBushels.format(excess)} bu more than is left on the contract. Record anyway?`,
-            body: "The contract will show as over-delivered.",
+            title: excess > 0.000001
+              ? `This load is ${preciseBushels.format(excess)} bu more than is left on the contract. Record anyway?`
+              : "This load is more than is left on the contract. Record anyway?",
+            body: excess > 0.000001
+              ? "The contract will show as over-delivered."
+              : "Farm Rx has more deliveries on this contract than this screen shows. The contract will show as over-delivered.",
             confirmLabel: "Record anyway",
           }))) return;
           allowOverdelivery = true;
@@ -4964,11 +5013,13 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
           ? { ...outgoing0, origin_crop_year: String(lot.crop_year), origin_commodity_id: lot.commodity_id }
           : outgoing0;
       // What this save did beyond the ticket, captured before the draft is cleared below.
-      const didAlso = effectsReady && confirmedEffects.length ? effectSentence : "";
+      const didAlso = effectsReady && confirmedEffects.length ? effectWords(true) : "";
       const movedOrDelivered = effectsReady && confirmedEffects.some((key) => key !== "harvest");
       const saved = await services.grainRepository.saveLoad(loadId.current, allowOverdelivery ? { ...outgoing, allow_overdelivery: true } : outgoing);
       loadId.current = null;
       setTicketOutstanding(false);
+      setShowProblems(false);
+      overdeliveryRefusedFor.current = null;
       // The next ticket almost always shares the date, the truck and the origin -- a farmer hauling
       // out of one bin all afternoon should not retype them. The weights, moisture and ticket number
       // are what change per load, so only those are cleared.
@@ -4993,11 +5044,21 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       // tranche has now made twice. Offline counts as unknown: the queued repository refuses before
       // sending, so nothing was committed, but the lot has nowhere to go until the signal is back.
       const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
-      if (!isTransportFailure(error, offline)) {
+      // Kept in the exact shape the foundation guard pins (ld4:a-refused-save-lets-its-lot-go).
+      if (!isTransportFailure(error, typeof navigator !== 'undefined' && navigator.onLine === false)) {
         loadId.current = null;
         setTicketOutstanding(false);
+      }
+      if (loadId.current === null) {
         setMessage(farmerError(error, "record this load"));
+        // The server counts more delivered on this contract than this screen does. Read the contracts
+        // again, and ask about the over-delivery on the next Save whatever the list then says.
+        if (isOverdeliveryRefusal(error)) {
+          overdeliveryRefusedFor.current = draft.destination_grain_contract_id || null;
+          await onSaved().catch(() => undefined);
+        }
       } else {
+        outstandingOffline.current = offline;
         // The outcome is unknown, so the ticket is kept and the form is locked to it. Offline, the
         // queued repository refused before sending, so nothing can have been saved yet; otherwise the
         // write may have committed with only its answer lost, and the farmer has to know that before
@@ -5049,7 +5110,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
           .join("; ");
         // Movements cannot be edited, so "deal with it" is spelled out as the two things that work.
         setVoidMessage(movements
-          ? `This ticket cannot be voided yet, because grain moved through that bin after it: ${movements}. To undo it, first void the later load that moved that grain, or add an opposite movement in that bin’s history under Bins & basis. Then void this ticket. Nothing was changed.`
+          ? `This ticket cannot be voided yet, because grain moved through that bin after it: ${movements}. To undo it, first void the later load that moved that grain. If that later movement was itself a mistake, undo it with “Add or take out grain” on that bin under Bins & basis. Then void this ticket. Nothing was changed.`
           : "This ticket cannot be voided yet, because the bins it touched have changed since. Nothing was changed.");
         await onSaved();
         return;
@@ -5089,20 +5150,34 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
     .sort((a, b) => b.cropYear - a.cropYear || commodityLabel(a.commodityId).localeCompare(commodityLabel(b.commodityId)));
 
   // Letting go of an outstanding ticket is deliberate: it may already be saved, and entering it
-  // again under a new id would count it twice.
+  // again under a new id would count it twice. So its weights, net and ticket number are cleared as a
+  // saved ticket's are, and the loads are read again so Recent loads and the same-ticket check can
+  // see it if it did land.
   const startDifferentTicket = async () => {
     if (!(await confirmDialog({
       title: "Start a different ticket?",
-      body: "The last load may already be saved. Check Recent loads after your signal is back before entering it again.",
+      body: outstandingOffline.current
+        ? "There was no signal, so the last load most likely was not saved. Its weights and ticket number are cleared. Check Recent loads when your signal is back before entering it again."
+        : "The last load may already be saved. Its weights and ticket number are cleared. Check Recent loads before entering it again.",
       confirmLabel: "Start a different ticket",
     }))) return;
     redraft();
     setMessage("");
+    netAuto.current = null;
+    setDraft((current) => ({ ...current, gross_lbs: "", tare_lbs: "", net_bushels: "", moisture_pct: "", ticket_number: "", notes: "" }));
+    await onSaved().catch(() => undefined);
   };
 
   // Fill the form from a voided ticket so it can be fixed and saved as a new one. It goes through
   // update(), so it is a fresh ticket with a fresh id; nothing is saved until the farmer taps Save.
-  const copyToNewTicket = (load: GrainLoad) => {
+  // What the voided ticket did comes with it, so a record-only ticket is not copied into one that
+  // moves bushels; and a ticket half typed in the form is not replaced without asking.
+  const copyToNewTicket = async (load: GrainLoad) => {
+    if ([draft.gross_lbs, draft.tare_lbs, draft.net_bushels, draft.ticket_number].some((value) => value.trim()) && !(await confirmDialog({
+      title: "Replace the ticket you are typing?",
+      body: "The form already has a ticket in it. Copying the voided ticket replaces what you typed.",
+      confirmLabel: "Replace it",
+    }))) return;
     netAuto.current = null;
     update({
       load_date: load.load_date,
@@ -5123,6 +5198,10 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
       truck_equipment_id: load.truck_equipment_id ?? "",
       truck_name: load.truck_equipment_id ? "" : load.truck_name ?? "",
       notes: "",
+      effect_bin_out: load.effect_bin_out,
+      effect_bin_in: load.effect_bin_in,
+      effect_contract_delivery: load.effect_contract_delivery,
+      effect_harvest: load.effect_harvest,
     });
     setVoidMessage("");
     setMessage("Copied from the voided ticket. Fix what was wrong, then tap Save load.");
@@ -5162,7 +5241,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
           {draft.origin_kind === "bin" ? (
             <>
               {/* A year chosen for one bin means nothing in another, so picking a bin clears it. */}
-              <label>Bin<select value={draft.origin_grain_bin_id} aria-invalid={problemAbout(/^Pick the bin this load came from|^That bin/)} onChange={(event) => update({ origin_grain_bin_id: event.target.value, origin_crop_year: "", origin_commodity_id: "" })}>
+              <label>Bin<select value={draft.origin_grain_bin_id} aria-invalid={problemAbout(/^Pick the bin this load came from|^That bin holds no crop|^That bin has no recorded/)} onChange={(event) => update({ origin_grain_bin_id: event.target.value, origin_crop_year: "", origin_commodity_id: "" })}>
                 <option value="">Pick a bin</option>
                 {workspace.grain_bins.map((bin) => <option key={bin.id} value={bin.id}>{bin.name}</option>)}
               </select></label>
@@ -5176,7 +5255,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
                 <p className="load-lot">Farm Rx could not read what this bin holds right now, so it cannot say which crop year this load is.</p>
               ) : binLotReady && draft.origin_grain_bin_id ? (
                 originLots.length === 0 ? (
-                  <p className="load-lot">This bin holds no crop with a crop year yet. Add an &ldquo;In&rdquo; movement for it under Bins &amp; basis.</p>
+                  <p className="load-lot">This bin holds no crop with a crop year yet. If it has grain in it, tap &ldquo;Add or take out grain&rdquo; on that bin under Bins &amp; basis and add an &ldquo;In&rdquo; for it.</p>
                 ) : originLots.length === 1 ? (
                   <p className="load-lot">This bin holds one crop year: <strong>{originLots[0].crop_year} {commodityLabel(originLots[0].commodity_id)}</strong>, {Math.round(originLots[0].bushels).toLocaleString()} bu.</p>
                 ) : (
@@ -5224,7 +5303,9 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
             {lot
               ? `This load is ${commodityLabel(lot.commodity_id)}, ${lot.crop_year} crop.`
               : draft.origin_kind === "bin"
-                ? "Pick a bin. If the bin shows no crop year yet, go to Bins & basis, open that bin and add an “In” movement for the grain already in it."
+                ? binLotReady
+                  ? "Pick a bin. If it shows no crop year yet but has grain in it, tap “Add or take out grain” on that bin under Bins & basis and add an “In” for it."
+                  : "Pick a bin. A bin with no recorded starting amount cannot name its crop year until the next database update."
                 : "Pick the field crop, and Farm Rx takes the crop and year from it."}
           </p>
         </fieldset>
@@ -5283,7 +5364,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
         <label>Tare weight (lb)<input type="text" inputMode="decimal" autoComplete="off" aria-invalid={problemAbout(/tare|loaded truck/i)} value={draft.tare_lbs} onChange={(event) => updateWeight({ tare_lbs: numberTyped(event.target.value) })} /></label>
         <div className="load-field">
           <label>Net bushels<input type="text" inputMode="decimal" autoComplete="off" aria-invalid={problemAbout(/net bushels/i)} value={draft.net_bushels} onChange={(event) => update({ net_bushels: numberTyped(event.target.value) })} /></label>
-          {netAuto.current && draft.net_bushels === netAuto.current && lbsPerBushel
+          {workedNet !== null && draft.net_bushels === workedNet
             ? <small className="load-hint">Worked out from the scale weights at {lbsPerBushel} lb/bu. Change it to match your ticket if it differs.</small>
             : !lot && <small className="load-hint">Pick where the load came from first, and Farm Rx works out net bushels from the weights you type.</small>}
         </div>
@@ -5339,9 +5420,9 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
         </fieldset>
         </fieldset>
 
-        {shownProblems.length > 0 && (
+        {showProblems && problems.length > 0 && (
           <ul className="form-error load-problems" role="alert">
-            {shownProblems.map((problem) => <li key={problem}>{problem}</li>)}
+            {problems.map((problem) => <li key={problem}>{problem}</li>)}
           </ul>
         )}
         <button className="primary-action" type="button" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : ticketOutstanding ? "Retry load" : "Save load"}</button>
@@ -5359,6 +5440,8 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
         <>
           {loadTotals.length > 0 && (
             <p className="load-totals">
+              {/* The recent list is capped, so this is said to be the listed loads, not the season. */}
+              In the loads listed below:{" "}
               {loadTotals.map((total) => `${commodityLabel(total.commodityId)} ${total.cropYear}: ${total.count} load${total.count === 1 ? "" : "s"}, ${displayBushels(total.bushels)} bu`).join(" · ")} (not counting voided tickets)
             </p>
           )}
@@ -5378,7 +5461,7 @@ export function LoadsTab({ workspace, services, onSaved }: { workspace: GrainWor
                       <span className="load-void-reason">Voided &mdash; {load.void_reason}</span>
                       {/* "Void it and enter it again" without retyping every field: the copy is a new
                           ticket with a new id, filled in for the farmer to fix and save. */}
-                      <button className="text-action" type="button" disabled={saving || ticketOutstanding} onClick={() => copyToNewTicket(load)}>Copy to a new ticket</button>
+                      <button className="text-action" type="button" disabled={saving || ticketOutstanding} onClick={() => void copyToNewTicket(load)}>Copy to a new ticket</button>
                     </>
                     : <button className="text-action" type="button" disabled={saving} onClick={() => void voidLoad(load)}>Void</button>}</td>
                 </tr>

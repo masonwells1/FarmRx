@@ -5,6 +5,8 @@ import { CONTRACT_REPAIR_PENDING, LOAD_RECORD_PENDING } from '../data/grain'
 export const firmOfferFillPartialSuccessMessage = 'Your sale was recorded as a contract. The offer could not be marked filled — reload the page. Do not enter this contract again.'
 
 function details(error: unknown) { const values: string[] = []; const seen = new Set<unknown>(); let current: unknown = error; while (current && !seen.has(current)) { seen.add(current); if (current instanceof Error) values.push(current.message); if (typeof current === 'object') { const row = current as { message?: unknown; code?: unknown; status?: unknown; cause?: unknown }; for (const value of [row.message, row.code, row.status]) if (typeof value === 'string' || typeof value === 'number') values.push(String(value)); current = row.cause } else break }; return values.join(' ').toLowerCase() }
+/** The load save was refused because it would over-deliver its contract, which a Retry alone never fixes. */
+export function isOverdeliveryRefusal(error: unknown) { return /would exceed the remaining contract bushels/.test(details(error)) }
 /** Fixed UI taxonomy: technical adapter/database text never reaches a farmer. */
 export function farmerError(error: unknown, action = 'save this field') {
   const message = details(error)
@@ -47,7 +49,13 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (/unreadable or mismatched saved work.*nothing was cleared/.test(message)) return 'Farm Rx found unreadable or mismatched saved work for a farm you can no longer open. Nothing was cleared.'
   // Final refusals from the delivery and bin-movement functions. Retrying the same thing can never
   // work, so the farmer is told what to change instead of "try again".
-  if (/would exceed the remaining contract bushels/.test(message)) return 'This load is more than what is left on the contract. Untick the "delivered against" box, or save again and confirm the over-delivery.'
+  // Shared by the Loads form and a contract's own Record delivery, so each is told about its own controls.
+  if (/would exceed the remaining contract bushels/.test(message)) return /load/.test(action)
+    ? 'This load is more than what is left on the contract. Untick “Record … delivered against …”, or tap Save load again and confirm the over-delivery.'
+    : 'This delivery is more than what is left on the contract. Reload, then record it again and confirm the over-delivery.'
+  // LD-4's per-lot check, the refusal a load out of a bin most often meets (server and mock wording).
+  if (/does not hold that many bushels of the|does not hold enough of the/.test(message)) return 'That bin does not hold that many bushels of that crop year. Check the bushels or the bin’s history.'
+  if (/empty those lots before storing another crop/.test(message)) return 'That bin still holds another crop. Empty it before putting a different crop in.'
   if (/would make the bin balance negative/.test(message)) return 'That bin does not hold that many bushels of this crop and crop year. Check the bushels or the bin’s history.'
   if (/would put more grain in the bin than it holds/.test(message)) return 'That would put more grain in the bin than it holds. Check the bushels or the bin’s capacity.'
   if (/network|fetch|timeout|connection|econn/.test(message)) return 'We could not reach Farm Rx. Check your signal and try again.'

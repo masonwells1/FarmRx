@@ -563,7 +563,7 @@ export function validateGrainLoad(
         }
         const lots = authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id)
         if (lots.length === 0) {
-          problems.push('That bin holds no crop with a crop year, so Farm Rx cannot tell which crop year this load is. Add an "In" movement for the grain in it under Bins & basis first.')
+          problems.push('That bin holds no crop with a crop year, so Farm Rx cannot tell which crop year this load is. If it has grain in it, tap "Add or take out grain" on that bin under Bins & basis and add an "In" for it first.')
         } else if (draft.origin_crop_year.trim()) {
           problems.push('That bin does not hold the ' + draft.origin_crop_year.trim() + ' crop.')
         } else {

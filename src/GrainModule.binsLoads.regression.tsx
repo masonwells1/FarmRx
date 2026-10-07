@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router'
 import { Basis, Bins, LoadsTab, movementSourceLabel } from './GrainModule'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
-import { loadDateInFutureProblem, netBushelsFromWeights, STANDARD_BUSHEL_LBS, validateGrainLoadShape, type BinTransaction, type CashBid, type GrainBin, type GrainContract, type GrainLoadDraft, type GrainServices, type GrainWorkspace } from './data/grain'
+import { loadDateInFutureProblem, netBushelsFromWeights, STANDARD_BUSHEL_LBS, validateGrainLoadShape, type BinTransaction, type CashBid, type GrainBin, type GrainContract, type GrainLoad, type GrainLoadDraft, type GrainServices, type GrainWorkspace } from './data/grain'
 import { grainLoadPayload } from './data/SupabaseGrainDataGateway'
 import { farmerError } from './lib/farmerErrors'
 import { useSaveReceipt } from './lib/saveReceipt'
@@ -33,6 +33,13 @@ assert(movementSourceLabel('grain_load') === 'From a load ticket' && movementSou
 assert(farmerError(new Error('delivery would exceed the remaining contract bushels; confirm over-delivery to record it'), 'record this load').startsWith('This load is more than what is left on the contract.'), 'An over-delivery refusal says what to change, not "try again".')
 assert(farmerError({ message: 'this movement would make the bin balance negative' }, 'add this movement').startsWith('That bin does not hold that many bushels'), 'A short bin is named.')
 assert(farmerError(new Error('This movement would put more grain in the bin than it holds.'), 'record this load').startsWith('That would put more grain in the bin than it holds.'), 'A full bin is named.')
+// The per-lot refusal a load out of a bin most often meets, in the server's words and the mock's.
+assert(farmerError({ code: 'FR001', message: 'this bin does not hold that many bushels of the 2026 crop' }, 'record this load').startsWith('That bin does not hold that many bushels of that crop year.'), 'The per-lot refusal is named, not "try again".')
+assert(farmerError(new Error('That bin does not hold enough of the 2026 crop.'), 'record this load').startsWith('That bin does not hold that many bushels of that crop year.'), 'The mock per-lot refusal is named too.')
+assert(farmerError({ message: 'this bin still holds nonzero lots: corn_yellow; empty those lots before storing another crop' }, 'add this movement') === 'That bin still holds another crop. Empty it before putting a different crop in.', 'A bin holding another crop is named.')
+// The over-delivery words fit the screen they appear on.
+assert(farmerError(new Error('delivery would exceed the remaining contract bushels'), 'record this delivery').startsWith('This delivery is more than what is left on the contract. Reload,'), 'On a contract there is no load and no box to untick.')
+assert(movementSourceLabel('harvest_import') === 'Harvest import', 'An unknown source is shown in words rather than as "Other".')
 const contractDraft: GrainLoadDraft = { ...baseDraft, destination_kind: 'contract', destination_buyer: '', destination_grain_contract_id: uid(2) }
 assert(grainLoadPayload(uid(3), { ...contractDraft, allow_overdelivery: true }).allow_overdelivery === true, 'A confirmed over-delivery travels with the save.')
 assert(!('allow_overdelivery' in grainLoadPayload(uid(3), { ...baseDraft, allow_overdelivery: true })), 'No delivery happens on a buyer load, so the flag is not sent.')
@@ -80,7 +87,7 @@ const workspace: GrainWorkspace = {
   capabilities: { contract_deliveries: true, contract_price_finalization: true, bin_movements: true, grain_loads: true, grain_load_effects: true, grain_load_bin_lot: true },
 } as GrainWorkspace
 const savedBins: GrainBin[] = []; const sentLoads: Array<{ id: string; draft: GrainLoadDraft }> = []; const savedBids: CashBid[] = []
-let loadMode: 'lost' | 'ok' = 'ok'
+let loadMode: 'lost' | 'ok' | 'refuse-over' = 'ok'
 let nextId = 100
 const repository = {
   getData: async () => workspace,
@@ -92,6 +99,7 @@ const repository = {
   saveLoad: async (id: string, draft: GrainLoadDraft) => {
     sentLoads.push({ id, draft: structuredClone(draft) })
     if (loadMode === 'lost') throw new TypeError('Failed to fetch')
+    if (loadMode === 'refuse-over') throw { code: 'FR001', message: 'delivery would exceed the remaining contract bushels; confirm over-delivery to record it' }
     return { id, farm_id: fields.farm.id, commodity_id: 'corn_yellow', crop_year: 2026, net_bushels: Number(draft.net_bushels) }
   },
 } as unknown as GrainServices['grainRepository']
@@ -125,6 +133,9 @@ try {
   assert(bravo.textContent?.includes('Hauled it on a truck? Record the load under Loads instead.'), 'The movement form points a hauled load at Loads.')
   await change(control(bravo, 'Direction'), 'out')
   assert(bravo.textContent?.includes('ask the farm owner to name the crop year of those older movements first.'), 'Someone who cannot see "Which crop year were these?" is sent to the farm owner instead.')
+  await change(control(bravo, 'Bushels'), 'abc')
+  await act(async () => { (bravo.querySelector('form.movement-form') as HTMLFormElement).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush() })
+  assert(bravo.textContent?.includes('Type bushels as a number, like 1000.') && !bravo.textContent.includes('greater than zero'), 'A word in Bushels is named as not a number.')
   await change(control(bravo, 'Bushels'), '1,250')
   assert((control(bravo, 'Bushels') as HTMLInputElement).value === '1250', 'Commas typed off a ticket are dropped, not turned into nothing.')
   const alpha = cardFor('Alpha bin')
@@ -141,7 +152,9 @@ try {
   assert(listed.length >= 3 && listed.includes('Net bushels must be more than zero.') && listed.includes('Pick the bin this load came from.') && listed.includes('Name the buyer or elevator this load went to.'), `Every problem is listed at once: ${JSON.stringify(listed)}`)
   assert(sentLoads.length === 0, 'A form with problems sends nothing.')
   await change(control(container, 'Bin', 'fieldset.load-origin label'), binA.id)
-  assert(!container.querySelector('ul.load-problems'), 'An edit clears the old list of problems.')
+  const remaining = [...container.querySelectorAll('ul.load-problems li')].map((item) => item.textContent)
+  assert(!remaining.includes('Pick the bin this load came from.') && remaining.includes('Net bushels must be more than zero.') && remaining.includes('Name the buyer or elevator this load went to.'), `A fixed problem drops off and the rest stay listed: ${JSON.stringify(remaining)}`)
+  assert(control(container, 'Net bushels').getAttribute('aria-invalid') === 'true' && control(container, 'Bin', 'fieldset.load-origin label').getAttribute('aria-invalid') !== 'true', 'The box still wrong stays marked; the fixed one does not.')
   assert(container.textContent?.includes('This load is Yellow Corn, 2026 crop.'), 'The bin answers for its one lot.')
   // Net bushels from the scale weights (B3, B37).
   await change(control(container, 'Gross weight'), '80,000')
@@ -171,7 +184,7 @@ try {
   loadMode = 'ok'
   await click(button(container, 'Retry load')); await click(dialogButton('Record anyway'))
   assert(Number(sentLoads.length) === 2 && sentLoads[1]!.id === sentLoads[0]!.id && JSON.stringify(sentLoads[1]!.draft) === JSON.stringify(sentLoads[0]!.draft), 'The retry resends the same ticket under the same id.')
-  assert(lastSaved === 1 && container.textContent?.includes('Load saved: 850 bu of Yellow Corn, 2026 crop.') && container.textContent.includes('Don’t add a separate bin movement or delivery for it.'), 'The saved message says what the load already did.')
+  assert(lastSaved === 1 && container.textContent?.includes('Load saved: 850 bu of Yellow Corn, 2026 crop. It took 850 bu out of Alpha bin and recorded 850 bu delivered against Riverside Elevator (2026).') && container.textContent.includes('Don’t add a separate bin movement or delivery for it.'), 'The saved message says what the load already did.')
   assert(!(container.querySelector('fieldset.load-fields') as HTMLFieldSetElement).disabled && button(container, 'Save load'), 'Once saved, the form is open for the next ticket.')
   await change(control(container, 'Gross weight'), '70000')
   assert(!container.textContent?.includes('Load saved:'), 'Typing the next ticket clears the last "Load saved".')
@@ -180,8 +193,13 @@ try {
   await change(control(container, 'Net bushels'), '50')
   await click(button(container, 'Save load'))
   const lostId = sentLoads[2]!.id
-  await click(button(container, 'Start a different ticket')); await click(dialogButton('Start a different ticket'))
+  const refreshesBefore = lastSaved
+  await click(button(container, 'Start a different ticket'))
+  assert(openDialog()?.textContent?.includes('The last load may already be saved. Its weights and ticket number are cleared.'), 'Letting go of the ticket says what it clears.')
+  await click(dialogButton('Start a different ticket'))
+  assert((control(container, 'Net bushels') as HTMLInputElement).value === '' && (control(container, 'Gross weight') as HTMLInputElement).value === '' && lastSaved === refreshesBefore + 1, 'The let-go ticket is cleared, so one tap cannot save it twice, and the loads are read again.')
   loadMode = 'ok'
+  await change(control(container, 'Net bushels'), '50')
   await click(button(container, 'Save load'))
   assert(Number(sentLoads.length) === 4 && sentLoads[3]!.id !== lostId, 'A different ticket gets a different id.')
   await act(async () => { root.render(createElement('div')); await flush() })
@@ -201,6 +219,84 @@ try {
   await change(control(basisForm, 'Basis'), '-0.35')
   await act(async () => { basisForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush() })
   assert(Number(savedBids.length) === 1 && savedBids[0]!.basis === -0.35 && savedBids[0]!.bid_date === '2026-09-30', `A dollar basis saves with the date the farmer picked: ${JSON.stringify(savedBids[0])}`)
+  assert((control(basisForm, 'Bid date') as HTMLInputElement).value !== '2026-09-30', 'After a save the date goes back to today, so the next bid is not back-dated.')
+  const basisInput = control(basisForm, 'Basis') as HTMLInputElement
+  assert(basisInput.getAttribute('aria-describedby') === 'basis-sign-hint' && !basisInput.closest('label')?.textContent?.includes('Under futures'), 'The sign hint describes the Basis box without being part of its name.')
+  await act(async () => { root.render(createElement('div')); await flush() })
+
+  // ---- Basis list: a quarter-cent basis is shown whole, and bids from every elevator are not drawn as one trend.
+  const bids = [
+    { id: uid(60), farm_id: fields.farm.id, elevator: 'Riverside Elevator', commodity_id: 'corn_yellow', bid_date: '2026-09-29', basis: -0.1275, cash_price: 4.1225, delivery_start: null, delivery_end: null, notes: null, feed_source: null, feed_report_id: null, feed_geography: null, created_at: stamp, updated_at: stamp },
+    { id: uid(61), farm_id: fields.farm.id, elevator: 'Hilltop Grain', commodity_id: 'corn_yellow', bid_date: '2026-09-30', basis: -0.3, cash_price: null, delivery_start: null, delivery_end: null, notes: null, feed_source: null, feed_report_id: null, feed_geography: null, created_at: stamp, updated_at: stamp },
+  ] as CashBid[]
+  await act(async () => { root.render(createElement(MemoryRouter, null, createElement(Basis, { workspace: { ...workspace, cash_bids: bids }, services, onSaved: async () => undefined }), createElement(ConfirmDialogHost))); await flush() })
+  assert(container.textContent?.includes('-$0.1275') && container.textContent.includes('Cash $4.1225'), 'A quarter-cent basis and cash price are not rounded to the cent.')
+  assert(!container.querySelector('svg.basis-chart') && container.textContent?.includes('Latest bids from every elevator. Type an elevator to see its trend.'), 'With no elevator typed, the bids are listed, not drawn as one trend.')
+  await change(control(container.querySelector('form.basis-entry') as HTMLElement, 'Elevator'), 'Riverside Elevator')
+  assert(container.querySelector('svg.basis-chart'), 'One elevator typed, its trend is drawn.')
+  await act(async () => { root.render(createElement('div')); await flush() })
+
+  // ---- Loads, second form: net bushels follow the crop, a repeated ticket is asked about, a voided
+  // ticket copies into a new one, and an over-delivery the server refused is asked about next time.
+  const cornCrop = fields.crop_assignments.find((assignment) => assignment.commodity_id === 'corn_yellow')!
+  const soyCrop = fields.crop_assignments.find((assignment) => assignment.commodity_id === 'soybeans')!
+  const loadRow = (n: number, patch: Partial<GrainLoad>): GrainLoad => ({ id: uid(n), farm_id: fields.farm.id, load_date: '2026-09-28', truck_equipment_id: null, truck_name: null, origin_kind: 'field', origin_grain_bin_id: null, origin_crop_assignment_id: cornCrop.id, destination_kind: 'buyer', destination_buyer: 'Co-op', destination_grain_contract_id: null, destination_grain_bin_id: null, commodity_id: 'corn_yellow', crop_year: cornCrop.crop_year, gross_lbs: null, tare_lbs: null, net_bushels: 600, moisture_pct: null, ticket_number: 'T-1', photo_path: null, notes: null, effect_bin_out: false, effect_bin_in: false, effect_contract_delivery: false, effect_harvest: true, voided_at: null, void_reason: null, created_at: stamp, updated_at: stamp, ...patch })
+  const voided = loadRow(71, { net_bushels: 400, ticket_number: 'T-9', effect_harvest: false, voided_at: stamp, void_reason: 'Wrong field' })
+  const loadsWorkspace = { ...workspace, grain_loads: [loadRow(70, {}), voided] } as GrainWorkspace
+  let refreshes = 0
+  await act(async () => { root.render(createElement(MemoryRouter, null, createElement(LoadsTab, { workspace: loadsWorkspace, services, onSaved: async () => { refreshes += 1 } }), createElement(ConfirmDialogHost))); await flush() })
+  assert(container.textContent?.includes('In the loads listed below: Yellow Corn'), 'The totals say they cover the listed loads only.')
+  const radio = (text: string) => [...container.querySelectorAll('fieldset label')].find((label) => label.textContent?.includes(text))!.querySelector('input') as HTMLInputElement
+  await click(radio('Off a field'))
+  await change(control(container, 'Gross weight'), '80000')
+  await change(control(container, 'Tare weight'), '30000')
+  assert((control(container, 'Net bushels') as HTMLInputElement).value === '', 'No crop yet, so no figure.')
+  const fieldCrop = () => control(container, 'Field crop', 'fieldset.load-origin label')
+  await change(fieldCrop(), cornCrop.id)
+  assert((control(container, 'Net bushels') as HTMLInputElement).value === '892.86', 'Weights typed before the crop are worked once the crop is picked.')
+  await change(fieldCrop(), soyCrop.id)
+  assert((control(container, 'Net bushels') as HTMLInputElement).value === '833.33' && container.textContent?.includes('Worked out from the scale weights at 60 lb/bu.'), `Switching to soybeans works the figure again at 60 lb/bu: ${(control(container, 'Net bushels') as HTMLInputElement).value}`)
+  await change(fieldCrop(), cornCrop.id)
+  await change(control(container, 'Net bushels'), '890')
+  await change(fieldCrop(), soyCrop.id)
+  assert((control(container, 'Net bushels') as HTMLInputElement).value === '890' && !container.textContent?.includes('Worked out from the scale weights'), 'A typed net is kept, and the hint does not vouch for it.')
+  await change(fieldCrop(), cornCrop.id)
+  // A repeated ticket number is asked about, and going back writes nothing (B14).
+  await change(control(container, 'Buyer or elevator', 'fieldset.load-destination label'), 'Co-op')
+  await change(control(container, 'Ticket number', 'label'), 't-1')
+  assert(container.textContent?.includes('Ticket t-1 was already saved on'), 'The repeated ticket is pointed out as it is typed.')
+  const before = sentLoads.length
+  await click(button(container, 'Save load'))
+  assert(openDialog()?.textContent?.includes('Ticket t-1 is already entered'), 'Save asks about the repeated ticket first.')
+  await click(dialogButton('Go back'))
+  assert(sentLoads.length === before && openDialog() === null, 'Going back from a repeated ticket writes nothing.')
+  // Copy to a new ticket asks before replacing a typed one, and copies what the voided ticket did (B19).
+  await click(button(container, 'Copy to a new ticket'))
+  assert(openDialog()?.textContent?.includes('Replace the ticket you are typing?'), 'A typed ticket is not replaced without asking.')
+  await click(dialogButton('Replace it'))
+  assert((control(container, 'Net bushels') as HTMLInputElement).value === '400' && (control(container, 'Ticket number', 'label') as HTMLInputElement).value === 'T-9', 'The voided ticket is copied into the form.')
+  const harvestBox = [...container.querySelectorAll('fieldset.load-effects label')].find((label) => label.textContent?.includes('harvest'))!.querySelector('input') as HTMLInputElement
+  assert(!harvestBox.checked, 'A record-only voided ticket copies as record-only.')
+  await click(button(container, 'Save load'))
+  const copied = sentLoads.at(-1)!
+  assert(sentLoads.length === before + 1 && copied.id !== voided.id && copied.draft.net_bushels === '400' && copied.draft.ticket_number === 'T-9' && copied.draft.effect_harvest === false, `The copy saves as a new ticket with the copied values: ${JSON.stringify(copied)}`)
+  // The server refuses an over-delivery this screen did not see; the next Save asks (finding 4).
+  await click(radio('Out of a bin'))
+  await change(control(container, 'Bin', 'fieldset.load-origin label'), binA.id)
+  await click(radio('Against a contract'))
+  await change(control(container, 'Contract', 'fieldset.load-destination label'), contract.id)
+  await change(control(container, 'Net bushels'), '50')
+  const deliveryBox = [...container.querySelectorAll('fieldset.load-effects label')].find((label) => label.textContent?.includes('delivered against'))!.querySelector('input') as HTMLInputElement
+  if (!deliveryBox.checked) await click(deliveryBox)
+  loadMode = 'refuse-over'
+  const refreshesBeforeRefusal = refreshes
+  await click(button(container, 'Save load'))
+  assert(openDialog() === null && container.textContent?.includes('This load is more than what is left on the contract.') && refreshes === refreshesBeforeRefusal + 1, 'The refusal is named and the contracts are read again.')
+  loadMode = 'ok'
+  await click(button(container, 'Save load'))
+  assert(openDialog()?.textContent?.includes('This load is more than is left on the contract. Record anyway?'), 'With a stale list, the next Save still asks about the over-delivery.')
+  await click(dialogButton('Record anyway'))
+  assert(sentLoads.at(-1)!.draft.allow_overdelivery === true && container.textContent?.includes('It recorded 50 bu delivered against Riverside Elevator (2026).'), `Record anyway sends the confirmation, and the saved message is in the past tense: ${container.querySelector('.load-message')?.textContent}`)
 } finally {
   await act(async () => { root.unmount() }); container.remove(); win.close()
 }

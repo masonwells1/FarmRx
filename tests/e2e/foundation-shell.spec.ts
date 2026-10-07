@@ -2088,7 +2088,7 @@ test('a bin whose lots cannot be read refuses to save and recovers on the next t
   refuseNextSave = true
   lotRows.splice(0, 1)
   await page.getByRole('button', { name: 'Save load' }).click()
-  await expect(page.getByText('Farm Rx could not record this load right now')).toBeVisible()
+  await expect(page.getByText('That bin does not hold that many bushels of that crop year.')).toBeVisible()
   expect(loadRecordCalls.length).toBe(0)
 
   // The bin now holds only 2025, and the form has to follow it. Before this repair the ticket stayed
