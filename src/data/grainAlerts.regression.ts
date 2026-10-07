@@ -87,6 +87,9 @@ assert(transitionStart >= 0 && serverFence > transitionStart && stateLock > serv
   assert(highestManual[0]!.observationId === uid(34), 'The alert names the highest manual bid, never a feed row above it.')
   // OP28/A41: the farmer reads the crop name, the bid, the elevator and the target in dollars; the key is unchanged.
   assert(reached[0]!.message === '2026 Corn cash bid $4.60 (Local elevator) reached your $4.50 target.' && reached[0]!.key === `price:${target.id}:4.5:${manualAbove.id}`, `The plan-target price message must name the crop, bid, elevator and target in dollars: ${reached[0]!.message}`)
+  // Quarter cents stay visible: a $4.1275 bid must not read as the same price as a $4.13 target.
+  const quarter = evaluateGrainAlerts({ ...workspace, marketing_plan_targets: [{ ...target, target_price: 4.125 }], cash_bids: [bid(35, 4.1275)] } as unknown as GrainWorkspace, alertNow).filter((alert) => alert.kind === 'price_target')
+  assert(quarter[0]?.message === '2026 Corn cash bid $4.1275 (Local elevator) reached your $4.125 target.', `The plan-target price message must keep quarter cents: ${quarter[0]?.message}`)
   const due = evaluateGrainAlerts({ ...workspace, marketing_plan_targets: [{ ...target, target_price: null, deadline: '2026-07-20' }] } as unknown as GrainWorkspace, alertNow).filter((alert) => alert.kind === 'target_deadline')
   assert(due.length === 1 && due[0]!.message === '2026 Corn marketing target deadline is in seven days (Jul 20, 2026).' && due[0]!.key === `deadline:${target.id}:2026-07-20:seven-days`, `The plan-target deadline message must name the crop and a written date: ${due[0]?.message}`)
 }

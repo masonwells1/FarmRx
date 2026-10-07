@@ -29,8 +29,11 @@ assert(match?.[1], 'The quote frame must declare its symbol allowlist as a regex
 const allowed = new RegExp(match[1].slice(1, -1))
 for (const year of [2025, 2026, 2027, 2035, 2098]) for (const quote of marketQuotes(year)) assert(allowed.test(quote.symbol), `Frame allowlist rejects derived symbol ${quote.symbol}.`)
 // A46: the frame tells the page when the quote inside it fails, since the iframe's own error event never fires for that.
-assert(frame.includes("parent.postMessage({type:'farm-rx-quote',status:'failed'},'*')") && frame.includes('loader.onerror=fail') && frame.includes('setTimeout(()=>{if(!document.querySelector('), 'The quote frame must report a failed or missing widget to the page.')
+assert(frame.includes("parent.postMessage({type:'farm-rx-quote',status},'*')") && frame.includes("const fail=()=>post('failed')") && frame.includes('loader.onerror=fail') && frame.includes('if(waited===8)fail()'), 'The quote frame must report a failed or missing widget to the page.')
+// A quote that appears after the 8-second failure (a slow rural connection) must still be shown: the frame keeps looking and says ready.
+assert(frame.includes("post('ready')") && frame.includes('if(waited<30)setTimeout(check,1000)'), 'The quote frame must report a late widget as ready.')
 const widget = readFileSync(new URL('./MarketQuote.tsx', import.meta.url), 'utf8')
-assert(widget.includes("event.source === frame.current?.contentWindow && event.data?.type === 'farm-rx-quote'") && !widget.includes('onLoad={() => setFailed(false)}'), 'The tile must accept a failure only from its own frame, and a later load event must not hide it.')
+assert(widget.includes("event.source !== frame.current?.contentWindow || event.data?.type !== 'farm-rx-quote'") && !widget.includes('onLoad={() => setFailed(false)}'), 'The tile must accept a failure only from its own frame, and a later load event must not hide it.')
+assert(widget.includes("else if (event.data.status === 'ready') setFailed(false)"), 'A late quote that says ready must replace the not-available note.')
 for (const bad of ['CBOT:ZCZ26', 'NASDAQ:AAPL', 'CBOT:ZCZ2026;alert(1)', 'CBOT:ZCF2026', '']) assert(!allowed.test(bad), `Frame allowlist must reject ${JSON.stringify(bad)}.`)
 console.log('MarketQuote regression passed.')

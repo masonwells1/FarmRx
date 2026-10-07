@@ -118,7 +118,7 @@ result = evaluateMarketingAlertRules({ ...workspace, fields: { ...workspace.fiel
 assert(result.firedRuleIds.includes(price.id), 'GL-2: a commodity configured to start in March must make a July 2026 spot bid the 2026 crop on the page, as it is for the sweep.')
 
 // A7/A8: the saved-rule sentence says how the sweep really behaves.
-assert(ruleSentence(marketed, 'Corn') === 'Alert me while 2026 Corn is below 55% sold.', `The % goal sentence must say it alerts while below the goal: ${ruleSentence(marketed, 'Corn')}`)
+assert(ruleSentence(marketed, 'Corn') === 'Alert me while 2026 Corn is below 55% marketed.', `The % goal sentence must say it alerts while below the goal: ${ruleSentence(marketed, 'Corn')}`)
 assert(ruleSentence({ ...deadline, remind_on: '2026-07-20' }, 'Corn') === 'Remind me a week before 2026-07-20 about 2026 Corn.', `The deadline sentence must say the reminder comes a week ahead: ${ruleSentence({ ...deadline, remind_on: '2026-07-20' }, 'Corn')}`)
 
 console.log('Marketing alert regressions passed.')

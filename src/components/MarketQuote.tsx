@@ -49,8 +49,13 @@ function MarketQuote({ symbol, label, detail }: MarketQuoteSpec) {
   const [failed, setFailed] = useState(false)
   const frame = useRef<HTMLIFrameElement>(null)
   // The frame page can load while the quote inside it does not; the frame says so, since onError never fires for that.
+  // A quote that arrives late on a slow connection says ready, and the tile shows it after all.
   useEffect(() => {
-    const onMessage = (event: MessageEvent) => { if (event.source === frame.current?.contentWindow && event.data?.type === 'farm-rx-quote' && event.data.status === 'failed') setFailed(true) }
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== frame.current?.contentWindow || event.data?.type !== 'farm-rx-quote') return
+      if (event.data.status === 'failed') setFailed(true)
+      else if (event.data.status === 'ready') setFailed(false)
+    }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
   }, [])

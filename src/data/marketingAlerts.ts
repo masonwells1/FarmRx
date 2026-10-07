@@ -10,8 +10,14 @@ export type MarketingAlertEvaluation = { alerts: MarketingAlertEvent[]; firedRul
 export const localCalendarDay = (value: Date) => farmLocalCalendarDate(value)
 const dateAtUtc = (value: string) => new Date(`${value}T00:00:00.000Z`)
 const dayDifference = (left: string, right: string) => Math.round((dateAtUtc(left).getTime() - dateAtUtc(right).getTime()) / 86_400_000)
-const money = (value: number) => `$${value.toFixed(2)}`
-const bidDate = (value: string) => new Date(`${value}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+// Bids and targets trade to the quarter cent ($4.1275): keep up to four decimals so a near miss does not read as equal.
+const quarterCent = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 })
+const money = (value: number) => quarterCent.format(value)
+/** A bid date as the farmer reads it: Oct 6. */
+export const bidDate = (value: string) => new Date(`${value}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+const percentLabel = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 })
+/** % marketed rounded DOWN to one decimal, so 49.96% never reads as a 50% goal already reached. */
+export const marketedPercentLabel = (value: number) => percentLabel.format(Math.floor(value * 10 + 1e-9) / 10)
 
 const simpleEmail = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/
 /** A marketing-plan target is a cash price target; basis is already included. */
@@ -68,7 +74,7 @@ export function evaluateMarketingAlertRules(workspace: GrainWorkspace, now = new
       const met = price !== null && (rule.direction === 'at_or_above' ? price >= rule.threshold : price <= rule.threshold)
       if (met && bid) { kind = 'marketing_price_target'; message = `${rule.crop_year} ${commodity} cash price is ${money(price)} (bid ${bidDate(bid.bid_date)}). You set ${rule.direction === 'at_or_above' ? 'at or above' : 'at or below'} ${money(rule.threshold)}.` }
     } else if (rule.rule_type === 'pct_marketed_goal' && rule.threshold !== null) {
-      if (hasProductionEstimate(workspace, rule)) { const current = marketedPercent(workspace, rule); if (current < rule.threshold) { kind = 'marketing_pct_marketed_goal'; message = `${rule.crop_year} ${commodity} is ${current.toFixed(0)}% marketed. Your goal is ${rule.threshold.toFixed(0)}%.` } }
+      if (hasProductionEstimate(workspace, rule)) { const current = marketedPercent(workspace, rule); if (current < rule.threshold) { kind = 'marketing_pct_marketed_goal'; message = `${rule.crop_year} ${commodity} is ${marketedPercentLabel(current)}% marketed. Your goal is ${rule.threshold}%.` } }
     } else if (rule.rule_type === 'deadline' && rule.remind_on !== null && dayDifference(rule.remind_on, today) >= 0 && dayDifference(rule.remind_on, today) <= 7) {
       const difference = dayDifference(rule.remind_on, today)
       kind = 'marketing_deadline'
@@ -83,7 +89,7 @@ export function evaluateMarketingAlertRules(workspace: GrainWorkspace, now = new
 export function ruleSentence(rule: MarketingAlertRule, commodity: string): string {
   if (rule.rule_type === 'price_target') return `Tell me when ${rule.crop_year} ${commodity} cash price target is ${rule.direction === 'at_or_above' ? 'at or above' : 'at or below'} ${money(rule.threshold ?? 0)}.`
   // Said the way the sweep works: a % goal alerts while marketing is below it, and a deadline reminds once, a week ahead.
-  if (rule.rule_type === 'pct_marketed_goal') return `Alert me while ${rule.crop_year} ${commodity} is below ${rule.threshold ?? 0}% sold.`
+  if (rule.rule_type === 'pct_marketed_goal') return `Alert me while ${rule.crop_year} ${commodity} is below ${rule.threshold ?? 0}% marketed.`
   return `Remind me a week before ${rule.remind_on ?? 'the selected date'} about ${rule.crop_year} ${commodity}.`
 }
 

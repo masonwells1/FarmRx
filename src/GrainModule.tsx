@@ -78,7 +78,7 @@ import {
 } from "./data/grainPosition";
 import { fillFirmOfferFallback, firmOfferContractId } from "./data/firmOfferFill";
 import { basisCentsPrompt, basisLooksLikeCents } from "./data/grain";
-import { latestAlertEligibleCashBid } from "./data/marketingAlerts";
+import { bidDate, latestAlertEligibleCashBid, marketedPercentLabel, validateMarketingAlertRule } from "./data/marketingAlerts";
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -1268,7 +1268,11 @@ export function MarketingAlerts({
       const message = farmerError(caught, "save this alert");
       // The form shows a failed save next to its own button; once the form has closed, the section shows it.
       if (saved) setError(message);
-      else throw new Error(message);
+      else {
+        // One message only: the open form says it did not save, so the heading drops its Needs attention receipt.
+        setReceiptId(null);
+        throw new Error(message);
+      }
     } finally {
       alertLock.release();
     }
@@ -1356,7 +1360,7 @@ export function MarketingAlerts({
             onClick={() => start("pct_marketed_goal")}
           >
             <strong>% marketed goal</strong>
-            <span>Alert me while I'm below a % sold</span>
+            <span>Alert me while I've marketed less than my goal</span>
           </button>
           <button
             className="alert-template"
@@ -1518,6 +1522,7 @@ export function FirmOffers({
   const [addingScope, setAddingScope] = useState<PositionScope | null>(null);
   // An earlier offer the new-offer form starts from: Copy as new offer, or the bushels a partial fill left over.
   const [template, setTemplate] = useState<FirmOffer | null>(null);
+  const [addCount, setAddCount] = useState(0);
   const [filling, setFilling] = useState<FirmOffer | null>(null);
   const [fillSaving, setFillSaving] = useState(false);
   const [error, setError] = useState("");
@@ -1553,21 +1558,22 @@ export function FirmOffers({
     setFilling(null);
     setTemplate(null);
     setError("");
+    // A notice can point at the leftover-bushels form ("Save the form below"); it goes when the form does.
+    setNotice("");
   };
   const openAdd = (from: PositionScope, start: FirmOffer | null = null) => {
     closeForms();
-    setNotice("");
     setTemplate(start);
     setAddingScope(from);
+    // A fresh form every time, even when the same offer is copied again or its leftover form is already open.
+    setAddCount((count) => count + 1);
   };
   const openEdit = (offer: FirmOffer) => {
     closeForms();
-    setNotice("");
     setEditing(offer);
   };
   const openFill = (offer: FirmOffer) => {
     closeForms();
-    setNotice("");
     setFilling(offer);
   };
   const openCopy = (offer: FirmOffer) => openAdd(scopeOf(offer), offer);
@@ -1589,7 +1595,11 @@ export function FirmOffers({
       const message = farmerError(caught, "save this firm offer");
       // The form shows a failed save next to its own button; once the form has closed, the section shows it.
       if (saved) setError(message);
-      else throw new Error(message);
+      else {
+        // One message only: the open form says it did not save, so the heading drops its Needs attention receipt.
+        setReceiptId(null);
+        throw new Error(message);
+      }
     } finally {
       offerLock.release();
     }
@@ -1724,7 +1734,7 @@ export function FirmOffers({
       <div ref={formAnchor} className="offer-form-anchor">
         {(addingScope || editing) && (
           <FirmOfferForm
-            key={editing?.id ?? `new:${template?.id ?? ""}`}
+            key={editing?.id ?? `new:${template?.id ?? ""}:${addCount}`}
             offer={editing}
             initial={editing ? null : template}
             scope={editing ? scopeOf(editing) : addingScope!}
@@ -2052,10 +2062,12 @@ function FirmOfferForm({
         ? "Futures $/bu"
         : "Cash $/bu";
   const contracted = scopeRows(workspace.grain_contracts, scope).reduce((sum, item) => sum + item.bushels, 0);
-  const otherPending = pendingFirmOfferBushels(workspace, scope) - (offer?.status === "open" ? offer.bushels : 0);
+  // Take this offer out only when it already counts as pending: an open offer past its date is counted nowhere.
+  const otherPending = pendingFirmOfferBushels(workspace, scope) - (offer && displayFirmOfferStatus(offer) === "open" ? offer.bushels : 0);
   const saleLimitMessage = saleLimitWarning(saleLimit, contracted, otherPending, Number(amount), "save");
+  // noValidate: the checks in submit say each problem in plain words next to Save, instead of the browser's own bubble.
   return (
-    <form className="firm-offer-form" onSubmit={(event) => void submit(event)}>
+    <form className="firm-offer-form" noValidate onSubmit={(event) => void submit(event)}>
       <div>
         <h3>{offer ? "Edit firm offer" : "New firm offer"}</h3>
         <p className="offer-form-scope">{scopeLabel(workspace, scope)}</p>
@@ -2223,6 +2235,10 @@ function AlertRuleForm({
   ]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (type === "deadline" && !remindOn) {
+      setError("Pick a reminder date.");
+      return;
+    }
     // A reminder date in the past can never go off. A saved date the farmer did not change is left alone.
     if (type === "deadline" && remindOn < today && remindOn !== (rule?.remind_on ?? "")) {
       setError("Pick today or a later date.");
@@ -2245,6 +2261,13 @@ function AlertRuleForm({
         created_at: rule?.created_at ?? timestamp,
         updated_at: timestamp,
       };
+      // The form skips the browser's own English bubbles (noValidate), so a blank or out-of-range number is said here.
+      const errors = validateMarketingAlertRule(next);
+      if (errors.length) {
+        setError(errors.join(" "));
+        return;
+      }
+      setError("");
       try {
         await onSave(next);
       } catch (caught) {
@@ -2258,7 +2281,7 @@ function AlertRuleForm({
     }
   };
   return (
-    <form className="alert-rule-form" onSubmit={(event) => void submit(event)}>
+    <form className="alert-rule-form" noValidate onSubmit={(event) => void submit(event)}>
       <div>
         <h3>
           {rule
@@ -2287,26 +2310,27 @@ function AlertRuleForm({
           </label>
           <label>
             Cash price target ($/bu)
+            {/* Bids trade to the quarter cent, so a target can too. */}
             <input
               required
               type="number"
               min="0.01"
               max="1000"
-              step="0.01"
+              step="any"
               inputMode="decimal"
               value={threshold}
               onChange={(event) => setThreshold(event.target.value)}
             />
           </label>
           <p className="alert-fact">
-            Checks the newest cash bid saved for this crop in the last 2 days,
-            from any elevator, including USDA bids. It does not watch futures
-            or live elevator prices, so keep your bids up to date.
+            Checks the newest cash bid saved for this crop from today or the 2
+            days before, from any elevator, including USDA bids. It does not
+            watch futures or live elevator prices, so keep your bids up to date.
           </p>
           <p className="alert-fact">
             {eligibleBid
-              ? `Bid it would use today: ${pricePerBu.format(eligibleBid.cash_price!)} from ${eligibleBid.elevator}, ${eligibleBid.bid_date}.`
-              : "No bid in the last 2 days, so this alert cannot go off until you enter one."}
+              ? `Bid it would use today: ${pricePerBu.format(eligibleBid.cash_price!)} from ${eligibleBid.elevator}, ${bidDate(eligibleBid.bid_date)}.`
+              : `No bid for the ${scope.crop_year} crop from today or the 2 days before, so this alert cannot go off until a new bid is saved.`}
           </p>
           {breakeven !== null && (
             <p className="alert-fact">
@@ -2331,13 +2355,15 @@ function AlertRuleForm({
             />
           </label>
           <p className="alert-fact">
-            Currently {currentPct.toFixed(0)}% marketed
+            Currently {marketedPercentLabel(currentPct)}% marketed
           </p>
-          {threshold !== "" && Number(threshold) > currentPct && (
+          {/* A paused rule never sends, and one that has already sent waits until the goal is reached first. */}
+          {threshold !== "" && Number(threshold) > currentPct && (!rule || (rule.active && !rule.last_triggered_at)) && (
             <p className="alert-fact">
-              You are below this goal now, so you will get this alert within
-              about 15 minutes. After that it only alerts again if you reach the
-              goal and then drop below it.
+              You are below this goal now, so you will get one notification
+              within about 15 minutes. After that it only notifies you again if
+              you reach the goal and then drop below it. While you are below the
+              goal it also shows in Grain alerts on this page.
             </p>
           )}
         </>
@@ -2349,14 +2375,15 @@ function AlertRuleForm({
             <input
               required
               type="date"
-              min={today}
+              min={rule?.remind_on && rule.remind_on < today ? undefined : today}
               value={remindOn}
               onChange={(event) => setRemindOn(event.target.value)}
             />
           </label>
           <p className="alert-fact">
-            You will get one reminder 7 days before this date, or right away if
-            it is less than 7 days off. It does not remind you again on the day.
+            You will get one notification 7 days before this date, or right away
+            if it is less than 7 days off. It is not sent again on the day, but
+            it can still show in Grain alerts on this page that week.
           </p>
         </>
       )}
