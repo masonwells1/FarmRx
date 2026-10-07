@@ -101,6 +101,9 @@ export function grainLoadPayload(id: string, draft: GrainLoadDraft): Record<stri
   payload.effect_bin_in = effective.effect_bin_in
   payload.effect_contract_delivery = effective.effect_contract_delivery
   payload.effect_harvest = effective.effect_harvest
+  // Sent only for a delivery that will actually happen, and only once the farmer confirmed going
+  // past what is left on the contract. The replay check does not compare it, so a retry stays safe.
+  if (effective.effect_contract_delivery && draft.allow_overdelivery === true) payload.allow_overdelivery = true
   if (draft.truck_equipment_id) payload.truck_equipment_id = draft.truck_equipment_id
   if (draft.truck_name.trim()) payload.truck_name = draft.truck_name.trim()
   if (draft.gross_lbs.trim()) payload.gross_lbs = Number(draft.gross_lbs)

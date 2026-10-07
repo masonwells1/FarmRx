@@ -1776,7 +1776,7 @@ test('a load records its ticket, takes its crop year from the origin, and can on
   await expect(page.getByRole('combobox', { name: 'Contract', exact: true }).getByRole('option')).toHaveText(['Pick a contract', /This Year Buyer/])
 
   await page.getByRole('combobox', { name: 'Contract', exact: true }).selectOption('00000000-0000-4000-8000-000000000072')
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('910.5')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('910.5')
   await page.getByRole('textbox', { name: 'Ticket number' }).fill('A-1001')
   await page.getByRole('button', { name: 'Save load' }).click()
 
@@ -1828,8 +1828,8 @@ test('a load offers only the effects its shape can reach, and unticking one drop
   await effects.getByRole('checkbox').uncheck()
   await expect(effects.getByText('Saving this records the ticket and changes nothing else.')).toBeVisible()
 
-  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('640')
+  await page.getByRole('combobox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('640')
   await page.getByRole('button', { name: 'Save load' }).click()
 
   await expect.poll(() => loadRecordCalls.length).toBe(1)
@@ -1924,8 +1924,8 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
   // Saving without answering is refused in the farmer's own words, not the database's. Everything
   // else the form needs is filled first, so the unanswered crop year is the only thing left to
   // complain about and the message below is provably about it.
-  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('4000')
+  await page.getByRole('combobox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('4000')
   await page.getByRole('button', { name: 'Save load' }).click()
   await expect(page.getByText('That bin holds more than one crop year')).toBeVisible()
   expect(loadRecordCalls.length).toBe(0)
@@ -1957,7 +1957,7 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
 
   // And the next ticket saves, which is the thing the farmer could not do.
   loadRecordCalls.length = 0
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('250')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('250')
   await page.getByRole('button', { name: 'Save load' }).click()
   await expect.poll(() => loadRecordCalls.length).toBe(1)
   const next = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
@@ -1984,7 +1984,7 @@ test('a hand-entered bin movement names its crop year, chosen from the lots the 
   const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: [], bin_lots: lotRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
   await page.goto('/grain/storage')
   const bin = page.locator('article.bin-card').filter({ hasText: 'Home bin' })
-  await bin.getByText('Bin history (0)', { exact: true }).click()
+  await bin.getByRole('button', { name: 'Add or take out grain' }).click()
   const form = bin.locator('form.movement-form')
   await form.getByLabel('Direction').selectOption('out')
   await form.getByLabel('Bushels').fill('1000')
@@ -2061,8 +2061,8 @@ test('a bin whose lots cannot be read refuses to save and recovers on the next t
   // --- The lot read fails, and the form says so instead of guessing from the movement array.
   lotsFailing = true
   await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(binId)
-  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('1000')
+  await page.getByRole('combobox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('1000')
   await page.getByRole('button', { name: 'Save load' }).click()
   // Both the inline notice under the bin and the save's own status say it; this is the status.
   await expect(page.getByText('Farm Rx could not read what this bin holds. Check your signal and try again.')).toBeVisible()
@@ -2088,7 +2088,7 @@ test('a bin whose lots cannot be read refuses to save and recovers on the next t
   refuseNextSave = true
   lotRows.splice(0, 1)
   await page.getByRole('button', { name: 'Save load' }).click()
-  await expect(page.getByText('Farm Rx could not record this load right now')).toBeVisible()
+  await expect(page.getByText('That bin does not hold that many bushels of that crop year.')).toBeVisible()
   expect(loadRecordCalls.length).toBe(0)
 
   // The bin now holds only 2025, and the form has to follow it. Before this repair the ticket stayed
@@ -2128,8 +2128,8 @@ test('hauling a one-lot bin dry drops the year it emptied, rather than refusing 
   await expect(page.getByText('This bin holds one crop year')).toContainText('2026')
 
   // Haul the whole lot. The mock's own save empties it, rather than the test arranging an empty bin.
-  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('4000')
+  await page.getByRole('combobox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('4000')
   await page.getByRole('button', { name: 'Save load' }).click()
   await expect.poll(() => loadRecordCalls.length).toBe(1)
   expect((loadRecordCalls[0]!.body.p_load as Record<string, unknown>).crop_year).toBe(2026)
@@ -2141,7 +2141,7 @@ test('hauling a one-lot bin dry drops the year it emptied, rather than refusing 
   await expect(page.getByText('This bin holds no crop with a crop year')).toBeVisible()
 
   loadRecordCalls.length = 0
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('250')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('250')
   await page.getByRole('button', { name: 'Save load' }).click()
 
   // Refused here, in the farmer's own words, without spending a round trip on a lot the screen is

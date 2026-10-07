@@ -132,7 +132,13 @@ function loadRecordError(error: unknown): Error {
   const candidate = error as { code?: unknown; message?: unknown }
   if ((candidate.code === '42P01' || candidate.code === 'PGRST205' || candidate.code === '42883' || candidate.code === 'PGRST202')
     && /(?:grain_loads|save_grain_load|void_grain_load)/i.test(String(candidate.message ?? ''))) return new Error(LOAD_RECORD_PENDING)
-  return error instanceof Error ? error : new Error(String(error))
+  // A PostgREST error is a plain object, not an Error. String() of it is "[object Object]", which
+  // threw away both the server's words and the "Failed to fetch" of a lost connection -- so a final
+  // refusal read as "try again", and a lost response was not recognised as one and the ticket id a
+  // safe retry needs was dropped. Its message is kept, and the original rides along as the cause.
+  if (error instanceof Error) return error
+  const message = typeof candidate?.message === 'string' && candidate.message ? candidate.message : String(error)
+  return Object.assign(new Error(message), { cause: error })
 }
 
 export interface GrainOperationWriter { editContractOperation(contractId: string, reason: string, changes: GrainContractCorrection, expectedUpdatedAt: string, operationId: string, context: FarmOperationContext): Promise<GrainContract>; deleteContractOperation(contractId: string, reason: string, expectedUpdatedAt: string, operationId: string, context: FarmOperationContext): Promise<ContractDeleteResult> }

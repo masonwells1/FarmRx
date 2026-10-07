@@ -297,6 +297,10 @@ export interface GrainLoadDraft {
   effect_bin_in: boolean
   effect_contract_delivery: boolean
   effect_harvest: boolean
+  /** Set only on the copy sent for a save the farmer confirmed as an over-delivery. save_grain_load
+   * passes it to record_grain_contract_delivery, which otherwise refuses a delivery past the
+   * contract's remaining bushels. The form's own draft never carries it. */
+  allow_overdelivery?: boolean
 }
 
 /** LD-2: one later bin movement standing in the way of a void, as the server names it. */
@@ -497,20 +501,26 @@ export function validateGrainLoadShape(draft: GrainLoadDraft): string[] {
   if (draft.ticket_number.trim().length > 120) problems.push('Keep the ticket number to 120 characters.')
   if (draft.notes.trim().length > 4000) problems.push('Keep the notes to 4,000 characters.')
 
+  // A word or stray character is told apart from a zero, so the farmer is not told "more than zero"
+  // about something they did type.
   const net = Number(draft.net_bushels)
-  if (!draft.net_bushels.trim() || !Number.isFinite(net) || net <= 0) problems.push('Net bushels must be more than zero.')
+  if (draft.net_bushels.trim() && !Number.isFinite(net)) problems.push('Type net bushels as a number, like 1000.')
+  else if (!draft.net_bushels.trim() || net <= 0) problems.push('Net bushels must be more than zero.')
 
   const gross = draft.gross_lbs.trim() ? Number(draft.gross_lbs) : null
   const tare = draft.tare_lbs.trim() ? Number(draft.tare_lbs) : null
-  if (gross !== null && (!Number.isFinite(gross) || gross <= 0)) problems.push('Gross weight must be more than zero.')
-  if (tare !== null && (!Number.isFinite(tare) || tare <= 0)) problems.push('Tare weight must be more than zero.')
+  if (gross !== null && !Number.isFinite(gross)) problems.push('Type the gross weight as a number of pounds.')
+  else if (gross !== null && gross <= 0) problems.push('Gross weight must be more than zero.')
+  if (tare !== null && !Number.isFinite(tare)) problems.push('Type the tare weight as a number of pounds.')
+  else if (tare !== null && tare <= 0) problems.push('Tare weight must be more than zero.')
   if (gross !== null && tare !== null && Number.isFinite(gross) && Number.isFinite(tare) && gross <= tare) {
     problems.push('The loaded truck has to weigh more than the empty one.')
   }
 
   if (draft.moisture_pct.trim()) {
     const moisture = Number(draft.moisture_pct)
-    if (!Number.isFinite(moisture) || moisture < 0 || moisture > 100) problems.push('Moisture must be between 0 and 100 percent.')
+    // The same 0-40 range a bin's moisture reading is held to; grain wetter than that is a typo.
+    if (!Number.isFinite(moisture) || moisture < 0 || moisture > 40) problems.push('Moisture must be between 0 and 40 percent.')
   }
 
   if (draft.truck_equipment_id && draft.truck_name.trim()) problems.push('Name the truck or pick one from equipment, not both.')
@@ -548,12 +558,12 @@ export function validateGrainLoad(
       // "Set the bin inventory first" was LD-1's only answer and is now wrong for two of the three.
       if (draft.origin_kind === 'bin') {
         if (workspace.capabilities?.grain_load_bin_lot === false) {
-          problems.push('That bin has no recorded crop yet, so Farm Rx cannot tell which crop year this load is. Set the bin inventory first.')
+          problems.push('That bin has no recorded starting amount, so Farm Rx cannot tell which crop year this load is until the next database update. Reload the app after the update.')
           return problems
         }
         const lots = authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id)
         if (lots.length === 0) {
-          problems.push('That bin holds no crop with a crop year, so Farm Rx cannot tell which crop year this load is.')
+          problems.push('That bin holds no crop with a crop year, so Farm Rx cannot tell which crop year this load is. If it has grain in it, tap "Add or take out grain" on that bin under Bins & basis and add an "In" for it first.')
         } else if (draft.origin_crop_year.trim()) {
           problems.push('That bin does not hold the ' + draft.origin_crop_year.trim() + ' crop.')
         } else {
@@ -583,6 +593,26 @@ export function validateGrainLoad(
   // that does not apply to this load, and normalizeLoadEffects drops it from what is sent.
 
   return problems
+}
+
+/** A haul date after today is a typo. Checked by the screen only, never by the repository: the
+ * server accepts any real date, and a time-zone edge must never block the replay of a saved ticket. */
+export function loadDateInFutureProblem(loadDate: string, today: string): string | null {
+  return isCalendarDate(loadDate) && loadDate > today ? 'The date hauled cannot be in the future.' : null
+}
+
+/** Pounds in a standard bushel for each crop family -- 56 for corn, 60 for soybeans and wheat. */
+export const STANDARD_BUSHEL_LBS: Record<Commodity['crop_family'], number> = { corn: 56, soybeans: 60, wheat: 60 }
+
+/** Net bushels from a scale ticket's gross and tare pounds, rounded to the cent of a bushel. Null
+ * unless both weights are numbers and the loaded truck weighs more than the empty one. A starting
+ * figure the farmer sees and can change -- it is never sent without being shown. */
+export function netBushelsFromWeights(gross: string, tare: string, lbsPerBushel: number): string | null {
+  if (!gross.trim() || !tare.trim()) return null
+  const g = Number(gross)
+  const t = Number(tare)
+  if (!Number.isFinite(g) || !Number.isFinite(t) || !(t > 0) || !(g > t) || !(lbsPerBushel > 0)) return null
+  return (Math.round(((g - t) * 100) / lbsPerBushel) / 100).toFixed(2)
 }
 
 /** LD-2: the four effects a saved load can have. Each is a separate visible write the farmer
