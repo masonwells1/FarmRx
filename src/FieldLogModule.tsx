@@ -54,11 +54,11 @@ function MultiFieldRain({ fields, repository, refresh, onQueued }: { fields: Fie
     const validation = validateFieldLogDraft(drafts[0].draft)
     if (validation) { setMessage(validation); submitLock.current.release(); return }
     setSubmitting(true); setMessage(null); setResult(null)
-    const saved: string[] = []; const queued: string[] = []; const failed: string[] = []; const kept: FieldLogEntry[] = []
+    const saved: string[] = []; const queued: string[] = []; const failed: string[] = []; const failedIds: string[] = []; const kept: FieldLogEntry[] = []
     try {
       for (const { field, draft } of drafts) {
         try { const entry = await repository.saveEntry(draft); if (entry.pending) { queued.push(field.name); kept.push(entry) } else saved.push(field.name) }
-        catch { failed.push(field.name) }
+        catch { failed.push(field.name); failedIds.push(field.id) }
       }
       const parts = [
         saved.length ? `Saved for ${saved.join(', ')}.` : '',
@@ -67,7 +67,7 @@ function MultiFieldRain({ fields, repository, refresh, onQueued }: { fields: Fie
       ].filter(Boolean)
       setResult(parts.join(' '))
       if (kept.length) onQueued(kept)
-      if (!failed.length) { setChosen(new Set()); setOpen(false) } else setChosen(new Set(fields.filter((field) => failed.includes(field.name)).map((field) => field.id)))
+      if (!failed.length) { setChosen(new Set()); setOpen(false) } else setChosen(new Set(failedIds))
       await refresh().catch(() => undefined)
     } finally { setSubmitting(false); submitLock.current.release() }
   }
