@@ -100,6 +100,12 @@ function phaseRequests(options: { rpcs?: string[]; direct?: string[] } = {}) {
   return createSeasonRequestClassifier({ targetMutationRpcs: options.rpcs, targetMutationRequests: options.direct, blockUnexpectedNonReadRequests: true })
 }
 
+// A contract's own row, its Delivered cell ("N bu delivered" over "N bu left"), and the full-width row
+// right under it that holds its delivery and correction controls.
+const contractRow = (page: Page, number: string) => page.locator('tr.contract-row').filter({ hasText: number })
+const contractDelivered = (page: Page, number: string) => contractRow(page, number).locator('td[data-label="Delivered"]')
+const contractActions = (page: Page, number: string) => contractRow(page, number).locator('xpath=following-sibling::tr[1][contains(@class, "contract-actions-row")]')
+
 test('@harvest-ridge-canonical-hr1 harvest records one exact actual with a durable replay receipt', async ({ page }) => {
   const requests = phaseRequests({ rpcs: ['save_crop_harvest_versioned'] }); const { external, writes } = await fence(page, requests); await signIn(page)
   await page.getByRole('link', { name: 'Harvest' }).click(); await page.getByRole('button', { name: 'Enter harvest' }).click()
@@ -110,6 +116,8 @@ test('@harvest-ridge-canonical-hr1 harvest records one exact actual with a durab
 
 test('@harvest-ridge-canonical-hr2 Grain reads harvest without automatic reconciliation or other writes', async ({ page }) => {
   const requests = phaseRequests(); const { external } = await fence(page, requests); await signIn(page); await page.getByRole('link', { name: 'Grain' }).click()
+  // The reconciliation sits under the position card's More details disclosure.
+  await page.locator('article.position-card').first().getByRole('button', { name: 'More details' }).click()
   await expect(page.locator('.grain-reconciliation p').first()).toContainText('Harvest actuals: 27,600 bu · Grain actual production: not entered')
   expect(requests.observedTargetMutationRpcs).toEqual([]); expect(requests.observedTargetMutationPaths).toEqual([]); assertFence(requests, external)
 })
@@ -117,6 +125,7 @@ test('@harvest-ridge-canonical-hr2 Grain reads harvest without automatic reconci
 test('@harvest-ridge-canonical-hr3 explicit reconciliation changes Grain actual only', async ({ page }) => {
   const requests = phaseRequests({ direct: ['PATCH /rest/v1/production_estimates'] }); const { external } = await fence(page, requests); await signIn(page); await page.getByRole('link', { name: 'Grain' }).click()
   const saved = page.waitForResponse(response => new URL(response.url()).pathname === '/rest/v1/production_estimates' && response.request().method() === 'PATCH' && response.ok())
+  await page.locator('article.position-card').first().getByRole('button', { name: 'More details' }).click()
   await page.getByRole('button', { name: 'Use harvest total as Grain actual' }).click(); await page.getByRole('dialog').getByRole('button', { name: 'Use harvest total' }).click(); await saved
   await expect(page.locator('.grain-reconciliation p').first()).toContainText('Harvest actuals: 27,600 bu · Grain actual production: 27,600 bu')
   expect(requests.observedTargetMutationPaths).toEqual(['PATCH /rest/v1/production_estimates']); assertFence(requests, external)
@@ -138,8 +147,9 @@ test('@harvest-ridge-canonical-extension-in adds one independent inbound movemen
 
 test('@harvest-ridge-canonical-extension-contract creates one contract without changing either bin', async ({ page }) => {
   const requests = phaseRequests({ direct: ['POST /rest/v1/grain_contracts'] }); const { external } = await fence(page, requests); await signIn(page); await page.goto('/grain/contracts')
-  const form = page.locator('form.contract-entry'); await form.getByLabel('Type').selectOption('cash_spot'); await form.getByLabel('Bushels').fill('2600'); await form.getByLabel('Cash $/bu').fill('4.25'); await form.getByText('Delivery, contract #, premium', { exact: true }).click(); await form.getByLabel('Start').fill('2027-11-01'); await form.getByLabel('End').fill('2027-12-15'); await form.getByLabel('Contract #').fill('HR-2027-PROOF-001'); await id(page, ids.contract); await form.getByRole('button', { name: 'Add contract' }).click()
-  await expect(page.getByText('Saved', { exact: true }).first()).toBeVisible(); await expect(page.locator('tr').filter({ hasText: 'HR-2027-PROOF-001' })).toContainText('2,600.00')
+  // Buyer is a required box; the verifier expects the contract to name Synthetic Elevator.
+  const form = page.locator('form.contract-entry'); await form.getByLabel('Buyer').fill('Synthetic Elevator'); await form.getByLabel('Type').selectOption('cash_spot'); await form.getByLabel('Bushels').fill('2600'); await form.getByLabel('Cash $/bu').fill('4.25'); await form.getByText('Delivery dates, contract #, premium (optional)', { exact: true }).click(); await form.getByLabel('Start').fill('2027-11-01'); await form.getByLabel('End').fill('2027-12-15'); await form.getByLabel('Contract #').fill('HR-2027-PROOF-001'); await id(page, ids.contract); await form.getByRole('button', { name: 'Add contract' }).click()
+  await expect(page.getByText('Saved', { exact: true }).first()).toBeVisible(); await expect(page.locator('tr.contract-row').filter({ hasText: 'HR-2027-PROOF-001' }).locator('td[data-label="Bushels"]')).toHaveText('2,600')
   await page.goto('/grain/storage'); await expect(page.locator('article.bin-card').filter({ hasText: 'Harvest Ridge Main Bin' })).toContainText('30,000 bu'); await expect(page.locator('article.bin-card').filter({ hasText: 'Harvest Ridge Proof Bin' })).toContainText('2,600 bu')
   expect(requests.observedTargetMutationPaths).toEqual(['POST /rest/v1/grain_contracts']); assertFence(requests, external)
 })
@@ -147,14 +157,14 @@ test('@harvest-ridge-canonical-extension-contract creates one contract without c
 test('@harvest-ridge-canonical-hr4 bin-out changes only the selected bin', async ({ page }) => {
   const requests = phaseRequests({ rpcs: ['append_bin_movement'] }); const { external, writes } = await fence(page, requests); await signIn(page); await page.goto('/grain/storage')
   const bin = page.locator('article.bin-card').filter({ hasText: 'Harvest Ridge Main Bin' }); await bin.getByRole('button', { name: 'Add or take out grain' }).click(); const form = bin.locator('form.movement-form'); await form.getByLabel('Direction').selectOption('out'); await form.getByLabel('Bushels').fill('5000'); await expect(form.getByLabel('Crop year')).toHaveValue('2027'); await form.getByLabel('Date').fill('2027-11-06'); await form.getByLabel('Note').fill('Delivery to Synthetic Elevator'); await expect(form.getByText('Bin-out changes this bin only. It does not mark a contract delivered.')).toBeVisible(); await id(page, ids.outbound); await form.getByRole('button', { name: 'Add movement' }).click()
-  await expect(bin).toContainText('25,000 bu'); await replay(page, writes, 'movement', ids.outbound); await page.goto('/grain/contracts'); await expect(page.locator('tr').filter({ hasText: 'HR-2027-001' })).toContainText('0.00 / 5,000.00 bu')
+  await expect(bin).toContainText('25,000 bu'); await replay(page, writes, 'movement', ids.outbound); await page.goto('/grain/contracts'); await expect(contractDelivered(page, 'HR-2027-001')).toHaveText(/^0 bu delivered\s*5,000 bu left$/)
   expect(requests.observedTargetMutationRpcs).toEqual(['append_bin_movement', 'append_bin_movement']); assertFence(requests, external)
 })
 
 test('@harvest-ridge-canonical-hr5 delivery changes only the assigned contract', async ({ page }) => {
   const requests = phaseRequests({ rpcs: ['record_grain_contract_delivery'] }); const { external, writes } = await fence(page, requests); await signIn(page); await page.goto('/grain/contracts')
-  const contract = page.locator('tr').filter({ hasText: 'HR-2027-001' }); await expect(contract.getByText('Recording a delivery does not remove grain from a bin.')).toBeVisible(); await contract.getByLabel('Delivered bushels').fill('5000'); await id(page, ids.delivery); await contract.getByRole('button', { name: 'Record delivery' }).click()
-  await expect(contract).toContainText('5,000.00 / 0.00 bu'); await replay(page, writes, 'delivery', ids.delivery); await page.goto('/grain/storage'); await expect(page.locator('article.bin-card').filter({ hasText: 'Harvest Ridge Main Bin' })).toContainText('25,000 bu')
+  const contract = contractActions(page, 'HR-2027-001'); await expect(contract.getByText('Recording a delivery does not remove grain from a bin.')).toBeVisible(); await contract.getByLabel('Delivered bushels').fill('5000'); await id(page, ids.delivery); await contract.getByRole('button', { name: 'Record delivery' }).click()
+  await expect(contractDelivered(page, 'HR-2027-001')).toHaveText(/^5,000 bu delivered\s*0 bu left$/); await replay(page, writes, 'delivery', ids.delivery); await page.goto('/grain/storage'); await expect(page.locator('article.bin-card').filter({ hasText: 'Harvest Ridge Main Bin' })).toContainText('25,000 bu')
   expect(requests.observedTargetMutationRpcs).toEqual(['record_grain_contract_delivery', 'record_grain_contract_delivery']); assertFence(requests, external)
 })
 
@@ -165,15 +175,15 @@ async function noOverflow(page: Page, label: string) {
 
 test('@harvest-ridge-canonical-phone phone Grain, Storage, and Contracts remain readable and read-only', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); const requests = phaseRequests(); const { external } = await fence(page, requests); await signIn(page)
-  await page.getByRole('navigation').getByRole('button', { name: 'More' }).click(); await page.getByRole('link', { name: 'Grain' }).click(); await expect(page.getByText('Harvest reconciliation')).toBeVisible(); await expect(page.locator('.grain-reconciliation p').first()).toContainText('Harvest actuals: 27,600 bu · Grain actual production: 27,600 bu'); await noOverflow(page, 'Grain')
+  await page.getByRole('navigation').getByRole('button', { name: 'More' }).click(); await page.getByRole('link', { name: 'Grain' }).click(); await page.locator('article.position-card').first().getByRole('button', { name: 'More details' }).click(); await expect(page.getByText('Harvest reconciliation')).toBeVisible(); await expect(page.locator('.grain-reconciliation p').first()).toContainText('Harvest actuals: 27,600 bu · Grain actual production: 27,600 bu'); await noOverflow(page, 'Grain')
   await page.goto('/grain/storage'); await expect(page.locator('article.bin-card').filter({ hasText: 'Harvest Ridge Main Bin' })).toContainText('25,000 bu'); await expect(page.locator('article.bin-card').filter({ hasText: 'Harvest Ridge Proof Bin' })).toContainText('2,600 bu'); await noOverflow(page, 'Storage')
-  await page.goto('/grain/contracts'); await expect(page.locator('tr').filter({ hasText: 'HR-2027-001' })).toContainText('5,000.00 / 0.00 bu'); await expect(page.locator('tr').filter({ hasText: 'HR-2027-PROOF-001' })).toContainText('2,600.00'); await noOverflow(page, 'Contracts')
+  await page.goto('/grain/contracts'); await expect(contractDelivered(page, 'HR-2027-001')).toHaveText(/^5,000 bu delivered\s*0 bu left$/); await expect(contractRow(page, 'HR-2027-PROOF-001').locator('td[data-label="Bushels"]')).toHaveText('2,600'); await noOverflow(page, 'Contracts')
   expect(requests.observedTargetMutationRpcs).toEqual([]); expect(requests.observedTargetMutationPaths).toEqual([]); assertFence(requests, external)
 })
 
 test('@harvest-ridge-reverse-hr5 delivery first leaves the bin untouched', async ({ page }) => {
   const requests = phaseRequests({ rpcs: ['record_grain_contract_delivery'] }); const { external, writes } = await fence(page, requests); await signIn(page); await page.goto('/grain/contracts')
-  const contract = page.locator('tr').filter({ hasText: 'HR-2027-001' }); await contract.getByLabel('Delivered bushels').fill('5000'); await id(page, reverseIds.delivery); await contract.getByRole('button', { name: 'Record delivery' }).click(); await expect(contract).toContainText('5,000.00 / 0.00 bu'); await replay(page, writes, 'delivery', reverseIds.delivery)
+  const contract = contractActions(page, 'HR-2027-001'); await contract.getByLabel('Delivered bushels').fill('5000'); await id(page, reverseIds.delivery); await contract.getByRole('button', { name: 'Record delivery' }).click(); await expect(contractDelivered(page, 'HR-2027-001')).toHaveText(/^5,000 bu delivered\s*0 bu left$/); await replay(page, writes, 'delivery', reverseIds.delivery)
   await page.goto('/grain/storage'); const bin = page.locator('article.bin-card').filter({ hasText: 'Harvest Ridge Main Bin' }); await expect(bin).toContainText('30,000 bu'); await expect(bin).toContainText('Bin history (0)'); expect(requests.observedTargetMutationRpcs).toEqual(['record_grain_contract_delivery', 'record_grain_contract_delivery']); assertFence(requests, external)
 })
 

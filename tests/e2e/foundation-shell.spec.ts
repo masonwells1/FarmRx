@@ -1513,9 +1513,12 @@ test('TradingView runs only inside an opaque sandbox and cannot reach Farm Rx st
   const marketHeading = page.getByRole('heading', { name: 'Futures prices' })
   await expect(marketHeading).toBeVisible()
   await marketHeading.scrollIntoViewIfNeeded()
+  // Only the futures for crops the farm has an estimate for: this farm grows corn, so the front month
+  // and the new-crop month. Every tile that is shown is still checked for the sandbox.
   const widgets = page.locator('iframe.market-quote__widget')
-  await expect(widgets).toHaveCount(6)
-  for (let index = 0; index < 6; index += 1) {
+  await expect(widgets).toHaveCount(2)
+  await expect(page.locator('.market-quote__heading strong')).toHaveText(['Corn', 'Corn'])
+  for (let index = 0; index < 2; index += 1) {
     await expect(widgets.nth(index)).toHaveAttribute('sandbox', 'allow-scripts')
     await expect(widgets.nth(index)).toHaveAttribute('referrerpolicy', 'no-referrer')
   }
@@ -1706,12 +1709,20 @@ test('a contract with no deliveries can be corrected with a reason, and one alre
   const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: contractRows, grain_contract_deliveries: deliveryRows, grain_contract_audit: [] })
   await page.goto('/grain/contracts')
 
-  const typo = page.getByRole('row').filter({ hasText: 'Buyer Typo' })
-  const delivered = page.getByRole('row').filter({ hasText: 'Already Delivered' })
+  // Each contract's delivery, pricing and correction controls sit in the full-width row right under it.
+  const actionsFor = (buyer: string) => page.locator('tr.contract-row').filter({ hasText: buyer }).locator('xpath=following-sibling::tr[1]')
+  const typo = actionsFor('Buyer Typo')
+  const delivered = actionsFor('Already Delivered')
+  await expect(typo).toHaveClass('contract-actions-row')
+  await expect(delivered).toHaveClass('contract-actions-row')
+  // The delivered contract's controls row is really there, so the absence below is about the control.
+  await expect(delivered.getByRole('button', { name: 'Record delivery' })).toBeVisible()
   await expect(typo.getByRole('button', { name: 'Correct or delete' })).toBeVisible()
   // A contract with delivered bushels is history, not a draft. The screen offers nothing the database
   // would refuse, so the control is absent rather than present and failing.
   await expect(delivered.getByRole('button', { name: 'Correct or delete' })).toHaveCount(0)
+  // And it says why, instead of the control simply vanishing.
+  await expect(delivered.getByText('Deliveries are recorded on this contract, so it can no longer be corrected or deleted.', { exact: false })).toBeVisible()
 
   await typo.getByRole('button', { name: 'Correct or delete' }).click()
   await expect(typo.getByText('Crop year, commodity, type and price cannot be corrected here.', { exact: false })).toBeVisible()
