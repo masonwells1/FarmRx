@@ -748,6 +748,27 @@ export function validateGrainContract(contract: GrainContract, commodityIds: Set
   return errors
 }
 
+/** Basis is stored and typed in dollars per bushel, but farmers say it in cents ("35 under"). A
+ * real basis is a few dimes either side of futures, so a value of two dollars or more is almost
+ * always cents typed into a dollar box. Farm Rx asks before saving such a value; it never converts
+ * the number on the farmer's behalf. */
+export const BASIS_CENTS_LIMIT = 2
+
+export function basisLooksLikeCents(value: number): boolean {
+  return Number.isFinite(value) && Math.abs(value) >= BASIS_CENTS_LIMIT
+}
+
+export function basisCentsPrompt(value: number): { title: string; body: string; confirmLabel: string } {
+  const sign = value < 0 ? '-' : ''
+  const cents = Math.abs(value)
+  const asDollars = (value / 100).toFixed(2)
+  return {
+    title: `Basis of ${sign}$${cents.toFixed(2)} per bushel?`,
+    body: `Basis is entered in dollars. ${cents} cents ${value < 0 ? 'under' : 'over'} is ${asDollars}.`,
+    confirmLabel: 'Keep this basis',
+  }
+}
+
 export function activeProductionForScope(workspace: GrainWorkspace, scope: PositionScope): number {
   const estimate = workspace.production_estimates.find((item) => sameScope(item, scope))
   if (!estimate) return 0

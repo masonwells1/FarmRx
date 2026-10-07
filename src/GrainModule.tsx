@@ -84,6 +84,14 @@ const money = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
+/** Grain is priced to the quarter cent ($4.1275), so a price shown to the farmer keeps up to four
+ * decimals instead of rounding away part of the contract price. */
+export const pricePerBu = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
+});
 const bushels = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const preciseBushels = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 export const displayBushels = (value: number) => Number.isInteger(value) ? bushels.format(value) : preciseBushels.format(value);
