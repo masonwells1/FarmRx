@@ -1,4 +1,4 @@
-import { cashTargetRevenue, evaluateMarketingAlertRules, latestAlertEligibleCashBid, latestManualCashBid, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
+import { cashTargetRevenue, evaluateMarketingAlertRules, latestAlertEligibleCashBid, latestManualCashBid, ruleSentence, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { cashBidEligibleForCropYear, marketingYearBounds, marketingYearStartFor } from './marketingYear'
 import { scopeKey, scopeOf, type FirmOffer, type GrainWorkspace, type InsuranceUnit, type MarketingAlertRule } from './grain'
 import { calculateGrainPosition, hasUnsupportedSavedCoverage, remainingMarketingCapacity, saleLimitForScope, saleLimitWarning, unsupportedCoverageMessage } from './grainPosition'
@@ -116,5 +116,9 @@ assert(marketingYearStartFor({ crop_family: 'barley' }) === null && marketingYea
 assert(!cashBidEligibleForCropYear({ crop_family: 'corn', marketing_year_start_month: 3, marketing_year_start_day: 1 }, 2026, '2026-10-15', '2027-06-01', '2027-06-30'), 'GL-2: a March-start commodity must judge a June 2027 window as the next crop year.')
 result = evaluateMarketingAlertRules({ ...workspace, fields: { ...workspace.fields, commodities: [{ id: 'corn', name: 'Corn', crop_family: 'corn', marketing_year_start_month: 3, marketing_year_start_day: 1 }] } as GrainWorkspace['fields'], cash_bids: [spotBid], marketing_alert_rules: [{ ...price, crop_year: 2026 }] }, now)
 assert(result.firedRuleIds.includes(price.id), 'GL-2: a commodity configured to start in March must make a July 2026 spot bid the 2026 crop on the page, as it is for the sweep.')
+
+// A7/A8: the saved-rule sentence says how the sweep really behaves.
+assert(ruleSentence(marketed, 'Corn') === 'Alert me while 2026 Corn is below 55% marketed.', `The % goal sentence must say it alerts while below the goal: ${ruleSentence(marketed, 'Corn')}`)
+assert(ruleSentence({ ...deadline, remind_on: '2026-07-20' }, 'Corn') === 'Remind me a week before 2026-07-20 about 2026 Corn.', `The deadline sentence must say the reminder comes a week ahead: ${ruleSentence({ ...deadline, remind_on: '2026-07-20' }, 'Corn')}`)
 
 console.log('Marketing alert regressions passed.')

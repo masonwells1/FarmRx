@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 export interface MarketQuoteSpec { symbol: string; label: string; detail: string }
 
@@ -25,7 +25,13 @@ export function newCropQuotes(cropYear: number): MarketQuoteSpec[] {
   ]
 }
 
-export function marketQuotes(cropYear: number): MarketQuoteSpec[] { return [...FRONT_MONTH, ...newCropQuotes(cropYear)] }
+const quoteFamily: Record<string, string> = { Corn: 'corn', Soybeans: 'soybeans', Wheat: 'wheat' }
+
+/** The tiles for the crops this farm grows (by crop family); every tile when the farm's crops are not known yet. */
+export function marketQuotes(cropYear: number, families?: readonly string[]): MarketQuoteSpec[] {
+  const all = [...FRONT_MONTH, ...newCropQuotes(cropYear)]
+  return families && families.length ? all.filter((quote) => families.includes(quoteFamily[quote.label])) : all
+}
 
 /**
  * The crop year the new-crop tiles follow: the newest crop year the farm has an
@@ -41,27 +47,39 @@ export function quoteCropYear(estimateCropYears: readonly number[], today = new 
 
 function MarketQuote({ symbol, label, detail }: MarketQuoteSpec) {
   const [failed, setFailed] = useState(false)
+  const frame = useRef<HTMLIFrameElement>(null)
+  // The frame page can load while the quote inside it does not; the frame says so, since onError never fires for that.
+  // A quote that arrives late on a slow connection says ready, and the tile shows it after all.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== frame.current?.contentWindow || event.data?.type !== 'farm-rx-quote') return
+      if (event.data.status === 'failed') setFailed(true)
+      else if (event.data.status === 'ready') setFailed(false)
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
   return <article className={`market-quote${failed ? ' market-quote--unavailable' : ''}`}>
     <div className="market-quote__heading"><strong>{label}</strong><span>{detail}</span></div>
     <iframe
+      ref={frame}
       className="market-quote__widget"
       title={`${label} ${detail} delayed market quote`}
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
       loading="lazy"
       src={`/market-quote-frame.html?symbol=${encodeURIComponent(symbol)}`}
-      onLoad={() => setFailed(false)}
       onError={() => setFailed(true)}
     />
     {failed && <p className="market-quote__fallback" role="status">Futures prices are not available right now.</p>}
   </article>
 }
 
-export function MarketQuoteSection({ cropYear }: { cropYear: number }) {
+export function MarketQuoteSection({ cropYear, families }: { cropYear: number; families?: readonly string[] }) {
   return <section className="grain-section market-data-section" aria-labelledby="market-data-heading">
     <div className="section-heading">
       <div><h2 id="market-data-heading">Futures prices</h2><p>CME quotes from TradingView, 10 minutes delayed. For display only: your numbers use the prices you enter.</p></div>
     </div>
-    <div className="market-quote-grid">{marketQuotes(cropYear).map((quote) => <MarketQuote key={quote.symbol} {...quote} />)}</div>
+    <div className="market-quote-grid">{marketQuotes(cropYear, families).map((quote) => <MarketQuote key={quote.symbol} {...quote} />)}</div>
   </section>
 }

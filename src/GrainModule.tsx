@@ -77,6 +77,8 @@ import {
   unsupportedCoverageMessage,
 } from "./data/grainPosition";
 import { fillFirmOfferFallback, firmOfferContractId } from "./data/firmOfferFill";
+import { basisCentsPrompt, basisLooksLikeCents } from "./data/grain";
+import { bidDate, latestAlertEligibleCashBid, marketedPercentLabel, validateMarketingAlertRule } from "./data/marketingAlerts";
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -1286,7 +1288,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
   );
 }
 
-function MarketingAlerts({
+export function MarketingAlerts({
   workspace,
   services,
   selectedEstimateId,
@@ -1305,6 +1307,9 @@ function MarketingAlerts({
   const alertLocks = useRef(createSubmitLockMap());
   const [editing, setEditing] = useState<MarketingAlertRule | null>(null);
   const [error, setError] = useState("");
+  // The receipt of this section's last write: Saved, or Waiting for signal when it was kept on this device.
+  const [receiptId, setReceiptId] = useState<string | null>(null);
+  const receipt = useSaveReceipt(receiptId);
   const selected =
     workspace.production_estimates.find(
       (estimate) => estimate.id === selectedEstimateId,
@@ -1332,16 +1337,24 @@ function MarketingAlerts({
   const save = async (rule: MarketingAlertRule) => {
     const alertLock = alertLocks.current.get(rule.id);
     if (!alertLock.acquire()) return;
+    let saved = false;
     try {
+      setReceiptId(rule.id);
       await services.grainRepository.saveMarketingAlertRule(rule);
+      saved = true;
       setError("");
       setDraftType(null);
       setEditing(null);
       await onSaved();
     } catch (caught) {
       const message = farmerError(caught, "save this alert");
-      setError(message);
-      throw new Error(message);
+      // The form shows a failed save next to its own button; once the form has closed, the section shows it.
+      if (saved) setError(message);
+      else {
+        // One message only: the open form says it did not save, so the heading drops its Needs attention receipt.
+        setReceiptId(null);
+        throw new Error(message);
+      }
     } finally {
       alertLock.release();
     }
@@ -1354,6 +1367,7 @@ function MarketingAlerts({
       return;
     }
     try {
+      setReceiptId(id);
       await services.grainRepository.deleteMarketingAlertRule(id);
       setError("");
       await onSaved();
@@ -1367,6 +1381,7 @@ function MarketingAlerts({
     const alertLock = alertLocks.current.get(rule.id);
     if (!alertLock.acquire()) return;
     try {
+      setReceiptId(rule.id);
       await services.grainRepository.saveMarketingAlertRule({
         ...rule,
         active: !rule.active,
@@ -1393,6 +1408,7 @@ function MarketingAlerts({
               A USDA cash price can reach your target, but USDA prices never
               change your position or revenue numbers.
             </p>
+            <SaveReceipt state={receipt} />
           </div>
           <label className="commodity-picker">
             <span>Commodity</span>
@@ -1426,7 +1442,7 @@ function MarketingAlerts({
             onClick={() => start("pct_marketed_goal")}
           >
             <strong>% marketed goal</strong>
-            <span>Remind me if I fall behind my marketing plan</span>
+            <span>Alert me while I've marketed less than my goal</span>
           </button>
           <button
             className="alert-template"
@@ -1434,7 +1450,7 @@ function MarketingAlerts({
             onClick={() => start("deadline")}
           >
             <strong>Deadline</strong>
-            <span>Remind me before a date</span>
+            <span>One reminder, a week ahead</span>
           </button>
         </div>
         {(draftType || editing) && (
@@ -1568,7 +1584,7 @@ function MarketingAlerts({
   );
 }
 
-function FirmOffers({
+export function FirmOffers({
   workspace,
   services,
   selectedEstimateId,
@@ -1584,11 +1600,24 @@ function FirmOffers({
   onSaved: () => Promise<void>;
 }) {
   const [editing, setEditing] = useState<FirmOffer | null>(null);
-  const [adding, setAdding] = useState(false);
+  // The crop a new offer saves to, taken when Add (or Copy) is tapped, so moving the picker never moves a typed draft.
+  const [addingScope, setAddingScope] = useState<PositionScope | null>(null);
+  // An earlier offer the new-offer form starts from: Copy as new offer, or the bushels a partial fill left over.
+  const [template, setTemplate] = useState<FirmOffer | null>(null);
+  const [addCount, setAddCount] = useState(0);
   const [filling, setFilling] = useState<FirmOffer | null>(null);
   const [fillSaving, setFillSaving] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [receiptId, setReceiptId] = useState<string | null>(null);
+  const receipt = useSaveReceipt(receiptId);
+  const formAnchor = useRef<HTMLDivElement>(null);
   const offerLocks = useRef(createSubmitLockMap());
+  // The forms open above a long list: bring the one just opened into view.
+  useEffect(() => {
+    if (addingScope || editing || filling)
+      formAnchor.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  }, [addingScope, editing?.id, filling?.id]);
   const selected =
     workspace.production_estimates.find(
       (estimate) => estimate.id === selectedEstimateId,
@@ -1604,19 +1633,55 @@ function FirmOffers({
         sameScope(estimate, offer),
       ),
   );
+  // Only one form is open at a time, from either list.
+  const closeForms = () => {
+    setAddingScope(null);
+    setEditing(null);
+    setFilling(null);
+    setTemplate(null);
+    setError("");
+    // A notice can point at the leftover-bushels form ("Save the form below"); it goes when the form does.
+    setNotice("");
+  };
+  const openAdd = (from: PositionScope, start: FirmOffer | null = null) => {
+    closeForms();
+    setTemplate(start);
+    setAddingScope(from);
+    // A fresh form every time, even when the same offer is copied again or its leftover form is already open.
+    setAddCount((count) => count + 1);
+  };
+  const openEdit = (offer: FirmOffer) => {
+    closeForms();
+    setEditing(offer);
+  };
+  const openFill = (offer: FirmOffer) => {
+    closeForms();
+    setFilling(offer);
+  };
+  const openCopy = (offer: FirmOffer) => openAdd(scopeOf(offer), offer);
   const save = async (offer: FirmOffer) => {
     const offerLock = offerLocks.current.get(offer.id);
     if (!offerLock.acquire()) return;
+    let saved = false;
     try {
+      setReceiptId(offer.id);
       await services.grainRepository.saveFirmOffer(offer);
+      saved = true;
       setEditing(null);
-      setAdding(false);
+      setAddingScope(null);
+      setTemplate(null);
+      setNotice("");
       setError("");
       await onSaved();
     } catch (caught) {
       const message = farmerError(caught, "save this firm offer");
-      setError(message);
-      throw new Error(message);
+      // The form shows a failed save next to its own button; once the form has closed, the section shows it.
+      if (saved) setError(message);
+      else {
+        // One message only: the open form says it did not save, so the heading drops its Needs attention receipt.
+        setReceiptId(null);
+        throw new Error(message);
+      }
     } finally {
       offerLock.release();
     }
@@ -1629,6 +1694,7 @@ function FirmOffers({
       return;
     }
     try {
+      setReceiptId(id);
       await services.grainRepository.deleteFirmOffer(id);
       setError("");
       await onSaved();
@@ -1641,7 +1707,12 @@ function FirmOffers({
   const cancel = async (offer: FirmOffer) => {
     const offerLock = offerLocks.current.get(offer.id);
     if (!offerLock.acquire()) return;
+    if (!(await confirmDialog({ title: "Mark this offer canceled?", body: "Do this after you cancel it with the buyer. It stops counting as pending bushels. You can copy it as a new offer later.", confirmLabel: "Mark canceled", cancelLabel: "Go back" }))) {
+      offerLock.release();
+      return;
+    }
     try {
+      setReceiptId(offer.id);
       await services.grainRepository.saveFirmOffer({
         ...offer,
         status: "canceled",
@@ -1656,35 +1727,44 @@ function FirmOffers({
       offerLock.release();
     }
   };
+  // A failed fill is thrown back to the fill form, which shows it under its Save button and stays open.
+  // The fill is online only (the queued repository refuses it offline), so the notice follows a recorded sale.
   const finishFill = async (contract: GrainContract, offer: FirmOffer) => {
     const offerLock = offerLocks.current.get(offer.id);
     if (fillSaving || !offerLock.acquire()) return;
     setFillSaving(true);
+    const filled = async () => {
+      setFilling(null);
+      setError("");
+      // The whole offer is marked filled; bushels the buyer is still holding come back only if the farmer saves them as a new offer.
+      const rest = Math.round((offer.bushels - contract.bushels) * 100) / 100;
+      setNotice(
+        rest > 0
+          ? `Sale recorded as a contract and the offer to ${offer.buyer} is marked filled. Save the form below if the buyer is still holding the other ${displayBushels(rest)} bu.`
+          : `Sale recorded as a contract and the offer to ${offer.buyer} is marked filled.`,
+      );
+      if (rest > 0) {
+        setTemplate({ ...offer, bushels: rest });
+        setAddingScope(scopeOf(offer));
+      }
+      try {
+        await onSaved();
+      } catch (caught) {
+        setError(farmerError(caught, "reload your firm offers"));
+      }
+    };
     try {
       try {
         await services.grainRepository.fillFirmOffer(offer, contract);
-        setFilling(null);
-        setError("");
-        await onSaved();
-        return;
       } catch (caught) {
-        if (!(caught instanceof Error) || caught.message !== "FIRM_OFFER_FILL_RPC_UNAVAILABLE") {
-          setError(farmerError(caught, "record this firm-offer sale"));
-          return;
-        }
-      }
-      try {
+        if (!(caught instanceof Error) || caught.message !== "FIRM_OFFER_FILL_RPC_UNAVAILABLE") throw caught;
         await fillFirmOfferFallback(
           services.grainRepository,
           offer,
           { ...contract, id: await firmOfferContractId(offer) },
         );
-        setFilling(null);
-        setError("");
-        await onSaved();
-      } catch (caught) {
-        setError(farmerError(caught, "mark this offer filled"));
       }
+      await filled();
     } finally {
       offerLock.release();
       setFillSaving(false);
@@ -1700,6 +1780,7 @@ function FirmOffers({
             Standing offers are shown separately from signed contracts until
             they fill.
           </p>
+          <SaveReceipt state={receipt} />
         </div>
         <label className="commodity-picker">
           <span>Commodity</span>
@@ -1718,65 +1799,75 @@ function FirmOffers({
           </select>
         </label>
       </div>
-      {!adding && !editing && !filling && (
+      {notice && (
+        <p className="saved-whisper offer-notice" role="status">
+          {notice}
+        </p>
+      )}
+      {!addingScope && !editing && !filling && (
         <button
           className="primary-action"
           type="button"
-          onClick={() => setAdding(true)}
+          onClick={() => openAdd(scope)}
         >
           Add firm offer
         </button>
       )}
-      {(adding || editing) && (
-        <FirmOfferForm
-          key={editing?.id ?? "new"}
-          offer={editing}
-          scope={editing ? scopeOf(editing) : scope}
-          services={services}
-          workspace={workspace}
-          saleLimit={saleLimitForScope(saleLimits, editing ?? scope)}
-          onCancel={() => {
-            setAdding(false);
-            setEditing(null);
-            setError("");
-          }}
-          onSave={save}
-        />
-      )}
-      {filling && (
-        <div className="offer-fill-entry">
-          <h3>Record the filled sale</h3>
-          <p>This creates the contract first, then marks the offer filled.</p>
-          <ContractEntry
-            workspace={workspace}
-            scope={scopeOf(filling)}
+      <div ref={formAnchor} className="offer-form-anchor">
+        {(addingScope || editing) && (
+          <FirmOfferForm
+            key={editing?.id ?? `new:${template?.id ?? ""}:${addCount}`}
+            offer={editing}
+            initial={editing ? null : template}
+            scope={editing ? scopeOf(editing) : addingScope!}
             services={services}
-            saleLimit={saleLimitForScope(saleLimits, filling)}
-            initialOffer={filling}
-            isSaving={fillSaving}
-            onFilled={(contract) => finishFill(contract, filling)}
-            onSaved={onSaved}
-            onReceipt={() => undefined}
+            workspace={workspace}
+            saleLimit={saleLimitForScope(saleLimits, editing ?? addingScope!)}
+            onCancel={closeForms}
+            onSave={save}
           />
-        </div>
+        )}
+        {filling && (
+          <div className="offer-fill-entry">
+            <h3>Record the filled sale</h3>
+            <p>This creates the contract first, then marks the offer filled.</p>
+            <ContractEntry
+              workspace={workspace}
+              scope={scopeOf(filling)}
+              services={services}
+              saleLimit={saleLimitForScope(saleLimits, filling)}
+              initialOffer={filling}
+              isSaving={fillSaving}
+              onFilled={(contract) => finishFill(contract, filling)}
+              onSaved={onSaved}
+              onReceipt={() => undefined}
+            />
+            <button
+              className="secondary-action"
+              type="button"
+              disabled={fillSaving}
+              onClick={closeForms}
+            >
+              Close without saving
+            </button>
+          </div>
+        )}
+      </div>
+      {offers.length === 0 && !addingScope && (
+        <p className="alert-empty">
+          No firm offers for this crop and year yet. Tap Add firm offer when a
+          buyer gives you a price to hold.
+        </p>
       )}
       <OfferList
         offers={offers}
         workspace={workspace}
         saleLimits={saleLimits}
-        onEdit={(offer) => {
-          setEditing(offer);
-          setAdding(false);
-          setFilling(null);
-        }}
+        onEdit={openEdit}
         onCancel={cancel}
         onDelete={remove}
-        onFill={(offer) => {
-          setFilling(offer);
-          setAdding(false);
-          setEditing(null);
-          setError("");
-        }}
+        onFill={openFill}
+        onCopy={openCopy}
       />
       {other.length > 0 && (
         <div className="offer-list other-offers">
@@ -1789,13 +1880,11 @@ function FirmOffers({
             offers={other}
             workspace={workspace}
             saleLimits={saleLimits}
-            onEdit={(offer) => {
-              setEditing(offer);
-              setAdding(false);
-            }}
+            onEdit={openEdit}
             onCancel={cancel}
             onDelete={remove}
-            onFill={(offer) => setFilling(offer)}
+            onFill={openFill}
+            onCopy={openCopy}
           />
         </div>
       )}
@@ -1816,6 +1905,7 @@ function OfferList({
   onCancel,
   onDelete,
   onFill,
+  onCopy,
 }: {
   offers: FirmOffer[];
   workspace: GrainWorkspace;
@@ -1824,6 +1914,7 @@ function OfferList({
   onCancel: (offer: FirmOffer) => void;
   onDelete: (id: string) => void;
   onFill: (offer: FirmOffer) => void;
+  onCopy: (offer: FirmOffer) => void;
 }) {
   const groups: FirmOfferStatus[] = ["open", "filled", "expired", "canceled"];
   const ordered = groups.map(
@@ -1852,8 +1943,8 @@ function OfferList({
                 )?.name ?? offer.commodity_id;
               const value =
                 offer.offer_type === "basis"
-                  ? `${money.format(offer.basis ?? 0)}/bu basis`
-                  : `${money.format(offer.price ?? 0)}/bu`;
+                  ? `${pricePerBu.format(offer.basis ?? 0)}/bu basis`
+                  : `${pricePerBu.format(offer.price ?? 0)}/bu`;
               const offerSaleLimit = saleLimitForScope(saleLimits, offer);
               return (
                 <article className="offer-row" key={offer.id}>
@@ -1908,9 +1999,33 @@ function OfferList({
                           type="button"
                           onClick={() => void onCancel(offer)}
                         >
-                          Cancel
+                          Mark canceled
                         </button>
                       </>
+                    )}
+                    {/* Past its date but still open on the farm record: a new expiry date renews it, and then it can be filled. */}
+                    {displayed === "expired" && offer.status === "open" && (
+                      <>
+                        <button
+                          className="secondary-action"
+                          type="button"
+                          onClick={() => onEdit(offer)}
+                        >
+                          Edit or renew
+                        </button>
+                        <small className="offer-kept-note">
+                          Change the expiry date to renew it, then mark it filled.
+                        </small>
+                      </>
+                    )}
+                    {(displayed === "expired" || displayed === "canceled") && (
+                      <button
+                        className="text-action"
+                        type="button"
+                        onClick={() => onCopy(offer)}
+                      >
+                        Copy as new offer
+                      </button>
                     )}
                     {displayed === "filled" ? (
                       <small className="offer-kept-note">
@@ -1938,6 +2053,7 @@ function OfferList({
 
 function FirmOfferForm({
   offer,
+  initial = null,
   scope,
   services,
   workspace,
@@ -1946,6 +2062,8 @@ function FirmOfferForm({
   onSave,
 }: {
   offer: FirmOffer | null;
+  /** A new offer started from an earlier one. Its status, link and expiry date are not carried over. */
+  initial?: FirmOffer | null;
   scope: PositionScope;
   services: GrainServices;
   workspace: GrainWorkspace;
@@ -1953,18 +2071,21 @@ function FirmOfferForm({
   onCancel: () => void;
   onSave: (offer: FirmOffer) => Promise<void>;
 }) {
-  const [buyer, setBuyer] = useState(offer?.buyer ?? "");
-  const [type, setType] = useState<FirmOfferType>(offer?.offer_type ?? "cash");
-  const [amount, setAmount] = useState(offer?.bushels.toString() ?? "");
-  const [price, setPrice] = useState(offer?.price?.toString() ?? "");
-  const [basis, setBasis] = useState(offer?.basis?.toString() ?? "");
-  const [month, setMonth] = useState(offer?.contract_month ?? "");
+  const start = offer ?? initial;
+  const [buyer, setBuyer] = useState(start?.buyer ?? "");
+  const [type, setType] = useState<FirmOfferType>(start?.offer_type ?? "cash");
+  const [amount, setAmount] = useState(start?.bushels.toString() ?? "");
+  const [price, setPrice] = useState(start?.price?.toString() ?? "");
+  const [basis, setBasis] = useState(start?.basis?.toString() ?? "");
+  const [month, setMonth] = useState(start?.contract_month ?? "");
   const [expires, setExpires] = useState(offer?.expires_on ?? "");
-  const [location, setLocation] = useState(offer?.delivery_location ?? "");
-  const [notes, setNotes] = useState(offer?.notes ?? "");
+  const [location, setLocation] = useState(start?.delivery_location ?? "");
+  const [notes, setNotes] = useState(start?.notes ?? "");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const submitLock = useRef(createSubmitLock());
+  // One id for this form, so a retry after an unclear failure updates the same offer instead of adding a second one.
+  const [offerId] = useState(() => offer?.id ?? services.createGrainId());
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!submitLock.current.acquire()) return;
@@ -1972,7 +2093,7 @@ function FirmOfferForm({
     try {
       const timestamp = new Date().toISOString();
       const next: FirmOffer = {
-        id: offer?.id ?? services.createGrainId(),
+        id: offerId,
         ...scope,
         buyer,
         offer_type: type,
@@ -1988,11 +2109,20 @@ function FirmOfferForm({
         created_at: offer?.created_at ?? timestamp,
         updated_at: timestamp,
       };
-      const errors = validateFirmOffer(next);
+      // Form-only checks on top of the database's own rules: a $0 price and a past expiry are almost always typing slips.
+      // An expiry date the farmer did not change is left alone, so an old offer's note can still be edited.
+      const errors = [
+        ...(type !== "basis" && price !== "" && !(Number(price) > 0) ? ["Enter a price above $0.00."] : []),
+        ...(expires && expires !== (offer?.expires_on ?? "") && expires < localCalendarDay(new Date()) ? ["The expiry date is in the past. Pick today or later, or leave it blank."] : []),
+        ...validateFirmOffer(next),
+      ];
       if (errors.length) {
         setError(errors.join(" "));
         return;
       }
+      setError("");
+      // Basis is typed in dollars; -35 is almost always "35 under" typed as cents. Ask, never convert.
+      if (next.basis !== null && basisLooksLikeCents(next.basis) && !(await confirmDialog(basisCentsPrompt(next.basis)))) return;
       try {
         await onSave(next);
       } catch (caught) {
@@ -2014,11 +2144,16 @@ function FirmOfferForm({
         ? "Futures $/bu"
         : "Cash $/bu";
   const contracted = scopeRows(workspace.grain_contracts, scope).reduce((sum, item) => sum + item.bushels, 0);
-  const otherPending = pendingFirmOfferBushels(workspace, scope) - (offer?.status === "open" ? offer.bushels : 0);
+  // Take this offer out only when it already counts as pending: an open offer past its date is counted nowhere.
+  const otherPending = pendingFirmOfferBushels(workspace, scope) - (offer && displayFirmOfferStatus(offer) === "open" ? offer.bushels : 0);
   const saleLimitMessage = saleLimitWarning(saleLimit, contracted, otherPending, Number(amount), "save");
+  // noValidate: the checks in submit say each problem in plain words next to Save, instead of the browser's own bubble.
   return (
-    <form className="firm-offer-form" onSubmit={(event) => void submit(event)}>
-      <h3>{offer ? "Edit firm offer" : "New firm offer"}</h3>
+    <form className="firm-offer-form" noValidate onSubmit={(event) => void submit(event)}>
+      <div>
+        <h3>{offer ? "Edit firm offer" : "New firm offer"}</h3>
+        <p className="offer-form-scope">{scopeLabel(workspace, scope)}</p>
+      </div>
       <label>
         Buyer
         <input
@@ -2053,12 +2188,14 @@ function FirmOfferForm({
       </label>
       <label>
         {priceLabel}
+        {/* Grain trades to the quarter cent, and a basis is often negative: the iOS decimal pad has no minus key. */}
         <input
           required
           type="number"
-          min={type === "basis" ? undefined : "0"}
-          step="0.01"
-          inputMode="decimal"
+          min={type === "basis" ? undefined : "0.01"}
+          step="any"
+          inputMode={type === "basis" ? undefined : "decimal"}
+          placeholder={type === "basis" ? "-0.35" : undefined}
           value={type === "basis" ? basis : price}
           onChange={(event) =>
             type === "basis"
@@ -2068,7 +2205,7 @@ function FirmOfferForm({
         />
       </label>
       <label>
-        Contract month <small>optional</small>
+        {type === "cash" ? "Delivery month" : "Futures month"} <small>optional</small>
         <input
           type="month"
           value={month}
@@ -2079,6 +2216,7 @@ function FirmOfferForm({
         Expires on <small>optional</small>
         <input
           type="date"
+          min={offer ? undefined : localCalendarDay(new Date())}
           value={expires}
           onChange={(event) => setExpires(event.target.value)}
         />
@@ -2114,7 +2252,7 @@ function FirmOfferForm({
           {saving ? "Saving…" : "Save firm offer"}
         </button>
         <button className="text-action" type="button" onClick={onCancel}>
-          Cancel
+          Close without saving
         </button>
       </div>
     </form>
@@ -2150,11 +2288,23 @@ function AlertRuleForm({
   const [message, setMessage] = useState(rule?.message ?? "");
   const [breakeven, setBreakeven] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const submitLock = useRef(createSubmitLock());
+  // One id for this form, so a double tap or a retry saves one rule instead of adding a second one.
+  const [ruleId] = useState(() => rule?.id ?? services.createGrainId());
+  const today = localCalendarDay(new Date());
+  // The bid the server sweep would read right now: the newest cash bid in the last two days, from any elevator.
+  const eligibleBid = type === "price_target" ? latestAlertEligibleCashBid(workspace, scope, today) : null;
   useEffect(() => {
+    // A late answer for an earlier crop, or a failed lookup, never shows a break-even for the wrong crop.
+    let live = true;
+    setBreakeven(null);
     if (type === "price_target")
-      void services.profitabilityRepository
+      services.profitabilityRepository
         .getBreakeven(scope, workspace.fields)
-        .then(setBreakeven);
+        .then((value) => { if (live) setBreakeven(value); })
+        .catch(() => { if (live) setBreakeven(null); });
+    return () => { live = false; };
   }, [
     type,
     services,
@@ -2167,30 +2317,53 @@ function AlertRuleForm({
   ]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const timestamp = new Date().toISOString();
-    const next: MarketingAlertRule = {
-      id: rule?.id ?? services.createGrainId(),
-      ...scope,
-      rule_type: type,
-      direction: type === "price_target" ? direction : null,
-      threshold: type === "deadline" ? null : Number(threshold),
-      remind_on: type === "deadline" ? remindOn || null : null,
-      message: message.trim() || null,
-      active: rule?.active ?? true,
-      last_triggered_at: rule?.last_triggered_at ?? null,
-      created_at: rule?.created_at ?? timestamp,
-      updated_at: timestamp,
-    };
+    if (type === "deadline" && !remindOn) {
+      setError("Pick a reminder date.");
+      return;
+    }
+    // A reminder date in the past can never go off. A saved date the farmer did not change is left alone.
+    if (type === "deadline" && remindOn < today && remindOn !== (rule?.remind_on ?? "")) {
+      setError("Pick today or a later date.");
+      return;
+    }
+    if (!submitLock.current.acquire()) return;
+    setSaving(true);
     try {
-      await onSave(next);
-    } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : "Unable to save this alert.",
-      );
+      const timestamp = new Date().toISOString();
+      const next: MarketingAlertRule = {
+        id: ruleId,
+        ...scope,
+        rule_type: type,
+        direction: type === "price_target" ? direction : null,
+        threshold: type === "deadline" ? null : Number(threshold),
+        remind_on: type === "deadline" ? remindOn || null : null,
+        message: message.trim() || null,
+        active: rule?.active ?? true,
+        last_triggered_at: rule?.last_triggered_at ?? null,
+        created_at: rule?.created_at ?? timestamp,
+        updated_at: timestamp,
+      };
+      // The form skips the browser's own English bubbles (noValidate), so a blank or out-of-range number is said here.
+      const errors = validateMarketingAlertRule(next);
+      if (errors.length) {
+        setError(errors.join(" "));
+        return;
+      }
+      setError("");
+      try {
+        await onSave(next);
+      } catch (caught) {
+        setError(
+          caught instanceof Error ? caught.message : "Unable to save this alert.",
+        );
+      }
+    } finally {
+      submitLock.current.release();
+      setSaving(false);
     }
   };
   return (
-    <form className="alert-rule-form" onSubmit={(event) => void submit(event)}>
+    <form className="alert-rule-form" noValidate onSubmit={(event) => void submit(event)}>
       <div>
         <h3>
           {rule
@@ -2219,19 +2392,27 @@ function AlertRuleForm({
           </label>
           <label>
             Cash price target ($/bu)
+            {/* Bids trade to the quarter cent, so a target can too. */}
             <input
               required
               type="number"
               min="0.01"
               max="1000"
-              step="0.01"
+              step="any"
               inputMode="decimal"
               value={threshold}
               onChange={(event) => setThreshold(event.target.value)}
             />
           </label>
           <p className="alert-fact">
-            Price alerts use the newest cash price entered for this commodity.
+            Checks the newest cash bid saved for this crop from today or the 2
+            days before, from any elevator, including USDA bids. It does not
+            watch futures or live elevator prices, so keep your bids up to date.
+          </p>
+          <p className="alert-fact">
+            {eligibleBid
+              ? `Bid it would use today: ${pricePerBu.format(eligibleBid.cash_price!)} from ${eligibleBid.elevator}, ${bidDate(eligibleBid.bid_date)}.`
+              : `No bid for the ${scope.crop_year} crop from today or the 2 days before, so this alert cannot go off until a new bid is saved.`}
           </p>
           {breakeven !== null && (
             <p className="alert-fact">
@@ -2256,20 +2437,37 @@ function AlertRuleForm({
             />
           </label>
           <p className="alert-fact">
-            Currently {currentPct.toFixed(0)}% marketed
+            Currently {marketedPercentLabel(currentPct)}% marketed
           </p>
+          {/* A paused rule never sends, and one that has already sent waits until the goal is reached first. */}
+          {threshold !== "" && Number(threshold) > currentPct && (!rule || (rule.active && !rule.last_triggered_at)) && (
+            <p className="alert-fact">
+              You are below this goal now, so you will get one notification
+              within about 15 minutes. After that it only notifies you again if
+              you reach the goal and then drop below it. While you are below the
+              goal it also shows in Grain alerts on this page.
+            </p>
+          )}
         </>
       )}
       {type === "deadline" && (
-        <label>
-          Reminder date
-          <input
-            required
-            type="date"
-            value={remindOn}
-            onChange={(event) => setRemindOn(event.target.value)}
-          />
-        </label>
+        <>
+          <label>
+            Reminder date
+            <input
+              required
+              type="date"
+              min={rule?.remind_on && rule.remind_on < today ? undefined : today}
+              value={remindOn}
+              onChange={(event) => setRemindOn(event.target.value)}
+            />
+          </label>
+          <p className="alert-fact">
+            You will get one notification 7 days before this date, or right away
+            if it is less than 7 days off. It is not sent again on the day, but
+            it can still show in Grain alerts on this page that week.
+          </p>
+        </>
       )}
       <label className="alert-note">
         Note <small>optional</small>
@@ -2288,8 +2486,8 @@ function AlertRuleForm({
         </p>
       )}
       <div className="alert-form-actions">
-        <button className="primary-action" type="submit">
-          Save alert
+        <button className="primary-action" type="submit" disabled={saving}>
+          {saving ? "Saving…" : "Save alert"}
         </button>
         <button className="text-action" type="button" onClick={onCancel}>
           Cancel
