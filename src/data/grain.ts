@@ -789,11 +789,18 @@ export function planMonthFor(now: Date, timeZone: string | null | undefined): nu
   return Number(farmCalendarDate(now, timeZone).slice(5, 7))
 }
 
-/** The marketing plan's cumulative target through a calendar month (1-12), as the Overview's plan status accumulates it: every
- * target whose month number is at or before the given month counts, whatever year its date carries. Today's grain line and the
- * Overview share this rule so the two screens report the same planned percent. */
-export function plannedPercentThroughMonth(targets: readonly { target_month: string; target_pct_of_production: number }[], month: number): number {
-  return targets.filter((target) => Number(target.target_month.slice(5, 7)) <= month).reduce((total, target) => total + target.target_pct_of_production, 0)
+/** The farm's current day (YYYY-MM-DD) the marketing plan is judged against: the same day as planMonthFor, with its year kept. */
+export function planDateFor(now: Date, timeZone: string | null | undefined): string {
+  return farmCalendarDate(now, timeZone)
+}
+
+/** The marketing plan's cumulative target through a date's month, as the Overview's plan status accumulates it: every target
+ * whose year and month are at or before that month counts. Comparing the year as well as the month keeps a plan that crosses
+ * New Year honest: in January 2027 a 2026 plan's October target is already due, and a 2027 crop's March target is not yet due
+ * in October 2026. Today's grain line and the Overview share this rule so the two screens report the same planned percent. */
+export function plannedPercentThroughDate(targets: readonly { target_month: string; target_pct_of_production: number }[], throughDate: string): number {
+  const through = throughDate.slice(0, 7)
+  return targets.filter((target) => target.target_month.slice(0, 7) <= through).reduce((total, target) => total + target.target_pct_of_production, 0)
 }
 
 /** Shared by the marketing plan and alert rules: signed contract bushels / active production. */

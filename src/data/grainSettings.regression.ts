@@ -303,6 +303,10 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
   assert(!isCarryDraft(`carry-grid:${uid(12)}`, { ...gridDraft, sent: {} }) && !isCarryDraft(`carry-grid:${uid(12)}`, { ...gridDraft, sent: { ...sentGrid, rows: [] } }) && !isCarryDraft(`carry-grid:${uid(12)}`, { ...gridDraft, draft: { ...gridDraft.draft, rows: rows.slice(1) } }) && !isCarryDraft(`carry-grid:${uid(13)}`, gridDraft), 'A grid draft with an empty or short lineage, twelve rows, or another estimate\'s key is dropped.')
 }
 
+// Grain usability: a marketing plan past 100% of the crop is named in farmer words, whichever layer refused it.
+for (const refusal of ['Marketing plan percentages cannot exceed 100%.', 'marketing plan total cannot exceed 100 percent', 'Marketing plan totals must be greater than 0% per month and no more than 100% for this crop scope.'])
+  assert(farmerError(new Error(refusal), 'save this target') === 'Your plan months add up to more than 100% of the crop. Lower one of them and try again.', `A plan over 100% must be explained plainly: ${refusal}`)
+
 console.log('Grain settings regressions passed.')
 
 // The first insert of a sale limit or a carry grid takes an id derived from its logical key: the same in every tab and browser, in

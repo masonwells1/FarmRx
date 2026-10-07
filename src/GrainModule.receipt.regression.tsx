@@ -1,11 +1,11 @@
 import { Window } from 'happy-dom'
 import React, { createElement, useState } from 'react'
 import { act } from 'react'
-import { Bins, ContractActions, ContractEntry, deliveryDefaultEstimate, FirstEstimate, PositionCard } from './GrainModule'
+import { Bins, ContractActions, ContractEntry, deliveryDefaultEstimate, FirstEstimate, PositionCard, TargetEditor } from './GrainModule'
 import { SaveReceipt } from './components/SaveReceipt'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
-import { recordedBinLots, type BinTransaction, type GrainBin, type GrainContract, type GrainContractDelivery, type GrainServices, type GrainWorkspace, type ProductionEstimate } from './data/grain'
+import { recordedBinLots, type BinTransaction, type GrainBin, type GrainContract, type GrainContractDelivery, type GrainLoad, type GrainServices, type GrainWorkspace, type ProductionEstimate } from './data/grain'
 import { setSaveReceipt, useSaveReceipt } from './lib/saveReceipt'
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -33,8 +33,15 @@ const firstContainer = document.createElement('div'); document.body.append(first
 let firstUnmounted = false; let reconcileContainer: HTMLDivElement | null = null; let reconcileRoot: ReturnType<typeof createRoot> | null = null
 try {
   await act(async () => { firstRoot.render(createElement(FirstHarness)); await flush() })
+  // Grain usability: each crop has its own yield box, and Create with a blank box says why instead of doing nothing.
+  const yieldInputs = [...firstContainer.querySelectorAll('input')] as HTMLInputElement[]; assert(yieldInputs.length > 1, 'Each crop and year without an estimate must get its own expected-yield box.')
+  const createButtons = [...firstContainer.querySelectorAll('button')].filter((button) => button.textContent === 'Create estimate') as HTMLButtonElement[]
+  await act(async () => { createButtons[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+  assert(firstContainer.textContent?.includes('Enter an expected yield above zero.') && Number(createdCalls) === 0, 'Create with a blank yield must explain itself on that card and send nothing.')
+  assert(firstContainer.textContent?.includes('ac planted'), 'Each crop card must show its planted acres.')
   const aph = firstContainer.querySelector('input') as HTMLInputElement; await act(async () => { Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, 'value')!.set!.call(aph, '180'); aph.dispatchEvent(new (win.InputEvent ?? win.Event)('input', { bubbles: true }) as unknown as Event); aph.dispatchEvent(new Event('change', { bubbles: true })); await flush() })
   const create = [...firstContainer.querySelectorAll('button')].find((button) => button.textContent === 'Create estimate') as HTMLButtonElement | undefined; assert(create && aph.value === '180' && !create.disabled, 'First estimate must keep the controlled APH value and genuinely enable Create estimate before submission.')
+  assert(([...firstContainer.querySelectorAll('input')] as HTMLInputElement[])[1].value === '' && firstContainer.textContent?.includes('bu expected'), 'A yield typed for one crop must not fill another crop\'s box, and the typed crop shows its expected bushels.')
   await act(async () => { create.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
   assert(firstContainer.textContent?.includes('Saving…') && createdCalls === 1, 'First estimate must select its exact generated ID and render Saving before the create returns.')
   await act(async () => { create.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve() }); assert(createdCalls === 1, 'Rapid first-estimate submit must create one ID and one write.')
@@ -52,6 +59,14 @@ try {
   await act(async () => { reconcile.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() }); const reconcileDialog = openDialog(); assert(reconciledCalls === 0 && reconcileDialog?.textContent?.includes('Use the harvest total as Grain actual?') && reconcileDialog.textContent.includes('This changes Grain actual only; it does not change bins.'), 'The in-app dialog must show the exact farmer confirmation text before any reconciliation call.'); await click(dialogButton('Go back')); assert(reconciledCalls === 0 && openDialog() === null, 'Cancel must make zero reconciliation calls and close the dialog.')
   await act(async () => { reconcile.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() }); await click(dialogButton('Use harvest total')); const savingCalls = Number(reconciledCalls); assert(savingCalls === 1 && renderedReconcileContainer.textContent?.includes('Saving…'), 'Harvest reconciliation must invoke one direct online write and render Saving after the exact confirmation text.')
   releaseReconcile(); await act(async () => { await flush(); await flush() }); const savedCalls = Number(reconciledCalls); assert(savedCalls === 1 && renderedReconcileContainer.textContent?.includes('Saved'), 'Harvest reconciliation must remain one direct write and render Saved when its receipt completes.'); window.confirm = previousConfirm
+  // Grain usability: with no insurance unit and no Revenue Protection on a budget there is no guarantee to show, so the card says
+  // "Not entered" and where to add it, never "0 bu" (which reads as no room left to sell).
+  const metricValue = (label: string) => [...renderedReconcileContainer.querySelectorAll('div')].find((item) => item.querySelector(':scope > span')?.textContent === label)?.querySelector(':scope > strong')?.textContent
+  assert(metricValue('Insurance estimate guarantee') === 'Not entered' && metricValue('Insurance estimate remaining') === 'Not entered' && metricValue('Insurance floor estimate') === 'Not entered' && renderedReconcileContainer.textContent?.includes("Add Revenue Protection coverage to this crop's budget in Profitability"), 'No coverage must read Not entered with where to add it, not 0 bu.')
+  // The Actual button is not greyed out with no reason: with no actual bushels saved it says what to do and saves nothing.
+  const productionCallsBefore = createdCalls
+  await click(button(renderedReconcileContainer, 'Actual'))
+  assert(renderedReconcileContainer.textContent?.includes('Enter actual bushels in More details and tap Save production. Then tap Actual.') && createdCalls === productionCallsBefore, 'Actual with no actual bushels must explain itself and make no save.')
 } finally { await act(async () => { if (!firstUnmounted) firstRoot.unmount(); reconcileRoot?.unmount() }); firstContainer.remove(); reconcileContainer?.remove() }
 
 type Gate = { promise: Promise<void>; release: () => void }
@@ -77,6 +92,69 @@ function button(container: HTMLElement, text: string) {
   return found
 }
 async function click(element: HTMLElement) { await act(async () => { element.click(); await flush() }) }
+
+// Grain usability (s1a): the empty farm points to Fields; the card shows load-ticket harvest without adopting it, explains a blank
+// yield beside the box, and shows its own Saving / Saved for a production save.
+{
+  const { MemoryRouter } = await import('react-router')
+  const emptyContainer = document.createElement('div'); document.body.append(emptyContainer); const emptyRoot = createRoot(emptyContainer)
+  const cardContainer = document.createElement('div'); document.body.append(cardContainer); const cardRoot = createRoot(cardContainer)
+  try {
+    await act(async () => { emptyRoot.render(createElement(MemoryRouter, null, createElement(FirstEstimate, { workspace: { ...workspace, production_estimates: [], fields: { ...fields, crop_assignments: [] } }, services, onSaved: async () => undefined, onReceipt: () => undefined, receipt: null }))); await flush() })
+    const fieldsLink = [...emptyContainer.querySelectorAll('a')].find((item) => item.textContent === 'Add crops in Fields')
+    assert(fieldsLink?.getAttribute('href') === '/fields' && !emptyContainer.querySelector('.loading-state') && emptyContainer.textContent?.includes('No crops to track yet'), 'A farm with no crop assignments must get one sentence and a link to Fields, not a loading placeholder.')
+
+    const loadFields = structuredClone(fields); for (const item of loadFields.crop_assignments) item.harvested_bushels = null
+    const loadAssignment = loadFields.crop_assignments[0]
+    const load: GrainLoad = { id: uid(730), farm_id: fields.farm.id, load_date: '2026-10-02', truck_equipment_id: null, truck_name: null, origin_kind: 'field', origin_grain_bin_id: null, origin_crop_assignment_id: loadAssignment.id, destination_kind: 'buyer', destination_buyer: 'Synthetic Elevator', destination_grain_contract_id: null, destination_grain_bin_id: null, commodity_id: loadAssignment.commodity_id, crop_year: loadAssignment.crop_year, gross_lbs: null, tare_lbs: null, net_bushels: 2_500, moisture_pct: null, ticket_number: null, photo_path: null, notes: null, effect_bin_out: false, effect_bin_in: false, effect_contract_delivery: false, effect_harvest: true, voided_at: null, void_reason: null, created_at: stamp, updated_at: stamp }
+    const cardEstimate: ProductionEstimate = { ...estimate, id: uid(731) }
+    const cardWorkspace: GrainWorkspace = { ...workspace, fields: loadFields, production_estimates: [cardEstimate], grain_loads: [load] }
+    let productionSaves = 0; const productionGate = gate()
+    const cardServices = { ...services, grainRepository: { ...repository, saveProductionEstimate: async (value: ProductionEstimate) => { productionSaves += 1; setSaveReceipt(value.id, 'saving'); await productionGate.promise; setSaveReceipt(value.id, 'saved') } } } as unknown as GrainServices
+    await act(async () => { cardRoot.render(createElement(MemoryRouter, null, createElement(PositionCard, { estimate: cardEstimate, workspace: cardWorkspace, services: cardServices, saleLimit: null, onSaleLimitChange: () => undefined, onSaved: async () => undefined, onReceipt: () => undefined }))); await flush() })
+    assert(cardContainer.querySelector('.eyebrow')?.textContent === `${cardEstimate.crop_year} crop`, 'The card header must name the crop year, not repeat the crop family.')
+    await click(button(cardContainer, 'Edit yield'))
+    assert(cardContainer.textContent?.includes('Load tickets: at least 2,500 bu') && [...cardContainer.querySelectorAll('a')].some((item) => item.getAttribute('href') === '/harvest'), 'Load-ticket harvest must be shown with the way to adopt it on Harvest.')
+    assert(button(cardContainer, 'Use harvest total as Grain actual').disabled && cardContainer.textContent?.includes('No harvest total entered yet on Harvest.'), 'Load tickets are never adopted here: the action stays off and says why.')
+    const yieldBox = control(cardContainer, 'Expected yield') as HTMLInputElement
+    assert(document.activeElement === yieldBox, 'Edit yield must open More details and put the cursor in the yield box.')
+    await change(yieldBox, ''); await click(button(cardContainer, 'Save production'))
+    assert(cardContainer.textContent?.includes('Enter an expected yield above zero (bu/ac).') && Number(productionSaves) === 0, 'A blank yield must be explained beside the card and never sent as 0.')
+    await change(yieldBox, '175'); await click(button(cardContainer, 'Save production'))
+    assert(productionSaves === 1 && cardContainer.textContent?.includes('Saving…'), 'The card must show its own Saving for a production save.')
+    productionGate.release(); await act(async () => { await flush(); await flush() })
+    assert(cardContainer.textContent?.includes('Saved'), 'The card must show its own Saved once the production save completes.')
+  } finally { await act(async () => { emptyRoot.unmount(); cardRoot.unmount() }); emptyContainer.remove(); cardContainer.remove() }
+}
+
+// Grain usability (s1a): the month editor stops a plan past 100% and a % over breakeven with no breakeven, inside the modal and
+// before any save; it offers Remove only for a month that has a target; and a failed save is shown inside the modal.
+{
+  const scope = { farm_id: fields.farm.id, crop_year: estimate.crop_year, commodity_id: estimate.commodity_id, operating_entity_id: null, enterprise_label: null }
+  const planTarget = (n: number, month: string, pct: number, price: number | null = null) => ({ id: uid(n), ...scope, target_month: month, target_pct_of_production: pct, target_price: price, breakeven_relative_pct: null, deadline: null, notes: null, created_at: stamp, updated_at: stamp })
+  const october = planTarget(741, `${scope.crop_year}-10-01`, 50, 4.5)
+  const planWorkspace: GrainWorkspace = { ...workspace, marketing_plan_targets: [planTarget(740, `${scope.crop_year}-09-01`, 40), october] }
+  const saves: Array<{ pct: number; price: number | null }> = []; let removes = 0
+  const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
+  const render = async (props: Partial<Parameters<typeof TargetEditor>[0]>) => { await act(async () => { root.render(createElement(TargetEditor, { month: 11, commodity: '2026 Yellow Corn — whole farm', scope, services, workspace: planWorkspace, onClose: () => undefined, onSave: (values) => { saves.push(values) }, ...props })); await flush() }) }
+  const submit = async () => { const save = button(container, 'Save target'); await act(async () => { save.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush() }) }
+  try {
+    await render({})
+    assert(![...container.querySelectorAll('button')].some((item) => item.textContent === 'Remove this month'), 'A month with no target has nothing to remove.')
+    await change(control(container, 'Target % of production'), '20'); await submit()
+    assert(container.textContent?.includes('Your plan would add up to 110% of the crop.') && Number(saves.length) === 0, 'A month that takes the plan past 100% must be stopped in the modal before a save.')
+    await change(control(container, 'Target % of production'), '10'); await change(control(container, 'ROI target'), '5'); await submit()
+    assert(container.textContent?.includes("Breakeven isn't available for this crop yet") && Number(saves.length) === 0, 'A % over breakeven with no breakeven must not save the old cash price beside it.')
+    await change(control(container, 'ROI target'), ''); await change(control(container, 'Cash price target'), '4.75'); await submit()
+    assert(saves.length === 1 && saves[0].pct === 10 && saves[0].price === 4.75, 'With the % cleared, the cash price saves as typed.')
+    await act(async () => { root.unmount() }); const editRoot = createRoot(container)
+    await act(async () => { editRoot.render(createElement(TargetEditor, { month: 10, commodity: '2026 Yellow Corn — whole farm', target: october, scope, services, workspace: planWorkspace, error: 'Farm Rx could not save this target right now. Please try again.', onClose: () => undefined, onSave: () => undefined, onRemove: () => { removes += 1 } })); await flush() })
+    assert(container.querySelector('.target-modal [role="alert"]')?.textContent === 'Farm Rx could not save this target right now. Please try again.', 'A failed save must be shown inside the modal, not behind it.')
+    assert((control(container, 'Target % of production') as HTMLInputElement).value === '50', 'Editing a month keeps its own percentage, and its own 50% is not counted twice against the 100% check.')
+    await click(button(container, 'Remove this month')); assert(removes === 1, 'A month with a target offers Remove this month.')
+    await act(async () => { editRoot.unmount() })
+  } finally { container.remove() }
+}
 
 const novemberIds = {
   contract: uid(801), deliveryOffline: uid(802), delivery: uid(803), deliveryRejected: uid(804), deliveryCorrected: uid(805), bin: uid(807), movementOffline: uid(808), inbound: uid(809), outboundRejected: uid(810), outbound: uid(811),

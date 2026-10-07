@@ -1,4 +1,5 @@
 import type { GrainData } from './grain'
+import type { FieldsRepository } from './fields'
 import { MockGrainRepository, mockFirmOfferIsExpired, readGrain, writeGrainEnvelope } from './MockGrainRepository'
 import type { FirmOffer } from './grain'
 
@@ -28,4 +29,29 @@ const migratedOldGrain = readGrain(oldGrain)
 assert(migratedOldGrain?.production_estimates[0]?.id === 'kept-estimate' && migratedOldGrain.grain_contracts[0]?.id === 'kept-contract' && migratedOldGrain.firm_offers.length === 0, 'An older local Grain envelope without firm_offers must retain its existing data and add an empty offer list.')
 assert(typeof MockGrainRepository.prototype.upsertGrainBin === 'function' && typeof MockGrainRepository.prototype.appendBinTransaction === 'function', 'Mock grain repository must expose the bin and append-only movement seam.')
 assert(!mockFirmOfferIsExpired({ expires_on: '2026-07-13' } as FirmOffer, new Date(2026, 6, 13, 23, 30)) && mockFirmOfferIsExpired({ expires_on: '2026-07-13' } as FirmOffer, new Date(2026, 6, 14, 0, 1)), 'Mock firm-offer expiry must use the device-local calendar day, including at 11:30 PM.')
+// Grain usability (remove one month of a plan): there is no single-target delete. The plan is replaced with every other month of
+// the same crop and year, and only the month left out is removed; other crops' plans are untouched.
+{
+  const storage = new Map<string, string>()
+  const previousStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => { storage.set(key, String(value)) }, removeItem: (key: string) => { storage.delete(key) }, clear: () => storage.clear(), key: () => null, length: 0 } })
+  try {
+    const { fieldsSeedForRegression } = await import('./MockFieldsRepository')
+    const fields = fieldsSeedForRegression()
+    const repo = new MockGrainRepository({ getData: async () => fields } as unknown as FieldsRepository)
+    const before = await repo.getData()
+    const cornTargets = before.marketing_plan_targets.filter((row) => row.commodity_id === 'corn_yellow')
+    assert(cornTargets.length >= 2, 'The mock seed must carry at least two corn plan months for the remove-one-month check.')
+    const scope = { farm_id: cornTargets[0].farm_id, crop_year: cornTargets[0].crop_year, commodity_id: cornTargets[0].commodity_id, operating_entity_id: cornTargets[0].operating_entity_id, enterprise_label: cornTargets[0].enterprise_label }
+    const sameScopeRows = before.marketing_plan_targets.filter((row) => row.farm_id === scope.farm_id && row.crop_year === scope.crop_year && row.commodity_id === scope.commodity_id && row.operating_entity_id === scope.operating_entity_id && row.enterprise_label === scope.enterprise_label)
+    const removed = sameScopeRows[0]
+    await repo.replaceMarketingPlanTargets(scope, sameScopeRows.filter((row) => row.id !== removed.id))
+    const after = await repo.getData()
+    assert(!after.marketing_plan_targets.some((row) => row.id === removed.id), 'Replacing a plan without one month must remove that month.')
+    assert(sameScopeRows.slice(1).every((row) => after.marketing_plan_targets.some((kept) => kept.id === row.id && kept.target_pct_of_production === row.target_pct_of_production)), 'Every other month of the same plan must stay as it was.')
+    assert(after.marketing_plan_targets.length === before.marketing_plan_targets.length - 1, 'Other crops\' plans must be untouched when one month is removed.')
+  } finally {
+    if (previousStorage) Object.defineProperty(globalThis, 'localStorage', previousStorage); else delete (globalThis as { localStorage?: unknown }).localStorage
+  }
+}
 console.log('MockGrainRepository regressions passed.')

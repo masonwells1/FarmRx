@@ -431,7 +431,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .grain-heading { margin-bottom: 0; }
 .market-stamp, .delayed-label { color: var(--matte-gray); font-size: 18px; }
 .delayed-label { white-space: nowrap; }
-.position-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.position-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; }
 .position-card, .grain-section { border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); }
 .position-card { padding: 20px; box-shadow: 0 3px 10px rgb(23 81 58 / 5%); }
 .position-top, .section-heading, .position-foot, .plan-status, .bin-row, .modal-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
@@ -452,7 +452,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
    removed, so the disclosure has to be comfortable to open on a phone and obvious that it holds more. */
 .position-hero { margin: 18px 0 14px; font-family: var(--brand-font); font-size: 22px; font-weight: 600; line-height: 1.35; }
 .position-hero strong { font-weight: 700; }
-.position-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.position-tiles { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 .position-more { margin: 16px 0 4px; border-top: 1px solid var(--hairline); }
 .position-more-toggle { display: block; width: 100%; min-height: 48px; padding: 14px 2px; border: 0; background: none; font: inherit; font-size: 18px; font-weight: 600; text-align: left; color: var(--deep-green, var(--charcoal)); cursor: pointer; }
 .position-more-toggle:focus-visible { outline: 2px solid var(--charcoal); outline-offset: 2px; }
@@ -486,7 +486,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .template-button:hover { border-color: var(--crx-green); background: #dff2e7; }
 .template-button strong { font-size: 18px; }
 .template-button span { color: var(--matte-gray); font-size: 18px; line-height: 1.25; }
-.month-grid { display: grid; grid-template-columns: repeat(12, minmax(88px, 1fr)); overflow-x: auto; padding: 18px 20px; gap: 8px; }
+.month-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); overflow-x: visible; padding: 18px 20px; gap: 8px; }
 .month-cell { min-width: 88px; min-height: 116px; display: grid; align-content: start; gap: 4px; padding: 10px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); color: var(--charcoal); text-align: left; }
 .month-cell:hover, .month-cell.planned { border-color: var(--crx-green); background: var(--light-green); }
 .month-cell span, .month-cell small { color: var(--matte-gray); font-size: 18px; font-weight: 700; }
@@ -904,7 +904,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
   .section-heading { align-items: start; flex-direction: column; gap: 10px; }
   .commodity-picker { width: 100%; }
   .template-bar { padding-right: 16px; padding-left: 16px; }
-  .month-grid { padding-right: 16px; padding-left: 16px; }
+  .month-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); padding-right: 16px; padding-left: 16px; }
   .plan-status { align-items: start; flex-direction: column; padding: 15px 16px; }
   .contract-entry { grid-template-columns: 1fr 1fr; padding: 16px; }
   .contract-entry > label:first-child, .contract-entry > label:nth-child(2), .contract-entry details { grid-column: 1 / -1; }
@@ -1007,7 +1007,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .section-tabs a { display: inline-flex; align-items: center; min-height: 48px; padding: 10px 18px; border-bottom: 3px solid transparent; margin-bottom: -2px; color: var(--matte-gray); font-size: 18px; font-weight: 700; text-decoration: none; white-space: nowrap; }
 .section-tabs a:hover { color: var(--deep-green); }
 .section-tabs a.active { color: var(--deep-green); border-bottom-color: var(--crx-green); }
-@media (max-width: 767px) { .section-tabs { flex-wrap: wrap; gap: 6px; overflow-x: visible; padding-bottom: 12px; border-bottom: 1px solid var(--hairline); }.section-tabs a { margin-bottom: 0; padding: 8px 12px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); }.section-tabs a.active { border-color: var(--deep-green); background: var(--deep-green); color: var(--on-dark); }.grain-page .position-top { flex-wrap: wrap; } }
+@media (max-width: 767px) { .section-tabs { flex-wrap: wrap; gap: 6px; overflow-x: visible; padding-bottom: 12px; border-bottom: 1px solid var(--hairline); }.section-tabs a { margin-bottom: 0; padding: 8px 12px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); }.section-tabs a.active { border-color: var(--deep-green); background: var(--deep-green); color: var(--on-dark); } }
 .overview-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 16px 20px; }
 .overview-picker label { display: grid; gap: 6px; font-weight: 700; }
 .overview-picker select { min-height: 48px; min-width: 240px; }
@@ -1278,3 +1278,30 @@ tbody tr:nth-child(even) td { background: var(--cream); }
   .load-form fieldset, .load-form > button, .load-form > .load-message { grid-column: 1 / -1; }
 }
 .contract-repair .destructive { color: var(--alert-red, #a4262c); }
+
+/* Grain usability: s1a-overview */
+.grain-page .position-top { flex-wrap: wrap; }
+.grain-page .position-top-actions { display: grid; justify-items: end; gap: 4px; }
+.grain-page .position-foot .text-action { min-height: 48px; padding: 0 4px; border: 0; background: none; font: inherit; font-weight: 700; cursor: pointer; }
+.grain-page .grain-reconciliation small { display: block; margin-top: 6px; color: var(--matte-gray); font-size: 18px; }
+.grain-page .first-estimate { padding: 20px; }
+.grain-page .first-estimate .section-heading, .grain-page .add-crop-card .section-heading { padding: 0 0 16px; }
+.grain-page .first-estimate-card { display: grid; gap: 10px; align-content: start; }
+.grain-page .first-estimate-card p { margin: 0; font-size: 18px; }
+.grain-page .first-estimate-card label { display: grid; gap: 6px; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
+.grain-page .first-estimate-card input { width: 100%; min-height: 48px; box-sizing: border-box; padding: 9px 10px; border: 2px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); font: inherit; font-size: 18px; }
+.grain-page .grain-empty-state { margin: 0 auto; }
+.grain-page .grain-needs-estimate { display: grid; justify-items: start; gap: 14px; padding: 20px; font-size: 18px; }
+.grain-page .grain-needs-estimate p { margin: 0; }
+.grain-page .plan-notice { margin: 0 20px; }
+.grain-page .target-modal-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.grain-page .target-modal-actions > button { flex: 1 1 160px; }
+.grain-page .untracked-stored-grain { padding-bottom: 20px; }
+.grain-page .untracked-stored-grain ul { margin: 0 0 14px; padding: 0 20px 0 40px; font-size: 18px; }
+.grain-page .untracked-stored-grain > .secondary-action { margin: 0 20px; }
+.grain-page .usda-empty { display: grid; justify-items: start; gap: 8px; padding: 0 20px; font-size: 18px; }
+.grain-page .usda-empty p { margin: 0; }
+.grain-page .actual-plan-card tfoot th { text-align: left; }
+/* The month editor now carries its own error line and a Remove button, so on a phone it can be taller than the screen: it scrolls, and centres only when it fits. */
+.grain-page .target-modal-backdrop { overflow-y: auto; place-items: start center; }
+.grain-page .target-modal { margin-block: auto; }
