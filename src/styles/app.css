@@ -1348,3 +1348,38 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .basis-entry label small { font-size: 18px; font-weight: 500; }
 .basis-entry .basis-hint { grid-column: 1 / -1; margin: 0; color: var(--matte-gray); font-size: 18px; }
 .basis-chart-note { margin: 0 20px 8px; }
+
+/* Grain usability: s1b-contracts */
+/* The crop and year picker lines up with the Add contract form under it instead of touching the card edge. */
+.grain-page .contracts-card > .contracts-picker { width: auto; margin: 0 20px 12px; }
+.contract-entry-scope { grid-column: 1 / -1; margin: 0; color: var(--charcoal); font-size: 18px; }
+.contract-entry .contract-entry-note { grid-column: 1 / -1; }
+.contract-entry details .contract-entry-hint { grid-column: 1 / -1; color: var(--matte-gray); font-size: 18px; font-weight: 500; }
+/* Success news after a delete: green, with its own Dismiss, rather than error red that never goes away. */
+.grain-inline-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 12px 20px; padding: 10px 12px; border-radius: 9px; background: var(--light-green); color: var(--charcoal); font-size: 18px; }
+.contracts-empty, .contracts-next-year { font-size: 18px; }
+.contracts-next-year { padding-top: 0; }
+/* The per-contract controls live in a full-width row under each contract, so the columns stay narrow
+   enough to fit a laptop screen without a sideways scroll. */
+.contracts-table { min-width: 0; }
+.contracts-table th, .contracts-table td { padding: 12px 10px; }
+.contracts-table tbody tr:nth-child(even) td { background: transparent; }
+.contracts-table .contract-row td { vertical-align: top; }
+.contracts-table .contract-actions-row td { padding: 0 10px 16px; border-top: 0; }
+.contract-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 28px; }
+.contract-action-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; }
+.contract-action-form label { display: grid; gap: 4px; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
+.contract-action-form input { width: 170px; min-height: 48px; padding: 9px 10px; border: 2px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); font: inherit; font-weight: 400; }
+.contract-action-form > small, .contract-actions > small, .contract-actions > .contract-repair { flex-basis: 100%; }
+.contract-actions .contract-repair { margin-top: 0; }
+/* Links inside a sentence: vertical padding on an inline element widens the tap area to 48px without spreading the lines. */
+.contracts-next-year a, .contract-action-hint a, .grain-delivery-intent p a { padding: 14px 0; }
+@media (max-width: 767px) {
+  .grain-page .contracts-card > .contracts-picker { margin: 0 16px 12px; }
+  .grain-inline-notice { margin: 12px 16px; }
+  .phone-stack.contracts-table tr.contract-row { border-bottom: 0; padding-bottom: 4px; }
+  .phone-stack.contracts-table tfoot { display: block; }
+  .contract-actions, .contract-action-form { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .contract-action-form input { width: 100%; }
+  .contract-action-form .text-action { justify-self: start; }
+}

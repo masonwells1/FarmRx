@@ -218,6 +218,7 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     assert(fillEntry() && hasButton(fillEntry()!, 'Close without saving') && !hasButton(section(), 'Add firm offer'), 'A4: the fill form must offer a way out.')
     const fillForm = () => fillEntry()!.querySelector('form') as HTMLFormElement
     await change(control(fillForm(), 'Bushels'), '6000')
+    assert(fillEntry()?.querySelector('.contract-entry-note')?.textContent?.includes('the other 4,000 bu stop counting as pending') && !fillEntry()?.querySelector('.form-error'), 'A18: filling part of an offer must say, before saving, that the rest stops counting as pending.')
     await submitSkippingBrowserChecks(fillForm())
     const sectionErrors = () => [...section().children].filter((item) => item.classList.contains('form-error'))
     assert(fills.length === 1 && fillEntry()?.querySelector('.form-error')?.textContent && sectionErrors().length === 0, `A13: a failed fill must keep the fill form open and show its error inside it. ${fillEntry()?.textContent}`)

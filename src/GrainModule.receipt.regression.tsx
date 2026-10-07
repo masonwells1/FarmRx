@@ -5,7 +5,7 @@ import { Bins, ContractActions, ContractEntry, deliveryDefaultEstimate, FirstEst
 import { SaveReceipt } from './components/SaveReceipt'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
-import { recordedBinLots, type BinTransaction, type GrainBin, type GrainContract, type GrainContractDelivery, type GrainLoad, type GrainServices, type GrainWorkspace, type ProductionEstimate } from './data/grain'
+import { recordedBinLots, type BinTransaction, type FirmOffer, type GrainBin, type GrainContract, type GrainContractDelivery, type GrainLoad, type GrainServices, type GrainWorkspace, type ProductionEstimate } from './data/grain'
 import { setSaveReceipt, useSaveReceipt } from './lib/saveReceipt'
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -195,9 +195,36 @@ function ContractHarness() {
   )
 }
 
+const { MemoryRouter: ContractRouter } = await import('react-router')
 const contractContainer = document.createElement('div'); document.body.append(contractContainer); const contractRoot = createRoot(contractContainer)
-await act(async () => { contractRoot.render(createElement(React.Fragment, null, createElement(ContractHarness), createElement(ConfirmDialogHost))); await flush() })
-await change(control(contractContainer, 'Bushels'), '12000'); await change(control(contractContainer, 'Cash $/bu'), '5')
+await act(async () => { contractRoot.render(createElement(ContractRouter, null, createElement(ContractHarness), createElement(ConfirmDialogHost))); await flush() })
+// Grain usability (s1b): the form names the crop it saves to, takes quarter cents, and gives the basis box a keyboard with a minus key.
+assert(contractContainer.querySelector('.contract-entry-scope')?.textContent === `New sale for ${estimate.crop_year} Yellow Corn — whole farm`, `C6: Add contract must name the crop and year it saves to. ${contractContainer.querySelector('.contract-entry-scope')?.textContent}`)
+assert(control(contractContainer, 'Cash $/bu').getAttribute('step') === 'any', 'C0: the contract price box must take quarter cents.')
+// C19: a cash price typed, then the type switched to HTA, must not become the futures price.
+await change(control(contractContainer, 'Cash $/bu'), '4.50'); await change(control(contractContainer, 'Type'), 'hta')
+assert((control(contractContainer, 'Futures $/bu') as HTMLInputElement).value === '', 'C19: switching to HTA must clear a typed cash price.')
+await change(control(contractContainer, 'Type'), 'basis')
+const contractBasis = control(contractContainer, 'Basis $/bu') as HTMLInputElement
+assert(contractBasis.getAttribute('step') === 'any' && contractBasis.getAttribute('inputmode') === null && contractBasis.getAttribute('placeholder') === '-0.35', 'C1: the contract basis box must take quarter cents with a minus key.')
+await change(control(contractContainer, 'Buyer'), 'County elevator'); await change(control(contractContainer, 'Bushels'), '12000'); await change(contractBasis, '-35')
+const submitContractForm = async () => { const form = button(contractContainer, 'Add contract').form!; await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush() }) }
+await submitContractForm()
+assert(openDialog()?.textContent?.includes('Basis of -$35.00 per bushel?') && Number(contractWrites) === 0 && Number(idIndex) === 0, 'C8: a contract basis that looks like cents must ask before saving, spending no id.')
+await click(dialogButton('Go back')); assert(Number(contractWrites) === 0 && Number(idIndex) === 0 && contractBasis.value === '-35', 'C8: Go back keeps the typed basis and saves nothing.')
+await change(control(contractContainer, 'Type'), 'forward_cash'); await change(control(contractContainer, 'Cash $/bu'), '5')
+// C4: delivery dates the wrong way round are explained beside the button, and the hidden date boxes are opened to show them.
+await change(control(contractContainer, 'Start'), `${estimate.crop_year}-11-30`); await change(control(contractContainer, 'End'), `${estimate.crop_year}-09-01`)
+const contractDetails = contractContainer.querySelector('.contract-entry details') as HTMLDetailsElement
+await act(async () => { contractDetails.open = false; contractDetails.dispatchEvent(new Event('toggle')); await flush() })
+await submitContractForm()
+assert(contractContainer.querySelector('.contract-entry [role="alert"]')?.textContent === 'Delivery end must be on or after delivery start.' && contractDetails.open && Number(contractWrites) === 0 && Number(idIndex) === 0, 'C4: a delivery end before its start must be named and the dates shown, with no save and no id spent.')
+await change(control(contractContainer, 'Start'), ''); await change(control(contractContainer, 'End'), '')
+// C9: the premium box is in cents, so a dollars-looking 0.1 asks first.
+assert([...contractContainer.querySelectorAll('label')].some((item) => item.textContent?.startsWith('Premium, cents per bu')), 'C9: the premium label must say it is in cents.')
+await change(control(contractContainer, 'Premium, cents per bu'), '0.1'); await submitContractForm()
+assert(openDialog()?.textContent?.includes('Premium of 0.1¢ per bushel?') && openDialog()?.textContent?.includes('For 10¢, type 10.') && Number(contractWrites) === 0, 'C9: a premium under one cent must ask before saving.')
+await click(dialogButton('Go back')); await change(control(contractContainer, 'Premium, cents per bu'), '')
 assert((control(contractContainer, 'Bushels') as HTMLInputElement).value === '12000' && (control(contractContainer, 'Cash $/bu') as HTMLInputElement).value === '5', `Contract controlled values were not retained: ${[...contractContainer.querySelectorAll('input')].map((item) => item.value).join('|')}`)
 const addContract = button(contractContainer, 'Add contract')
 assert(addContract.form, 'Contract submit button must belong to the real form.')
@@ -205,17 +232,22 @@ await act(async () => { addContract.form!.dispatchEvent(new Event('submit', { bu
 assert(contractWrites === 1 && seenContracts[0]?.id === novemberIds.contract && contractContainer.textContent?.includes('Saving…'), `Contract create must show Saving for its exact generated ID and lock a real double submit to one write. writes=${contractWrites} id=${seenContracts[0]?.id} text=${contractContainer.textContent}`)
 contractGate.release(); await act(async () => { await flush(); await flush() })
 assert(contractWrites === 1 && contractContainer.textContent?.includes('Saved'), 'Contracts owning area must show Saved for the exact completed contract ID.')
-const deliveryInput = control(contractContainer, 'Delivered bushels'); await change(deliveryInput, '13000')
+assert(seenContracts[0]?.delivery_start === null && seenContracts[0]?.delivery_end === null, 'C3: a contract the farmer never dated must be saved undated, not with a hidden Sep-Nov window.')
+// B37: a ticket number typed with commas is kept as the plain number. C7: the delivery carries the date and note typed.
+const deliveryInput = control(contractContainer, 'Delivered bushels') as HTMLInputElement; await change(deliveryInput, '13,000')
+assert(deliveryInput.value === '13000', `B37: delivered bushels must accept 1,200-style commas. ${deliveryInput.value}`)
+await change(control(contractContainer, 'Delivered on'), '2025-09-28'); await change(control(contractContainer, 'Ticket # or note'), 'Ticket 4411')
 let genericContractWritesBeforeDelivery = contractWrites
 const priorNovemberConfirm = window.confirm; window.confirm = () => { throw new Error('window.confirm must not be used: the in-app dialog host is mounted.') }; let deliveryConfirmations = 0
 async function answerOverDelivery(answer: 'Record anyway' | 'Go back') { assert(openDialog()?.textContent?.includes('more than the contract. Record anyway?'), 'Each delivery attempt must cross the real over-delivery confirmation boundary.'); deliveryConfirmations += 1; await click(dialogButton(answer)) }
 await click(button(contractContainer, 'Record delivery'))
-assert(deliveryWrites === 0 && openDialog()?.textContent?.includes('This is 1,000.00 bu more than the contract. Record anyway?'), 'The over-delivery dialog must state the exact excess before any write.'); await answerOverDelivery('Go back'); assert(deliveryWrites === 0 && openDialog() === null, 'Cancelling the real over-delivery confirmation must perform zero writes.')
+assert(deliveryWrites === 0 && openDialog()?.textContent?.includes('This is 1,000 bu more than the contract. Record anyway?'), 'The over-delivery dialog must state the exact excess before any write.'); await answerOverDelivery('Go back'); assert(deliveryWrites === 0 && openDialog() === null, 'Cancelling the real over-delivery confirmation must perform zero writes.')
 const recordDelivery = button(contractContainer, 'Record delivery'); await act(async () => { recordDelivery.click(); recordDelivery.click(); await flush() }); await answerOverDelivery('Record anyway')
 assert(deliveryWrites === 0 && attemptedDeliveries.length === 1 && attemptedDeliveries[0]?.id === novemberIds.deliveryOffline && contractContainer.textContent?.includes('Needs attention') && contractContainer.textContent?.includes('Connect to the internet before recording a delivery.') && !contractContainer.textContent?.includes('may be recorded') && !(control(contractContainer, 'Delivered bushels') as HTMLInputElement).disabled && button(contractContainer, 'Record delivery'), 'Offline delivery must make zero server calls, remain editable, avoid ambiguous copy, and discard its failed draft ID.')
 deliveryMode = 'ambiguous'
 const correctedDelivery = button(contractContainer, 'Record delivery'); await act(async () => { correctedDelivery.click(); correctedDelivery.click(); await flush() }); await answerOverDelivery('Record anyway')
 assert(Number(deliveryWrites) === 1 && seenDeliveries[0]?.id === novemberIds.delivery && contractContainer.textContent?.includes('Saving…'), 'Delivery must show Saving for one exact stable draft ID.')
+assert(seenDeliveries[0]?.delivered_on === '2025-09-28' && seenDeliveries[0]?.note === 'Ticket 4411' && seenDeliveries[0]?.bushels === 13_000, 'C7: a delivery must be sent with the date and ticket note the farmer typed.')
 deliveryGate.release(); await act(async () => { await flush(); await flush() })
 assert(contractContainer.textContent?.includes('Confirmation needed') && contractContainer.textContent?.includes('may already be recorded') && !contractContainer.textContent?.includes('Needs attention') && contractContainer.textContent?.includes('Retry keeps the same delivery') && contractContainer.textContent?.includes('Retry delivery'), 'A lost delivery response must truthfully retain Confirmation needed and explicit same-entry retry custody.')
 deliveryGate = gate(); const retryDelivery = button(contractContainer, 'Retry delivery'); await act(async () => { retryDelivery.click(); retryDelivery.click(); await flush() }); await answerOverDelivery('Record anyway')
@@ -228,7 +260,54 @@ assert(contractContainer.textContent?.includes('Needs attention') && !contractCo
 deliveryMode = 'success'; deliveryGate = gate(); const correctedRejectedDelivery = button(contractContainer, 'Record delivery'); await act(async () => { correctedRejectedDelivery.click(); correctedRejectedDelivery.click(); await flush() }); await answerOverDelivery('Record anyway'); assert(Number(deliveryWrites) === 4 && seenDeliveries[3]?.id === novemberIds.deliveryCorrected, 'Corrected delivery retry must mint a new ID and lock rapid clicks to one server attempt.'); deliveryGate.release(); await act(async () => { await flush(); await flush() }); assert(Number(novemberWorkspace.grain_contract_deliveries.length) === 2 && contractContainer.textContent?.includes('Saved'), 'Corrected delivery must save one new canonical row.')
 assert(deliveryConfirmations === 6, 'Each of the six delivery attempts must cross the real over-delivery confirmation boundary.'); window.confirm = priorNovemberConfirm
 assert(contractContainer.textContent?.includes('Recording a delivery does not remove grain from a bin.'), 'Contract UI must state that delivery does not change bin inventory.')
+assert([...contractContainer.querySelectorAll('.contract-actions a')].some((item) => item.getAttribute('href') === '/grain/loads') && contractContainer.textContent?.includes('Use this only for trucks with no load ticket.'), 'B4/C16: the delivery box must steer a truck out of a bin to Loads.')
+assert(!contractContainer.textContent?.includes('Correct or delete') && contractContainer.querySelector('.contract-locked-note')?.textContent?.includes('can no longer be corrected or deleted'), 'C2a: a delivered contract must say why it can no longer be corrected, not just drop the control.')
+// C26: Go / Enter in the delivery box submits its own small form.
+const deliveryForm = control(contractContainer, 'Delivered bushels').closest('form') as HTMLFormElement | null; assert(deliveryForm && deliveryForm.querySelector('button[type="submit"]')?.textContent === 'Record delivery', 'C26: Delivered bushels and Record delivery must share a form so Enter records.')
+await act(async () => { deliveryForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush() })
+assert(contractContainer.querySelector('.contract-action-message')?.textContent === 'Enter delivered bushels.' && Number(deliveryWrites) === 4, 'C26: submitting the delivery form (Enter / Go) must run Record delivery, and say plainly what is missing.')
 await act(async () => { contractRoot.unmount() }); contractContainer.remove()
+
+// Grain usability (s1b): a contract that load tickets already deliver against asks before a hand-typed delivery; Cancel correction
+// throws the abandoned edit away; and a basis set on an HTA keeps its quarter cents and warns when it looks like cents.
+{
+  const { MemoryRouter } = await import('react-router')
+  const scope = { farm_id: fields.farm.id, crop_year: estimate.crop_year, commodity_id: estimate.commodity_id, operating_entity_id: null, enterprise_label: null }
+  const hta: GrainContract = { id: uid(1401), ...scope, contract_type: 'hta', buyer: 'River terminal', bushels: 5_000, cash_price: null, futures_price: 4.74, basis: null, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, created_at: stamp, updated_at: stamp }
+  const loaded: GrainContract = { ...hta, id: uid(1402), contract_type: 'forward_cash', cash_price: 4.5, futures_price: null, buyer: 'Feed mill' }
+  const ticketDelivery: GrainContractDelivery = { id: uid(1403), farm_id: fields.farm.id, grain_contract_id: loaded.id, bushels: 1_000, delivered_on: '2026-10-01', note: null, created_at: stamp, grain_load_id: uid(1404) }
+  const actionsWorkspace: GrainWorkspace = { ...workspace, grain_contracts: [hta, loaded], grain_contract_deliveries: [ticketDelivery], capabilities: { contract_deliveries: true, contract_price_finalization: true, bin_movements: true } }
+  let deliveryCalls = 0; let finalizeCalls = 0; let ids = 0
+  const actionServices = { ...services, createGrainId: () => uid(1500 + ids++), grainRepository: { recordContractDelivery: async () => { deliveryCalls += 1 }, finalizeContractPriceLeg: async () => { finalizeCalls += 1 } } } as unknown as GrainServices
+  const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
+  const render = async (contract: GrainContract) => { await act(async () => { root.render(createElement(MemoryRouter, null, createElement(ContractActions, { key: contract.id, contract, workspace: actionsWorkspace, services: actionServices, onSaved: async () => undefined, onDeliverySaved: async () => undefined, onReceipt: () => undefined }), createElement(ConfirmDialogHost))); await flush() }) }
+  try {
+    await render(loaded)
+    assert(container.textContent?.includes('1,000 bu came from load tickets.') && container.querySelector('.contract-locked-note')?.textContent?.includes('void its load ticket under Loads'), 'C16/C2a: a contract delivered by load ticket must say so and name the undo.')
+    await change(control(container, 'Delivered bushels'), '500'); await click(button(container, 'Record delivery'))
+    assert(openDialog()?.textContent?.includes('Record this delivery by hand?') && deliveryCalls === 0, 'C16: a hand-typed delivery on a ticketed contract must ask first.')
+    await click(dialogButton('Go back')); assert(deliveryCalls === 0 && ids === 0, 'C16: Go back must record nothing and spend no id.')
+    await change(control(container, 'Delivered on'), '2999-01-01'); await click(button(container, 'Record delivery'))
+    assert(container.textContent?.includes('The delivery date cannot be in the future.') && deliveryCalls === 0 && !openDialog(), 'C7: a future delivery date must be refused beside the box.')
+
+    await render(hta)
+    await click(button(container, 'Correct or delete')); await change(control(container, 'Buyer'), 'Typed by mistake')
+    await click(button(container, 'Cancel correction')); await click(button(container, 'Correct or delete'))
+    assert((control(container, 'Buyer') as HTMLInputElement).value === 'River terminal', 'C21: Cancel correction must throw away the abandoned edit.')
+    const basisBox = control(container, 'Set basis $/bu') as HTMLInputElement
+    assert(basisBox.getAttribute('step') === 'any' && basisBox.getAttribute('inputmode') === null && basisBox.closest('form'), 'C0/C1/C26: Set basis takes quarter cents, a minus key and Enter.')
+    await change(basisBox, '-0.1275'); await click(button(container, 'Set basis'))
+    assert(openDialog()?.textContent?.includes('Set basis to -$0.1275/bu?') && !openDialog()?.textContent?.includes('Basis is entered in dollars'), `C0: the confirm must show the quarter-cent basis exactly. ${openDialog()?.textContent}`)
+    await click(dialogButton('Go back')); await change(basisBox, '-35'); await click(button(container, 'Set basis'))
+    assert(openDialog()?.textContent?.includes('Basis is entered in dollars. 35 cents under is -0.35.') && finalizeCalls === 0, 'C8: a basis that looks like cents must say so in the same confirm.')
+    await click(dialogButton('Go back')); assert(finalizeCalls === 0, 'C8: Go back sets nothing.')
+
+    // A10: an HTA offer's month is a futures month, so the delivery dates it fills in are shown and flagged for checking.
+    const htaOffer: FirmOffer = { id: uid(1405), ...scope, buyer: 'River terminal', offer_type: 'hta', bushels: 5_000, price: 4.5, basis: null, contract_month: `${estimate.crop_year}-12`, expires_on: null, delivery_location: null, notes: null, status: 'open', filled_contract_id: null, created_at: stamp, updated_at: stamp }
+    await act(async () => { root.render(createElement(MemoryRouter, null, createElement(ContractEntry, { workspace: actionsWorkspace, scope, services: actionServices, saleLimit: null, initialOffer: htaOffer, onFilled: async () => undefined, onSaved: async () => undefined, onReceipt: () => undefined }))); await flush() })
+    assert((container.querySelector('.contract-entry details') as HTMLDetailsElement).open && container.querySelector('.contract-entry-hint')?.textContent?.includes("came from the offer's futures month") && (control(container, 'Start') as HTMLInputElement).value === `${estimate.crop_year}-12-01`, 'A10: dates taken from an HTA offer month must be shown with a check-them hint.')
+  } finally { await act(async () => { root.unmount() }); container.remove() }
+}
 
 let failMovementRefresh = false
 function BinsHarness() {
