@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router'
 import { Basis, Bins, LoadsTab, movementSourceLabel } from './GrainModule'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
-import { loadDateInFutureProblem, netBushelsFromWeights, STANDARD_BUSHEL_LBS, validateGrainLoadShape, type BinTransaction, type CashBid, type GrainBin, type GrainContract, type GrainLoad, type GrainLoadDraft, type GrainServices, type GrainWorkspace } from './data/grain'
+import { BIN_UNDATED_GRAIN, loadDateInFutureProblem, netBushelsFromWeights, STANDARD_BUSHEL_LBS, validateGrainLoad, validateGrainLoadShape, type BinTransaction, type CashBid, type GrainBin, type GrainContract, type GrainLoad, type GrainLoadDraft, type GrainServices, type GrainWorkspace } from './data/grain'
 import { grainLoadPayload } from './data/SupabaseGrainDataGateway'
 import { farmerError } from './lib/farmerErrors'
 import { useSaveReceipt } from './lib/saveReceipt'
@@ -40,6 +40,10 @@ assert(farmerError({ message: 'this bin still holds nonzero lots: corn_yellow; e
 // The over-delivery words fit the screen they appear on.
 assert(farmerError(new Error('delivery would exceed the remaining contract bushels'), 'record this delivery').startsWith('This delivery is more than what is left on the contract. Reload,'), 'On a contract there is no load and no box to untick.')
 assert(movementSourceLabel('harvest_import') === 'Harvest import', 'An unknown source is shown in words rather than as "Other".')
+// Full review: the load wording is chosen by the Loads form's own action, not by the word "load" inside another one.
+assert(farmerError(new Error('delivery would exceed the remaining contract bushels'), 'reload your firm offers').startsWith('This delivery is more than'), 'An action that merely contains "load" must not get the Loads form wording.')
+assert(farmerError(new Error('delivery would exceed the remaining contract bushels'), 'record this load').includes('Untick the “delivered against” box'), 'The Loads wording names the box to untick in words a farmer can find.')
+assert(farmerError(new Error('Connect to the internet before using the harvest total.'), 'use the harvest total') === 'Connect to the internet before using the harvest total.', 'Harvest reconciliation offline keeps its own plain instruction.')
 const contractDraft: GrainLoadDraft = { ...baseDraft, destination_kind: 'contract', destination_buyer: '', destination_grain_contract_id: uid(2) }
 assert(grainLoadPayload(uid(3), { ...contractDraft, allow_overdelivery: true }).allow_overdelivery === true, 'A confirmed over-delivery travels with the save.')
 assert(!('allow_overdelivery' in grainLoadPayload(uid(3), { ...baseDraft, allow_overdelivery: true })), 'No delivery happens on a buyer load, so the flag is not sent.')
@@ -171,7 +175,7 @@ try {
   await change(contractSelect, contract.id)
   assert(container.textContent?.includes('100 bu left to deliver on this contract.'), 'The chosen contract says what is left on it.')
   await click(button(container, 'Save load'))
-  assert(openDialog()?.textContent?.includes('This load is 750.00 bu more than is left on the contract. Record anyway?'), 'The over-delivery is named before any write.')
+  assert(openDialog()?.textContent?.includes('This load is 750 bu more than is left on the contract. Record anyway?'), 'The over-delivery is named before any write.')
   await click(dialogButton('Go back'))
   assert(sentLoads.length === 0 && openDialog() === null, 'Go back makes no write.')
   // A lost response keeps the ticket and locks the form to it (B2, B13).
@@ -193,6 +197,12 @@ try {
   await change(control(container, 'Net bushels'), '50')
   await click(button(container, 'Save load'))
   const lostId = sentLoads[2]!.id
+  // Full review: lost with signal, then retried with none. The first attempt may have committed, so the screen must keep
+  // saying "may already be saved", never "most likely was not saved".
+  Object.defineProperty(win.navigator, 'onLine', { configurable: true, get: () => false })
+  await click(button(container, 'Retry load'))
+  assert(sentLoads.at(-1)!.id === lostId && container.textContent?.includes('This load may already be saved') && !container.textContent?.includes('Tap Retry load when you have signal'), `An offline retry of a ticket that went out with signal must keep the may-be-saved wording: ${container.querySelector('.load-message')?.textContent}`)
+  Object.defineProperty(win.navigator, 'onLine', { configurable: true, get: () => true })
   const refreshesBefore = lastSaved
   await click(button(container, 'Start a different ticket'))
   assert(openDialog()?.textContent?.includes('The last load may already be saved. Its weights and ticket number are cleared.'), 'Letting go of the ticket says what it clears.')
@@ -201,7 +211,7 @@ try {
   loadMode = 'ok'
   await change(control(container, 'Net bushels'), '50')
   await click(button(container, 'Save load'))
-  assert(Number(sentLoads.length) === 4 && sentLoads[3]!.id !== lostId, 'A different ticket gets a different id.')
+  assert(Number(sentLoads.length) === 5 && sentLoads[4]!.id !== lostId, 'A different ticket gets a different id.')
   await act(async () => { root.render(createElement('div')); await flush() })
 
   // ---- Basis: a basis typed in cents is asked about before it is saved (C8), and the date is the farmer's.
@@ -297,6 +307,26 @@ try {
   assert(openDialog()?.textContent?.includes('This load is more than is left on the contract. Record anyway?'), 'With a stale list, the next Save still asks about the over-delivery.')
   await click(dialogButton('Record anyway'))
   assert(sentLoads.at(-1)!.draft.allow_overdelivery === true && container.textContent?.includes('It recorded 50 bu delivered against Riverside Elevator (2026).'), `Record anyway sends the confirmation, and the saved message is in the past tense: ${container.querySelector('.load-message')?.textContent}`)
+  // Full review: a bin whose grain has no crop year (older movements) shows bushels but names no lot. Adding an "In" for that
+  // grain would count it twice, so neither the form nor the validation ever suggests one; they say to name the year instead.
+  const binC = bin(13, 'Charlie bin', 20_000)
+  const undated: BinTransaction = { ...fill, id: uid(14), grain_bin_id: binC.id, crop_year: null, bushels: 3_000, source_kind: 'manual' }
+  const undatedWorkspace = { ...workspace, grain_bins: [...workspace.grain_bins, binC], bin_transactions: [...workspace.bin_transactions, undated] } as GrainWorkspace
+  const undatedProblems = validateGrainLoad({ ...baseDraft, origin_kind: 'bin', origin_crop_assignment_id: '', origin_grain_bin_id: binC.id, net_bushels: '100' }, undatedWorkspace, [])
+  assert(undatedProblems.includes(BIN_UNDATED_GRAIN) && !undatedProblems.some((problem) => problem.includes('add an "In"')), `A bin holding only undated grain must ask for its crop year, never a second "In": ${JSON.stringify(undatedProblems)}`)
+  const emptyProblems = validateGrainLoad({ ...baseDraft, origin_kind: 'bin', origin_crop_assignment_id: '', origin_grain_bin_id: binB.id, net_bushels: '100' }, undatedWorkspace, [])
+  assert(emptyProblems.some((problem) => problem.includes('add an "In"')), 'A bin showing no grain at all may still be told to add an "In".')
+  await act(async () => { root.render(createElement(MemoryRouter, null, createElement(LoadsTab, { key: 'undated', workspace: undatedWorkspace, services, onSaved: async () => undefined, canManageFarm: true }), createElement(ConfirmDialogHost))); await flush() })
+  await change(control(container, 'Bin', 'fieldset.load-origin label'), binC.id)
+  const lotLines = [...container.querySelectorAll('.load-lot')].map((item) => item.textContent ?? '').join(' | ')
+  assert(lotLines.includes('This bin’s 3,000 bu have no crop year yet. Name it under “Which crop year were these?” on Bins & basis.') && !lotLines.includes('add an “In”'), `The load form must send undated grain to the crop-year list, not to a second "In": ${lotLines}`)
+  // Full review: a comma is a thousands separator only. "892,86" (a decimal comma) is refused, never read as 89,286.
+  await change(control(container, 'Net bushels'), '1,250')
+  assert((control(container, 'Net bushels') as HTMLInputElement).value === '1250', 'A thousands comma is still dropped.')
+  await change(control(container, 'Net bushels'), '892,86')
+  assert((control(container, 'Net bushels') as HTMLInputElement).value === '892,86', 'A decimal comma is kept as typed, so it can be refused.')
+  await click(button(container, 'Save load'))
+  assert([...container.querySelectorAll('ul.load-problems li')].some((item) => item.textContent === 'Type net bushels as a number, like 1000.'), 'A decimal comma is named as not a number.')
 } finally {
   await act(async () => { root.unmount() }); container.remove(); win.close()
 }

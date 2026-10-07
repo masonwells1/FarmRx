@@ -2,6 +2,7 @@ import { isMarsBid } from './basisMath'
 import { cashBidEligibleForCropYear } from './marketingYear'
 import { farmLocalCalendarDate } from './farmDates'
 import { marketedPercent, sameScope, type CashBid, type GrainWorkspace, type MarketingAlertRule } from './grain'
+import { formatFarmDate } from '../lib/farmDate'
 
 export type MarketingAlertEvent = { ruleId: string; key: string; kind: 'marketing_price_target' | 'marketing_pct_marketed_goal' | 'marketing_deadline'; message: string }
 export type MarketingAlertEvaluation = { alerts: MarketingAlertEvent[]; firedRuleIds: string[]; conditions: Array<{ ruleId: string; met: boolean }> }
@@ -90,7 +91,7 @@ export function ruleSentence(rule: MarketingAlertRule, commodity: string): strin
   if (rule.rule_type === 'price_target') return `Tell me when ${rule.crop_year} ${commodity} cash price target is ${rule.direction === 'at_or_above' ? 'at or above' : 'at or below'} ${money(rule.threshold ?? 0)}.`
   // Said the way the sweep works: a % goal alerts while marketing is below it, and a deadline reminds once, a week ahead.
   if (rule.rule_type === 'pct_marketed_goal') return `Alert me while ${rule.crop_year} ${commodity} is below ${rule.threshold ?? 0}% marketed.`
-  return `Remind me a week before ${rule.remind_on ?? 'the selected date'} about ${rule.crop_year} ${commodity}.`
+  return `Remind me a week before ${rule.remind_on ? formatFarmDate(rule.remind_on) : 'the selected date'} about ${rule.crop_year} ${commodity}.`
 }
 
 export function scopedAlertRules(workspace: GrainWorkspace, rule: MarketingAlertRule) { return workspace.marketing_alert_rules.filter((item) => sameScope(item, rule)) }

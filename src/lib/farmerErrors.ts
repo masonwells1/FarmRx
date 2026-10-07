@@ -21,6 +21,7 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (/price finalization arrives with the next database update/.test(message)) return 'Price finalization arrives with the next database update.'
   if (/movement date must be after the latest bin baseline|dated on or before the bin's baseline/.test(message)) return PRE_BASELINE_BIN_MOVEMENT_MESSAGE
   if (/connect to the internet before recording a delivery/.test(message)) return 'Connect to the internet before recording a delivery.'
+  if (/connect to the internet before using the harvest total/.test(message)) return 'Connect to the internet before using the harvest total.'
   if (/correcting a contract arrives with the next database update/.test(message)) return CONTRACT_REPAIR_PENDING
   // The earlier attempt did commit; only its response was lost. Saying "try again" would be wrong.
   if (/farm_rx_correction_already_saved/.test(message)) return 'Your earlier correction was saved. Reload the contract before making another change.'
@@ -54,8 +55,9 @@ export function farmerError(error: unknown, action = 'save this field') {
   // Final refusals from the delivery and bin-movement functions. Retrying the same thing can never
   // work, so the farmer is told what to change instead of "try again".
   // Shared by the Loads form and a contract's own Record delivery, so each is told about its own controls.
-  if (/would exceed the remaining contract bushels/.test(message)) return /load/.test(action)
-    ? 'This load is more than what is left on the contract. Untick “Record … delivered against …”, or tap Save load again and confirm the over-delivery.'
+  // Matched on the Loads form's own action, not on the word "load", which other actions ("reload ...") also contain.
+  if (/would exceed the remaining contract bushels/.test(message)) return action === 'record this load'
+    ? 'This load is more than what is left on the contract. Untick the “delivered against” box, or tap Save load again and confirm the over-delivery.'
     : 'This delivery is more than what is left on the contract. Reload, then record it again and confirm the over-delivery.'
   // LD-4's per-lot check, the refusal a load out of a bin most often meets (server and mock wording).
   if (/does not hold that many bushels of the|does not hold enough of the/.test(message)) return 'That bin does not hold that many bushels of that crop year. Check the bushels or the bin’s history.'

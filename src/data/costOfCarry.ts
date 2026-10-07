@@ -62,9 +62,11 @@ export function shiftCarryRows<T extends CarryGridRow>(rows: readonly T[], fromM
   const shifted = rows.map((_, index) => rows[index + shift] ?? blank())
   const dropped = rows.filter((_, index) => index - shift < 0 || index - shift >= rows.length)
   const lost = dropped.filter((row) => row.marketPrice.trim() !== '').length
-  // A month with no typed price can still hold a basis the farmer changed from the default: it is cleared too.
+  // A month with no typed price can still hold a basis the farmer changed from the default: it is cleared too. Compared as numbers,
+  // so -0.30 against a default of -0.3 is the same basis, and a box the farmer cleared holds nothing to lose.
   const defaultBasis = blank().basis
-  const lostBasis = dropped.filter((row) => row.marketPrice.trim() === '' && row.basis !== defaultBasis).length
+  const changedBasis = (basis: string) => basis.trim() !== '' && Number(basis) !== Number(defaultBasis)
+  const lostBasis = dropped.filter((row) => row.marketPrice.trim() === '' && changedBasis(row.basis)).length
   return { rows: shifted, lost, lostBasis }
 }
 

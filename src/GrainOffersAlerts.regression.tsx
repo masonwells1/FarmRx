@@ -9,8 +9,9 @@ import { FIRM_OFFER_FILL_PARTIAL_SUCCESS } from './data/firmOfferFill'
 import { bidDate, localCalendarDay } from './data/marketingAlerts'
 import { firmOfferFillPartialSuccessMessage } from './lib/farmerErrors'
 import { setSaveReceipt } from './lib/saveReceipt'
+import { formatFarmDate } from './lib/farmDate'
 import { scopeKey, scopeOf } from './data/grain'
-import type { CashBid, FirmOffer, GrainContract, GrainServices, GrainWorkspace, MarketingAlertRule, ProductionEstimate } from './data/grain'
+import type { CashBid, FirmOffer, GrainAlertSettings, GrainContract, GrainServices, GrainWorkspace, MarketingAlertRule, ProductionEstimate } from './data/grain'
 
 // Grain usability (alerts, firm offers, cost of carry): the rendered screens, driven the way a farmer uses them.
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -51,9 +52,6 @@ const hasButton = (container: ParentNode, text: string) => [...container.querySe
 async function click(element: HTMLElement) { await act(async () => { element.click(); await flush() }) }
 // requestSubmit runs the browser's own validation first, the way a tap on Save does; a bare submit event would skip it.
 async function submit(form: HTMLFormElement, times = 1) { await act(async () => { for (let index = 0; index < times; index += 1) form.requestSubmit(); await flush() }) }
-// The fill form is the contract entry form, which this file does not own: its cash price box still has step 0.01, so the browser
-// would refuse the $4.1275 offer price. That is reported for the contract form's owner; here the fill path is driven past it.
-async function submitSkippingBrowserChecks(form: HTMLFormElement) { await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush() }) }
 type Gate = { promise: Promise<void>; release: () => void }
 function gate(): Gate { let release!: () => void; return { promise: new Promise<void>((resolve) => { release = resolve }), release } }
 
@@ -68,10 +66,13 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
 
 // ---------------------------------------------------------------- Marketing alerts
 {
-  const ruleWrites: MarketingAlertRule[] = []; let ruleGate = gate(); let ruleMode: 'ok' | 'fail' = 'ok'
+  const ruleWrites: MarketingAlertRule[] = []; let ruleGate = gate(); let ruleMode: 'ok' | 'fail' | 'offline' = 'ok'
+  const emailWrites: GrainAlertSettings[] = []
   const repository = {
     getData: async () => workspace,
-    saveMarketingAlertRule: async (value: MarketingAlertRule) => { ruleWrites.push(value); setSaveReceipt(value.id, 'saving'); await ruleGate.promise; if (ruleMode === 'fail') { setSaveReceipt(value.id, 'needs attention'); throw new Error('server refused the rule') } workspace.marketing_alert_rules = [...workspace.marketing_alert_rules.filter((row) => row.id !== value.id), value]; setSaveReceipt(value.id, 'saved') },
+    // As the queued repository does offline: the change is kept on this device and the receipt says so, never Saved.
+    saveGrainAlertSettings: async (value: GrainAlertSettings) => { emailWrites.push(value); setSaveReceipt(value.farm_id, 'saving'); await Promise.resolve(); setSaveReceipt(value.farm_id, 'queued offline') },
+    saveMarketingAlertRule: async (value: MarketingAlertRule) => { ruleWrites.push(value); setSaveReceipt(value.id, 'saving'); await ruleGate.promise; if (ruleMode === 'offline') { workspace.marketing_alert_rules = [...workspace.marketing_alert_rules.filter((row) => row.id !== value.id), value]; setSaveReceipt(value.id, 'queued offline'); return } if (ruleMode === 'fail') { setSaveReceipt(value.id, 'needs attention'); throw new Error('server refused the rule') } workspace.marketing_alert_rules = [...workspace.marketing_alert_rules.filter((row) => row.id !== value.id), value]; setSaveReceipt(value.id, 'saved') },
   }
   const services = { grainRepository: repository, createGrainId: () => uid(nextId++), profitabilityRepository } as unknown as GrainServices
   function AlertsHarness() {
@@ -107,7 +108,7 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     await click(button(container, "% marketed goalAlert me while I've marketed less than my goal"))
     const goalForm = container.querySelector('form.alert-rule-form') as HTMLFormElement
     await change(control(goalForm, 'Marketed goal %'), '50')
-    assert(goalForm.textContent?.includes('You are below this goal now, so you will get one notification within about 15 minutes.') && goalForm.textContent.includes('Currently 0% marketed'), 'A7: a goal above the current % marketed must warn that it goes off right away.')
+    assert(goalForm.textContent?.includes('You are below this goal now, so this alert goes off within about 15 minutes (on your phone, if notifications are on, and in Grain alerts here).') && goalForm.textContent.includes('Currently 0% marketed'), 'A7: a goal above the current % marketed must warn that it goes off right away.')
     ruleGate.release(); await submit(goalForm); await act(async () => { await flush() })
     const errors = [...container.querySelectorAll('.form-error')]
     assert(errors.length === 1 && goalForm.contains(errors[0]!), `A27: a failed alert save must show one error, inside the form. Found ${errors.length}.`)
@@ -122,7 +123,7 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     const sentRow = [...container.querySelectorAll('.alert-rule')].find((item) => item.textContent?.includes('below 50% marketed')) as HTMLElement
     await click(button(sentRow, 'Edit'))
     assert(!container.querySelector('form.alert-rule-form')?.textContent?.includes('You are below this goal now'), 'A7: editing a goal that already sent must not promise another alert in 15 minutes.')
-    await click(button(container.querySelector('form.alert-rule-form')!, 'Cancel'))
+    await click(button(container.querySelector('form.alert-rule-form')!, 'Close without saving'))
     const writesBeforeDeadline = ruleWrites.length
 
     // A deadline in the past can never go off, so it is refused before any write.
@@ -131,19 +132,42 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     assert(deadlineForm.textContent?.includes('You will get one notification 7 days before this date') && (control(deadlineForm, 'Reminder date') as HTMLInputElement).getAttribute('min') === today, 'A8/A25: the deadline form must explain the one reminder and refuse earlier dates.')
     await change(control(deadlineForm, 'Reminder date'), yesterday); await submit(deadlineForm)
     assert(ruleWrites.length === writesBeforeDeadline && deadlineForm.textContent?.includes('Pick today or a later date.'), 'A25: a past reminder date must be refused with no write.')
-    await click(button(deadlineForm, 'Cancel'))
+    await click(button(deadlineForm, 'Close without saving'))
 
     // A saved deadline whose date has passed can still have its note edited: the date box must not block Save.
     const pastDeadline: MarketingAlertRule = { id: uid(750), farm_id: farmId, crop_year: 2026, commodity_id: 'corn_yellow', operating_entity_id: null, enterprise_label: null, rule_type: 'deadline', direction: null, threshold: null, remind_on: yesterday, message: 'Insurance', active: true, last_triggered_at: null, created_at: stamp, updated_at: stamp }
     workspace.marketing_alert_rules = [...workspace.marketing_alert_rules, pastDeadline]
     await act(async () => { root.render(createElement(React.Fragment, null, createElement(AlertsHarness, { key: 'past' }), createElement(ConfirmDialogHost))); await flush() })
-    const pastRow = [...container.querySelectorAll('.alert-rule')].find((item) => item.textContent?.includes(`Remind me a week before ${yesterday}`)) as HTMLElement
+    const pastRow = [...container.querySelectorAll('.alert-rule')].find((item) => item.textContent?.includes(`Remind me a week before ${formatFarmDate(yesterday)}`)) as HTMLElement
     assert(pastRow, 'The past deadline rule must be listed.')
     await click(button(pastRow, 'Edit'))
     const pastForm = container.querySelector('form.alert-rule-form') as HTMLFormElement
     assert((control(pastForm, 'Reminder date') as HTMLInputElement).getAttribute('min') === null, 'A25: an unchanged past reminder date must not carry a min that blocks Save.')
     await change(control(pastForm, 'Note'), 'Insurance sales close'); await submit(pastForm); await act(async () => { await flush() })
     assert(ruleWrites.at(-1)?.id === pastDeadline.id && ruleWrites.at(-1)?.message === 'Insurance sales close' && ruleWrites.at(-1)?.remind_on === yesterday, 'A25: editing only the note of a past deadline must save.')
+
+    // Full review: an open alert form saves to the crop it was opened for, so moving the picker closes it rather than moving the rule.
+    await click(button(container, 'Cash price targetTell me when yellow corn hits my number'))
+    assert(container.querySelector('form.alert-rule-form'), 'The price-target form did not open.')
+    await change(control(container.querySelector('.alerts-card')!, 'Commodity'), beans.id)
+    assert(!container.querySelector('form.alert-rule-form'), 'Changing the crop picker must close an open alert form, so the rule is never saved to the other crop.')
+
+    // Full review: a rule kept offline says Waiting for signal, never Saved.
+    ruleGate = { promise: Promise.resolve(), release: () => undefined }; ruleMode = 'offline'
+    await click(button(container, 'Cash price targetTell me when yellow corn hits my number'))
+    await change(control(container.querySelector('form.alert-rule-form')!, 'Cash price target ($/bu)'), '4.75')
+    await submit(container.querySelector('form.alert-rule-form') as HTMLFormElement); await act(async () => { await flush() })
+    const alertsHeading = container.querySelector('.alerts-card .section-heading') as HTMLElement
+    assert(alertsHeading.textContent?.includes('Waiting for signal. Kept on this device.') && !alertsHeading.textContent.includes('Saved'), `A queued-offline alert must say Waiting for signal, not Saved. ${alertsHeading.textContent}`)
+    ruleMode = 'ok'
+
+    // Full review: alert email addresses are checked before anything is kept, and an offline save says so.
+    const emailCard = container.querySelector('.alert-email-card') as HTMLElement
+    const emailForm = emailCard.querySelector('form') as HTMLFormElement
+    await change(control(emailForm, 'Email addresses'), 'farmer@example.com, nonsense'); await submit(emailForm)
+    assert(emailWrites.length === 0 && emailCard.querySelector('.form-error')?.textContent === 'Enter complete email addresses, with no extra spaces.', 'An invalid alert email must be refused next to Save, with nothing kept.')
+    await change(control(emailForm, 'Email addresses'), 'farmer@example.com'); await submit(emailForm)
+    assert(Number(emailWrites.length) === 1 && emailCard.textContent?.includes('Waiting for signal. Kept on this device.') && !emailCard.textContent.includes('Saved'), `Alert emails kept offline must say Waiting for signal, never Saved. ${emailCard.textContent}`)
   } finally { await act(async () => { root.unmount() }); container.remove() }
 }
 
@@ -219,12 +243,12 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     const fillForm = () => fillEntry()!.querySelector('form') as HTMLFormElement
     await change(control(fillForm(), 'Bushels'), '6000')
     assert(fillEntry()?.querySelector('.contract-entry-note')?.textContent?.includes('the other 4,000 bu stop counting as pending') && !fillEntry()?.querySelector('.form-error'), 'A18: filling part of an offer must say, before saving, that the rest stops counting as pending.')
-    await submitSkippingBrowserChecks(fillForm())
+    await submit(fillForm())
     const sectionErrors = () => [...section().children].filter((item) => item.classList.contains('form-error'))
     assert(fills.length === 1 && fillEntry()?.querySelector('.form-error')?.textContent && sectionErrors().length === 0, `A13: a failed fill must keep the fill form open and show its error inside it. ${fillEntry()?.textContent}`)
-    fillMode = 'partial'; await submitSkippingBrowserChecks(fillForm())
+    fillMode = 'partial'; await submit(fillForm())
     assert(fillEntry()?.textContent?.includes(firmOfferFillPartialSuccessMessage), 'A13: the partial-success warning must show on the fill form.')
-    fillMode = 'ok'; await submitSkippingBrowserChecks(fillForm()); await act(async () => { await flush() })
+    fillMode = 'ok'; await submit(fillForm()); await act(async () => { await flush() })
     assert(!fillEntry() && section().textContent?.includes('Save the form below if the buyer is still holding the other 4,000 bu.'), `A13/A18: a partial fill must say what was recorded and offer the leftover bushels. ${section().textContent}`)
     assert((control(offerForm(), 'Bushels') as HTMLInputElement).value === '4000' && (control(offerForm(), 'Buyer') as HTMLInputElement).value === 'County elevator' && (control(offerForm(), 'Expires on') as HTMLInputElement).value === '', 'A18: the leftover-bushels form must be prefilled from the offer, with a blank expiry.')
     assert(Number(offerWrites.length) === 1, 'A18: the leftover bushels count as pending only after the farmer saves them.')
@@ -249,6 +273,23 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     assert(offerForm().textContent?.includes('above your 15,000 bu sale limit'), `A5: renewing an expired offer must count the other open offers in full for the sale-limit warning. ${offerForm().textContent}`)
     await change(control(offerForm(), 'Expires on'), nextWeek); await submit(offerForm())
     assert(offerWrites.at(-1)?.id === expiredOpen.id && offerWrites.at(-1)?.expires_on === nextWeek && offerWrites.at(-1)?.status === 'open', 'A5: renewing saves the same offer with the new date.')
+
+    // Full review: Mark filled on one offer, then on another, starts the second offer's own sale (the fill form is keyed by offer).
+    const openDetails = () => [...section().querySelectorAll('details')].find((item) => item.textContent?.startsWith('Open offers')) as HTMLElement
+    const rowFor = (buyer: string) => { const row = [...openDetails().querySelectorAll('article.offer-row')].find((item) => item.querySelector('strong')?.textContent === buyer) as HTMLElement | undefined; assert(row, `Missing open offer from ${buyer}.`); return row }
+    await click(button(rowFor('River terminal'), 'Mark filled'))
+    await change(control(fillForm(), 'Bushels'), '1234')
+    await click(button(rowFor('Feed mill'), 'Mark filled'))
+    assert((control(fillForm(), 'Buyer') as HTMLInputElement).value === 'Feed mill' && (control(fillForm(), 'Bushels') as HTMLInputElement).value === '8000', 'A second Mark filled must show that offer\u2019s buyer and bushels, never the first offer\u2019s sale.')
+    const fillBushels = control(fillForm(), 'Bushels') as HTMLInputElement
+    assert(fillBushels.getAttribute('step') === 'any' && fillBushels.getAttribute('min') === '0.01' && fillBushels.getAttribute('inputmode') === 'decimal', 'An offer with fractional bushels (a leftover is rounded to the cent) must be fillable.')
+    await click(button(fillEntry()!, 'Close without saving'))
+
+    // Full review: an Edit form left open must not bring back an offer just marked canceled.
+    await click(button(rowFor('Feed mill'), 'Edit'))
+    assert(offerForm(), 'The edit form did not open.')
+    await click(button(rowFor('Feed mill'), 'Mark canceled')); await click(dialogButton('Mark canceled')); await act(async () => { await flush() })
+    assert(!offerForm() && offerWrites.at(-1)?.id === otherOpen.id && offerWrites.at(-1)?.status === 'canceled', 'Marking an offer canceled must close its open Edit form, so Save cannot write it back as open.')
   } finally { await act(async () => { root.unmount() }); container.remove() }
 }
 

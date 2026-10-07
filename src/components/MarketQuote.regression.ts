@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs'
-import { marketQuotes, newCropQuotes, quoteCropYear } from './MarketQuote'
+import { Window } from 'happy-dom'
+import React, { act, createElement } from 'react'
+import { MarketQuoteSection, marketQuotes, newCropQuotes, quoteCropYear } from './MarketQuote'
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 
@@ -36,4 +38,29 @@ const widget = readFileSync(new URL('./MarketQuote.tsx', import.meta.url), 'utf8
 assert(widget.includes("event.source !== frame.current?.contentWindow || event.data?.type !== 'farm-rx-quote'") && !widget.includes('onLoad={() => setFailed(false)}'), 'The tile must accept a failure only from its own frame, and a later load event must not hide it.')
 assert(widget.includes("else if (event.data.status === 'ready') setFailed(false)"), 'A late quote that says ready must replace the not-available note.')
 for (const bad of ['CBOT:ZCZ26', 'NASDAQ:AAPL', 'CBOT:ZCZ2026;alert(1)', 'CBOT:ZCF2026', '']) assert(!allowed.test(bad), `Frame allowlist must reject ${JSON.stringify(bad)}.`)
+// The message handling itself, rendered: a failure from another frame is ignored, the tile's own frame shows the fallback, and a
+// late 'ready' takes it away. Known gap: the frame says ready as soon as TradingView's inner iframe exists, even if it stays blank.
+{
+  const win = new Window({ url: 'http://farmrx.test/grain', settings: { disableIframePageLoading: true } as never })
+  Object.assign(globalThis, { React, window: win, document: win.document, HTMLElement: win.HTMLElement, Node: win.Node, Event: win.Event, IS_REACT_ACT_ENVIRONMENT: true })
+  const { createRoot } = await import('react-dom/client')
+  const container = win.document.createElement('div'); win.document.body.appendChild(container)
+  const root = createRoot(container as never)
+  await act(async () => { root.render(createElement(MarketQuoteSection, { cropYear: 2026, families: ['corn'] })) })
+  const tile = container.querySelector('iframe') as unknown as HTMLIFrameElement
+  assert(tile, 'The quote tile must render its frame.')
+  // happy-dom loads no frame page, so the tile's frame is given a window of its own to post from.
+  const own = new Window(); const foreign = new Window()
+  Object.defineProperty(tile, 'contentWindow', { configurable: true, get: () => own })
+  const post = async (source: Window, status: string) => { await act(async () => { win.dispatchEvent(new win.MessageEvent('message', { data: { type: 'farm-rx-quote', status }, source: source as never })) }) }
+  const fallback = () => container.textContent?.includes('Futures prices are not available right now.') ?? false
+  await post(foreign, 'failed')
+  assert(!fallback(), 'A failure posted by another frame must not mark this tile unavailable.')
+  await post(own, 'failed')
+  assert(fallback(), "The tile's own frame saying failed must show the not-available note.")
+  await post(own, 'ready')
+  assert(!fallback(), "A late ready from the tile's own frame must take the not-available note away.")
+  await act(async () => root.unmount())
+  await win.happyDOM.close()
+}
 console.log('MarketQuote regression passed.')

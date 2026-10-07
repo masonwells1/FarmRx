@@ -1,11 +1,11 @@
 import { Window } from 'happy-dom'
 import React, { createElement, useState } from 'react'
 import { act } from 'react'
-import { Bins, ContractActions, ContractEntry, deliveryDefaultEstimate, FirstEstimate, lotGapText, NeedsEstimate, planSavedNoticeFor, PlanStatus, PositionCard, TargetEditor, UntrackedStoredGrain } from './GrainModule'
+import { Bins, ContractActions, ContractEntry, deliveryDefaultEstimate, FirstEstimate, lotGapText, NeedsEstimate, planSavedNoticeFor, PlanStatus, planWithoutMonth, PositionCard, READ_ONLY_GRAIN, TargetEditor, UntrackedStoredGrain } from './GrainModule'
 import { SaveReceipt } from './components/SaveReceipt'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
-import { recordedBinLots, type BinTransaction, type FirmOffer, type GrainBin, type GrainContract, type GrainContractDelivery, type GrainLoad, type GrainServices, type GrainWorkspace, type ProductionEstimate } from './data/grain'
+import { basisCentsPrompt, recordedBinLots, type BinTransaction, type FirmOffer, type GrainBin, type GrainContract, type GrainContractDelivery, type GrainLoad, type GrainServices, type GrainWorkspace, type ProductionEstimate } from './data/grain'
 import { setSaveReceipt, useSaveReceipt } from './lib/saveReceipt'
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
@@ -71,7 +71,7 @@ try {
   // The Actual button is not greyed out with no reason: with no actual bushels saved it says what to do and saves nothing.
   const productionCallsBefore = createdCalls
   await click(button(renderedReconcileContainer, 'Actual'))
-  assert(renderedReconcileContainer.textContent?.includes('Enter actual bushels in More details and tap Save production. Then tap Actual.') && createdCalls === productionCallsBefore, 'Actual with no actual bushels must explain itself and make no save.')
+  assert(renderedReconcileContainer.textContent?.includes('Enter actual bushels below and tap Save production, then tap Actual.') && createdCalls === productionCallsBefore, 'Actual with no actual bushels must explain itself and make no save.')
   const guidance = renderedReconcileContainer.querySelector('.actual-bushels-field .position-guidance'); const actualBox = control(renderedReconcileContainer, 'Actual bushels')
   assert(guidance?.textContent?.startsWith('Enter actual bushels') && guidance.getAttribute('role') === null && guidance.nextElementSibling?.contains(actualBox) && actualBox.getAttribute('aria-describedby') === guidance.id, 'Review repair: the Actual guidance is a plain hint directly above the Actual bushels box, not an alert at the bottom of the card.')
 } finally { await act(async () => { if (!firstUnmounted) firstRoot.unmount(); reconcileRoot?.unmount() }); firstContainer.remove(); reconcileContainer?.remove() }
@@ -162,10 +162,20 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     await change(control(container, 'ROI target'), ''); await change(control(container, 'Cash price target'), '4.75'); await submit()
     assert(saves.length === 1 && saves[0].pct === 10 && saves[0].price === 4.75, 'With the % cleared, the cash price saves as typed.')
     await act(async () => { root.unmount() }); const editRoot = createRoot(container)
-    await act(async () => { editRoot.render(createElement(TargetEditor, { month: 10, commodity: '2026 Yellow Corn — whole farm', target: october, scope, services, workspace: planWorkspace, error: 'Farm Rx could not save this target right now. Please try again.', onClose: () => undefined, onSave: () => undefined, onRemove: () => { removes += 1 } })); await flush() })
+    let closes = 0
+    await act(async () => { editRoot.render(createElement(TargetEditor, { month: 10, commodity: '2026 Yellow Corn — whole farm', target: october, scope, services, workspace: planWorkspace, error: 'Farm Rx could not save this target right now. Please try again.', onClose: () => { closes += 1 }, onSave: () => undefined, onRemove: () => { removes += 1 } })); await flush() })
     assert(container.querySelector('.target-modal [role="alert"]')?.textContent === 'Farm Rx could not save this target right now. Please try again.', 'A failed save must be shown inside the modal, not behind it.')
     assert((control(container, 'Target % of production') as HTMLInputElement).value === '50', 'Editing a month keeps its own percentage, and its own 50% is not counted twice against the 100% check.')
     await click(button(container, 'Remove this month')); assert(removes === 1, 'A month with a target offers Remove this month.')
+    // Full review: the month editor is a real modal: named, focus starts in the % box, and Escape closes it.
+    const modal = container.querySelector('.target-modal') as HTMLElement
+    assert(modal.getAttribute('role') === 'dialog' && modal.getAttribute('aria-modal') === 'true' && (modal.getAttribute('aria-labelledby') ?? '').split(' ').every((id) => id && document.getElementById(id)) && document.activeElement === control(container, 'Target % of production'), 'The month editor must be a named modal with focus in its % box.')
+    // Full review: removing a month sends the plan minus that month only, from whatever plan is newest, and leaves other crops alone.
+    const otherCrop = { ...planTarget(742, `${scope.crop_year}-12-01`, 10), commodity_id: 'soybeans' }
+    const newerMonth = planTarget(743, `${scope.crop_year}-12-01`, 5)
+    assert(JSON.stringify(planWithoutMonth([...planWorkspace.marketing_plan_targets, newerMonth, otherCrop], scope, october.id).map((row) => row.id)) === JSON.stringify([uid(740), uid(743)]), 'Remove this month must keep every other month of this crop, including one added since, and nothing of another crop.')
+    await act(async () => { document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }) as unknown as Event); await flush() })
+    assert(closes === 1, 'Escape must close the month editor.')
     await act(async () => { editRoot.unmount() })
   } finally { container.remove() }
 }
@@ -199,6 +209,15 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     await render('priced', { services: pricedServices, workspace })
     await change(control(container, 'ROI target'), '3.1875')
     assert(container.querySelector('.computed-price')?.textContent?.includes('target $4.1275') && (control(container, 'Cash price target') as HTMLInputElement).value === '4.1275', 'A computed target is shown to the quarter cent, not rounded to $4.13.')
+    // Full review: the ROI box takes any step, so the browser cannot silently refuse 3.1875%; and the save goes through.
+    assert(control(container, 'ROI target').getAttribute('step') === 'any', 'The ROI box must not carry a step the browser enforces.')
+    await change(control(container, 'Target % of production'), '10'); await submit()
+    assert(Number(saves.length) === 2 && Math.abs((saves[1].price ?? 0) - 4.1275) < 1e-9, 'A quarter-step ROI target must save its computed price.')
+    // Full review: a validation message goes as soon as the farmer changes the box it is about.
+    await change(control(container, 'Target % of production'), '101'); await submit()
+    assert(container.textContent?.includes('Your plan would add up to'), 'The 100% check must speak first.')
+    await change(control(container, 'Target % of production'), '5')
+    assert(!container.querySelector('.target-modal [role="alert"]'), 'Lowering the % must clear the old "add up to" message.')
   } finally { await act(async () => { root.unmount() }); container.remove() }
 }
 
@@ -215,8 +234,18 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     await show(createElement(PlanStatus, { estimate, workspace }))
     assert(container.textContent?.includes('Plan progress') && container.textContent.includes('No plan yet. Pick a template or tap a month.') && !container.textContent.includes('Your plan calls for') && !container.textContent.includes('isn’t in any month'), 'With no plan, the plan status says so once instead of "calls for 0%" and "100% not planned".')
 
+    // Full review (HANDS-OP-a): carry-over of the same commodity sits in another lot, so the plan's "in bins" counts this crop year only.
+    const carryBin = { id: uid(765), farm_id: fields.farm.id, name: 'Mixed bin', capacity_bu: 10_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: stamp, updated_at: stamp } as GrainBin
+    const lotIn = (n: number, cropYear: number, amount: number) => ({ id: uid(n), farm_id: fields.farm.id, grain_bin_id: carryBin.id, direction: 'in', bushels: amount, commodity_id: estimate.commodity_id, crop_year: cropYear, occurred_on: '2025-10-01', note: null, source_kind: 'manual', grain_load_id: null, created_at: stamp }) as BinTransaction
+    await show(createElement(PlanStatus, { estimate, workspace: { ...workspace, grain_bins: [carryBin], bin_transactions: [lotIn(766, estimate.crop_year - 1, 1_000), lotIn(767, estimate.crop_year, 2_000)] } }))
+    assert(container.textContent?.includes(`2,000 bu of the ${estimate.crop_year} crop in bins`), `The plan status must count only this crop year's lot in bins, not the carry-over: ${container.textContent}`)
+
     await show(createElement(NeedsEstimate, { tabLabel: 'Firm offers', hasCrops: true }))
     assert(container.textContent === 'The Firm offers tab is kept per crop and year, so start your first crop estimate on the Overview.Go to Overview' && container.querySelector('a')?.getAttribute('href') === '/grain', 'The needs-estimate prompt is one sentence naming the open tab, with Go to Overview.')
+    await show(createElement(NeedsEstimate, { tabLabel: 'Alerts', hasCrops: true }))
+    assert(container.textContent?.startsWith('Most of the Alerts tab is kept per crop and year'), 'Alerts holds farm-wide email settings too, so it is "most of" the tab.')
+    await show(createElement(NeedsEstimate, { tabLabel: 'Firm offers', hasCrops: true, canWrite: false }))
+    assert(container.textContent?.includes(READ_ONLY_GRAIN) && !container.querySelector('a'), 'A member who may only view is not sent to start an estimate they cannot save.')
     await show(createElement(NeedsEstimate, { tabLabel: 'Plan', hasCrops: false }))
     assert(container.querySelector('a')?.getAttribute('href') === '/fields' && container.textContent?.includes('add your crops in Fields first'), 'With no crops at all, the prompt goes to Fields, where crops are added.')
 
@@ -271,6 +300,24 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     const sameScopeEstimate = { ...estimate, id: uid(785) }
     await act(async () => { root.render(createElement(MemoryRouter, null, createElement(PositionCard, { key: 'ambiguous', estimate: sameScopeEstimate, workspace: { ...workspace, production_estimates: [sameScopeEstimate], grain_contracts: [{ id: uid(786), farm_id: fields.farm.id, crop_year: estimate.crop_year, commodity_id: estimate.commodity_id, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer: 'Elevator', bushels: 1_000, futures_price: null, basis: null, cash_price: 4.5, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, created_at: stamp, updated_at: stamp } as GrainContract] }, services: pendingServices, saleLimit: 9_000, onSaleLimitChange: () => undefined, onSaved: async () => undefined }))); await flush() })
     assert(metricValue('Already contracted') === '1,000 bu' && metricValue('Insurance estimate guarantee') === 'Not entered', 'A refetch for the same crop scope must not flash back to Checking.')
+    // Full review: a coverage read that fails says so; it never tells the farmer to add coverage that may already be saved.
+    const failingServices = { ...services, profitabilityRepository: { ...services.profitabilityRepository, getWorkspace: async () => { throw new Error('no signal') } } } as unknown as GrainServices
+    await card('read-failed', { ...estimate, id: uid(787) }, failingServices)
+    assert(metricValue('Insurance estimate guarantee') === 'Not available' && metricNote('Insurance estimate guarantee') === 'Coverage could not be checked right now.' && metricValue('Insurance floor estimate') === 'Not available' && !container.textContent?.includes('Add Revenue Protection coverage'), 'A failed coverage read must read Not available, not Not entered with "add coverage".')
+    // Full review: Projected / Actual changes only which figure drives the math; a yield typed but never saved is not sent with it.
+    const toggled: ProductionEstimate[] = []
+    const toggleServices = { ...services, grainRepository: { ...services.grainRepository, saveProductionEstimate: async (value: ProductionEstimate) => { toggled.push(value) } } } as unknown as GrainServices
+    await card('toggle', { ...estimate, id: uid(788), aph_yield: 180, actual_bushels: 1_200, drives_math: 'projected' }, toggleServices)
+    assert(button(container, 'Projected').getAttribute('aria-pressed') === 'true' && button(container, 'Actual').getAttribute('aria-pressed') === 'false', 'The toggle must say which choice is active to a screen reader.')
+    await change(control(container, 'Expected yield'), '999'); await change(control(container, 'Actual bushels'), '')
+    await click(button(container, 'Actual'))
+    assert(toggled.length === 1 && toggled[0].drives_math === 'actual' && toggled[0].aph_yield === 180 && toggled[0].actual_bushels === 1_200, `The toggle must send the saved yield and actual, never an unsaved draft: ${JSON.stringify(toggled[0])}`)
+    // Full review: a member who may only view gets no production writes, and is told why once.
+    await card('read-only-production', { ...estimate, id: uid(789) }, services, { canWriteSettings: false })
+    assert(button(container, 'Save production').disabled && button(container, 'Projected').disabled && button(container, 'Actual').disabled && container.textContent?.includes(READ_ONLY_GRAIN), 'A view-only member must not be offered production saves the server refuses.')
+    // Full review: units with no insured acres have no floor to show, rather than $NaN.
+    await card('zero-acres', { ...estimate, id: uid(790) }, services, { workspace: { ...workspace, production_estimates: [{ ...estimate, id: uid(790) }], insurance_units: [{ id: uid(791), farm_id: fields.farm.id, crop_year: estimate.crop_year, commodity_id: estimate.commodity_id, operating_entity_id: null, enterprise_label: null, insured_acres: 0, aph: 180, coverage_level_pct: 75, revenue_guarantee_per_acre: 600, guarantee_per_bu: 3.5 }] } as unknown as GrainWorkspace })
+    assert(!container.textContent?.includes('NaN'), 'An insurance floor over zero insured acres must not print $NaN.')
   } finally { await act(async () => { root.unmount() }); container.remove() }
 }
 
@@ -354,7 +401,7 @@ assert(seenContracts[0]?.delivery_start === null && seenContracts[0]?.delivery_e
 // B37: a ticket number typed with commas is kept as the plain number. C7: the delivery carries the date and note typed.
 const deliveryInput = control(contractContainer, 'Delivered bushels') as HTMLInputElement; await change(deliveryInput, '13,000')
 assert(deliveryInput.value === '13000', `B37: delivered bushels must accept 1,200-style commas. ${deliveryInput.value}`)
-await change(control(contractContainer, 'Delivered on'), '2025-09-28'); await change(control(contractContainer, 'Ticket # or note'), 'Ticket 4411')
+await change(control(contractContainer, 'Delivered on'), `${estimate.crop_year}-09-28`); await change(control(contractContainer, 'Ticket # or note'), 'Ticket 4411')
 let genericContractWritesBeforeDelivery = contractWrites
 const priorNovemberConfirm = window.confirm; window.confirm = () => { throw new Error('window.confirm must not be used: the in-app dialog host is mounted.') }; let deliveryConfirmations = 0
 async function answerOverDelivery(answer: 'Record anyway' | 'Go back') { assert(openDialog()?.textContent?.includes('more than the contract. Record anyway?'), 'Each delivery attempt must cross the real over-delivery confirmation boundary.'); deliveryConfirmations += 1; await click(dialogButton(answer)) }
@@ -365,7 +412,7 @@ assert(deliveryWrites === 0 && attemptedDeliveries.length === 1 && attemptedDeli
 deliveryMode = 'ambiguous'
 const correctedDelivery = button(contractContainer, 'Record delivery'); await act(async () => { correctedDelivery.click(); correctedDelivery.click(); await flush() }); await answerOverDelivery('Record anyway')
 assert(Number(deliveryWrites) === 1 && seenDeliveries[0]?.id === novemberIds.delivery && contractContainer.textContent?.includes('Saving…'), 'Delivery must show Saving for one exact stable draft ID.')
-assert(seenDeliveries[0]?.delivered_on === '2025-09-28' && seenDeliveries[0]?.note === 'Ticket 4411' && seenDeliveries[0]?.bushels === 13_000, 'C7: a delivery must be sent with the date and ticket note the farmer typed.')
+assert(seenDeliveries[0]?.delivered_on === `${estimate.crop_year}-09-28` && seenDeliveries[0]?.note === 'Ticket 4411' && seenDeliveries[0]?.bushels === 13_000, 'C7: a delivery must be sent with the date and ticket note the farmer typed.')
 deliveryGate.release(); await act(async () => { await flush(); await flush() })
 assert(contractContainer.textContent?.includes('Confirmation needed') && contractContainer.textContent?.includes('may already be recorded') && !contractContainer.textContent?.includes('Needs attention') && contractContainer.textContent?.includes('Retry keeps the same delivery') && contractContainer.textContent?.includes('Retry delivery'), 'A lost delivery response must truthfully retain Confirmation needed and explicit same-entry retry custody.')
 deliveryGate = gate(); const retryDelivery = button(contractContainer, 'Retry delivery'); await act(async () => { retryDelivery.click(); retryDelivery.click(); await flush() }); await answerOverDelivery('Record anyway')
@@ -378,7 +425,7 @@ assert(contractContainer.textContent?.includes('Needs attention') && !contractCo
 deliveryMode = 'success'; deliveryGate = gate(); const correctedRejectedDelivery = button(contractContainer, 'Record delivery'); await act(async () => { correctedRejectedDelivery.click(); correctedRejectedDelivery.click(); await flush() }); await answerOverDelivery('Record anyway'); assert(Number(deliveryWrites) === 4 && seenDeliveries[3]?.id === novemberIds.deliveryCorrected, 'Corrected delivery retry must mint a new ID and lock rapid clicks to one server attempt.'); deliveryGate.release(); await act(async () => { await flush(); await flush() }); assert(Number(novemberWorkspace.grain_contract_deliveries.length) === 2 && contractContainer.textContent?.includes('Saved'), 'Corrected delivery must save one new canonical row.')
 assert(deliveryConfirmations === 6, 'Each of the six delivery attempts must cross the real over-delivery confirmation boundary.'); window.confirm = priorNovemberConfirm
 assert(contractContainer.textContent?.includes('Recording a delivery does not remove grain from a bin.'), 'Contract UI must state that delivery does not change bin inventory.')
-assert([...contractContainer.querySelectorAll('.contract-actions a')].some((item) => item.getAttribute('href') === '/grain/loads') && contractContainer.textContent?.includes('Use this only for trucks with no load ticket.'), 'B4/C16: the delivery box must steer a truck out of a bin to Loads.')
+assert([...contractContainer.querySelectorAll('.contract-actions a')].some((item) => item.getAttribute('href') === '/grain/loads') && contractContainer.textContent?.includes('a load that names this contract counts here automatically.'), 'B4/C16: the delivery box must steer a truck out of a bin to Loads.')
 assert(!contractContainer.textContent?.includes('Correct or delete') && contractContainer.querySelector('.contract-locked-note')?.textContent?.includes('can no longer be corrected or deleted'), 'C2a: a delivered contract must say why it can no longer be corrected, not just drop the control.')
 // C26: Go / Enter in the delivery box submits its own small form.
 const deliveryForm = control(contractContainer, 'Delivered bushels').closest('form') as HTMLFormElement | null; assert(deliveryForm && deliveryForm.querySelector('button[type="submit"]')?.textContent === 'Record delivery', 'C26: Delivered bushels and Record delivery must share a form so Enter records.')
@@ -417,8 +464,28 @@ await act(async () => { contractRoot.unmount() }); contractContainer.remove()
     await change(basisBox, '-0.1275'); await click(button(container, 'Set basis'))
     assert(openDialog()?.textContent?.includes('Set basis to -$0.1275/bu?') && !openDialog()?.textContent?.includes('Basis is entered in dollars'), `C0: the confirm must show the quarter-cent basis exactly. ${openDialog()?.textContent}`)
     await click(dialogButton('Go back')); await change(basisBox, '-35'); await click(button(container, 'Set basis'))
-    assert(openDialog()?.textContent?.includes('Basis is entered in dollars. 35 cents under is -0.35.') && finalizeCalls === 0, 'C8: a basis that looks like cents must say so in the same confirm.')
+    assert(openDialog()?.textContent?.includes('Basis is entered in dollars per bushel. For 35 cents under, go back and type -0.35.') && finalizeCalls === 0, 'C8: a basis that looks like cents must say so in the same confirm.')
     await click(dialogButton('Go back')); assert(finalizeCalls === 0, 'C8: Go back sets nothing.')
+    assert(basisCentsPrompt(-35.25).body === 'Basis is entered in dollars per bushel. For 35.25 cents under, go back and type -0.3525.', `A quarter-cent basis typed as cents must be advised to the quarter cent: ${basisCentsPrompt(-35.25).body}`)
+    // Full review: a price-box problem shows under the price box, not under the delivery boxes.
+    await change(basisBox, ''); await click(button(container, 'Set basis'))
+    assert(basisBox.closest('form')?.querySelector('.contract-action-message')?.textContent === 'Enter a valid basis.' && !control(container, 'Delivered bushels').closest('form')?.querySelector('.contract-action-message'), 'Set basis errors must sit in the Set basis form.')
+    // Full review: delivered bushels are plain numbers with at most two decimals (the column keeps two, and a retry must match).
+    await change(control(container, 'Delivered bushels'), '1200.555'); await click(button(container, 'Record delivery'))
+    assert(container.textContent?.includes('Bushels can have at most 2 decimals.') && deliveryCalls === 0 && ids === 0, 'Three decimals must be refused before any id is taken.')
+    await change(control(container, 'Delivered bushels'), '1e3'); await click(button(container, 'Record delivery'))
+    assert(container.textContent?.includes('Type delivered bushels as a number, like 1200 or 1200.5.') && deliveryCalls === 0, 'An exponent is not a number of bushels.')
+    // Full review: a delivery dated before the contract's crop year (a year typo) is asked about; a manual delivery cannot be undone.
+    await change(control(container, 'Delivered bushels'), '100'); await change(control(container, 'Delivered on'), `${hta.crop_year - 10}-10-02`); await click(button(container, 'Record delivery'))
+    assert(openDialog()?.textContent?.includes(`That is before the ${hta.crop_year} crop.`) && deliveryCalls === 0, 'A delivery date before the crop year must be confirmed first.')
+    await click(dialogButton('Go back')); assert(deliveryCalls === 0 && ids === 0, 'Go back records nothing.')
+    assert(control(container, 'Delivered bushels').closest('form')?.hasAttribute('novalidate') && basisBox.closest('form')?.hasAttribute('novalidate'), 'The delivery and price forms check their own boxes, so the browser bubble never pre-empts the plain message.')
+
+    // Full review: a contract with both load-ticket and hand-typed deliveries names both undo paths.
+    const mixedWorkspace = { ...actionsWorkspace, grain_contract_deliveries: [ticketDelivery, { ...ticketDelivery, id: uid(1406), grain_load_id: null }] } as GrainWorkspace
+    await act(async () => { root.render(createElement(MemoryRouter, null, createElement(ContractActions, { key: 'mixed', contract: loaded, workspace: mixedWorkspace, services: actionServices, onSaved: async () => undefined, onDeliverySaved: async () => undefined, onReceipt: () => undefined }), createElement(ConfirmDialogHost))); await flush() })
+    const mixedNote = container.querySelector('.contract-locked-note')?.textContent ?? ''
+    assert(mixedNote.includes('Deliveries from load tickets can be undone by voiding the ticket under Loads.') && mixedNote.includes('A delivery typed in by hand cannot be undone in Farm Rx yet.'), `Mixed deliveries must name both undo paths: ${mixedNote}`)
 
     // A10: an HTA offer's month is a futures month, so the delivery dates it fills in are shown and flagged for checking.
     const htaOffer: FirmOffer = { id: uid(1405), ...scope, buyer: 'River terminal', offer_type: 'hta', bushels: 5_000, price: 4.5, basis: null, contract_month: `${estimate.crop_year}-12`, expires_on: null, delivery_location: null, notes: null, status: 'open', filled_contract_id: null, created_at: stamp, updated_at: stamp }

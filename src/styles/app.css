@@ -1386,3 +1386,30 @@ tbody tr:nth-child(even) td { background: var(--cream); }
   .contract-action-form input { width: 100%; }
   .contract-action-form .text-action { justify-self: start; }
 }
+
+/* Grain usability: full review repairs */
+/* Links inside a sentence get the same 48px tap height as the contracts links. */
+.grain-page .untracked-stored-grain li a, .load-hint a { padding: 14px 0; }
+/* The delivery-intent banner lines up with the picker and form instead of touching the card edge. */
+.grain-page .contracts-card > .grain-delivery-intent { margin: 0 20px 18px; }
+/* An opened form stops below the sticky app header, and the long alert explanations read full width under the inputs. */
+.grain-page .offer-form-anchor { scroll-margin-top: 140px; }
+.alert-rule-form .alert-fact { grid-column: 1 / -1; }
+/* A long contract option ("ADM Decatur · 2026 · 1,250 bu left of 10,000") must not widen the load form past a phone screen. */
+.load-form fieldset { min-width: 0; }
+.load-form select, .load-form input:not([type="radio"]):not([type="checkbox"]) { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
+/* With the basis hint on its own row, the next field fills the cell beside Basis instead of leaving it empty. */
+.basis-entry { grid-auto-flow: row dense; }
+/* The bin and movement forms open inside a bin card, which is narrow on a laptop: columns wrap rather than crush. */
+@media (min-width: 768px) {
+  .grain-page .bin-form, .grain-page .movement-form { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .grain-page .movement-form .secondary-action { grid-column: 1 / -1; justify-self: start; }
+}
+@media (max-width: 767px) {
+  /* The stacked card already has its own padding and gap; desktop cell padding, borders and stripes do not apply. */
+  .phone-stack.contracts-table td, .phone-stack.contracts-table .contract-actions-row td { padding: 0; }
+  .phone-stack.load-table td { padding: 0; border: 0; }
+  .load-table tbody tr:nth-child(even) td { background: transparent; }
+  .grain-page .contracts-card > .grain-delivery-intent { margin: 0 16px 18px; }
+  .grain-page .contracts-card > .contracts-empty, .grain-page .contracts-card > .contracts-next-year, .grain-page .contracts-card > .contracts-read-only { padding-right: 16px; padding-left: 16px; }
+}

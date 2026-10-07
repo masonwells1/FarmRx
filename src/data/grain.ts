@@ -387,6 +387,19 @@ export function loadLotFor(
 }
 
 /** LD-4: the lots a bin origin could be hauled from, for the picker and for the messages below. */
+/** The bushels a bin holds that carry no crop year (movements written before crop years existed). The bin's own total
+ * counts them, so a bin can show grain while naming no lot: that grain needs its year named, never a second "In". */
+export function binUndatedBushels(workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions'>, binId: string): number {
+  if (!binId) return 0
+  return deriveBinLots(
+    workspace.bin_inventory.find((row) => row.grain_bin_id === binId),
+    workspace.bin_transactions.filter((row) => row.grain_bin_id === binId),
+  ).filter((lot) => lot.crop_year === null).reduce((total, lot) => total + lot.bushels, 0)
+}
+
+/** Said when a bin names no crop year: grain with no year is named under Bins & basis; only an empty bin is told to add an "In". */
+export const BIN_UNDATED_GRAIN = 'That bin’s grain has no crop year yet, so Farm Rx cannot tell which crop year this load is. Name it under "Which crop year were these?" on Bins & basis, or ask the farm owner or a manager to.'
+
 export function originBinLots(workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions'>, binId: string): BinLotOnHand[] {
   if (!binId) return []
   return binLotsOnHand(
@@ -563,7 +576,10 @@ export function validateGrainLoad(
         }
         const lots = authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id)
         if (lots.length === 0) {
-          problems.push('That bin holds no crop with a crop year, so Farm Rx cannot tell which crop year this load is. If it has grain in it, tap "Add or take out grain" on that bin under Bins & basis and add an "In" for it first.')
+          // Adding an "In" for grain the bin already shows would count it twice, so that is offered only for a bin showing none.
+          problems.push(binUndatedBushels(workspace, draft.origin_grain_bin_id) > 0.000001
+            ? BIN_UNDATED_GRAIN
+            : 'That bin holds no crop with a crop year, so Farm Rx cannot tell which crop year this load is. If it has grain in it, tap "Add or take out grain" on that bin under Bins & basis and add an "In" for it first.')
         } else if (draft.origin_crop_year.trim()) {
           problems.push('That bin does not hold the ' + draft.origin_crop_year.trim() + ' crop.')
         } else {
@@ -791,10 +807,11 @@ export function basisLooksLikeCents(value: number): boolean {
 export function basisCentsPrompt(value: number): { title: string; body: string; confirmLabel: string } {
   const sign = value < 0 ? '-' : ''
   const cents = Math.abs(value)
-  const asDollars = (value / 100).toFixed(2)
+  // Up to four decimals, so a quarter-cent basis (-35.25 cents) is advised as -0.3525, not rounded to -0.35.
+  const asDollars = String(Number((value / 100).toFixed(4)))
   return {
     title: `Basis of ${sign}$${cents.toFixed(2)} per bushel?`,
-    body: `Basis is entered in dollars. ${cents} cents ${value < 0 ? 'under' : 'over'} is ${asDollars}.`,
+    body: `Basis is entered in dollars per bushel. For ${cents} cents ${value < 0 ? 'under' : 'over'}, go back and type ${asDollars}.`,
     confirmLabel: 'Keep this basis',
   }
 }
