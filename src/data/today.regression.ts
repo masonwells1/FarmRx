@@ -4,7 +4,7 @@ import type { EquipmentTasksWorkspace, Equipment, FarmTask, MeterReading, Servic
 import { pendingPassOutcomes, unresolvedAssignmentMessage, type ProgramsQueueEntryV1, type ProgramsSnapshotView } from './programsWriteQueue'
 import { projectProgramsQueue } from './QueuedProgramsRepository'
 import type { PendingPassOutcome, ProgramsData } from './programs'
-import { planDateFor, planMonthFor, plannedPercentThroughDate, type CashBid, type GrainContract, type GrainWorkspace, type MarketingPlanTarget, type ProductionEstimate } from './grain'
+import { planDateFor, plannedPercentThroughDate, type CashBid, type GrainContract, type GrainWorkspace, type MarketingPlanTarget, type ProductionEstimate } from './grain'
 import { parseTodayGrainLineIntent, todayGrainLineIntent } from './todayIntents'
 import type { InventoryProduct, InventoryWorkspace } from './inventory'
 import type { Field, FieldsData } from './fields'
@@ -440,7 +440,11 @@ assert.equal(plannedPercentThroughDate(acrossYear, '2026-12-15'), 20, 'In Decemb
 assert.equal(plannedPercentThroughDate(acrossYear, '2027-01-05'), 40, 'In January 2027 the October 2026 target still counts once the year is compared.')
 assert.equal(plannedPercentThroughDate([target('00000000-0000-4000-8000-000000000e28', '2027-03-01', 25)], '2026-10-06'), 0, 'A 2027 crop target dated March 2027 is not already due in October 2026.')
 assert.equal(planDateFor(new Date('2026-09-01T00:30:00Z'), 'America/Chicago'), '2026-08-31', 'The plan date is the farm\'s day in its own zone, with its year.')
-assert.deepEqual([planMonthFor(new Date('2026-09-01T00:30:00Z'), 'America/Chicago'), planMonthFor(new Date('2026-09-01T00:30:00Z'), 'Asia/Tokyo'), planMonthFor(new Date('2026-09-01T00:30:00Z'), null)], [8, 9, new Date('2026-09-01T00:30:00Z').getMonth() + 1], 'The Overview judges the plan by the farm\'s month in its own zone (still August in Chicago at 00:30 UTC on September 1), as Today does; without a zone, the device\'s.')
+{
+  // Kept from the removed planMonthFor check: the same moment is a different farm day by zone, and without a zone it is the device's.
+  const moment = new Date('2026-09-01T00:30:00Z'); const pad = (value: number) => String(value).padStart(2, '0')
+  assert.deepEqual([planDateFor(moment, 'America/Chicago').slice(0, 7), planDateFor(moment, 'Asia/Tokyo').slice(0, 7), planDateFor(moment, null)], ['2026-08', '2026-09', `${moment.getFullYear()}-${pad(moment.getMonth() + 1)}-${pad(moment.getDate())}`], 'The Overview judges the plan by the farm\'s month in its own zone (still August in Chicago at 00:30 UTC on September 1), as Today does; without a zone, the device\'s.')
+}
 const basisOnly = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, cash_bids: [bid('00000000-0000-4000-8000-000000000e41', 'Cargill Olney', '2026-07-10', null, -0.35), bid('00000000-0000-4000-8000-000000000e42', 'Cargill Olney', '2026-07-14', null, -0.4)] }, today })
 assert.equal(basisOnly?.detail.split(' · ')[1], 'Cargill Olney basis −$0.40, down 5¢ since Jul 10', 'A bid entered as basis only is shown as basis with its change.')
 const firstBid = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, cash_bids: [bid('00000000-0000-4000-8000-000000000e51', 'ADM Decatur', '2026-07-14', 4.15, -0.27)] }, today })

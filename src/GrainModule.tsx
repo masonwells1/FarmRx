@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Link, NavLink, useLocation } from "react-router";
 import { parseTodayRecordIntent, parseTodayGrainLineIntent } from "./data/todayIntents";
 import { NeedsAttentionList } from "./components/NeedsAttentionList";
@@ -13,7 +13,7 @@ import { beginPendingSettingsWork, registerPendingSettingsFlush, SETTINGS_CONTEX
 import { clearSettingsDraft, readSettingsDrafts, writeSettingsDraft, type SettingsDraftScope } from "./data/settingsDrafts";
 import { quarantineTiedSettingsDrafts } from "./data/revokedFarmRecovery";
 import { supabaseConfig } from "./lib/supabaseConfig";
-import { getModuleSyncStatus, subscribeSyncStatus } from "./data/syncStatus";
+import { getModuleSyncStatus, subscribeSyncStatus, type SyncState } from "./data/syncStatus";
 import { useOptionalFarmAccess } from "./auth/FarmAccessContext";
 import { canEditFarmModule } from "./auth/farmContext";
 import { normalizeGrainSaleLimit, stableGrainSaleLimitId } from "./data/grainSettings";
@@ -62,6 +62,7 @@ import {
 } from "./data/binLedger";
 import { knownCounterparties, isMarsBid, latestBasis, marsBidLabel } from "./data/basisMath";
 import { GrainCostOfCarry } from "./GrainCostOfCarry";
+import { scopeLabel } from "./data/grainScopeLabel";
 import {
   displayFirmOfferStatus,
   offerToContract,
@@ -363,18 +364,6 @@ function scopeRows<T extends PositionScope>(rows: T[], scope: PositionScope) {
   return rows.filter((row) => sameScope(row, scope));
 }
 export { deliveryDefaultEstimate } from "./data/grain";
-function scopeLabel(workspace: GrainWorkspace, scope: PositionScope) {
-  const commodity =
-    workspace.fields.commodities.find((item) => item.id === scope.commodity_id)
-      ?.name ?? scope.commodity_id;
-  const entity =
-    scope.enterprise_label ??
-    workspace.fields.entities.find(
-      (item) => item.id === scope.operating_entity_id,
-    )?.name ??
-    "whole farm";
-  return `${scope.crop_year} ${commodity} — ${entity}`;
-}
 function binPosition(workspace: GrainWorkspace, bin: GrainBin) {
   const inventory = workspace.bin_inventory.find(
     (item) => item.grain_bin_id === bin.id,
@@ -391,6 +380,30 @@ function binPosition(workspace: GrainWorkspace, bin: GrainBin) {
     onHand: derived.lots.reduce((sum, lot) => sum + lot.onHand, 0),
     exceedsRecordedInventory: derived.lots.some((lot) => lot.onHand < 0),
   };
+}
+
+/** Queued while offline, a plan change is not yet on the farm's record, so the notice says so instead of "saved". Only queueing
+ * the save sets "pending" or "syncing"; "blocked" after a direct save means other, older saves are parked, not this one. */
+export const planSavedNoticeFor = (kind: SyncState["kind"]) =>
+  kind === "pending" || kind === "syncing" ? "Plan kept on this device. It will save when you have signal." : "Plan saved.";
+
+/** A tab kept per crop and year, opened before the farm has any estimate: one sentence and the one place to go next. */
+export function NeedsEstimate({ tabLabel, hasCrops }: { tabLabel: string; hasCrops: boolean }) {
+  return (
+    <section className="grain-section grain-needs-estimate">
+      {hasCrops ? (
+        <>
+          <p>The {tabLabel} tab is kept per crop and year, so start your first crop estimate on the Overview.</p>
+          <NavLink to="/grain" end className="primary-action">Go to Overview</NavLink>
+        </>
+      ) : (
+        <>
+          <p>The {tabLabel} tab is kept per crop and year, so add your crops in Fields first.</p>
+          <Link to="/fields" className="primary-action">Add crops in Fields</Link>
+        </>
+      )}
+    </section>
+  );
 }
 
 /** `canManageFarm` decides whether the crop-year reconciliation list is offered. Naming what a
@@ -476,6 +489,8 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
           return newer;
         });
         for (const key of adopted) { dirtySaleLimits.current.delete(key); failedSaleLimits.current.delete(key); delete saleLimitBases.current[key]; settleSaleLimitUnflushed(key); }
+        // The newer row replaced the value whose save failed, so that failure no longer describes the box.
+        if (adopted.length) setSaleLimitNotice((current) => current && adopted.includes(current.key) ? null : current);
         setSaleLimits((current) => ({ ...current, ...Object.fromEntries(rows.map((limit) => [scopeKey(scopeOf(limit)), limit.sale_limit_bushels])) }));
         // A limit this browser kept for this account and farm (its save failed, or the page was left before it ran) comes back
         // dirty and pending, unless the farm's row moved on since, in which case the newer row wins and the draft is dropped.
@@ -771,6 +786,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
           whisper();
         }}
         onReceipt={setLastReceiptId}
+        canManageFarm={canManageFarm}
       />
       <CropYearReconciliation
         workspace={workspace}
@@ -807,8 +823,6 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
             workspace={workspace}
             services={services}
             onSaved={refresh}
-            onReceipt={setLastReceiptId}
-            receipt={receipt}
           />
         )}
         {tabPath === "loads" && (
@@ -816,10 +830,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
         )}
         {tabPath === "storage" && storageTab}
         {tabPath !== "" && tabPath !== "loads" && tabPath !== "storage" && (
-          <section className="grain-section grain-needs-estimate">
-            <p>Start a grain estimate on the Overview tab first. Contracts and plans are kept per crop and year.</p>
-            <NavLink to="/grain" end className="primary-action">Go to Overview</NavLink>
-          </section>
+          <NeedsEstimate tabLabel={GRAIN_TABS.find((tab) => tab.slug === tabPath)?.label ?? "This"} hasCrops={workspace.fields.crop_assignments.length > 0} />
         )}
         <aside className="compliance-note">
           Farm Rx shows your numbers and your targets. It does not give marketing
@@ -834,8 +845,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
   const contractPosition = calculateGrainPosition(0, contractRows, 0, null);
   const farmYear = Number(planDateFor(new Date(), workspace.fields.farm.time_zone).slice(0, 4));
   const nextYearMissing = !workspace.production_estimates.some((estimate) => estimate.crop_year === farmYear + 1);
-  // Queued while offline, a plan change is not yet on the farm's record; the notice says so instead of "saved".
-  const planSavedNotice = () => getModuleSyncStatus("grain").kind !== "synced" ? "Plan kept on this device. It will save when you have signal." : "Plan saved.";
+  const planSavedNotice = () => planSavedNoticeFor(getModuleSyncStatus("grain").kind);
   const saveTarget = async (values: {
     pct: number;
     price: number | null;
@@ -904,7 +914,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
   const applyTemplate = async (template: Template) => {
     if (!planLock.current.acquire()) return;
     const existing = scopeRows(workspace.marketing_plan_targets, selectedScope);
-    if (existing.length && !(await confirmDialog({ title: `Replace your ${selectedScopeLabel} plan?`, body: `This replaces the ${existing.length === 1 ? "1 month" : `${existing.length} months`} you have set with the ${templates[template].name} template (${templates[template].total}% of the crop). Contracts are not changed.`, confirmLabel: "Replace plan", destructive: true }))) {
+    if (existing.length && !(await confirmDialog({ title: `Replace the plan for ${selectedScopeLabel}?`, body: `This replaces the ${existing.length === 1 ? "1 month" : `${existing.length} months`} you have set with the ${templates[template].name} template (${templates[template].total}% of the crop). Contracts are not changed.`, confirmLabel: "Replace plan", destructive: true }))) {
       planLock.current.release();
       return;
     }
@@ -981,6 +991,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
                 services={services}
                 saleLimit={saleLimitForScope(saleLimits, estimate)}
                 saleLimitPersisted={workspace.capabilities?.persisted_settings === true}
+                canWriteSettings={canWriteSettings}
                 saleLimitError={saleLimitNotice?.key === scopeKey(scopeOf(estimate)) ? saleLimitNotice.message : ""}
                 onSaleLimitCommit={() => void commitSaleLimit(estimate)}
                 onSaleLimitChange={(limit) => {
@@ -1005,7 +1016,6 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
                   whisper();
                   await refresh();
                 }}
-                onReceipt={setLastReceiptId}
               />
             ))}
           </section>
@@ -1017,10 +1027,12 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
             workspace={workspace}
             services={services}
             onSaved={refresh}
-            onReceipt={setLastReceiptId}
-            receipt={receipt}
           />
-          <MarketQuoteSection cropYear={quoteCropYear(workspace.production_estimates.map((estimate) => estimate.crop_year))} />
+          {/* Only the futures for crops this farm has an estimate for; the page never gets here with none. */}
+          <MarketQuoteSection
+            cropYear={quoteCropYear(workspace.production_estimates.map((estimate) => estimate.crop_year))}
+            families={[...new Set(workspace.production_estimates.flatMap((estimate) => workspace.fields.commodities.find((item) => item.id === estimate.commodity_id)?.crop_family ?? []))]}
+          />
         </>
       )}
       {tabPath === "plan" && (
@@ -1094,7 +1106,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
                         ? target
                           ? "Add cash target"
                           : "No target set"
-                          : `Cash target ${money.format(target.target_price)}`}
+                          : `Cash target ${pricePerBu.format(target.target_price)}`}
                     </small>
                   </button>
                 );
@@ -2629,23 +2641,22 @@ export function FirstEstimate({
   workspace,
   services,
   onSaved,
-  onReceipt,
-  receipt,
   compact = false,
 }: {
   workspace: GrainWorkspace;
   services: GrainServices;
   onSaved: () => Promise<void>;
-  onReceipt: (id: string) => void;
-  receipt: ReturnType<typeof useSaveReceipt>;
   compact?: boolean;
 }) {
   const assignments = workspace.fields.crop_assignments;
   // One expected yield per crop and year: corn and beans yield very differently, so a single shared box
   // would hand the second crop the first one's number.
   const [aph, setAph] = useState<Record<string, string>>({});
+  // Errors, and the Saving / Saved receipt, show on the card of the crop being created and nowhere else. Once the
+  // estimate exists this card goes away and the crop's position card shows the same receipt (it follows the same id).
   const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
-  const [error, setError] = useState("");
+  const [creating, setCreating] = useState<{ id: string; key: string } | null>(null);
+  const receipt = useSaveReceipt(creating?.id ?? null);
   const submitLock = useRef(createSubmitLock());
   if (!assignments.length)
     return compact ? null : (
@@ -2683,7 +2694,7 @@ export function FirstEstimate({
     const now = new Date().toISOString();
     const id = services.createGrainId();
     try {
-      onReceipt(id);
+      setCreating({ id, key });
       await services.grainRepository.saveProductionEstimate({
         id,
         farm_id: workspace.fields.farm.id,
@@ -2700,7 +2711,6 @@ export function FirstEstimate({
         created_at: now,
         updated_at: now,
       });
-      setError("");
       // GL-3a: clear the yield after a successful save. The compact card stays mounted while any crop
       // assignment still lacks an estimate, so a yield left behind would be ready to save again. A yield
       // drives the whole position, so a carried-over number is a wrong number, not a convenience. Each
@@ -2712,7 +2722,7 @@ export function FirstEstimate({
       });
       await onSaved();
     } catch (caught) {
-      setError(farmerError(caught, "start this estimate"));
+      setCardErrors((current) => ({ ...current, [key]: farmerError(caught, "start this estimate") }));
     } finally {
       submitLock.current.release();
     }
@@ -2729,7 +2739,6 @@ export function FirstEstimate({
           </p>
         </div>
       </div>
-      <SaveReceipt state={receipt} />
       <div className="position-grid">
         {[...grouped.values()].map((assignment) => {
           const key = `${assignment.crop_year}|${assignment.commodity_id}`;
@@ -2774,15 +2783,11 @@ export function FirstEstimate({
               >
                 Create estimate
               </button>
+              {creating?.key === key && <SaveReceipt state={receipt} />}
             </article>
           );
         })}
       </div>
-      {error && (
-        <p className="form-error grain-inline-error" role="alert">
-          {error}
-        </p>
-      )}
     </section>
   );
 }
@@ -2793,22 +2798,23 @@ export function PositionCard({
   services,
   saleLimit,
   saleLimitPersisted = false,
+  canWriteSettings = true,
   saleLimitError = "",
   onSaleLimitChange,
   onSaleLimitCommit,
   onSaved,
-  onReceipt,
 }: {
   estimate: ProductionEstimate;
   workspace: GrainWorkspace;
   services: GrainServices;
   saleLimit: number | null;
   saleLimitPersisted?: boolean;
+  /** A member who may read but not edit this farm's settings: a farm-saved sale limit is shown, not offered for editing. */
+  canWriteSettings?: boolean;
   saleLimitError?: string;
   onSaleLimitChange: (limit: number | null) => void;
   onSaleLimitCommit?: () => void;
   onSaved: () => Promise<void>;
-  onReceipt: (id: string) => void;
 }) {
   const [aph, setAph] = useState(String(estimate.aph_yield));
   const [actual, setActual] = useState(
@@ -2819,10 +2825,16 @@ export function PositionCard({
   // of those renders mid-read.
   const [showMore, setShowMore] = useState(false);
   const [error, setError] = useState("");
+  // What to do next (the Actual button with no actual bushels saved), shown beside the box it is about. Not an error.
+  const [guidance, setGuidance] = useState("");
   const submitLock = useRef(createSubmitLock());
   // The queued repository publishes each production save's receipt under the estimate's own id, so the
-  // card can say Saving / Saved for its own saves without the page-level receipt.
+  // card can say Saving / Saved for its own saves without the page-level receipt. There is one receipt,
+  // shown beside the control used last; with More details closed it sits beside Projected / Actual.
   const cardReceipt = useSaveReceipt(estimate.id);
+  const [receiptAt, setReceiptAt] = useState<"toggle" | "reconcile" | "production">("toggle");
+  const saleLimitErrorId = useId();
+  const guidanceId = useId();
   // "Edit yield" and the Actual button open More details and then put the cursor in the box they need.
   const yieldInputRef = useRef<HTMLInputElement>(null);
   const actualInputRef = useRef<HTMLInputElement>(null);
@@ -2903,11 +2915,18 @@ export function PositionCard({
   // into the harvest total this card offers to write as the Grain actual.
   const fromLoads = matchingAssignments.reduce((sum, assignment) => sum + harvestBushelsFromLoads(workspace.grain_loads, assignment.id), 0);
   const binBalance = deriveCommodityBinTotal(workspace.grain_bins, workspace.bin_inventory, workspace.bin_transactions, scope.commodity_id);
+  // Coverage goes back to "Checking…" only for a different crop scope. The same scope is read again after a
+  // contract save, and the figures shown stay until that read settles rather than flashing back to Checking.
+  const coverageScopeKey = scopeKey(scope);
+  const coverageScopeRef = useRef<string | null>(null);
   useEffect(() => {
     let active = true;
-    setRpMarketingEstimate(null);
-    setCoverageChecked(false);
-    setSavedCoverageBlocked(hasUnsupportedSavedCoverage(insurance, []));
+    if (coverageScopeRef.current !== coverageScopeKey) {
+      coverageScopeRef.current = coverageScopeKey;
+      setRpMarketingEstimate(null);
+      setCoverageChecked(false);
+      setSavedCoverageBlocked(hasUnsupportedSavedCoverage(insurance, []));
+    }
     void services.profitabilityRepository
       .getWorkspace()
       .then((profitability) => {
@@ -2915,7 +2934,7 @@ export function PositionCard({
           sameScope(item, scope),
         );
         if (hasUnsupportedSavedCoverage(insurance, matchingBudgets.map((budget) => budget.rp_coverage_pct))) {
-          if (active) { setSavedCoverageBlocked(true); setCoverageChecked(true); }
+          if (active) { setSavedCoverageBlocked(true); setRpMarketingEstimate(null); setCoverageChecked(true); }
           return;
         }
         const allocationOwners = new Map<string, string>();
@@ -2946,20 +2965,13 @@ export function PositionCard({
           }
         }
         if (!active) return;
+        setSavedCoverageBlocked(false);
         setCoverageChecked(true);
-        if (!hasAllocation) return;
-        if (ambiguous) {
-          setRpMarketingEstimate({ ambiguous: true });
-          return;
-        }
-        setRpMarketingEstimate({
-          guaranteedBushels,
-          bushels: guaranteedBushels,
-        });
+        setRpMarketingEstimate(!hasAllocation ? null : ambiguous ? { ambiguous: true } : { guaranteedBushels, bushels: guaranteedBushels });
       })
       .catch(() => {
         /* Grain remains usable when the private profitability workspace cannot be read. */
-        if (active) setCoverageChecked(true);
+        if (active) { setRpMarketingEstimate(null); setCoverageChecked(true); }
       });
     return () => {
       active = false;
@@ -2977,16 +2989,22 @@ export function PositionCard({
     rpMarketingEstimate !== null && "ambiguous" in rpMarketingEstimate;
   const rpBushels =
     rpMarketingEstimate !== null && !rpAmbiguous ? rpMarketingEstimate.bushels : null;
-  // No insurance unit and no Revenue Protection coverage on a budget: there is no guarantee to show, and
-  // "0 bu" would read as "no room left to sell". The sale-limit figures below are not affected.
-  const noCoverage = !savedCoverageBlocked && insurance.length === 0 && rpBushels === null && !rpAmbiguous;
-  const noCoverageNote = "Add Revenue Protection coverage to this crop's budget in Profitability to see this.";
+  // No insurance unit and no usable Revenue Protection estimate on a budget: there is no guarantee to show, and
+  // "0 bu" would read as "no room left to sell". That includes RP coverage that cannot be used because a field
+  // is allocated to two budgets. Only said once the check has finished. The sale-limit figures are not affected.
+  const noCoverage = coverageChecked && !savedCoverageBlocked && insurance.length === 0 && rpBushels === null;
+  const noCoverageNote = rpAmbiguous
+    ? "A field is allocated to more than one budget in Profitability, so no Revenue Protection estimate is shown. Fix the field allocations there to see this."
+    : "Add Revenue Protection coverage to this crop's budget in Profitability to see this.";
+  const checkingCoverageNote = "Checking coverage…";
   const insuranceEstimate = savedCoverageBlocked || noCoverage ? null : rpBushels ?? insuranceUnitEstimate;
   const remainingEstimate = insuranceEstimate === null ? null : remainingMarketingCapacity(insuranceEstimate, contractedBushels, pendingOffers);
   const coverageValue = (value: number | null) => savedCoverageBlocked ? "Blocked" : !coverageChecked ? "Checking…" : noCoverage || value === null ? "Not entered" : `${bushels.format(value)} bu`;
   const remainingSaleLimit = saleLimit === null ? null : Math.max(0, saleLimit - contractedBushels - pendingOffers);
   const estimateNote = savedCoverageBlocked
     ? unsupportedCoverageMessage
+    : !coverageChecked
+    ? checkingCoverageNote
     : noCoverage
     ? noCoverageNote
     : rpAmbiguous
@@ -3008,6 +3026,7 @@ export function PositionCard({
     try {
       await services.grainRepository.saveProductionEstimate(input);
       setError("");
+      setGuidance("");
       await onSaved();
     } catch (exception) {
       setError(farmerError(exception, "save production"));
@@ -3021,8 +3040,8 @@ export function PositionCard({
       submitLock.current.release();
       return;
     }
+    setReceiptAt("reconcile");
     try {
-      onReceipt(estimate.id);
       await services.grainRepository.reconcileHarvestActual(estimate, harvestActual);
       setActual(String(harvestActual));
       setError("");
@@ -3058,7 +3077,7 @@ export function PositionCard({
           <button
             type="button"
             className={estimate.drives_math === "projected" ? "active" : ""}
-            onClick={() => void saveProduction(buildProductionSaveInput(estimate, aph, actual, "projected"))}
+            onClick={() => { setReceiptAt("toggle"); void saveProduction(buildProductionSaveInput(estimate, aph, actual, "projected")); }}
           >
             Projected
           </button>
@@ -3070,17 +3089,18 @@ export function PositionCard({
               // opens the box to do it in. Nothing is saved.
               if (estimate.actual_bushels === null) {
                 setShowMore(true);
-                setError("Enter actual bushels in More details and tap Save production. Then tap Actual.");
+                setGuidance("Enter actual bushels in More details and tap Save production. Then tap Actual.");
                 setFocusTarget("actual");
                 return;
               }
+              setReceiptAt("toggle");
               void saveProduction(buildProductionSaveInput(estimate, aph, actual, "actual"));
             }}
           >
             Actual
           </button>
         </div>
-        {!showMore && <SaveReceipt state={cardReceipt} />}
+        {(receiptAt === "toggle" || !showMore) && <SaveReceipt state={cardReceipt} />}
         </div>
       </div>
       {/* GL-3: the card opened with a paragraph and nine numbers. It now leads with one line and three
@@ -3095,15 +3115,15 @@ export function PositionCard({
           one hero line and three tiles and that shape is worth keeping. Carry-over grain of the same
           commodity is a different lot and is deliberately not counted here. */}
       <p className="position-committed-free">
-        <span className="numeric">{bushels.format(committedFree.onHand)} bu</span> of the {estimate.crop_year} crop stored
+        <span className="numeric">{displayBushels(committedFree.onHand)} bu</span> of the {estimate.crop_year} crop stored
         {" · "}
         {committedFree.committed > 0.000001
-          ? <><span className="numeric">{bushels.format(committedFree.committed)} bu</span> committed</>
+          ? <><span className="numeric">{displayBushels(committedFree.committed)} bu</span> committed</>
           : "nothing committed"}
         {" · "}
         {lotGap
-          ? <strong className={lotGap.short ? "committed-free-short" : undefined}>{lotGap.text}</strong>
-          : <strong>{bushels.format(committedFree.free)} bu free</strong>}
+          ? <strong className={lotGap.short ? "committed-free-short" : undefined}><span className="numeric">{displayBushels(lotGap.bushels)}</span> {lotGap.text}</strong>
+          : <strong><span className="numeric">{displayBushels(committedFree.free)}</span> bu free</strong>}
       </p>
       <div className="position-stats position-tiles">
         <Metric
@@ -3155,7 +3175,8 @@ export function PositionCard({
             ? ". Add a cash price target to estimate it."
             : ` using your cash price target of ${money.format(plannedPrice)}.`}
         </p>
-        <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p>{fromLoads > 0 && <p>Load tickets: at least <strong>{bushels.format(fromLoads)} bu</strong>. To count them as harvest, use &lsquo;Use load total&rsquo; on the Harvest page first. <NavLink to="/harvest" className="text-action">Open Harvest</NavLink></p>}<button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { void reconcileHarvest() }}>Use harvest total as Grain actual</button>{harvestActual <= 0 && <small>No harvest total entered yet on Harvest.</small>}</section>
+        <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p>{/* Only while the tickets show more than the harvest total: once Use load total has been tapped on Harvest
+            (or more was entered there), there is nothing left to adopt. */}{fromLoads > harvestActual + 0.000001 && <p>Load tickets show <strong className="numeric">{displayBushels(fromLoads)} bu</strong>, more than the harvest total entered. To use them, tap Use load total on Harvest. <NavLink to="/harvest" className="text-action">Open Harvest</NavLink></p>}<button className="secondary-action" type="button" disabled={harvestActual <= 0} onClick={() => { void reconcileHarvest() }}>Use harvest total as Grain actual</button>{receiptAt === "reconcile" && <SaveReceipt state={cardReceipt} />}{harvestActual <= 0 && <small>No harvest total entered yet on Harvest.</small>}</section>
         <div className="position-stats">
           <Metric
             label="Insurance floor estimate"
@@ -3168,6 +3189,7 @@ export function PositionCard({
           premiums, and your share can leave you exposed.
         </p>
         <div className="production-editor sale-limit-editor">
+          <div className="sale-limit-field">
           <label>
             Your sale limit (bushels)
             <input
@@ -3175,6 +3197,10 @@ export function PositionCard({
               min="0"
               step="1"
               inputMode="numeric"
+              // A farm-saved limit would never be saved for a member who may only read this farm, so the box is not offered to them.
+              disabled={saleLimitPersisted && !canWriteSettings}
+              aria-invalid={saleLimitError ? true : undefined}
+              aria-describedby={saleLimitError ? saleLimitErrorId : undefined}
               value={saleLimit ?? ""}
               onChange={(event) => {
                 const value = event.target.value.trim();
@@ -3188,13 +3214,14 @@ export function PositionCard({
                 }
               }}
             />
-            <small>{saleLimitPersisted ? "Saves for this farm when you leave this box. It is your limit, not an insurance guarantee." : "Used only in this open session; it is your limit, not an insurance guarantee."}</small>
-            {saleLimitError && <p className="form-error" role="alert">{saleLimitError}</p>}
+            <small>{!saleLimitPersisted ? "Used only in this open session; it is your limit, not an insurance guarantee." : canWriteSettings ? "Saves for this farm when you leave this box. It is your limit, not an insurance guarantee." : "Only someone who can edit this farm can save a sale limit."}</small>
           </label>
+          {saleLimitError && <p className="form-error" role="alert" id={saleLimitErrorId}>{saleLimitError}</p>}
+          </div>
           <Metric label="Insurance estimate guarantee" value={coverageValue(insuranceEstimate)} note={estimateNote} />
           <Metric label="Already contracted" value={`${bushels.format(contractedBushels)} bu`} note="Signed contracts" />
           <Metric label="Pending offers" value={`${bushels.format(pendingOffers)} bu`} note="Open firm offers; not sold yet" />
-          <Metric label="Insurance estimate remaining" value={coverageValue(remainingEstimate)} note={savedCoverageBlocked ? unsupportedCoverageMessage : noCoverage ? noCoverageNote : "Guarantee − contracted − pending; never below zero"} />
+          <Metric label="Insurance estimate remaining" value={coverageValue(remainingEstimate)} note={savedCoverageBlocked ? unsupportedCoverageMessage : !coverageChecked ? checkingCoverageNote : noCoverage ? noCoverageNote : "Guarantee − contracted − pending; never below zero"} />
           <Metric label="Your sale limit remaining" value={remainingSaleLimit === null ? "Set your own sale limit" : `${bushels.format(remainingSaleLimit)} bu`} note={saleLimit === null ? "Set your own sale limit to plan sales." : `${bushels.format(saleLimit)} limit − contracted − pending`} />
         </div>
         {pendingOffers > 0 && (
@@ -3224,6 +3251,8 @@ export function PositionCard({
               onChange={(event) => setAph(event.target.value)}
             />
           </label>
+          <div className="actual-bushels-field">
+          {guidance && <p className="position-guidance" id={guidanceId}>{guidance}</p>}
           <label>
             Actual bushels
             <input
@@ -3234,17 +3263,19 @@ export function PositionCard({
               step="1"
               value={actual}
               placeholder="Enter at harvest"
+              aria-describedby={guidance ? guidanceId : undefined}
               onChange={(event) => setActual(event.target.value)}
             />
           </label>
+          </div>
           <button
             type="button"
             className="secondary-action"
-            onClick={() => void saveProduction(buildProductionSaveInput(estimate, aph, actual))}
+            onClick={() => { setReceiptAt("production"); void saveProduction(buildProductionSaveInput(estimate, aph, actual)); }}
           >
             Save production
           </button>
-          <SaveReceipt state={cardReceipt} />
+          {receiptAt === "production" && <SaveReceipt state={cardReceipt} />}
         </div>
         </div>
         )}
@@ -3303,7 +3334,7 @@ function Metric({
   );
 }
 
-function PlanStatus({
+export function PlanStatus({
   estimate,
   workspace,
 }: {
@@ -3341,10 +3372,16 @@ function PlanStatus({
   return (
     <div className="plan-status">
       <div>
-        <span>Plan progress through {monthLabel(today)}</span>
+        <span>Plan progress</span>
         <strong>{Math.round(actualPct)}% of the crop contracted</strong>
-        <span>Your plan calls for {Math.round(targetPct)}% by {monthLabel(today)}</span>
-        {unplanned > 0 && <span>{unplanned}% of the crop isn&rsquo;t in any month of the plan yet</span>}
+        {targets.length === 0 ? (
+          <span>No plan yet. Pick a template or tap a month.</span>
+        ) : (
+          <>
+            <span>Your plan calls for {Math.round(targetPct)}% by {monthLabel(today)}</span>
+            {unplanned > 0 && <span>{unplanned}% of the crop isn&rsquo;t in any month of the plan yet</span>}
+          </>
+        )}
         <small className="numeric">
           {bushels.format(inBins)} bu of the {scope.crop_year} crop in bins
           {wholeFarmBins ? " (whole farm)" : ""}
@@ -3994,20 +4031,29 @@ export function ContractActions({ contract, workspace, services, autoFocusDelive
 /** A lot with more committed than stored is not always oversold. New crop still in the field is
  * normally sold ahead, so the gap is "not in the bins yet" while contracts stay within this crop's
  * estimate, and only "more sold than your estimate" past it. With no estimate there is nothing to
- * compare against, so it stays "short". Wording only: the committed/free maths is unchanged. */
-function lotGapText(workspace: GrainWorkspace, commodityId: string, cropYear: number, free: number): { text: string; short: boolean } | null {
+ * compare against, so it stays "short". Wording only: the committed/free maths is unchanged.
+ * The bushels come back on their own so each caller can show them as a number (displayBushels in a
+ * numeric span), and `text` is the words after it. */
+export function lotGapText(workspace: GrainWorkspace, commodityId: string, cropYear: number, free: number): { bushels: number; text: string; short: boolean } | null {
   if (free >= -0.000001) return null;
   const estimates = workspace.production_estimates.filter((estimate) => estimate.commodity_id === commodityId && estimate.crop_year === cropYear);
-  if (estimates.length === 0) return { text: `${displayBushels(-free)} bu short`, short: true };
-  const production = estimates.reduce((sum, estimate) => sum + activeProduction(estimate), 0);
+  if (estimates.length === 0) return { bushels: -free, text: "bu short", short: true };
+  // A whole-farm estimate already covers the crop an entity or enterprise estimate beside it describes, so
+  // adding them would count the same bushels twice. Only when there is no whole-farm estimate are the parts summed.
+  const wholeFarm = estimates.filter((estimate) => estimate.operating_entity_id === null && estimate.enterprise_label === null);
+  const production = (wholeFarm.length ? wholeFarm : estimates).reduce((sum, estimate) => sum + activeProduction(estimate), 0);
   const contracted = workspace.grain_contracts.filter((contract) => contract.commodity_id === commodityId && contract.crop_year === cropYear).reduce((sum, contract) => sum + contract.bushels, 0);
-  if (contracted > production + 0.000001) return { text: `${bushels.format(contracted - production)} bu more sold than your ${cropYear} crop estimate`, short: true };
-  return { text: `${bushels.format(-free)} bu sold but not in the bins yet`, short: false };
+  if (contracted > production + 0.000001) return { bushels: contracted - production, text: `bu more sold than your ${cropYear} crop estimate`, short: true };
+  // Once actual bushels are in, the crop is harvested and the grain is not still to come.
+  const harvested = estimates.some((estimate) => estimate.actual_bushels !== null);
+  return { bushels: -free, text: harvested ? "bu sold but not in the bins" : "bu sold but not in the bins yet", short: false };
 }
 
 /** HANDS-OP-b1: grain in the bins for a crop and year that has no estimate (old-crop carry-over, most
- * often) has no card on the Overview. Rather than leave it invisible, it is listed with what it is. */
-function UntrackedStoredGrain({ workspace }: { workspace: GrainWorkspace }) {
+ * often) has no card on the Overview. Rather than leave it invisible, it is listed with what it is.
+ * It can still be hauled to a buyer under Loads, which needs no estimate; a crop that is planted for
+ * that year is pointed to Add another crop below, where its estimate is started. */
+export function UntrackedStoredGrain({ workspace }: { workspace: GrainWorkspace }) {
   const untracked = deriveCommittedFree(workspace).filter((lot) => lot.onHand > 0.000001 && !workspace.production_estimates.some((estimate) => estimate.commodity_id === lot.commodity_id && estimate.crop_year === lot.crop_year));
   if (untracked.length === 0) return null;
   const commodityLabel = (id: string) => workspace.fields.commodities.find((item) => item.id === id)?.name ?? id;
@@ -4016,15 +4062,20 @@ function UntrackedStoredGrain({ workspace }: { workspace: GrainWorkspace }) {
       <div className="section-heading">
         <div>
           <h2>Stored grain not tracked here</h2>
-          <p>Sales of this grain can&rsquo;t be recorded in Grain yet. It still counts on Bins &amp; basis.</p>
         </div>
       </div>
       <ul>
-        {untracked.map((lot) => (
-          <li key={`${lot.commodity_id}:${lot.crop_year}`}>
-            <strong>{lot.crop_year} {commodityLabel(lot.commodity_id)}</strong> · <span className="numeric">{bushels.format(lot.onHand)} bu</span> in bins
-          </li>
-        ))}
+        {untracked.map((lot) => {
+          const planted = workspace.fields.crop_assignments.some((assignment) => assignment.commodity_id === lot.commodity_id && assignment.crop_year === lot.crop_year);
+          return (
+            <li key={`${lot.commodity_id}:${lot.crop_year}`}>
+              <strong>{lot.crop_year} {commodityLabel(lot.commodity_id)}</strong> · <span className="numeric">{displayBushels(lot.onHand)} bu</span> in bins.{" "}
+              {planted
+                ? <>No {lot.crop_year} estimate yet, so this grain has no card here. Enter its expected yield under Add another crop below.</>
+                : <>No {lot.crop_year} estimate, so this grain has no card here. Haul it out under <NavLink to="/grain/loads">Loads</NavLink>; it still counts on Bins &amp; basis.</>}
+            </li>
+          );
+        })}
       </ul>
       <NavLink to="/grain/storage" className="secondary-action">Open Bins &amp; basis</NavLink>
     </section>
@@ -4059,7 +4110,7 @@ function CommittedFreeLine({ workspace }: { workspace: GrainWorkspace }) {
                 : "nothing committed"}
               {" · "}
               {gap
-                ? <strong className={gap.short ? "committed-free-short" : undefined}>{gap.text}</strong>
+                ? <strong className={gap.short ? "committed-free-short" : undefined}><span className="numeric">{displayBushels(gap.bushels)}</span> {gap.text}</strong>
                 : <><strong className="numeric">{displayBushels(lot.free)}</strong> free</>}
             </li>
             );
@@ -4583,8 +4634,8 @@ function MovementForm({
   const nameOlderMovements = canManageFarm === true
     ? "name those movements under \u201cWhich crop year were these?\u201d first."
     : canManageFarm === false
-      ? "ask the farm owner to name the crop year of those older movements first."
-      : "name those movements under \u201cWhich crop year were these?\u201d first, or ask the farm owner to.";
+      ? "ask the farm owner or a manager to name the crop year of those older movements first."
+      : "name those movements under \u201cWhich crop year were these?\u201d first, or ask the farm owner or a manager to.";
   const noLotToTakeOut = `This bin has no ${commodityName} with a crop year on record to take out. If it holds grain from before crop years were recorded, ${nameOlderMovements}`;
   // Fill in a lone lot, from a settled list only, and never under a retry: the outstanding draft
   // already carries the year it was sent with.
@@ -5121,10 +5172,16 @@ export function TargetEditor({
   );
   const [deadline, setDeadline] = useState(target?.deadline ?? "");
   const [breakeven, setBreakeven] = useState<number | null>(null);
+  // Until the breakeven read settles, "no breakeven" cannot be told apart from "still loading".
+  const [breakevenLoaded, setBreakevenLoaded] = useState(false);
   useEffect(() => {
+    let active = true;
+    setBreakevenLoaded(false);
     void services.profitabilityRepository
       .getBreakeven(scope, workspace.fields)
-      .then(setBreakeven);
+      .then((value) => { if (active) { setBreakeven(value); setBreakevenLoaded(true); } })
+      .catch(() => { if (active) { setBreakeven(null); setBreakevenLoaded(true); } });
+    return () => { active = false; };
   }, [
     services,
     scope.farm_id,
@@ -5152,7 +5209,12 @@ export function TargetEditor({
             .filter((row) => row.id !== target?.id)
             .reduce((sum, row) => sum + row.target_pct_of_production, 0);
           if (others + Number(pct) > MARKETING_PLAN_PERCENT_TOLERANCE) {
-            setFormError(`Your plan would add up to ${Math.round(others + Number(pct))}% of the crop. Lower this month or another so the total is 100% or less.`);
+            // To two decimals, not rounded to a whole number: 100.4% must not read as "100%" beside "100% or less".
+            setFormError(`Your plan would add up to ${Number((others + Number(pct)).toFixed(2))}% of the crop. Lower this month or another so the total is 100% or less.`);
+            return;
+          }
+          if (relative !== "" && !breakevenLoaded) {
+            setFormError("Checking breakeven… try again in a moment.");
             return;
           }
           // A % over breakeven is stored as the price it works out to. With no breakeven there is no price,
@@ -5172,7 +5234,8 @@ export function TargetEditor({
       >
         <div className="modal-heading">
           <div>
-            <span className="eyebrow">{months[month - 1]} {scope.crop_year} plan</span>
+            {/* The heading below is the crop scope label, which already names the crop year. */}
+            <span className="eyebrow">{months[month - 1]} plan</span>
             <h2>{commodity}</h2>
           </div>
           <button className="text-action" type="button" onClick={onClose}>
@@ -5194,12 +5257,13 @@ export function TargetEditor({
         </label>
         <label>
           Cash price target ($/bu) <small>optional; all-in cash price, including any premiums</small>
+          {/* Quarter-cent prices ($4.1275) are typed and shown in full; the computed price is shown to four places. */}
           <input
             type="number"
             min="0"
-            step="0.01"
+            step="any"
             inputMode="decimal"
-            value={relative !== "" ? (computedPrice === null ? "" : computedPrice.toFixed(2)) : price}
+            value={relative !== "" ? (computedPrice === null ? "" : String(Number(computedPrice.toFixed(4)))) : price}
             disabled={relative !== ""}
             onChange={(event) => setPrice(event.target.value)}
           />
@@ -5217,9 +5281,11 @@ export function TargetEditor({
         </label>
         {relative !== "" && (
           <p className="computed-price">
-            Breakeven{" "}
-            {breakeven === null ? "not available" : money.format(breakeven)} →
-            target {computedPrice === null ? "—" : money.format(computedPrice)}
+            {!breakevenLoaded ? "Checking breakeven…" : <>
+              Breakeven{" "}
+              {breakeven === null ? "not available" : pricePerBu.format(breakeven)} →
+              target {computedPrice === null ? "—" : pricePerBu.format(computedPrice)}
+            </>}
           </p>
         )}
         <label>

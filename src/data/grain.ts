@@ -812,14 +812,9 @@ export function deliveryDefaultEstimate<T extends { crop_year: number }>(estimat
   return estimates.reduce<T | undefined>((newest, estimate) => (!newest || estimate.crop_year > newest.crop_year ? estimate : newest), undefined)
 }
 
-/** The calendar month (1-12) the marketing plan is judged against: the farm's current day in its stored time zone, the same day
+/** The farm's current day (YYYY-MM-DD) the marketing plan is judged against: the farm's day in its stored time zone, the same day
  * Today places, so the Overview and the grain line count the same targets on either side of a month boundary wherever the
- * device happens to be. */
-export function planMonthFor(now: Date, timeZone: string | null | undefined): number {
-  return Number(farmCalendarDate(now, timeZone).slice(5, 7))
-}
-
-/** The farm's current day (YYYY-MM-DD) the marketing plan is judged against: the same day as planMonthFor, with its year kept. */
+ * device happens to be. The year is kept, so a plan that crosses New Year counts the right months. */
 export function planDateFor(now: Date, timeZone: string | null | undefined): string {
   return farmCalendarDate(now, timeZone)
 }

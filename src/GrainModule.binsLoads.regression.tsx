@@ -132,7 +132,7 @@ try {
   assert(!(bravo.querySelector('.bin-move') as HTMLElement).hidden && button(bravo, 'Close'), 'The button opens the form without opening the history.')
   assert(bravo.textContent?.includes('Hauled it on a truck? Record the load under Loads instead.'), 'The movement form points a hauled load at Loads.')
   await change(control(bravo, 'Direction'), 'out')
-  assert(bravo.textContent?.includes('ask the farm owner to name the crop year of those older movements first.'), 'Someone who cannot see "Which crop year were these?" is sent to the farm owner instead.')
+  assert(bravo.textContent?.includes('ask the farm owner or a manager to name the crop year of those older movements first.'), 'Someone who cannot see "Which crop year were these?" is sent to the farm owner instead.')
   await change(control(bravo, 'Bushels'), 'abc')
   await act(async () => { (bravo.querySelector('form.movement-form') as HTMLFormElement).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush() })
   assert(bravo.textContent?.includes('Type bushels as a number, like 1000.') && !bravo.textContent.includes('greater than zero'), 'A word in Bushels is named as not a number.')

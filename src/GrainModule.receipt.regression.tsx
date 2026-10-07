@@ -1,7 +1,7 @@
 import { Window } from 'happy-dom'
 import React, { createElement, useState } from 'react'
 import { act } from 'react'
-import { Bins, ContractActions, ContractEntry, deliveryDefaultEstimate, FirstEstimate, PositionCard, TargetEditor } from './GrainModule'
+import { Bins, ContractActions, ContractEntry, deliveryDefaultEstimate, FirstEstimate, lotGapText, NeedsEstimate, planSavedNoticeFor, PlanStatus, PositionCard, TargetEditor, UntrackedStoredGrain } from './GrainModule'
 import { SaveReceipt } from './components/SaveReceipt'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
@@ -26,8 +26,10 @@ const createGate = new Promise<void>((resolve) => { releaseCreate = resolve }); 
 const repository = { getData: async () => workspace, saveProductionEstimate: async (value: ProductionEstimate) => { createdCalls += 1; setSaveReceipt(value.id, 'saving'); await createGate; setSaveReceipt(value.id, 'saved') }, reconcileHarvestActual: async (value: ProductionEstimate, actual: number) => { reconciledCalls += 1; setSaveReceipt(value.id, 'saving'); await reconcileGate; assert(actual === 1_300, 'Reconciliation must use the Harvest total.'); setSaveReceipt(value.id, 'saved') } }
 const services = { grainRepository: repository, createGrainId: () => nextId, profitabilityRepository: { getBreakeven: async () => null, getWorkspace: async () => ({ budgets: [], allocations: [] }) } } as unknown as GrainServices
 
-function FirstHarness() { const [id, setId] = useState<string | null>(null); return createElement(FirstEstimate, { workspace: { ...workspace, production_estimates: [] }, services, onSaved: async () => undefined, onReceipt: setId, receipt: useSaveReceipt(id) }) }
-function ReconcileHarness() { const [id, setId] = useState<string | null>(null); const receipt = useSaveReceipt(id); return createElement(React.Fragment, null, createElement(PositionCard, { estimate, workspace, services, saleLimit: null, onSaleLimitChange: () => undefined, onSaved: async () => undefined, onReceipt: setId }), createElement(SaveReceipt, { state: receipt })) }
+// Each component shows its own receipt; the harnesses add no page-level receipt, so a duplicate would be the component's own.
+function FirstHarness() { return createElement(FirstEstimate, { workspace: { ...workspace, production_estimates: [] }, services, onSaved: async () => undefined }) }
+function ReconcileHarness() { return createElement(PositionCard, { estimate, workspace, services, saleLimit: null, onSaleLimitChange: () => undefined, onSaved: async () => undefined }) }
+const countOf = (container: HTMLElement, text: string) => (container.textContent ?? '').split(text).length - 1
 
 const firstContainer = document.createElement('div'); document.body.append(firstContainer); const firstRoot = createRoot(firstContainer)
 let firstUnmounted = false; let reconcileContainer: HTMLDivElement | null = null; let reconcileRoot: ReturnType<typeof createRoot> | null = null
@@ -44,6 +46,8 @@ try {
   assert(([...firstContainer.querySelectorAll('input')] as HTMLInputElement[])[1].value === '' && firstContainer.textContent?.includes('bu expected'), 'A yield typed for one crop must not fill another crop\'s box, and the typed crop shows its expected bushels.')
   await act(async () => { create.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
   assert(firstContainer.textContent?.includes('Saving…') && createdCalls === 1, 'First estimate must select its exact generated ID and render Saving before the create returns.')
+  // Review repair: the receipt shows once, on the card of the crop being created, not above the whole grid as well.
+  assert(countOf(firstContainer, 'Saving…') === 1 && firstContainer.querySelectorAll('article')[0]?.textContent?.includes('Saving…') && !firstContainer.querySelectorAll('article')[1]?.textContent?.includes('Saving…'), 'The first-estimate receipt must show once, on the crop being created only.')
   await act(async () => { create.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve() }); assert(createdCalls === 1, 'Rapid first-estimate submit must create one ID and one write.')
   releaseCreate(); await act(async () => { await flush(); await flush() }); assert(firstContainer.textContent?.includes('Saved') && createdCalls === 1, 'First estimate must render Saved for its one completed write.')
 
@@ -58,6 +62,7 @@ try {
   const reconcile = [...renderedReconcileContainer.querySelectorAll('button')].find((button) => button.textContent === 'Use harvest total as Grain actual'); assert(reconcile, 'Harvest reconciliation action did not render after opening More details.')
   await act(async () => { reconcile.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() }); const reconcileDialog = openDialog(); assert(reconciledCalls === 0 && reconcileDialog?.textContent?.includes('Use the harvest total as Grain actual?') && reconcileDialog.textContent.includes('This changes Grain actual only; it does not change bins.'), 'The in-app dialog must show the exact farmer confirmation text before any reconciliation call.'); await click(dialogButton('Go back')); assert(reconciledCalls === 0 && openDialog() === null, 'Cancel must make zero reconciliation calls and close the dialog.')
   await act(async () => { reconcile.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() }); await click(dialogButton('Use harvest total')); const savingCalls = Number(reconciledCalls); assert(savingCalls === 1 && renderedReconcileContainer.textContent?.includes('Saving…'), 'Harvest reconciliation must invoke one direct online write and render Saving after the exact confirmation text.')
+  assert(countOf(renderedReconcileContainer, 'Saving…') === 1 && reconcile.nextElementSibling?.textContent === 'Saving…', 'Review repair: the reconciliation receipt shows once, beside Use harvest total, not also beside Save production or the toggle.')
   releaseReconcile(); await act(async () => { await flush(); await flush() }); const savedCalls = Number(reconciledCalls); assert(savedCalls === 1 && renderedReconcileContainer.textContent?.includes('Saved'), 'Harvest reconciliation must remain one direct write and render Saved when its receipt completes.'); window.confirm = previousConfirm
   // Grain usability: with no insurance unit and no Revenue Protection on a budget there is no guarantee to show, so the card says
   // "Not entered" and where to add it, never "0 bu" (which reads as no room left to sell).
@@ -67,6 +72,8 @@ try {
   const productionCallsBefore = createdCalls
   await click(button(renderedReconcileContainer, 'Actual'))
   assert(renderedReconcileContainer.textContent?.includes('Enter actual bushels in More details and tap Save production. Then tap Actual.') && createdCalls === productionCallsBefore, 'Actual with no actual bushels must explain itself and make no save.')
+  const guidance = renderedReconcileContainer.querySelector('.actual-bushels-field .position-guidance'); const actualBox = control(renderedReconcileContainer, 'Actual bushels')
+  assert(guidance?.textContent?.startsWith('Enter actual bushels') && guidance.getAttribute('role') === null && guidance.nextElementSibling?.contains(actualBox) && actualBox.getAttribute('aria-describedby') === guidance.id, 'Review repair: the Actual guidance is a plain hint directly above the Actual bushels box, not an alert at the bottom of the card.')
 } finally { await act(async () => { if (!firstUnmounted) firstRoot.unmount(); reconcileRoot?.unmount() }); firstContainer.remove(); reconcileContainer?.remove() }
 
 type Gate = { promise: Promise<void>; release: () => void }
@@ -100,7 +107,7 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
   const emptyContainer = document.createElement('div'); document.body.append(emptyContainer); const emptyRoot = createRoot(emptyContainer)
   const cardContainer = document.createElement('div'); document.body.append(cardContainer); const cardRoot = createRoot(cardContainer)
   try {
-    await act(async () => { emptyRoot.render(createElement(MemoryRouter, null, createElement(FirstEstimate, { workspace: { ...workspace, production_estimates: [], fields: { ...fields, crop_assignments: [] } }, services, onSaved: async () => undefined, onReceipt: () => undefined, receipt: null }))); await flush() })
+    await act(async () => { emptyRoot.render(createElement(MemoryRouter, null, createElement(FirstEstimate, { workspace: { ...workspace, production_estimates: [], fields: { ...fields, crop_assignments: [] } }, services, onSaved: async () => undefined }))); await flush() })
     const fieldsLink = [...emptyContainer.querySelectorAll('a')].find((item) => item.textContent === 'Add crops in Fields')
     assert(fieldsLink?.getAttribute('href') === '/fields' && !emptyContainer.querySelector('.loading-state') && emptyContainer.textContent?.includes('No crops to track yet'), 'A farm with no crop assignments must get one sentence and a link to Fields, not a loading placeholder.')
 
@@ -111,10 +118,10 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     const cardWorkspace: GrainWorkspace = { ...workspace, fields: loadFields, production_estimates: [cardEstimate], grain_loads: [load] }
     let productionSaves = 0; const productionGate = gate()
     const cardServices = { ...services, grainRepository: { ...repository, saveProductionEstimate: async (value: ProductionEstimate) => { productionSaves += 1; setSaveReceipt(value.id, 'saving'); await productionGate.promise; setSaveReceipt(value.id, 'saved') } } } as unknown as GrainServices
-    await act(async () => { cardRoot.render(createElement(MemoryRouter, null, createElement(PositionCard, { estimate: cardEstimate, workspace: cardWorkspace, services: cardServices, saleLimit: null, onSaleLimitChange: () => undefined, onSaved: async () => undefined, onReceipt: () => undefined }))); await flush() })
+    await act(async () => { cardRoot.render(createElement(MemoryRouter, null, createElement(PositionCard, { estimate: cardEstimate, workspace: cardWorkspace, services: cardServices, saleLimit: null, onSaleLimitChange: () => undefined, onSaved: async () => undefined }))); await flush() })
     assert(cardContainer.querySelector('.eyebrow')?.textContent === `${cardEstimate.crop_year} crop`, 'The card header must name the crop year, not repeat the crop family.')
     await click(button(cardContainer, 'Edit yield'))
-    assert(cardContainer.textContent?.includes('Load tickets: at least 2,500 bu') && [...cardContainer.querySelectorAll('a')].some((item) => item.getAttribute('href') === '/harvest'), 'Load-ticket harvest must be shown with the way to adopt it on Harvest.')
+    assert(cardContainer.textContent?.includes('Load tickets show 2,500 bu, more than the harvest total entered. To use them, tap Use load total on Harvest.') && [...cardContainer.querySelectorAll('a')].some((item) => item.getAttribute('href') === '/harvest'), 'Load-ticket harvest must be shown with the way to adopt it on Harvest.')
     assert(button(cardContainer, 'Use harvest total as Grain actual').disabled && cardContainer.textContent?.includes('No harvest total entered yet on Harvest.'), 'Load tickets are never adopted here: the action stays off and says why.')
     const yieldBox = control(cardContainer, 'Expected yield') as HTMLInputElement
     assert(document.activeElement === yieldBox, 'Edit yield must open More details and put the cursor in the yield box.')
@@ -122,8 +129,15 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     assert(cardContainer.textContent?.includes('Enter an expected yield above zero (bu/ac).') && Number(productionSaves) === 0, 'A blank yield must be explained beside the card and never sent as 0.')
     await change(yieldBox, '175'); await click(button(cardContainer, 'Save production'))
     assert(productionSaves === 1 && cardContainer.textContent?.includes('Saving…'), 'The card must show its own Saving for a production save.')
+    assert(countOf(cardContainer, 'Saving…') === 1 && button(cardContainer, 'Save production').nextElementSibling?.textContent === 'Saving…', 'Review repair: a production save shows its one receipt beside Save production.')
     productionGate.release(); await act(async () => { await flush(); await flush() })
     assert(cardContainer.textContent?.includes('Saved'), 'The card must show its own Saved once the production save completes.')
+    // Review repair: once the load total has been used on Harvest (the harvest total equals it), there is nothing left to adopt.
+    const usedFields = structuredClone(loadFields); usedFields.crop_assignments[0].harvested_bushels = 2_500
+    const usedEstimate = { ...cardEstimate, id: uid(732) }
+    await act(async () => { cardRoot.render(createElement(MemoryRouter, null, createElement(PositionCard, { key: 'used', estimate: usedEstimate, workspace: { ...cardWorkspace, fields: usedFields, production_estimates: [usedEstimate] }, services: cardServices, saleLimit: null, onSaleLimitChange: () => undefined, onSaved: async () => undefined }))); await flush() })
+    await click(button(cardContainer, 'More details'))
+    assert(cardContainer.textContent?.includes('Harvest actuals: 2,500 bu') && !cardContainer.textContent?.includes('Load tickets show') && !button(cardContainer, 'Use harvest total as Grain actual').disabled, 'The load-ticket hint must hide once the harvest total already holds the load total.')
   } finally { await act(async () => { emptyRoot.unmount(); cardRoot.unmount() }); emptyContainer.remove(); cardContainer.remove() }
 }
 
@@ -154,6 +168,110 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     await click(button(container, 'Remove this month')); assert(removes === 1, 'A month with a target offers Remove this month.')
     await act(async () => { editRoot.unmount() })
   } finally { container.remove() }
+}
+
+// Review repairs (Overview and plan): the 100% check keeps its decimals, a month's own % is not counted twice on a real submit, a
+// breakeven still loading is not called "not available", and the cash target takes quarter cents.
+{
+  const scope = { farm_id: fields.farm.id, crop_year: estimate.crop_year, commodity_id: estimate.commodity_id, operating_entity_id: null, enterprise_label: null }
+  const planTarget = (n: number, month: string, pct: number) => ({ id: uid(n), ...scope, target_month: month, target_pct_of_production: pct, target_price: null, breakeven_relative_pct: null, deadline: null, notes: null, created_at: stamp, updated_at: stamp })
+  const september = planTarget(750, `${scope.crop_year}-09-01`, 60); const october = planTarget(751, `${scope.crop_year}-10-01`, 50)
+  const saves: Array<{ pct: number; price: number | null }> = []
+  const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
+  const render = async (key: string, props: Partial<Parameters<typeof TargetEditor>[0]>) => { await act(async () => { root.render(createElement(TargetEditor, { key, month: 11, commodity: '2026 Yellow Corn — whole farm', scope, services, workspace: { ...workspace, marketing_plan_targets: [september] }, onClose: () => undefined, onSave: (values) => { saves.push(values) }, ...props })); await flush() }) }
+  const submit = async () => { const save = button(container, 'Save target'); await act(async () => { save.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush() }) }
+  try {
+    await render('decimals', {})
+    assert(container.querySelector('.modal-heading .eyebrow')?.textContent === 'Nov plan', 'The month editor eyebrow names the month only; the heading already carries the crop year.')
+    assert(control(container, 'Cash price target').getAttribute('step') === 'any', 'The cash target box must take quarter-cent prices.')
+    await change(control(container, 'Target % of production'), '40.4'); await submit()
+    assert(container.textContent?.includes('Your plan would add up to 100.4% of the crop.') && saves.length === 0, '60% + 40.4% must read 100.4%, not a rounded 100%.')
+    await render('own-month', { month: 10, target: october, workspace: { ...workspace, marketing_plan_targets: [{ ...september, target_pct_of_production: 50 }, october] } })
+    await submit()
+    assert(Number(saves.length) === 1 && saves[0].pct === 50 && !container.querySelector('[role="alert"]'), 'Saving a 50% month beside another 50% month must save once: its own 50% is not counted twice.')
+    const loadingServices = { ...services, profitabilityRepository: { ...services.profitabilityRepository, getBreakeven: () => new Promise<null>(() => undefined) } } as unknown as GrainServices
+    await render('loading', { services: loadingServices, workspace })
+    await change(control(container, 'Target % of production'), '10'); await change(control(container, 'ROI target'), '5')
+    assert(container.querySelector('.computed-price')?.textContent === 'Checking breakeven…', 'While breakeven loads, the preview says so instead of "not available".')
+    await submit()
+    assert(container.textContent?.includes('Checking breakeven… try again in a moment.') && !container.textContent?.includes('not available') && Number(saves.length) === 1, 'A % over breakeven submitted while breakeven loads must ask to wait, not call it unavailable, and save nothing.')
+    const pricedServices = { ...services, profitabilityRepository: { ...services.profitabilityRepository, getBreakeven: async () => 4 } } as unknown as GrainServices
+    await render('priced', { services: pricedServices, workspace })
+    await change(control(container, 'ROI target'), '3.1875')
+    assert(container.querySelector('.computed-price')?.textContent?.includes('target $4.1275') && (control(container, 'Cash price target') as HTMLInputElement).value === '4.1275', 'A computed target is shown to the quarter cent, not rounded to $4.13.')
+  } finally { await act(async () => { root.unmount() }); container.remove() }
+}
+
+// Review repairs: plan notices, the plan status with no plan, the needs-an-estimate prompt, untracked stored grain, and the lot
+// gap wording.
+{
+  const { MemoryRouter } = await import('react-router')
+  assert(planSavedNoticeFor('blocked') === 'Plan saved.' && planSavedNoticeFor('synced') === 'Plan saved.', 'A direct save while other saves are parked is saved, not "kept on this device".')
+  assert(planSavedNoticeFor('pending') === 'Plan kept on this device. It will save when you have signal.' && planSavedNoticeFor('syncing') === planSavedNoticeFor('pending'), 'Only a queued save says it is kept on this device.')
+
+  const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
+  const show = async (element: React.ReactElement) => { await act(async () => { root.render(createElement(MemoryRouter, null, element)); await flush() }) }
+  try {
+    await show(createElement(PlanStatus, { estimate, workspace }))
+    assert(container.textContent?.includes('Plan progress') && container.textContent.includes('No plan yet. Pick a template or tap a month.') && !container.textContent.includes('Your plan calls for') && !container.textContent.includes('isn’t in any month'), 'With no plan, the plan status says so once instead of "calls for 0%" and "100% not planned".')
+
+    await show(createElement(NeedsEstimate, { tabLabel: 'Firm offers', hasCrops: true }))
+    assert(container.textContent === 'The Firm offers tab is kept per crop and year, so start your first crop estimate on the Overview.Go to Overview' && container.querySelector('a')?.getAttribute('href') === '/grain', 'The needs-estimate prompt is one sentence naming the open tab, with Go to Overview.')
+    await show(createElement(NeedsEstimate, { tabLabel: 'Plan', hasCrops: false }))
+    assert(container.querySelector('a')?.getAttribute('href') === '/fields' && container.textContent?.includes('add your crops in Fields first'), 'With no crops at all, the prompt goes to Fields, where crops are added.')
+
+    const bin: GrainBin = { id: uid(760), farm_id: fields.farm.id, name: 'Old crop bin', capacity_bu: 10_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: stamp, updated_at: stamp } as GrainBin
+    const stored = (n: number, crop_year: number): BinTransaction => ({ id: uid(n), farm_id: fields.farm.id, grain_bin_id: bin.id, direction: 'in', bushels: 1_500.5, commodity_id: estimate.commodity_id, crop_year, occurred_on: '2025-10-01', note: null, source_kind: 'manual', grain_load_id: null, created_at: stamp }) as BinTransaction
+    await show(createElement(UntrackedStoredGrain, { workspace: { ...workspace, production_estimates: [], grain_bins: [bin], bin_transactions: [stored(761, 2019)] } }))
+    assert(container.textContent?.includes('1,500.50 bu in bins.') && container.textContent.includes('No 2019 estimate, so this grain has no card here. Haul it out under Loads; it still counts on Bins & basis.') && [...container.querySelectorAll('a')].some((item) => item.getAttribute('href') === '/grain/loads') && !container.textContent.includes('can’t be recorded'), 'Untracked stored grain must say it can be hauled under Loads, not that its sales cannot be recorded.')
+    await show(createElement(UntrackedStoredGrain, { workspace: { ...workspace, production_estimates: [], grain_bins: [bin], bin_transactions: [stored(762, estimate.crop_year)] } }))
+    assert(container.textContent?.includes(`No ${estimate.crop_year} estimate yet, so this grain has no card here. Enter its expected yield under Add another crop below.`), 'Stored grain of a crop planted that year points to Add another crop.')
+  } finally { await act(async () => { root.unmount() }); container.remove() }
+
+  const year = estimate.crop_year
+  const contract = (n: number, bushelCount: number) => ({ id: uid(n), farm_id: fields.farm.id, crop_year: year, commodity_id: estimate.commodity_id, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer: 'Elevator', bushels: bushelCount, futures_price: null, basis: null, cash_price: 4.5, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, created_at: stamp, updated_at: stamp }) as GrainContract
+  const wholeFarm = { ...estimate, expected_bushels: 10_000, actual_bushels: null }
+  const entityEstimate = { ...estimate, id: uid(770), operating_entity_id: uid(771), expected_bushels: 6_000 }
+  const gapFor = (estimates: ProductionEstimate[], contracted: number, free: number) => lotGapText({ ...workspace, production_estimates: estimates, grain_contracts: [contract(772, contracted)] }, estimate.commodity_id, year, free)
+  assert(JSON.stringify(gapFor([wholeFarm], 4_000, -4_000)) === JSON.stringify({ bushels: 4_000, text: 'bu sold but not in the bins yet', short: false }), 'New crop sold ahead within the estimate is "not in the bins yet", with the number given separately.')
+  assert(gapFor([{ ...wholeFarm, actual_bushels: 9_000 }], 4_000, -4_000)?.text === 'bu sold but not in the bins', 'After harvest (actual bushels entered) the gap is not "yet" to come in.')
+  assert(JSON.stringify(gapFor([wholeFarm], 12_000.5, -12_000.5)) === JSON.stringify({ bushels: 2_000.5, text: `bu more sold than your ${year} crop estimate`, short: true }), 'Past the estimate it is oversold, by the exact amount.')
+  assert(gapFor([wholeFarm, entityEstimate], 12_000, -12_000)?.short === true, 'An entity estimate beside the whole-farm one is not added to it, so 12,000 sold against a 10,000 bu crop is oversold.')
+  assert(gapFor([entityEstimate, { ...entityEstimate, id: uid(773), operating_entity_id: uid(774) }], 12_000, -12_000)?.short === false, 'With no whole-farm estimate, the entity estimates together are the crop.')
+  assert(JSON.stringify(gapFor([], 500, -500)) === JSON.stringify({ bushels: 500, text: 'bu short', short: true }) && gapFor([wholeFarm], 0, 0) === null, 'No estimate is plainly short; no gap is nothing.')
+}
+
+// Review repairs (position card): a sale limit a read-only member cannot save is not offered; its error sits outside the label and
+// is tied to the box; and coverage says Checking until it is checked, then Not entered when the RP estimate is ambiguous.
+{
+  const { MemoryRouter } = await import('react-router')
+  const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
+  const metricValue = (label: string) => [...container.querySelectorAll('div')].find((item) => item.querySelector(':scope > span')?.textContent === label)?.querySelector(':scope > strong')?.textContent
+  const metricNote = (label: string) => [...container.querySelectorAll('div')].find((item) => item.querySelector(':scope > span')?.textContent === label)?.querySelector(':scope > small')?.textContent
+  const card = async (key: string, cardEstimate: ProductionEstimate, cardServices: GrainServices, props: Partial<Parameters<typeof PositionCard>[0]> = {}) => {
+    await act(async () => { root.render(createElement(MemoryRouter, null, createElement(PositionCard, { key, estimate: cardEstimate, workspace: { ...workspace, production_estimates: [cardEstimate] }, services: cardServices, saleLimit: 9_000, onSaleLimitChange: () => undefined, onSaved: async () => undefined, ...props }))); await flush() })
+    await click(button(container, 'More details'))
+  }
+  try {
+    await card('read-only', { ...estimate, id: uid(780) }, services, { saleLimitPersisted: true, canWriteSettings: false })
+    const readOnlyBox = control(container, 'Your sale limit') as HTMLInputElement
+    assert(readOnlyBox.disabled && readOnlyBox.value === '9000' && container.textContent?.includes('Only someone who can edit this farm can save a sale limit.') && !container.textContent.includes('Saves for this farm when you leave this box.'), 'A read-only member sees the farm sale limit but is not promised a save.')
+    await card('error', { ...estimate, id: uid(781) }, services, { saleLimitPersisted: true, saleLimitError: 'That sale limit is too large to save.' })
+    const errorBox = control(container, 'Your sale limit') as HTMLInputElement; const errorLine = container.querySelector('.sale-limit-field > [role="alert"]')
+    assert(!errorBox.disabled && errorLine?.textContent === 'That sale limit is too large to save.' && !errorLine.closest('label') && errorBox.getAttribute('aria-describedby') === errorLine.id && errorBox.getAttribute('aria-invalid') === 'true', 'The sale-limit error sits after the label and is tied to the box.')
+
+    const pendingServices = { ...services, profitabilityRepository: { ...services.profitabilityRepository, getWorkspace: () => new Promise(() => undefined) } } as unknown as GrainServices
+    await card('checking', { ...estimate, id: uid(782) }, pendingServices)
+    assert(metricValue('Insurance estimate guarantee') === 'Checking…' && metricNote('Insurance estimate guarantee') === 'Checking coverage…' && !container.textContent?.includes('Add Revenue Protection coverage'), 'Until coverage is checked, the card says Checking, not "add coverage".')
+    const budget = (n: number) => ({ id: uid(n), farm_id: fields.farm.id, crop_year: estimate.crop_year, commodity_id: estimate.commodity_id, operating_entity_id: null, enterprise_label: null, rp_coverage_pct: 75, rp_aph_yield: 180, rp_projected_price: 4.5, rp_premium_per_acre: null })
+    const ambiguousServices = { ...services, profitabilityRepository: { ...services.profitabilityRepository, getWorkspace: async () => ({ budgets: [budget(783), budget(784)], allocations: [{ budget_id: uid(783), crop_assignment_id: assignment.id, allocated_acres: 10 }, { budget_id: uid(784), crop_assignment_id: assignment.id, allocated_acres: 10 }] }) } } as unknown as GrainServices
+    await card('ambiguous', { ...estimate, id: uid(785) }, ambiguousServices)
+    assert(metricValue('Insurance estimate guarantee') === 'Not entered' && metricValue('Insurance estimate remaining') === 'Not entered' && metricNote('Insurance estimate guarantee')?.includes('allocated to more than one budget in Profitability'), 'An RP estimate that cannot be used (a field in two budgets) with no insurance unit reads Not entered with why, never 0 bu.')
+    // A contract saved for the same crop reads coverage again; what is shown stays until that read settles, with no flash of Checking.
+    const sameScopeEstimate = { ...estimate, id: uid(785) }
+    await act(async () => { root.render(createElement(MemoryRouter, null, createElement(PositionCard, { key: 'ambiguous', estimate: sameScopeEstimate, workspace: { ...workspace, production_estimates: [sameScopeEstimate], grain_contracts: [{ id: uid(786), farm_id: fields.farm.id, crop_year: estimate.crop_year, commodity_id: estimate.commodity_id, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer: 'Elevator', bushels: 1_000, futures_price: null, basis: null, cash_price: 4.5, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, created_at: stamp, updated_at: stamp } as GrainContract] }, services: pendingServices, saleLimit: 9_000, onSaleLimitChange: () => undefined, onSaved: async () => undefined }))); await flush() })
+    assert(metricValue('Already contracted') === '1,000 bu' && metricValue('Insurance estimate guarantee') === 'Not entered', 'A refetch for the same crop scope must not flash back to Checking.')
+  } finally { await act(async () => { root.unmount() }); container.remove() }
 }
 
 const novemberIds = {

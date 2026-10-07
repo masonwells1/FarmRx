@@ -304,8 +304,10 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
 }
 
 // Grain usability: a marketing plan past 100% of the crop is named in farmer words, whichever layer refused it.
-for (const refusal of ['Marketing plan percentages cannot exceed 100%.', 'marketing plan total cannot exceed 100 percent', 'Marketing plan totals must be greater than 0% per month and no more than 100% for this crop scope.'])
+for (const refusal of ['Marketing plan percentages cannot exceed 100%.', 'marketing plan total cannot exceed 100 percent'])
   assert(farmerError(new Error(refusal), 'save this target') === 'Your plan months add up to more than 100% of the crop. Lower one of them and try again.', `A plan over 100% must be explained plainly: ${refusal}`)
+// The mock's one refusal covers a 0% month as well as the total, so it is named accurately rather than as "over 100%".
+assert(farmerError(new Error('Marketing plan totals must be greater than 0% per month and no more than 100% for this crop scope.'), 'save this target') === 'Each plan month must be above 0% and the months together no more than 100% of the crop.', 'The mock plan refusal must not claim the plan is over 100%.')
 
 console.log('Grain settings regressions passed.')
 

@@ -47,8 +47,10 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (/connect to the internet before filling this offer|firm offer must be filled while connected/.test(message)) return 'Connect to the internet before filling this offer.'
   if (/offline copy is too old/.test(message)) return 'This offline copy is too old to show safely. Connect to update it.'
   if (/unreadable or mismatched saved work.*nothing was cleared/.test(message)) return 'Farm Rx found unreadable or mismatched saved work for a farm you can no longer open. Nothing was cleared.'
-  // A marketing plan whose months add up past the whole crop: the live repository, the RPC and the mock each word it differently.
-  if (/cannot exceed 100|no more than 100% for this crop scope/.test(message)) return 'Your plan months add up to more than 100% of the crop. Lower one of them and try again.'
+  // A marketing plan whose months add up past the whole crop, as the live repository and the RPC word it.
+  if (/cannot exceed 100/.test(message)) return 'Your plan months add up to more than 100% of the crop. Lower one of them and try again.'
+  // The mock gives one refusal for several causes (a month at 0%, a month over 100%, or the total), so it is not told as "over 100%".
+  if (/no more than 100% for this crop scope/.test(message)) return 'Each plan month must be above 0% and the months together no more than 100% of the crop.'
   // Final refusals from the delivery and bin-movement functions. Retrying the same thing can never
   // work, so the farmer is told what to change instead of "try again".
   // Shared by the Loads form and a contract's own Record delivery, so each is told about its own controls.
