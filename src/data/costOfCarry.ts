@@ -50,3 +50,31 @@ export function verdict(rows: CarryRow[]): CarryVerdict {
     ? { kind: 'harvest', netPerBu: 0 }
     : { kind: 'store', month: best.monthsStored, netPerBu: best.netVsHarvest }
 }
+
+/** Grid helpers: they only move or copy prices the farmer typed, and never compute carry. */
+type CarryGridRow = { marketPrice: string; basis: string }
+
+/** The grid's rows are calendar months counted from the harvest month (row i is harvest month + i). Moving
+ * the harvest month keeps every typed price on its own calendar month; `lost` counts the typed prices that
+ * fall outside the new 13 months, and new months start blank with the default basis. */
+export function shiftCarryRows<T extends CarryGridRow>(rows: readonly T[], fromMonth: number, toMonth: number, blank: () => T): { rows: T[]; lost: number } {
+  const shift = toMonth - fromMonth
+  const shifted = rows.map((_, index) => rows[index + shift] ?? blank())
+  const lost = rows.filter((row, index) => row.marketPrice.trim() !== '' && (index - shift < 0 || index - shift >= rows.length)).length
+  return { rows: shifted, lost }
+}
+
+/** A delivery month is priced off the next listed futures month, so each blank futures price takes the next
+ * typed price below it. Months after the last typed price stay blank. */
+export function fillFuturesFromNext<T extends CarryGridRow>(rows: readonly T[]): T[] {
+  const filled = [...rows]; let next = ''
+  for (let index = filled.length - 1; index >= 0; index -= 1) {
+    if (filled[index].marketPrice.trim() !== '') next = filled[index].marketPrice
+    else if (next !== '') filled[index] = { ...filled[index], marketPrice: next }
+  }
+  return filled
+}
+
+export function canFillFuturesFromNext(rows: readonly CarryGridRow[]): boolean {
+  return rows.some((row, index) => row.marketPrice.trim() === '' && rows.slice(index + 1).some((later) => later.marketPrice.trim() !== ''))
+}
