@@ -31,7 +31,7 @@ const isSaleLimitDraft = (key: string, payload: unknown): payload is SaleLimitDr
 import { getSaveReceipt, setSaveReceipt, useSaveReceipt } from "./lib/saveReceipt";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOfferType, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractDelivery, GrainContractType, GrainLoad, GrainLoadDraft, GrainServices, GrainWorkspace, LoadTruck, MarketingAlertRule, MarketingAlertRuleType, MarketingPlanTarget, PositionScope, ProductionEstimate } from "./data/grain";
-import { contractUndeliveredBushels, deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
+import { contractUndeliveredBushels, deriveBinLots, deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
 import type { BinLotOnHand } from "./data/committedFree";
 import { formatFarmDate } from "./lib/farmDate";
 import { binUndatedBushels, confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, contractIsDeletable, loadEffectsAvailable, loadLotFor, manualMovementCropYears, originBinLots, recordedBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planDateFor, plannedPercentThroughDate, harvestBushelsFromLoads, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason, MARKETING_PLAN_PERCENT_TOLERANCE, activeLoads, basisCentsPrompt, basisLooksLikeCents, loadDateInFutureProblem, netBushelsFromWeights, normalizeLoadEffects, STANDARD_BUSHEL_LBS } from "./data/grain";
@@ -3220,7 +3220,7 @@ export function PositionCard({
           tiles; everything else is still here, one tap away, and nothing was removed. */}
       <p className="position-hero">
         <strong>{Math.round(pricedPct)}% priced</strong>
-        {average === null ? "" : ` at ${money.format(average)} average`} ·{" "}
+        {average === null ? "" : ` at ${pricePerBu.format(average)} average`} ·{" "}
         <strong>{bushels.format(outrightOpen)} bu</strong> still unpriced
       </p>
       {/* LD-3: what is actually in the bins for THIS crop year, against what is still owed on this
@@ -3274,7 +3274,7 @@ export function PositionCard({
         <div className="position-more-body">
         <p className="position-sentence">
           {Math.round(pricedPct)}% fully priced at{" "}
-          {average === null ? "—" : money.format(average)} avg. Breakeven{" "}
+          {average === null ? "—" : pricePerBu.format(average)} avg. Breakeven{" "}
           {breakeven === null ? "—" : money.format(breakeven)}.{" "}
           {bushels.format(
             basisOpen.reduce((sum, contract) => sum + contract.bushels, 0),
@@ -4369,6 +4369,7 @@ export function Bins({
           const position = binPosition(workspace, bin);
           // Only crops the bin still holds. A crop emptied out of the bin is history, not a badge.
           const heldLots = position.lots.filter((lot) => Math.abs(lot.onHand) > 0.000001);
+          const heldYearLots = deriveBinLots(position.inventory, workspace.bin_transactions.filter((item) => item.grain_bin_id === bin.id)).filter((lot) => Math.abs(lot.bushels) > 0.000001);
           // A bin holding two crops is held to the stricter safe moisture of the two.
           const heldFamily = heldLots
             .map((lot) => workspace.fields.commodities.find((item) => item.id === lot.commodityId)?.crop_family ?? null)
@@ -4418,9 +4419,10 @@ export function Bins({
                 />
               )}
               <div className="bin-card-meta">
-                {heldLots.length ? heldLots.map((lot) => {
-                  const commodity = workspace.fields.commodities.find((item) => item.id === lot.commodityId);
-                  return <span key={lot.commodityId} className={`commodity-badge ${commodity?.traits.identity_preserved ? "ip" : ""}`}>{commodity?.traits.identity_preserved ? "IP · " : ""}{commodity?.name ?? lot.commodityId} · {displayBushels(lot.onHand)} bu</span>
+                {/* One badge per crop year, so carry-over and this year's grain in the same bin are never read as one pile. */}
+                {heldYearLots.length ? heldYearLots.map((lot) => {
+                  const commodity = workspace.fields.commodities.find((item) => item.id === lot.commodity_id);
+                  return <span key={`${lot.commodity_id}:${lot.crop_year ?? ""}`} className={`commodity-badge ${commodity?.traits.identity_preserved ? "ip" : ""}`}>{commodity?.traits.identity_preserved ? "IP · " : ""}{lot.crop_year ?? "Year not recorded"} {commodity?.name ?? lot.commodity_id} · {displayBushels(lot.bushels)} bu</span>
                 }) : (
                   <span className="commodity-badge">Empty</span>
                 )}
@@ -6116,7 +6118,7 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
                 <p className="load-lot">Farm Rx could not read what this bin holds right now, so it cannot say which crop year this load is.</p>
               ) : binLotReady && draft.origin_grain_bin_id ? (
                 originLots.length === 0 ? (
-                  <p className="load-lot">{noLotAdvice}</p>
+                  <p className="load-lot">This bin holds no crop with a crop year, so a load cannot say which crop year it is yet.</p>
                 ) : originLots.length === 1 ? (
                   <p className="load-lot">This bin holds one crop year: <strong>{originLots[0].crop_year} {commodityLabel(originLots[0].commodity_id)}</strong>, {Math.round(originLots[0].bushels).toLocaleString()} bu.</p>
                 ) : (
