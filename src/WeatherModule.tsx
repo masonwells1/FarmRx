@@ -42,16 +42,21 @@ function TownSearch({ onPick }: { onPick: (place: PlaceMatch) => void }) {
   const [matches, setMatches] = useState<PlaceMatch[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Each search and each edit gets a new number; a reply is shown only if nothing has changed since it was asked,
+  // so a stale match can never be picked and save the wrong location.
+  const latest = useRef(0)
   async function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (busy) return
+    const asked = ++latest.current
     setBusy(true); setError(null); setMatches(null)
-    try { if (!weatherService) throw new Error('Town search is not available in this browser.'); setMatches(await weatherService.searchPlaces(text)) }
-    catch (caught) { setError(caught instanceof Error ? caught.message : 'Town search did not respond. Check your signal and try again.') }
-    finally { setBusy(false) }
+    try { if (!weatherService) throw new Error('Town search is not available in this browser.'); const found = await weatherService.searchPlaces(text); if (asked === latest.current) setMatches(found) }
+    catch (caught) { if (asked === latest.current) setError(caught instanceof Error ? caught.message : 'Town search did not respond. Check your signal and try again.') }
+    finally { if (asked === latest.current) setBusy(false) }
   }
+  function edit(value: string) { latest.current++; setText(value); setMatches(null); setError(null); setBusy(false) }
   return <div className="town-search">
-    <form className="weather-location-form" onSubmit={search}><label>Nearest town or ZIP code<input value={text} onChange={(event) => setText(event.target.value)} placeholder="Tuscola or 61953" maxLength={80} required /></label><button className="secondary-action" disabled={busy}>{busy ? 'Searching…' : 'Find'}</button></form>
+    <form className="weather-location-form" onSubmit={search}><label>Nearest town or ZIP code<input value={text} onChange={(event) => edit(event.target.value)} placeholder="Tuscola or 61953" maxLength={80} required /></label><button className="secondary-action" disabled={busy}>{busy ? 'Searching…' : 'Find'}</button></form>
     {error && <p className="form-error" role="alert">{error}</p>}
     {matches && (matches.length ? <ul className="town-matches" aria-label="Matching places">{matches.map((place) => <li key={`${place.latitude},${place.longitude}`}><button type="button" className="secondary-action" onClick={() => onPick(place)}>{place.name}{place.region ? `, ${place.region}` : ''}</button></li>)}</ul> : <p className="weather-note" role="status">No US town or ZIP code matched. Check the spelling.</p>)}
   </div>
