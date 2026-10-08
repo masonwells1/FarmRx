@@ -10,6 +10,7 @@ import { bidDate, localCalendarDay } from './data/marketingAlerts'
 import { firmOfferFillPartialSuccessMessage } from './lib/farmerErrors'
 import { setSaveReceipt } from './lib/saveReceipt'
 import { formatFarmDate } from './lib/farmDate'
+import { farmCalendarDate } from './data/farmDates'
 import { scopeKey, scopeOf } from './data/grain'
 import type { CashBid, FirmOffer, GrainAlertSettings, GrainContract, GrainServices, GrainWorkspace, MarketingAlertRule, ProductionEstimate } from './data/grain'
 
@@ -169,6 +170,24 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     await change(control(emailForm, 'Email addresses'), 'farmer@example.com'); await submit(emailForm)
     assert(Number(emailWrites.length) === 1 && emailCard.textContent?.includes('Waiting for signal. Kept on this device.') && !emailCard.textContent.includes('Saved'), `Alert emails kept offline must say Waiting for signal, never Saved. ${emailCard.textContent}`)
   } finally { await act(async () => { root.unmount() }); container.remove() }
+}
+
+// Codex review: the deadline form's "today" is the farm's calendar day, as the alert sweep reads it, not this device's.
+{
+  const services = { grainRepository: { getData: async () => workspace, saveMarketingAlertRule: async () => undefined, saveGrainAlertSettings: async () => undefined }, createGrainId: () => uid(nextId++), profitabilityRepository } as unknown as GrainServices
+  // The farthest-ahead zone and one 25 hours behind it: whatever this device's zone and hour, one of them is on another day.
+  const zones = ['Pacific/Kiritimati', 'Pacific/Pago_Pago']
+  assert(zones.some((zone) => farmCalendarDate(new Date(), zone) !== localCalendarDay(new Date())), 'Test setup: one farm must sit on another calendar day from this device.')
+  for (const zone of zones) {
+    const zoned: GrainWorkspace = { ...workspace, marketing_alert_rules: [], fields: { ...fields, farm: { ...fields.farm, time_zone: zone } } }
+    const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
+    try {
+      await act(async () => { root.render(createElement(MarketingAlerts, { workspace: zoned, services, selectedEstimateId: corn.id, onSelectEstimate: () => undefined, onSaved: async () => undefined })); await flush() })
+      await click(button(container, 'DeadlineOne reminder, a week ahead'))
+      const min = (control(container.querySelector('form.alert-rule-form')!, 'Reminder date') as HTMLInputElement).getAttribute('min')
+      assert(min === farmCalendarDate(new Date(), zone), `A farm in ${zone} must date its deadline reminders by its own calendar day, got ${min}.`)
+    } finally { await act(async () => { root.unmount() }); container.remove() }
+  }
 }
 
 // ---------------------------------------------------------------- Firm offers

@@ -2405,7 +2405,8 @@ function AlertRuleForm({
   const submitLock = useRef(createSubmitLock());
   // One id for this form, so a double tap or a retry saves one rule instead of adding a second one.
   const [ruleId] = useState(() => rule?.id ?? services.createGrainId());
-  const today = localCalendarDay(new Date());
+  // The farm's calendar day, not this device's: the alert sweep judges reminder dates and bid age on the farm's own date.
+  const today = planDateFor(new Date(), workspace.fields.farm.time_zone);
   // The bid the server sweep would read right now: the newest cash bid in the last two days, from any elevator.
   const eligibleBid = type === "price_target" ? latestAlertEligibleCashBid(workspace, scope, today) : null;
   useEffect(() => {
