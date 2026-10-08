@@ -19,7 +19,8 @@ export function FieldLogPage({ fieldLogRepository, fieldsRepository }: { fieldLo
   const location = useLocation()
   // A Today "Rain" tile arrives with a record intent: open the rainfall form on the first field so the farmer types straight away.
   const [openRainfallOnFirstField] = useState(() => parseTodayRecordIntent(location.state)?.record === 'rainfall')
-  // Rain kept on this device by the several-fields form, shown in each field's timeline until it is sent.
+  // Rain from the several-fields form, kept on this device or already saved, shown in each field's timeline. A saved entry
+  // stays here too: a reload that loses signal answers from the copy cached before the save, which does not have it yet.
   const [queuedRain, setQueuedRain] = useState<FieldLogEntry[]>([])
   const [fieldsData, setFieldsData] = useState<FieldsData | null>(null); const [entries, setEntries] = useState<FieldLogEntry[]>([]); const [role, setRole] = useState<string>('read_only'); const [attentionQueueKey, setAttentionQueueKey] = useState<string | null>(null); const [error, setError] = useState<string | null>(null); const [loading, setLoading] = useState(true)
   const reload = async () => { setLoading(true); try { const [fields, log, queueKey] = await Promise.all([fieldsRepository.getData(), fieldLogRepository.getData(), fieldLogRepository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)]); setFieldsData(fields); setEntries(log.entries); setRole(log.viewer.role); setAttentionQueueKey(queueKey); setError(null) } catch (caught) { setError(farmerError(caught, 'open the field log')) } finally { setLoading(false) } }
@@ -29,12 +30,12 @@ export function FieldLogPage({ fieldLogRepository, fieldsRepository }: { fieldLo
   const activeFields = fieldsData.fields.filter((field) => field.is_active)
   const fieldNames = new Map(fieldsData.fields.map((field) => [field.id, field.name]))
   const legacyFieldName = (entry: unknown) => { const draft = entry && typeof entry === 'object' ? (entry as { draft?: unknown }).draft : null; const fieldId = draft && typeof draft === 'object' ? (draft as { field_id?: unknown }).field_id : null; return typeof fieldId === 'string' ? fieldNames.get(fieldId) ?? null : null }
-  return <section className="page field-log-page"><header className="page-heading"><div><h1>Field Log</h1><p>Rain totals and notes, by field.</p></div></header>{error && <p className="form-error">{error}</p>}<NeedsAttentionList module="fieldLog" queueKey={attentionQueueKey} onChanged={reload} legacyFieldName={legacyFieldName} />{editable(role) && activeFields.length > 1 && <MultiFieldRain fields={activeFields} repository={fieldLogRepository} refresh={reload} onQueued={(kept) => setQueuedRain((current) => [...current.filter((entry) => !kept.some((next) => next.id === entry.id)), ...kept])} />}{!activeFields.length ? <section className="empty-state"><h2>Add your first field to start a field log.</h2>{editable(role) && <Link className="primary-action" to="/fields">Add a field</Link>}</section> : <div className="field-log-list">{activeFields.map((field, index) => <FieldCard key={field.id} field={field} entries={entries.filter((entry) => entry.field_id === field.id)} assignments={fieldsData.crop_assignments} canEdit={editable(role)} initialMode={openRainfallOnFirstField && index === 0 && editable(role) ? 'rainfall' : null} repository={fieldLogRepository} refresh={reload} queued={queuedRain.filter((entry) => entry.field_id === field.id)} />)}</div>}</section>
+  return <section className="page field-log-page"><header className="page-heading"><div><h1>Field Log</h1><p>Rain totals and notes, by field.</p></div></header>{error && <p className="form-error">{error}</p>}<NeedsAttentionList module="fieldLog" queueKey={attentionQueueKey} onChanged={reload} legacyFieldName={legacyFieldName} />{editable(role) && activeFields.length > 1 && <MultiFieldRain fields={activeFields} repository={fieldLogRepository} refresh={reload} onQueued={(kept) => setQueuedRain((current) => [...current.filter((entry) => !kept.some((next) => next.id === entry.id)), ...kept])} onSaved={(confirmed) => setQueuedRain((current) => [...current.filter((entry) => !confirmed.some((next) => next.id === entry.id)), ...confirmed])} />}{!activeFields.length ? <section className="empty-state"><h2>Add your first field to start a field log.</h2>{editable(role) && <Link className="primary-action" to="/fields">Add a field</Link>}</section> : <div className="field-log-list">{activeFields.map((field, index) => <FieldCard key={field.id} field={field} entries={entries.filter((entry) => entry.field_id === field.id)} assignments={fieldsData.crop_assignments} canEdit={editable(role)} initialMode={openRainfallOnFirstField && index === 0 && editable(role) ? 'rainfall' : null} repository={fieldLogRepository} refresh={reload} queued={queuedRain.filter((entry) => entry.field_id === field.id)} />)}</div>}</section>
 }
 
 /** One rain total for several fields at once. Each chosen field gets its own ordinary rainfall entry through the same
  * repository save as the per-field form, one after another, so a field that fails is named and the rest are kept. */
-function MultiFieldRain({ fields, repository, refresh, onQueued }: { fields: Field[]; repository: FieldLogRepository; refresh: () => Promise<void>; onQueued: (entries: FieldLogEntry[]) => void }) {
+function MultiFieldRain({ fields, repository, refresh, onQueued, onSaved }: { fields: Field[]; repository: FieldLogRepository; refresh: () => Promise<void>; onQueued: (entries: FieldLogEntry[]) => void; onSaved: (entries: FieldLogEntry[]) => void }) {
   const submitLock = useRef(createSubmitLock())
   const [open, setOpen] = useState(false)
   const [chosen, setChosen] = useState<Set<string>>(() => new Set())
@@ -54,10 +55,10 @@ function MultiFieldRain({ fields, repository, refresh, onQueued }: { fields: Fie
     const validation = validateFieldLogDraft(drafts[0].draft)
     if (validation) { setMessage(validation); submitLock.current.release(); return }
     setSubmitting(true); setMessage(null); setResult(null)
-    const saved: string[] = []; const queued: string[] = []; const failed: string[] = []; const failedIds: string[] = []; const kept: FieldLogEntry[] = []
+    const saved: string[] = []; const queued: string[] = []; const failed: string[] = []; const failedIds: string[] = []; const kept: FieldLogEntry[] = []; const confirmed: FieldLogEntry[] = []
     try {
       for (const { field, draft } of drafts) {
-        try { const entry = await repository.saveEntry(draft); if (entry.pending) { queued.push(field.name); kept.push(entry) } else saved.push(field.name) }
+        try { const entry = await repository.saveEntry(draft); if (entry.pending) { queued.push(field.name); kept.push(entry) } else { saved.push(field.name); confirmed.push(entry) } }
         catch { failed.push(field.name); failedIds.push(field.id) }
       }
       const parts = [
@@ -67,6 +68,8 @@ function MultiFieldRain({ fields, repository, refresh, onQueued }: { fields: Fie
       ].filter(Boolean)
       setResult(parts.join(' '))
       if (kept.length) onQueued(kept)
+      // Saved entries go into the timeline now, so a reload that loses signal afterwards cannot hide rain the server already has.
+      if (confirmed.length) onSaved(confirmed)
       if (!failed.length) { setChosen(new Set()); setOpen(false) } else setChosen(new Set(failedIds))
       await refresh().catch(() => undefined)
     } finally { setSubmitting(false); submitLock.current.release() }
