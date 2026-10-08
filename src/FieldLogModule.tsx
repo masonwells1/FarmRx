@@ -80,9 +80,9 @@ function MultiFieldRain({ fields, repository, refresh, onQueued }: { fields: Fie
         <div className="multi-rain-picks">{fields.map((field) => <label key={field.id} className="check-label"><input type="checkbox" checked={chosen.has(field.id)} onChange={() => toggle(field.id)} /> {field.name}</label>)}</div>
         <button type="button" className="secondary-action" onClick={() => setChosen(chosen.size === fields.length ? new Set() : new Set(fields.map((field) => field.id)))}>{chosen.size === fields.length ? 'Clear all' : 'Pick all fields'}</button>
       </fieldset>
-      <label>Date<input name="date" type="date" max={fieldLogMaximumObservedOn()} defaultValue={today()} required /></label>
-      <label>Rainfall (inches)<input name="rainfall" type="number" min="0" max="100" step="0.01" required /></label>
-      <label className="wide">Optional note<textarea name="note" maxLength={500} /></label>
+      <label>Date<input name="date" type="date" max={fieldLogMaximumObservedOn()} defaultValue={today()} required disabled={submitting} /></label>
+      <label>Rainfall (inches)<input name="rainfall" type="number" min="0" max="100" step="0.01" required disabled={submitting} /></label>
+      <label className="wide">Optional note<textarea name="note" maxLength={500} disabled={submitting} /></label>
       {message && <p className="form-error">{message}</p>}
       <div><button className="primary-action" disabled={submitting}>{submitting ? 'Saving…' : chosen.size ? `Save rain for ${chosen.size} field${chosen.size === 1 ? '' : 's'}` : 'Save rain'}</button><button type="button" className="secondary-action" disabled={submitting} onClick={() => { setOpen(false); setMessage(null) }}>Cancel</button></div>
     </form>}
