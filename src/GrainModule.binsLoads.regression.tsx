@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router'
 import { Basis, Bins, LoadsTab, movementSourceLabel } from './GrainModule'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
-import { BIN_UNDATED_GRAIN, loadDateInFutureProblem, netBushelsFromWeights, typedNumberText, STANDARD_BUSHEL_LBS, validateGrainLoad, validateGrainLoadShape, type BinTransaction, type CashBid, type GrainBin, type GrainContract, type GrainLoad, type GrainLoadDraft, type GrainServices, type GrainWorkspace } from './data/grain'
+import { BIN_UNDATED_GRAIN, loadDateInFutureProblem, netBushelsFromWeights, typedAmountProblem, typedNumberText, STANDARD_BUSHEL_LBS, validateGrainLoad, validateGrainLoadShape, type BinTransaction, type CashBid, type GrainBin, type GrainContract, type GrainLoad, type GrainLoadDraft, type GrainServices, type GrainWorkspace } from './data/grain'
 import { grainLoadPayload } from './data/SupabaseGrainDataGateway'
 import { farmCalendarDate } from './data/farmDates'
 import { farmerError } from './lib/farmerErrors'
@@ -25,8 +25,21 @@ assert(netBushelsFromWeights('62000', '32000', STANDARD_BUSHEL_LBS.soybeans) ===
 assert(netBushelsFromWeights('30000', '30000', 56) === null && netBushelsFromWeights('20000', '30000', 56) === null, 'No figure unless the loaded truck weighs more than the empty one.')
 assert(netBushelsFromWeights('', '30000', 56) === null && netBushelsFromWeights('abc', '30000', 56) === null, 'No figure from a blank or a word.')
 assert(typedNumberText('1,200') === '1200' && typedNumberText('12,345.5') === '12345.5' && typedNumberText(' 1 200 ') === '1200' && typedNumberText('1,234,567') === '1234567', 'Thousands commas and spaces are dropped.')
-assert(typedNumberText('1200,5') === '1200,5' && typedNumberText('1200,500') === '1200,500' && typedNumberText('892,86') === '892,86' && typedNumberText('1,2') === '1,2', 'A decimal or misplaced comma is kept, so the box is refused as not a number instead of being read as another amount.')
+assert(typedNumberText('1200,5') === '1200,5' && typedNumberText('892,86') === '892,86' && typedNumberText('1,2') === '1,2' && typedNumberText('1,2345') === '1,2345', 'A decimal or misplaced comma is kept, so the box is refused instead of being read as another amount.')
+// Sweep #4/#35: the helper runs on every keystroke, so typing key by key must end where pasting does.
+const typedKeyByKey = (text: string) => [...text].reduce((box, key) => typedNumberText(box + key), '')
+assert(typedKeyByKey('1,000,000') === '1000000' && typedKeyByKey('2,500,000.25') === '2500000.25' && typedKeyByKey('1,234,567') === '1234567', `Two thousands commas typed one key at a time are both dropped: ${typedKeyByKey('1,000,000')}`)
+assert(typedKeyByKey('1200,5') === '1200,5' && typedKeyByKey('892,86') === '892,86', 'A decimal comma typed key by key is still kept.')
+// Sweep #13/#14: one rule for every bushel and pound box -- plain digits, at most two decimals, and a decimal comma named.
+assert(typedAmountProblem('1200.', 'bushels', 'x') === null && typedAmountProblem('.5', 'bushels', 'x') === null && typedAmountProblem('-5', 'bushels', 'x') === null && typedAmountProblem('', 'bushels', 'x') === null, 'A trailing dot, a leading dot and a minus (left to the box’s own "more than zero") are readable.')
+assert(typedAmountProblem('1e3', 'bushels', 'NOT') === 'NOT' && typedAmountProblem('0x10', 'bushels', 'NOT') === 'NOT' && typedAmountProblem('0b101', 'bushels', 'NOT') === 'NOT', 'Exponent, hex and binary text are not bushels.')
+assert(typedAmountProblem('1250.125', 'bushels', 'NOT') === 'Bushels can have at most 2 decimals.', 'A third decimal is refused, not rounded by the server.')
+assert(typedAmountProblem('1200,5', 'bushels', 'NOT')?.startsWith('A comma in bushels is read only as a thousands mark'), 'A decimal comma is named, not called "not a number".')
+assert(netBushelsFromWeights('1e5', '30000', 56) === null && netBushelsFromWeights('0x186A0', '30000', 56) === null, 'Sweep #13: no net figure is worked from exponent or hex weights.')
 const baseDraft: GrainLoadDraft = { load_date: '2026-10-01', truck_equipment_id: '', truck_name: '', origin_kind: 'field', origin_grain_bin_id: '', origin_crop_assignment_id: uid(1), origin_crop_year: '', origin_commodity_id: '', destination_kind: 'buyer', destination_buyer: 'Co-op', destination_grain_contract_id: '', destination_grain_bin_id: '', gross_lbs: '', tare_lbs: '', net_bushels: '100', moisture_pct: '', ticket_number: '', notes: '', effect_bin_out: true, effect_bin_in: true, effect_contract_delivery: true, effect_harvest: true }
+assert(validateGrainLoadShape({ ...baseDraft, net_bushels: '892.857' }).includes('Net bushels can have at most 2 decimals.'), 'Sweep #5/#31: a three-decimal net is refused before it is sent, so a retry always matches what was stored.')
+assert(validateGrainLoadShape({ ...baseDraft, net_bushels: '1e3' }).includes('Type net bushels as a number, like 1000.') && validateGrainLoadShape({ ...baseDraft, gross_lbs: '0x186A0' }).includes('Type the gross weight as a number of pounds.'), 'Sweep #13: exponent and hex text are refused in a load, as in a delivery.')
+assert(validateGrainLoadShape({ ...baseDraft, net_bushels: '1200,5' }).some((problem) => problem.startsWith('A comma in net bushels is read only as a thousands mark')), 'Sweep #14: a decimal comma in net bushels is named.')
 assert(validateGrainLoadShape({ ...baseDraft, net_bushels: 'abc' }).includes('Type net bushels as a number, like 1000.'), 'A word in net bushels is named as not a number, not as zero.')
 assert(validateGrainLoadShape({ ...baseDraft, net_bushels: '' }).includes('Net bushels must be more than zero.'), 'A blank net still asks for more than zero.')
 assert(validateGrainLoadShape({ ...baseDraft, gross_lbs: 'x' }).includes('Type the gross weight as a number of pounds.'), 'A word in gross weight is named, not silently dropped.')
@@ -150,7 +163,27 @@ try {
   await change(control(bravo, 'Bushels'), '1200,5')
   assert((control(bravo, 'Bushels') as HTMLInputElement).value === '1200,5', 'A decimal comma is kept as typed, not stripped into another amount.')
   await act(async () => { (bravo.querySelector('form.movement-form') as HTMLFormElement).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush() })
-  assert(movementWrites === 0 && bravo.textContent?.includes('Type bushels as a number, like 1000.'), `A decimal comma in Bushels is refused with nothing written (${movementWrites} writes).`)
+  assert(movementWrites === 0 && bravo.textContent?.includes('A comma in bushels is read only as a thousands mark, like 1,200.'), `A decimal comma in Bushels is refused, by name, with nothing written (${movementWrites} writes).`)
+  // Sweep #1: an "In" that would otherwise save. A third decimal is refused before any write: the server would round it, its
+  // echo would not match what was sent, and each retry would add another movement while the screen said none saved.
+  const submitMovement = async () => { await act(async () => { (bravo.querySelector('form.movement-form') as HTMLFormElement).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush() }) }
+  await change(control(bravo, 'Direction'), 'in')
+  const yearBox = control(bravo, 'Crop year') as HTMLSelectElement
+  const inYear = [...yearBox.options].find((option) => option.value)?.value
+  assert(inYear, 'An "In" offers a crop year to pick.')
+  await change(yearBox, inYear)
+  await change(control(bravo, 'Bushels'), '1250.125'); await submitMovement()
+  assert(movementWrites === 0 && bravo.textContent?.includes('Bushels can have at most 2 decimals.'), `A third decimal in Bushels is refused with nothing written (${movementWrites} writes).`)
+  // Sweep #13: "0x10" is not 16 bu.
+  await change(control(bravo, 'Bushels'), '0x10'); await submitMovement()
+  assert(movementWrites === 0 && bravo.textContent?.includes('Type bushels as a number, like 1000.'), `Hex text in Bushels is refused with nothing written (${movementWrites} writes).`)
+  // Sweep #4/#35: a million typed one key at a time keeps both thousands commas out of the box.
+  const bushelsBox = control(bravo, 'Bushels') as HTMLInputElement
+  await change(bushelsBox, '')
+  for (const key of '1,000,000') await change(bushelsBox, bushelsBox.value + key)
+  assert(bushelsBox.value === '1000000', `1,000,000 typed key by key must read 1000000, got ${bushelsBox.value}.`)
+  await change(control(bravo, 'Bushels'), '1250.12'); await submitMovement()
+  assert(Number(movementWrites) === 1, `Two decimals still save, once (${movementWrites} writes).`)
   const alpha = cardFor('Alpha bin')
   assert(alpha.textContent?.includes('5,000 bu') && alpha.textContent.includes('· 50%'), 'A bin holding grain shows its fill.')
   await act(async () => { root.render(createElement('div')); await flush() })
@@ -335,7 +368,13 @@ try {
   await change(control(container, 'Net bushels'), '892,86')
   assert((control(container, 'Net bushels') as HTMLInputElement).value === '892,86', 'A decimal comma is kept as typed, so it can be refused.')
   await click(button(container, 'Save load'))
-  assert([...container.querySelectorAll('ul.load-problems li')].some((item) => item.textContent === 'Type net bushels as a number, like 1000.'), 'A decimal comma is named as not a number.')
+  assert([...container.querySelectorAll('ul.load-problems li')].some((item) => item.textContent?.startsWith('A comma in net bushels is read only as a thousands mark')) && control(container, 'Net bushels').getAttribute('aria-invalid') === 'true', 'A decimal comma is named, and the Net bushels box is marked.')
+  // Sweep #5/#31: a net the column would round is refused on the screen, so the server is never sent a figure it judges
+  // differently (over-delivery) or stores differently (a retried ticket refused as "different details").
+  const sentBeforeThreeDecimals = sentLoads.length
+  await change(control(container, 'Net bushels'), '500.005')
+  await click(button(container, 'Save load'))
+  assert([...container.querySelectorAll('ul.load-problems li')].some((item) => item.textContent === 'Net bushels can have at most 2 decimals.') && sentLoads.length === sentBeforeThreeDecimals && openDialog() === null, 'A three-decimal net is refused before any question or write.')
 
   // ---- Codex review: a new load and a new cash bid are dated, and capped, by the farm's calendar day, as deliveries and
   // the alert sweep are. The farthest-ahead zone and one 25 hours behind it: one is always on another day from this device.

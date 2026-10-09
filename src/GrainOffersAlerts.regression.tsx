@@ -92,6 +92,9 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     // A blank target is said in plain words next to Save, with no write (the form skips the browser's own bubble).
     await submit(form)
     assert(ruleWrites.length === 0 && form.querySelector('.form-error')?.textContent?.includes('Price target must be above $0'), `A25: a blank target must be refused next to Save. ${form.textContent}`)
+    // Sweep #7: a target that cannot be read as a number is named as that, not told about the $0-$1,000 range.
+    await change(target, '4,25'); await submit(form)
+    assert(ruleWrites.length === 0 && form.querySelector('.form-error')?.textContent === 'Type the price target as a number, like 4.25.', `A decimal comma in the target must be named, with no write: ${form.querySelector('.form-error')?.textContent}`)
     await change(target, '4.5')
     await submit(form, 2)
     assert(Number(ruleWrites.length) === 1 && button(form, 'Saving…').disabled, `A2: a double tap on Save alert must make one write and show Saving. writes=${ruleWrites.length}`)
@@ -108,6 +111,9 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     ruleGate = gate(); ruleMode = 'fail'
     await click(button(container, "% marketed goalAlert me while I've marketed less than my goal"))
     const goalForm = container.querySelector('form.alert-rule-form') as HTMLFormElement
+    const writesBeforeCommaGoal = ruleWrites.length
+    await change(control(goalForm, 'Marketed goal %'), '50,5'); await submit(goalForm)
+    assert(ruleWrites.length === writesBeforeCommaGoal && goalForm.querySelector('.form-error')?.textContent === 'Type the goal as a number, like 50.5.', `Sweep #7: a decimal comma in the goal must be named, with no write: ${goalForm.querySelector('.form-error')?.textContent}`)
     await change(control(goalForm, 'Marketed goal %'), '50')
     assert(goalForm.textContent?.includes('You are below this goal now, so this alert goes off within about 15 minutes (on your phone, if notifications are on, and in Grain alerts here).') && goalForm.textContent.includes('Currently 0% marketed'), 'A7: a goal above the current % marketed must warn that it goes off right away.')
     ruleGate.release(); await submit(goalForm); await act(async () => { await flush() })
@@ -225,6 +231,17 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     await change(control(offerForm(), 'Buyer'), 'County elevator'); await change(control(offerForm(), 'Bushels'), '10000'); await change(control(offerForm(), 'Cash $/bu'), '0')
     await submit(offerForm())
     assert(offerWrites.length === 0 && offerForm().textContent?.includes('Enter a price above $0.00.'), 'A25: a $0 cash price must be refused with no write.')
+    // Sweep #6/#8: the form checks its own boxes (noValidate), so each problem is said once, in words about that box.
+    const offerError = () => offerForm()?.querySelector('.form-error')?.textContent
+    await change(control(offerForm(), 'Cash $/bu'), '-1'); await submit(offerForm())
+    assert(offerWrites.length === 0 && offerError() === 'Enter a price above $0.00.', `A negative price gets one message, not "above $0.00" and "zero or more" together: ${offerError()}`)
+    await change(control(offerForm(), 'Cash $/bu'), '4,1275'); await submit(offerForm())
+    assert(offerWrites.length === 0 && offerError() === 'Type the cash price as a number, like 4.1275.', `A price that cannot be read is named, not called missing: ${offerError()}`)
+    await change(control(offerForm(), 'Bushels'), '5,000')
+    assert((control(offerForm(), 'Bushels') as HTMLInputElement).value === '5000', 'A thousands comma in offer Bushels is dropped, not reported as blank.')
+    await change(control(offerForm(), 'Bushels'), '100.255'); await change(control(offerForm(), 'Cash $/bu'), '4.1275'); await submit(offerForm())
+    assert(offerWrites.length === 0 && offerError() === 'Bushels can have at most 2 decimals.', `A third decimal in offer Bushels is refused, not rounded by the server: ${offerError()}`)
+    await change(control(offerForm(), 'Bushels'), '10000')
     const priceInput = control(offerForm(), 'Cash $/bu') as HTMLInputElement
     assert(priceInput.getAttribute('step') === 'any' && priceInput.getAttribute('inputmode') === 'decimal', 'C0: the offer price box must take quarter cents.')
     await change(priceInput, '4.1275'); await change(control(offerForm(), 'Expires on'), yesterday); await submit(offerForm())
@@ -240,7 +257,10 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     const basisInput = control(offerForm(), 'Basis $/bu') as HTMLInputElement
     assert(basisInput.getAttribute('inputmode') === null && basisInput.getAttribute('placeholder') === '-0.35', 'C1: the basis box must use a keyboard with a minus key.')
     assert(offerForm().textContent?.includes('Futures month'), 'A10: on a basis offer the month is the futures month.')
-    await change(control(offerForm(), 'Buyer'), 'Bean plant'); await change(control(offerForm(), 'Bushels'), '3000'); await change(basisInput, '-35')
+    await change(control(offerForm(), 'Buyer'), 'Bean plant'); await change(control(offerForm(), 'Bushels'), '3000')
+    await change(basisInput, '-0,35'); await submit(offerForm())
+    assert(Number(offerWrites.length) === 1 && offerForm().querySelector('.form-error')?.textContent === 'Type the basis as a number, like -0.35.' && !openDialog(), `Sweep #6: a basis that cannot be read is named: ${offerForm().querySelector('.form-error')?.textContent}`)
+    await change(basisInput, '-35')
     await submit(offerForm())
     assert(openDialog()?.textContent?.includes('Basis of -$35.00 per bushel?'), 'C8: a basis that looks like cents must ask before saving.')
     await click(dialogButton('Go back'))

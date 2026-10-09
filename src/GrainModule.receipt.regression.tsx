@@ -40,6 +40,11 @@ try {
   const createButtons = [...firstContainer.querySelectorAll('button')].filter((button) => button.textContent === 'Create estimate') as HTMLButtonElement[]
   await act(async () => { createButtons[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
   assert(firstContainer.textContent?.includes('Enter an expected yield above zero.') && Number(createdCalls) === 0, 'Create with a blank yield must explain itself on that card and send nothing.')
+  // Sweep #10: a decimal comma is named as not a number, not as a missing yield (a number box would have reported it blank).
+  const secondYield = firstContainer.querySelectorAll('input')[1] as HTMLInputElement
+  await change(secondYield, '180,5'); await act(async () => { createButtons[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+  assert(secondYield.value === '180,5' && firstContainer.textContent?.includes('Type the expected yield as a number, like 180.5.') && !firstContainer.textContent?.includes('Enter an expected yield above zero.') && Number(createdCalls) === 0, `A comma in the yield must be named and send nothing: ${firstContainer.textContent}`)
+  await change(secondYield, '')
   assert(firstContainer.textContent?.includes('ac planted'), 'Each crop card must show its planted acres.')
   const aph = firstContainer.querySelector('input') as HTMLInputElement; await act(async () => { Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, 'value')!.set!.call(aph, '180'); aph.dispatchEvent(new (win.InputEvent ?? win.Event)('input', { bubbles: true }) as unknown as Event); aph.dispatchEvent(new Event('change', { bubbles: true })); await flush() })
   const create = [...firstContainer.querySelectorAll('button')].find((button) => button.textContent === 'Create estimate') as HTMLButtonElement | undefined; assert(create && aph.value === '180' && !create.disabled, 'First estimate must keep the controlled APH value and genuinely enable Create estimate before submission.')
@@ -127,6 +132,14 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     assert(document.activeElement === yieldBox, 'Edit yield must open More details and put the cursor in the yield box.')
     await change(yieldBox, ''); await click(button(cardContainer, 'Save production'))
     assert(cardContainer.textContent?.includes('Enter an expected yield above zero (bu/ac).') && Number(productionSaves) === 0, 'A blank yield must be explained beside the card and never sent as 0.')
+    // Sweep #10/#11: a decimal comma in either box is named and nothing is sent; Actual bushels gets the decimal keypad.
+    await change(yieldBox, '180,5'); await click(button(cardContainer, 'Save production'))
+    assert(cardContainer.textContent?.includes('Type the expected yield as a number, like 180.5.') && !cardContainer.textContent?.includes('Enter an expected yield above zero') && Number(productionSaves) === 0, `A comma in the yield must be named, not called blank: ${cardContainer.textContent}`)
+    const cardActual = control(cardContainer, 'Actual bushels') as HTMLInputElement
+    assert(cardActual.getAttribute('inputmode') === 'decimal', 'An actual can be part of a bushel, so its keypad must have a decimal key.')
+    await change(yieldBox, '175'); await change(cardActual, '45210,5'); await click(button(cardContainer, 'Save production'))
+    assert(cardContainer.textContent?.includes('A comma in actual bushels is read only as a thousands mark') && Number(productionSaves) === 0, `A comma in the actual must be named and never sent as a cleared actual: ${cardContainer.textContent}`)
+    await change(cardActual, '')
     await change(yieldBox, '175'); await click(button(cardContainer, 'Save production'))
     assert(productionSaves === 1 && cardContainer.textContent?.includes('Saving…'), 'The card must show its own Saving for a production save.')
     assert(countOf(cardContainer, 'Saving…') === 1 && button(cardContainer, 'Save production').nextElementSibling?.textContent === 'Saving…', 'Review repair: a production save shows its one receipt beside Save production.')
@@ -390,6 +403,10 @@ assert([...contractContainer.querySelectorAll('label')].some((item) => item.text
 await change(control(contractContainer, 'Premium, cents per bu'), '0.1'); await submitContractForm()
 assert(openDialog()?.textContent?.includes('Premium of 0.1¢ per bushel?') && openDialog()?.textContent?.includes('For 10¢, type 10.') && Number(contractWrites) === 0, 'C9: a premium under one cent must ask before saving.')
 await click(dialogButton('Go back')); await change(control(contractContainer, 'Premium, cents per bu'), '')
+// Sweep #9: the bushels column keeps two decimals, so a third is refused with no save and no id spent, never rounded unseen.
+await change(control(contractContainer, 'Bushels'), '12000.125'); await submitContractForm()
+assert(contractContainer.querySelector('.contract-entry [role="alert"]')?.textContent === 'Bushels can have at most 2 decimals.' && Number(contractWrites) === 0 && Number(idIndex) === 0, `A third decimal on Add contract must be refused before any save: ${contractContainer.querySelector('.contract-entry [role="alert"]')?.textContent}`)
+await change(control(contractContainer, 'Bushels'), '12000')
 assert((control(contractContainer, 'Bushels') as HTMLInputElement).value === '12000' && (control(contractContainer, 'Cash $/bu') as HTMLInputElement).value === '5', `Contract controlled values were not retained: ${[...contractContainer.querySelectorAll('input')].map((item) => item.value).join('|')}`)
 const addContract = button(contractContainer, 'Add contract')
 assert(addContract.form, 'Contract submit button must belong to the real form.')
@@ -475,6 +492,18 @@ await act(async () => { contractRoot.unmount() }); contractContainer.remove()
     assert(container.textContent?.includes('Bushels can have at most 2 decimals.') && deliveryCalls === 0 && ids === 0, 'Three decimals must be refused before any id is taken.')
     await change(control(container, 'Delivered bushels'), '1e3'); await click(button(container, 'Record delivery'))
     assert(container.textContent?.includes('Type delivered bushels as a number, like 1200 or 1200.5.') && deliveryCalls === 0, 'An exponent is not a number of bushels.')
+    // Sweep #12/#14: a typed zero or minus is told "more than zero" (something was entered), a decimal comma is named, and
+    // "1200." reads as 1200 -- it goes on to the next question instead of being called not a number.
+    for (const typed of ['0', '0.00', '-5']) {
+      await change(control(container, 'Delivered bushels'), typed); await click(button(container, 'Record delivery'))
+      const deliveryMessage = control(container, 'Delivered bushels').closest('form')?.querySelector('.contract-action-message')?.textContent
+      assert(deliveryMessage === 'Delivered bushels must be more than zero.' && deliveryCalls === 0 && ids === 0, `"${typed}" must be told more than zero: ${deliveryMessage}`)
+    }
+    await change(control(container, 'Delivered bushels'), '1200,5'); await click(button(container, 'Record delivery'))
+    assert(container.textContent?.includes('A comma in bushels is read only as a thousands mark, like 1,200.') && deliveryCalls === 0 && ids === 0, 'A decimal comma in Delivered bushels must be named.')
+    await change(control(container, 'Delivered bushels'), '1200.'); await change(control(container, 'Delivered on'), `${hta.crop_year - 10}-10-02`); await click(button(container, 'Record delivery'))
+    assert(openDialog()?.textContent?.includes(`That is before the ${hta.crop_year} crop.`) && deliveryCalls === 0, `"1200." must be read as 1200: ${container.querySelector('.contract-action-message')?.textContent}`)
+    await click(dialogButton('Go back'))
     // Full review: a delivery dated before the contract's crop year (a year typo) is asked about; a manual delivery cannot be undone.
     await change(control(container, 'Delivered bushels'), '100'); await change(control(container, 'Delivered on'), `${hta.crop_year - 10}-10-02`); await click(button(container, 'Record delivery'))
     assert(openDialog()?.textContent?.includes(`That is before the ${hta.crop_year} crop.`) && deliveryCalls === 0, 'A delivery date before the crop year must be confirmed first.')

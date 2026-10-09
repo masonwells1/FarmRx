@@ -34,7 +34,7 @@ import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOffe
 import { contractUndeliveredBushels, deriveBinLots, deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
 import type { BinLotOnHand } from "./data/committedFree";
 import { formatFarmDate } from "./lib/farmDate";
-import { binUndatedBushels, confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, contractIsDeletable, loadEffectsAvailable, loadLotFor, manualMovementCropYears, originBinLots, recordedBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planDateFor, plannedPercentThroughDate, harvestBushelsFromLoads, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason, MARKETING_PLAN_PERCENT_TOLERANCE, activeLoads, typedNumberText, basisCentsPrompt, basisLooksLikeCents, loadDateInFutureProblem, netBushelsFromWeights, normalizeLoadEffects, STANDARD_BUSHEL_LBS } from "./data/grain";
+import { binUndatedBushels, confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, contractIsDeletable, loadEffectsAvailable, loadLotFor, manualMovementCropYears, originBinLots, recordedBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planDateFor, plannedPercentThroughDate, harvestBushelsFromLoads, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason, MARKETING_PLAN_PERCENT_TOLERANCE, activeLoads, typedAmountProblem, typedNumberText, basisCentsPrompt, basisLooksLikeCents, loadDateInFutureProblem, netBushelsFromWeights, normalizeLoadEffects, STANDARD_BUSHEL_LBS } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -2198,10 +2198,24 @@ function FirmOfferForm({
   const submitLock = useRef(createSubmitLock());
   // One id for this form, so a retry after an unclear failure updates the same offer instead of adding a second one.
   const [offerId] = useState(() => offer?.id ?? services.createGrainId());
+  const priceBox = useRef<HTMLInputElement>(null);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!submitLock.current.acquire()) return;
     try {
+      // A box Farm Rx cannot read is said first, and alone: the checks below would read it as blank or zero and say that
+      // instead. A number box the browser cannot read ("4,1275") reports itself blank, so its own badInput is asked too.
+      const priceText = type === "basis" ? basis : price;
+      const unreadable = [
+        typedAmountProblem(amount, "bushels", "Type bushels as a number, like 1200 or 1200.5."),
+        priceBox.current?.validity?.badInput || (priceText.trim() !== "" && !Number.isFinite(Number(priceText)))
+          ? type === "basis" ? "Type the basis as a number, like -0.35." : `Type the ${type === "hta" ? "futures" : "cash"} price as a number, like 4.1275.`
+          : null,
+      ].filter((problem): problem is string => problem !== null);
+      if (unreadable.length) {
+        setError(unreadable.join(" "));
+        return;
+      }
       const timestamp = new Date().toISOString();
       const next: FirmOffer = {
         id: offerId,
@@ -2222,10 +2236,12 @@ function FirmOfferForm({
       };
       // Form-only checks on top of the database's own rules: a $0 price and a past expiry are almost always typing slips.
       // An expiry date the farmer did not change is left alone, so an old offer's note can still be edited.
+      const priceNotAboveZero = type !== "basis" && price !== "" && !(Number(price) > 0);
       const errors = [
-        ...(type !== "basis" && price !== "" && !(Number(price) > 0) ? ["Enter a price above $0.00."] : []),
+        ...(priceNotAboveZero ? ["Enter a price above $0.00."] : []),
         ...(expires && expires !== (offer?.expires_on ?? "") && expires < localCalendarDay(new Date()) ? ["The expiry date is in the past. Pick today or later, or leave it blank."] : []),
-        ...validateFirmOffer(next),
+        // The shared rule's "zero or more" would contradict "above $0.00" just above it, about the same box.
+        ...validateFirmOffer(next).filter((problem) => !(priceNotAboveZero && problem === "Price must be zero or more.")),
       ];
       if (errors.length) {
         setError(errors.join(" "));
@@ -2289,20 +2305,22 @@ function FirmOfferForm({
       </label>
       <label>
         Bushels
+        {/* Text, not a number box: the form checks its own boxes (noValidate), and a number box reports "5,000" as blank.
+            Thousands commas are dropped as typed; a decimal comma stays and is refused by name. */}
         <input
           required
-          type="number"
-          min="0.01"
-          step="0.01"
+          type="text"
           inputMode="decimal"
+          autoComplete="off"
           value={amount}
-          onChange={(event) => setAmount(event.target.value)}
+          onChange={(event) => setAmount(typedNumberText(event.target.value))}
         />
       </label>
       <label>
         {priceLabel}
         {/* Grain trades to the quarter cent, and a basis is often negative: the iOS decimal pad has no minus key. */}
         <input
+          ref={priceBox}
           required
           type="number"
           min={type === "basis" ? undefined : "0.01"}
@@ -2397,6 +2415,8 @@ function AlertRuleForm({
     rule?.direction ?? "at_or_above",
   );
   const [threshold, setThreshold] = useState(rule?.threshold?.toString() ?? "");
+  // The one threshold box showing (price target or % goal), so submit can ask whether the browser could read it.
+  const thresholdBox = useRef<HTMLInputElement>(null);
   const [remindOn, setRemindOn] = useState(rule?.remind_on ?? "");
   const [message, setMessage] = useState(rule?.message ?? "");
   const [breakeven, setBreakeven] = useState<number | null>(null);
@@ -2438,6 +2458,11 @@ function AlertRuleForm({
     // A reminder date in the past can never go off. A saved date the farmer did not change is left alone.
     if (type === "deadline" && remindOn < today && remindOn !== (rule?.remind_on ?? "")) {
       setError("Pick today or a later date.");
+      return;
+    }
+    // A number box the browser cannot read ("4,25") reports itself blank, which would read as $0 and be told about the range.
+    if (type !== "deadline" && (thresholdBox.current?.validity?.badInput || (threshold.trim() !== "" && !Number.isFinite(Number(threshold))))) {
+      setError(type === "price_target" ? "Type the price target as a number, like 4.25." : "Type the goal as a number, like 50.5.");
       return;
     }
     if (!submitLock.current.acquire()) return;
@@ -2508,6 +2533,7 @@ function AlertRuleForm({
             Cash price target ($/bu)
             {/* Bids trade to the quarter cent, so a target can too. */}
             <input
+              ref={thresholdBox}
               required
               type="number"
               min="0.01"
@@ -2540,6 +2566,7 @@ function AlertRuleForm({
           <label>
             Marketed goal %
             <input
+              ref={thresholdBox}
               required
               type="number"
               min="0.01"
@@ -2776,7 +2803,12 @@ export function FirstEstimate({
   const create = async (assignment: (typeof assignments)[number]) => {
     const key = `${assignment.crop_year}|${assignment.commodity_id}`;
     const yieldValue = Number(aph[key] ?? "");
-    if ((aph[key] ?? "").trim() === "" || !Number.isFinite(yieldValue) || yieldValue <= 0) {
+    // Something typed that is not a number ("180,5") is named as that, not as a missing yield.
+    if ((aph[key] ?? "").trim() !== "" && !Number.isFinite(yieldValue)) {
+      setCardErrors((current) => ({ ...current, [key]: "Type the expected yield as a number, like 180.5." }));
+      return;
+    }
+    if ((aph[key] ?? "").trim() === "" || yieldValue <= 0) {
       setCardErrors((current) => ({ ...current, [key]: "Enter an expected yield above zero." }));
       return;
     }
@@ -2851,16 +2883,16 @@ export function FirstEstimate({
               </p>
               <label>
                 Expected yield (bu/ac)
+                {/* Text, not a number box: a number box reports "180,5" as blank, which would be told "enter a yield". */}
                 <input
-                  type="number"
+                  type="text"
                   inputMode="decimal"
-                  min="0.01"
-                  step="any"
+                  autoComplete="off"
                   aria-invalid={cardErrors[key] ? true : undefined}
                   aria-describedby={cardErrors[key] ? errorId : undefined}
                   value={aph[key] ?? ""}
                   onChange={(event) => {
-                    const value = event.target.value;
+                    const value = typedNumberText(event.target.value);
                     setAph((current) => ({ ...current, [key]: value }));
                     setCardErrors((current) => ({ ...current, [key]: "" }));
                   }}
@@ -3140,6 +3172,19 @@ export function PositionCard({
       submitLock.current.release();
     }
   };
+  // Save production reads the two boxes as typed. Something typed that is not a number ("180,5", "45210,5") is named as that,
+  // never sent as a blank yield or a cleared actual. The actual column keeps two decimals, like every bushel amount.
+  const saveTypedProduction = () => {
+    const yieldUnreadable = aph.trim() !== "" && !Number.isFinite(Number(aph));
+    const actualProblem = typedAmountProblem(actual, "actual bushels", "Type actual bushels as a number, like 45210.5.");
+    if (yieldUnreadable || actualProblem) {
+      setError(yieldUnreadable ? "Type the expected yield as a number, like 180.5." : actualProblem ?? "");
+      setShowMore(true);
+      setFocusTarget(yieldUnreadable ? "yield" : "actual");
+      return;
+    }
+    void saveProduction(buildProductionSaveInput(estimate, aph, actual));
+  };
   const reconcileHarvest = async () => {
     if (!submitLock.current.acquire()) return;
     if (!(await confirmDialog({ title: "Use the harvest total as Grain actual?", body: "This changes Grain actual only; it does not change bins.", confirmLabel: "Use harvest total" }))) {
@@ -3353,17 +3398,18 @@ export function PositionCard({
                 : `${estimate.planted_acres.toLocaleString()} ac`}
             </strong>
           </label>
+          {/* Text, not number boxes: a number box reports "180,5" as blank, so Save production could not tell a typo from an
+              empty box. The decimal keypad for both: an actual can be part of a bushel (45,210.5), as a harvest total can. */}
           <label>
             Expected yield (bu/ac)
             <input
               ref={yieldInputRef}
-              type="number"
+              type="text"
               inputMode="decimal"
-              min="0.01"
-              step="any"
+              autoComplete="off"
               disabled={!canWriteSettings}
               value={aph}
-              onChange={(event) => setAph(event.target.value)}
+              onChange={(event) => setAph(typedNumberText(event.target.value))}
             />
           </label>
           <div className="actual-bushels-field">
@@ -3372,15 +3418,14 @@ export function PositionCard({
             Actual bushels
             <input
               ref={actualInputRef}
-              type="number"
-              inputMode="numeric"
-              min="0"
-              step="1"
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
               value={actual}
               placeholder="Enter at harvest"
               disabled={!canWriteSettings}
               aria-describedby={guidance ? guidanceId : undefined}
-              onChange={(event) => setActual(event.target.value)}
+              onChange={(event) => setActual(typedNumberText(event.target.value))}
             />
           </label>
           </div>
@@ -3388,7 +3433,7 @@ export function PositionCard({
             type="button"
             className="secondary-action"
             disabled={!canWriteSettings}
-            onClick={() => { setReceiptAt("production"); void saveProduction(buildProductionSaveInput(estimate, aph, actual)); }}
+            onClick={() => { setReceiptAt("production"); saveTypedProduction(); }}
           >
             Save production
           </button>
@@ -3696,8 +3741,10 @@ export function ContractEntry({
       };
       // Every check runs before an id is taken: a refused or abandoned contract must not spend one
       // from the shared, ordered generator. The repository's own check would otherwise surface only
-      // as "could not record this contract", which no retry can fix.
-      const problem = validateGrainContract({ ...draft, id: "" }, new Set(workspace.fields.commodities.map((commodity) => commodity.id)))[0];
+      // as "could not record this contract", which no retry can fix. The bushels column keeps two
+      // decimals, so a third (step="any" lets the browser pass it) is refused rather than rounded unseen.
+      const problem = typedAmountProblem(bushelCount, "bushels", "Type bushels as a number, like 1200 or 1200.5.")
+        ?? validateGrainContract({ ...draft, id: "" }, new Set(workspace.fields.commodities.map((commodity) => commodity.id)))[0];
       if (problem) {
         if (/^(Delivery|Premium)/.test(problem)) setDetailsOpen(true);
         setError(problem);
@@ -4095,12 +4142,13 @@ export function ContractActions({ contract, workspace, services, autoFocusDelive
         // Plain digits with an optional decimal: "1e3" or "0x10" are not bushels, and the column keeps two decimals, so a third
         // would be rounded on the server and a retry of the same delivery refused as different content.
         if (delivery.trim() === "") { setMessage("Enter delivered bushels."); return }
-        if (!/^\d+(\.\d+)?$/.test(delivery)) { setMessage("Type delivered bushels as a number, like 1200 or 1200.5."); return }
-        if (/\.\d{3,}$/.test(delivery)) { setMessage("Bushels can have at most 2 decimals."); return }
+        const typo = typedAmountProblem(delivery, "bushels", "Type delivered bushels as a number, like 1200 or 1200.5.");
+        if (typo) { setMessage(typo); return }
       }
       // A retry resends the held draft exactly, so only a new entry is read from the boxes and checked.
       const value = deliveryDraft.current?.bushels ?? Number(delivery);
-      if (!Number.isFinite(value) || value <= 0) { setMessage("Enter delivered bushels."); return }
+      // Something was typed, so a zero or a minus is told "more than zero", not "enter" as if the box were empty.
+      if (!Number.isFinite(value) || value <= 0) { setMessage("Delivered bushels must be more than zero."); return }
       if (!deliveryDraft.current) {
         const today = farmToday();
         if (!deliveredOn) { setMessage("Enter the delivery date."); return }
@@ -4797,9 +4845,12 @@ function MovementForm({
     if (!submitLock.current.acquire()) return;
     setSaving(true);
     try {
-      // A word in the box would otherwise reach the bushel check as "must be greater than zero".
-      if (!movementDraft.current && bushelsValue.trim() && !Number.isFinite(Number(bushelsValue))) {
-        setError("Type bushels as a number, like 1000.");
+      // Before anything is built: a word would otherwise reach the bushel check as "must be greater than zero", "0x10" would
+      // save 16 bu, and a third decimal would be rounded by the server. The echo of that rounded figure would not match what
+      // was sent, so the movement would read as not saved after it was -- and each retry would add another one.
+      const bushelsProblem = movementDraft.current ? null : typedAmountProblem(bushelsValue, "bushels", "Type bushels as a number, like 1000.");
+      if (bushelsProblem) {
+        setError(bushelsProblem);
         return;
       }
       if (activeCommodityIds.length && !activeCommodityIds.includes(commodity)) {
@@ -4878,7 +4929,7 @@ function MovementForm({
       <label>
         Bushels
         {/* Text, not a number box: a number box turns "1,000" typed off a ticket into nothing. Thousands
-            commas and spaces are dropped as they are typed; a decimal comma stays and is refused. */}
+            commas and spaces are dropped as they are typed; a decimal comma stays and is refused by name. */}
         <input
           required
           type="text"
@@ -5666,7 +5717,7 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
     setDraft((current) => ({ ...current, net_bushels: workedNet }));
   }, [lbsPerBushel, workedNet, ticketOutstanding, draft.net_bushels]);
   // Spaces go, and commas only as thousands separators ("1,000"). Any other comma ("892,86", a decimal comma from some phone
-  // keyboards) is kept, so the box is refused as not a number instead of being read as 89,286.
+  // keyboards) is kept, so the box is refused, with the comma named, instead of being read as 89,286.
   const numberTyped = typedNumberText;
   const contractLeft = (contract: GrainContract) => contractUndeliveredBushels(contract, workspace.grain_contract_deliveries);
   // The contracts this load could go against, with what is still left to deliver on each. The one
@@ -5813,7 +5864,8 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
       let allowOverdelivery = false;
       if (effectsReady && normalizeLoadEffects(draft).effect_contract_delivery) {
         const contract = workspace.grain_contracts.find((row) => row.id === draft.destination_grain_contract_id);
-        // Rounded to the cent of a bushel first, so a net typed to three places never asks about "0.00 bu more".
+        // A net has at most two decimals (validateGrainLoadShape), so this and the server judge the same figure. Rounded to the
+        // cent anyway, so floating-point dust (500.01 - 500 is 0.00999…) never asks about "0.00 bu more".
         const excess = contract ? Math.round((Number(draft.net_bushels) - contractLeft(contract)) * 100) / 100 : 0;
         const refusedBefore = !!contract && overdeliveryRefusedFor.current === contract.id;
         if (excess > 0 || refusedBefore) {

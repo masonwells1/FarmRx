@@ -514,19 +514,23 @@ export function validateGrainLoadShape(draft: GrainLoadDraft): string[] {
   if (draft.ticket_number.trim().length > 120) problems.push('Keep the ticket number to 120 characters.')
   if (draft.notes.trim().length > 4000) problems.push('Keep the notes to 4,000 characters.')
 
-  // A word or stray character is told apart from a zero, so the farmer is not told "more than zero"
-  // about something they did type.
+  // A word, a decimal comma or a third decimal is told apart from a zero, so the farmer is not told "more than zero" about
+  // something they did type. Net bushels are compared exactly when a ticket is retried, so a net the column would round is
+  // refused here, before it is ever sent.
+  const netProblem = typedAmountProblem(draft.net_bushels, 'net bushels', 'Type net bushels as a number, like 1000.')
   const net = Number(draft.net_bushels)
-  if (draft.net_bushels.trim() && !Number.isFinite(net)) problems.push('Type net bushels as a number, like 1000.')
+  if (netProblem) problems.push(netProblem)
   else if (!draft.net_bushels.trim() || net <= 0) problems.push('Net bushels must be more than zero.')
 
-  const gross = draft.gross_lbs.trim() ? Number(draft.gross_lbs) : null
-  const tare = draft.tare_lbs.trim() ? Number(draft.tare_lbs) : null
-  if (gross !== null && !Number.isFinite(gross)) problems.push('Type the gross weight as a number of pounds.')
+  const grossProblem = typedAmountProblem(draft.gross_lbs, 'the gross weight', 'Type the gross weight as a number of pounds.')
+  const tareProblem = typedAmountProblem(draft.tare_lbs, 'the tare weight', 'Type the tare weight as a number of pounds.')
+  const gross = draft.gross_lbs.trim() && !grossProblem ? Number(draft.gross_lbs) : null
+  const tare = draft.tare_lbs.trim() && !tareProblem ? Number(draft.tare_lbs) : null
+  if (grossProblem) problems.push(grossProblem)
   else if (gross !== null && gross <= 0) problems.push('Gross weight must be more than zero.')
-  if (tare !== null && !Number.isFinite(tare)) problems.push('Type the tare weight as a number of pounds.')
+  if (tareProblem) problems.push(tareProblem)
   else if (tare !== null && tare <= 0) problems.push('Tare weight must be more than zero.')
-  if (gross !== null && tare !== null && Number.isFinite(gross) && Number.isFinite(tare) && gross <= tare) {
+  if (gross !== null && tare !== null && gross <= tare) {
     problems.push('The loaded truck has to weigh more than the empty one.')
   }
 
@@ -620,19 +624,39 @@ export function loadDateInFutureProblem(loadDate: string, today: string): string
 /** Pounds in a standard bushel for each crop family -- 56 for corn, 60 for soybeans and wheat. */
 export const STANDARD_BUSHEL_LBS: Record<Commodity['crop_family'], number> = { corn: 56, soybeans: 60, wheat: 60 }
 
-/** A bushel or pound amount as typed, ready for Number(). Spaces go, and commas go only when every one is a real
- * thousands separator ("1,200" or "12,345.5"). Any other comma -- "1200,5" from a phone keyboard that types a decimal
- * comma, or a misplaced "1200,500" -- is kept, so the box is refused as not a number instead of saving another amount. */
+/** A bushel or pound amount as typed, ready for Number(). Spaces go, and so does a comma with exactly three digits after
+ * it ("1,200", "12,345.5"). It runs on every keystroke, so it has to give the same answer typed key by key as pasted:
+ * "1,000" becomes "1000" as soon as it is typed, and the next ",000" then goes the same way. Any other comma -- "1200,5" or
+ * "892,86" from a phone keyboard that types a decimal comma -- is kept, so the box is refused instead of saving another amount. */
 export function typedNumberText(value: string): string {
-  const compact = value.replace(/\s/g, '')
-  return /^-?\d{1,3}(,\d{3})+(\.\d*)?$/.test(compact) ? compact.replace(/,/g, '') : compact
+  return value.replace(/\s/g, '').replace(/,(?=\d{3}(?:\D|$))/g, '')
+}
+
+/** Plain digits with at most one decimal point ("1200", "1200.5", "1200.", ".5"), and a minus sign each box's own "more
+ * than zero" check answers. Not "1e3" or "0x10", which Number() would quietly read as 1000 and 16. */
+const PLAIN_AMOUNT = /^-?(\d+\.?\d*|\.\d+)$/
+
+/** Why a bushel or pound amount typed in a box cannot be saved as typed, or null when it can. Run it on the box's text
+ * (after typedNumberText). A blank box and a zero are each caller's own question: only it knows whether the box is optional.
+ * - A comma still there is a decimal comma, often the only decimal key on a phone keypad, so the message names it and says
+ *   how to get past it, instead of "type a number" about something that looks like one.
+ * - At most two decimals: every bushel and pound column keeps two, so the server would round a third, and the same save
+ *   retried would then be refused as different (a load) or written twice (a bin movement).
+ * `name` is how the message names the box ("net bushels", "the gross weight"); `notNumber` is that box's own wording. */
+export function typedAmountProblem(text: string, name: string, notNumber: string): string | null {
+  const value = text.trim()
+  if (!value) return null
+  if (/^-?\d*,\d+$/.test(value)) return `A comma in ${name} is read only as a thousands mark, like 1,200. For a decimal, use a period, like 1200.5, or leave off the part after the comma.`
+  if (!PLAIN_AMOUNT.test(value)) return notNumber
+  if (/\.\d{3,}$/.test(value)) return `${name.charAt(0).toUpperCase()}${name.slice(1)} can have at most 2 decimals.`
+  return null
 }
 
 /** Net bushels from a scale ticket's gross and tare pounds, rounded to the cent of a bushel. Null
- * unless both weights are numbers and the loaded truck weighs more than the empty one. A starting
+ * unless both weights are plain numbers and the loaded truck weighs more than the empty one. A starting
  * figure the farmer sees and can change -- it is never sent without being shown. */
 export function netBushelsFromWeights(gross: string, tare: string, lbsPerBushel: number): string | null {
-  if (!gross.trim() || !tare.trim()) return null
+  if (!PLAIN_AMOUNT.test(gross.trim()) || !PLAIN_AMOUNT.test(tare.trim())) return null
   const g = Number(gross)
   const t = Number(tare)
   if (!Number.isFinite(g) || !Number.isFinite(t) || !(t > 0) || !(g > t) || !(lbsPerBushel > 0)) return null
