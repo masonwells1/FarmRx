@@ -141,7 +141,9 @@ export function deriveFarmLotOnHand(
 }
 
 /** Bushels still owed on one contract. Floored at zero per contract: an over-delivered contract owes
- * nothing, and letting it go negative would quietly pay down a different contract's obligation. */
+ * nothing, and letting it go negative would quietly pay down a different contract's obligation.
+ * Rounded to the cent, as the bushel columns are: 100.1 + 200.2 delivered on a 300.3 bu contract adds
+ * up to 300.29999999999995 here, and that float noise must not leave the contract looking open. */
 export function contractUndeliveredBushels(
   contract: GrainContract,
   deliveries: readonly GrainContractDelivery[],
@@ -149,7 +151,8 @@ export function contractUndeliveredBushels(
   const delivered = deliveries
     .filter((row) => row.grain_contract_id === contract.id)
     .reduce((total, row) => total + row.bushels, 0)
-  return Math.max(0, contract.bushels - delivered)
+  const owed = Math.max(0, contract.bushels - delivered)
+  return Math.round(owed * 100) / 100
 }
 
 /** Committed bushels for one lot: what the farm still owes on contracts for that commodity in that

@@ -16,9 +16,11 @@ const quarterCent = new Intl.NumberFormat('en-US', { style: 'currency', currency
 const money = (value: number) => quarterCent.format(value)
 /** A bid date as the farmer reads it: Oct 6. */
 export const bidDate = (value: string) => new Date(`${value}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-const percentLabel = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 })
-/** % marketed rounded DOWN to one decimal, so 49.96% never reads as a 50% goal already reached. */
-export const marketedPercentLabel = (value: number) => percentLabel.format(Math.floor(value * 10 + 1e-9) / 10)
+const percentLabel = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
+/** % marketed rounded DOWN to two decimals, so 49.96% never reads as a 50% goal already reached. Two, not one:
+ * a goal takes two decimals (step 0.01), so the figure shown is at or above a goal exactly when the real one is,
+ * and "Currently 49.9%" never sits beside a 49.95% goal the farm has already met. */
+export const marketedPercentLabel = (value: number) => percentLabel.format(Math.floor(value * 100 + 1e-9) / 100)
 
 const simpleEmail = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/
 /** A marketing-plan target is a cash price target; basis is already included. */

@@ -137,6 +137,12 @@ const delivery = (grain_contract_id: string, bushels: number): GrainContractDeli
   // Floored per contract: letting this read -1,500 would quietly pay down the other contract.
   assert(contractUndeliveredBushels(over, deliveries) === 0, 'An over-delivered contract owes nothing, never a negative.')
   assert(deriveCommittedBushels([owed, over], deliveries, 'soybeans', 2026) === 6_000, 'Over-delivery on one contract must not reduce another.')
+  // Sweep #24: 100.1 + 200.2 is 300.29999999999995 in floating point. A 300.3 bu contract delivered that way owes nothing,
+  // and a partly delivered decimal contract owes the cent figure.
+  const exact = contract(2026, 'soybeans', 300.3)
+  const exactDeliveries = [delivery(exact.id, 100.1), delivery(exact.id, 200.2)]
+  assert(contractUndeliveredBushels(exact, exactDeliveries) === 0, `A decimal contract delivered in full owes 0, not float noise: ${contractUndeliveredBushels(exact, exactDeliveries)}`)
+  assert(contractUndeliveredBushels(exact, [delivery(exact.id, 100.1)]) === 200.2, `A partly delivered decimal contract owes the cent figure: ${contractUndeliveredBushels(exact, [delivery(exact.id, 100.1)])}`)
 }
 
 // ---- 5. Free is honest when the farm owes more than it holds ----

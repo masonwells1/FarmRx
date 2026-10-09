@@ -1,7 +1,7 @@
 import { Window } from 'happy-dom'
 import React, { createElement, useState } from 'react'
 import { act } from 'react'
-import { FirmOffers, MarketingAlerts } from './GrainModule'
+import { FirmOffers, MarketingAlerts, offerMonthText } from './GrainModule'
 import { GrainCostOfCarry } from './GrainCostOfCarry'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
@@ -64,6 +64,11 @@ const workspace: GrainWorkspace = { fields, production_estimates: [corn, beans],
 let nextId = 800
 // A failing break-even lookup must not surface as an unhandled rejection (A48): this process would exit on one.
 const profitabilityRepository = { getBreakeven: async () => { throw new Error('no budget') }, getWorkspace: async () => ({ budgets: [], allocations: [] }) }
+
+// Sweep #17: a firm offer's month is free text (a browser with no month picker gives a plain box). Only a real
+// year-month is reworded; anything else is shown as typed, never as "Feb Dec " or "undefined Z26".
+assert(offerMonthText('2026-12') === 'Dec 2026' && offerMonthText(' 2027-03 ') === 'Mar 2027', 'A year-month reads as a month and year.')
+assert(offerMonthText('Dec 2026') === 'Dec 2026' && offerMonthText('December') === 'December' && offerMonthText('Z26') === 'Z26' && offerMonthText('2026-13') === '2026-13', `Free text is shown as typed: ${offerMonthText('Dec 2026')} / ${offerMonthText('Z26')}`)
 
 // ---------------------------------------------------------------- Marketing alerts
 {
@@ -196,6 +201,18 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
   }
 }
 
+// Sweep #33: the price-alert form shows break-even to the quarter cent, as the target editor does ($650/ac over 155 bu/ac).
+{
+  const services = { grainRepository: { getData: async () => workspace, saveMarketingAlertRule: async () => undefined, saveGrainAlertSettings: async () => undefined }, createGrainId: () => uid(nextId++), profitabilityRepository: { ...profitabilityRepository, getBreakeven: async () => 650 / 155 } } as unknown as GrainServices
+  const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
+  try {
+    await act(async () => { root.render(createElement(MarketingAlerts, { workspace: { ...workspace, marketing_alert_rules: [] }, services, selectedEstimateId: corn.id, onSelectEstimate: () => undefined, onSaved: async () => undefined })); await flush() })
+    await click(button(container, 'Cash price targetTell me when yellow corn hits my number'))
+    const form = container.querySelector('form.alert-rule-form') as HTMLFormElement
+    assert(form?.textContent?.includes('Your break-even: $4.1935/bu'), `The alert form's break-even must not be rounded to $4.19: ${form?.textContent}`)
+  } finally { await act(async () => { root.unmount() }); container.remove() }
+}
+
 // ---------------------------------------------------------------- Firm offers
 {
   const offerWrites: FirmOffer[] = []; const fills: GrainContract[] = []; let fillMode: 'error' | 'partial' | 'ok' = 'error'
@@ -282,6 +299,12 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     const fillForm = () => fillEntry()!.querySelector('form') as HTMLFormElement
     await change(control(fillForm(), 'Bushels'), '6000')
     assert(fillEntry()?.querySelector('.contract-entry-note')?.textContent?.includes('the other 4,000 bu stop counting as pending') && !fillEntry()?.querySelector('.form-error'), 'A18: filling part of an offer must say, before saving, that the rest stops counting as pending.')
+    // Sweep #32: the "more than the offer" note is decided on the rounded figure it shows, so it never says "0 bu more".
+    await change(control(fillForm(), 'Bushels'), '10000.004')
+    assert(!fillEntry()?.textContent?.includes('more than the offer'), `A fraction of a cent over the offer must not read "0 bu more than the offer": ${fillEntry()?.textContent}`)
+    await change(control(fillForm(), 'Bushels'), '10000.5')
+    assert(fillEntry()?.textContent?.includes('This is 0.50 bu more than the offer.'), 'Half a bushel over the offer is still named.')
+    await change(control(fillForm(), 'Bushels'), '6000')
     await submit(fillForm())
     const sectionErrors = () => [...section().children].filter((item) => item.classList.contains('form-error'))
     assert(fills.length === 1 && fillEntry()?.querySelector('.form-error')?.textContent && sectionErrors().length === 0, `A13: a failed fill must keep the fill form open and show its error inside it. ${fillEntry()?.textContent}`)
@@ -296,7 +319,7 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
 
     // An open offer past its date can be renewed; expired and canceled offers can be copied.
     // Another open offer of 8,000 bu and a 15,000 bu limit: 6,000 contracted + 8,000 + the 5,000 being renewed is over it.
-    const otherOpen: FirmOffer = { ...expiredOpen, id: uid(901), buyer: 'Feed mill', bushels: 8_000, expires_on: nextWeek }
+    const otherOpen: FirmOffer = { ...expiredOpen, id: uid(901), buyer: 'Feed mill', bushels: 8_000, expires_on: nextWeek, contract_month: 'Dec 2026' }
     workspace.firm_offers = [...workspace.firm_offers, expiredOpen, otherOpen]
     saleLimits = { [scopeKey(scopeOf(corn))]: 15_000 }
     await act(async () => { root.render(createElement(React.Fragment, null, createElement(OffersHarness, { key: 'reload' }), createElement(ConfirmDialogHost))); await flush() })
@@ -316,6 +339,7 @@ const profitabilityRepository = { getBreakeven: async () => { throw new Error('n
     // Full review: Mark filled on one offer, then on another, starts the second offer's own sale (the fill form is keyed by offer).
     const openDetails = () => [...section().querySelectorAll('details')].find((item) => item.textContent?.startsWith('Open offers')) as HTMLElement
     const rowFor = (buyer: string) => { const row = [...openDetails().querySelectorAll('article.offer-row')].find((item) => item.querySelector('strong')?.textContent === buyer) as HTMLElement | undefined; assert(row, `Missing open offer from ${buyer}.`); return row }
+    assert(rowFor('Feed mill').textContent?.includes(' · delivery Dec 2026') && !rowFor('Feed mill').textContent?.includes('Feb'), `Sweep #17: a month typed as text is listed as typed: ${rowFor('Feed mill').textContent}`)
     await click(button(rowFor('River terminal'), 'Mark filled'))
     await change(control(fillForm(), 'Bushels'), '1234')
     await click(button(rowFor('Feed mill'), 'Mark filled'))

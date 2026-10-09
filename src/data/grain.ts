@@ -836,13 +836,15 @@ export function basisLooksLikeCents(value: number): boolean {
   return Number.isFinite(value) && Math.abs(value) >= BASIS_CENTS_LIMIT
 }
 
+/** The basis columns keep six decimals, so the question shows every one of them: "Keep this basis" saves exactly the figure asked about. */
+const basisAsTyped = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6, useGrouping: false })
 export function basisCentsPrompt(value: number): { title: string; body: string; confirmLabel: string } {
   const sign = value < 0 ? '-' : ''
   const cents = Math.abs(value)
   // Up to four decimals, so a quarter-cent basis (-35.25 cents) is advised as -0.3525, not rounded to -0.35.
   const asDollars = String(Number((value / 100).toFixed(4)))
   return {
-    title: `Basis of ${sign}$${cents.toFixed(2)} per bushel?`,
+    title: `Basis of ${sign}$${basisAsTyped.format(cents)} per bushel?`,
     body: `Basis is entered in dollars per bushel. For ${cents} cents ${value < 0 ? 'under' : 'over'}, go back and type ${asDollars}.`,
     confirmLabel: 'Keep this basis',
   }

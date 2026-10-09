@@ -1,7 +1,7 @@
 import { Window } from 'happy-dom'
 import React, { createElement, useState } from 'react'
 import { act } from 'react'
-import { Bins, ContractActions, ContractEntry, deliveryDefaultEstimate, FirstEstimate, lotGapText, NeedsEstimate, planSavedNoticeFor, PlanStatus, planWithoutMonth, PositionCard, READ_ONLY_GRAIN, TargetEditor, UntrackedStoredGrain } from './GrainModule'
+import { ActualVsPlan, Bins, ContractActions, ContractEntry, deliveryDefaultEstimate, FirstEstimate, lotGapText, NeedsEstimate, planSavedNoticeFor, PlanStatus, planWithoutMonth, PositionCard, READ_ONLY_GRAIN, TargetEditor, UntrackedStoredGrain } from './GrainModule'
 import { SaveReceipt } from './components/SaveReceipt'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
@@ -281,6 +281,55 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
   assert(gapFor([wholeFarm, entityEstimate], 12_000, -12_000)?.short === true, 'An entity estimate beside the whole-farm one is not added to it, so 12,000 sold against a 10,000 bu crop is oversold.')
   assert(gapFor([entityEstimate, { ...entityEstimate, id: uid(773), operating_entity_id: uid(774) }], 12_000, -12_000)?.short === false, 'With no whole-farm estimate, the entity estimates together are the crop.')
   assert(JSON.stringify(gapFor([], 500, -500)) === JSON.stringify({ bushels: 500, text: 'bu short', short: true }) && gapFor([wholeFarm], 0, 0) === null, 'No estimate is plainly short; no gap is nothing.')
+  // Sweep #23: 12,000 sold against a 10,000 bu estimate with 11,000 already delivered and nothing stored owes 1,000. The red
+  // figure is the 1,000 still owed, never the 2,000 "more sold" (which counts bushels already delivered).
+  assert(JSON.stringify(gapFor([wholeFarm], 12_000, -1_000)) === JSON.stringify({ bushels: 1_000, text: 'bu short', short: true }), `Once deliveries eat into it, the gap is what is still owed: ${JSON.stringify(gapFor([wholeFarm], 12_000, -1_000))}`)
+  // A decimal projection is compared as the card shows it (29,741 bu), so the gap and the production figure add up on screen.
+  assert(gapFor([{ ...wholeFarm, expected_bushels: 29_740.65 }], 30_000, -30_000)?.bushels === 259, `30,000 sold against a projection shown as 29,741 is 259 more: ${gapFor([{ ...wholeFarm, expected_bushels: 29_740.65 }], 30_000, -30_000)?.bushels}`)
+}
+
+// Sweep (displayed figures): the same figure reads the same on every tab. Recorded bushels keep their cents, prices and
+// break-even keep their quarter cents, planted acres are en-US on any phone, and a cents basis is asked about as typed.
+{
+  const { MemoryRouter } = await import('react-router')
+  const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
+  const show = async (element: React.ReactElement) => { await act(async () => { root.render(createElement(MemoryRouter, null, element)); await flush() }) }
+  const year = estimate.crop_year
+  const scope = { farm_id: fields.farm.id, crop_year: year, commodity_id: estimate.commodity_id, operating_entity_id: null, enterprise_label: null }
+  const target = (price: number | null) => ({ id: uid(793), ...scope, target_month: `${year}-10-01`, target_pct_of_production: 50, target_price: price, breakeven_relative_pct: null, deadline: null, notes: null, created_at: stamp, updated_at: stamp })
+  const sale = { id: uid(794), ...scope, contract_type: 'forward_cash', buyer: 'Elevator', bushels: 1_000.5, futures_price: null, basis: null, cash_price: 4.5, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, created_at: stamp, updated_at: stamp } as GrainContract
+  const bin = { id: uid(795), farm_id: fields.farm.id, name: 'Decimal bin', capacity_bu: 10_000, location_type: 'on_farm', location_name: null, notes: null, moisture_pct: null, moisture_checked_on: null, created_at: stamp, updated_at: stamp } as GrainBin
+  const stored = { id: uid(796), farm_id: fields.farm.id, grain_bin_id: bin.id, direction: 'in', bushels: 1_000.5, commodity_id: estimate.commodity_id, crop_year: year, occurred_on: '2026-10-01', note: null, source_kind: 'manual', grain_load_id: null, created_at: stamp } as BinTransaction
+  try {
+    // #28: the Plan tab shows recorded bushels as the Overview and the Contracts total do, 1,000.50 rather than 1,001.
+    await show(createElement(PlanStatus, { estimate, workspace: { ...workspace, grain_bins: [bin], bin_transactions: [stored] } }))
+    assert(container.textContent?.includes(`1,000.50 bu of the ${year} crop in bins`), `The plan status shows the lot to the cent: ${container.textContent}`)
+    await show(createElement(ActualVsPlan, { estimate, workspace: { ...workspace, marketing_plan_targets: [target(null)], grain_contracts: [sale] } }))
+    assert(container.querySelector('tfoot')?.textContent?.startsWith('Contracted so far1,000.50 bu ('), `Contracted so far shows the contracts to the cent: ${container.querySelector('tfoot')?.textContent}`)
+
+    // #25/#33/#29: one card. The cash target and break-even are shown to the quarter cent everywhere on it, and the harvest
+    // total at the precision of the load figure beside it.
+    const harvestFields = structuredClone(fields); for (const item of harvestFields.crop_assignments) item.harvested_bushels = null
+    harvestFields.crop_assignments[0]!.harvested_bushels = 999.6
+    const cardEstimate = { ...estimate, id: uid(797) }
+    const priceServices = { ...services, profitabilityRepository: { ...services.profitabilityRepository, getBreakeven: async () => 650 / 155 } } as unknown as GrainServices
+    await show(createElement(PositionCard, { estimate: cardEstimate, workspace: { ...workspace, fields: harvestFields, production_estimates: [cardEstimate], marketing_plan_targets: [target(4.1275)] }, services: priceServices, saleLimit: null, onSaleLimitChange: () => undefined, onSaved: async () => undefined }))
+    await click(button(container, 'More details'))
+    const cardText = container.textContent ?? ''
+    assert(cardText.includes('Breakeven $4.1935.') && cardText.includes('using your cash price target of $4.1275.') && cardText.includes('Cash price target $4.1275'), `The cash target and break-even must not be rounded to the cent on the card: ${cardText}`)
+    assert(cardText.includes('Harvest actuals: 999.60 bu'), `Harvest actuals keep their cents: ${cardText}`)
+
+    // #34: planted acres are en-US even when the phone's own number style is German.
+    const nativeToLocale = Number.prototype.toLocaleString
+    Number.prototype.toLocaleString = function (this: number, ...args: Parameters<typeof nativeToLocale>) { return nativeToLocale.call(this, args[0] ?? 'de-DE', args[1]) }
+    try {
+      await show(createElement(FirstEstimate, { workspace: { ...workspace, production_estimates: [], fields: { ...fields, crop_assignments: [{ ...assignment, planted_acres: 1_234.5 }] } }, services, onSaved: async () => undefined }))
+      assert(container.textContent?.includes(`${assignment.crop_year} crop · 1,234.5 ac planted`), `Planted acres must not follow the device locale: ${container.textContent}`)
+    } finally { Number.prototype.toLocaleString = nativeToLocale }
+  } finally { await act(async () => { root.unmount() }); container.remove() }
+
+  // #16: the question shows the basis exactly as it will be saved, not rounded to the cent.
+  assert(basisCentsPrompt(-35.125).title === 'Basis of -$35.125 per bushel?' && basisCentsPrompt(-3.1275).title === 'Basis of -$3.1275 per bushel?' && basisCentsPrompt(-35).title === 'Basis of -$35.00 per bushel?', `The cents-basis question must show the typed basis: ${basisCentsPrompt(-35.125).title}`)
 }
 
 // Review repairs (position card): a sale limit a read-only member cannot save is not offered; its error sits outside the label and

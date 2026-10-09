@@ -98,7 +98,15 @@ export const pricePerBu = new Intl.NumberFormat("en-US", {
 });
 const bushels = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const preciseBushels = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-export const displayBushels = (value: number) => Number.isInteger(value) ? bushels.format(value) : preciseBushels.format(value);
+/** Whole bushels as whole, anything else to the cent. Rounded to the cent FIRST: a sum of decimal
+ * bushels carries float noise (5374.4 + 2267.7 + 100.9 is 7742.999999999999), and that must still
+ * read 7,743, not 7,743.00. `|| 0` turns a rounded -0 into 0, so a tiny negative never shows as "-0". */
+export const displayBushels = (value: number) => {
+  const rounded = Math.round(value * 100) / 100 || 0;
+  return Number.isInteger(rounded) ? bushels.format(rounded) : preciseBushels.format(rounded);
+};
+/** Planted acres in the same en-US style as every bushel and price beside them, not the device's locale. */
+const acresFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 export const HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY = "Harvest-minus-bins is not shown because bins cover the whole farm and all years.";
 
 /** Pure view data so every ledger label uses the same baseline supersession rule as bin math. */
@@ -163,6 +171,9 @@ const GRAIN_TABS = [
 ];
 /** "Oct 2026" from any ISO date or month ("2026-10-01", "2026-10"). */
 const monthLabel = (date: string) => `${months[Number(date.slice(5, 7)) - 1]} ${date.slice(0, 4)}`;
+/** A firm offer's month is free text: browsers without a month picker give a plain box, so "Dec 2026"
+ * or "Z26" can be saved. Only a real year-month is reworded; anything else is shown as the farmer typed it. */
+export const offerMonthText = (month: string) => /^\d{4}-(0[1-9]|1[0-2])$/.test(month.trim()) ? monthLabel(month.trim()) : month.trim();
 /** LD-2: the one-time list of bin movements written before crop years existed.
  *
  * Those rows are an explicit "crop year unknown" bucket. No year-specific figure counts them and
@@ -1270,7 +1281,9 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
                 {contractRows.map(
                   (contract, contractIndex) => {
                     const delivered = workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((sum, item) => sum + item.bushels, 0);
-                    const remaining = contract.bushels - delivered;
+                    // To the cent: 100.1 + 200.2 delivered on a 300.3 bu contract leaves float noise, not bushels, so it
+                    // must read "0 bu left" with no "Over-delivered by 0 bu" under it.
+                    const remaining = Math.round((contract.bushels - delivered) * 100) / 100;
                     const finalPrice = finalCashPrice(contract);
                     return (
                     <Fragment key={contract.id}>
@@ -2071,7 +2084,7 @@ function OfferList({
                     </span>
                     <small>
                       {commodity}
-                      {offer.contract_month ? ` · ${offer.offer_type === "cash" ? "delivery" : "futures"} ${monthLabel(offer.contract_month)}` : ""}
+                      {offer.contract_month ? ` · ${offer.offer_type === "cash" ? "delivery" : "futures"} ${offerMonthText(offer.contract_month)}` : ""}
                       {offer.delivery_location
                         ? ` · ${offer.delivery_location}`
                         : ""}
@@ -2556,7 +2569,7 @@ function AlertRuleForm({
           </p>
           {breakeven !== null && (
             <p className="alert-fact">
-              Your break-even: {money.format(breakeven)}/bu
+              Your break-even: {pricePerBu.format(breakeven)}/bu
             </p>
           )}
         </>
@@ -2879,7 +2892,7 @@ export function FirstEstimate({
               </h3>
               {/* No acres entered is unknown, not unplanted, so it is not shown as "0 ac planted". */}
               <p>
-                {assignment.crop_year} crop · {acres > 0 ? `${acres.toLocaleString()} ac planted` : "acres not entered in Fields"}
+                {assignment.crop_year} crop · {acres > 0 ? `${acresFormat.format(acres)} ac planted` : "acres not entered in Fields"}
               </p>
               <label>
                 Expected yield (bu/ac)
@@ -3321,7 +3334,7 @@ export function PositionCard({
         <p className="position-sentence">
           {Math.round(pricedPct)}% fully priced at{" "}
           {average === null ? "—" : pricePerBu.format(average)} avg. Breakeven{" "}
-          {breakeven === null ? "—" : money.format(breakeven)}.{" "}
+          {breakeven === null ? "—" : pricePerBu.format(breakeven)}.{" "}
           {bushels.format(
             basisOpen.reduce((sum, contract) => sum + contract.bushels, 0),
           )}{" "}
@@ -3332,9 +3345,9 @@ export function PositionCard({
           bu futures open. {bushels.format(outrightOpen)} bu unpriced
           {plannedPrice === null
             ? ". Add a cash price target to estimate it."
-            : ` using your cash price target of ${money.format(plannedPrice)}.`}
+            : ` using your cash price target of ${pricePerBu.format(plannedPrice)}.`}
         </p>
-        <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{bushels.format(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${bushels.format(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${bushels.format(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p>{/* Only while the tickets show more than the harvest total: once Use load total has been tapped on Harvest
+        <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{displayBushels(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${displayBushels(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${displayBushels(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p>{/* Only while the tickets show more than the harvest total: once Use load total has been tapped on Harvest
             (or more was entered there), there is nothing left to adopt. */}{fromLoads > harvestActual + 0.000001 && <p>Load tickets show <strong className="numeric">{displayBushels(fromLoads)} bu</strong>, more than the harvest total entered. To use them, tap Use load total on Harvest. <NavLink to="/harvest" className="text-action">Open Harvest</NavLink></p>}<button className="secondary-action" type="button" disabled={harvestActual <= 0 || !canWriteSettings} onClick={() => { void reconcileHarvest() }}>Use harvest total as Grain actual</button>{receiptAt === "reconcile" && <SaveReceipt state={cardReceipt} />}{harvestActual <= 0 && <small>No harvest total entered yet on Harvest.</small>}</section>
         <div className="position-stats">
           <Metric
@@ -3395,7 +3408,7 @@ export function PositionCard({
             <strong>
               {estimate.planted_acres === null
                 ? "—"
-                : `${estimate.planted_acres.toLocaleString()} ac`}
+                : `${acresFormat.format(estimate.planted_acres)} ac`}
             </strong>
           </label>
           {/* Text, not number boxes: a number box reports "180,5" as blank, so Save production could not tell a typo from an
@@ -3468,7 +3481,7 @@ export function PositionCard({
             "No cash price target yet"
           ) : (
             <>
-              Cash price target <strong>{money.format(plannedPrice)}</strong>
+              Cash price target <strong>{pricePerBu.format(plannedPrice)}</strong>
             </>
           )}
           {insuranceFloor !== null && (
@@ -3546,7 +3559,7 @@ export function PlanStatus({
           </>
         )}
         <small className="numeric">
-          {bushels.format(inBins)} bu of the {scope.crop_year} crop in bins
+          {displayBushels(inBins)} bu of the {scope.crop_year} crop in bins
           {wholeFarmBins ? " (whole farm)" : ""}
         </small>
       </div>
@@ -3559,7 +3572,7 @@ export function PlanStatus({
   );
 }
 
-function ActualVsPlan({
+export function ActualVsPlan({
   estimate,
   workspace,
 }: {
@@ -3641,7 +3654,7 @@ function ActualVsPlan({
                 <th scope="row" colSpan={3}>Contracted so far</th>
                 <td className="align-right numeric">
                   <strong>
-                    {bushels.format(sold)} bu ({Math.round(production ? (sold / production) * 100 : 0)}%)
+                    {displayBushels(sold)} bu ({Math.round(production ? (sold / production) * 100 : 0)}%)
                   </strong>
                 </td>
               </tr>
@@ -3716,6 +3729,11 @@ export function ContractEntry({
   // for the rest, which counts as pending only once the farmer saves it.
   const offerLeftover = initialOffer && Number.isFinite(proposedBushels) && proposedBushels > 0 && proposedBushels < initialOffer.bushels
     ? Math.round((initialOffer.bushels - proposedBushels) * 100) / 100
+    : 0;
+  // Worked out and rounded the same way, and the note shows only when the ROUNDED figure is above zero, so
+  // 1000.004 typed against a 1,000 bu offer never reads "This is 0 bu more than the offer".
+  const offerOverage = initialOffer && Number.isFinite(proposedBushels) && proposedBushels > initialOffer.bushels
+    ? Math.round((proposedBushels - initialOffer.bushels) * 100) / 100
     : 0;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -3853,9 +3871,9 @@ export function ContractEntry({
           Saving marks the whole offer filled, so the other {displayBushels(offerLeftover)} bu stop counting as pending. Farm Rx then opens a new-offer form with them filled in. Save it if the buyer is still holding them.
         </p>
       )}
-      {initialOffer && Number.isFinite(proposedBushels) && proposedBushels > initialOffer.bushels && (
+      {offerOverage > 0 && (
         <p className="alert-fact contract-entry-note">
-          This is {displayBushels(Math.round((proposedBushels - initialOffer.bushels) * 100) / 100)} bu more than the offer. Check the bushels against the buyer's confirmation.
+          This is {displayBushels(offerOverage)} bu more than the offer. Check the bushels against the buyer's confirmation.
         </p>
       )}
       {/* step="any": grain is priced to the quarter cent, and a 0.01 step makes the browser refuse
@@ -4239,7 +4257,14 @@ export function lotGapText(workspace: GrainWorkspace, commodityId: string, cropY
   const wholeFarm = estimates.filter((estimate) => estimate.operating_entity_id === null && estimate.enterprise_label === null);
   const production = (wholeFarm.length ? wholeFarm : estimates).reduce((sum, estimate) => sum + activeProduction(estimate), 0);
   const contracted = workspace.grain_contracts.filter((contract) => contract.commodity_id === commodityId && contract.crop_year === cropYear).reduce((sum, contract) => sum + contract.bushels, 0);
-  if (contracted > production + 0.000001) return { bushels: contracted - production, text: `bu more sold than your ${cropYear} crop estimate`, short: true };
+  // Against the estimate in whole bushels, as the card's footer and headline show it, so 30,000 sold against a 29,740.65 bu
+  // projection reads "259 bu more sold" next to "29,741 bu", not 259.35.
+  const oversold = Math.round((contracted - Math.round(production)) * 100) / 100;
+  // `contracted` counts bushels already delivered too, so once deliveries eat into it the oversold figure can be more
+  // than is still owed past the bins (-free). Then the crop the estimate described is already hauled or stored, and
+  // what is left owed is plainly short: the red figure is never bigger than the bushels still owed.
+  if (oversold > -free + 0.000001) return { bushels: -free, text: "bu short", short: true };
+  if (oversold > 0.000001) return { bushels: oversold, text: `bu more sold than your ${cropYear} crop estimate`, short: true };
   // Once actual bushels are in, the crop is harvested and the grain is not still to come.
   const harvested = estimates.some((estimate) => estimate.actual_bushels !== null);
   return { bushels: -free, text: harvested ? "bu sold but not in the bins" : "bu sold but not in the bins yet", short: false };
@@ -5815,17 +5840,19 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
   const availableEffects = effectsReady ? loadEffectsAvailable(draft) : [];
   const confirmedEffects = confirmedLoadEffects(draft);
   const typedNet = Number(draft.net_bushels);
+  // In the same en-US style as every other bushel figure, not the device's locale ("1.000,5" on a German phone).
   const bushelLabel = draft.net_bushels.trim() && Number.isFinite(typedNet) && typedNet > 0
-    ? `${typedNet.toLocaleString()} bu`
+    ? `${displayBushels(typedNet)} bu`
     : "these bushels";
   // The same four effects said as a sentence, so what is about to happen reads as English rather
-  // than as a column of ticked boxes -- and, once saved, as what already happened.
-  const effectWords = (past: boolean) => {
+  // than as a column of ticked boxes -- and, once saved, as what already happened (then `label` is the
+  // saved row's bushels, so both halves of "Load saved" give one figure).
+  const effectWords = (past: boolean, label = bushelLabel) => {
     const phrases = confirmedEffects.map((key) => {
-      if (key === "bin_out") return `${past ? "took" : "takes"} ${bushelLabel} out of ${binName(draft.origin_grain_bin_id)}`;
-      if (key === "bin_in") return `${past ? "put" : "puts"} ${bushelLabel} into ${binName(draft.destination_grain_bin_id)}`;
-      if (key === "contract_delivery") return `${past ? "recorded" : "records"} ${bushelLabel} delivered against ${contractLabel(draft.destination_grain_contract_id)}`;
-      return `${past ? "counted" : "counts"} ${bushelLabel} toward ${fieldName(draft.origin_crop_assignment_id)}\u2019s harvest`;
+      if (key === "bin_out") return `${past ? "took" : "takes"} ${label} out of ${binName(draft.origin_grain_bin_id)}`;
+      if (key === "bin_in") return `${past ? "put" : "puts"} ${label} into ${binName(draft.destination_grain_bin_id)}`;
+      if (key === "contract_delivery") return `${past ? "recorded" : "records"} ${label} delivered against ${contractLabel(draft.destination_grain_contract_id)}`;
+      return `${past ? "counted" : "counts"} ${label} toward ${fieldName(draft.origin_crop_assignment_id)}\u2019s harvest`;
     });
     return phrases.length <= 1 ? phrases.join("") : `${phrases.slice(0, -1).join(", ")} and ${phrases[phrases.length - 1]}`;
   };
@@ -5916,10 +5943,11 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
         : draft.origin_kind === "bin" && lot
           ? { ...outgoing0, origin_crop_year: String(lot.crop_year), origin_commodity_id: lot.commodity_id }
           : outgoing0;
-      // What this save did beyond the ticket, captured before the draft is cleared below.
-      const didAlso = effectsReady && confirmedEffects.length ? effectWords(true) : "";
       const movedOrDelivered = effectsReady && confirmedEffects.some((key) => key !== "harvest");
       const saved = await services.grainRepository.saveLoad(loadId.current, allowOverdelivery ? { ...outgoing, allow_overdelivery: true } : outgoing);
+      // What this save did beyond the ticket, in the saved row's bushels (the figure "Load saved" opens with). The
+      // effects and names come from this render's draft, which clearing the form below does not change.
+      const didAlso = effectsReady && confirmedEffects.length ? effectWords(true, `${displayBushels(saved.net_bushels)} bu`) : "";
       loadId.current = null;
       setTicketOutstanding(false);
       setShowProblems(false);

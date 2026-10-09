@@ -1725,6 +1725,27 @@ test('the Contracts table shows decimal bushels as saved, not rounded', async ({
   expect(unexpected).toEqual([])
 })
 
+test('the Contracts table rounds summed decimal bushels to the cent, so float noise never shows', async ({ page, context }) => {
+  // Sweep #38/#24: in the browser 5374.4 + 2267.7 + 100.9 is 7742.999999999999, 0.01 + 2267.69 is a hair over 2267.7 and
+  // 0.02 + 100.88 a hair under 100.9. The total must read 7,743, and both contracts delivered in full "0 bu left", with no
+  // "0.00 bu left" and no "Over-delivered by 0 bu".
+  await seedSession(context)
+  const farm = farms[0]!
+  const row = (id: string, buyer: string, bushels: number) => ({ id, farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer, bushels, futures_price: null, basis: null, cash_price: 4.75, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, firm_offer_id: null, created_at: now, updated_at: now })
+  const contractRows = [row('00000000-0000-4000-8000-000000000081', 'Open Fill', 5_374.4), row('00000000-0000-4000-8000-000000000082', 'Hair Over', 2_267.7), row('00000000-0000-4000-8000-000000000083', 'Hair Under', 100.9)]
+  const delivery = (id: string, contractId: string, bushels: number) => ({ id, farm_id: farm.id, grain_contract_id: contractId, bushels, delivered_on: '2026-10-05', note: null, created_at: now })
+  const deliveryRows = [delivery('00000000-0000-4000-8000-000000000084', contractRows[1]!.id, 0.01), delivery('00000000-0000-4000-8000-000000000085', contractRows[1]!.id, 2_267.69), delivery('00000000-0000-4000-8000-000000000086', contractRows[2]!.id, 0.02), delivery('00000000-0000-4000-8000-000000000087', contractRows[2]!.id, 100.88)]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: contractRows, grain_contract_deliveries: deliveryRows, grain_contract_audit: [] })
+  await page.goto('/grain/contracts')
+  const delivered = (buyer: string) => page.locator('tr.contract-row').filter({ hasText: buyer }).locator('td[data-label="Delivered"]')
+  await expect(page.locator('tfoot td[data-label="Bushels"]')).toHaveText('7,743')
+  await expect(delivered('Hair Over')).toHaveText(/^2,267\.70 bu delivered\s*0 bu left$/)
+  await expect(delivered('Hair Under')).toHaveText(/^100\.90 bu delivered\s*0 bu left$/)
+  await expect(delivered('Open Fill')).toHaveText(/^0 bu delivered\s*5,374\.40 bu left$/)
+  await expect(page.locator('tfoot td[data-label="Delivered"]')).toHaveText(/^2,368\.60 bu delivered\s*5,374\.40 bu left$/)
+  expect(unexpected).toEqual([])
+})
+
 test('a contract with no deliveries can be corrected with a reason, and one already delivered against cannot', async ({ page, context }) => {
   await seedSession(context)
   contractRepairCalls.length = 0

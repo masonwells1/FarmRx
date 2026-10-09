@@ -1,4 +1,4 @@
-import { cashTargetRevenue, evaluateMarketingAlertRules, latestAlertEligibleCashBid, latestManualCashBid, ruleSentence, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
+import { cashTargetRevenue, evaluateMarketingAlertRules, latestAlertEligibleCashBid, latestManualCashBid, marketedPercentLabel, ruleSentence, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { cashBidEligibleForCropYear, marketingYearBounds, marketingYearStartFor } from './marketingYear'
 import { scopeKey, scopeOf, type FirmOffer, type GrainWorkspace, type InsuranceUnit, type MarketingAlertRule } from './grain'
 import { calculateGrainPosition, hasUnsupportedSavedCoverage, remainingMarketingCapacity, saleLimitForScope, saleLimitWarning, unsupportedCoverageMessage } from './grainPosition'
@@ -120,5 +120,9 @@ assert(result.firedRuleIds.includes(price.id), 'GL-2: a commodity configured to 
 // A7/A8: the saved-rule sentence says how the sweep really behaves.
 assert(ruleSentence(marketed, 'Corn') === 'Alert me while 2026 Corn is below 55% marketed.', `The % goal sentence must say it alerts while below the goal: ${ruleSentence(marketed, 'Corn')}`)
 assert(ruleSentence({ ...deadline, remind_on: '2026-07-20' }, 'Corn') === 'Remind me a week before Jul 20, 2026 about 2026 Corn.', `The deadline sentence must say the reminder comes a week ahead: ${ruleSentence({ ...deadline, remind_on: '2026-07-20' }, 'Corn')}`)
+
+// Sweep #30: % marketed is floored to the goal box's own two decimals, so the figure shown is at or above a goal exactly
+// when the real one is: 49.96% beside a met 49.95% goal reads 49.96, not 49.9, and still never rounds up to a 50% goal.
+assert(marketedPercentLabel(4_996 / 10_000 * 100) === '49.96' && marketedPercentLabel(49.999) === '49.99' && marketedPercentLabel(49.955) === '49.95' && marketedPercentLabel(50) === '50' && marketedPercentLabel(0) === '0', `% marketed must floor to two decimals: ${marketedPercentLabel(4_996 / 10_000 * 100)} / ${marketedPercentLabel(49.999)}`)
 
 console.log('Marketing alert regressions passed.')

@@ -2,7 +2,7 @@ import { Window } from 'happy-dom'
 import React, { createElement, useState } from 'react'
 import { act } from 'react'
 import { MemoryRouter } from 'react-router'
-import { Basis, Bins, LoadsTab, movementSourceLabel } from './GrainModule'
+import { Basis, Bins, displayBushels, LoadsTab, movementSourceLabel } from './GrainModule'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
 import { BIN_UNDATED_GRAIN, loadDateInFutureProblem, netBushelsFromWeights, typedAmountProblem, typedNumberText, STANDARD_BUSHEL_LBS, validateGrainLoad, validateGrainLoadShape, type BinTransaction, type CashBid, type GrainBin, type GrainContract, type GrainLoad, type GrainLoadDraft, type GrainServices, type GrainWorkspace } from './data/grain'
@@ -45,6 +45,8 @@ assert(validateGrainLoadShape({ ...baseDraft, net_bushels: '' }).includes('Net b
 assert(validateGrainLoadShape({ ...baseDraft, gross_lbs: 'x' }).includes('Type the gross weight as a number of pounds.'), 'A word in gross weight is named, not silently dropped.')
 assert(validateGrainLoadShape({ ...baseDraft, moisture_pct: '55' }).includes('Moisture must be between 0 and 40 percent.'), 'Load moisture is held to the same 0-40 as a bin reading.')
 assert(loadDateInFutureProblem('2026-10-02', '2026-10-01') === 'The date hauled cannot be in the future.' && loadDateInFutureProblem('2026-10-01', '2026-10-01') === null, 'Only a date after today is refused.')
+// Sweep #38: bushels are rounded to the cent before choosing whole or two decimals, so a sum's float noise never shows.
+assert(displayBushels(5374.4 + 2267.7 + 100.9) === '7,743' && displayBushels(0.8 - (0.7 + 0.1)) === '0' && displayBushels(-1e-12) === '0' && displayBushels(1000.5) === '1,000.50' && displayBushels(892.857) === '892.86', `Summed decimal bushels read as the cent figure, never 7,743.00, 0.00 or -0: ${displayBushels(5374.4 + 2267.7 + 100.9)} / ${displayBushels(-1e-12)}`)
 assert(movementSourceLabel('grain_load') === 'From a load ticket' && movementSourceLabel('manual entry') === 'Entered by hand' && movementSourceLabel(null) === 'Entered by hand', 'Bin history speaks in words, not stored codes.')
 assert(farmerError(new Error('delivery would exceed the remaining contract bushels; confirm over-delivery to record it'), 'record this load').startsWith('This load is more than what is left on the contract.'), 'An over-delivery refusal says what to change, not "try again".')
 assert(farmerError({ message: 'this movement would make the bin balance negative' }, 'add this movement').startsWith('That bin does not hold that many bushels'), 'A short bin is named.')
@@ -337,7 +339,7 @@ try {
   await change(control(container, 'Bin', 'fieldset.load-origin label'), binA.id)
   await click(radio('Against a contract'))
   await change(control(container, 'Contract', 'fieldset.load-destination label'), contract.id)
-  await change(control(container, 'Net bushels'), '50')
+  await change(control(container, 'Net bushels'), '50.5')
   const deliveryBox = [...container.querySelectorAll('fieldset.load-effects label')].find((label) => label.textContent?.includes('delivered against'))!.querySelector('input') as HTMLInputElement
   if (!deliveryBox.checked) await click(deliveryBox)
   loadMode = 'refuse-over'
@@ -348,7 +350,8 @@ try {
   await click(button(container, 'Save load'))
   assert(openDialog()?.textContent?.includes('This load is more than is left on the contract. Record anyway?'), 'With a stale list, the next Save still asks about the over-delivery.')
   await click(dialogButton('Record anyway'))
-  assert(sentLoads.at(-1)!.draft.allow_overdelivery === true && container.textContent?.includes('It recorded 50 bu delivered against Riverside Elevator (2026).'), `Record anyway sends the confirmation, and the saved message is in the past tense: ${container.querySelector('.load-message')?.textContent}`)
+  // Sweep #27: both halves of the message give the saved figure the same way (en-US, two decimals), not "50.50" then "50.5".
+  assert(sentLoads.at(-1)!.draft.allow_overdelivery === true && container.textContent?.includes('Load saved: 50.50 bu of Yellow Corn, 2026 crop. It recorded 50.50 bu delivered against Riverside Elevator (2026).'), `Record anyway sends the confirmation, and the saved message is in the past tense with one figure: ${container.querySelector('.load-message')?.textContent}`)
   // Full review: a bin whose grain has no crop year (older movements) shows bushels but names no lot. Adding an "In" for that
   // grain would count it twice, so neither the form nor the validation ever suggests one; they say to name the year instead.
   const binC = bin(13, 'Charlie bin', 20_000)
@@ -375,6 +378,24 @@ try {
   await change(control(container, 'Net bushels'), '500.005')
   await click(button(container, 'Save load'))
   assert([...container.querySelectorAll('ul.load-problems li')].some((item) => item.textContent === 'Net bushels can have at most 2 decimals.') && sentLoads.length === sentBeforeThreeDecimals && openDialog() === null, 'A three-decimal net is refused before any question or write.')
+
+  // ---- Sweep #24: 100.1 + 200.2 delivered on a 300.3 bu contract is float noise short of 300.3. The contract is delivered
+  // in full: it is not listed as open with "0.00 bu left", and typing its buyer offers no shortcut onto it.
+  const exactFill: GrainContract = { ...contract, id: uid(30), buyer: 'Hilltop Grain', bushels: 300.3 }
+  const exactWorkspace = { ...workspace, grain_contracts: [contract, exactFill], grain_contract_deliveries: [...workspace.grain_contract_deliveries, { id: uid(31), farm_id: fields.farm.id, grain_contract_id: exactFill.id, bushels: 100.1, delivered_on: '2026-09-26', note: null, created_at: stamp }, { id: uid(32), farm_id: fields.farm.id, grain_contract_id: exactFill.id, bushels: 200.2, delivered_on: '2026-09-27', note: null, created_at: stamp }] } as GrainWorkspace
+  await act(async () => { root.render(createElement(MemoryRouter, null, createElement(LoadsTab, { key: 'exact-fill', workspace: exactWorkspace, services, onSaved: async () => undefined }), createElement(ConfirmDialogHost))); await flush() })
+  await change(control(container, 'Bin', 'fieldset.load-origin label'), binA.id)
+  const hasShortcut = (buyer: string) => [...container.querySelectorAll('button')].some((item) => item.textContent?.startsWith(`Apply to the ${buyer}`))
+  await change(control(container, 'Buyer or elevator', 'fieldset.load-destination label'), 'Riverside Elevator')
+  assert(hasShortcut('Riverside Elevator'), 'Test setup: an open contract with the typed buyer is offered as a shortcut.')
+  await change(control(container, 'Buyer or elevator', 'fieldset.load-destination label'), 'Hilltop Grain')
+  assert(!hasShortcut('Hilltop Grain'), 'A contract delivered in full in decimals is not offered as the shortcut for its buyer.')
+  await click([...container.querySelectorAll('fieldset.load-destination label')].find((label) => label.textContent?.includes('Against a contract'))!.querySelector('input') as HTMLInputElement)
+  const exactSelect = control(container, 'Contract', 'fieldset.load-destination label') as HTMLSelectElement
+  const exactOptions = [...exactSelect.options].map((option) => option.textContent)
+  assert(exactOptions.includes('Hilltop Grain · 2026 · delivered in full') && exactOptions.indexOf('Riverside Elevator · 2026 · 100 bu left of 1,000') < exactOptions.indexOf('Hilltop Grain · 2026 · delivered in full'), `The decimal contract reads "delivered in full" and sorts after the open one: ${exactOptions.join(' | ')}`)
+  await change(exactSelect, exactFill.id)
+  assert(container.textContent?.includes('This contract is delivered in full. Saving will ask before recording more.'), 'The chosen decimal contract says it is delivered in full, not "0.00 bu left".')
 
   // ---- Codex review: a new load and a new cash bid are dated, and capped, by the farm's calendar day, as deliveries and
   // the alert sweep are. The farthest-ahead zone and one 25 hours behind it: one is always on another day from this device.
