@@ -290,6 +290,27 @@ try {
   assert(container.querySelector('svg.basis-chart'), 'One elevator typed, its trend is drawn.')
   await act(async () => { root.render(createElement('div')); await flush() })
 
+  // ---- Sweep #26: with no elevator typed, the list is the farm's own bids. A day of USDA feed rows under market-location names
+  // must not read as elevator bids or push yesterday's own bid out of the last eight.
+  const feedRows = Array.from({ length: 9 }, (_, index) => ({ ...bids[1]!, id: uid(80 + index), elevator: `USDA location ${index + 1}`, bid_date: '2026-10-01', basis: -0.4, cash_price: 4.05, notes: '[USDA MARS 2850 · Iowa]', feed_source: 'usda_mars', feed_report_id: '2850', feed_geography: 'IA' })) as CashBid[]
+  const ownBid = { ...bids[0]!, bid_date: '2026-09-30' }
+  await act(async () => { root.render(createElement(MemoryRouter, null, createElement(Basis, { key: 'feed', workspace: { ...workspace, cash_bids: [ownBid, ...feedRows] }, services, onSaved: async () => undefined }), createElement(ConfirmDialogHost))); await flush() })
+  const basisRows = container.querySelector('.basis-list')?.textContent ?? ''
+  assert(basisRows.includes('Riverside Elevator') && !basisRows.includes('USDA location'), `The every-elevator list must keep the farm's own bid and leave out feed rows: ${basisRows}`)
+  await act(async () => { root.render(createElement('div')); await flush() })
+
+  // ---- Sweep #3: an older "Out" with no crop year, beside an "In" whose year was named, nets below zero in the unnamed bucket.
+  // The bin card says that grain was taken out with no crop year; it never shows a minus badge.
+  const binD = bin(15, 'Delta bin', 20_000)
+  const namedIn: BinTransaction = { ...fill, id: uid(16), grain_bin_id: binD.id, bushels: 10_000, crop_year: 2025, source_kind: 'manual' }
+  const unnamedOut: BinTransaction = { ...fill, id: uid(17), grain_bin_id: binD.id, direction: 'out', bushels: 2_000, crop_year: null, occurred_on: '2026-09-21', source_kind: 'manual' }
+  const reconciling = { ...workspace, grain_bins: [binD], bin_transactions: [namedIn, unnamedOut] } as GrainWorkspace
+  function ReconcilingBins() { return createElement(Bins, { workspace: reconciling, services, receipt: useSaveReceipt(null), onSaved: async () => undefined, onMovementSaved: async () => undefined, onReceipt: () => undefined, canManageFarm: true }) }
+  await act(async () => { root.render(createElement(MemoryRouter, null, createElement(ReconcilingBins), createElement(ConfirmDialogHost))); await flush() })
+  const badges = [...container.querySelectorAll('article.bin-card .commodity-badge')].map((item) => item.textContent ?? '')
+  assert(badges.includes('2025 Yellow Corn · 10,000 bu') && badges.includes('Yellow Corn · 2,000 bu taken out with no crop year') && !badges.some((badge) => badge.includes('-2,000')), `An unnamed lot below zero must read as grain taken out, never as a minus badge: ${JSON.stringify(badges)}`)
+  await act(async () => { root.render(createElement('div')); await flush() })
+
   // ---- Loads, second form: net bushels follow the crop, a repeated ticket is asked about, a voided
   // ticket copies into a new one, and an over-delivery the server refused is asked about next time.
   const cornCrop = fields.crop_assignments.find((assignment) => assignment.commodity_id === 'corn_yellow')!

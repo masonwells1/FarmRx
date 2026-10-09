@@ -1,6 +1,7 @@
 import { cashTargetRevenue, evaluateMarketingAlertRules, latestAlertEligibleCashBid, latestManualCashBid, marketedPercentLabel, ruleSentence, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { cashBidEligibleForCropYear, marketingYearBounds, marketingYearStartFor } from './marketingYear'
 import { scopeKey, scopeOf, type FirmOffer, type GrainWorkspace, type InsuranceUnit, type MarketingAlertRule } from './grain'
+import { farmCalendarDate, farmLocalCalendarDate } from './farmDates'
 import { calculateGrainPosition, hasUnsupportedSavedCoverage, remainingMarketingCapacity, saleLimitForScope, saleLimitWarning, unsupportedCoverageMessage } from './grainPosition'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -116,6 +117,22 @@ assert(marketingYearStartFor({ crop_family: 'barley' }) === null && marketingYea
 assert(!cashBidEligibleForCropYear({ crop_family: 'corn', marketing_year_start_month: 3, marketing_year_start_day: 1 }, 2026, '2026-10-15', '2027-06-01', '2027-06-30'), 'GL-2: a March-start commodity must judge a June 2027 window as the next crop year.')
 result = evaluateMarketingAlertRules({ ...workspace, fields: { ...workspace.fields, commodities: [{ id: 'corn', name: 'Corn', crop_family: 'corn', marketing_year_start_month: 3, marketing_year_start_day: 1 }] } as GrainWorkspace['fields'], cash_bids: [spotBid], marketing_alert_rules: [{ ...price, crop_year: 2026 }] }, now)
 assert(result.firedRuleIds.includes(price.id), 'GL-2: a commodity configured to start in March must make a July 2026 spot bid the 2026 crop on the page, as it is for the sweep.')
+
+// Sweep #37: the page judges rules on the farm's calendar day, as the sweep does and as a new cash bid is dated, not on this
+// device's day. The farthest-ahead zone and one 25 hours behind it: at this instant one of them is on another day from this device.
+{
+  const zone = ['Pacific/Kiritimati', 'Pacific/Pago_Pago'].find((item) => farmCalendarDate(now, item) !== farmLocalCalendarDate(now))
+  assert(zone, 'Test setup: one farm must sit on another calendar day from this device.')
+  const farmDay = farmCalendarDate(now, zone)
+  const zoned = { ...workspace, fields: { ...workspace.fields, farm: { ...workspace.fields.farm, time_zone: zone } } } as GrainWorkspace
+  const reminder = evaluateMarketingAlertRules({ ...zoned, marketing_alert_rules: [{ ...deadline, remind_on: farmDay }] }, now)
+  assert(reminder.firedRuleIds.length === 1 && reminder.alerts[0]?.message.includes('reminder is today') && reminder.alerts[0]?.key.endsWith(`:${farmDay}`), `${zone}: a reminder dated the farm's day ${farmDay} must say today: ${JSON.stringify(reminder)}`)
+  const farmDayBid = { ...workspace.cash_bids[0], bid_date: farmDay }
+  const fresh = evaluateMarketingAlertRules({ ...zoned, cash_bids: [farmDayBid], marketing_alert_rules: [price] }, now)
+  assert(fresh.conditions[0]?.met === true && fresh.firedRuleIds.includes(price.id), `${zone}: a bid dated the farm's day ${farmDay} must meet the target: ${JSON.stringify(fresh)}`)
+  const sent = evaluateMarketingAlertRules({ ...zoned, cash_bids: [farmDayBid], marketing_alert_rules: [{ ...price, last_triggered_at: now.toISOString() }] }, now)
+  assert(sent.conditions[0]?.met === true && sent.firedRuleIds.length === 0, `${zone}: a rule already sent on the farm's day must not be sent again that day: ${JSON.stringify(sent)}`)
+}
 
 // A7/A8: the saved-rule sentence says how the sweep really behaves.
 assert(ruleSentence(marketed, 'Corn') === 'Alert me while 2026 Corn is below 55% marketed.', `The % goal sentence must say it alerts while below the goal: ${ruleSentence(marketed, 'Corn')}`)

@@ -3,7 +3,7 @@ import type { GrainWorkspace } from './grain'
 import { evaluateMarketingAlertRules } from './marketingAlerts'
 import { isMarsBid } from './basisMath'
 import { getOperationalIntegrityCapability } from './operationalIntegrityCapability'
-import { farmLocalCalendarDate } from './farmDates'
+import { farmCalendarDate } from './farmDates'
 import { currentFarmContext } from '../auth/farmContext'
 import { supabaseConfig } from '../lib/supabaseConfig'
 import { bindFarmOperationRequest, captureFarmOperationContext, farmOperationRequestHeaders, verifyFarmOperationContext, type FarmOperationContext } from './farmOperationContext'
@@ -22,7 +22,8 @@ const readableDate = (value: string) => new Date(`${value}T00:00:00Z`).toLocaleD
  * marketing alert rules folded in below are the server sweep's (run_scheduled_alert_sweep, every
  * fifteen minutes); this evaluation of them exists so the page agrees with the email that arrives. */
 export function evaluateGrainAlerts(workspace: GrainWorkspace, now = new Date()): GrainAlert[] {
-  const today = farmLocalCalendarDate(now); const alerts: GrainAlert[] = []
+  // The farm's calendar day, the same day the marketing rules folded in below are judged on.
+  const today = farmCalendarDate(now, workspace.fields.farm.time_zone); const alerts: GrainAlert[] = []
   const name = (id: string) => workspace.fields.commodities.find((commodity) => commodity.id === id)?.name ?? id
   for (const target of workspace.marketing_plan_targets) {
     if (target.target_price !== null) { const candidates = workspace.cash_bids.filter((bid) => bid.commodity_id === target.commodity_id && bid.cash_price !== null && !isMarsBid(bid) && observationFresh(bid.bid_date, now)); const highest = candidates.sort((left, right) => (right.cash_price! - left.cash_price!) || right.bid_date.localeCompare(left.bid_date))[0]; if (highest && highest.cash_price! >= target.target_price) alerts.push({ key: `price:${target.id}:${target.target_price}:${highest.id}`, kind: 'price_target', targetId: target.id, observationId: highest.id, message: `${target.crop_year} ${name(target.commodity_id)} cash bid ${quarterCent.format(highest.cash_price!)} (${highest.elevator}) reached your ${quarterCent.format(target.target_price)} target.` }) }

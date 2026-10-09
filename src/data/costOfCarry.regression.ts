@@ -54,6 +54,10 @@ check('harvest month Oct to Dec counts the Nov custom basis as lost', customBasi
 check('a basis left at the default is not counted as lost', shiftCarryRows(Array.from({ length: 13 }, () => gridRow('', '-0.25')), 9, 11, blankRow).lostBasis, 0)
 check('a basis written differently from the default (-0.250 vs -0.25) is not counted as lost', shiftCarryRows(Array.from({ length: 13 }, () => gridRow('', '-0.250')), 9, 11, blankRow).lostBasis, 0)
 check('a basis box the farmer cleared is not counted as lost', shiftCarryRows(Array.from({ length: 13 }, () => gridRow('', '')), 9, 11, blankRow).lostBasis, 0)
+// Sweep #15: with the default basis cleared, a month's typed 0 basis is the farmer's own and is counted, not read as the blank default.
+const blankDefault = () => gridRow('', '')
+check('a typed 0 basis beside a cleared default is counted as lost', shiftCarryRows(Array.from({ length: 13 }, (_, index) => gridRow('', index === 0 ? '0' : '')), 9, 10, blankDefault).lostBasis, 1)
+check('blank basis boxes beside a cleared default are not counted as lost', shiftCarryRows(Array.from({ length: 13 }, () => gridRow('', '')), 9, 10, blankDefault).lostBasis, 0)
 const sparse = ['', '', '4.60', '', '4.75', '', ''].map((price) => gridRow(price))
 check('fill-down copies the next typed futures price into blank months', fillFuturesFromNext(sparse).map((row) => row.marketPrice).join('|'), '4.60|4.60|4.60|4.75|4.75||')
 check('fill-down keeps each row basis', fillFuturesFromNext(sparse)[0].basis, '-0.30')

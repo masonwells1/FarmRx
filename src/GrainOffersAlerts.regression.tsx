@@ -312,7 +312,9 @@ assert(offerMonthText('Dec 2026') === 'Dec 2026' && offerMonthText('December') =
     assert(fillEntry()?.textContent?.includes(firmOfferFillPartialSuccessMessage), 'A13: the partial-success warning must show on the fill form.')
     fillMode = 'ok'; await submit(fillForm()); await act(async () => { await flush() })
     assert(!fillEntry() && section().textContent?.includes('Save the form below if the buyer is still holding the other 4,000 bu.'), `A13/A18: a partial fill must say what was recorded and offer the leftover bushels. ${section().textContent}`)
-    assert((control(offerForm(), 'Bushels') as HTMLInputElement).value === '4000' && (control(offerForm(), 'Buyer') as HTMLInputElement).value === 'County elevator' && (control(offerForm(), 'Expires on') as HTMLInputElement).value === '', 'A18: the leftover-bushels form must be prefilled from the offer, with a blank expiry.')
+    // Sweep #18: the buyer holds the rest of the same offer to the same date, so the leftover keeps the offer's expiry. A blank
+    // date would keep those bushels pending forever. (Copy as new offer, below, still starts with no date.)
+    assert((control(offerForm(), 'Bushels') as HTMLInputElement).value === '4000' && (control(offerForm(), 'Buyer') as HTMLInputElement).value === 'County elevator' && (control(offerForm(), 'Expires on') as HTMLInputElement).value === nextWeek, `A18: the leftover-bushels form must be prefilled from the offer, with the offer's own expiry: ${(control(offerForm(), 'Expires on') as HTMLInputElement).value}`)
     assert(Number(offerWrites.length) === 1, 'A18: the leftover bushels count as pending only after the farmer saves them.')
     await click(button(offerForm(), 'Close without saving'))
     assert(!section().textContent?.includes('Save the form below'), 'A18: closing the leftover-bushels form must also clear the notice that points at it.')

@@ -401,6 +401,16 @@ export const planSavedNoticeFor = (kind: SyncState["kind"]) =>
 /** Said once wherever a member who may only view Grain would otherwise be offered a write the server refuses. */
 export const READ_ONLY_GRAIN = "Only someone who can edit this farm can change the plan or the crop estimates.";
 
+/** The crop year the Contracts tab asks the farmer to set up before it can be sold, or null when it is set up. From September,
+ * as harvest starts, that is next calendar year's crop; from January it is this calendar year's crop, the one sold ahead of
+ * planting (January already belongs to the new crop year). Any estimate for that year or a later one counts, so New Year's Day
+ * never brings the note back asking for a crop two seasons out. */
+export function upcomingCropMissing(estimates: readonly { crop_year: number }[], farmDate: string): number | null {
+  const year = Number(farmDate.slice(0, 4));
+  const upcoming = Number(farmDate.slice(5, 7)) >= 9 ? year + 1 : year;
+  return estimates.some((estimate) => estimate.crop_year >= upcoming) ? null : upcoming;
+}
+
 /** The plan for one crop scope with one month left out: what replace_marketing_plan_targets is sent to remove that month. */
 export function planWithoutMonth(targets: MarketingPlanTarget[], scope: PositionScope, removedId: string) {
   return scopeRows(targets, scope).filter((row) => row.id !== removedId);
@@ -875,8 +885,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
   const contractRows = scopeRows(workspace.grain_contracts, selectedScope);
   // Display only: the same finalRevenue / finalBushels the Overview averages, nothing new persisted.
   const contractPosition = calculateGrainPosition(0, contractRows, 0, null);
-  const farmYear = Number(planDateFor(new Date(), workspace.fields.farm.time_zone).slice(0, 4));
-  const nextYearMissing = !workspace.production_estimates.some((estimate) => estimate.crop_year === farmYear + 1);
+  const missingCropYear = upcomingCropMissing(workspace.production_estimates, planDateFor(new Date(), workspace.fields.farm.time_zone));
   const planSavedNotice = () => planSavedNoticeFor(getModuleSyncStatus("grain").kind);
   const saveTarget = async (values: {
     pct: number;
@@ -1225,10 +1234,10 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
               </select>
             </label>
           )}
-          {/* A crop can be sold only once it has an estimate, and next year's crop gets one only after it
+          {/* A crop can be sold only once it has an estimate, and the coming crop gets one only after it
               is planned in Fields and given a yield on Overview. Nothing else on this tab says so. */}
-          {!deliveryIntent && nextYearMissing && canWriteSettings && (
-            <p className="panel-note contracts-next-year">To sell next year's crop, add it in <Link to="/fields">Fields</Link>, then set its expected yield on <Link to="/grain">Overview</Link>. It will then appear here.</p>
+          {!deliveryIntent && missingCropYear !== null && canWriteSettings && (
+            <p className="panel-note contracts-next-year">To sell the {missingCropYear} crop, add it in <Link to="/fields">Fields</Link>, then set its expected yield on <Link to="/grain">Overview</Link>. It will then appear here.</p>
           )}
           {/* A member who may only view gets no write controls here, only this sentence: every sale or delivery they tried would be refused. */}
           {!canWriteSettings ? <p className="panel-note contracts-read-only">You can view contracts. Ask the farm owner to record sales or deliveries.</p> : deliveryIntent ? <div className="grain-delivery-intent" role="status"><div><strong>Recording a grain delivery</strong><p>Pick the crop and year above, then the contract below, and enter the delivered bushels. Nothing is written until you tap Record delivery.</p><p>Hauling a truck out of a bin? <Link to="/grain/loads">Record it as a load</Link> instead. It takes the grain out of the bin and records the delivery in one step.</p></div><button className="secondary-action" type="button" onClick={() => setDeliveryIntent(false)}>Record a sale instead</button></div> : <ContractEntry
@@ -1759,7 +1768,8 @@ export function FirmOffers({
     closeForms();
     setFilling(offer);
   };
-  const openCopy = (offer: FirmOffer) => openAdd(scopeOf(offer), offer);
+  // A copy starts with no expiry: Copy is offered on expired and canceled offers, whose date is past or no longer the buyer's.
+  const openCopy = (offer: FirmOffer) => openAdd(scopeOf(offer), { ...offer, expires_on: null });
   const save = async (offer: FirmOffer) => {
     const offerLock = offerLocks.current.get(offer.id);
     if (!offerLock.acquire()) return;
@@ -1855,6 +1865,8 @@ export function FirmOffers({
           : `Sale recorded as a contract and the offer to ${offer.buyer} is marked filled.`,
       );
       if (rest > 0) {
+        // The leftover keeps the offer's expiry: the buyer is holding the rest of the same offer, to the same date, and a blank
+        // date would keep those bushels pending forever.
         setTemplate({ ...offer, bushels: rest });
         setAddingScope(scopeOf(offer));
       }
@@ -2187,7 +2199,8 @@ function FirmOfferForm({
   onSave,
 }: {
   offer: FirmOffer | null;
-  /** A new offer started from an earlier one. Its status, link and expiry date are not carried over. */
+  /** A new offer started from an earlier one. Its status and link are not carried over; its expiry date is, so the
+   * caller clears it when the date should not follow (Copy as new offer). */
   initial?: FirmOffer | null;
   scope: PositionScope;
   services: GrainServices;
@@ -2203,7 +2216,7 @@ function FirmOfferForm({
   const [price, setPrice] = useState(start?.price?.toString() ?? "");
   const [basis, setBasis] = useState(start?.basis?.toString() ?? "");
   const [month, setMonth] = useState(start?.contract_month ?? "");
-  const [expires, setExpires] = useState(offer?.expires_on ?? "");
+  const [expires, setExpires] = useState(start?.expires_on ?? "");
   const [location, setLocation] = useState(start?.delivery_location ?? "");
   const [notes, setNotes] = useState(start?.notes ?? "");
   const [error, setError] = useState("");
@@ -2248,11 +2261,12 @@ function FirmOfferForm({
         updated_at: timestamp,
       };
       // Form-only checks on top of the database's own rules: a $0 price and a past expiry are almost always typing slips.
-      // An expiry date the farmer did not change is left alone, so an old offer's note can still be edited.
+      // An expiry date the farmer did not change is left alone, so an old offer's note can still be edited, and a leftover
+      // offer's carried-over date still saves if the day turns over before Save.
       const priceNotAboveZero = type !== "basis" && price !== "" && !(Number(price) > 0);
       const errors = [
         ...(priceNotAboveZero ? ["Enter a price above $0.00."] : []),
-        ...(expires && expires !== (offer?.expires_on ?? "") && expires < localCalendarDay(new Date()) ? ["The expiry date is in the past. Pick today or later, or leave it blank."] : []),
+        ...(expires && expires !== (start?.expires_on ?? "") && expires < localCalendarDay(new Date()) ? ["The expiry date is in the past. Pick today or later, or leave it blank."] : []),
         // The shared rule's "zero or more" would contradict "above $0.00" just above it, about the same box.
         ...validateFirmOffer(next).filter((problem) => !(priceNotAboveZero && problem === "Price must be zero or more.")),
       ];
@@ -4496,7 +4510,12 @@ export function Bins({
                 {/* One badge per crop year, so carry-over and this year's grain in the same bin are never read as one pile. */}
                 {heldYearLots.length ? heldYearLots.map((lot) => {
                   const commodity = workspace.fields.commodities.find((item) => item.id === lot.commodity_id);
-                  return <span key={`${lot.commodity_id}:${lot.crop_year ?? ""}`} className={`commodity-badge ${commodity?.traits.identity_preserved ? "ip" : ""}`}>{commodity?.traits.identity_preserved ? "IP · " : ""}{lot.crop_year ?? "Year not recorded"} {commodity?.name ?? lot.commodity_id} · {displayBushels(lot.bushels)} bu</span>
+                  // Movements with no crop year can net below zero (an older "Out" not yet named, beside a lot that was). That is
+                  // grain taken out, not a pile of minus bushels, and Farm Rx will not guess which year it came out of.
+                  const takenOut = lot.crop_year === null && lot.bushels < 0;
+                  return <span key={`${lot.commodity_id}:${lot.crop_year ?? ""}`} className={`commodity-badge ${commodity?.traits.identity_preserved ? "ip" : ""}`}>{commodity?.traits.identity_preserved ? "IP · " : ""}{takenOut
+                    ? `${commodity?.name ?? lot.commodity_id} · ${displayBushels(-lot.bushels)} bu taken out with no crop year`
+                    : `${lot.crop_year ?? "Year not recorded"} ${commodity?.name ?? lot.commodity_id} · ${displayBushels(lot.bushels)} bu`}</span>
                 }) : (
                   <span className="commodity-badge">Empty</span>
                 )}
@@ -5110,9 +5129,11 @@ export function Basis({
   const allElevators = !elevator.trim();
   // Matched the way the farmer types it: "riverside " finds the saved "Riverside".
   const elevatorKey = elevator.trim().toLowerCase();
+  // The every-elevator list is the farm's own bids. USDA feed rows come in many a day under market-location names, so mixed in
+  // they would read as elevator bids and push the farmer's own out of the last eight; the heading names the feed instead.
   const history = workspace.cash_bids
     .filter(
-      (bid) => (allElevators || bid.elevator.trim().toLowerCase() === elevatorKey) && bid.commodity_id === commodity,
+      (bid) => (allElevators ? !isMarsBid(bid) : bid.elevator.trim().toLowerCase() === elevatorKey) && bid.commodity_id === commodity,
     )
     .sort((left, right) => left.bid_date.localeCompare(right.bid_date))
     .slice(-8);
@@ -5453,6 +5474,14 @@ export function TargetEditor({
     Number.isFinite(relativeValue)
       ? breakeven * (1 + relativeValue / 100)
       : null;
+  // A saved month whose % over breakeven is left as it was keeps its saved price while breakeven loads or cannot be read (offline,
+  // no Profitability access): the month grid shows that price, and a save that only changes the month's % or deadline still works.
+  const savedPrice =
+    target && target.breakeven_relative_pct !== null && target.target_price !== null && relativeValue === target.breakeven_relative_pct
+      ? target.target_price
+      : null;
+  // While breakeven is (re)loading, a price worked from an earlier read is not shown or saved.
+  const shownPrice = breakevenLoaded ? computedPrice ?? savedPrice : savedPrice;
   return (
     <div className="target-modal-backdrop" role="presentation">
       <form
@@ -5472,20 +5501,21 @@ export function TargetEditor({
             setFormError(`Your plan would add up to ${Number((others + Number(pct)).toFixed(2))}% of the crop. Lower this month or another so the total is 100% or less.`);
             return;
           }
-          if (relative !== "" && !breakevenLoaded) {
+          if (relative !== "" && !breakevenLoaded && savedPrice === null) {
             setFormError("Checking breakeven… try again in a moment.");
             return;
           }
           // A % over breakeven is stored as the price it works out to. With no breakeven there is no price,
-          // and saving the old cash price beside the new % would store a number the screen is not showing.
-          if (relative !== "" && computedPrice === null) {
+          // and saving the old cash price beside a new % would store a number the screen is not showing.
+          // An unchanged % keeps the price it was saved with, which is the price the box shows.
+          if (relative !== "" && shownPrice === null) {
             setFormError("Breakeven isn't available for this crop yet, so a % over breakeven can't be turned into a price. Clear that box and enter a cash price, or add this crop's costs in Profitability.");
             return;
           }
           setFormError("");
           onSave({
             pct: Number(pct),
-            price: relative !== "" ? computedPrice : (price === "" ? null : Number(price)),
+            price: relative !== "" ? shownPrice : (price === "" ? null : Number(price)),
             relativePct: relativeValue,
             deadline: deadline || null,
           });
@@ -5523,7 +5553,7 @@ export function TargetEditor({
             min="0"
             step="any"
             inputMode="decimal"
-            value={relative !== "" ? (computedPrice === null ? "" : String(Number(computedPrice.toFixed(4)))) : price}
+            value={relative !== "" ? (shownPrice === null ? "" : String(Number(shownPrice.toFixed(4)))) : price}
             disabled={relative !== ""}
             onChange={(event) => { setPrice(event.target.value); setFormError(""); }}
           />
@@ -5542,10 +5572,10 @@ export function TargetEditor({
         </label>
         {relative !== "" && (
           <p className="computed-price">
-            {!breakevenLoaded ? "Checking breakeven…" : <>
+            {!breakevenLoaded ? <>Checking breakeven…{savedPrice !== null && <> Saved target {pricePerBu.format(savedPrice)}</>}</> : <>
               Breakeven{" "}
               {breakeven === null ? "not available" : pricePerBu.format(breakeven)} →
-              target {computedPrice === null ? "—" : pricePerBu.format(computedPrice)}
+              target {computedPrice !== null ? pricePerBu.format(computedPrice) : savedPrice !== null ? `${pricePerBu.format(savedPrice)} (saved)` : "—"}
             </>}
           </p>
         )}

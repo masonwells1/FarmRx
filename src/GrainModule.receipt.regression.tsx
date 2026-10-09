@@ -1,7 +1,7 @@
 import { Window } from 'happy-dom'
 import React, { createElement, useState } from 'react'
 import { act } from 'react'
-import { ActualVsPlan, Bins, ContractActions, ContractEntry, deliveryDefaultEstimate, FirstEstimate, lotGapText, NeedsEstimate, planSavedNoticeFor, PlanStatus, planWithoutMonth, PositionCard, READ_ONLY_GRAIN, TargetEditor, UntrackedStoredGrain } from './GrainModule'
+import { ActualVsPlan, Bins, ContractActions, ContractEntry, deliveryDefaultEstimate, FirstEstimate, lotGapText, NeedsEstimate, planSavedNoticeFor, PlanStatus, planWithoutMonth, PositionCard, READ_ONLY_GRAIN, TargetEditor, UntrackedStoredGrain, upcomingCropMissing } from './GrainModule'
 import { SaveReceipt } from './components/SaveReceipt'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
@@ -232,6 +232,42 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     await change(control(container, 'Target % of production'), '5')
     assert(!container.querySelector('.target-modal [role="alert"]'), 'Lowering the % must clear the old "add up to" message.')
   } finally { await act(async () => { root.unmount() }); container.remove() }
+}
+
+// Sweep #2: a saved month whose % over breakeven is left as it was keeps its saved price while breakeven loads or cannot be read
+// (offline, no Profitability access), and a save that changes only the month's % goes through with that price. A changed % still
+// needs breakeven, so the old price is never stored beside a new %.
+{
+  const scope = { farm_id: fields.farm.id, crop_year: estimate.crop_year, commodity_id: estimate.commodity_id, operating_entity_id: null, enterprise_label: null }
+  const march = { id: uid(755), ...scope, target_month: `${scope.crop_year}-03-01`, target_pct_of_production: 20, target_price: 4.62, breakeven_relative_pct: 10, deadline: null, notes: null, created_at: stamp, updated_at: stamp }
+  const saves: Array<{ pct: number; price: number | null; relativePct: number | null }> = []
+  const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
+  const failingServices = { ...services, profitabilityRepository: { ...services.profitabilityRepository, getBreakeven: async () => { throw new Error('Failed to fetch') } } } as unknown as GrainServices
+  const loadingServices = { ...services, profitabilityRepository: { ...services.profitabilityRepository, getBreakeven: () => new Promise<null>(() => undefined) } } as unknown as GrainServices
+  const render = async (key: string, editorServices: GrainServices) => { await act(async () => { root.render(createElement(TargetEditor, { key, month: 3, commodity: '2026 Yellow Corn — whole farm', target: march, scope, services: editorServices, workspace: { ...workspace, marketing_plan_targets: [march] }, onClose: () => undefined, onSave: (values) => { saves.push(values) } })); await flush() }) }
+  const submit = async () => { const save = button(container, 'Save target'); await act(async () => { save.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush() }) }
+  const priceBox = () => control(container, 'Cash price target') as HTMLInputElement
+  try {
+    await render('unavailable', failingServices)
+    assert(priceBox().value === '4.62' && container.querySelector('.computed-price')?.textContent?.includes('$4.62 (saved)'), `With breakeven unreadable, the saved $4.62 must stay in view: box "${priceBox().value}", ${container.querySelector('.computed-price')?.textContent}`)
+    await change(control(container, 'Target % of production'), '25'); await submit()
+    assert(Number(saves.length) === 1 && saves[0].pct === 25 && saves[0].price === 4.62 && saves[0].relativePct === 10 && !container.querySelector('.target-modal [role="alert"]'), `Changing only the month's % must save with the saved price and %: ${JSON.stringify(saves)} ${container.querySelector('.target-modal [role="alert"]')?.textContent}`)
+    await change(control(container, 'ROI target'), '12'); await submit()
+    assert(Number(saves.length) === 1 && container.textContent?.includes("Breakeven isn't available for this crop yet") && priceBox().value === '', 'A changed % with no breakeven must still be refused, never saved beside the old price.')
+    await render('loading', loadingServices)
+    assert(priceBox().value === '4.62' && container.querySelector('.computed-price')?.textContent === 'Checking breakeven… Saved target $4.62', `While breakeven loads, the saved price stays in view: box "${priceBox().value}", ${container.querySelector('.computed-price')?.textContent}`)
+    await submit()
+    assert(Number(saves.length) === 2 && saves[1].price === 4.62 && saves[1].relativePct === 10, `An unchanged month saved while breakeven loads keeps its saved price: ${JSON.stringify(saves[1])}`)
+  } finally { await act(async () => { root.unmount() }); container.remove() }
+}
+
+// Sweep #21: the Contracts note asks for the crop about to be sold ahead, not calendar year + 1. With 2026 and 2027 set up, New
+// Year's Day must not bring it back asking for 2028; from September the next crop is asked for, and the year is named.
+{
+  const years = (...list: number[]) => list.map((crop_year) => ({ crop_year }))
+  assert(upcomingCropMissing(years(2026, 2027), '2026-12-31') === null && upcomingCropMissing(years(2026, 2027), '2027-01-01') === null, `New Year's Day must not ask for a crop two seasons out: ${upcomingCropMissing(years(2026, 2027), '2027-01-01')}`)
+  assert(upcomingCropMissing(years(2026, 2027), '2027-08-31') === null && upcomingCropMissing(years(2026, 2027), '2027-09-01') === 2028, 'From September, as harvest starts, the next crop is asked for.')
+  assert(upcomingCropMissing(years(2026), '2026-10-15') === 2027 && upcomingCropMissing(years(2026), '2027-01-01') === 2027 && upcomingCropMissing(years(2025), '2026-03-01') === 2026, 'A missing coming crop is named by its year.')
 }
 
 // Review repairs: plan notices, the plan status with no plan, the needs-an-estimate prompt, untracked stored grain, and the lot
