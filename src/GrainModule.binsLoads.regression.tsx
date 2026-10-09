@@ -77,6 +77,10 @@ assert(farmerError(new Error('Connect to the internet before using the harvest t
 const contractDraft: GrainLoadDraft = { ...baseDraft, destination_kind: 'contract', destination_buyer: '', destination_grain_contract_id: uid(2) }
 assert(grainLoadPayload(uid(3), { ...contractDraft, allow_overdelivery: true }).allow_overdelivery === true, 'A confirmed over-delivery travels with the save.')
 assert(!('allow_overdelivery' in grainLoadPayload(uid(3), { ...baseDraft, allow_overdelivery: true })), 'No delivery happens on a buyer load, so the flag is not sent.')
+// Review: an inner space is a thousands mark only inside thousands groups, and the save layer reads by the screen's rule.
+assert(typedNumberText('1200 500') === '1200 500' && typedAmount('1200 500') === null && typedAmount('45210 125') === null && typedAmount(' 1 200 ') === 1200 && typedAmount('1 000 000') === 1_000_000, 'An inner space never merges two numbers: "1200 500" is refused, not read as 1,200,500.')
+const commaPayload = grainLoadPayload(uid(3), { ...baseDraft, gross_lbs: '80,000', tare_lbs: '30,000', net_bushels: '892.86' })
+assert(commaPayload.gross_lbs === 80_000 && commaPayload.tare_lbs === 30_000 && grainLoadPayload(uid(3), { ...baseDraft, net_bushels: '1,200' }).net_bushels === 1200, `The load payload reads typed weights and net by the screen's rule, never null for "80,000": ${JSON.stringify(commaPayload)}`)
 assert(!('allow_overdelivery' in grainLoadPayload(uid(3), { ...contractDraft, effect_contract_delivery: false, allow_overdelivery: true })), 'An unticked delivery sends no flag.')
 assert(!('allow_overdelivery' in grainLoadPayload(uid(3), contractDraft)), 'Nothing confirmed, nothing sent.')
 

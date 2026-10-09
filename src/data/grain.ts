@@ -628,14 +628,18 @@ export const STANDARD_BUSHEL_LBS: Record<Commodity['crop_family'], number> = { c
 /** Thousands commas in their only right places: one to three digits, then groups of exactly three ("1,200", "1,000,000",
  * "2,500,000.25"). Nothing else counts as one -- "1200,500" or "45210,125" is a decimal comma (or a slip), not a thousand. */
 const THOUSANDS_GROUPED = /^-?\d{1,3}(,\d{3})+(\.\d*)?$/
+/** The same thousands grouping marked with spaces ("1 200", "1\u00a0000\u00a0000"; \s covers no-break and thin spaces). */
+const SPACE_GROUPED = /^-?\d{1,3}(\s\d{3})+(\.\d*)?$/
 
 /** A bushel or pound amount as the farmer typed it, ready for Number() -- the ONE rule every box is read by. The box itself
  * keeps exactly what was typed; this runs when the value is read (a check, a figure worked from it, a save), always on the
- * whole text, so typing key by key and pasting can never end differently. Spaces go. Commas go only when the whole amount is
+ * whole text, so typing key by key and pasting can never end differently. Spaces at the ends go; a space inside goes only as a
+ * thousands mark ("1 200"), so "1200 500" is refused rather than read as 1,200,500. Commas go only when the whole amount is
  * grouped in thousands ("1,200", "1,000,000"). Any other comma -- "1200,5" or "892,86" from a phone keyboard that types a
  * decimal comma, "1200,500", ",500", "1,2345" -- is kept, so the box is refused, by name, instead of saving another amount. */
 export function typedNumberText(value: string): string {
-  const compact = value.replace(/\s/g, '')
+  const trimmed = value.trim()
+  const compact = SPACE_GROUPED.test(trimmed) ? trimmed.replace(/\s/g, '') : trimmed
   return THOUSANDS_GROUPED.test(compact) ? compact.replace(/,/g, '') : compact
 }
 

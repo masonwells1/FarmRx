@@ -3073,7 +3073,9 @@ export function PositionCard({
     0,
   );
   const matchingAssignments = workspace.fields.crop_assignments.filter((assignment) => assignment.crop_year === scope.crop_year && assignment.commodity_id === scope.commodity_id && (scope.operating_entity_id === null || workspace.fields.fields.some((field) => field.id === assignment.field_id && field.operating_entity_id === scope.operating_entity_id)));
-  const harvestActual = matchingAssignments.reduce((sum, assignment) => sum + (assignment.harvested_bushels ?? 0), 0);
+  // Rounded to the cent the column keeps: 5374.4 + 2267.7 + 100.9 adds up to 7742.999999999999, which the save's
+  // read-back check would never match after the server stored 7743.
+  const harvestActual = Math.round(matchingAssignments.reduce((sum, assignment) => sum + (assignment.harvested_bushels ?? 0), 0) * 100) / 100;
   // LD-2: load tickets never write harvested_bushels; adopting their total is one explicit "Use load
   // total" on Harvest. So the figure is shown here for the farmer to act on there, and is never added
   // into the harvest total this card offers to write as the Grain actual.
@@ -3209,7 +3211,8 @@ export function PositionCard({
   // never sent as a blank yield or a cleared actual. The actual column keeps two decimals, like every bushel amount.
   const saveTypedProduction = () => {
     const yieldUnreadable = aph.trim() !== "" && typedAmount(aph) === null;
-    const actualProblem = typedAmountProblem(actual, "actual bushels", "Type actual bushels as a number, like 45210.5.");
+    const actualProblem = typedAmountProblem(actual, "actual bushels", "Type actual bushels as a number, like 45210.5.")
+      ?? ((typedAmount(actual) ?? 0) < 0 ? "Actual bushels cannot be below zero." : null);
     if (yieldUnreadable || actualProblem) {
       setError(yieldUnreadable ? "Type the expected yield as a number, like 180.5." : actualProblem ?? "");
       setShowMore(true);
@@ -5444,11 +5447,14 @@ export function TargetEditor({
   useEffect(() => {
     let active = true;
     setBreakevenLoaded(false);
+    // A lookup that never answers (a hung connection) counts as unavailable after 10 seconds, so a month whose % is
+    // unchanged can still save with its saved price instead of "try again" forever. A late answer still lands.
+    const giveUp = setTimeout(() => { if (active) { setBreakeven(null); setBreakevenLoaded(true); } }, 10_000);
     void services.profitabilityRepository
       .getBreakeven(scope, workspace.fields)
-      .then((value) => { if (active) { setBreakeven(value); setBreakevenLoaded(true); } })
-      .catch(() => { if (active) { setBreakeven(null); setBreakevenLoaded(true); } });
-    return () => { active = false; };
+      .then((value) => { if (active) { clearTimeout(giveUp); setBreakeven(value); setBreakevenLoaded(true); } })
+      .catch(() => { if (active) { clearTimeout(giveUp); setBreakeven(null); setBreakevenLoaded(true); } });
+    return () => { active = false; clearTimeout(giveUp); };
   }, [
     services,
     scope.farm_id,
@@ -6355,7 +6361,7 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
         </fieldset>
 
         {/* Text boxes, not number boxes: a number box turns "1,000" typed off a ticket into nothing.
-            Commas and spaces are dropped as they are typed, so the draft only ever holds a number. */}
+            Each box keeps what was typed; typedAmount reads it (thousands commas only) when it is checked or sent. */}
         <label>Gross weight (lb)<input type="text" inputMode="decimal" autoComplete="off" aria-invalid={problemAbout(/gross|loaded truck/i)} value={draft.gross_lbs} onChange={(event) => updateWeight({ gross_lbs: event.target.value })} /></label>
         <label>Tare weight (lb)<input type="text" inputMode="decimal" autoComplete="off" aria-invalid={problemAbout(/tare|loaded truck/i)} value={draft.tare_lbs} onChange={(event) => updateWeight({ tare_lbs: event.target.value })} /></label>
         <div className="load-field">

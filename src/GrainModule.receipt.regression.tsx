@@ -144,6 +144,9 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     // Review of #68: "45210,125" is a decimal comma (or a slip), not 45,210,125 bu -- refused by name, nothing sent.
     await change(cardActual, '45210,125'); await click(button(cardContainer, 'Save production'))
     assert(cardActual.value === '45210,125' && cardContainer.textContent?.includes('A comma in actual bushels is read only as a thousands mark') && Number(productionSaves) === 0, `"45210,125" must be refused, never saved as 45,210,125 bu: ${JSON.stringify(savedProduction.map((item) => item.actual_bushels))}`)
+    // A negative actual is refused by name here, not by the save layer's generic APH message.
+    await change(cardActual, '-5'); await click(button(cardContainer, 'Save production'))
+    assert(cardContainer.textContent?.includes('Actual bushels cannot be below zero.') && Number(productionSaves) === 0, 'A negative actual must be refused by name with nothing sent.')
     // A thousands-grouped actual is kept as typed in the box and saved as the number it reads as; so is a yield typed with spaces.
     await change(cardActual, '45,210.5')
     await change(yieldBox, ' 175 '); await click(button(cardContainer, 'Save production'))

@@ -2,7 +2,7 @@ import { supabase } from '../lib/supabaseClient'
 import { localCalendarDay } from './marketingAlerts'
 import type { GrainDataGateway, GrainRowBundle, ReplaceMarketingPlanInput } from './GrainDataGateway'
 import type { BinTransaction, CashBid, FirmOffer, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainLoadDraft, GrainSaleLimit, MarketingAlertRule, ProductionEstimate } from './grain'
-import { normalizeLoadEffects } from './grain'
+import { normalizeLoadEffects, typedAmount } from './grain'
 import { DELETE_PERMISSION_MESSAGE } from './saveDurability'
 import { optimisticSave } from './optimisticSave'
 import { bindFarmOperationRequest, type FarmOperationContext } from './farmOperationContext'
@@ -72,7 +72,8 @@ export function grainLoadPayload(id: string, draft: GrainLoadDraft): Record<stri
     load_date: draft.load_date,
     origin_kind: draft.origin_kind,
     destination_kind: draft.destination_kind,
-    net_bushels: Number(draft.net_bushels),
+    // Read by the same rule as the screen, so a draft holding "1,200" is never sent as null.
+    net_bushels: typedAmount(draft.net_bushels),
   }
   if (draft.origin_kind === 'bin') {
     payload.origin_grain_bin_id = draft.origin_grain_bin_id
@@ -106,8 +107,8 @@ export function grainLoadPayload(id: string, draft: GrainLoadDraft): Record<stri
   if (effective.effect_contract_delivery && draft.allow_overdelivery === true) payload.allow_overdelivery = true
   if (draft.truck_equipment_id) payload.truck_equipment_id = draft.truck_equipment_id
   if (draft.truck_name.trim()) payload.truck_name = draft.truck_name.trim()
-  if (draft.gross_lbs.trim()) payload.gross_lbs = Number(draft.gross_lbs)
-  if (draft.tare_lbs.trim()) payload.tare_lbs = Number(draft.tare_lbs)
+  if (draft.gross_lbs.trim()) payload.gross_lbs = typedAmount(draft.gross_lbs)
+  if (draft.tare_lbs.trim()) payload.tare_lbs = typedAmount(draft.tare_lbs)
   if (draft.moisture_pct.trim()) payload.moisture_pct = Number(draft.moisture_pct)
   if (draft.ticket_number.trim()) payload.ticket_number = draft.ticket_number.trim()
   if (draft.notes.trim()) payload.notes = draft.notes.trim()
