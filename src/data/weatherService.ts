@@ -77,6 +77,21 @@ function validateHistoryCache(value: unknown, startISODate: string, endISODate: 
 /** Pure base-temperature accumulation. Temperatures below the base never subtract heat units. */
 export function growingDegreeDays(daily: DailyHistory[], base = 50) { if (!Number.isFinite(base)) throw new Error('Enter a valid GDD base temperature.'); return Math.round(daily.reduce((total, day) => total + Math.max(0, (day.temperature_max_f + day.temperature_min_f) / 2 - base), 0)) }
 
+export type PlaceMatch = { name: string; region: string; latitude: number; longitude: number }
+
+/** Read Open-Meteo's place search, keeping only rows with a usable name and coordinates. */
+export function parsePlaceMatches(value: unknown): PlaceMatch[] {
+  const results = value && typeof value === 'object' ? (value as { results?: unknown }).results : undefined
+  if (!Array.isArray(results)) return []
+  return results.flatMap((row) => {
+    if (!row || typeof row !== 'object') return []
+    const { name, latitude, longitude, admin1, admin2 } = row as Record<string, unknown>
+    if (typeof name !== 'string' || !name.trim() || typeof latitude !== 'number' || typeof longitude !== 'number' || !Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return []
+    const region = [typeof admin2 === 'string' && admin2 && admin2 !== name ? `${admin2} County` : '', typeof admin1 === 'string' ? admin1 : ''].filter(Boolean).join(', ')
+    return [{ name: name.trim(), region, latitude, longitude }]
+  }).slice(0, 5)
+}
+
 export function createWeatherService(deps: Deps) {
   async function fetchForecast(lat: number, lon: number): Promise<ForecastBundle> {
     if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180) throw new Error('Enter a valid field location.')
@@ -98,7 +113,22 @@ export function createWeatherService(deps: Deps) {
     const query = new URLSearchParams({ latitude: String(lat), longitude: String(lon), start_date: startISODate, end_date: cappedEnd, daily: 'temperature_2m_max,temperature_2m_min', temperature_unit: 'fahrenheit', timezone: 'auto' })
     try { const response = await deps.fetch(`https://archive-api.open-meteo.com/v1/archive?${query}`); if (!response.ok) throw new Error('Weather history service did not respond.'); const fetched_at = now.toISOString(); const daily = normalizeHistory(await response.json(), fetched_at); if (!hasContinuousDailyHistory(daily, startISODate, cappedEnd)) throw new Error('Weather history is not available yet.'); const envelope: HistoryCacheEnvelope = { version: 1, fetched_at, daily }; try { deps.storage.setItem(key, JSON.stringify(envelope)) } catch { /* Caching is optional. */ } return { daily, fetched_at, stale: false } } catch { if (cached && cachedAge !== null) return { daily: cached.daily, fetched_at: cached.fetched_at, stale: true }; throw new Error('Weather history is not available yet — reconnect and try again.') }
   }
-  return { fetchForecast, fetchDailyHistory }
+  /** Find a US town or ZIP code. Nothing is stored here; the farmer picks a match and saves it like a typed location. */
+  async function searchPlaces(text: string): Promise<PlaceMatch[]> {
+    const name = text.trim()
+    if (name.length < 2 || name.length > 80) throw new Error('Type a town name or a 5-digit ZIP code.')
+    const query = new URLSearchParams({ name, count: '5', language: 'en', format: 'json', countryCode: 'US' })
+    const noReply = 'Town search did not respond. Check your signal and try again.'
+    // Offline, DNS, and CORS failures reject with browser text such as "Failed to fetch"; the farmer sees the plain message.
+    let body: unknown
+    try {
+      const response = await deps.fetch(`https://geocoding-api.open-meteo.com/v1/search?${query}`)
+      if (!response.ok) throw new Error(noReply)
+      body = await response.json()
+    } catch { throw new Error(noReply) }
+    return parsePlaceMatches(body)
+  }
+  return { fetchForecast, fetchDailyHistory, searchPlaces }
 }
 export const weatherService = typeof window === 'undefined' ? null : createWeatherService({ fetch: window.fetch.bind(window), clock: () => new Date(), storage: window.localStorage })
 
