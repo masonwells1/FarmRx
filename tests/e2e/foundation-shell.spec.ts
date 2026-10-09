@@ -1709,19 +1709,33 @@ test('the Contracts table shows decimal bushels as saved, not rounded', async ({
   await expect(page.locator('tr.contract-row').filter({ hasText: 'Partial Fill' }).locator('td[data-label="Bushels"]')).toHaveText('100.25')
   await expect(page.locator('tr.contract-row').filter({ hasText: 'Whole Bushels' }).locator('td[data-label="Bushels"]')).toHaveText('1,000')
   await expect(page.locator('tfoot td[data-label="Bushels"]')).toHaveText('1,100.25')
-  // Delivered bushels: a thousands comma off a ticket is dropped, but a decimal comma ("1200,5" from some phone keyboards)
-  // stays and is refused by name, never read as 12,005 bu. A refused box sends nothing.
+  // Delivered bushels: the box keeps exactly what was typed, and it is read by one strict rule. A comma that is not a thousands
+  // mark ("1200,500", or "1200,5" from a phone keyboard with a decimal comma) is refused by name, never read as 1,200,500 or
+  // 12,005 bu; a thousands-grouped amount is read as the number it is. A refused box sends nothing.
   const deliveryBox = page.locator('tr.contract-row').filter({ hasText: 'Whole Bushels' }).locator('xpath=following-sibling::tr[1]').getByLabel('Delivered bushels')
+  const commaRefusal = page.getByText('A comma in bushels is read only as a thousands mark, like 1,200. For a decimal, use a period, like 1200.5, or leave off the part after the comma.')
+  const confirm = page.getByRole('dialog')
   await deliveryBox.fill('1,200')
-  await expect(deliveryBox).toHaveValue('1200')
-  // Typed one key at a time, as a farmer does: both thousands commas of a million are dropped, not just the first.
+  await expect(deliveryBox).toHaveValue('1,200')
+  await deliveryBox.fill('1200,500')
+  await expect(deliveryBox).toHaveValue('1200,500')
+  await deliveryBox.press('Enter')
+  await expect(commaRefusal).toBeVisible()
+  await expect(confirm).toHaveCount(0)
+  // Typed one key at a time, as a farmer does: the box is never rewritten under the farmer's fingers, and the whole of it reads
+  // as a million -- asked about against this 1,000 bu contract before anything is sent.
   await deliveryBox.fill('')
   await deliveryBox.pressSequentially('1,000,000')
-  await expect(deliveryBox).toHaveValue('1000000')
+  await expect(deliveryBox).toHaveValue('1,000,000')
+  await deliveryBox.press('Enter')
+  await expect(confirm).toContainText('This is 999,000 bu more than the contract. Record anyway?')
+  await confirm.getByRole('button', { name: 'Go back' }).click()
+  await expect(confirm).toHaveCount(0)
   await deliveryBox.fill('1200,5')
   await expect(deliveryBox).toHaveValue('1200,5')
   await deliveryBox.press('Enter')
-  await expect(page.getByText('A comma in bushels is read only as a thousands mark, like 1,200. For a decimal, use a period, like 1200.5, or leave off the part after the comma.')).toBeVisible()
+  await expect(commaRefusal).toBeVisible()
+  await expect(confirm).toHaveCount(0)
   expect(unexpected).toEqual([])
 })
 

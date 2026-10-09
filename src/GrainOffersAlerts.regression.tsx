@@ -255,16 +255,23 @@ assert(offerMonthText('Dec 2026') === 'Dec 2026' && offerMonthText('December') =
     await change(control(offerForm(), 'Cash $/bu'), '4,1275'); await submit(offerForm())
     assert(offerWrites.length === 0 && offerError() === 'Type the cash price as a number, like 4.1275.', `A price that cannot be read is named, not called missing: ${offerError()}`)
     await change(control(offerForm(), 'Bushels'), '5,000')
-    assert((control(offerForm(), 'Bushels') as HTMLInputElement).value === '5000', 'A thousands comma in offer Bushels is dropped, not reported as blank.')
+    assert((control(offerForm(), 'Bushels') as HTMLInputElement).value === '5,000', 'Review of #68: a thousands comma in offer Bushels is kept as typed, not reported as blank.')
+    // Review of #68: a comma that is not a thousands mark is refused by name, never read as an amount 1,000 times too big.
+    for (const typed of ['1200,500', '45210,125', '1,2345']) {
+      await change(control(offerForm(), 'Bushels'), typed); await submit(offerForm())
+      assert(offerWrites.length === 0 && (control(offerForm(), 'Bushels') as HTMLInputElement).value === typed && offerError()?.startsWith('A comma in bushels is read only as a thousands mark'), `"${typed}" in offer Bushels must be refused by name: ${offerError()}`)
+    }
     await change(control(offerForm(), 'Bushels'), '100.255'); await change(control(offerForm(), 'Cash $/bu'), '4.1275'); await submit(offerForm())
     assert(offerWrites.length === 0 && offerError() === 'Bushels can have at most 2 decimals.', `A third decimal in offer Bushels is refused, not rounded by the server: ${offerError()}`)
-    await change(control(offerForm(), 'Bushels'), '10000')
+    // Review of #68: read by the one rule -- "10,000.000" is 10000, and zero third decimals are no third decimal.
+    await change(control(offerForm(), 'Bushels'), '10,000.000')
     const priceInput = control(offerForm(), 'Cash $/bu') as HTMLInputElement
     assert(priceInput.getAttribute('step') === 'any' && priceInput.getAttribute('inputmode') === 'decimal', 'C0: the offer price box must take quarter cents.')
     await change(priceInput, '4.1275'); await change(control(offerForm(), 'Expires on'), yesterday); await submit(offerForm())
     assert(offerWrites.length === 0 && offerForm().textContent?.includes('The expiry date is in the past.'), 'A25: a past expiry on a new offer must be refused with no write.')
     await change(control(offerForm(), 'Expires on'), nextWeek); await submit(offerForm(), 2)
     assert(Number(offerWrites.length) === 1 && offerWrites[0]!.commodity_id === 'corn_yellow' && offerWrites[0]!.price === 4.1275, 'A9/A2: one write, to the crop the form named, at the quarter-cent price.')
+    assert(offerWrites[0]!.bushels === 10_000, `"10,000.000" is saved as 10000 bu: ${offerWrites[0]!.bushels}`)
     assert(section().textContent?.includes('Saved') && !offerForm(), 'A27: a saved offer closes its form and shows Saved.')
 
     // The picker now shows soybeans: a basis offer typed in cents asks before saving.

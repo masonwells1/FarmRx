@@ -517,15 +517,16 @@ export function validateGrainLoadShape(draft: GrainLoadDraft): string[] {
   // A word, a decimal comma or a third decimal is told apart from a zero, so the farmer is not told "more than zero" about
   // something they did type. Net bushels are compared exactly when a ticket is retried, so a net the column would round is
   // refused here, before it is ever sent.
+  // Each box is read by the one typed-amount rule, so "1,200" is 1200 here exactly as it is when it is sent.
   const netProblem = typedAmountProblem(draft.net_bushels, 'net bushels', 'Type net bushels as a number, like 1000.')
-  const net = Number(draft.net_bushels)
+  const net = typedAmount(draft.net_bushels)
   if (netProblem) problems.push(netProblem)
-  else if (!draft.net_bushels.trim() || net <= 0) problems.push('Net bushels must be more than zero.')
+  else if (net === null || net <= 0) problems.push('Net bushels must be more than zero.')
 
   const grossProblem = typedAmountProblem(draft.gross_lbs, 'the gross weight', 'Type the gross weight as a number of pounds.')
   const tareProblem = typedAmountProblem(draft.tare_lbs, 'the tare weight', 'Type the tare weight as a number of pounds.')
-  const gross = draft.gross_lbs.trim() && !grossProblem ? Number(draft.gross_lbs) : null
-  const tare = draft.tare_lbs.trim() && !tareProblem ? Number(draft.tare_lbs) : null
+  const gross = grossProblem ? null : typedAmount(draft.gross_lbs)
+  const tare = tareProblem ? null : typedAmount(draft.tare_lbs)
   if (grossProblem) problems.push(grossProblem)
   else if (gross !== null && gross <= 0) problems.push('Gross weight must be more than zero.')
   if (tareProblem) problems.push(tareProblem)
@@ -624,43 +625,66 @@ export function loadDateInFutureProblem(loadDate: string, today: string): string
 /** Pounds in a standard bushel for each crop family -- 56 for corn, 60 for soybeans and wheat. */
 export const STANDARD_BUSHEL_LBS: Record<Commodity['crop_family'], number> = { corn: 56, soybeans: 60, wheat: 60 }
 
-/** A bushel or pound amount as typed, ready for Number(). Spaces go, and so does a comma with exactly three digits after
- * it ("1,200", "12,345.5"). It runs on every keystroke, so it has to give the same answer typed key by key as pasted:
- * "1,000" becomes "1000" as soon as it is typed, and the next ",000" then goes the same way. Any other comma -- "1200,5" or
- * "892,86" from a phone keyboard that types a decimal comma -- is kept, so the box is refused instead of saving another amount. */
+/** Thousands commas in their only right places: one to three digits, then groups of exactly three ("1,200", "1,000,000",
+ * "2,500,000.25"). Nothing else counts as one -- "1200,500" or "45210,125" is a decimal comma (or a slip), not a thousand. */
+const THOUSANDS_GROUPED = /^-?\d{1,3}(,\d{3})+(\.\d*)?$/
+
+/** A bushel or pound amount as the farmer typed it, ready for Number() -- the ONE rule every box is read by. The box itself
+ * keeps exactly what was typed; this runs when the value is read (a check, a figure worked from it, a save), always on the
+ * whole text, so typing key by key and pasting can never end differently. Spaces go. Commas go only when the whole amount is
+ * grouped in thousands ("1,200", "1,000,000"). Any other comma -- "1200,5" or "892,86" from a phone keyboard that types a
+ * decimal comma, "1200,500", ",500", "1,2345" -- is kept, so the box is refused, by name, instead of saving another amount. */
 export function typedNumberText(value: string): string {
-  return value.replace(/\s/g, '').replace(/,(?=\d{3}(?:\D|$))/g, '')
+  const compact = value.replace(/\s/g, '')
+  return THOUSANDS_GROUPED.test(compact) ? compact.replace(/,/g, '') : compact
 }
 
 /** Plain digits with at most one decimal point ("1200", "1200.5", "1200.", ".5"), and a minus sign each box's own "more
  * than zero" check answers. Not "1e3" or "0x10", which Number() would quietly read as 1000 and 16. */
 const PLAIN_AMOUNT = /^-?(\d+\.?\d*|\.\d+)$/
 
-/** Why a bushel or pound amount typed in a box cannot be saved as typed, or null when it can. Run it on the box's text
- * (after typedNumberText). A blank box and a zero are each caller's own question: only it knows whether the box is optional.
- * - A comma still there is a decimal comma, often the only decimal key on a phone keypad, so the message names it and says
- *   how to get past it, instead of "type a number" about something that looks like one.
+/** The number a typed amount box holds, read by typedNumberText's rule, or null when the box is blank or holds something
+ * that is not a plain amount ("1200,5", "1e3", a word). Callers that must tell those two apart ask typedAmountProblem. */
+export function typedAmount(text: string): number | null {
+  const value = typedNumberText(text)
+  if (!PLAIN_AMOUNT.test(value)) return null
+  const amount = Number(value)
+  return Number.isFinite(amount) ? amount : null
+}
+
+/** Why a bushel or pound amount typed in a box cannot be saved as typed, or null when it can. Run it on the box's own text:
+ * it reads it by typedNumberText's rule. A blank box and a zero are each caller's own question: only it knows whether the box
+ * is optional.
+ * - A comma still there after that rule is a decimal comma, often the only decimal key on a phone keypad, so the message names
+ *   it and says how to get past it, instead of "type a number" about something that looks like one.
  * - At most two decimals: every bushel and pound column keeps two, so the server would round a third, and the same save
- *   retried would then be refused as different (a load) or written twice (a bin movement).
+ *   retried would then be refused as different (a load) or written twice (a bin movement). Zeros after them change nothing
+ *   ("1200.500" is 1200.5), so only a real third decimal is refused.
  * `name` is how the message names the box ("net bushels", "the gross weight"); `notNumber` is that box's own wording. */
 export function typedAmountProblem(text: string, name: string, notNumber: string): string | null {
-  const value = text.trim()
+  const value = typedNumberText(text)
   if (!value) return null
-  if (/^-?\d*,\d+$/.test(value)) return `A comma in ${name} is read only as a thousands mark, like 1,200. For a decimal, use a period, like 1200.5, or leave off the part after the comma.`
+  if (value.includes(',') && PLAIN_AMOUNT.test(value.replace(/,/g, ''))) return `A comma in ${name} is read only as a thousands mark, like 1,200. For a decimal, use a period, like 1200.5, or leave off the part after the comma.`
   if (!PLAIN_AMOUNT.test(value)) return notNumber
-  if (/\.\d{3,}$/.test(value)) return `${name.charAt(0).toUpperCase()}${name.slice(1)} can have at most 2 decimals.`
+  if ((value.split('.')[1] ?? '').replace(/0+$/, '').length > 2) return `${name.charAt(0).toUpperCase()}${name.slice(1)} can have at most 2 decimals.`
   return null
 }
 
 /** Net bushels from a scale ticket's gross and tare pounds, rounded to the cent of a bushel. Null
- * unless both weights are plain numbers and the loaded truck weighs more than the empty one. A starting
- * figure the farmer sees and can change -- it is never sent without being shown. */
+ * unless both weights are plain numbers and the loaded truck weighs more than the empty one. The
+ * weights are read as typed, thousands commas and all ("80,000"). A starting figure the farmer sees
+ * and can change -- it is never sent without being shown. */
 export function netBushelsFromWeights(gross: string, tare: string, lbsPerBushel: number): string | null {
-  if (!PLAIN_AMOUNT.test(gross.trim()) || !PLAIN_AMOUNT.test(tare.trim())) return null
-  const g = Number(gross)
-  const t = Number(tare)
-  if (!Number.isFinite(g) || !Number.isFinite(t) || !(t > 0) || !(g > t) || !(lbsPerBushel > 0)) return null
+  const g = typedAmount(gross)
+  const t = typedAmount(tare)
+  if (g === null || t === null || !(t > 0) || !(g > t) || !(lbsPerBushel > 0)) return null
   return (Math.round(((g - t) * 100) / lbsPerBushel) / 100).toFixed(2)
+}
+
+/** A load draft with its three typed amounts read by typedNumberText's rule, so what is checked again and sent is the
+ * number the form showed ("80,000" goes as 80000), and a retry of the same ticket sends the same text every time. */
+export function typedLoadDraft<T extends Pick<GrainLoadDraft, 'gross_lbs' | 'tare_lbs' | 'net_bushels'>>(draft: T): T {
+  return { ...draft, gross_lbs: typedNumberText(draft.gross_lbs), tare_lbs: typedNumberText(draft.tare_lbs), net_bushels: typedNumberText(draft.net_bushels) }
 }
 
 /** LD-2: the four effects a saved load can have. Each is a separate visible write the farmer

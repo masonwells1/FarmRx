@@ -21,9 +21,9 @@ function dialogButton(text: string) { const found = [...document.querySelectorAl
 const fields = fieldsSeedForRegression(); const assignment = fields.crop_assignments[0]; assignment.harvested_bushels = 1_300
 const estimate: ProductionEstimate = { id: uid(700), farm_id: fields.farm.id, crop_year: assignment.crop_year, commodity_id: assignment.commodity_id, operating_entity_id: null, enterprise_label: null, planted_acres: assignment.planted_acres, aph_yield: 180, expected_bushels: assignment.planted_acres * 180, actual_bushels: null, drives_math: 'projected', notes: null, created_at: stamp, updated_at: stamp }
 const workspace: GrainWorkspace = { fields, production_estimates: [estimate], grain_contracts: [], grain_contract_deliveries: [], grain_loads: [], marketing_plan_targets: [], insurance_units: [], grain_bins: [], bin_inventory: [], bin_transactions: [], cash_bids: [], usda_market_reports: [], usda_report_dates: [], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null, grain_sale_limits: [], grain_carry_settings: null, grain_carry_grids: [] }
-let createdCalls = 0; let reconciledCalls = 0; let nextId = uid(701); let releaseCreate!: () => void; let releaseReconcile!: () => void
+let createdCalls = 0; const createdEstimates: ProductionEstimate[] = []; let reconciledCalls = 0; let nextId = uid(701); let releaseCreate!: () => void; let releaseReconcile!: () => void
 const createGate = new Promise<void>((resolve) => { releaseCreate = resolve }); const reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve })
-const repository = { getData: async () => workspace, saveProductionEstimate: async (value: ProductionEstimate) => { createdCalls += 1; setSaveReceipt(value.id, 'saving'); await createGate; setSaveReceipt(value.id, 'saved') }, reconcileHarvestActual: async (value: ProductionEstimate, actual: number) => { reconciledCalls += 1; setSaveReceipt(value.id, 'saving'); await reconcileGate; assert(actual === 1_300, 'Reconciliation must use the Harvest total.'); setSaveReceipt(value.id, 'saved') } }
+const repository = { getData: async () => workspace, saveProductionEstimate: async (value: ProductionEstimate) => { createdCalls += 1; createdEstimates.push(structuredClone(value)); setSaveReceipt(value.id, 'saving'); await createGate; setSaveReceipt(value.id, 'saved') }, reconcileHarvestActual: async (value: ProductionEstimate, actual: number) => { reconciledCalls += 1; setSaveReceipt(value.id, 'saving'); await reconcileGate; assert(actual === 1_300, 'Reconciliation must use the Harvest total.'); setSaveReceipt(value.id, 'saved') } }
 const services = { grainRepository: repository, createGrainId: () => nextId, profitabilityRepository: { getBreakeven: async () => null, getWorkspace: async () => ({ budgets: [], allocations: [] }) } } as unknown as GrainServices
 
 // Each component shows its own receipt; the harnesses add no page-level receipt, so a duplicate would be the component's own.
@@ -46,11 +46,13 @@ try {
   assert(secondYield.value === '180,5' && firstContainer.textContent?.includes('Type the expected yield as a number, like 180.5.') && !firstContainer.textContent?.includes('Enter an expected yield above zero.') && Number(createdCalls) === 0, `A comma in the yield must be named and send nothing: ${firstContainer.textContent}`)
   await change(secondYield, '')
   assert(firstContainer.textContent?.includes('ac planted'), 'Each crop card must show its planted acres.')
-  const aph = firstContainer.querySelector('input') as HTMLInputElement; await act(async () => { Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, 'value')!.set!.call(aph, '180'); aph.dispatchEvent(new (win.InputEvent ?? win.Event)('input', { bubbles: true }) as unknown as Event); aph.dispatchEvent(new Event('change', { bubbles: true })); await flush() })
-  const create = [...firstContainer.querySelectorAll('button')].find((button) => button.textContent === 'Create estimate') as HTMLButtonElement | undefined; assert(create && aph.value === '180' && !create.disabled, 'First estimate must keep the controlled APH value and genuinely enable Create estimate before submission.')
+  const aph = firstContainer.querySelector('input') as HTMLInputElement; await act(async () => { Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, 'value')!.set!.call(aph, ' 180 '); aph.dispatchEvent(new (win.InputEvent ?? win.Event)('input', { bubbles: true }) as unknown as Event); aph.dispatchEvent(new Event('change', { bubbles: true })); await flush() })
+  const create = [...firstContainer.querySelectorAll('button')].find((button) => button.textContent === 'Create estimate') as HTMLButtonElement | undefined; assert(create && aph.value === ' 180 ' && !create.disabled, 'First estimate must keep the controlled APH value and genuinely enable Create estimate before submission.')
   assert(([...firstContainer.querySelectorAll('input')] as HTMLInputElement[])[1].value === '' && firstContainer.textContent?.includes('bu expected'), 'A yield typed for one crop must not fill another crop\'s box, and the typed crop shows its expected bushels.')
   await act(async () => { create.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
   assert(firstContainer.textContent?.includes('Saving…') && createdCalls === 1, 'First estimate must select its exact generated ID and render Saving before the create returns.')
+  // Review of #68: the box kept " 180 " as typed, and the estimate is started at the 180 bu/ac it reads as.
+  assert(createdEstimates[0]?.aph_yield === 180, `" 180 " starts the estimate at 180 bu/ac: ${createdEstimates[0]?.aph_yield}`)
   // Review repair: the receipt shows once, on the card of the crop being created, not above the whole grid as well.
   assert(countOf(firstContainer, 'Saving…') === 1 && firstContainer.querySelectorAll('article')[0]?.textContent?.includes('Saving…') && !firstContainer.querySelectorAll('article')[1]?.textContent?.includes('Saving…'), 'The first-estimate receipt must show once, on the crop being created only.')
   await act(async () => { create.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve() }); assert(createdCalls === 1, 'Rapid first-estimate submit must create one ID and one write.')
@@ -121,8 +123,8 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     const load: GrainLoad = { id: uid(730), farm_id: fields.farm.id, load_date: '2026-10-02', truck_equipment_id: null, truck_name: null, origin_kind: 'field', origin_grain_bin_id: null, origin_crop_assignment_id: loadAssignment.id, destination_kind: 'buyer', destination_buyer: 'Synthetic Elevator', destination_grain_contract_id: null, destination_grain_bin_id: null, commodity_id: loadAssignment.commodity_id, crop_year: loadAssignment.crop_year, gross_lbs: null, tare_lbs: null, net_bushels: 2_500, moisture_pct: null, ticket_number: null, photo_path: null, notes: null, effect_bin_out: false, effect_bin_in: false, effect_contract_delivery: false, effect_harvest: true, voided_at: null, void_reason: null, created_at: stamp, updated_at: stamp }
     const cardEstimate: ProductionEstimate = { ...estimate, id: uid(731) }
     const cardWorkspace: GrainWorkspace = { ...workspace, fields: loadFields, production_estimates: [cardEstimate], grain_loads: [load] }
-    let productionSaves = 0; const productionGate = gate()
-    const cardServices = { ...services, grainRepository: { ...repository, saveProductionEstimate: async (value: ProductionEstimate) => { productionSaves += 1; setSaveReceipt(value.id, 'saving'); await productionGate.promise; setSaveReceipt(value.id, 'saved') } } } as unknown as GrainServices
+    let productionSaves = 0; const productionGate = gate(); const savedProduction: ProductionEstimate[] = []
+    const cardServices = { ...services, grainRepository: { ...repository, saveProductionEstimate: async (value: ProductionEstimate) => { productionSaves += 1; savedProduction.push(structuredClone(value)); setSaveReceipt(value.id, 'saving'); await productionGate.promise; setSaveReceipt(value.id, 'saved') } } } as unknown as GrainServices
     await act(async () => { cardRoot.render(createElement(MemoryRouter, null, createElement(PositionCard, { estimate: cardEstimate, workspace: cardWorkspace, services: cardServices, saleLimit: null, onSaleLimitChange: () => undefined, onSaved: async () => undefined }))); await flush() })
     assert(cardContainer.querySelector('.eyebrow')?.textContent === `${cardEstimate.crop_year} crop`, 'The card header must name the crop year, not repeat the crop family.')
     await click(button(cardContainer, 'Edit yield'))
@@ -139,8 +141,14 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     assert(cardActual.getAttribute('inputmode') === 'decimal', 'An actual can be part of a bushel, so its keypad must have a decimal key.')
     await change(yieldBox, '175'); await change(cardActual, '45210,5'); await click(button(cardContainer, 'Save production'))
     assert(cardContainer.textContent?.includes('A comma in actual bushels is read only as a thousands mark') && Number(productionSaves) === 0, `A comma in the actual must be named and never sent as a cleared actual: ${cardContainer.textContent}`)
-    await change(cardActual, '')
-    await change(yieldBox, '175'); await click(button(cardContainer, 'Save production'))
+    // Review of #68: "45210,125" is a decimal comma (or a slip), not 45,210,125 bu -- refused by name, nothing sent.
+    await change(cardActual, '45210,125'); await click(button(cardContainer, 'Save production'))
+    assert(cardActual.value === '45210,125' && cardContainer.textContent?.includes('A comma in actual bushels is read only as a thousands mark') && Number(productionSaves) === 0, `"45210,125" must be refused, never saved as 45,210,125 bu: ${JSON.stringify(savedProduction.map((item) => item.actual_bushels))}`)
+    // A thousands-grouped actual is kept as typed in the box and saved as the number it reads as; so is a yield typed with spaces.
+    await change(cardActual, '45,210.5')
+    await change(yieldBox, ' 175 '); await click(button(cardContainer, 'Save production'))
+    assert(yieldBox.value === ' 175 ', `The yield box keeps what was typed: "${yieldBox.value}"`)
+    assert((control(cardContainer, 'Actual bushels') as HTMLInputElement).value === '45,210.5' && savedProduction[0]?.actual_bushels === 45_210.5 && savedProduction[0]?.aph_yield === 175, `"45,210.5" saves as 45210.5 bu: ${JSON.stringify(savedProduction[0] && { aph: savedProduction[0].aph_yield, actual: savedProduction[0].actual_bushels })}`)
     assert(productionSaves === 1 && cardContainer.textContent?.includes('Saving…'), 'The card must show its own Saving for a production save.')
     assert(countOf(cardContainer, 'Saving…') === 1 && button(cardContainer, 'Save production').nextElementSibling?.textContent === 'Saving…', 'Review repair: a production save shows its one receipt beside Save production.')
     productionGate.release(); await act(async () => { await flush(); await flush() })
@@ -256,8 +264,12 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     assert(Number(saves.length) === 1 && container.textContent?.includes("Breakeven isn't available for this crop yet") && priceBox().value === '', 'A changed % with no breakeven must still be refused, never saved beside the old price.')
     await render('loading', loadingServices)
     assert(priceBox().value === '4.62' && container.querySelector('.computed-price')?.textContent === 'Checking breakeven… Saved target $4.62', `While breakeven loads, the saved price stays in view: box "${priceBox().value}", ${container.querySelector('.computed-price')?.textContent}`)
+    // Review of #68: while breakeven is still loading, even an unchanged month waits -- the breakeven about to arrive may work
+    // out a different price than the one saved, so the saved price is used only once breakeven has loaded as unavailable.
     await submit()
-    assert(Number(saves.length) === 2 && saves[1].price === 4.62 && saves[1].relativePct === 10, `An unchanged month saved while breakeven loads keeps its saved price: ${JSON.stringify(saves[1])}`)
+    assert(Number(saves.length) === 1 && container.querySelector('.target-modal [role="alert"]')?.textContent === 'Checking breakeven… try again in a moment.', `A save while breakeven loads must wait, not store the saved price: ${JSON.stringify(saves)} ${container.querySelector('.target-modal [role="alert"]')?.textContent}`)
+    await change(control(container, 'Target % of production'), '30'); await submit()
+    assert(Number(saves.length) === 1 && container.querySelector('.target-modal [role="alert"]')?.textContent === 'Checking breakeven… try again in a moment.', `A changed month % while breakeven loads must wait too: ${JSON.stringify(saves)}`)
   } finally { await act(async () => { root.unmount() }); container.remove() }
 }
 
@@ -322,6 +334,11 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
   assert(JSON.stringify(gapFor([wholeFarm], 12_000, -1_000)) === JSON.stringify({ bushels: 1_000, text: 'bu short', short: true }), `Once deliveries eat into it, the gap is what is still owed: ${JSON.stringify(gapFor([wholeFarm], 12_000, -1_000))}`)
   // A decimal projection is compared as the card shows it (29,741 bu), so the gap and the production figure add up on screen.
   assert(gapFor([{ ...wholeFarm, expected_bushels: 29_740.65 }], 30_000, -30_000)?.bushels === 259, `30,000 sold against a projection shown as 29,741 is 259 more: ${gapFor([{ ...wholeFarm, expected_bushels: 29_740.65 }], 30_000, -30_000)?.bushels}`)
+  // Review of #68: "more sold" is decided on the cent figures, not on the estimate rounded to a whole bushel. 29,740.10 sold
+  // against a 29,740.40 bu estimate is within it; 29,740.90 against 29,740.65 is past it, by the cents, never by 0 or less.
+  assert(JSON.stringify(gapFor([{ ...wholeFarm, expected_bushels: 29_740.4 }], 29_740.1, -29_740.1)) === JSON.stringify({ bushels: 29_740.1, text: 'bu sold but not in the bins yet', short: false }), `29,740.10 sold against a 29,740.40 estimate is not "more sold": ${JSON.stringify(gapFor([{ ...wholeFarm, expected_bushels: 29_740.4 }], 29_740.1, -29_740.1))}`)
+  assert(JSON.stringify(gapFor([{ ...wholeFarm, expected_bushels: 29_740.65 }], 29_740.9, -29_740.9)) === JSON.stringify({ bushels: 0.25, text: `bu more sold than your ${year} crop estimate`, short: true }), `29,740.90 sold against 29,740.65 is 0.25 more: ${JSON.stringify(gapFor([{ ...wholeFarm, expected_bushels: 29_740.65 }], 29_740.9, -29_740.9))}`)
+  assert(gapFor([{ ...wholeFarm, expected_bushels: 29_740.4 }], 29_740.4, -29_740.4)?.short === false, 'Sold exactly the estimate is not more sold.')
 }
 
 // Sweep (displayed figures): the same figure reads the same on every tab. Recorded bushels keep their cents, prices and
@@ -349,11 +366,13 @@ async function click(element: HTMLElement) { await act(async () => { element.cli
     harvestFields.crop_assignments[0]!.harvested_bushels = 999.6
     const cardEstimate = { ...estimate, id: uid(797) }
     const priceServices = { ...services, profitabilityRepository: { ...services.profitabilityRepository, getBreakeven: async () => 650 / 155 } } as unknown as GrainServices
-    await show(createElement(PositionCard, { estimate: cardEstimate, workspace: { ...workspace, fields: harvestFields, production_estimates: [cardEstimate], marketing_plan_targets: [target(4.1275)] }, services: priceServices, saleLimit: null, onSaleLimitChange: () => undefined, onSaved: async () => undefined }))
+    await show(createElement(PositionCard, { estimate: cardEstimate, workspace: { ...workspace, fields: harvestFields, production_estimates: [cardEstimate], marketing_plan_targets: [target(4.1275)], grain_bins: [bin], bin_transactions: [stored] }, services: priceServices, saleLimit: null, onSaleLimitChange: () => undefined, onSaved: async () => undefined }))
     await click(button(container, 'More details'))
     const cardText = container.textContent ?? ''
     assert(cardText.includes('Breakeven $4.1935.') && cardText.includes('using your cash price target of $4.1275.') && cardText.includes('Cash price target $4.1275'), `The cash target and break-even must not be rounded to the cent on the card: ${cardText}`)
     assert(cardText.includes('Harvest actuals: 999.60 bu'), `Harvest actuals keep their cents: ${cardText}`)
+    // Review of #68: the bins figure beside them keeps its cents too, as every other bushel figure in the reconciliation does.
+    assert(cardText.includes('(whole farm, all years): 1,000.50 bu'), `The harvest reconciliation's bins figure keeps its cents: ${cardText.match(/All bins holding[^.]*/)?.[0]}`)
 
     // #34: planted acres are en-US even when the phone's own number style is German.
     const nativeToLocale = Number.prototype.toLocaleString
@@ -502,7 +521,7 @@ assert(contractWrites === 1 && contractContainer.textContent?.includes('Saved'),
 assert(seenContracts[0]?.delivery_start === null && seenContracts[0]?.delivery_end === null, 'C3: a contract the farmer never dated must be saved undated, not with a hidden Sep-Nov window.')
 // B37: a ticket number typed with commas is kept as the plain number. C7: the delivery carries the date and note typed.
 const deliveryInput = control(contractContainer, 'Delivered bushels') as HTMLInputElement; await change(deliveryInput, '13,000')
-assert(deliveryInput.value === '13000', `B37: delivered bushels must accept 1,200-style commas. ${deliveryInput.value}`)
+assert(deliveryInput.value === '13,000', `B37: delivered bushels must accept 1,200-style commas, kept as typed. ${deliveryInput.value}`)
 await change(control(contractContainer, 'Delivered on'), `${estimate.crop_year}-09-28`); await change(control(contractContainer, 'Ticket # or note'), 'Ticket 4411')
 let genericContractWritesBeforeDelivery = contractWrites
 const priorNovemberConfirm = window.confirm; window.confirm = () => { throw new Error('window.confirm must not be used: the in-app dialog host is mounted.') }; let deliveryConfirmations = 0
@@ -594,6 +613,28 @@ await act(async () => { contractRoot.unmount() }); contractContainer.remove()
     assert(openDialog()?.textContent?.includes(`That is before the ${hta.crop_year} crop.`) && deliveryCalls === 0, 'A delivery date before the crop year must be confirmed first.')
     await click(dialogButton('Go back')); assert(deliveryCalls === 0 && ids === 0, 'Go back records nothing.')
     assert(control(container, 'Delivered bushels').closest('form')?.hasAttribute('novalidate') && basisBox.closest('form')?.hasAttribute('novalidate'), 'The delivery and price forms check their own boxes, so the browser bubble never pre-empts the plain message.')
+    // Review of #68: the box keeps what was typed. A comma that is not a thousands mark is refused by name, never read 1,000
+    // times too big; a thousands-grouped amount is read as the number it is, and the over-delivery question names it.
+    for (const typed of ['1200,500', '45210,125', ',500', '1,2345']) {
+      await change(control(container, 'Delivered bushels'), typed); await click(button(container, 'Record delivery'))
+      assert((control(container, 'Delivered bushels') as HTMLInputElement).value === typed && container.textContent?.includes('A comma in bushels is read only as a thousands mark, like 1,200.') && !openDialog() && deliveryCalls === 0 && ids === 0, `"${typed}" in Delivered bushels must be refused by name: ${container.querySelector('.contract-action-message')?.textContent} ${openDialog()?.textContent ?? ''}`)
+    }
+    await act(async () => { root.render(createElement(MemoryRouter, null, createElement(ContractActions, { key: 'thousands', contract: hta, workspace: actionsWorkspace, services: actionServices, onSaved: async () => undefined, onDeliverySaved: async () => undefined, onReceipt: () => undefined }), createElement(ConfirmDialogHost))); await flush() })
+    await change(control(container, 'Delivered bushels'), '1,000,000'); await click(button(container, 'Record delivery'))
+    assert((control(container, 'Delivered bushels') as HTMLInputElement).value === '1,000,000' && openDialog()?.textContent?.includes('This is 995,000 bu more than the contract. Record anyway?') && deliveryCalls === 0, `"1,000,000" must be read as a million against the 5,000 bu contract: ${openDialog()?.textContent}`)
+    await click(dialogButton('Go back')); assert(deliveryCalls === 0 && ids === 0, 'Go back records nothing.')
+
+    // Review of #68: the over-delivery excess is worked to the cent. 0.01 already delivered on a 2,267.70 bu contract plus
+    // 2,267.69 now is exactly the contract (in floating point a hair over), so nothing is asked and the delivery is recorded.
+    // A third decimal of zero ("2,267.690") is no third decimal.
+    const exact: GrainContract = { ...loaded, id: uid(1407), buyer: 'Exact fill', bushels: 2_267.7 }
+    const exactWorkspace = { ...actionsWorkspace, grain_contracts: [...actionsWorkspace.grain_contracts, exact], grain_contract_deliveries: [...actionsWorkspace.grain_contract_deliveries, { id: uid(1408), farm_id: fields.farm.id, grain_contract_id: exact.id, bushels: 0.01, delivered_on: '2026-10-01', note: null, created_at: stamp, grain_load_id: null }] } as GrainWorkspace
+    const exactDeliveries: GrainContractDelivery[] = []
+    const exactServices = { ...actionServices, grainRepository: { ...actionServices.grainRepository, recordContractDelivery: async (value: GrainContractDelivery) => { exactDeliveries.push(structuredClone(value)) } } } as unknown as GrainServices
+    await act(async () => { root.render(createElement(MemoryRouter, null, createElement(ContractActions, { key: 'exact', contract: exact, workspace: exactWorkspace, services: exactServices, onSaved: async () => undefined, onDeliverySaved: async () => undefined, onReceipt: () => undefined }), createElement(ConfirmDialogHost))); await flush() })
+    await change(control(container, 'Delivered bushels'), '2,267.690'); await click(button(container, 'Record delivery'))
+    assert(!openDialog() && exactDeliveries.length === 1 && exactDeliveries[0]!.bushels === 2_267.69 && exactDeliveries[0]!.allow_overdelivery === false, `Filling a contract exactly must not ask about "0 bu more than the contract": ${openDialog()?.textContent ?? ''} ${JSON.stringify(exactDeliveries)} ${container.querySelector('.contract-action-message')?.textContent}`)
+    if (openDialog()) await click(dialogButton('Go back'))
 
     // Full review: a contract with both load-ticket and hand-typed deliveries names both undo paths.
     const mixedWorkspace = { ...actionsWorkspace, grain_contract_deliveries: [ticketDelivery, { ...ticketDelivery, id: uid(1406), grain_load_id: null }] } as GrainWorkspace

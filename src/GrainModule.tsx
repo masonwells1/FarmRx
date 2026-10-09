@@ -34,7 +34,7 @@ import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOffe
 import { contractUndeliveredBushels, deriveBinLots, deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
 import type { BinLotOnHand } from "./data/committedFree";
 import { formatFarmDate } from "./lib/farmDate";
-import { binUndatedBushels, confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, contractIsDeletable, loadEffectsAvailable, loadLotFor, manualMovementCropYears, originBinLots, recordedBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planDateFor, plannedPercentThroughDate, harvestBushelsFromLoads, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason, MARKETING_PLAN_PERCENT_TOLERANCE, activeLoads, typedAmountProblem, typedNumberText, basisCentsPrompt, basisLooksLikeCents, loadDateInFutureProblem, netBushelsFromWeights, normalizeLoadEffects, STANDARD_BUSHEL_LBS } from "./data/grain";
+import { binUndatedBushels, confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, contractIsDeletable, loadEffectsAvailable, loadLotFor, manualMovementCropYears, originBinLots, recordedBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planDateFor, plannedPercentThroughDate, harvestBushelsFromLoads, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason, MARKETING_PLAN_PERCENT_TOLERANCE, activeLoads, typedAmount, typedAmountProblem, typedLoadDraft, basisCentsPrompt, basisLooksLikeCents, loadDateInFutureProblem, netBushelsFromWeights, normalizeLoadEffects, STANDARD_BUSHEL_LBS } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -100,8 +100,10 @@ const bushels = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const preciseBushels = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 /** Whole bushels as whole, anything else to the cent. Rounded to the cent FIRST: a sum of decimal
  * bushels carries float noise (5374.4 + 2267.7 + 100.9 is 7742.999999999999), and that must still
- * read 7,743, not 7,743.00. `|| 0` turns a rounded -0 into 0, so a tiny negative never shows as "-0". */
+ * read 7,743, not 7,743.00. `|| 0` turns a rounded -0 into 0, so a tiny negative never shows as "-0". A figure that is not a
+ * number at all (NaN, Infinity) shows as "—", never as a confident "0" or as "NaN". */
 export const displayBushels = (value: number) => {
+  if (!Number.isFinite(value)) return "—";
   const rounded = Math.round(value * 100) / 100 || 0;
   return Number.isInteger(rounded) ? bushels.format(rounded) : preciseBushels.format(rounded);
 };
@@ -124,7 +126,9 @@ export const movementSourceLabel = (kind: string | null | undefined) =>
 
 /** Keeps the harvest-total action from accidentally saving a stale text-input value. */
 export function buildProductionSaveInput(estimate: ProductionEstimate, aphValue: string, actualValue: string, drives_math = estimate.drives_math, actualOverride?: number): ProductionEstimate {
-  return { ...estimate, aph_yield: Number(aphValue), actual_bushels: actualOverride ?? (actualValue.trim() === "" ? null : Number(actualValue)), drives_math };
+  // Both boxes are read by the one typed-amount rule ("45,210.5" is 45210.5); blank or unreadable is not a number, and
+  // saveProduction refuses it.
+  return { ...estimate, aph_yield: typedAmount(aphValue) ?? Number.NaN, actual_bushels: actualOverride ?? (actualValue.trim() === "" ? null : typedAmount(actualValue) ?? Number.NaN), drives_math };
 }
 
 /** Harvest reconciliation changes only the persisted Grain actual and its math basis. */
@@ -2248,7 +2252,9 @@ function FirmOfferForm({
         ...scope,
         buyer,
         offer_type: type,
-        bushels: Number(amount),
+        // Read by the one typed-amount rule ("5,000" is 5000). The box was checked above, so only a blank is left unread, and
+        // a blank is 0, which the shared rule refuses as not above zero.
+        bushels: typedAmount(amount) ?? 0,
         price: type === "basis" ? null : price === "" ? null : Number(price),
         basis: type === "basis" ? (basis === "" ? null : Number(basis)) : null,
         contract_month: month.trim() || null,
@@ -2302,7 +2308,7 @@ function FirmOfferForm({
   const contracted = scopeRows(workspace.grain_contracts, scope).reduce((sum, item) => sum + item.bushels, 0);
   // Take this offer out only when it already counts as pending: an open offer past its date is counted nowhere.
   const otherPending = pendingFirmOfferBushels(workspace, scope) - (offer && displayFirmOfferStatus(offer) === "open" ? offer.bushels : 0);
-  const saleLimitMessage = saleLimitWarning(saleLimit, contracted, otherPending, Number(amount), "save");
+  const saleLimitMessage = saleLimitWarning(saleLimit, contracted, otherPending, typedAmount(amount) ?? (amount.trim() ? Number.NaN : 0), "save");
   // noValidate: the checks in submit say each problem in plain words next to Save, instead of the browser's own bubble.
   return (
     <form className="firm-offer-form" noValidate onSubmit={(event) => void submit(event)}>
@@ -2333,14 +2339,14 @@ function FirmOfferForm({
       <label>
         Bushels
         {/* Text, not a number box: the form checks its own boxes (noValidate), and a number box reports "5,000" as blank.
-            Thousands commas are dropped as typed; a decimal comma stays and is refused by name. */}
+            The box keeps what was typed; "5,000" is read as 5000, and a decimal comma is refused by name. */}
         <input
           required
           type="text"
           inputMode="decimal"
           autoComplete="off"
           value={amount}
-          onChange={(event) => setAmount(typedNumberText(event.target.value))}
+          onChange={(event) => setAmount(event.target.value)}
         />
       </label>
       <label>
@@ -2829,13 +2835,13 @@ export function FirstEstimate({
   );
   const create = async (assignment: (typeof assignments)[number]) => {
     const key = `${assignment.crop_year}|${assignment.commodity_id}`;
-    const yieldValue = Number(aph[key] ?? "");
+    const yieldValue = typedAmount(aph[key] ?? "");
     // Something typed that is not a number ("180,5") is named as that, not as a missing yield.
-    if ((aph[key] ?? "").trim() !== "" && !Number.isFinite(yieldValue)) {
+    if ((aph[key] ?? "").trim() !== "" && yieldValue === null) {
       setCardErrors((current) => ({ ...current, [key]: "Type the expected yield as a number, like 180.5." }));
       return;
     }
-    if ((aph[key] ?? "").trim() === "" || yieldValue <= 0) {
+    if (yieldValue === null || yieldValue <= 0) {
       setCardErrors((current) => ({ ...current, [key]: "Enter an expected yield above zero." }));
       return;
     }
@@ -2894,8 +2900,8 @@ export function FirstEstimate({
           const key = `${assignment.crop_year}|${assignment.commodity_id}`;
           const acres = acresByKey.get(key) ?? 0;
           const errorId = `${errorIdBase}-${index}`;
-          const yieldValue = Number(aph[key] ?? "");
-          const validYield = (aph[key] ?? "").trim() !== "" && Number.isFinite(yieldValue) && yieldValue > 0;
+          const yieldValue = typedAmount(aph[key] ?? "");
+          const validYield = yieldValue !== null && yieldValue > 0;
           return (
             <article className="position-card first-estimate-card" key={key}>
               {/* h3: the section above is the h2 ("Start your grain estimate" or "Add another crop"). */}
@@ -2919,7 +2925,7 @@ export function FirstEstimate({
                   aria-describedby={cardErrors[key] ? errorId : undefined}
                   value={aph[key] ?? ""}
                   onChange={(event) => {
-                    const value = typedNumberText(event.target.value);
+                    const value = event.target.value;
                     setAph((current) => ({ ...current, [key]: value }));
                     setCardErrors((current) => ({ ...current, [key]: "" }));
                   }}
@@ -3202,7 +3208,7 @@ export function PositionCard({
   // Save production reads the two boxes as typed. Something typed that is not a number ("180,5", "45210,5") is named as that,
   // never sent as a blank yield or a cleared actual. The actual column keeps two decimals, like every bushel amount.
   const saveTypedProduction = () => {
-    const yieldUnreadable = aph.trim() !== "" && !Number.isFinite(Number(aph));
+    const yieldUnreadable = aph.trim() !== "" && typedAmount(aph) === null;
     const actualProblem = typedAmountProblem(actual, "actual bushels", "Type actual bushels as a number, like 45210.5.");
     if (yieldUnreadable || actualProblem) {
       setError(yieldUnreadable ? "Type the expected yield as a number, like 180.5." : actualProblem ?? "");
@@ -3361,7 +3367,7 @@ export function PositionCard({
             ? ". Add a cash price target to estimate it."
             : ` using your cash price target of ${pricePerBu.format(plannedPrice)}.`}
         </p>
-        <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{displayBushels(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${displayBushels(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {bushels.format(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${displayBushels(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p>{/* Only while the tickets show more than the harvest total: once Use load total has been tapped on Harvest
+        <section className="grain-reconciliation"><h3>Harvest reconciliation</h3><p>Harvest actuals: <strong>{displayBushels(harvestActual)} bu</strong> · Grain actual production: <strong>{estimate.actual_bushels === null ? "not entered" : `${displayBushels(estimate.actual_bushels)} bu`}</strong> · <strong>All bins holding {commodity.name} (whole farm, all years): {displayBushels(binBalance)} bu</strong>.</p><p>{estimate.actual_bushels === null ? "Grain actual has not been entered. Bins are never changed by this action." : `Harvest minus Grain actual: ${displayBushels(harvestActual - estimate.actual_bushels)} bu. ${HARVEST_RECONCILIATION_SCOPE_SUPPRESSION_COPY}`}</p>{/* Only while the tickets show more than the harvest total: once Use load total has been tapped on Harvest
             (or more was entered there), there is nothing left to adopt. */}{fromLoads > harvestActual + 0.000001 && <p>Load tickets show <strong className="numeric">{displayBushels(fromLoads)} bu</strong>, more than the harvest total entered. To use them, tap Use load total on Harvest. <NavLink to="/harvest" className="text-action">Open Harvest</NavLink></p>}<button className="secondary-action" type="button" disabled={harvestActual <= 0 || !canWriteSettings} onClick={() => { void reconcileHarvest() }}>Use harvest total as Grain actual</button>{receiptAt === "reconcile" && <SaveReceipt state={cardReceipt} />}{harvestActual <= 0 && <small>No harvest total entered yet on Harvest.</small>}</section>
         <div className="position-stats">
           <Metric
@@ -3436,7 +3442,7 @@ export function PositionCard({
               autoComplete="off"
               disabled={!canWriteSettings}
               value={aph}
-              onChange={(event) => setAph(typedNumberText(event.target.value))}
+              onChange={(event) => setAph(event.target.value)}
             />
           </label>
           <div className="actual-bushels-field">
@@ -3452,7 +3458,7 @@ export function PositionCard({
               placeholder="Enter at harvest"
               disabled={!canWriteSettings}
               aria-describedby={guidance ? guidanceId : undefined}
-              onChange={(event) => setActual(typedNumberText(event.target.value))}
+              onChange={(event) => setActual(event.target.value)}
             />
           </label>
           </div>
@@ -4178,7 +4184,8 @@ export function ContractActions({ contract, workspace, services, autoFocusDelive
         if (typo) { setMessage(typo); return }
       }
       // A retry resends the held draft exactly, so only a new entry is read from the boxes and checked.
-      const value = deliveryDraft.current?.bushels ?? Number(delivery);
+      // Read by the one typed-amount rule: "13,000" off a ticket is 13000; the box was checked above.
+      const value = deliveryDraft.current?.bushels ?? typedAmount(delivery) ?? Number.NaN;
       // Something was typed, so a zero or a minus is told "more than zero", not "enter" as if the box were empty.
       if (!Number.isFinite(value) || value <= 0) { setMessage("Delivered bushels must be more than zero."); return }
       if (!deliveryDraft.current) {
@@ -4190,7 +4197,9 @@ export function ContractActions({ contract, workspace, services, autoFocusDelive
         if (fromLoads > 0 && !(await confirmDialog({ title: "Record this delivery by hand?", body: "Load tickets already count deliveries on this contract. Recording the same truck here would count it twice.", confirmLabel: "Record delivery" }))) return;
       }
       const delivered = workspace.grain_contract_deliveries.filter((item) => item.grain_contract_id === contract.id).reduce((sum, item) => sum + item.bushels, 0);
-      const excess = delivered + value - contract.bushels;
+      // Rounded to the cent, as every bushel column keeps it, so float dust (0.01 + 2267.69 is a hair over 2267.7) never asks
+      // about "0 bu more than the contract".
+      const excess = Math.round((delivered + value - contract.bushels) * 100) / 100;
       const allow_overdelivery = excess > 0 && (await confirmDialog({ title: `This is ${displayBushels(excess)} bu more than the contract. Record anyway?`, body: "The contract will show as over-delivered.", confirmLabel: "Record anyway" }));
       if (excess > 0 && !allow_overdelivery) return;
       setSaving(true);
@@ -4233,8 +4242,8 @@ export function ContractActions({ contract, workspace, services, autoFocusDelive
       {priceMessage && <small className="contract-action-message contract-price-message" role="status">{priceMessage}</small>}
     </form>}
     <form className="contract-action-form" noValidate onSubmit={(event) => { event.preventDefault(); void record() }}>
-      {/* Text, not a number box, so "1,200" copied off a ticket is kept: thousands commas and spaces are dropped as typed. */}
-      <label>Delivered bushels<input type="text" inputMode="decimal" autoComplete="off" value={delivery} disabled={deliveryUnconfirmed} autoFocus={autoFocusDelivery} onChange={(event) => setDelivery(typedNumberText(event.target.value))} /></label>
+      {/* Text, not a number box, so "1,200" copied off a ticket is kept as typed and read as 1200; a decimal comma is refused by name. */}
+      <label>Delivered bushels<input type="text" inputMode="decimal" autoComplete="off" value={delivery} disabled={deliveryUnconfirmed} autoFocus={autoFocusDelivery} onChange={(event) => setDelivery(event.target.value)} /></label>
       <label>Delivered on<input type="date" max={farmToday()} value={deliveredOn} disabled={deliveryUnconfirmed} onChange={(event) => setDeliveredOn(event.target.value)} /></label>
       <label>Ticket # or note (optional)<input type="text" maxLength={4000} value={deliveryNote} disabled={deliveryUnconfirmed} onChange={(event) => setDeliveryNote(event.target.value)} /></label>
       <button className="text-action" type="submit" disabled={saving || !workspace.capabilities?.contract_deliveries}>{deliveryUnconfirmed ? "Retry delivery" : "Record delivery"}</button>
@@ -4271,9 +4280,14 @@ export function lotGapText(workspace: GrainWorkspace, commodityId: string, cropY
   const wholeFarm = estimates.filter((estimate) => estimate.operating_entity_id === null && estimate.enterprise_label === null);
   const production = (wholeFarm.length ? wholeFarm : estimates).reduce((sum, estimate) => sum + activeProduction(estimate), 0);
   const contracted = workspace.grain_contracts.filter((contract) => contract.commodity_id === commodityId && contract.crop_year === cropYear).reduce((sum, contract) => sum + contract.bushels, 0);
-  // Against the estimate in whole bushels, as the card's footer and headline show it, so 30,000 sold against a 29,740.65 bu
-  // projection reads "259 bu more sold" next to "29,741 bu", not 259.35.
-  const oversold = Math.round((contracted - Math.round(production)) * 100) / 100;
+  // Whether more is sold than the estimate is decided on the cent figures themselves: 29,740.10 sold against a 29,740.40 bu
+  // estimate is not oversold, even though the estimate shows as 29,740. Only the amount shown is then taken against the
+  // estimate in whole bushels, as the card's footer and headline show it, so 30,000 sold against a 29,740.65 bu projection
+  // reads "259 bu more sold" next to "29,741 bu", not 259.35. When that whole-bushel figure would read 0 or less (29,740.90
+  // sold against 29,740.65), the cent difference is shown instead, so a real oversale never reads as nothing.
+  const oversoldCents = Math.round(contracted * 100) - Math.round(production * 100);
+  const shownOver = Math.round((contracted - Math.round(production)) * 100) / 100;
+  const oversold = oversoldCents > 0 ? (shownOver > 0 ? shownOver : oversoldCents / 100) : 0;
   // `contracted` counts bushels already delivered too, so once deliveries eat into it the oversold figure can be more
   // than is still owed past the bins (-free). Then the crop the estimate described is already hauled or stored, and
   // what is left owed is plainly short: the red figure is never bigger than the bushels still owed.
@@ -4919,7 +4933,9 @@ function MovementForm({
         farm_id: workspace.fields.farm.id,
         grain_bin_id: bin.id,
         direction,
-        bushels: Number(bushelsValue),
+        // Read by the one typed-amount rule ("1,250" is 1250); the box was checked above, so a blank is the only thing
+        // unread, and 0 is refused by validateBinTransaction.
+        bushels: typedAmount(bushelsValue) ?? 0,
         commodity_id: commodity,
         occurred_on: occurredOn,
         note: note.trim() || null,
@@ -4972,8 +4988,8 @@ function MovementForm({
       </label>
       <label>
         Bushels
-        {/* Text, not a number box: a number box turns "1,000" typed off a ticket into nothing. Thousands
-            commas and spaces are dropped as they are typed; a decimal comma stays and is refused by name. */}
+        {/* Text, not a number box: a number box turns "1,000" typed off a ticket into nothing. The box keeps
+            what was typed and reads "1,000" as 1000; a decimal comma is refused by name. */}
         <input
           required
           type="text"
@@ -4981,7 +4997,7 @@ function MovementForm({
           autoComplete="off"
           value={bushelsValue}
           disabled={movementUnconfirmed}
-          onChange={(event) => setBushelsValue(typedNumberText(event.target.value))}
+          onChange={(event) => setBushelsValue(event.target.value)}
         />
       </label>
       <label>
@@ -5474,8 +5490,10 @@ export function TargetEditor({
     Number.isFinite(relativeValue)
       ? breakeven * (1 + relativeValue / 100)
       : null;
-  // A saved month whose % over breakeven is left as it was keeps its saved price while breakeven loads or cannot be read (offline,
-  // no Profitability access): the month grid shows that price, and a save that only changes the month's % or deadline still works.
+  // A saved month whose % over breakeven is left as it was keeps its saved price in view while breakeven loads or cannot be read
+  // (offline, no Profitability access). Saving it with that price waits until breakeven has loaded: once it reads as unavailable,
+  // a save that only changes the month's % or deadline goes through with the saved price; while it is still loading every save
+  // is asked to wait, because the breakeven about to arrive would work out a different price.
   const savedPrice =
     target && target.breakeven_relative_pct !== null && target.target_price !== null && relativeValue === target.breakeven_relative_pct
       ? target.target_price
@@ -5501,7 +5519,7 @@ export function TargetEditor({
             setFormError(`Your plan would add up to ${Number((others + Number(pct)).toFixed(2))}% of the crop. Lower this month or another so the total is 100% or less.`);
             return;
           }
-          if (relative !== "" && !breakevenLoaded && savedPrice === null) {
+          if (relative !== "" && !breakevenLoaded) {
             setFormError("Checking breakeven… try again in a moment.");
             return;
           }
@@ -5746,7 +5764,7 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
   // Pounds per bushel for the crop this load is, once the origin has said which crop that is.
   const lbsPerBushel = lot ? STANDARD_BUSHEL_LBS[workspace.fields.commodities.find((item) => item.id === lot.commodity_id)?.crop_family ?? "corn"] : null;
   // Gross and tare fill in net bushels while the net box is empty or still holds the last figure
-  // worked out here. Commas and spaces typed off a ticket are dropped, so the draft holds a number.
+  // worked out here. The weight boxes keep what was typed; "80,000" off a ticket is read as 80000.
   const updateWeight = (patch: { gross_lbs?: string; tare_lbs?: string }) => {
     const next = { ...draft, ...patch };
     const worked = lbsPerBushel ? netBushelsFromWeights(next.gross_lbs, next.tare_lbs, lbsPerBushel) : null;
@@ -5771,9 +5789,6 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
     netAuto.current = workedNet;
     setDraft((current) => ({ ...current, net_bushels: workedNet }));
   }, [lbsPerBushel, workedNet, ticketOutstanding, draft.net_bushels]);
-  // Spaces go, and commas only as thousands separators ("1,000"). Any other comma ("892,86", a decimal comma from some phone
-  // keyboards) is kept, so the box is refused, with the comma named, instead of being read as 89,286.
-  const numberTyped = typedNumberText;
   const contractLeft = (contract: GrainContract) => contractUndeliveredBushels(contract, workspace.grain_contract_deliveries);
   // The contracts this load could go against, with what is still left to deliver on each. The one
   // already chosen always stays in the list, so the box never looks blank while the draft holds it;
@@ -5869,9 +5884,10 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
     : "This bin shows no grain with a crop year. If it has grain in it, tap “Add or take out grain” on that bin under Bins & basis and add an “In” for it.";
   const availableEffects = effectsReady ? loadEffectsAvailable(draft) : [];
   const confirmedEffects = confirmedLoadEffects(draft);
-  const typedNet = Number(draft.net_bushels);
+  // Read by the one typed-amount rule, as the save is: "1,200" is 1200, and "892,86" is not a number at all.
+  const typedNet = typedAmount(draft.net_bushels);
   // In the same en-US style as every other bushel figure, not the device's locale ("1.000,5" on a German phone).
-  const bushelLabel = draft.net_bushels.trim() && Number.isFinite(typedNet) && typedNet > 0
+  const bushelLabel = typedNet !== null && typedNet > 0
     ? `${displayBushels(typedNet)} bu`
     : "these bushels";
   // The same four effects said as a sentence, so what is about to happen reads as English rather
@@ -5923,7 +5939,7 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
         const contract = workspace.grain_contracts.find((row) => row.id === draft.destination_grain_contract_id);
         // A net has at most two decimals (validateGrainLoadShape), so this and the server judge the same figure. Rounded to the
         // cent anyway, so floating-point dust (500.01 - 500 is 0.00999…) never asks about "0.00 bu more".
-        const excess = contract ? Math.round((Number(draft.net_bushels) - contractLeft(contract)) * 100) / 100 : 0;
+        const excess = contract ? Math.round(((typedAmount(draft.net_bushels) ?? 0) - contractLeft(contract)) * 100) / 100 : 0;
         const refusedBefore = !!contract && overdeliveryRefusedFor.current === contract.id;
         if (excess > 0 || refusedBefore) {
           if (!(await confirmDialog({
@@ -5968,11 +5984,14 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
       //
       // `lot` is what loadLotFor resolved from the same list the screen rendered, so this cannot
       // disagree with what the farmer was looking at, and it no longer depends on effect timing.
-      const outgoing = !binLotReady
+      //
+      // The boxes keep what the farmer typed ("80,000"); what goes out is the same amounts read by the one typed-amount rule,
+      // so the repository checks, and the server stores, the number the form showed -- the same text on every retry.
+      const outgoing = typedLoadDraft(!binLotReady
         ? { ...outgoing0, origin_crop_year: "", origin_commodity_id: "" }
         : draft.origin_kind === "bin" && lot
           ? { ...outgoing0, origin_crop_year: String(lot.crop_year), origin_commodity_id: lot.commodity_id }
-          : outgoing0;
+          : outgoing0);
       const movedOrDelivered = effectsReady && confirmedEffects.some((key) => key !== "harvest");
       const saved = await services.grainRepository.saveLoad(loadId.current, allowOverdelivery ? { ...outgoing, allow_overdelivery: true } : outgoing);
       // What this save did beyond the ticket, in the saved row's bushels (the figure "Load saved" opens with). The
@@ -6337,10 +6356,10 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
 
         {/* Text boxes, not number boxes: a number box turns "1,000" typed off a ticket into nothing.
             Commas and spaces are dropped as they are typed, so the draft only ever holds a number. */}
-        <label>Gross weight (lb)<input type="text" inputMode="decimal" autoComplete="off" aria-invalid={problemAbout(/gross|loaded truck/i)} value={draft.gross_lbs} onChange={(event) => updateWeight({ gross_lbs: numberTyped(event.target.value) })} /></label>
-        <label>Tare weight (lb)<input type="text" inputMode="decimal" autoComplete="off" aria-invalid={problemAbout(/tare|loaded truck/i)} value={draft.tare_lbs} onChange={(event) => updateWeight({ tare_lbs: numberTyped(event.target.value) })} /></label>
+        <label>Gross weight (lb)<input type="text" inputMode="decimal" autoComplete="off" aria-invalid={problemAbout(/gross|loaded truck/i)} value={draft.gross_lbs} onChange={(event) => updateWeight({ gross_lbs: event.target.value })} /></label>
+        <label>Tare weight (lb)<input type="text" inputMode="decimal" autoComplete="off" aria-invalid={problemAbout(/tare|loaded truck/i)} value={draft.tare_lbs} onChange={(event) => updateWeight({ tare_lbs: event.target.value })} /></label>
         <div className="load-field">
-          <label>Net bushels<input type="text" inputMode="decimal" autoComplete="off" aria-invalid={problemAbout(/net bushels/i)} value={draft.net_bushels} onChange={(event) => update({ net_bushels: numberTyped(event.target.value) })} /></label>
+          <label>Net bushels<input type="text" inputMode="decimal" autoComplete="off" aria-invalid={problemAbout(/net bushels/i)} value={draft.net_bushels} onChange={(event) => update({ net_bushels: event.target.value })} /></label>
           {workedNet !== null && draft.net_bushels === workedNet
             ? <small className="load-hint">Worked out from the scale weights at {lbsPerBushel} lb/bu. Change it to match your ticket if it differs.</small>
             : !lot && <small className="load-hint">Pick where the load came from first, and Farm Rx works out net bushels from the weights you type.</small>}
