@@ -49,7 +49,7 @@ import {
   ruleSentence,
 } from "./data/marketingAlerts";
 import { localCalendarDay } from "./data/marketingAlerts";
-import { farmCalendarDate, farmLocalCalendarDate } from "./data/farmDates";
+import { farmCalendarDate } from "./data/farmDates";
 import {
   deriveBinPosition,
   activeBinCommodityIds,
@@ -243,8 +243,8 @@ function CropYearReconciliation({ workspace, services, canManageFarm, onSaved }:
  * in plain words what the ticked boxes will do before the save. Unticking is the exception, which is
  * why unticking is what takes the deliberate action. normalizeLoadEffects clears whichever of them
  * the chosen origin and destination cannot reach. */
-const emptyLoadDraft = (): GrainLoadDraft => ({
-  load_date: localCalendarDay(new Date()),
+const emptyLoadDraft = (farmToday: string): GrainLoadDraft => ({
+  load_date: farmToday,
   truck_equipment_id: "",
   truck_name: "",
   origin_kind: "bin",
@@ -1283,7 +1283,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
                       </td>
                       <td data-label="Type">{contractLabels[contract.contract_type]}</td>
                       <td className="align-right numeric" data-label="Bushels">
-                        {bushels.format(contract.bushels)}
+                        {displayBushels(contract.bushels)}
                       </td>
                       {/* A half-priced contract shows the leg that is known, not only the one that is missing. */}
                       <td className="align-right numeric" data-label="Price">
@@ -1319,7 +1319,7 @@ export function GrainPage({ services, canManageFarm = false }: { services: Grain
               <tfoot>
                 <tr>
                   <th scope="row" colSpan={2}>Total for {selectedScopeLabel}</th>
-                  <td className="align-right numeric" data-label="Bushels"><strong>{bushels.format(contractRows.reduce((sum, contract) => sum + contract.bushels, 0))}</strong></td>
+                  <td className="align-right numeric" data-label="Bushels"><strong>{displayBushels(contractRows.reduce((sum, contract) => sum + contract.bushels, 0))}</strong></td>
                   <td className="align-right numeric" data-label="Average price">{contractPosition.finalBushels ? <><strong>{pricePerBu.format(contractPosition.finalRevenue / contractPosition.finalBushels)}</strong><small>avg on {displayBushels(contractPosition.finalBushels)} priced bu</small></> : "—"}</td>
                   {/* Under the Delivery heading on a laptop, so the value names itself rather than reading as a delivery figure. */}
                   <td className="align-right numeric" data-label="Value">{contractPosition.finalBushels ? <><strong>Value {money.format(contractPosition.finalRevenue)}</strong><small>priced contracts</small></> : "—"}</td>
@@ -2065,7 +2065,7 @@ function OfferList({
                           : "Cash"}{" "}
                       ·{" "}
                       <b className="numeric">
-                        {bushels.format(offer.bushels)} bu
+                        {displayBushels(offer.bushels)} bu
                       </b>{" "}
                       · <b className="numeric">{value}</b>
                     </span>
@@ -4973,7 +4973,9 @@ export function Basis({
       ?? "");
   const [basis, setBasis] = useState("");
   const [cashPrice, setCashPrice] = useState("");
-  const today = farmLocalCalendarDate();
+  // The farm's calendar day: the alert sweep ages bids by it, so a bid dated here is never "tomorrow" on the farm.
+  const farmToday = () => planDateFor(new Date(), workspace.fields.farm.time_zone);
+  const today = farmToday();
   const [bidDate, setBidDate] = useState(today);
   const [error, setError] = useState("");
   const submitLock = useRef(createSubmitLock());
@@ -4987,7 +4989,7 @@ export function Basis({
       setError("Cash price must be zero or more.");
       return;
     }
-    if (!bidDate || bidDate > farmLocalCalendarDate()) {
+    if (!bidDate || bidDate > farmToday()) {
       setError("Pick the date of this bid. It cannot be after today.");
       return;
     }
@@ -5018,7 +5020,7 @@ export function Basis({
       setBasis("");
       setCashPrice("");
       // Back to today, so the next bid is not quietly saved under the date of the last one.
-      setBidDate(farmLocalCalendarDate());
+      setBidDate(farmToday());
       setError("");
       await onSaved();
     } catch (exception) {
@@ -5503,7 +5505,7 @@ export function TargetEditor({
 export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }: { workspace: GrainWorkspace; services: GrainServices; onSaved: () => Promise<void>; /** Whether this viewer can name an older movement's crop year themselves. */ canManageFarm?: boolean }) {
   const available = workspace.capabilities?.grain_loads !== false;
   // A farm with no bins starts on "Off a field" rather than on an empty bin list.
-  const [draft, setDraft] = useState<GrainLoadDraft>(() => ({ ...emptyLoadDraft(), origin_kind: workspace.grain_bins.length ? "bin" : "field" }));
+  const [draft, setDraft] = useState<GrainLoadDraft>(() => ({ ...emptyLoadDraft(planDateFor(new Date(), workspace.fields.farm.time_zone)), origin_kind: workspace.grain_bins.length ? "bin" : "field" }));
   const [message, setMessage] = useState("");
   // Every problem with the form at once, listed beside the Save button, rather than one per tap.
   // Turned on by a Save that found problems and off by one that worked. While it is on, the list is
@@ -5630,8 +5632,9 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
   // moves bushels, originLots is onHandLots and nothing changes.
   const lotsForResolution = draft.origin_crop_year.trim() ? recordedLots : originLots;
   const lot = loadLotFor(workspace, draft, binLotReady ? lotsForResolution : undefined);
-  const todayLocal = localCalendarDay(new Date());
-  const futureDate = loadDateInFutureProblem(draft.load_date, todayLocal);
+  // The farm's calendar day, not this device's, as deliveries and the alert sweep use.
+  const farmToday = planDateFor(new Date(), workspace.fields.farm.time_zone);
+  const futureDate = loadDateInFutureProblem(draft.load_date, farmToday);
   const problems = [...validateGrainLoad(draft, workspace, binLotReady ? lotsForResolution : undefined), ...(futureDate ? [futureDate] : [])];
   const cropAssignments = workspace.fields.crop_assignments;
   // Pounds per bushel for the crop this load is, once the origin has said which crop that is.
@@ -6096,7 +6099,7 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
             resends that same ticket and no edit can quietly start a second one. The Save button sits
             outside, because it is how the retry is made. */}
         <fieldset className="load-fields" disabled={ticketOutstanding}>
-        <label>Date hauled<input type="date" max={todayLocal} aria-invalid={problemAbout(/^Pick the date this load|^Pick a real date|^The date hauled/)} value={draft.load_date} onChange={(event) => update({ load_date: event.target.value })} /></label>
+        <label>Date hauled<input type="date" max={farmToday} aria-invalid={problemAbout(/^Pick the date this load|^Pick a real date|^The date hauled/)} value={draft.load_date} onChange={(event) => update({ load_date: event.target.value })} /></label>
 
         <fieldset className="load-origin">
           <legend>Where it came from</legend>

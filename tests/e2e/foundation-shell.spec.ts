@@ -1697,6 +1697,21 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
 // GL-3b: a contract typed wrong was a dead end -- no edit, no delete, and a marketing position that
 // stayed wrong forever. The control appears only for a contract with no deliveries, it requires a
 // reason, and it sends only the fields the farmer actually touched.
+test('the Contracts table shows decimal bushels as saved, not rounded', async ({ page, context }) => {
+  // Contracts accept amounts like 100.25 bu (a partial firm-offer fill). The bushels column and its total must show
+  // the saved figure, or the row reads 100 bu while bushels left and value are worked out from 100.25.
+  await seedSession(context)
+  const farm = farms[0]!
+  const row = (id: string, buyer: string, bushels: number) => ({ id, farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer, bushels, futures_price: null, basis: null, cash_price: 4.75, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, firm_offer_id: null, created_at: now, updated_at: now })
+  const contractRows = [row('00000000-0000-4000-8000-000000000071', 'Whole Bushels', 1_000), row('00000000-0000-4000-8000-000000000072', 'Partial Fill', 100.25)]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: contractRows, grain_contract_deliveries: [], grain_contract_audit: [] })
+  await page.goto('/grain/contracts')
+  await expect(page.locator('tr.contract-row').filter({ hasText: 'Partial Fill' }).locator('td[data-label="Bushels"]')).toHaveText('100.25')
+  await expect(page.locator('tr.contract-row').filter({ hasText: 'Whole Bushels' }).locator('td[data-label="Bushels"]')).toHaveText('1,000')
+  await expect(page.locator('tfoot td[data-label="Bushels"]')).toHaveText('1,100.25')
+  expect(unexpected).toEqual([])
+})
+
 test('a contract with no deliveries can be corrected with a reason, and one already delivered against cannot', async ({ page, context }) => {
   await seedSession(context)
   contractRepairCalls.length = 0

@@ -7,6 +7,7 @@ import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
 import { BIN_UNDATED_GRAIN, loadDateInFutureProblem, netBushelsFromWeights, STANDARD_BUSHEL_LBS, validateGrainLoad, validateGrainLoadShape, type BinTransaction, type CashBid, type GrainBin, type GrainContract, type GrainLoad, type GrainLoadDraft, type GrainServices, type GrainWorkspace } from './data/grain'
 import { grainLoadPayload } from './data/SupabaseGrainDataGateway'
+import { farmCalendarDate } from './data/farmDates'
 import { farmerError } from './lib/farmerErrors'
 import { useSaveReceipt } from './lib/saveReceipt'
 
@@ -327,6 +328,21 @@ try {
   assert((control(container, 'Net bushels') as HTMLInputElement).value === '892,86', 'A decimal comma is kept as typed, so it can be refused.')
   await click(button(container, 'Save load'))
   assert([...container.querySelectorAll('ul.load-problems li')].some((item) => item.textContent === 'Type net bushels as a number, like 1000.'), 'A decimal comma is named as not a number.')
+
+  // ---- Codex review: a new load and a new cash bid are dated, and capped, by the farm's calendar day, as deliveries and
+  // the alert sweep are. The farthest-ahead zone and one 25 hours behind it: one is always on another day from this device.
+  const zones = ['Pacific/Kiritimati', 'Pacific/Pago_Pago']
+  assert(zones.some((zone) => farmCalendarDate(new Date(), zone) !== farmCalendarDate(new Date(), null)), 'Test setup: one farm must sit on another calendar day from this device.')
+  for (const zone of zones) {
+    const zoned = { ...workspace, fields: { ...fields, farm: { ...fields.farm, time_zone: zone } } } as GrainWorkspace
+    await act(async () => { root.render(createElement(MemoryRouter, null, createElement(LoadsTab, { key: `load-${zone}`, workspace: zoned, services, onSaved: async () => undefined }), createElement(ConfirmDialogHost))); await flush() })
+    const hauled = control(container, 'Date hauled') as HTMLInputElement; const loadDay = farmCalendarDate(new Date(), zone)
+    assert(hauled.value === loadDay && hauled.getAttribute('max') === loadDay, `${zone}: a new load must be dated and capped at the farm's day ${loadDay}, got ${hauled.value} / ${hauled.getAttribute('max')}.`)
+    await act(async () => { root.render(createElement(MemoryRouter, null, createElement(Basis, { key: `bid-${zone}`, workspace: zoned, services, onSaved: async () => undefined }), createElement(ConfirmDialogHost))); await flush() })
+    const bidDay = control(container, 'Bid date') as HTMLInputElement; const farmDay = farmCalendarDate(new Date(), zone)
+    assert(bidDay.value === farmDay && bidDay.getAttribute('max') === farmDay, `${zone}: a new cash bid must be dated and capped at the farm's day ${farmDay}, got ${bidDay.value} / ${bidDay.getAttribute('max')}.`)
+  }
+
 } finally {
   await act(async () => { root.unmount() }); container.remove(); win.close()
 }
