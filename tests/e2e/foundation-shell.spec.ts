@@ -1709,6 +1709,15 @@ test('the Contracts table shows decimal bushels as saved, not rounded', async ({
   await expect(page.locator('tr.contract-row').filter({ hasText: 'Partial Fill' }).locator('td[data-label="Bushels"]')).toHaveText('100.25')
   await expect(page.locator('tr.contract-row').filter({ hasText: 'Whole Bushels' }).locator('td[data-label="Bushels"]')).toHaveText('1,000')
   await expect(page.locator('tfoot td[data-label="Bushels"]')).toHaveText('1,100.25')
+  // Delivered bushels: a thousands comma off a ticket is dropped, but a decimal comma ("1200,5" from some phone keyboards)
+  // stays and is refused, never read as 12,005 bu. A refused box sends nothing.
+  const deliveryBox = page.locator('tr.contract-row').filter({ hasText: 'Whole Bushels' }).locator('xpath=following-sibling::tr[1]').getByLabel('Delivered bushels')
+  await deliveryBox.fill('1,200')
+  await expect(deliveryBox).toHaveValue('1200')
+  await deliveryBox.fill('1200,5')
+  await expect(deliveryBox).toHaveValue('1200,5')
+  await deliveryBox.press('Enter')
+  await expect(page.getByText('Type delivered bushels as a number, like 1200 or 1200.5.')).toBeVisible()
   expect(unexpected).toEqual([])
 })
 

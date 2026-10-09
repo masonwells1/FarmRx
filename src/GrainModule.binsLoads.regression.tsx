@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router'
 import { Basis, Bins, LoadsTab, movementSourceLabel } from './GrainModule'
 import { ConfirmDialogHost } from './components/ConfirmDialog'
 import { fieldsSeedForRegression } from './data/MockFieldsRepository'
-import { BIN_UNDATED_GRAIN, loadDateInFutureProblem, netBushelsFromWeights, STANDARD_BUSHEL_LBS, validateGrainLoad, validateGrainLoadShape, type BinTransaction, type CashBid, type GrainBin, type GrainContract, type GrainLoad, type GrainLoadDraft, type GrainServices, type GrainWorkspace } from './data/grain'
+import { BIN_UNDATED_GRAIN, loadDateInFutureProblem, netBushelsFromWeights, typedNumberText, STANDARD_BUSHEL_LBS, validateGrainLoad, validateGrainLoadShape, type BinTransaction, type CashBid, type GrainBin, type GrainContract, type GrainLoad, type GrainLoadDraft, type GrainServices, type GrainWorkspace } from './data/grain'
 import { grainLoadPayload } from './data/SupabaseGrainDataGateway'
 import { farmCalendarDate } from './data/farmDates'
 import { farmerError } from './lib/farmerErrors'
@@ -24,6 +24,8 @@ assert(netBushelsFromWeights('80000', '30000', STANDARD_BUSHEL_LBS.corn) === '89
 assert(netBushelsFromWeights('62000', '32000', STANDARD_BUSHEL_LBS.soybeans) === '500.00', 'Soybeans: 30,000 lb net is 500 bu at 60 lb/bu.')
 assert(netBushelsFromWeights('30000', '30000', 56) === null && netBushelsFromWeights('20000', '30000', 56) === null, 'No figure unless the loaded truck weighs more than the empty one.')
 assert(netBushelsFromWeights('', '30000', 56) === null && netBushelsFromWeights('abc', '30000', 56) === null, 'No figure from a blank or a word.')
+assert(typedNumberText('1,200') === '1200' && typedNumberText('12,345.5') === '12345.5' && typedNumberText(' 1 200 ') === '1200' && typedNumberText('1,234,567') === '1234567', 'Thousands commas and spaces are dropped.')
+assert(typedNumberText('1200,5') === '1200,5' && typedNumberText('1200,500') === '1200,500' && typedNumberText('892,86') === '892,86' && typedNumberText('1,2') === '1,2', 'A decimal or misplaced comma is kept, so the box is refused as not a number instead of being read as another amount.')
 const baseDraft: GrainLoadDraft = { load_date: '2026-10-01', truck_equipment_id: '', truck_name: '', origin_kind: 'field', origin_grain_bin_id: '', origin_crop_assignment_id: uid(1), origin_crop_year: '', origin_commodity_id: '', destination_kind: 'buyer', destination_buyer: 'Co-op', destination_grain_contract_id: '', destination_grain_bin_id: '', gross_lbs: '', tare_lbs: '', net_bushels: '100', moisture_pct: '', ticket_number: '', notes: '', effect_bin_out: true, effect_bin_in: true, effect_contract_delivery: true, effect_harvest: true }
 assert(validateGrainLoadShape({ ...baseDraft, net_bushels: 'abc' }).includes('Type net bushels as a number, like 1000.'), 'A word in net bushels is named as not a number, not as zero.')
 assert(validateGrainLoadShape({ ...baseDraft, net_bushels: '' }).includes('Net bushels must be more than zero.'), 'A blank net still asks for more than zero.')
@@ -93,13 +95,14 @@ const workspace: GrainWorkspace = {
 } as GrainWorkspace
 const savedBins: GrainBin[] = []; const sentLoads: Array<{ id: string; draft: GrainLoadDraft }> = []; const savedBids: CashBid[] = []
 let loadMode: 'lost' | 'ok' | 'refuse-over' = 'ok'
+let movementWrites = 0
 let nextId = 100
 const repository = {
   getData: async () => workspace,
   listBinLots: async (binId: string) => binId === binA.id ? [{ commodity_id: 'corn_yellow', crop_year: 2026, bushels: 5_000 }] : [],
   listLoadTrucks: async () => [],
   upsertGrainBin: async (value: GrainBin) => { savedBins.push(value) },
-  appendBinTransaction: async () => undefined,
+  appendBinTransaction: async () => { movementWrites += 1 },
   saveCashBid: async (value: CashBid) => { savedBids.push(value) },
   saveLoad: async (id: string, draft: GrainLoadDraft) => {
     sentLoads.push({ id, draft: structuredClone(draft) })
@@ -143,6 +146,11 @@ try {
   assert(bravo.textContent?.includes('Type bushels as a number, like 1000.') && !bravo.textContent.includes('greater than zero'), 'A word in Bushels is named as not a number.')
   await change(control(bravo, 'Bushels'), '1,250')
   assert((control(bravo, 'Bushels') as HTMLInputElement).value === '1250', 'Commas typed off a ticket are dropped, not turned into nothing.')
+  // Codex review: a decimal comma from some phone keyboards stays and is refused, never saved as 12,005 bu.
+  await change(control(bravo, 'Bushels'), '1200,5')
+  assert((control(bravo, 'Bushels') as HTMLInputElement).value === '1200,5', 'A decimal comma is kept as typed, not stripped into another amount.')
+  await act(async () => { (bravo.querySelector('form.movement-form') as HTMLFormElement).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush() })
+  assert(movementWrites === 0 && bravo.textContent?.includes('Type bushels as a number, like 1000.'), `A decimal comma in Bushels is refused with nothing written (${movementWrites} writes).`)
   const alpha = cardFor('Alpha bin')
   assert(alpha.textContent?.includes('5,000 bu') && alpha.textContent.includes('· 50%'), 'A bin holding grain shows its fill.')
   await act(async () => { root.render(createElement('div')); await flush() })

@@ -34,7 +34,7 @@ import type { BinInventory, BinTransaction, FirmOffer, FirmOfferStatus, FirmOffe
 import { contractUndeliveredBushels, deriveBinLots, deriveCommittedFree, deriveCommittedFreeLot, deriveUnknownCropYearBushels } from "./data/committedFree";
 import type { BinLotOnHand } from "./data/committedFree";
 import { formatFarmDate } from "./lib/farmDate";
-import { binUndatedBushels, confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, contractIsDeletable, loadEffectsAvailable, loadLotFor, manualMovementCropYears, originBinLots, recordedBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planDateFor, plannedPercentThroughDate, harvestBushelsFromLoads, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason, MARKETING_PLAN_PERCENT_TOLERANCE, activeLoads, basisCentsPrompt, basisLooksLikeCents, loadDateInFutureProblem, netBushelsFromWeights, normalizeLoadEffects, STANDARD_BUSHEL_LBS } from "./data/grain";
+import { binUndatedBushels, confirmedLoadEffects, contractCorrectionDiff, contractIsCorrectable, contractIsDeletable, loadEffectsAvailable, loadLotFor, manualMovementCropYears, originBinLots, recordedBinLots, LOAD_RECORD_PENDING, marketedPercent, movementsWithoutCropYear, validateAssignedCropYear, sameScope, scopeKey, scopeOf, deliveryDefaultEstimate, planDateFor, plannedPercentThroughDate, harvestBushelsFromLoads, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateLoadVoidReason, MARKETING_PLAN_PERCENT_TOLERANCE, activeLoads, typedNumberText, basisCentsPrompt, basisLooksLikeCents, loadDateInFutureProblem, netBushelsFromWeights, normalizeLoadEffects, STANDARD_BUSHEL_LBS } from "./data/grain";
 import {
   captureGrainAlertOperationContext,
   evaluateGrainAlerts,
@@ -4153,8 +4153,8 @@ export function ContractActions({ contract, workspace, services, autoFocusDelive
       {priceMessage && <small className="contract-action-message contract-price-message" role="status">{priceMessage}</small>}
     </form>}
     <form className="contract-action-form" noValidate onSubmit={(event) => { event.preventDefault(); void record() }}>
-      {/* Text, not a number box, so "1,200" copied off a ticket is kept: commas and spaces are dropped as typed. */}
-      <label>Delivered bushels<input type="text" inputMode="decimal" autoComplete="off" value={delivery} disabled={deliveryUnconfirmed} autoFocus={autoFocusDelivery} onChange={(event) => setDelivery(event.target.value.replace(/[,\s]/g, ""))} /></label>
+      {/* Text, not a number box, so "1,200" copied off a ticket is kept: thousands commas and spaces are dropped as typed. */}
+      <label>Delivered bushels<input type="text" inputMode="decimal" autoComplete="off" value={delivery} disabled={deliveryUnconfirmed} autoFocus={autoFocusDelivery} onChange={(event) => setDelivery(typedNumberText(event.target.value))} /></label>
       <label>Delivered on<input type="date" max={farmToday()} value={deliveredOn} disabled={deliveryUnconfirmed} onChange={(event) => setDeliveredOn(event.target.value)} /></label>
       <label>Ticket # or note (optional)<input type="text" maxLength={4000} value={deliveryNote} disabled={deliveryUnconfirmed} onChange={(event) => setDeliveryNote(event.target.value)} /></label>
       <button className="text-action" type="submit" disabled={saving || !workspace.capabilities?.contract_deliveries}>{deliveryUnconfirmed ? "Retry delivery" : "Record delivery"}</button>
@@ -4877,8 +4877,8 @@ function MovementForm({
       </label>
       <label>
         Bushels
-        {/* Text, not a number box: a number box turns "1,000" typed off a ticket into nothing. The
-            commas and spaces are dropped as they are typed, so what is kept is a plain number. */}
+        {/* Text, not a number box: a number box turns "1,000" typed off a ticket into nothing. Thousands
+            commas and spaces are dropped as they are typed; a decimal comma stays and is refused. */}
         <input
           required
           type="text"
@@ -4886,7 +4886,7 @@ function MovementForm({
           autoComplete="off"
           value={bushelsValue}
           disabled={movementUnconfirmed}
-          onChange={(event) => setBushelsValue(event.target.value.replace(/[,\s]/g, ""))}
+          onChange={(event) => setBushelsValue(typedNumberText(event.target.value))}
         />
       </label>
       <label>
@@ -5665,9 +5665,9 @@ export function LoadsTab({ workspace, services, onSaved, canManageFarm = false }
     netAuto.current = workedNet;
     setDraft((current) => ({ ...current, net_bushels: workedNet }));
   }, [lbsPerBushel, workedNet, ticketOutstanding, draft.net_bushels]);
-  // Spaces go, and a comma only as a thousands separator ("1,000"). Any other comma ("892,86", a decimal comma from some phone
+  // Spaces go, and commas only as thousands separators ("1,000"). Any other comma ("892,86", a decimal comma from some phone
   // keyboards) is kept, so the box is refused as not a number instead of being read as 89,286.
-  const numberTyped = (value: string) => value.replace(/\s/g, "").replace(/,(?=\d{3}(\D|$))/g, "");
+  const numberTyped = typedNumberText;
   const contractLeft = (contract: GrainContract) => contractUndeliveredBushels(contract, workspace.grain_contract_deliveries);
   // The contracts this load could go against, with what is still left to deliver on each. The one
   // already chosen always stays in the list, so the box never looks blank while the draft holds it;

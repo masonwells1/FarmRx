@@ -620,6 +620,14 @@ export function loadDateInFutureProblem(loadDate: string, today: string): string
 /** Pounds in a standard bushel for each crop family -- 56 for corn, 60 for soybeans and wheat. */
 export const STANDARD_BUSHEL_LBS: Record<Commodity['crop_family'], number> = { corn: 56, soybeans: 60, wheat: 60 }
 
+/** A bushel or pound amount as typed, ready for Number(). Spaces go, and commas go only when every one is a real
+ * thousands separator ("1,200" or "12,345.5"). Any other comma -- "1200,5" from a phone keyboard that types a decimal
+ * comma, or a misplaced "1200,500" -- is kept, so the box is refused as not a number instead of saving another amount. */
+export function typedNumberText(value: string): string {
+  const compact = value.replace(/\s/g, '')
+  return /^-?\d{1,3}(,\d{3})+(\.\d*)?$/.test(compact) ? compact.replace(/,/g, '') : compact
+}
+
 /** Net bushels from a scale ticket's gross and tare pounds, rounded to the cent of a bushel. Null
  * unless both weights are numbers and the loaded truck weighs more than the empty one. A starting
  * figure the farmer sees and can change -- it is never sent without being shown. */
