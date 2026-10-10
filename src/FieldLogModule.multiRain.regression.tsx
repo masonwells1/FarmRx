@@ -22,13 +22,13 @@ const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0'
 const user = uid(1); const farm = uid(2); const north = uid(3); const south = uid(4); const stamp = '2027-08-04T12:00:00.000Z'
 const field = (id: string, name: string) => ({ id, farm_id: farm, name, total_acres: 80, is_active: true, latitude: null, longitude: null })
 const fieldsData = { farm: { id: farm }, entities: [], fields: [field(north, 'Pine North 80'), field(south, 'Pine South 80')], crop_assignments: [], arrangements: [], commodities: [] } as unknown as FieldsData
-let reads = 0; let nextId = 10; let server: FieldLogEntry[] | null = null; let noSignal = false; let cachedReads = false; let holdNext = false; let releaseHeld = () => {}; const unsent: FieldLogEntry[] = []; let afterSave: 'stale copy' | 'no copy' = 'stale copy'; const saves: FieldLogEntryDraft[] = []; const deletes: string[] = []
+let reads = 0; let nextId = 10; let server: FieldLogEntry[] | null = null; let noSignal = false; let cachedReads = false; let holdNext: (() => { entries: FieldLogEntry[]; cached?: true }) | null = null; let releaseHeld = () => {}; const unsent: FieldLogEntry[] = []; const returned: FieldLogEntry[] = []; let afterSave: 'stale copy' | 'no copy' = 'stale copy'; const saves: FieldLogEntryDraft[] = []; const deletes: string[] = []
 const fieldsRepository = { getData: async () => fieldsData, saveField: async () => { throw new Error('unexpected field mutation') } } satisfies FieldsRepository
 const fieldLogRepository = {
   // With `server` set, reads return it, plus the unsent rows when `noSignal` (the offline copy lists them). `holdNext`
-  // holds the next read, with signal, until `releaseHeld()`. Otherwise the page's first read works. Every read after the save loses signal: it gets the pre-save copy, or an error with no copy.
-  getData: async () => { reads += 1; if (holdNext) { holdNext = false; await new Promise<void>((resolve) => { releaseHeld = resolve }); return { entries: server ?? [], viewer: { user_id: user, role: 'owner' as const } } } if (server) return { entries: noSignal ? [...server, ...unsent] : server, viewer: { user_id: user, role: 'owner' as const }, ...(noSignal || cachedReads ? { cached: true as const } : {}) }; if (reads > 1 && afterSave === 'no copy') throw new Error('network down'); return { entries: [] as FieldLogEntry[], viewer: { user_id: user, role: 'owner' as const }, ...(reads > 1 ? { cached: true as const } : {}) } },
-  saveEntry: async (draft: FieldLogEntryDraft) => { saves.push(draft); const entry = { ...draft, id: draft.id ?? uid(nextId++), farm_id: farm, created_by: user, created_at: stamp, updated_at: stamp, ...(noSignal ? { pending: true } : {}) } as FieldLogEntry; if (noSignal) unsent.push(entry); return entry },
+  // holds the next read until `releaseHeld()`, then answers with its reply. Otherwise the page's first read works. Every read after the save loses signal: it gets the pre-save copy, or an error with no copy.
+  getData: async () => { reads += 1; if (holdNext) { const reply = holdNext; holdNext = null; await new Promise<void>((resolve) => { releaseHeld = resolve }); return { ...reply(), viewer: { user_id: user, role: 'owner' as const } } } if (server) return { entries: noSignal ? [...server, ...unsent] : server, viewer: { user_id: user, role: 'owner' as const }, ...(noSignal || cachedReads ? { cached: true as const } : {}) }; if (reads > 1 && afterSave === 'no copy') throw new Error('network down'); return { entries: [] as FieldLogEntry[], viewer: { user_id: user, role: 'owner' as const }, ...(reads > 1 ? { cached: true as const } : {}) } },
+  saveEntry: async (draft: FieldLogEntryDraft) => { saves.push(draft); const entry = { ...draft, id: draft.id ?? uid(nextId++), farm_id: farm, created_by: user, created_at: stamp, updated_at: stamp, ...(noSignal ? { pending: true } : {}) } as FieldLogEntry; if (noSignal) unsent.push(entry); returned.push(entry); return entry },
   deleteEntry: async (id: string) => { deletes.push(id); return { id, deleted: true as const } },
 } as unknown as FieldLogRepository
 const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
@@ -98,7 +98,7 @@ try {
   await addNote('Signal, deleted elsewhere')
   for (const name of ['Pine North 80', 'Pine South 80']) assert(!timeline(name).includes('0.30 in'), `${name}: rain deleted elsewhere must go once a reload with signal does not have it. Timeline: ${timeline(name)}`)
   // A slow reload with signal that went out before the save does not have the new rain, so it must not release it.
-  holdNext = true
+  holdNext = () => ({ entries: server ?? [] })
   await addNote('Slow signal')
   cachedReads = true
   await saveRainForBoth('0.55')
@@ -108,6 +108,21 @@ try {
   cachedReads = false
   await addNote('Signal back again')
   assert(!timeline('Pine South 80').includes('0.55 in'), `A reload with signal after the save owns the entry again. South: ${timeline('Pine South 80')}`)
+  // Two reloads after the save finish out of order: the one with signal has the rain, then one that lost signal answers
+  // later from an older copy without it. The rain must still show (Codex, PR #69).
+  cachedReads = true
+  await saveRainForBoth('0.65')
+  const savedRain = returned.slice(-2)
+  holdNext = () => ({ entries: [], cached: true })
+  await addNote('Weak signal')
+  cachedReads = false; server = savedRain
+  await addNote('Strong signal')
+  assert(timeline('Pine South 80').includes('0.65 in'), `The reload with signal must show the saved rain. South: ${timeline('Pine South 80')}`)
+  await act(async () => { releaseHeld(); await flush(); await flush() })
+  for (const name of ['Pine North 80', 'Pine South 80']) assert(timeline(name).includes('0.65 in'), `${name}: an older copy answering last must not hide rain the server has. Timeline: ${timeline(name)}`)
+  server = []
+  await addNote('Deleted elsewhere again')
+  assert(!timeline('Pine South 80').includes('0.65 in'), `A reload with signal without the entry releases it. South: ${timeline('Pine South 80')}`)
   // Rain saved with no signal stays as not sent until the server has it, even though the offline copy right after the
   // save listed it: a later reload with signal, before the queue sends it, must not drop it from the card.
   noSignal = true
@@ -116,5 +131,12 @@ try {
   noSignal = false
   await addNote('Signal back')
   for (const name of ['Pine North 80', 'Pine South 80']) assert(timeline(name).includes('0.75 in · Synthetic storm') && timeline(name).includes('Not sent yet'), `${name}: unsent rain must stay on the card until the server has it. Timeline: ${timeline(name)}`)
+  // Once the server's answer has it, the sent rain loses "Not sent yet", and an older copy answering later still shows it.
+  server = unsent.map((entry) => ({ ...entry, pending: undefined }))
+  await addNote('Sent')
+  holdNext = () => ({ entries: [], cached: true })
+  await addNote('Old copy')
+  await act(async () => { releaseHeld(); await flush(); await flush() })
+  for (const name of ['Pine North 80', 'Pine South 80']) assert(timeline(name).includes('0.75 in · Synthetic storm') && !timeline(name).includes('Not sent yet'), `${name}: sent rain must show as saved, even after an older copy. Timeline: ${timeline(name)}`)
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
 console.log('Field Log several-fields rain regression passed')
