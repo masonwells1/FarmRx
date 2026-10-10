@@ -161,6 +161,7 @@ async function run() {
   assert(deletedAnswer.offline === true && deletedAnswer.entries.map((entry) => entry.id).join() === uid(603), `A waiting delete must take its row out of the saved-copy answer. Got: ${deletedAnswer.entries.map((entry) => entry.id).join()}`)
   labelGateway.loadFailure = null; const liveWhileWaiting = await labelQueued.getData()
   assert(liveWhileWaiting.offline === undefined && liveWhileWaiting.entries.map((entry) => entry.id).join() === uid(600), 'A live answer carries the server rows only, not the writes still waiting on this device.')
+  assert([...new Set(liveWhileWaiting.waitingIds ?? [])].sort().join() === [uid(601), uid(603)].sort().join(), `A live answer must list the ids still waiting on this device. Got: ${liveWhileWaiting.waitingIds?.join()}`)
   const lostSignal = new TypeError('Failed to fetch'); labelGateway.loadFailure = lostSignal; let noCopyError: unknown = null
   const noCopyQueued = new QueuedFieldLogRepository(live(labelGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'offline-label-no-copy', storage: memory(), createId: () => uid(604), clock: () => stamp, isOffline: () => true, readWorkspaceCache: async () => null })
   try { await noCopyQueued.getData() } catch (caught) { noCopyError = caught }
@@ -176,6 +177,7 @@ async function run() {
   for (let tries = 0; !orderGateway.holding; tries += 1) { if (tries > 1_000) throw new Error('The older live read never reached the gateway.'); await new Promise<void>((resolve) => setTimeout(resolve, 0)) }
   orderGateway.entries.push(canonical(draft(uid(702))))
   const newerRead = await orderQueued.getData(); releaseOlder(); const olderAnswer = await olderRead
+  assert(newerRead.waitingIds?.length === 0, 'With nothing waiting, a live answer lists no waiting ids.')
   assert(newerRead.entries.length === 2 && olderAnswer.entries.length === 1 && savedCopies.join(' | ') === `${uid(700)},${uid(702)}`, `An older live read answering last must not overwrite the newer saved copy. Writes: ${savedCopies.join(' | ')}`)
   const laterRead = await orderQueued.getData()
   assert(laterRead.entries.length === 2 && savedCopies.length === 2 && savedCopies[1] === `${uid(700)},${uid(702)}`, 'A live read that starts after the newest write still updates the saved copy.')

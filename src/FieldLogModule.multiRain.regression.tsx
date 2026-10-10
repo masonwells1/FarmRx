@@ -27,7 +27,7 @@ const fieldsData = { farm: { id: farm }, entities: [], fields: [field(north, 'Pi
 
 // A small server, the copy live reads leave on this device, and the writes waiting on the device. It follows the queued
 // repository: a save or delete waits while anything else waits or when its send loses signal; a live read answers from
-// the server alone and writes the saved copy unless a newer live read already did; 'stale copy' answers from the saved
+// the server alone (with the ids still waiting) and writes the saved copy unless a newer live read already did; 'stale copy' answers from the saved
 // copy with the waiting writes laid over it, marked offline; 'no copy' throws. A read sees the server as it was when it
 // started, so one can be held open across another save. A 'refused' send is turned down by the server.
 let signal: 'online' | 'stale copy' | 'no copy' = 'online'; const sendOutcomes: Array<'sent' | 'lost signal' | 'refused'> = []
@@ -41,11 +41,12 @@ const fieldsRepository = { getData: async () => fieldsData, saveField: async () 
 const fieldLogRepository = {
   getData: async () => {
     reads += 1
-    const viewer = { user_id: user, role: 'owner' as const }; const mode = signal; const snapshot = structuredClone(server); const liveRead = mode === 'online' ? ++liveReadsStarted : 0
+    const viewer = { user_id: user, role: 'owner' as const }; const mode = signal; const snapshot = structuredClone(server); const liveRead = mode === 'online' ? ++liveReadsStarted : 0; const waitingIds = [...waiting.map((entry) => entry.id), ...waitingDeletes]
     if (holdReads > 0) { holdReads -= 1; await new Promise<void>((resolve) => { heldReads.push(resolve) }) }
-    if (mode === 'online') { if (liveRead > cachedFrom) { cachedFrom = liveRead; cached = structuredClone(snapshot) } return { entries: snapshot, viewer } }
+    if (mode === 'online') { if (liveRead > cachedFrom) { cachedFrom = liveRead; cached = structuredClone(snapshot) } return { entries: snapshot, viewer, waitingIds } }
     if (mode === 'no copy') throw new Error('network down')
-    return { entries: waiting.reduce(upsert, structuredClone(cached)).filter((row) => !waitingDeletes.includes(row.id)), viewer, offline: true as const }
+    const overlay = (rows: FieldLogEntry[], kept: FieldLogEntry) => upsert(rows, { ...kept, created_at: rows.find((row) => row.id === kept.id)?.created_at ?? kept.created_at })
+    return { entries: waiting.reduce(overlay, structuredClone(cached)).filter((row) => !waitingDeletes.includes(row.id)), viewer, offline: true as const }
   },
   saveEntry: async (draft: FieldLogEntryDraft) => {
     saves.push(draft)
@@ -217,6 +218,22 @@ try {
   sendWaiting(); signal = 'stale copy'
   await addNote(S, 'Synthetic ninth note')
   assert(timeline(N).includes('0.27 in') && !timeline(N).includes('0.25 in'), `A sent edit must not fall back to the saved copy's old amount. North: ${timeline(N)}`)
+  // Sent, then changed on another phone before a good reload: the next live reload shows the other phone's amount, because
+  // the edit no longer waits on this device.
+  const northEdit = server.find((entry) => entry.rainfall_in === 0.27)!
+  server = upsert(server, { ...northEdit, rainfall_in: 0.29 }); signal = 'online'
+  await addNote(S, 'Synthetic change check note')
+  assert(timeline(N).includes('0.29 in') && !timeline(N).includes('0.27 in') && !timeline(N).includes('Not sent yet'), `An edit changed elsewhere after it was sent must show the server's amount. North: ${timeline(N)}`)
+  // Rain that waited, was sent and was deleted on another phone before any good reload goes away on the next live reload.
+  sendOutcomes.push('lost signal')
+  await saveInCard(S, buttonIn(card(S), 'Add rain'), { rainfall: '0.14' })
+  sendWaiting(); server = server.filter((entry) => entry.rainfall_in !== 0.14); signal = 'stale copy'
+  await addNote(N, 'Synthetic offline note')
+  assert(row(S, '0.14 in').textContent?.includes('Not sent yet'), `Sent rain must stay while reloads have no signal. South: ${timeline(S)}`)
+  signal = 'online'
+  await addNote(N, 'Synthetic online note')
+  assert(!timeline(S).includes('0.14 in'), `Sent rain deleted on another phone before a good reload must go away. South: ${timeline(S)}`)
+  signal = 'stale copy'
 
   // Another tab on this device queues an edit of rain this page saved: the next answer from the saved copy shows that
   // waiting edit, so the confirmed local copy steps aside instead of offering Edit on the older amount.
@@ -249,6 +266,16 @@ try {
   await addNote(N, 'Synthetic twelfth note')
   await act(async () => { heldReads.shift()?.(); await flush(); await flush() })
   assert(!container.querySelector('.field-log-page > .form-error'), `An older reload failing late must not show an error. ${container.querySelector('.field-log-page > .form-error')?.textContent}`)
+
+  // A live reload that started before a write was kept waiting cannot list it, so its answer must not settle it.
+  signal = 'online'; holdReads = 1
+  await addNote(S, 'Synthetic held note')
+  assert(heldCount() === 1, 'The reload after the held note must be held open.')
+  sendOutcomes.push('lost signal')
+  await saveInCard(N, buttonIn(card(N), 'Add rain'), { rainfall: '0.17' })
+  await act(async () => { heldReads.shift()?.(); await flush(); await flush() })
+  assert(row(N, '0.17 in').textContent?.includes('Not sent yet'), `Rain kept after a live reload started must survive its answer. North: ${timeline(N)}`)
+  sendWaiting(); signal = 'stale copy'
 
   // Switching Edit from one row to another starts a fresh form: what was typed for the first row must not be saved onto
   // the second.

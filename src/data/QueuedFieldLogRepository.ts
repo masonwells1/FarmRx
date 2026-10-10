@@ -31,12 +31,15 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
     try {
       const cacheFence = captureWorkspaceCacheFence(cacheScope)
       this.liveReadsStarted += 1; const liveRead = this.liveReadsStarted
+      // Ids of writes still waiting when the read starts, so the page keeps its copies of them; unreadable bytes report none.
+      let waitingIds: string[] | undefined
+      try { waitingIds = queue.read().entries.flatMap((entry) => entry.version !== 2 ? [] : [entry.kind === 'saveEntry' ? entry.draft.id! : entry.entryId]) } catch { waitingIds = undefined }
       const data = await this.live.getData(fieldId); await verifyRead()
       if (liveRead > (this.savedCopyReads.get(savedCopyKey) ?? 0)) {
         this.savedCopyReads.set(savedCopyKey, liveRead)
         await (this.d.writeWorkspaceCache ?? writeWorkspaceCache)(cacheScope, data, cacheFence); await verifyRead()
       }
-      return data
+      return waitingIds ? { ...data, waitingIds } : data
     } catch (error) {
       await verifyRead()
       if (!isTransportFailure(error, this.d.isOffline())) throw error
