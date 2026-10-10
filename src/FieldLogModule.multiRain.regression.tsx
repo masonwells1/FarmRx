@@ -22,12 +22,12 @@ const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0'
 const user = uid(1); const farm = uid(2); const north = uid(3); const south = uid(4); const stamp = '2027-08-04T12:00:00.000Z'
 const field = (id: string, name: string) => ({ id, farm_id: farm, name, total_acres: 80, is_active: true, latitude: null, longitude: null })
 const fieldsData = { farm: { id: farm }, entities: [], fields: [field(north, 'Pine North 80'), field(south, 'Pine South 80')], crop_assignments: [], arrangements: [], commodities: [] } as unknown as FieldsData
-let reads = 0; let nextId = 10; let server: FieldLogEntry[] | null = null; let afterSave: 'stale copy' | 'no copy' = 'stale copy'; const saves: FieldLogEntryDraft[] = []; const deletes: string[] = []
+let reads = 0; let nextId = 10; let server: FieldLogEntry[] | null = null; let noSignal = false; const unsent: FieldLogEntry[] = []; let afterSave: 'stale copy' | 'no copy' = 'stale copy'; const saves: FieldLogEntryDraft[] = []; const deletes: string[] = []
 const fieldsRepository = { getData: async () => fieldsData, saveField: async () => { throw new Error('unexpected field mutation') } } satisfies FieldsRepository
 const fieldLogRepository = {
-  // With `server` set, reads have signal and return it. Otherwise the page's first read works. Every read after the save loses signal: it gets the pre-save copy, or an error with no copy.
-  getData: async () => { reads += 1; if (server) return { entries: server, viewer: { user_id: user, role: 'owner' as const } }; if (reads > 1 && afterSave === 'no copy') throw new Error('network down'); return { entries: [] as FieldLogEntry[], viewer: { user_id: user, role: 'owner' as const } } },
-  saveEntry: async (draft: FieldLogEntryDraft) => { saves.push(draft); return { ...draft, id: draft.id ?? uid(nextId++), farm_id: farm, created_by: user, created_at: stamp, updated_at: stamp } as FieldLogEntry },
+  // With `server` set, reads return it, plus the unsent rows when `noSignal` (the offline copy lists them). Otherwise the page's first read works. Every read after the save loses signal: it gets the pre-save copy, or an error with no copy.
+  getData: async () => { reads += 1; if (server) return { entries: noSignal ? [...server, ...unsent] : server, viewer: { user_id: user, role: 'owner' as const } }; if (reads > 1 && afterSave === 'no copy') throw new Error('network down'); return { entries: [] as FieldLogEntry[], viewer: { user_id: user, role: 'owner' as const } } },
+  saveEntry: async (draft: FieldLogEntryDraft) => { saves.push(draft); const entry = { ...draft, id: draft.id ?? uid(nextId++), farm_id: farm, created_by: user, created_at: stamp, updated_at: stamp, ...(noSignal ? { pending: true } : {}) } as FieldLogEntry; if (noSignal) unsent.push(entry); return entry },
   deleteEntry: async (id: string) => { deletes.push(id); return { id, deleted: true as const } },
 } as unknown as FieldLogRepository
 const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
@@ -86,5 +86,13 @@ try {
   server = []
   await addNote('Checked again')
   assert(!timeline('Pine South 80').includes('1.25 in') && card('Pine South 80').querySelector('.rain-total')?.textContent?.includes('0.00 in'), `An entry deleted elsewhere must not come back from the local list. South: ${timeline('Pine South 80')}`)
+  // Rain saved with no signal stays as not sent until the server has it, even though the offline copy right after the
+  // save listed it: a later reload with signal, before the queue sends it, must not drop it from the card.
+  noSignal = true
+  await saveRainForBoth()
+  assert(container.textContent?.includes('Kept on this device'), `The no-signal save must be kept on this device. ${container.textContent}`)
+  noSignal = false
+  await addNote('Signal back')
+  for (const name of ['Pine North 80', 'Pine South 80']) assert(timeline(name).includes('0.75 in · Synthetic storm') && timeline(name).includes('Not sent yet'), `${name}: unsent rain must stay on the card until the server has it. Timeline: ${timeline(name)}`)
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
 console.log('Field Log several-fields rain regression passed')
