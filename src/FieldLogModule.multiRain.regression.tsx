@@ -32,7 +32,7 @@ const fieldsData = { farm: { id: farm }, entities: [], fields: [field(north, 'Pi
 // started, so one can be held open across another save. A 'refused' send is turned down by the server.
 let signal: 'online' | 'stale copy' | 'no copy' = 'online'; const sendOutcomes: Array<'sent' | 'lost signal' | 'refused'> = []
 let server: FieldLogEntry[] = []; let cached: FieldLogEntry[] = []; let waiting: FieldLogEntry[] = []; let waitingDeletes: string[] = []
-let holdReads = 0; const heldReads: Array<() => void> = []; const heldCount = () => heldReads.length; let liveReadsStarted = 0; let cachedFrom = 0
+let queueUnreadable = false; let holdReads = 0; const heldReads: Array<() => void> = []; const heldCount = () => heldReads.length; let liveReadsStarted = 0; let cachedFrom = 0
 let reads = 0; let nextId = 10; const saves: FieldLogEntryDraft[] = []; const deletes: string[] = []
 const upsert = (rows: FieldLogEntry[], row: FieldLogEntry) => [...rows.filter((item) => item.id !== row.id), row]
 const somethingWaits = () => waiting.length > 0 || waitingDeletes.length > 0
@@ -43,7 +43,7 @@ const fieldLogRepository = {
     reads += 1
     const viewer = { user_id: user, role: 'owner' as const }; const mode = signal; const snapshot = structuredClone(server); const liveRead = mode === 'online' ? ++liveReadsStarted : 0; const waitingIds = [...waiting.map((entry) => entry.id), ...waitingDeletes]
     if (holdReads > 0) { holdReads -= 1; await new Promise<void>((resolve) => { heldReads.push(resolve) }) }
-    if (mode === 'online') { if (liveRead > cachedFrom) { cachedFrom = liveRead; cached = structuredClone(snapshot) } return { entries: snapshot, viewer, waitingIds } }
+    if (mode === 'online') { if (liveRead > cachedFrom) { cachedFrom = liveRead; cached = structuredClone(snapshot) } return queueUnreadable ? { entries: snapshot, viewer } : { entries: snapshot, viewer, waitingIds } }
     if (mode === 'no copy') throw new Error('network down')
     const overlay = (rows: FieldLogEntry[], kept: FieldLogEntry) => upsert(rows, { ...kept, created_at: rows.find((row) => row.id === kept.id)?.created_at ?? kept.created_at })
     return { entries: waiting.reduce(overlay, structuredClone(cached)).filter((row) => !waitingDeletes.includes(row.id)), viewer, offline: true as const }
@@ -275,7 +275,14 @@ try {
   await saveInCard(N, buttonIn(card(N), 'Add rain'), { rainfall: '0.17' })
   await act(async () => { heldReads.shift()?.(); await flush(); await flush() })
   assert(row(N, '0.17 in').textContent?.includes('Not sent yet'), `Rain kept after a live reload started must survive its answer. North: ${timeline(N)}`)
-  sendWaiting(); signal = 'stale copy'
+  // When the queue cannot be read, a live answer cannot say what still waits, so the waiting copy stays.
+  sendWaiting(); queueUnreadable = true
+  await addNote(S, 'Synthetic unreadable queue note')
+  assert(row(N, '0.17 in').textContent?.includes('Not sent yet'), `With the waiting list unknown, a waiting copy must stay. North: ${timeline(N)}`)
+  queueUnreadable = false
+  await addNote(S, 'Synthetic readable queue note')
+  assert(timeline(N).includes('0.17 in') && !row(N, '0.17 in').textContent?.includes('Not sent yet'), `Once the list is known again, sent rain must settle. North: ${timeline(N)}`)
+  signal = 'stale copy'
 
   // Switching Edit from one row to another starts a fresh form: what was typed for the first row must not be saved onto
   // the second.

@@ -161,7 +161,7 @@ async function run() {
   assert(deletedAnswer.offline === true && deletedAnswer.entries.map((entry) => entry.id).join() === uid(603), `A waiting delete must take its row out of the saved-copy answer. Got: ${deletedAnswer.entries.map((entry) => entry.id).join()}`)
   labelGateway.loadFailure = null; const liveWhileWaiting = await labelQueued.getData()
   assert(liveWhileWaiting.offline === undefined && liveWhileWaiting.entries.map((entry) => entry.id).join() === uid(600), 'A live answer carries the server rows only, not the writes still waiting on this device.')
-  assert([...new Set(liveWhileWaiting.waitingIds ?? [])].sort().join() === [uid(601), uid(603)].sort().join(), `A live answer must list the ids still waiting on this device. Got: ${liveWhileWaiting.waitingIds?.join()}`)
+  assert([...(liveWhileWaiting.waitingIds ?? [])].sort().join() === [uid(601), uid(601), uid(603)].sort().join(), `A live answer must list the ids still waiting on this device, one per waiting write. Got: ${liveWhileWaiting.waitingIds?.join()}`)
   const lostSignal = new TypeError('Failed to fetch'); labelGateway.loadFailure = lostSignal; let noCopyError: unknown = null
   const noCopyQueued = new QueuedFieldLogRepository(live(labelGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'offline-label-no-copy', storage: memory(), createId: () => uid(604), clock: () => stamp, isOffline: () => true, readWorkspaceCache: async () => null })
   try { await noCopyQueued.getData() } catch (caught) { noCopyError = caught }
@@ -181,6 +181,21 @@ async function run() {
   assert(newerRead.entries.length === 2 && olderAnswer.entries.length === 1 && savedCopies.join(' | ') === `${uid(700)},${uid(702)}`, `An older live read answering last must not overwrite the newer saved copy. Writes: ${savedCopies.join(' | ')}`)
   const laterRead = await orderQueued.getData()
   assert(laterRead.entries.length === 2 && savedCopies.length === 2 && savedCopies[1] === `${uid(700)},${uid(702)}`, 'A live read that starts after the newest write still updates the saved copy.')
-  console.log('SupabaseFieldLogRepository regression passed (15 coverage groups)')
+
+  // Group 16: the waiting list is read before the server, so a write sent during the read is still listed (its row may
+  // already be in the answer, and the page keeps its copy one reload longer rather than dropping it); unreadable queue
+  // bytes never break a live read, they only leave the list unknown.
+  const listStore = memory(); const listProject = 'waiting-list-field-log'; const listGateway = new HeldGateway(); let listId = 720; let listOffline = true
+  const listQueued = new QueuedFieldLogRepository(live(listGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: listProject, storage: listStore, createId: () => uid(listId++), clock: () => stamp, isOffline: () => listOffline, writeWorkspaceCache: async () => true })
+  const listed = await listQueued.saveEntry(draft(uid(730))); listOffline = false
+  let releaseList = () => {}; listGateway.hold = new Promise<void>((resolve) => { releaseList = resolve })
+  const listRead = listQueued.getData()
+  for (let tries = 0; !listGateway.holding; tries += 1) { if (tries > 1_000) throw new Error('The listed live read never reached the gateway.'); await new Promise<void>((resolve) => setTimeout(resolve, 0)) }
+  listStore.removeItem(fieldLogWriteQueueKey(listProject, actor, farm)); releaseList(); const listAnswer = await listRead
+  assert(listed.pending && listAnswer.waitingIds?.join() === uid(730), `A write waiting when the read started must stay listed even if it leaves the queue during the read. Got: ${listAnswer.waitingIds?.join()}`)
+  listStore.setItem(fieldLogWriteQueueKey(listProject, actor, farm), '{"version":1,"entries":[{"broken":true}]}')
+  const unreadableAnswer = await listQueued.getData()
+  assert(unreadableAnswer.waitingIds === undefined && unreadableAnswer.offline === undefined, 'Unreadable queue bytes must leave the waiting list unknown without breaking the live read.')
+  console.log('SupabaseFieldLogRepository regression passed (16 coverage groups)')
 }
 void run()
