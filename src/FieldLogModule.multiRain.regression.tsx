@@ -22,11 +22,11 @@ const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0'
 const user = uid(1); const farm = uid(2); const north = uid(3); const south = uid(4); const stamp = '2027-08-04T12:00:00.000Z'
 const field = (id: string, name: string) => ({ id, farm_id: farm, name, total_acres: 80, is_active: true, latitude: null, longitude: null })
 const fieldsData = { farm: { id: farm }, entities: [], fields: [field(north, 'Pine North 80'), field(south, 'Pine South 80')], crop_assignments: [], arrangements: [], commodities: [] } as unknown as FieldsData
-let reads = 0; let nextId = 10; let afterSave: 'stale copy' | 'no copy' = 'stale copy'; const saves: FieldLogEntryDraft[] = []; const deletes: string[] = []
+let reads = 0; let nextId = 10; let server: FieldLogEntry[] | null = null; let afterSave: 'stale copy' | 'no copy' = 'stale copy'; const saves: FieldLogEntryDraft[] = []; const deletes: string[] = []
 const fieldsRepository = { getData: async () => fieldsData, saveField: async () => { throw new Error('unexpected field mutation') } } satisfies FieldsRepository
 const fieldLogRepository = {
-  // The page's first read works. Every read after the save loses signal: it gets the pre-save copy, or an error with no copy.
-  getData: async () => { reads += 1; if (reads > 1 && afterSave === 'no copy') throw new Error('network down'); return { entries: [] as FieldLogEntry[], viewer: { user_id: user, role: 'owner' as const } } },
+  // With `server` set, reads have signal and return it. Otherwise the page's first read works. Every read after the save loses signal: it gets the pre-save copy, or an error with no copy.
+  getData: async () => { reads += 1; if (server) return { entries: server, viewer: { user_id: user, role: 'owner' as const } }; if (reads > 1 && afterSave === 'no copy') throw new Error('network down'); return { entries: [] as FieldLogEntry[], viewer: { user_id: user, role: 'owner' as const } } },
   saveEntry: async (draft: FieldLogEntryDraft) => { saves.push(draft); return { ...draft, id: draft.id ?? uid(nextId++), farm_id: farm, created_by: user, created_at: stamp, updated_at: stamp } as FieldLogEntry },
   deleteEntry: async (id: string) => { deletes.push(id); return { id, deleted: true as const } },
 } as unknown as FieldLogRepository
@@ -71,5 +71,20 @@ try {
   await act(async () => { editForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush(); await flush() })
   assert(saves.length === 3 && !!saves[2].id && saves[2].rainfall_in === 1.25, `The edit must be saved once with its new amount, got ${JSON.stringify(saves.at(-1))}.`)
   assert(timeline('Pine South 80').includes('1.25 in · Corrected gauge') && !timeline('Pine South 80').includes('0.75 in') && card('Pine South 80').querySelector('.rain-total')?.textContent?.includes('1.25 in'), `A confirmed edit must replace the entry shown from this form. South: ${timeline('Pine South 80')}`)
+  // Once a reload with signal has that entry, the loaded copy owns it: when it is later deleted on another device, the
+  // next reload drops it here too instead of the local list bringing it back (where an edit would recreate it).
+  const addNote = async (text: string) => {
+    await click([...card('Pine North 80').querySelectorAll('button')].find((item) => item.textContent === 'Add note') as HTMLButtonElement)
+    const noteForm = card('Pine North 80').querySelector('form.field-log-form') as HTMLFormElement
+    assert(noteForm, 'The note form did not open.')
+    ;(noteForm.querySelector('textarea[name="note"]') as HTMLTextAreaElement).value = text
+    await act(async () => { noteForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush(); await flush() })
+  }
+  server = [{ ...saves[2], id: saves[2].id!, farm_id: farm, created_by: user, created_at: stamp, updated_at: stamp } as FieldLogEntry]
+  await addNote('Checked gauge')
+  assert(timeline('Pine South 80').includes('1.25 in · Corrected gauge'), `A reload with signal must show the server copy. South: ${timeline('Pine South 80')}`)
+  server = []
+  await addNote('Checked again')
+  assert(!timeline('Pine South 80').includes('1.25 in') && card('Pine South 80').querySelector('.rain-total')?.textContent?.includes('0.00 in'), `An entry deleted elsewhere must not come back from the local list. South: ${timeline('Pine South 80')}`)
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
 console.log('Field Log several-fields rain regression passed')
