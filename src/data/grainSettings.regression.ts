@@ -306,6 +306,9 @@ assert(!hasPendingSettingsWork(owner), 'The farm is clear once every queued save
 // Grain usability: a marketing plan past 100% of the crop is named in farmer words, whichever layer refused it.
 for (const refusal of ['Marketing plan percentages cannot exceed 100%.', 'marketing plan total cannot exceed 100 percent'])
   assert(farmerError(new Error(refusal), 'save this target') === 'Your plan months add up to more than 100% of the crop. Lower one of them and try again.', `A plan over 100% must be explained plainly: ${refusal}`)
+// CodeRabbit on #68: another limit that happens to say "cannot exceed 100..." is not called a plan over 100%.
+for (const other of ['note cannot exceed 1000 characters', 'quantity cannot exceed 100 bushels', 'moisture cannot exceed 100'])
+  assert(!farmerError(new Error(other), 'save this').includes('plan months'), `An unrelated limit must not be explained as a marketing plan over 100%: ${other}`)
 // The mock's one refusal covers a 0% month as well as the total, so it is named accurately rather than as "over 100%".
 assert(farmerError(new Error('Marketing plan totals must be greater than 0% per month and no more than 100% for this crop scope.'), 'save this target') === 'Each plan month must be above 0% and the months together no more than 100% of the crop.', 'The mock plan refusal must not claim the plan is over 100%.')
 
