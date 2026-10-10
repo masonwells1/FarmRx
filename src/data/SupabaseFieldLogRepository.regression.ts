@@ -147,12 +147,16 @@ async function run() {
   const seasonEntries = [canonical({ ...draft(uid(30)), observed_on: '2026-01-01', rainfall_in: 0.2 }), canonical({ ...draft(uid(31)), observed_on: '2026-07-01', rainfall_in: 1.1 }), canonical({ ...draft(uid(32)), observed_on: '2025-12-31', rainfall_in: 9 }), canonical({ ...draft(uid(33), 'note'), observed_on: '2026-07-02' })] as Array<{ observed_on: string; rainfall_in: number | null; entry_type: string }>
   const total = seasonEntries.filter((entry) => entry.entry_type === 'rainfall' && entry.observed_on >= '2026-01-01' && entry.observed_on <= '2026-07-12').reduce((sum, entry) => sum + (entry.rainfall_in ?? 0), 0); assert(total === 1.3, 'Season rainfall must include only the current calendar year through today.')
   // Group 14: an answer from this device's saved copy is marked offline, so the page knows it may predate a save; a live one is not.
-  const labelGateway = new FakeGateway(); labelGateway.entries = [canonical(draft(uid(600)))]; const savedCopy = { entries: [canonical(draft(uid(601)))], viewer: { user_id: actor, role: 'worker' } }
-  const labelQueued = new QueuedFieldLogRepository(live(labelGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'offline-label-field-log', storage: memory(), createId: () => uid(602), clock: () => stamp, isOffline: () => false, readWorkspaceCache: async <T>() => ({ data: structuredClone(savedCopy) as T, cachedAt: stamp }) })
+  const labelGateway = new FakeGateway(); labelGateway.entries = [canonical(draft(uid(600)))]; const savedCopy = { entries: [canonical(draft(uid(601)))], viewer: { user_id: actor, role: 'worker' } }; let labelOffline = false
+  const labelQueued = new QueuedFieldLogRepository(live(labelGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'offline-label-field-log', storage: memory(), createId: () => uid(602), clock: () => stamp, isOffline: () => labelOffline, readWorkspaceCache: async <T>() => ({ data: structuredClone(savedCopy) as T, cachedAt: stamp }) })
   const liveAnswer = await labelQueued.getData()
   assert(liveAnswer.offline === undefined && liveAnswer.entries.map((entry) => entry.id).join() === uid(600), 'A live Field Log answer must not be marked offline.')
   labelGateway.loadFailure = new TypeError('Failed to fetch'); const savedAnswer = await labelQueued.getData()
   assert(savedAnswer.offline === true && savedAnswer.entries.map((entry) => entry.id).join() === uid(601), 'An answer from the saved copy must be marked offline.')
+  labelOffline = true; const waitingSave = await labelQueued.saveEntry(draft(uid(603))); const overlaidAnswer = await labelQueued.getData()
+  assert(waitingSave.pending && overlaidAnswer.offline === true && overlaidAnswer.entries.map((entry) => `${entry.id}:${entry.pending === true}`).join() === `${uid(601)}:false,${uid(603)}:true`, 'The saved-copy answer must stay marked offline with a waiting save laid over it as pending.')
+  const noCopyQueued = new QueuedFieldLogRepository(live(labelGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'offline-label-no-copy', storage: memory(), createId: () => uid(604), clock: () => stamp, isOffline: () => true, readWorkspaceCache: async () => null })
+  await rejects(() => noCopyQueued.getData(), 'With no saved copy, a read that cannot reach the server must fail instead of answering.')
   console.log('SupabaseFieldLogRepository regression passed (14 coverage groups)')
 }
 void run()
