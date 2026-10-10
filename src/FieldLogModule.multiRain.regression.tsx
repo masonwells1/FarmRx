@@ -26,7 +26,7 @@ let reads = 0; let nextId = 10; let server: FieldLogEntry[] | null = null; let n
 const fieldsRepository = { getData: async () => fieldsData, saveField: async () => { throw new Error('unexpected field mutation') } } satisfies FieldsRepository
 const fieldLogRepository = {
   // With `server` set, reads return it, plus the unsent rows when `noSignal` (the offline copy lists them). Otherwise the page's first read works. Every read after the save loses signal: it gets the pre-save copy, or an error with no copy.
-  getData: async () => { reads += 1; if (server) return { entries: noSignal ? [...server, ...unsent] : server, viewer: { user_id: user, role: 'owner' as const } }; if (reads > 1 && afterSave === 'no copy') throw new Error('network down'); return { entries: [] as FieldLogEntry[], viewer: { user_id: user, role: 'owner' as const } } },
+  getData: async () => { reads += 1; if (server) return { entries: noSignal ? [...server, ...unsent] : server, viewer: { user_id: user, role: 'owner' as const }, ...(noSignal ? { cached: true as const } : {}) }; if (reads > 1 && afterSave === 'no copy') throw new Error('network down'); return { entries: [] as FieldLogEntry[], viewer: { user_id: user, role: 'owner' as const }, ...(reads > 1 ? { cached: true as const } : {}) } },
   saveEntry: async (draft: FieldLogEntryDraft) => { saves.push(draft); const entry = { ...draft, id: draft.id ?? uid(nextId++), farm_id: farm, created_by: user, created_at: stamp, updated_at: stamp, ...(noSignal ? { pending: true } : {}) } as FieldLogEntry; if (noSignal) unsent.push(entry); return entry },
   deleteEntry: async (id: string) => { deletes.push(id); return { id, deleted: true as const } },
 } as unknown as FieldLogRepository
@@ -35,12 +35,12 @@ const button = (text: string) => { const found = [...container.querySelectorAll(
 const card = (name: string) => { const found = [...container.querySelectorAll('.field-log-card')].find((item) => item.querySelector('h2')?.textContent === name) as HTMLElement | undefined; assert(found, `The ${name} card did not render.`); return found }
 async function click(element: HTMLElement) { await act(async () => { element.click(); await flush() }) }
 const dialogButton = (text: string) => { const found = [...document.querySelectorAll('[role="dialog"] button')].find((item) => item.textContent === text) as HTMLButtonElement | undefined; assert(found, `Dialog button ${text} did not render.`); return found }
-async function saveRainForBoth() {
+async function saveRainForBoth(amount = '0.75') {
   await click(button('Add rain to several fields'))
   await click(button('Pick all fields'))
   const form = container.querySelector('form.multi-rain-form') as HTMLFormElement
   assert(form, 'The several-fields rain form did not open.')
-  ;(form.querySelector('input[name="rainfall"]') as HTMLInputElement).value = '0.75'
+  ;(form.querySelector('input[name="rainfall"]') as HTMLInputElement).value = amount
   ;(form.querySelector('textarea[name="note"]') as HTMLTextAreaElement).value = 'Synthetic storm'
   await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush(); await flush() })
 }
@@ -86,6 +86,16 @@ try {
   server = []
   await addNote('Checked again')
   assert(!timeline('Pine South 80').includes('1.25 in') && card('Pine South 80').querySelector('.rain-total')?.textContent?.includes('0.00 in'), `An entry deleted elsewhere must not come back from the local list. South: ${timeline('Pine South 80')}`)
+  // Deleted on another device before this one ever had a reload with signal: the first such reload, which does not
+  // have the entry, retires it here too (Codex, PR #69). Reloads from the copy on this device keep it until then.
+  server = null; afterSave = 'stale copy'
+  await saveRainForBoth('0.30')
+  assert(timeline('Pine North 80').includes('0.30 in') && timeline('Pine South 80').includes('0.30 in'), `Rain saved before the copy on this device must show. South: ${timeline('Pine South 80')}`)
+  await addNote('Still no signal')
+  assert(timeline('Pine South 80').includes('0.30 in'), `A reload from the copy on this device must keep the saved rain. South: ${timeline('Pine South 80')}`)
+  server = []
+  await addNote('Signal, deleted elsewhere')
+  for (const name of ['Pine North 80', 'Pine South 80']) assert(!timeline(name).includes('0.30 in'), `${name}: rain deleted elsewhere must go once a reload with signal does not have it. Timeline: ${timeline(name)}`)
   // Rain saved with no signal stays as not sent until the server has it, even though the offline copy right after the
   // save listed it: a later reload with signal, before the queue sends it, must not drop it from the card.
   noSignal = true

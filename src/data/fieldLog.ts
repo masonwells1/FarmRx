@@ -28,6 +28,8 @@ export interface FieldLogEntryDraft {
 export interface FieldLogData {
   entries: FieldLogEntry[]
   viewer: { user_id: string; role: FarmViewerRole }
+  /** Set when a read without signal answered from the copy saved on this device, which can be older than recent saves. */
+  cached?: true
 }
 
 export interface FieldLogDeleteReceipt { id: string; deleted: true; pending?: boolean }

@@ -89,6 +89,13 @@ async function run() {
   await rejects(() => renderQueued.getData(), 'A stale-generation v2 item was projected over cached Field Log data.')
   assert(renderCacheReads === 1 && renderStore.getItem(renderQueue.key) === renderBytes && renderGateway.saves.length === 0 && readRevokedFarmRecovery(renderStore, renderProject, actor).length === 0, 'Stale-generation cached projection must reach the cached overlay, preserve queue bytes, and make zero remote or recovery mutations.')
 
+  // Group 9b: a read without signal that answers from the copy on this device says so, and a read with signal does not, so the
+  // page knows which answer is the server's (PR #69: several-fields rain is released only by the server's answer).
+  const cachedGateway = new FakeGateway(); let cachedOffline = false
+  const cachedQueued = new QueuedFieldLogRepository(live(cachedGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'cached-flag-field-log', storage: memory(), createId: () => uid(700), clock: () => stamp, isOffline: () => cachedOffline, readWorkspaceCache: async <T>() => ({ data: { entries: [], viewer: { user_id: actor, role: 'worker' } } as T, cachedAt: stamp }) })
+  const withSignal = await cachedQueued.getData(); cachedGateway.loadFailure = new TypeError('offline'); cachedOffline = true; const fromDevice = await cachedQueued.getData()
+  assert(withSignal.cached === undefined && fromDevice.cached === true, `Only a read answered from the copy on this device may be marked cached. With signal: ${withSignal.cached}, without: ${fromDevice.cached}`)
+
   // Group 10: a cross-project v2 item is invalid for both active queue reads and revoked recovery.
   assert(savedEntry.version === 2, 'The cross-project custody test needs a v2 queue item.')
   const crossProjectStore = memory(); const crossProject = 'cross-project-field-log'; const crossKey = fieldLogWriteQueueKey(crossProject, actor, farm); const crossEntry = { ...savedEntry, operationContext: { ...savedEntry.operationContext, projectRef: 'different-project' } }; const crossBytes = JSON.stringify({ version: 1, entries: [crossEntry] })
