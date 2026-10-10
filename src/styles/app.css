@@ -438,7 +438,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .grain-heading { margin-bottom: 0; }
 .market-stamp, .delayed-label { color: var(--matte-gray); font-size: 18px; }
 .delayed-label { white-space: nowrap; }
-.position-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.position-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; }
 .position-card, .grain-section { border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); }
 .position-card { padding: 20px; box-shadow: 0 3px 10px rgb(23 81 58 / 5%); }
 .position-top, .section-heading, .position-foot, .plan-status, .bin-row, .modal-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
@@ -459,7 +459,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
    removed, so the disclosure has to be comfortable to open on a phone and obvious that it holds more. */
 .position-hero { margin: 18px 0 14px; font-family: var(--brand-font); font-size: 22px; font-weight: 600; line-height: 1.35; }
 .position-hero strong { font-weight: 700; }
-.position-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.position-tiles { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 .position-more { margin: 16px 0 4px; border-top: 1px solid var(--hairline); }
 .position-more-toggle { display: block; width: 100%; min-height: 48px; padding: 14px 2px; border: 0; background: none; font: inherit; font-size: 18px; font-weight: 600; text-align: left; color: var(--deep-green, var(--charcoal)); cursor: pointer; }
 .position-more-toggle:focus-visible { outline: 2px solid var(--charcoal); outline-offset: 2px; }
@@ -493,7 +493,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .template-button:hover { border-color: var(--crx-green); background: #dff2e7; }
 .template-button strong { font-size: 18px; }
 .template-button span { color: var(--matte-gray); font-size: 18px; line-height: 1.25; }
-.month-grid { display: grid; grid-template-columns: repeat(12, minmax(88px, 1fr)); overflow-x: auto; padding: 18px 20px; gap: 8px; }
+.month-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); overflow-x: visible; padding: 18px 20px; gap: 8px; }
 .month-cell { min-width: 88px; min-height: 116px; display: grid; align-content: start; gap: 4px; padding: 10px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface); color: var(--charcoal); text-align: left; }
 .month-cell:hover, .month-cell.planned { border-color: var(--crx-green); background: var(--light-green); }
 .month-cell span, .month-cell small { color: var(--matte-gray); font-size: 18px; font-weight: 700; }
@@ -553,7 +553,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .movement-list span, .movement-list small { color: var(--matte-gray); }
 .movement-in { color: var(--deep-green); }
 .movement-out { color: var(--warn-red); }
-.basis-entry { display: grid; grid-template-columns: 1.2fr 1fr .7fr auto; gap: 8px; padding: 0 20px 16px; }
+.basis-entry { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; gap: 8px; padding: 0 20px 16px; }
 .basis-entry .secondary-action { white-space: nowrap; }
 .basis-list { padding: 0 20px 12px; }
 .basis-list > div { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 11px 0; border-top: 1px solid var(--hairline); }
@@ -869,6 +869,9 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .grain-page .production-editor { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 12px; align-items: end; margin-top: 14px; }
 .grain-page .production-editor label { display: grid; gap: 5px; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
 .grain-page .production-editor strong { min-height: 48px; display: flex; align-items: center; color: var(--charcoal); }
+.grain-page .sale-limit-field, .grain-page .actual-bushels-field { display: grid; gap: 6px; align-content: end; }
+.grain-page .sale-limit-field .form-error, .grain-page .position-guidance { margin: 0; font-size: 18px; }
+.grain-page .position-guidance { color: var(--charcoal); }
 .grain-page .grain-inline-error { margin: 12px 20px; font-size: 18px; }
 .grain-page .contract-entry { grid-template-columns: 1.2fr 1fr .8fr .8fr auto; }
 .grain-page .contract-entry details { grid-column: 1 / -1; }
@@ -911,7 +914,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
   .section-heading { align-items: start; flex-direction: column; gap: 10px; }
   .commodity-picker { width: 100%; }
   .template-bar { padding-right: 16px; padding-left: 16px; }
-  .month-grid { padding-right: 16px; padding-left: 16px; }
+  .month-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); padding-right: 16px; padding-left: 16px; }
   .plan-status { align-items: start; flex-direction: column; padding: 15px 16px; }
   .contract-entry { grid-template-columns: 1fr 1fr; padding: 16px; }
   .contract-entry > label:first-child, .contract-entry > label:nth-child(2), .contract-entry details { grid-column: 1 / -1; }
@@ -1014,7 +1017,7 @@ tbody tr:nth-child(even) td { background: var(--cream); }
 .section-tabs a { display: inline-flex; align-items: center; min-height: 48px; padding: 10px 18px; border-bottom: 3px solid transparent; margin-bottom: -2px; color: var(--matte-gray); font-size: 18px; font-weight: 700; text-decoration: none; white-space: nowrap; }
 .section-tabs a:hover { color: var(--deep-green); }
 .section-tabs a.active { color: var(--deep-green); border-bottom-color: var(--crx-green); }
-@media (max-width: 767px) { .section-tabs { flex-wrap: wrap; gap: 6px; overflow-x: visible; padding-bottom: 12px; border-bottom: 1px solid var(--hairline); }.section-tabs a { margin-bottom: 0; padding: 8px 12px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); }.section-tabs a.active { border-color: var(--deep-green); background: var(--deep-green); color: var(--on-dark); }.grain-page .position-top { flex-wrap: wrap; } }
+@media (max-width: 767px) { .section-tabs { flex-wrap: wrap; gap: 6px; overflow-x: visible; padding-bottom: 12px; border-bottom: 1px solid var(--hairline); }.section-tabs a { margin-bottom: 0; padding: 8px 12px; border: 1px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); }.section-tabs a.active { border-color: var(--deep-green); background: var(--deep-green); color: var(--on-dark); } }
 .overview-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 16px 20px; }
 .overview-picker label { display: grid; gap: 6px; font-weight: 700; }
 .overview-picker select { min-height: 48px; min-width: 240px; }
@@ -1285,6 +1288,138 @@ tbody tr:nth-child(even) td { background: var(--cream); }
   .load-form fieldset, .load-form > button, .load-form > .load-message { grid-column: 1 / -1; }
 }
 .contract-repair .destructive { color: var(--alert-red, #a4262c); }
+
+/* Grain usability: s1a-overview */
+.grain-page .position-top { flex-wrap: wrap; }
+.grain-page .position-top-actions { display: grid; justify-items: end; gap: 4px; }
+.grain-page .position-foot .text-action { min-height: 48px; padding: 0 4px; border: 0; background: none; font: inherit; font-weight: 700; cursor: pointer; }
+.grain-page .grain-reconciliation small { display: block; margin-top: 6px; color: var(--matte-gray); font-size: 18px; }
+.grain-page .first-estimate { padding: 20px; }
+.grain-page .first-estimate .section-heading, .grain-page .add-crop-card .section-heading { padding: 0 0 16px; }
+.grain-page .first-estimate-card { display: grid; gap: 10px; align-content: start; }
+.grain-page .first-estimate-card p { margin: 0; font-size: 18px; }
+.grain-page .first-estimate-card label { display: grid; gap: 6px; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
+.grain-page .first-estimate-card input { width: 100%; min-height: 48px; box-sizing: border-box; padding: 9px 10px; border: 2px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); font: inherit; font-size: 18px; }
+.grain-page .grain-empty-state { margin: 0 auto; }
+.grain-page .grain-needs-estimate { display: grid; justify-items: start; gap: 14px; padding: 20px; font-size: 18px; }
+.grain-page .grain-needs-estimate p { margin: 0; }
+.grain-page .plan-notice { margin: 0 20px; }
+.grain-page .target-modal-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.grain-page .target-modal-actions > button { flex: 1 1 160px; }
+.grain-page .untracked-stored-grain { padding-bottom: 20px; }
+.grain-page .untracked-stored-grain ul { margin: 0 0 14px; padding: 0 20px 0 40px; font-size: 18px; }
+.grain-page .untracked-stored-grain > .secondary-action { margin: 0 20px; }
+.grain-page .usda-empty { display: grid; justify-items: start; gap: 8px; padding: 0 20px; font-size: 18px; }
+.grain-page .usda-empty p { margin: 0; }
+.grain-page .actual-plan-card tfoot th { text-align: left; }
+/* The month editor now carries its own error line and a Remove button, so on a phone it can be taller than the screen: it scrolls, and centres only when it fits. */
+.grain-page .target-modal-backdrop { overflow-y: auto; place-items: start center; }
+.grain-page .target-modal { margin-block: auto; }
+
+/* Grain usability: s3-alerts-offers-carry */
+.carry-hint { margin: 0; padding: 0 20px 16px; color: var(--charcoal); font-size: 18px; }
+.carry-fill { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 0 20px 20px; }
+.carry-fill p { flex: 1 1 280px; margin: 0; color: var(--matte-gray); font-size: 18px; }
+.carry-fill .secondary-action:disabled { cursor: not-allowed; opacity: .55; }
+.grain-page .firm-offer-form .offer-form-scope { margin: 4px 0 0; color: var(--matte-gray); font-size: 18px; }
+.grain-page .offer-notice { margin: 12px 0 0; }
+.grain-page .offer-fill-entry > .secondary-action { margin-top: 12px; }
+.grain-page .firm-offers-card { padding-bottom: 20px; }
+.grain-page .firm-offers-card > :not(.section-heading) { margin-right: 20px; margin-left: 20px; }
+@media (max-width: 767px) { .carry-hint { padding-right: 16px; padding-left: 16px; } .carry-fill { padding-right: 16px; padding-left: 16px; } .carry-fill .secondary-action { width: 100%; } .grain-page .firm-offers-card > :not(.section-heading) { margin-right: 16px; margin-left: 16px; } }
+
+/* Grain usability: s2-bins-loads */
+/* The load form's fields sit in one fieldset so a ticket waiting on a retry locks them all at once.
+   display: contents keeps every field in the form's own grid, exactly where it was. */
+/* Where a browser ignores display: contents on a fieldset, it still draws no box of its own. */
+.load-form .load-fields { display: contents; border: 0; padding: 0; margin: 0; min-width: 0; }
+.load-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.load-hint { display: block; color: var(--matte-gray); font-size: 18px; font-weight: 400; }
+.load-form .text-action { min-height: 48px; justify-self: start; text-align: left; }
+.load-form .load-effects > label { flex-direction: row; align-items: center; }
+.load-form [aria-invalid="true"] { border-color: var(--warn-red); outline: 2px solid var(--warn-red); }
+/* Every problem at once, beside the Save button rather than one per tap below it. */
+.load-problems { margin: 0; padding-left: 36px; font-size: 18px; }
+.load-problems li + li { margin-top: 4px; }
+.load-totals { margin: 4px 0 8px; font-size: 18px; }
+.load-table td .text-action { display: block; }
+@media (min-width: 720px) {
+  .load-form > .load-problems, .load-form > .text-action { grid-column: 1 / -1; }
+}
+/* Bins: adding or taking out grain has its own button on each bin, and the notes in the movement
+   form run the full width of its grid. */
+.bin-move-toggle { justify-self: start; min-height: 48px; }
+/* A bin form scrolled into view stops below the sticky app header rather than under it. */
+.bin-form { scroll-margin-top: 140px; }
+.bin-move > .panel-note { margin: 0 0 8px; }
+.movement-form .panel-note { grid-column: 1 / -1; margin: 0; }
+/* Basis: visible labels, because a placeholder disappears as soon as typing starts. */
+.basis-entry label { display: grid; gap: 4px; align-content: start; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
+.basis-entry label small { font-size: 18px; font-weight: 500; }
+.basis-entry .basis-hint { grid-column: 1 / -1; margin: 0; color: var(--matte-gray); font-size: 18px; }
+.basis-chart-note { margin: 0 20px 8px; }
+
+/* Grain usability: s1b-contracts */
+/* The crop and year picker lines up with the Add contract form under it instead of touching the card edge. */
+.grain-page .contracts-card > .contracts-picker { width: auto; margin: 0 20px 12px; }
+.contract-entry-scope { grid-column: 1 / -1; margin: 0; color: var(--charcoal); font-size: 18px; }
+.contract-entry .contract-entry-note { grid-column: 1 / -1; }
+.contract-entry details .contract-entry-hint { grid-column: 1 / -1; color: var(--matte-gray); font-size: 18px; font-weight: 500; }
+/* Success news after a delete: green, with its own Dismiss, rather than error red that never goes away. */
+.grain-inline-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 12px 20px; padding: 10px 12px; border-radius: 9px; background: var(--light-green); color: var(--charcoal); font-size: 18px; }
+.contracts-empty, .contracts-next-year { font-size: 18px; }
+.contracts-next-year { padding-top: 0; }
+/* The per-contract controls live in a full-width row under each contract, so the columns stay narrow
+   enough to fit a laptop screen without a sideways scroll. */
+.contracts-table { min-width: 0; }
+.contracts-table th, .contracts-table td { padding: 12px 10px; }
+.contracts-table tbody tr:nth-child(even) td { background: transparent; }
+.contracts-table .contract-row td { vertical-align: top; }
+.contracts-table .contract-actions-row td { padding: 0 10px 16px; border-top: 0; }
+.contract-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 28px; }
+.contract-action-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; }
+.contract-action-form label { display: grid; gap: 4px; color: var(--matte-gray); font-size: 18px; font-weight: 700; }
+.contract-action-form input { width: 170px; min-height: 48px; padding: 9px 10px; border: 2px solid var(--hairline); border-radius: 9px; background: var(--surface); color: var(--charcoal); font: inherit; font-weight: 400; }
+.contract-action-form > small, .contract-actions > small, .contract-actions > .contract-repair { flex-basis: 100%; }
+.contract-actions .contract-repair { margin-top: 0; }
+/* Links inside a sentence: vertical padding on an inline element widens the tap area to 48px without spreading the lines. */
+.contracts-next-year a, .contract-action-hint a, .grain-delivery-intent p a { padding: 14px 0; }
+@media (max-width: 767px) {
+  .grain-page .contracts-card > .contracts-picker { margin: 0 16px 12px; }
+  .grain-inline-notice { margin: 12px 16px; }
+  .phone-stack.contracts-table tr.contract-row { border-bottom: 0; padding-bottom: 4px; }
+  .phone-stack.contracts-table tfoot { display: block; }
+  .contract-actions, .contract-action-form { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .contract-action-form input { width: 100%; }
+  .contract-action-form .text-action { justify-self: start; }
+}
+
+/* Grain usability: full review repairs */
+/* Links inside a sentence get the same 48px tap height as the contracts links. */
+.grain-page .untracked-stored-grain li a, .load-hint a { padding: 14px 0; }
+/* The delivery-intent banner lines up with the picker and form instead of touching the card edge. */
+.grain-page .contracts-card > .grain-delivery-intent { margin: 0 20px 18px; }
+/* An opened form stops below the sticky app header, and the long alert explanations read full width under the inputs. */
+.grain-page .offer-form-anchor { scroll-margin-top: 140px; }
+.alert-rule-form .alert-fact { grid-column: 1 / -1; }
+/* A long contract option ("ADM Decatur · 2026 · 1,250 bu left of 10,000") must not widen the load form past a phone screen. */
+.load-form fieldset { min-width: 0; }
+.load-form select, .load-form input:not([type="radio"]):not([type="checkbox"]) { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
+/* With the basis hint on its own row, the next field fills the cell beside Basis instead of leaving it empty. */
+.basis-entry { grid-auto-flow: row dense; }
+/* The bin and movement forms open inside a bin card, which is narrow on a laptop: columns wrap rather than crush. */
+@media (min-width: 768px) {
+  .grain-page .bin-form, .grain-page .movement-form { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .grain-page .movement-form .secondary-action { grid-column: 1 / -1; justify-self: start; }
+}
+@media (max-width: 767px) {
+  /* The stacked card already has its own padding and gap; desktop cell padding, borders and stripes do not apply. */
+  .phone-stack.contracts-table td, .phone-stack.contracts-table .contract-actions-row td { padding: 0; }
+  .phone-stack.load-table td { padding: 0; border: 0; }
+  .load-table tbody tr:nth-child(even) td { background: transparent; }
+  .grain-page .contracts-card > .grain-delivery-intent { margin: 0 16px 18px; }
+  .grain-page .contracts-card > .contracts-empty, .grain-page .contracts-card > .contracts-next-year, .grain-page .contracts-card > .contracts-read-only { padding-right: 16px; padding-left: 16px; }
+}
 .town-search { display: grid; gap: 10px; margin-top: 12px; }
 .town-matches { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .town-matches button { width: 100%; justify-content: flex-start; text-align: left; }

@@ -156,7 +156,7 @@ function draftFrom(patch: Partial<GrainLoadDraft>): GrainLoadDraft {
   // that is what the installed RPC will do.
   const noBaseline = workspaceWith([], rows.movements, false)
   const problems = validateGrainLoad(draftFrom({}), noBaseline)
-  assert(problems.some((problem) => problem.includes('Set the bin inventory first')), `Expected LD-1's message before the migration, saw ${JSON.stringify(problems)}.`)
+  assert(problems.some((problem) => problem.includes('no recorded starting amount') && problem.includes('next database update')), `Expected LD-1's message before the migration, saw ${JSON.stringify(problems)}.`)
 }
 
 // ---------------------------------------------------------------- 8. one bin's lots are not another's

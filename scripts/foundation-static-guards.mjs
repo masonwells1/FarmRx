@@ -667,9 +667,10 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, grainModule, 'list="contract-buyer-suggestions"', 'gl3:buyer-is-free-text')
   requireText(errors, grainModule, 'className="position-more-toggle"', 'gl3:position-card-discloses')
   requireText(errors, grainModule, '{showMore ? "Hide details" : "More details"}', 'gl3:position-card-discloses')
-  requireText(errors, grainModule, '<h2>Add another crop</h2>', 'gl3:second-crop-reachable')
+  requireText(errors, grainModule, '<h2>{compact ? "Add another crop" : "Start your grain estimate"}</h2>', 'gl3:second-crop-reachable')
   // The compact card stays mounted between crops, so the yield must not carry from one to the next.
-  requireText(errors, grainModule, 'setAph("");\n      await onSaved();', 'gl3:yield-cleared-between-crops')
+  // Each crop has its own yield box, and a successful save clears the saved crop's box before reloading.
+  requireText(errors, grainModule, 'setAph((current) => {\n        const next = { ...current };\n        delete next[key];\n        return next;\n      });\n      await onSaved();', 'gl3:yield-cleared-between-crops')
 
   // GL-3b: the way out of a contract typed wrong. Both actions are server-owned, because "this
   // contract has no deliveries" must be decided under a row lock, the reason is not optional, and the
@@ -686,7 +687,9 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, gl3bMigration, 'if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then\n    raise exception \'this contract already has delivered bushels and can no longer be changed\';', 'gl3b:delivered-contract-is-history')
   requireText(errors, gl3bMigration, 'if public.grain_contract_has_deliveries(p_farm_id, p_contract_id) then\n    raise exception \'this contract already has delivered bushels and can no longer be deleted\';', 'gl3b:delivered-contract-is-history')
   requireText(errors, read(root, 'src/data/grain.ts'), 'return !workspace.grain_contract_deliveries.some((delivery) => delivery.grain_contract_id === contractId)', 'gl3b:delivered-contract-is-history')
-  requireText(errors, grainModule, 'if (!available || !contractIsCorrectable(workspace, contract.id)) return null;', 'gl3b:delivered-contract-is-history')
+  // A delivered contract shows why it is locked in place of the correction control, returning before it.
+  requireText(errors, grainModule, 'if (!available) return null;', 'gl3b:delivered-contract-is-history')
+  requireText(errors, grainModule, 'if (!contractIsCorrectable(workspace, contract.id)) {\n    const deliveries = workspace.grain_contract_deliveries.filter((delivery) => delivery.grain_contract_id === contract.id);\n    return <small className="contract-locked-note">', 'gl3b:delivered-contract-is-history')
   // The reason is the farm's own record of why a number moved, so it is required in the browser, in
   // the repository, and in the column's own check constraint.
   requireText(errors, read(root, 'src/data/grain.ts'), 'export function validateContractCorrectionReason(', 'gl3b:reason-is-required')
@@ -828,7 +831,8 @@ export function foundationStaticGuard(root = process.cwd()) {
   // GL-3a made the crop and year picker permanent, so the sale form must not outlive a scope change:
   // a draft typed for one crop year would otherwise be saved under the next one.
   requireText(errors, grainModule, 'key={scopeKey(selectedScope)}', 'gl3:contract-form-resets-on-scope-change')
-  requireText(errors, grainModule, '<tfoot>', 'gl3:contract-totals-row')
+  // The Plan tab now has a totals row of its own, so this names the contracts table's one.
+  requireText(errors, grainModule, '<tfoot>\n                <tr>\n                  <th scope="row" colSpan={2}>Total for {selectedScopeLabel}</th>', 'gl3:contract-totals-row')
   // The totals row floors each contract's remaining exactly as its own row does, so one over-delivered
   // contract can never make the farm's remaining look smaller than it is.
   requireText(errors, grainModule, 'sum + Math.max(0, contract.bushels - workspace.grain_contract_deliveries', 'gl3:totals-never-net-over-delivery')

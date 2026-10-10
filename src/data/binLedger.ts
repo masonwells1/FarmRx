@@ -73,14 +73,22 @@ export function deriveCommodityBinTotal(bins: GrainBin[], inventories: BinInvent
   }, 0)
 }
 
-export function moistureStatus(bin: GrainBin, now = new Date()) {
+/** Safe storage moisture by crop family: about 15% for corn, 13% for soybeans and 13.5% for wheat.
+ * A bin whose crop is not known is held to the corn figure, as every bin was before. */
+export function safeStorageMoisture(cropFamily?: 'corn' | 'soybeans' | 'wheat' | null) {
+  return cropFamily === 'soybeans' ? 13 : cropFamily === 'wheat' ? 13.5 : 15
+}
+
+export function moistureStatus(bin: GrainBin, now = new Date(), cropFamily?: 'corn' | 'soybeans' | 'wheat' | null) {
   if (bin.moisture_pct !== null && bin.moisture_checked_on === null) return { flagged: true, message: 'Moisture reading has no date.', daysSinceChecked: null }
   if (bin.moisture_pct === null && bin.moisture_checked_on !== null) return { flagged: true, message: 'Moisture check date has no reading.', daysSinceChecked: null }
   if (bin.moisture_pct === null || bin.moisture_checked_on === null) return { flagged: false, message: 'No moisture reading', daysSinceChecked: null }
   const today = localCalendarDay(now)
   const checkedOn = bin.moisture_checked_on > today ? today : bin.moisture_checked_on
   const daysSinceChecked = Math.max(0, Math.round((new Date(`${today}T00:00:00.000Z`).getTime() - new Date(`${checkedOn}T00:00:00.000Z`).getTime()) / 86_400_000))
-  const high = bin.moisture_pct > 15
+  const limit = safeStorageMoisture(cropFamily)
+  const high = bin.moisture_pct > limit
   const stale = daysSinceChecked > 30
-  return { flagged: high || stale, message: high && stale ? 'Moisture is over 15% and the reading is more than 30 days old.' : high ? 'Moisture is over 15%.' : stale ? 'Moisture reading is more than 30 days old.' : 'Moisture reading is current.', daysSinceChecked }
+  const over = `Moisture is over ${limit}%${cropFamily ? ` for ${cropFamily}` : ''}`
+  return { flagged: high || stale, message: high && stale ? `${over} and the reading is more than 30 days old.` : high ? `${over}.` : stale ? 'Moisture reading is more than 30 days old.' : 'Moisture reading is current.', daysSinceChecked }
 }

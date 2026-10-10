@@ -32,6 +32,12 @@ assert(moistureStatus({ ...bin, moisture_pct: 15.01 }, today).flagged, '15.01% m
 assert(!moistureStatus({ ...bin, moisture_checked_on: '2026-06-13' }, today).flagged, 'A 30-day-old reading must not be stale.')
 assert(moistureStatus({ ...bin, moisture_checked_on: '2026-06-12' }, today).flagged, 'A 31-day-old reading must be stale.')
 assert(!moistureStatus({ ...bin, moisture_pct: null, moisture_checked_on: null }, today).flagged, 'No moisture reading must stay neutral.')
+// Safe storage moisture depends on the crop: soybeans keep at about 13%, corn at about 15%.
+const soyAt14 = moistureStatus({ ...bin, moisture_pct: 14 }, today, 'soybeans')
+assert(soyAt14.flagged && soyAt14.message === 'Moisture is over 13% for soybeans.', `Soybeans at 14% must be flagged against 13% (saw ${soyAt14.message}).`)
+assert(!moistureStatus({ ...bin, moisture_pct: 14 }, today, 'corn').flagged && !moistureStatus({ ...bin, moisture_pct: 14 }, today).flagged, 'Corn, or a bin whose crop is unknown, at 14% must not be flagged.')
+assert(moistureStatus({ ...bin, moisture_pct: 13.6 }, today, 'wheat').flagged && !moistureStatus({ ...bin, moisture_pct: 13.5 }, today, 'wheat').flagged, 'Wheat must be held to 13.5%.')
+assert(moistureStatus({ ...bin, moisture_pct: 15.01 }, today).message === 'Moisture is over 15%.', 'A bin with no known crop keeps the 15% message.')
 const undatedReading = moistureStatus({ ...bin, moisture_checked_on: null }, today)
 assert(undatedReading.flagged && undatedReading.message === 'Moisture reading has no date.', 'A moisture percentage without its check date must be plainly flagged.')
 const futureReading = moistureStatus({ ...bin, moisture_checked_on: '2026-08-13' }, today)

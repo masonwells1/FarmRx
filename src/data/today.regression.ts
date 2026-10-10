@@ -4,7 +4,7 @@ import type { EquipmentTasksWorkspace, Equipment, FarmTask, MeterReading, Servic
 import { pendingPassOutcomes, unresolvedAssignmentMessage, type ProgramsQueueEntryV1, type ProgramsSnapshotView } from './programsWriteQueue'
 import { projectProgramsQueue } from './QueuedProgramsRepository'
 import type { PendingPassOutcome, ProgramsData } from './programs'
-import { planMonthFor, plannedPercentThroughMonth, type CashBid, type GrainContract, type GrainWorkspace, type MarketingPlanTarget, type ProductionEstimate } from './grain'
+import { planDateFor, plannedPercentThroughDate, type CashBid, type GrainContract, type GrainWorkspace, type MarketingPlanTarget, type ProductionEstimate } from './grain'
 import { parseTodayGrainLineIntent, todayGrainLineIntent } from './todayIntents'
 import type { InventoryProduct, InventoryWorkspace } from './inventory'
 import type { Field, FieldsData } from './fields'
@@ -432,9 +432,19 @@ assert.equal(sparse?.detail, 'No plan yet · No local bid yet', 'Absent plan and
 const decemberLine = todayGrainLine({ profile: owner, grain: grainWorkspace, today: '2026-12-03' })
 assert.equal(decemberLine?.detail.split(' · ')[0], 'Plan says 60% by now', 'The plan figure accumulates every target month through the current month.')
 const nextYearTarget = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, marketing_plan_targets: [...grainWorkspace.marketing_plan_targets, target('00000000-0000-4000-8000-000000000e25', '2027-03-01', 10)] }, today })
-assert.equal(nextYearTarget?.detail.split(' · ')[0], 'Plan says 50% by now', 'The plan figure follows the Overview\'s own rule (month number through the current month, whatever year the target carries), so both screens report one number.')
-assert.equal(plannedPercentThroughMonth(grainWorkspace.marketing_plan_targets, 7), 40, 'The shared rule accumulates every target month at or before the given month.')
-assert.deepEqual([planMonthFor(new Date('2026-09-01T00:30:00Z'), 'America/Chicago'), planMonthFor(new Date('2026-09-01T00:30:00Z'), 'Asia/Tokyo'), planMonthFor(new Date('2026-09-01T00:30:00Z'), null)], [8, 9, new Date('2026-09-01T00:30:00Z').getMonth() + 1], 'The Overview judges the plan by the farm\'s month in its own zone (still August in Chicago at 00:30 UTC on September 1), as Today does; without a zone, the device\'s.')
+assert.equal(nextYearTarget?.detail.split(' · ')[0], 'Plan says 40% by now', 'The plan figure follows the Overview\'s own rule (year and month through the current month), so a March 2027 target is not due in July 2026 and both screens report one number.')
+assert.equal(plannedPercentThroughDate(grainWorkspace.marketing_plan_targets, '2026-07-15'), 40, 'The shared rule accumulates every target month at or before the given month.')
+// A plan that crosses New Year: an October 2026 target and a January 2027 target.
+const acrossYear = [target('00000000-0000-4000-8000-000000000e26', '2026-10-01', 20), target('00000000-0000-4000-8000-000000000e27', '2027-01-01', 20)]
+assert.equal(plannedPercentThroughDate(acrossYear, '2026-12-15'), 20, 'In December 2026 only the October 2026 target is due; the January 2027 one is not.')
+assert.equal(plannedPercentThroughDate(acrossYear, '2027-01-05'), 40, 'In January 2027 the October 2026 target still counts once the year is compared.')
+assert.equal(plannedPercentThroughDate([target('00000000-0000-4000-8000-000000000e28', '2027-03-01', 25)], '2026-10-06'), 0, 'A 2027 crop target dated March 2027 is not already due in October 2026.')
+assert.equal(planDateFor(new Date('2026-09-01T00:30:00Z'), 'America/Chicago'), '2026-08-31', 'The plan date is the farm\'s day in its own zone, with its year.')
+{
+  // Kept from the removed planMonthFor check: the same moment is a different farm day by zone, and without a zone it is the device's.
+  const moment = new Date('2026-09-01T00:30:00Z'); const pad = (value: number) => String(value).padStart(2, '0')
+  assert.deepEqual([planDateFor(moment, 'America/Chicago').slice(0, 7), planDateFor(moment, 'Asia/Tokyo').slice(0, 7), planDateFor(moment, null)], ['2026-08', '2026-09', `${moment.getFullYear()}-${pad(moment.getMonth() + 1)}-${pad(moment.getDate())}`], 'The Overview judges the plan by the farm\'s month in its own zone (still August in Chicago at 00:30 UTC on September 1), as Today does; without a zone, the device\'s.')
+}
 const basisOnly = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, cash_bids: [bid('00000000-0000-4000-8000-000000000e41', 'Cargill Olney', '2026-07-10', null, -0.35), bid('00000000-0000-4000-8000-000000000e42', 'Cargill Olney', '2026-07-14', null, -0.4)] }, today })
 assert.equal(basisOnly?.detail.split(' · ')[1], 'Cargill Olney basis −$0.40, down 5¢ since Jul 10', 'A bid entered as basis only is shown as basis with its change.')
 const firstBid = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, cash_bids: [bid('00000000-0000-4000-8000-000000000e51', 'ADM Decatur', '2026-07-14', 4.15, -0.27)] }, today })

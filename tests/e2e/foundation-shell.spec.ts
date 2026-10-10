@@ -1513,9 +1513,12 @@ test('TradingView runs only inside an opaque sandbox and cannot reach Farm Rx st
   const marketHeading = page.getByRole('heading', { name: 'Futures prices' })
   await expect(marketHeading).toBeVisible()
   await marketHeading.scrollIntoViewIfNeeded()
+  // Only the futures for crops the farm has an estimate for: this farm grows corn, so the front month
+  // and the new-crop month. Every tile that is shown is still checked for the sandbox.
   const widgets = page.locator('iframe.market-quote__widget')
-  await expect(widgets).toHaveCount(6)
-  for (let index = 0; index < 6; index += 1) {
+  await expect(widgets).toHaveCount(2)
+  await expect(page.locator('.market-quote__heading strong')).toHaveText(['Corn', 'Corn'])
+  for (let index = 0; index < 2; index += 1) {
     await expect(widgets.nth(index)).toHaveAttribute('sandbox', 'allow-scripts')
     await expect(widgets.nth(index)).toHaveAttribute('referrerpolicy', 'no-referrer')
   }
@@ -1694,6 +1697,69 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
 // GL-3b: a contract typed wrong was a dead end -- no edit, no delete, and a marketing position that
 // stayed wrong forever. The control appears only for a contract with no deliveries, it requires a
 // reason, and it sends only the fields the farmer actually touched.
+test('the Contracts table shows decimal bushels as saved, not rounded', async ({ page, context }) => {
+  // Contracts accept amounts like 100.25 bu (a partial firm-offer fill). The bushels column and its total must show
+  // the saved figure, or the row reads 100 bu while bushels left and value are worked out from 100.25.
+  await seedSession(context)
+  const farm = farms[0]!
+  const row = (id: string, buyer: string, bushels: number) => ({ id, farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer, bushels, futures_price: null, basis: null, cash_price: 4.75, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, firm_offer_id: null, created_at: now, updated_at: now })
+  const contractRows = [row('00000000-0000-4000-8000-000000000071', 'Whole Bushels', 1_000), row('00000000-0000-4000-8000-000000000072', 'Partial Fill', 100.25)]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: contractRows, grain_contract_deliveries: [], grain_contract_audit: [] })
+  await page.goto('/grain/contracts')
+  await expect(page.locator('tr.contract-row').filter({ hasText: 'Partial Fill' }).locator('td[data-label="Bushels"]')).toHaveText('100.25')
+  await expect(page.locator('tr.contract-row').filter({ hasText: 'Whole Bushels' }).locator('td[data-label="Bushels"]')).toHaveText('1,000')
+  await expect(page.locator('tfoot td[data-label="Bushels"]')).toHaveText('1,100.25')
+  // Delivered bushels: the box keeps exactly what was typed, and it is read by one strict rule. A comma that is not a thousands
+  // mark ("1200,500", or "1200,5" from a phone keyboard with a decimal comma) is refused by name, never read as 1,200,500 or
+  // 12,005 bu; a thousands-grouped amount is read as the number it is. A refused box sends nothing.
+  const deliveryBox = page.locator('tr.contract-row').filter({ hasText: 'Whole Bushels' }).locator('xpath=following-sibling::tr[1]').getByLabel('Delivered bushels')
+  const commaRefusal = page.getByText('A comma in bushels is read only as a thousands mark, like 1,200. For a decimal, use a period, like 1200.5, or leave off the part after the comma.')
+  const confirm = page.getByRole('dialog')
+  await deliveryBox.fill('1,200')
+  await expect(deliveryBox).toHaveValue('1,200')
+  await deliveryBox.fill('1200,500')
+  await expect(deliveryBox).toHaveValue('1200,500')
+  await deliveryBox.press('Enter')
+  await expect(commaRefusal).toBeVisible()
+  await expect(confirm).toHaveCount(0)
+  // Typed one key at a time, as a farmer does: the box is never rewritten under the farmer's fingers, and the whole of it reads
+  // as a million -- asked about against this 1,000 bu contract before anything is sent.
+  await deliveryBox.fill('')
+  await deliveryBox.pressSequentially('1,000,000')
+  await expect(deliveryBox).toHaveValue('1,000,000')
+  await deliveryBox.press('Enter')
+  await expect(confirm).toContainText('This is 999,000 bu more than the contract. Record anyway?')
+  await confirm.getByRole('button', { name: 'Go back' }).click()
+  await expect(confirm).toHaveCount(0)
+  await deliveryBox.fill('1200,5')
+  await expect(deliveryBox).toHaveValue('1200,5')
+  await deliveryBox.press('Enter')
+  await expect(commaRefusal).toBeVisible()
+  await expect(confirm).toHaveCount(0)
+  expect(unexpected).toEqual([])
+})
+
+test('the Contracts table rounds summed decimal bushels to the cent, so float noise never shows', async ({ page, context }) => {
+  // Sweep #38/#24: in the browser 5374.4 + 2267.7 + 100.9 is 7742.999999999999, 0.01 + 2267.69 is a hair over 2267.7 and
+  // 0.02 + 100.88 a hair under 100.9. The total must read 7,743, and both contracts delivered in full "0 bu left", with no
+  // "0.00 bu left" and no "Over-delivered by 0 bu".
+  await seedSession(context)
+  const farm = farms[0]!
+  const row = (id: string, buyer: string, bushels: number) => ({ id, farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer, bushels, futures_price: null, basis: null, cash_price: 4.75, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, firm_offer_id: null, created_at: now, updated_at: now })
+  const contractRows = [row('00000000-0000-4000-8000-000000000081', 'Open Fill', 5_374.4), row('00000000-0000-4000-8000-000000000082', 'Hair Over', 2_267.7), row('00000000-0000-4000-8000-000000000083', 'Hair Under', 100.9)]
+  const delivery = (id: string, contractId: string, bushels: number) => ({ id, farm_id: farm.id, grain_contract_id: contractId, bushels, delivered_on: '2026-10-05', note: null, created_at: now })
+  const deliveryRows = [delivery('00000000-0000-4000-8000-000000000084', contractRows[1]!.id, 0.01), delivery('00000000-0000-4000-8000-000000000085', contractRows[1]!.id, 2_267.69), delivery('00000000-0000-4000-8000-000000000086', contractRows[2]!.id, 0.02), delivery('00000000-0000-4000-8000-000000000087', contractRows[2]!.id, 100.88)]
+  const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: contractRows, grain_contract_deliveries: deliveryRows, grain_contract_audit: [] })
+  await page.goto('/grain/contracts')
+  const delivered = (buyer: string) => page.locator('tr.contract-row').filter({ hasText: buyer }).locator('td[data-label="Delivered"]')
+  await expect(page.locator('tfoot td[data-label="Bushels"]')).toHaveText('7,743')
+  await expect(delivered('Hair Over')).toHaveText(/^2,267\.70 bu delivered\s*0 bu left$/)
+  await expect(delivered('Hair Under')).toHaveText(/^100\.90 bu delivered\s*0 bu left$/)
+  await expect(delivered('Open Fill')).toHaveText(/^0 bu delivered\s*5,374\.40 bu left$/)
+  await expect(page.locator('tfoot td[data-label="Delivered"]')).toHaveText(/^2,368\.60 bu delivered\s*5,374\.40 bu left$/)
+  expect(unexpected).toEqual([])
+})
+
 test('a contract with no deliveries can be corrected with a reason, and one already delivered against cannot', async ({ page, context }) => {
   await seedSession(context)
   contractRepairCalls.length = 0
@@ -1706,12 +1772,20 @@ test('a contract with no deliveries can be corrected with a reason, and one alre
   const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: contractRows, grain_contract_deliveries: deliveryRows, grain_contract_audit: [] })
   await page.goto('/grain/contracts')
 
-  const typo = page.getByRole('row').filter({ hasText: 'Buyer Typo' })
-  const delivered = page.getByRole('row').filter({ hasText: 'Already Delivered' })
+  // Each contract's delivery, pricing and correction controls sit in the full-width row right under it.
+  const actionsFor = (buyer: string) => page.locator('tr.contract-row').filter({ hasText: buyer }).locator('xpath=following-sibling::tr[1]')
+  const typo = actionsFor('Buyer Typo')
+  const delivered = actionsFor('Already Delivered')
+  await expect(typo).toHaveClass('contract-actions-row')
+  await expect(delivered).toHaveClass('contract-actions-row')
+  // The delivered contract's controls row is really there, so the absence below is about the control.
+  await expect(delivered.getByRole('button', { name: 'Record delivery' })).toBeVisible()
   await expect(typo.getByRole('button', { name: 'Correct or delete' })).toBeVisible()
   // A contract with delivered bushels is history, not a draft. The screen offers nothing the database
   // would refuse, so the control is absent rather than present and failing.
   await expect(delivered.getByRole('button', { name: 'Correct or delete' })).toHaveCount(0)
+  // And it says why, instead of the control simply vanishing.
+  await expect(delivered.getByText('Deliveries are recorded on this contract, so it can no longer be corrected or deleted.', { exact: false })).toBeVisible()
 
   await typo.getByRole('button', { name: 'Correct or delete' }).click()
   await expect(typo.getByText('Crop year, commodity, type and price cannot be corrected here.', { exact: false })).toBeVisible()
@@ -1776,7 +1850,7 @@ test('a load records its ticket, takes its crop year from the origin, and can on
   await expect(page.getByRole('combobox', { name: 'Contract', exact: true }).getByRole('option')).toHaveText(['Pick a contract', /This Year Buyer/])
 
   await page.getByRole('combobox', { name: 'Contract', exact: true }).selectOption('00000000-0000-4000-8000-000000000072')
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('910.5')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('910.5')
   await page.getByRole('textbox', { name: 'Ticket number' }).fill('A-1001')
   await page.getByRole('button', { name: 'Save load' }).click()
 
@@ -1828,8 +1902,8 @@ test('a load offers only the effects its shape can reach, and unticking one drop
   await effects.getByRole('checkbox').uncheck()
   await expect(effects.getByText('Saving this records the ticket and changes nothing else.')).toBeVisible()
 
-  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('640')
+  await page.getByRole('combobox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('640')
   await page.getByRole('button', { name: 'Save load' }).click()
 
   await expect.poll(() => loadRecordCalls.length).toBe(1)
@@ -1924,8 +1998,8 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
   // Saving without answering is refused in the farmer's own words, not the database's. Everything
   // else the form needs is filled first, so the unanswered crop year is the only thing left to
   // complain about and the message below is provably about it.
-  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('4000')
+  await page.getByRole('combobox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('4000')
   await page.getByRole('button', { name: 'Save load' }).click()
   await expect(page.getByText('That bin holds more than one crop year')).toBeVisible()
   expect(loadRecordCalls.length).toBe(0)
@@ -1957,7 +2031,7 @@ test('a bin holding two crop years asks which one a load came from, and hauls th
 
   // And the next ticket saves, which is the thing the farmer could not do.
   loadRecordCalls.length = 0
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('250')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('250')
   await page.getByRole('button', { name: 'Save load' }).click()
   await expect.poll(() => loadRecordCalls.length).toBe(1)
   const next = loadRecordCalls[0]!.body.p_load as Record<string, unknown>
@@ -1984,7 +2058,7 @@ test('a hand-entered bin movement names its crop year, chosen from the lots the 
   const unexpected = await mockSupabase(page, [farm], [], false, 1, ownerProfile, userId, {}, { grain_contracts: [], grain_bins: binRows, bin_inventory: inventoryRows, bin_transactions: [], bin_lots: lotRows, grain_contract_deliveries: [], grain_contract_audit: [], grain_loads: [] })
   await page.goto('/grain/storage')
   const bin = page.locator('article.bin-card').filter({ hasText: 'Home bin' })
-  await bin.getByText('Bin history (0)', { exact: true }).click()
+  await bin.getByRole('button', { name: 'Add or take out grain' }).click()
   const form = bin.locator('form.movement-form')
   await form.getByLabel('Direction').selectOption('out')
   await form.getByLabel('Bushels').fill('1000')
@@ -2061,8 +2135,8 @@ test('a bin whose lots cannot be read refuses to save and recovers on the next t
   // --- The lot read fails, and the form says so instead of guessing from the movement array.
   lotsFailing = true
   await page.getByRole('combobox', { name: 'Bin', exact: true }).selectOption(binId)
-  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('1000')
+  await page.getByRole('combobox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('1000')
   await page.getByRole('button', { name: 'Save load' }).click()
   // Both the inline notice under the bin and the save's own status say it; this is the status.
   await expect(page.getByText('Farm Rx could not read what this bin holds. Check your signal and try again.')).toBeVisible()
@@ -2088,7 +2162,7 @@ test('a bin whose lots cannot be read refuses to save and recovers on the next t
   refuseNextSave = true
   lotRows.splice(0, 1)
   await page.getByRole('button', { name: 'Save load' }).click()
-  await expect(page.getByText('Farm Rx could not record this load right now')).toBeVisible()
+  await expect(page.getByText('That bin does not hold that many bushels of that crop year.')).toBeVisible()
   expect(loadRecordCalls.length).toBe(0)
 
   // The bin now holds only 2025, and the form has to follow it. Before this repair the ticket stayed
@@ -2128,8 +2202,8 @@ test('hauling a one-lot bin dry drops the year it emptied, rather than refusing 
   await expect(page.getByText('This bin holds one crop year')).toContainText('2026')
 
   // Haul the whole lot. The mock's own save empties it, rather than the test arranging an empty bin.
-  await page.getByRole('textbox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('4000')
+  await page.getByRole('combobox', { name: 'Buyer or elevator' }).fill('Riverside Elevator')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('4000')
   await page.getByRole('button', { name: 'Save load' }).click()
   await expect.poll(() => loadRecordCalls.length).toBe(1)
   expect((loadRecordCalls[0]!.body.p_load as Record<string, unknown>).crop_year).toBe(2026)
@@ -2141,7 +2215,7 @@ test('hauling a one-lot bin dry drops the year it emptied, rather than refusing 
   await expect(page.getByText('This bin holds no crop with a crop year')).toBeVisible()
 
   loadRecordCalls.length = 0
-  await page.getByRole('spinbutton', { name: 'Net bushels' }).fill('250')
+  await page.getByRole('textbox', { name: 'Net bushels' }).fill('250')
   await page.getByRole('button', { name: 'Save load' }).click()
 
   // Refused here, in the farmer's own words, without spending a round trip on a lot the screen is

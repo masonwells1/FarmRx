@@ -11,6 +11,7 @@ import { getSaveReceipt } from '../lib/saveReceipt'
 import { readNeedsAttention } from './needsAttentionStore'
 import { isMarsBid, knownCounterparties, latestBasis, marsBidLabel } from './basisMath'
 import { farmerError } from '../lib/farmerErrors'
+import { isTransportFailure } from './QueuedFieldsRepository'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE } from './binLedger'
 import { deriveBinOnHand } from './binLedger'
 import { FILLED_OFFER_DELETE_MESSAGE } from './firmOffers'
@@ -111,6 +112,8 @@ async function run() {
   assert(data.production_estimates.length === 1 && data.grain_bins.length === 1 && data.usda_report_dates.length === 1 && data.grain_contracts[0].cash_price === 4.5, 'All Grain result sets must map numeric strings exactly.')
   const acres = gateway.state.fields.crop_assignments.filter((row) => row.crop_year === 2026 && row.commodity_id === data.production_estimates[0].commodity_id).reduce((sum, row) => sum + row.planted_acres, 0); assert(data.production_estimates[0].planted_acres === acres && data.production_estimates[0].expected_bushels === acres * 200, 'Production was not reconciled from injected Fields.')
   gateway.fail = true; await rejects(() => repo.getData(), 'Partial gateway failure must reject.'); gateway.fail = false
+  // C30: contracts with the same scope and delivery start list in the order they were entered, not by random id.
+  { const tieGateway = new FakeGateway(); const base = tieGateway.state.bundle.grain_contracts[0] as Record<string, unknown>; tieGateway.state.bundle.grain_contracts = [{ ...base, id: uid(1300), created_at: '2026-07-02T12:00:00.000Z' }, { ...base, id: uid(1301), created_at: '2026-07-01T12:00:00.000Z' }]; const tied = await repository(tieGateway).getData(); assert(tied.grain_contracts.map((row) => row.id).join() === [uid(1301), uid(1300)].join(), 'Contracts tied on delivery start must list in entry order.') }
   const bad = structuredClone(gateway.state.bundle) as { grain_contracts: Array<Record<string, unknown>> }; bad.grain_contracts[0].contract_type = 'mystery'; gateway.state.bundle.grain_contracts = bad.grain_contracts; await rejects(() => repo.getData(), 'Unknown enum must fail closed.'); gateway.state.bundle.grain_contracts = fixture().bundle.grain_contracts
   const firstInventory = gateway.state.bundle.bin_inventory[0] as Record<string, unknown>; firstInventory.farm_id = uid(55); await rejects(() => repo.getData(), 'Cross-farm private rows must reject.'); firstInventory.farm_id = gateway.state.fields.farm.id
   // 6-10: all persistence shapes bind the farm and preserve client IDs.
@@ -619,6 +622,22 @@ async function run() {
     try { await preLoadRepo.saveLoad(uid(92), draft) } catch (error) { pendingSave = error instanceof Error ? error.message : '' }
     try { await preLoadRepo.voidLoad(uid(92), 'entered twice') } catch (error) { pendingVoid = error instanceof Error ? error.message : '' }
     assert(pendingSave === LOAD_RECORD_PENDING && pendingVoid === LOAD_RECORD_PENDING, `LD-1: a pre-migration database must say so plainly (saw ${pendingSave} / ${pendingVoid}).`)
+
+    // PostgREST reports errors as plain objects. Turned into "[object Object]", a lost connection
+    // was not recognised as one -- so the ticket id a safe retry needs was dropped -- and a final
+    // refusal lost the words that say what to change.
+    for (const [raw, transport, words] of [
+      [{ message: 'TypeError: Failed to fetch', details: '', hint: '', code: '' }, true, 'We could not reach Farm Rx. Check your signal and try again.'],
+      [{ message: 'delivery would exceed the remaining contract bushels; confirm over-delivery to record it', details: null, hint: null, code: 'P0001' }, false, 'This load is more than what is left on the contract.'],
+    ] as const) {
+      const plainErrorGateway = new FakeGateway()
+      Object.defineProperty(plainErrorGateway, 'saveGrainLoadRpc', { value: async () => { throw raw } })
+      let caught: unknown = null
+      try { await repository(plainErrorGateway).saveLoad(uid(93), draft) } catch (error) { caught = error }
+      assert(caught instanceof Error && caught.message === raw.message, `A plain PostgREST error must keep its message (saw ${caught instanceof Error ? caught.message : String(caught)}).`)
+      assert(isTransportFailure(caught, false) === transport, `"${raw.message}" must ${transport ? '' : 'not '}read as a lost connection.`)
+      assert(farmerError(caught, 'record this load').startsWith(words), `"${raw.message}" must reach the farmer as "${words}" (saw ${farmerError(caught, 'record this load')}).`)
+    }
   }
 
   // ------------------------------------------------ LD-4: a read is not exempt from the epoch fence
