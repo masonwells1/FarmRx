@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation } from 'react-router'
 import { confirmDialog } from './components/ConfirmDialog'
 import type { Field, FieldsData, FieldsRepository } from './data/fields'
-import { FIELD_LOG_OFFLINE_DELETE_MESSAGE, fieldLogMaximumObservedOn, validateFieldLogDraft, type FieldLogEntry, type FieldLogEntryDraft, type FieldLogRepository } from './data/fieldLog'
+import { FIELD_LOG_OFFLINE_DELETE_MESSAGE, fieldLogMaximumObservedOn, validateFieldLogDraft, type FieldLogData, type FieldLogEntry, type FieldLogEntryDraft, type FieldLogRepository } from './data/fieldLog'
 import { growingDegreeDays, weatherService } from './data/weatherService'
 import { farmerError } from './lib/farmerErrors'
 import { formatFarmDate } from './lib/farmDate'
@@ -15,27 +15,39 @@ const today = () => farmLocalCalendarDate()
 const editable = (role: string) => role === 'owner' || role === 'manager' || role === 'worker'
 const inches = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+/** An entry this page saved or kept on the device, with how many reloads had started when it was kept. */
+type LocalEntry = { entry: FieldLogEntry; readsBefore: number }
+/** A local entry steps aside once a reload has the server's copy of it. A saved one also steps aside when a reload that
+ * started after the save reached the server without it: it was deleted on another phone, and its Edit button would save
+ * it back. Rain still waiting on this device stays until the server has it. */
+function staysLocal(local: LocalEntry, log: FieldLogData, read: number) {
+  if (log.entries.some((entry) => entry.id === local.entry.id && !entry.pending)) return false
+  return log.offline === true || local.entry.pending === true || read <= local.readsBefore
+}
+
 export function FieldLogPage({ fieldLogRepository, fieldsRepository }: { fieldLogRepository: FieldLogRepository; fieldsRepository: FieldsRepository }) {
   const location = useLocation()
   // A Today "Rain" tile arrives with a record intent: open the rainfall form on the first field so the farmer types straight away.
   const [openRainfallOnFirstField] = useState(() => parseTodayRecordIntent(location.state)?.record === 'rainfall')
-  // Rain from the several-fields form, kept on this device or already saved, shown in each field's timeline. A saved entry
-  // stays here too: a reload that loses signal answers from the copy cached before the save, which does not have it yet.
-  const [queuedRain, setQueuedRain] = useState<FieldLogEntry[]>([])
+  // Entries saved or kept on this device from this page, shown in each field's timeline until a reload settles them. A
+  // reload that loses signal answers from the copy saved on this device before them, which does not have them yet.
+  const [localEntries, setLocalEntries] = useState<LocalEntry[]>([])
+  const readsStarted = useRef(0)
+  const keepLocal = (kept: FieldLogEntry[]) => { const readsBefore = readsStarted.current; setLocalEntries((current) => [...current.filter((local) => !kept.some((next) => next.id === local.entry.id)), ...kept.map((entry) => ({ entry, readsBefore }))]) }
   const [fieldsData, setFieldsData] = useState<FieldsData | null>(null); const [entries, setEntries] = useState<FieldLogEntry[]>([]); const [role, setRole] = useState<string>('read_only'); const [attentionQueueKey, setAttentionQueueKey] = useState<string | null>(null); const [error, setError] = useState<string | null>(null); const [loading, setLoading] = useState(true)
-  const reload = async () => { setLoading(true); try { const [fields, log, queueKey] = await Promise.all([fieldsRepository.getData(), fieldLogRepository.getData(), fieldLogRepository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)]); setFieldsData(fields); setEntries(log.entries); setRole(log.viewer.role); setAttentionQueueKey(queueKey); setError(null) } catch (caught) { setError(farmerError(caught, 'open the field log')) } finally { setLoading(false) } }
+  const reload = async () => { readsStarted.current += 1; const read = readsStarted.current; setLoading(true); try { const [fields, log, queueKey] = await Promise.all([fieldsRepository.getData(), fieldLogRepository.getData(), fieldLogRepository.getNeedsAttentionQueueKey?.().catch(() => null) ?? Promise.resolve(null)]); setFieldsData(fields); setEntries(log.entries); setLocalEntries((current) => current.filter((local) => staysLocal(local, log, read))); setRole(log.viewer.role); setAttentionQueueKey(queueKey); setError(null) } catch (caught) { setError(farmerError(caught, 'open the field log')) } finally { setLoading(false) } }
   useEffect(() => { void reload() }, [])
   if (loading && !fieldsData) return <section className="page field-log-page"><p className="loading-state">Loading field log…</p></section>
   if (!fieldsData) return <section className="page field-log-page"><h1>Field Log</h1><p className="form-error">{error ?? 'Farm Rx could not load the field log.'}</p><button className="secondary-action" onClick={() => void reload()}>Try again</button></section>
   const activeFields = fieldsData.fields.filter((field) => field.is_active)
   const fieldNames = new Map(fieldsData.fields.map((field) => [field.id, field.name]))
   const legacyFieldName = (entry: unknown) => { const draft = entry && typeof entry === 'object' ? (entry as { draft?: unknown }).draft : null; const fieldId = draft && typeof draft === 'object' ? (draft as { field_id?: unknown }).field_id : null; return typeof fieldId === 'string' ? fieldNames.get(fieldId) ?? null : null }
-  return <section className="page field-log-page"><header className="page-heading"><div><h1>Field Log</h1><p>Rain totals and notes, by field.</p></div></header>{error && <p className="form-error">{error}</p>}<NeedsAttentionList module="fieldLog" queueKey={attentionQueueKey} onChanged={reload} legacyFieldName={legacyFieldName} />{editable(role) && activeFields.length > 1 && <MultiFieldRain fields={activeFields} repository={fieldLogRepository} refresh={reload} onQueued={(kept) => setQueuedRain((current) => [...current.filter((entry) => !kept.some((next) => next.id === entry.id)), ...kept])} onSaved={(confirmed) => setQueuedRain((current) => [...current.filter((entry) => !confirmed.some((next) => next.id === entry.id)), ...confirmed])} />}{!activeFields.length ? <section className="empty-state"><h2>Add your first field to start a field log.</h2>{editable(role) && <Link className="primary-action" to="/fields">Add a field</Link>}</section> : <div className="field-log-list">{activeFields.map((field, index) => <FieldCard key={field.id} field={field} entries={entries.filter((entry) => entry.field_id === field.id)} assignments={fieldsData.crop_assignments} canEdit={editable(role)} initialMode={openRainfallOnFirstField && index === 0 && editable(role) ? 'rainfall' : null} repository={fieldLogRepository} refresh={reload} queued={queuedRain.filter((entry) => entry.field_id === field.id)} />)}</div>}</section>
+  return <section className="page field-log-page"><header className="page-heading"><div><h1>Field Log</h1><p>Rain totals and notes, by field.</p></div></header>{error && <p className="form-error">{error}</p>}<NeedsAttentionList module="fieldLog" queueKey={attentionQueueKey} onChanged={reload} legacyFieldName={legacyFieldName} />{editable(role) && activeFields.length > 1 && <MultiFieldRain fields={activeFields} repository={fieldLogRepository} refresh={reload} onKept={keepLocal} />}{!activeFields.length ? <section className="empty-state"><h2>Add your first field to start a field log.</h2>{editable(role) && <Link className="primary-action" to="/fields">Add a field</Link>}</section> : <div className="field-log-list">{activeFields.map((field, index) => <FieldCard key={field.id} field={field} entries={entries.filter((entry) => entry.field_id === field.id)} assignments={fieldsData.crop_assignments} canEdit={editable(role)} initialMode={openRainfallOnFirstField && index === 0 && editable(role) ? 'rainfall' : null} repository={fieldLogRepository} refresh={reload} local={localEntries.map((local) => local.entry).filter((entry) => entry.field_id === field.id)} onSaved={(saved) => keepLocal([saved])} />)}</div>}</section>
 }
 
 /** One rain total for several fields at once. Each chosen field gets its own ordinary rainfall entry through the same
  * repository save as the per-field form, one after another, so a field that fails is named and the rest are kept. */
-function MultiFieldRain({ fields, repository, refresh, onQueued, onSaved }: { fields: Field[]; repository: FieldLogRepository; refresh: () => Promise<void>; onQueued: (entries: FieldLogEntry[]) => void; onSaved: (entries: FieldLogEntry[]) => void }) {
+function MultiFieldRain({ fields, repository, refresh, onKept }: { fields: Field[]; repository: FieldLogRepository; refresh: () => Promise<void>; onKept: (entries: FieldLogEntry[]) => void }) {
   const submitLock = useRef(createSubmitLock())
   const [open, setOpen] = useState(false)
   const [chosen, setChosen] = useState<Set<string>>(() => new Set())
@@ -55,10 +67,10 @@ function MultiFieldRain({ fields, repository, refresh, onQueued, onSaved }: { fi
     const validation = validateFieldLogDraft(drafts[0].draft)
     if (validation) { setMessage(validation); submitLock.current.release(); return }
     setSubmitting(true); setMessage(null); setResult(null)
-    const saved: string[] = []; const queued: string[] = []; const failed: string[] = []; const failedIds: string[] = []; const kept: FieldLogEntry[] = []; const confirmed: FieldLogEntry[] = []
+    const saved: string[] = []; const queued: string[] = []; const failed: string[] = []; const failedIds: string[] = []; const kept: FieldLogEntry[] = []
     try {
       for (const { field, draft } of drafts) {
-        try { const entry = await repository.saveEntry(draft); if (entry.pending) { queued.push(field.name); kept.push(entry) } else { saved.push(field.name); confirmed.push(entry) } }
+        try { const entry = await repository.saveEntry(draft); kept.push(entry); if (entry.pending) queued.push(field.name); else saved.push(field.name) }
         catch { failed.push(field.name); failedIds.push(field.id) }
       }
       const parts = [
@@ -67,9 +79,8 @@ function MultiFieldRain({ fields, repository, refresh, onQueued, onSaved }: { fi
         failed.length ? `Not saved for ${failed.join(', ')}. Try those again.` : '',
       ].filter(Boolean)
       setResult(parts.join(' '))
-      if (kept.length) onQueued(kept)
-      // Saved entries go into the timeline now, so a reload that loses signal afterwards cannot hide rain the server already has.
-      if (confirmed.length) onSaved(confirmed)
+      // Saved and kept entries go into the timeline now, so a reload that loses signal afterwards cannot hide them.
+      if (kept.length) onKept(kept)
       if (!failed.length) { setChosen(new Set()); setOpen(false) } else setChosen(new Set(failedIds))
       await refresh().catch(() => undefined)
     } finally { setSubmitting(false); submitLock.current.release() }
@@ -92,10 +103,10 @@ function MultiFieldRain({ fields, repository, refresh, onQueued, onSaved }: { fi
   </section>
 }
 
-function FieldCard({ field, entries, assignments, canEdit, initialMode = null, repository, refresh, queued = [] }: { field: Field; entries: FieldLogEntry[]; assignments: FieldsData['crop_assignments']; canEdit: boolean; initialMode?: 'rainfall' | 'note' | null; repository: FieldLogRepository; refresh: () => Promise<void>; queued?: FieldLogEntry[] }) {
-  const deleteLocks = useRef(createSubmitLockMap()); const [mode, setMode] = useState<'rainfall' | 'note' | null>(initialMode); const [editing, setEditing] = useState<FieldLogEntry | null>(null); const [pendingEntries, setPendingEntries] = useState<FieldLogEntry[]>([]); const [deletedIds, setDeletedIds] = useState<Set<string>>(() => new Set()); const [error, setError] = useState<string | null>(null); const [notice, setNotice] = useState<string | null>(null); const year = new Date().getFullYear(); const localPending = [...pendingEntries, ...queued.filter((kept) => !pendingEntries.some((pending) => pending.id === kept.id))]; const timelineEntries = [...entries, ...localPending.filter((pending) => !entries.some((entry) => entry.id === pending.id))].filter((entry) => !deletedIds.has(entry.id)).sort((a, b) => b.observed_on.localeCompare(a.observed_on)); const season = timelineEntries.filter((entry) => entry.entry_type === 'rainfall' && entry.observed_on >= `${year}-01-01` && entry.observed_on <= today()).reduce((sum, entry) => sum + (entry.rainfall_in ?? 0), 0)
+function FieldCard({ field, entries, assignments, canEdit, initialMode = null, repository, refresh, local = [], onSaved }: { field: Field; entries: FieldLogEntry[]; assignments: FieldsData['crop_assignments']; canEdit: boolean; initialMode?: 'rainfall' | 'note' | null; repository: FieldLogRepository; refresh: () => Promise<void>; local?: FieldLogEntry[]; onSaved?: (entry: FieldLogEntry) => void }) {
+  const deleteLocks = useRef(createSubmitLockMap()); const [mode, setMode] = useState<'rainfall' | 'note' | null>(initialMode); const [editing, setEditing] = useState<FieldLogEntry | null>(null); const [pendingEntries, setPendingEntries] = useState<FieldLogEntry[]>([]); const [deletedIds, setDeletedIds] = useState<Set<string>>(() => new Set()); const [error, setError] = useState<string | null>(null); const [notice, setNotice] = useState<string | null>(null); const year = new Date().getFullYear(); const localPending = [...pendingEntries, ...local.filter((kept) => !pendingEntries.some((pending) => pending.id === kept.id))]; const timelineEntries = [...entries, ...localPending.filter((pending) => !entries.some((entry) => entry.id === pending.id))].filter((entry) => !deletedIds.has(entry.id)).sort((a, b) => b.observed_on.localeCompare(a.observed_on)); const season = timelineEntries.filter((entry) => entry.entry_type === 'rainfall' && entry.observed_on >= `${year}-01-01` && entry.observed_on <= today()).reduce((sum, entry) => sum + (entry.rainfall_in ?? 0), 0)
   const plantingDate = useMemo(() => assignments.filter((assignment) => assignment.field_id === field.id && assignment.crop_year === year && !!assignment.planting_date).map((assignment) => assignment.planting_date!).sort()[0] ?? null, [assignments, field.id, year])
-  async function save(draft: FieldLogEntryDraft) { try { const saved = await repository.saveEntry(draft); setMode(null); setEditing(null); setError(null); if (saved.pending) { setPendingEntries((current) => current.some((entry) => entry.id === saved.id) ? current.map((entry) => entry.id === saved.id ? saved : entry) : [...current, saved]); return } await refresh() } catch (caught) { setError(farmerError(caught, 'save this field log entry')) } }
+  async function save(draft: FieldLogEntryDraft) { try { const saved = await repository.saveEntry(draft); setMode(null); setEditing(null); setError(null); if (saved.pending) { setPendingEntries((current) => current.some((entry) => entry.id === saved.id) ? current.map((entry) => entry.id === saved.id ? saved : entry) : [...current, saved]); return } onSaved?.(saved); await refresh() } catch (caught) { setError(farmerError(caught, 'save this field log entry')) } }
   async function remove(entry: FieldLogEntry) { const deleteLock = deleteLocks.current.get(entry.id); if (!deleteLock.acquire()) return; if (!(await confirmDialog({ title: 'Delete this field log entry?', body: 'It is removed from the field log for good.', confirmLabel: 'Delete entry', destructive: true }))) { deleteLock.release(); return } try { const receipt = await repository.deleteEntry(entry.id); setDeletedIds((current) => new Set(current).add(entry.id)); setError(null); if (receipt.pending) { setNotice(FIELD_LOG_OFFLINE_DELETE_MESSAGE); return } setNotice(null); await refresh() } catch (caught) { setError(farmerError(caught, 'delete this field log entry')) } finally { deleteLock.release() } }
   return <article className="field-log-card"><header className="field-log-card-head"><div><h2>{field.name}</h2><p>{field.total_acres.toLocaleString()} acres</p></div><div className="rain-total"><span>{year} season</span><strong>{inches.format(season)} in</strong></div></header><Gdd field={field} plantingDate={plantingDate} />{canEdit && <div className="field-log-actions"><button className="primary-action" onClick={() => { setMode('rainfall'); setEditing(null) }}>Add rain</button><button className="secondary-action" onClick={() => { setMode('note'); setEditing(null) }}>Add note</button></div>}{(mode || editing) && <EntryForm entry={editing} type={editing?.entry_type ?? mode!} fieldId={field.id} save={save} cancel={() => { setMode(null); setEditing(null); setError(null) }} />}{error && <p className="form-error">{error}</p>}{notice && <p className="field-log-pending" role="status">{notice}</p>}<section className="field-log-timeline"><h3>Timeline</h3>{timelineEntries.length ? timelineEntries.map((entry) => <div className="field-log-row" key={entry.id}><div><strong>{formatFarmDate(entry.observed_on)}</strong><span>{entry.entry_type === 'rainfall' ? `${inches.format(entry.rainfall_in ?? 0)} in${entry.note ? ` · ${entry.note}` : ''}` : entry.note}</span>{entry.pending && <em className="field-log-pending">Not sent yet</em>}</div>{canEdit && !entry.pending && <div className="field-log-row-actions"><button onClick={() => { setEditing(entry); setMode(null) }}>Edit</button><button className="danger-action" onClick={() => void remove(entry)}>Delete</button></div>}</div>) : <p className="card-empty">No rain or notes recorded yet.</p>}</section></article>
 }
