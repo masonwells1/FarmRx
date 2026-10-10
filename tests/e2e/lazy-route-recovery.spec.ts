@@ -139,7 +139,7 @@ test("a persistent lazy route failure stops reloading and offers a retry", async
   if (!(await grainLink.isVisible())) await page.getByRole("button", { name: "More" }).click();
   await grainLink.click();
   await expect(page).toHaveURL(/\/grain$/);
-  await expect(page.getByText("Add a crop assignment in Fields to begin your grain position.")).toBeVisible();
+  await expect(page.getByText("Grain starts from the crops you assign to fields. Add a crop to a field, then come back here.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "This page could not open." })).toBeHidden();
 });
 

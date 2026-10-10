@@ -5,6 +5,8 @@ import { CONTRACT_REPAIR_PENDING, LOAD_RECORD_PENDING } from '../data/grain'
 export const firmOfferFillPartialSuccessMessage = 'Your sale was recorded as a contract. The offer could not be marked filled — reload the page. Do not enter this contract again.'
 
 function details(error: unknown) { const values: string[] = []; const seen = new Set<unknown>(); let current: unknown = error; while (current && !seen.has(current)) { seen.add(current); if (current instanceof Error) values.push(current.message); if (typeof current === 'object') { const row = current as { message?: unknown; code?: unknown; status?: unknown; cause?: unknown }; for (const value of [row.message, row.code, row.status]) if (typeof value === 'string' || typeof value === 'number') values.push(String(value)); current = row.cause } else break }; return values.join(' ').toLowerCase() }
+/** The load save was refused because it would over-deliver its contract, which a Retry alone never fixes. */
+export function isOverdeliveryRefusal(error: unknown) { return /would exceed the remaining contract bushels/.test(details(error)) }
 /** Fixed UI taxonomy: technical adapter/database text never reaches a farmer. */
 export function farmerError(error: unknown, action = 'save this field') {
   const message = details(error)
@@ -19,6 +21,7 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (/price finalization arrives with the next database update/.test(message)) return 'Price finalization arrives with the next database update.'
   if (/movement date must be after the latest bin baseline|dated on or before the bin's baseline/.test(message)) return PRE_BASELINE_BIN_MOVEMENT_MESSAGE
   if (/connect to the internet before recording a delivery/.test(message)) return 'Connect to the internet before recording a delivery.'
+  if (/connect to the internet before using the harvest total/.test(message)) return 'Connect to the internet before using the harvest total.'
   if (/correcting a contract arrives with the next database update/.test(message)) return CONTRACT_REPAIR_PENDING
   // The earlier attempt did commit; only its response was lost. Saying "try again" would be wrong.
   if (/farm_rx_correction_already_saved/.test(message)) return 'Your earlier correction was saved. Reload the contract before making another change.'
@@ -45,6 +48,23 @@ export function farmerError(error: unknown, action = 'save this field') {
   if (/connect to the internet before filling this offer|firm offer must be filled while connected/.test(message)) return 'Connect to the internet before filling this offer.'
   if (/offline copy is too old/.test(message)) return 'This offline copy is too old to show safely. Connect to update it.'
   if (/unreadable or mismatched saved work.*nothing was cleared/.test(message)) return 'Farm Rx found unreadable or mismatched saved work for a farm you can no longer open. Nothing was cleared.'
+  // A marketing plan whose months add up past the whole crop, as the live repository and the RPC word it.
+  // Only the plan's own wording: another limit ("cannot exceed 1000 characters", "cannot exceed 100 bu") is not about the plan.
+  if (/marketing plan (percentages|total) cannot exceed 100(%| percent)/i.test(message)) return 'Your plan months add up to more than 100% of the crop. Lower one of them and try again.'
+  // The mock gives one refusal for several causes (a month at 0%, a month over 100%, or the total), so it is not told as "over 100%".
+  if (/no more than 100% for this crop scope/.test(message)) return 'Each plan month must be above 0% and the months together no more than 100% of the crop.'
+  // Final refusals from the delivery and bin-movement functions. Retrying the same thing can never
+  // work, so the farmer is told what to change instead of "try again".
+  // Shared by the Loads form and a contract's own Record delivery, so each is told about its own controls.
+  // Matched on the Loads form's own action, not on the word "load", which other actions ("reload ...") also contain.
+  if (/would exceed the remaining contract bushels/.test(message)) return action === 'record this load'
+    ? 'This load is more than what is left on the contract. Untick the “delivered against” box, or tap Save load again and confirm the over-delivery.'
+    : 'This delivery is more than what is left on the contract. Reload, then record it again and confirm the over-delivery.'
+  // LD-4's per-lot check, the refusal a load out of a bin most often meets (server and mock wording).
+  if (/does not hold that many bushels of the|does not hold enough of the/.test(message)) return 'That bin does not hold that many bushels of that crop year. Check the bushels or the bin’s history.'
+  if (/empty those lots before storing another crop/.test(message)) return 'That bin still holds another crop. Empty it before putting a different crop in.'
+  if (/would make the bin balance negative/.test(message)) return 'That bin does not hold that many bushels of this crop and crop year. Check the bushels or the bin’s history.'
+  if (/would put more grain in the bin than it holds/.test(message)) return 'That would put more grain in the bin than it holds. Check the bushels or the bin’s capacity.'
   if (/network|fetch|timeout|connection|econn/.test(message)) return 'We could not reach Farm Rx. Check your signal and try again.'
   if (/sign-in ended|jwt|auth|unauthori[sz]ed|\b401\b/.test(message)) return 'Your sign-in ended. Please sign in again.'
   if (/permission|rls|forbidden|\b403\b/.test(message)) return 'You do not have permission to make that change.'

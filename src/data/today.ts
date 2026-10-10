@@ -4,7 +4,7 @@ import type { InventoryUnit, InventoryWorkspace } from './inventory'
 import type { Field } from './fields'
 import type { Notification } from './notifications'
 import type { PendingPassOutcome } from './programs'
-import { deliveryDefaultEstimate, marketedPercent, plannedPercentThroughMonth, sameScope, scopeOf, type CashBid, type GrainWorkspace } from './grain'
+import { deliveryDefaultEstimate, marketedPercent, plannedPercentThroughDate, sameScope, scopeOf, type CashBid, type GrainWorkspace } from './grain'
 import { isMarsBid } from './basisMath'
 import type { ForecastBundle, SprayLevel } from './weather'
 import { bestWindowToday, compassLabel, daylight, evaluateSprayWindow, fieldWallClockDate, formatHour, formatMph, isActionablyFresh } from './weatherService'
@@ -226,9 +226,9 @@ export function todayGrainLine(input: { profile: FarmAccessProfile; grain: Grain
   const entity = scope.enterprise_label ?? (scope.operating_entity_id === null ? null : grain.fields.entities.find((item) => item.id === scope.operating_entity_id)?.name ?? 'one entity')
   const sold = Math.round(marketedPercent(grain, scope))
   const targets = grain.marketing_plan_targets.filter((target) => sameScope(target, scope))
-  // The Overview's own rule (month number through the current month, whatever year the target carries), so the plan figure here
+  // The Overview's own rule (every target month, year included, through the farm's current month), so the plan figure here
   // is the one the farmer sees after tapping through.
-  const planThrough = plannedPercentThroughMonth(targets, Number(today.slice(5, 7)))
+  const planThrough = plannedPercentThroughDate(targets, today)
   const plan = targets.length === 0 ? 'No plan yet' : `Plan says ${Math.round(planThrough)}% by now`
   const bids = latestLocalBids(grain, scope.farm_id, scope.commodity_id)
   let bid = 'No local bid yet'

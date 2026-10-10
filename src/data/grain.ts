@@ -297,6 +297,10 @@ export interface GrainLoadDraft {
   effect_bin_in: boolean
   effect_contract_delivery: boolean
   effect_harvest: boolean
+  /** Set only on the copy sent for a save the farmer confirmed as an over-delivery. save_grain_load
+   * passes it to record_grain_contract_delivery, which otherwise refuses a delivery past the
+   * contract's remaining bushels. The form's own draft never carries it. */
+  allow_overdelivery?: boolean
 }
 
 /** LD-2: one later bin movement standing in the way of a void, as the server names it. */
@@ -383,6 +387,19 @@ export function loadLotFor(
 }
 
 /** LD-4: the lots a bin origin could be hauled from, for the picker and for the messages below. */
+/** The bushels a bin holds that carry no crop year (movements written before crop years existed). The bin's own total
+ * counts them, so a bin can show grain while naming no lot: that grain needs its year named, never a second "In". */
+export function binUndatedBushels(workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions'>, binId: string): number {
+  if (!binId) return 0
+  return deriveBinLots(
+    workspace.bin_inventory.find((row) => row.grain_bin_id === binId),
+    workspace.bin_transactions.filter((row) => row.grain_bin_id === binId),
+  ).filter((lot) => lot.crop_year === null).reduce((total, lot) => total + lot.bushels, 0)
+}
+
+/** Said when a bin names no crop year: grain with no year is named under Bins & basis; only an empty bin is told to add an "In". */
+export const BIN_UNDATED_GRAIN = 'That bin’s grain has no crop year yet, so Farm Rx cannot tell which crop year this load is. Name it under "Which crop year were these?" on Bins & basis, or ask the farm owner or a manager to.'
+
 export function originBinLots(workspace: Pick<GrainWorkspace, 'bin_inventory' | 'bin_transactions'>, binId: string): BinLotOnHand[] {
   if (!binId) return []
   return binLotsOnHand(
@@ -497,20 +514,31 @@ export function validateGrainLoadShape(draft: GrainLoadDraft): string[] {
   if (draft.ticket_number.trim().length > 120) problems.push('Keep the ticket number to 120 characters.')
   if (draft.notes.trim().length > 4000) problems.push('Keep the notes to 4,000 characters.')
 
-  const net = Number(draft.net_bushels)
-  if (!draft.net_bushels.trim() || !Number.isFinite(net) || net <= 0) problems.push('Net bushels must be more than zero.')
+  // A word, a decimal comma or a third decimal is told apart from a zero, so the farmer is not told "more than zero" about
+  // something they did type. Net bushels are compared exactly when a ticket is retried, so a net the column would round is
+  // refused here, before it is ever sent.
+  // Each box is read by the one typed-amount rule, so "1,200" is 1200 here exactly as it is when it is sent.
+  const netProblem = typedAmountProblem(draft.net_bushels, 'net bushels', 'Type net bushels as a number, like 1000.')
+  const net = typedAmount(draft.net_bushels)
+  if (netProblem) problems.push(netProblem)
+  else if (net === null || net <= 0) problems.push('Net bushels must be more than zero.')
 
-  const gross = draft.gross_lbs.trim() ? Number(draft.gross_lbs) : null
-  const tare = draft.tare_lbs.trim() ? Number(draft.tare_lbs) : null
-  if (gross !== null && (!Number.isFinite(gross) || gross <= 0)) problems.push('Gross weight must be more than zero.')
-  if (tare !== null && (!Number.isFinite(tare) || tare <= 0)) problems.push('Tare weight must be more than zero.')
-  if (gross !== null && tare !== null && Number.isFinite(gross) && Number.isFinite(tare) && gross <= tare) {
+  const grossProblem = typedAmountProblem(draft.gross_lbs, 'the gross weight', 'Type the gross weight as a number of pounds.')
+  const tareProblem = typedAmountProblem(draft.tare_lbs, 'the tare weight', 'Type the tare weight as a number of pounds.')
+  const gross = grossProblem ? null : typedAmount(draft.gross_lbs)
+  const tare = tareProblem ? null : typedAmount(draft.tare_lbs)
+  if (grossProblem) problems.push(grossProblem)
+  else if (gross !== null && gross <= 0) problems.push('Gross weight must be more than zero.')
+  if (tareProblem) problems.push(tareProblem)
+  else if (tare !== null && tare <= 0) problems.push('Tare weight must be more than zero.')
+  if (gross !== null && tare !== null && gross <= tare) {
     problems.push('The loaded truck has to weigh more than the empty one.')
   }
 
   if (draft.moisture_pct.trim()) {
     const moisture = Number(draft.moisture_pct)
-    if (!Number.isFinite(moisture) || moisture < 0 || moisture > 100) problems.push('Moisture must be between 0 and 100 percent.')
+    // The same 0-40 range a bin's moisture reading is held to; grain wetter than that is a typo.
+    if (!Number.isFinite(moisture) || moisture < 0 || moisture > 40) problems.push('Moisture must be between 0 and 40 percent.')
   }
 
   if (draft.truck_equipment_id && draft.truck_name.trim()) problems.push('Name the truck or pick one from equipment, not both.')
@@ -548,12 +576,15 @@ export function validateGrainLoad(
       // "Set the bin inventory first" was LD-1's only answer and is now wrong for two of the three.
       if (draft.origin_kind === 'bin') {
         if (workspace.capabilities?.grain_load_bin_lot === false) {
-          problems.push('That bin has no recorded crop yet, so Farm Rx cannot tell which crop year this load is. Set the bin inventory first.')
+          problems.push('That bin has no recorded starting amount, so Farm Rx cannot tell which crop year this load is until the next database update. Reload the app after the update.')
           return problems
         }
         const lots = authoritativeLots ?? originBinLots(workspace, draft.origin_grain_bin_id)
         if (lots.length === 0) {
-          problems.push('That bin holds no crop with a crop year, so Farm Rx cannot tell which crop year this load is.')
+          // Adding an "In" for grain the bin already shows would count it twice, so that is offered only for a bin showing none.
+          problems.push(binUndatedBushels(workspace, draft.origin_grain_bin_id) > 0.000001
+            ? BIN_UNDATED_GRAIN
+            : 'That bin holds no crop with a crop year, so Farm Rx cannot tell which crop year this load is. If it has grain in it, tap "Add or take out grain" on that bin under Bins & basis and add an "In" for it first.')
         } else if (draft.origin_crop_year.trim()) {
           problems.push('That bin does not hold the ' + draft.origin_crop_year.trim() + ' crop.')
         } else {
@@ -583,6 +614,81 @@ export function validateGrainLoad(
   // that does not apply to this load, and normalizeLoadEffects drops it from what is sent.
 
   return problems
+}
+
+/** A haul date after today is a typo. Checked by the screen only, never by the repository: the
+ * server accepts any real date, and a time-zone edge must never block the replay of a saved ticket. */
+export function loadDateInFutureProblem(loadDate: string, today: string): string | null {
+  return isCalendarDate(loadDate) && loadDate > today ? 'The date hauled cannot be in the future.' : null
+}
+
+/** Pounds in a standard bushel for each crop family -- 56 for corn, 60 for soybeans and wheat. */
+export const STANDARD_BUSHEL_LBS: Record<Commodity['crop_family'], number> = { corn: 56, soybeans: 60, wheat: 60 }
+
+/** Thousands commas in their only right places: one to three digits, then groups of exactly three ("1,200", "1,000,000",
+ * "2,500,000.25"). Nothing else counts as one -- "1200,500" or "45210,125" is a decimal comma (or a slip), not a thousand. */
+const THOUSANDS_GROUPED = /^-?\d{1,3}(,\d{3})+(\.\d*)?$/
+/** The same thousands grouping marked with spaces ("1 200", "1\u00a0000\u00a0000"; \s covers no-break and thin spaces). */
+const SPACE_GROUPED = /^-?\d{1,3}(\s\d{3})+(\.\d*)?$/
+
+/** A bushel or pound amount as the farmer typed it, ready for Number() -- the ONE rule every box is read by. The box itself
+ * keeps exactly what was typed; this runs when the value is read (a check, a figure worked from it, a save), always on the
+ * whole text, so typing key by key and pasting can never end differently. Spaces at the ends go; a space inside goes only as a
+ * thousands mark ("1 200"), so "1200 500" is refused rather than read as 1,200,500. Commas go only when the whole amount is
+ * grouped in thousands ("1,200", "1,000,000"). Any other comma -- "1200,5" or "892,86" from a phone keyboard that types a
+ * decimal comma, "1200,500", ",500", "1,2345" -- is kept, so the box is refused, by name, instead of saving another amount. */
+export function typedNumberText(value: string): string {
+  const trimmed = value.trim()
+  const compact = SPACE_GROUPED.test(trimmed) ? trimmed.replace(/\s/g, '') : trimmed
+  return THOUSANDS_GROUPED.test(compact) ? compact.replace(/,/g, '') : compact
+}
+
+/** Plain digits with at most one decimal point ("1200", "1200.5", "1200.", ".5"), and a minus sign each box's own "more
+ * than zero" check answers. Not "1e3" or "0x10", which Number() would quietly read as 1000 and 16. */
+const PLAIN_AMOUNT = /^-?(\d+\.?\d*|\.\d+)$/
+
+/** The number a typed amount box holds, read by typedNumberText's rule, or null when the box is blank or holds something
+ * that is not a plain amount ("1200,5", "1e3", a word). Callers that must tell those two apart ask typedAmountProblem. */
+export function typedAmount(text: string): number | null {
+  const value = typedNumberText(text)
+  if (!PLAIN_AMOUNT.test(value)) return null
+  const amount = Number(value)
+  return Number.isFinite(amount) ? amount : null
+}
+
+/** Why a bushel or pound amount typed in a box cannot be saved as typed, or null when it can. Run it on the box's own text:
+ * it reads it by typedNumberText's rule. A blank box and a zero are each caller's own question: only it knows whether the box
+ * is optional.
+ * - A comma still there after that rule is a decimal comma, often the only decimal key on a phone keypad, so the message names
+ *   it and says how to get past it, instead of "type a number" about something that looks like one.
+ * - At most two decimals: every bushel and pound column keeps two, so the server would round a third, and the same save
+ *   retried would then be refused as different (a load) or written twice (a bin movement). Zeros after them change nothing
+ *   ("1200.500" is 1200.5), so only a real third decimal is refused.
+ * `name` is how the message names the box ("net bushels", "the gross weight"); `notNumber` is that box's own wording. */
+export function typedAmountProblem(text: string, name: string, notNumber: string): string | null {
+  const value = typedNumberText(text)
+  if (!value) return null
+  if (value.includes(',') && PLAIN_AMOUNT.test(value.replace(/,/g, ''))) return `A comma in ${name} is read only as a thousands mark, like 1,200. For a decimal, use a period, like 1200.5, or leave off the part after the comma.`
+  if (!PLAIN_AMOUNT.test(value)) return notNumber
+  if ((value.split('.')[1] ?? '').replace(/0+$/, '').length > 2) return `${name.charAt(0).toUpperCase()}${name.slice(1)} can have at most 2 decimals.`
+  return null
+}
+
+/** Net bushels from a scale ticket's gross and tare pounds, rounded to the cent of a bushel. Null
+ * unless both weights are plain numbers and the loaded truck weighs more than the empty one. The
+ * weights are read as typed, thousands commas and all ("80,000"). A starting figure the farmer sees
+ * and can change -- it is never sent without being shown. */
+export function netBushelsFromWeights(gross: string, tare: string, lbsPerBushel: number): string | null {
+  const g = typedAmount(gross)
+  const t = typedAmount(tare)
+  if (g === null || t === null || !(t > 0) || !(g > t) || !(lbsPerBushel > 0)) return null
+  return (Math.round(((g - t) * 100) / lbsPerBushel) / 100).toFixed(2)
+}
+
+/** A load draft with its three typed amounts read by typedNumberText's rule, so what is checked again and sent is the
+ * number the form showed ("80,000" goes as 80000), and a retry of the same ticket sends the same text every time. */
+export function typedLoadDraft<T extends Pick<GrainLoadDraft, 'gross_lbs' | 'tare_lbs' | 'net_bushels'>>(draft: T): T {
+  return { ...draft, gross_lbs: typedNumberText(draft.gross_lbs), tare_lbs: typedNumberText(draft.tare_lbs), net_bushels: typedNumberText(draft.net_bushels) }
 }
 
 /** LD-2: the four effects a saved load can have. Each is a separate visible write the farmer
@@ -748,6 +854,30 @@ export function validateGrainContract(contract: GrainContract, commodityIds: Set
   return errors
 }
 
+/** Basis is stored and typed in dollars per bushel, but farmers say it in cents ("35 under"). A
+ * real basis is a few dimes either side of futures, so a value of two dollars or more is almost
+ * always cents typed into a dollar box. Farm Rx asks before saving such a value; it never converts
+ * the number on the farmer's behalf. */
+export const BASIS_CENTS_LIMIT = 2
+
+export function basisLooksLikeCents(value: number): boolean {
+  return Number.isFinite(value) && Math.abs(value) >= BASIS_CENTS_LIMIT
+}
+
+/** The basis columns keep six decimals, so the question shows every one of them: "Keep this basis" saves exactly the figure asked about. */
+const basisAsTyped = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6, useGrouping: false })
+export function basisCentsPrompt(value: number): { title: string; body: string; confirmLabel: string } {
+  const sign = value < 0 ? '-' : ''
+  const cents = Math.abs(value)
+  // Up to four decimals, so a quarter-cent basis (-35.25 cents) is advised as -0.3525, not rounded to -0.35.
+  const asDollars = String(Number((value / 100).toFixed(4)))
+  return {
+    title: `Basis of ${sign}$${basisAsTyped.format(cents)} per bushel?`,
+    body: `Basis is entered in dollars per bushel. For ${cents} cents ${value < 0 ? 'under' : 'over'}, go back and type ${asDollars}.`,
+    confirmLabel: 'Keep this basis',
+  }
+}
+
 export function activeProductionForScope(workspace: GrainWorkspace, scope: PositionScope): number {
   const estimate = workspace.production_estimates.find((item) => sameScope(item, scope))
   if (!estimate) return 0
@@ -761,18 +891,20 @@ export function deliveryDefaultEstimate<T extends { crop_year: number }>(estimat
   return estimates.reduce<T | undefined>((newest, estimate) => (!newest || estimate.crop_year > newest.crop_year ? estimate : newest), undefined)
 }
 
-/** The calendar month (1-12) the marketing plan is judged against: the farm's current day in its stored time zone, the same day
+/** The farm's current day (YYYY-MM-DD) the marketing plan is judged against: the farm's day in its stored time zone, the same day
  * Today places, so the Overview and the grain line count the same targets on either side of a month boundary wherever the
- * device happens to be. */
-export function planMonthFor(now: Date, timeZone: string | null | undefined): number {
-  return Number(farmCalendarDate(now, timeZone).slice(5, 7))
+ * device happens to be. The year is kept, so a plan that crosses New Year counts the right months. */
+export function planDateFor(now: Date, timeZone: string | null | undefined): string {
+  return farmCalendarDate(now, timeZone)
 }
 
-/** The marketing plan's cumulative target through a calendar month (1-12), as the Overview's plan status accumulates it: every
- * target whose month number is at or before the given month counts, whatever year its date carries. Today's grain line and the
- * Overview share this rule so the two screens report the same planned percent. */
-export function plannedPercentThroughMonth(targets: readonly { target_month: string; target_pct_of_production: number }[], month: number): number {
-  return targets.filter((target) => Number(target.target_month.slice(5, 7)) <= month).reduce((total, target) => total + target.target_pct_of_production, 0)
+/** The marketing plan's cumulative target through a date's month, as the Overview's plan status accumulates it: every target
+ * whose year and month are at or before that month counts. Comparing the year as well as the month keeps a plan that crosses
+ * New Year honest: in January 2027 a 2026 plan's October target is already due, and a 2027 crop's March target is not yet due
+ * in October 2026. Today's grain line and the Overview share this rule so the two screens report the same planned percent. */
+export function plannedPercentThroughDate(targets: readonly { target_month: string; target_pct_of_production: number }[], throughDate: string): number {
+  const through = throughDate.slice(0, 7)
+  return targets.filter((target) => target.target_month.slice(0, 7) <= through).reduce((total, target) => total + target.target_pct_of_production, 0)
 }
 
 /** Shared by the marketing plan and alert rules: signed contract bushels / active production. */

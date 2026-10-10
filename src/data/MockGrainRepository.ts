@@ -2,7 +2,7 @@ import type { FieldsRepository } from './fields'
 import { isLotMovementSuperseded } from './committedFree'
 import type { BinTransaction, BinTransactionDirection, CashBid, FirmOffer, FuturesQuote, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, GrainRepository, GrainSaleLimit, GrainWorkspace, LoadVoidBlocker, LoadVoidResult, MarketDataService, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaMarketReport, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
-import { contractIsCorrectable, contractIsDeletable, enterpriseLabelFits, isCalendarDate, MARKETING_PLAN_PERCENT_TOLERANCE, validateTarget, loadEffectsAvailable, loadLotFor, lotsSaveResolvesAgainst, recordedBinLots, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateGrainLoadShape, validateLoadVoidReason } from './grain'
+import { contractIsCorrectable, typedAmount, contractIsDeletable, enterpriseLabelFits, isCalendarDate, MARKETING_PLAN_PERCENT_TOLERANCE, validateTarget, loadEffectsAvailable, loadLotFor, lotsSaveResolvesAgainst, recordedBinLots, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateGrainLoadShape, validateLoadVoidReason } from './grain'
 import { localCalendarDay, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { DELETE_PERMISSION_MESSAGE } from './saveDurability'
@@ -313,9 +313,9 @@ export class MockGrainRepository implements GrainRepository {
       destination_grain_contract_id: resolvedDraft.destination_kind === 'contract' ? resolvedDraft.destination_grain_contract_id : null,
       destination_grain_bin_id: resolvedDraft.destination_kind === 'bin' ? resolvedDraft.destination_grain_bin_id : null,
       commodity_id: lot.commodity_id, crop_year: lot.crop_year,
-      gross_lbs: resolvedDraft.gross_lbs.trim() ? Number(resolvedDraft.gross_lbs) : null,
-      tare_lbs: resolvedDraft.tare_lbs.trim() ? Number(resolvedDraft.tare_lbs) : null,
-      net_bushels: Number(resolvedDraft.net_bushels),
+      gross_lbs: resolvedDraft.gross_lbs.trim() ? typedAmount(resolvedDraft.gross_lbs) : null,
+      tare_lbs: resolvedDraft.tare_lbs.trim() ? typedAmount(resolvedDraft.tare_lbs) : null,
+      net_bushels: typedAmount(resolvedDraft.net_bushels) ?? Number.NaN,
       moisture_pct: resolvedDraft.moisture_pct.trim() ? Number(resolvedDraft.moisture_pct) : null,
       ticket_number: resolvedDraft.ticket_number.trim() || null,
       photo_path: null,
@@ -368,11 +368,12 @@ export class MockGrainRepository implements GrainRepository {
       if (refusal) throw new Error(refusal)
     }
     // Refusal audit (LD-010): the delivery effect goes through record_grain_contract_delivery, which
-    // refuses an over-delivery -- and the browser never sends allow_overdelivery for a load.
+    // refuses an over-delivery -- unless the farmer confirmed it, in which case save_grain_load passes
+    // allow_overdelivery through exactly as a contract's own delivery does.
     if (saved.effect_contract_delivery && saved.destination_grain_contract_id) {
       const contract = workspace.grain_contracts.find((row) => row.id === saved.destination_grain_contract_id)
       if (!contract) throw new Error('Farm Rx could not record this delivery.')
-      if (overDelivers(workspace, contract, saved.net_bushels)) throw new Error(OVER_DELIVERY_MESSAGE)
+      if (overDelivers(workspace, contract, saved.net_bushels) && resolvedDraft.allow_overdelivery !== true) throw new Error(OVER_DELIVERY_MESSAGE)
     }
     const deliveries: GrainContractDelivery[] = saved.effect_contract_delivery && saved.destination_grain_contract_id
       ? [{ id: createGrainId(), farm_id: saved.farm_id, grain_contract_id: saved.destination_grain_contract_id, bushels: saved.net_bushels, delivered_on: saved.load_date, note, grain_load_id: saved.id, created_at: stamp }]
