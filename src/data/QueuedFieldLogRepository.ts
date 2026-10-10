@@ -36,7 +36,7 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
       if (!cached) throw error
       const data = structuredClone(cached.data)
       for (const entry of queue.read().entries) { if (entry.version !== 2) continue; await verifyQueuedOperationContext(this.d, entry.operationContext, entry); if (entry.kind === 'deleteEntry') data.entries = data.entries.filter((row) => row.id !== entry.entryId); else if (!fieldId || entry.draft.field_id === fieldId) { const row = pendingEntry(entry, context); data.entries = data.entries.some((item) => item.id === row.id) ? data.entries.map((item) => item.id === row.id ? row : item) : [...data.entries, row] } }
-      await verifyRead(); return data
+      data.cached = true; await verifyRead(); return data
     }
   }
   private base<K extends FieldLogQueueEntryV2['kind']>(kind: K, operationContext: FarmOperationContext) { return { version: 2 as const, module: 'fieldLog' as const, kind, operationId: this.d.createId(), userId: operationContext.userId, farmId: operationContext.farmId, enqueuedAt: this.d.clock(), operationContext } }
