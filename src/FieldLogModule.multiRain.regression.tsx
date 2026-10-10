@@ -27,7 +27,7 @@ const fieldsRepository = { getData: async () => fieldsData, saveField: async () 
 const fieldLogRepository = {
   // The page's first read works. Every read after the save loses signal: it gets the pre-save copy, or an error with no copy.
   getData: async () => { reads += 1; if (reads > 1 && afterSave === 'no copy') throw new Error('network down'); return { entries: [] as FieldLogEntry[], viewer: { user_id: user, role: 'owner' as const } } },
-  saveEntry: async (draft: FieldLogEntryDraft) => { saves.push(draft); return { ...draft, id: uid(nextId++), farm_id: farm, created_by: user, created_at: stamp, updated_at: stamp } as FieldLogEntry },
+  saveEntry: async (draft: FieldLogEntryDraft) => { saves.push(draft); return { ...draft, id: draft.id ?? uid(nextId++), farm_id: farm, created_by: user, created_at: stamp, updated_at: stamp } as FieldLogEntry },
   deleteEntry: async (id: string) => { deletes.push(id); return { id, deleted: true as const } },
 } as unknown as FieldLogRepository
 const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
@@ -60,5 +60,16 @@ try {
   assert(del, 'A saved entry must offer Delete.')
   await click(del); await click(dialogButton('Delete entry')); await act(async () => { await flush() })
   assert(deletes.length === 1 && !timeline('Pine North 80').includes('0.75 in') && timeline('Pine South 80').includes('0.75 in'), `Deleting must remove only that field's entry. North: ${timeline('Pine North 80')}`)
+  // Editing that entry while the reload still loses signal shows the edit, not the values the form first saved (Codex, PR #69).
+  const south = card('Pine South 80'); const edit = [...south.querySelectorAll('button')].find((item) => item.textContent === 'Edit') as HTMLButtonElement | undefined
+  assert(edit, 'A saved entry must offer Edit.')
+  await click(edit)
+  const editForm = south.querySelector('form.field-log-form') as HTMLFormElement
+  assert(editForm, 'The edit form did not open.')
+  ;(editForm.querySelector('input[name="rainfall"]') as HTMLInputElement).value = '1.25'
+  ;(editForm.querySelector('textarea[name="note"]') as HTMLTextAreaElement).value = 'Corrected gauge'
+  await act(async () => { editForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush(); await flush() })
+  assert(saves.length === 3 && !!saves[2].id && saves[2].rainfall_in === 1.25, `The edit must be saved once with its new amount, got ${JSON.stringify(saves.at(-1))}.`)
+  assert(timeline('Pine South 80').includes('1.25 in · Corrected gauge') && !timeline('Pine South 80').includes('0.75 in') && card('Pine South 80').querySelector('.rain-total')?.textContent?.includes('1.25 in'), `A confirmed edit must replace the entry shown from this form. South: ${timeline('Pine South 80')}`)
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
 console.log('Field Log several-fields rain regression passed')
