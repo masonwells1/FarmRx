@@ -36,7 +36,7 @@ let holdReads = 0; const heldReads: Array<() => void> = []; const heldCount = ()
 let reads = 0; let nextId = 10; const saves: FieldLogEntryDraft[] = []; const deletes: string[] = []
 const upsert = (rows: FieldLogEntry[], row: FieldLogEntry) => [...rows.filter((item) => item.id !== row.id), row]
 const somethingWaits = () => waiting.length > 0 || waitingDeletes.length > 0
-const sendWaiting = () => { server = waiting.map(({ pending: _pending, ...entry }) => entry).reduce(upsert, server).filter((row) => !waitingDeletes.includes(row.id)); waiting = []; waitingDeletes = [] }
+const sendWaiting = () => { server = waiting.map(({ pending: _pending, ...entry }) => ({ ...entry, created_at: server.find((row) => row.id === entry.id)?.created_at ?? entry.created_at })).reduce(upsert, server).filter((row) => !waitingDeletes.includes(row.id)); waiting = []; waitingDeletes = [] }
 const fieldsRepository = { getData: async () => fieldsData, saveField: async () => { throw new Error('unexpected field mutation') } } satisfies FieldsRepository
 const fieldLogRepository = {
   getData: async () => {
@@ -124,7 +124,7 @@ try {
   assert(server.find((entry) => entry.field_id === south && entry.entry_type === 'rainfall')?.rainfall_in === 0.6, 'The South edit must reach the server.')
   assert(timeline(S).includes('0.60 in') && !timeline(S).includes('0.75 in') && seasonTotal(S) === '0.60 in', `An edit must beat the older row in the device's saved copy. Timeline: ${timeline(S)}`)
   // Rows on the same date keep the server's order (newest first): the edited storm stays below the newer note.
-  assert(timeline(S).indexOf('Synthetic scouting note') < timeline(S).indexOf('0.60 in'), `An edited row must keep its place among same-date rows. Timeline: ${timeline(S)}`)
+  assert(timeline(S).indexOf('Synthetic scouting note') >= 0 && timeline(S).indexOf('Synthetic scouting note') < timeline(S).indexOf('0.60 in'), `An edited row must keep its place among same-date rows. Timeline: ${timeline(S)}`)
 
   // Rain whose send loses signal waits on the device, and so does every save after it. It shows as not sent yet, also
   // through a live reload that comes before it is sent (a later several-fields save, which waits too, reloads the page).
@@ -180,7 +180,8 @@ try {
   await saveRainForBoth('0.04')
   await act(async () => { heldReads.shift()?.(); await flush(); await flush() })
   for (const name of [N, S]) assert(timeline(name).includes('0.04 in'), `An older reload answering last must not hide newer rain. ${name}: ${timeline(name)}`)
-  // The older read did not overwrite the saved copy either: a reload without signal right after still shows the rain.
+  // The older read did not overwrite the saved copy either (the fake follows the repository's write rule, which the
+  // repository regression pins in group 15): a reload without signal right after still shows the rain.
   signal = 'stale copy'
   await addNote(S, 'Synthetic stale check note')
   for (const name of [N, S]) assert(timeline(name).includes('0.04 in'), `The saved copy must keep rain a newer live read saw. ${name}: ${timeline(name)}`)
@@ -208,6 +209,11 @@ try {
   sendOutcomes.push('lost signal')
   await saveInCard(N, buttonIn(row(N, '0.25 in'), 'Edit'), { rainfall: '0.27' })
   assert(row(N, '0.27 in').textContent?.includes('Not sent yet'), `A waiting edit must show its new amount as not sent yet. North: ${timeline(N)}`)
+  assert(timeline(N).indexOf('Synthetic third note') >= 0 && timeline(N).indexOf('0.27 in') > timeline(N).indexOf('Synthetic third note'), `A waiting edit must keep its place among same-date rows. North: ${timeline(N)}`)
+  // A live reload while the edit still waits has the server's old row; it must not settle the edit.
+  signal = 'online'
+  await saveRainForBoth('0.12')
+  assert(row(N, '0.27 in').textContent?.includes('Not sent yet') && !timeline(N).includes('0.25 in'), `A live reload must not replace a waiting edit with the old row. North: ${timeline(N)}`)
   sendWaiting(); signal = 'stale copy'
   await addNote(S, 'Synthetic ninth note')
   assert(timeline(N).includes('0.27 in') && !timeline(N).includes('0.25 in'), `A sent edit must not fall back to the saved copy's old amount. North: ${timeline(N)}`)
@@ -217,7 +223,7 @@ try {
   await saveInCard(N, buttonIn(card(N), 'Add rain'), { rainfall: '0.09' })
   const northSprinkle = server.find((entry) => entry.rainfall_in === 0.09)!
   assert(timeline(N).includes('0.09 in'), `Rain saved without signal must show. North: ${timeline(N)}`)
-  waiting = upsert(waiting, { ...northSprinkle, rainfall_in: 0.11, pending: true })
+  waiting = upsert(waiting, { ...northSprinkle, rainfall_in: 0.11, created_at: nextStamp(), pending: true })
   await saveRainForBoth('0.01')
   assert(!timeline(N).includes('0.09 in') && row(N, '0.11 in').textContent?.includes('Not sent yet'), `Another tab's waiting edit must replace the confirmed local copy. North: ${timeline(N)}`)
   // A delete made while writes wait also waits: the row goes at once and the farmer is told it finishes later.
@@ -225,7 +231,7 @@ try {
   assert(waitingDeletes.length === 1 && !timeline(S).includes('0.60 in') && card(S).textContent?.includes('Deleted on this device. It will finish syncing when you reconnect.'), `A waiting delete must hide the row and say so. South: ${timeline(S)}`)
   sendWaiting(); signal = 'online'
   await addNote(N, 'Synthetic tenth note')
-  assert(!timeline(S).includes('0.60 in') && timeline(N).includes('0.11 in') && !timeline(N).includes('Not sent yet'), `After sending, a good reload must show the server: the delete done and the edit kept. North: ${timeline(N)} South: ${timeline(S)}`)
+  assert(!server.some((entry) => entry.rainfall_in === 0.6) && !timeline(S).includes('0.60 in') && timeline(N).includes('0.11 in') && !timeline(N).includes('Not sent yet'), `After sending, the delete must have reached the server and the edit must show from it. North: ${timeline(N)} South: ${timeline(S)}`)
 
   // One field's save is refused by the server: the form names it, keeps it chosen, and the other field's rain shows.
   sendOutcomes.push('sent', 'refused'); signal = 'stale copy'
@@ -244,6 +250,17 @@ try {
   await act(async () => { heldReads.shift()?.(); await flush(); await flush() })
   assert(!container.querySelector('.field-log-page > .form-error'), `An older reload failing late must not show an error. ${container.querySelector('.field-log-page > .form-error')?.textContent}`)
 
+  // Switching Edit from one row to another starts a fresh form: what was typed for the first row must not be saved onto
+  // the second.
+  await click(buttonIn(row(N, '0.07 in'), 'Edit'))
+  const firstForm = card(N).querySelector('form.field-log-form') as HTMLFormElement
+  const typed = firstForm.querySelector('input[name="rainfall"]') as HTMLInputElement
+  await act(async () => { typed.value = '0.70'; typed.dispatchEvent(new Event('input', { bubbles: true })); await flush() })
+  await click(buttonIn(row(N, '0.04 in'), 'Edit'))
+  const secondForm = card(N).querySelector('form.field-log-form') as HTMLFormElement
+  assert((secondForm.querySelector('input[name="rainfall"]') as HTMLInputElement).value === '0.04', `The second row's form must show its own amount, got ${(secondForm.querySelector('input[name="rainfall"]') as HTMLInputElement).value}.`)
+  await click(buttonIn(secondForm, 'Cancel'))
+
   // A live reload that started before an edit answers with the old amount while the edit's own reload is still out:
   // it must not settle the edit, and neither must the edit's reload when it answers from the saved copy.
   signal = 'online'; holdReads = 1
@@ -255,5 +272,12 @@ try {
   assert(timeline(N).includes('0.16 in') && !timeline(N).includes('0.06 in'), `A live reload that started before an edit must not settle it. North: ${timeline(N)}`)
   await act(async () => { heldReads.shift()?.(); await flush(); await flush() })
   assert(timeline(N).includes('0.16 in') && !timeline(N).includes('0.06 in'), `The edit must still show after its own reload answers from the saved copy. North: ${timeline(N)}`)
+
+  // Same-date rows are ordered by created time as instants: the server writes '…T15:00:00+00:00' and the device
+  // '…T15:00:00.400Z', and comparing the text would put the older row first.
+  const stampedNote = (id: string, createdAt: string, note: string) => ({ id, farm_id: farm, field_id: north, entry_type: 'note', observed_on: '2027-08-04', rainfall_in: null, note, created_by: user, created_at: createdAt, updated_at: createdAt })
+  const orderRepository = { ...fieldLogRepository, getData: async () => ({ entries: [stampedNote(uid(900), '2027-08-04T15:00:00+00:00', 'Server stamp row'), stampedNote(uid(901), '2027-08-04T15:00:00.400Z', 'Device stamp row')], viewer: { user_id: user, role: 'owner' as const } }) } as unknown as FieldLogRepository
+  await act(async () => { root.render(createElement(MemoryRouter, { key: 'order' }, createElement(FieldLogPage, { fieldLogRepository: orderRepository, fieldsRepository }), createElement(ConfirmDialogHost))); await flush() })
+  assert(timeline(N).indexOf('Device stamp row') >= 0 && timeline(N).indexOf('Device stamp row') < timeline(N).indexOf('Server stamp row'), `The later row must come first whatever its stamp format. North: ${timeline(N)}`)
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
 console.log('Field Log local copies regression passed (several-fields and one-field saves, edits, deletes, reload order)')

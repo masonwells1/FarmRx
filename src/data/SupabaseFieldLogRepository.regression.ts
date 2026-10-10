@@ -148,13 +148,15 @@ async function run() {
   const total = seasonEntries.filter((entry) => entry.entry_type === 'rainfall' && entry.observed_on >= '2026-01-01' && entry.observed_on <= '2026-07-12').reduce((sum, entry) => sum + (entry.rainfall_in ?? 0), 0); assert(total === 1.3, 'Season rainfall must include only the current calendar year through today.')
   // Group 14: an answer from this device's saved copy is marked offline, so the page knows it may predate a save; a live one is not.
   const labelGateway = new FakeGateway(); labelGateway.entries = [canonical(draft(uid(600)))]; const savedCopy = { entries: [canonical(draft(uid(601)))], viewer: { user_id: actor, role: 'worker' } }; let labelOffline = false; let labelId = 610
-  const labelQueued = new QueuedFieldLogRepository(live(labelGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'offline-label-field-log', storage: memory(), createId: () => uid(labelId++), clock: () => stamp, isOffline: () => labelOffline, readWorkspaceCache: async <T>() => ({ data: structuredClone(savedCopy) as T, cachedAt: stamp }) })
+  const labelQueued = new QueuedFieldLogRepository(live(labelGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'offline-label-field-log', storage: memory(), createId: () => uid(labelId++), clock: () => '2026-07-13T09:00:00.000Z', isOffline: () => labelOffline, readWorkspaceCache: async <T>() => ({ data: structuredClone(savedCopy) as T, cachedAt: stamp }) })
   const liveAnswer = await labelQueued.getData()
   assert(liveAnswer.offline === undefined && liveAnswer.entries.map((entry) => entry.id).join() === uid(600), 'A live Field Log answer must not be marked offline.')
   labelGateway.loadFailure = new TypeError('Failed to fetch'); const savedAnswer = await labelQueued.getData()
   assert(savedAnswer.offline === true && savedAnswer.entries.map((entry) => entry.id).join() === uid(601), 'An answer from the saved copy must be marked offline.')
   labelOffline = true; const waitingSave = await labelQueued.saveEntry(draft(uid(603))); const overlaidAnswer = await labelQueued.getData()
   assert(waitingSave.pending && overlaidAnswer.offline === true && overlaidAnswer.entries.map((entry) => `${entry.id}:${entry.pending === true}`).join() === `${uid(601)}:false,${uid(603)}:true`, 'The saved-copy answer must stay marked offline with a waiting save laid over it as pending.')
+  await labelQueued.saveEntry({ ...draft(uid(601)), rainfall_in: 1.5 }); const editedRow = (await labelQueued.getData()).entries.find((entry) => entry.id === uid(601))
+  assert(editedRow?.pending && editedRow.rainfall_in === 1.5 && editedRow.created_at === stamp, 'A waiting edit laid over the saved copy must keep the row\'s created time, so it keeps its place.')
   await labelQueued.deleteEntry(uid(601)); const deletedAnswer = await labelQueued.getData()
   assert(deletedAnswer.offline === true && deletedAnswer.entries.map((entry) => entry.id).join() === uid(603), `A waiting delete must take its row out of the saved-copy answer. Got: ${deletedAnswer.entries.map((entry) => entry.id).join()}`)
   labelGateway.loadFailure = null; const liveWhileWaiting = await labelQueued.getData()
@@ -171,12 +173,12 @@ async function run() {
   const orderQueued = new QueuedFieldLogRepository(live(orderGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'saved-copy-order-field-log', storage: memory(), createId: () => uid(701), clock: () => stamp, isOffline: () => false, writeWorkspaceCache: async <T>(_scope: unknown, data: T) => { savedCopies.push((data as { entries: Array<{ id: string }> }).entries.map((entry) => entry.id).join()); return true } })
   let releaseOlder = () => {}; orderGateway.hold = new Promise<void>((resolve) => { releaseOlder = resolve })
   const olderRead = orderQueued.getData()
-  while (!orderGateway.holding) await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  for (let tries = 0; !orderGateway.holding; tries += 1) { if (tries > 1_000) throw new Error('The older live read never reached the gateway.'); await new Promise<void>((resolve) => setTimeout(resolve, 0)) }
   orderGateway.entries.push(canonical(draft(uid(702))))
   const newerRead = await orderQueued.getData(); releaseOlder(); const olderAnswer = await olderRead
   assert(newerRead.entries.length === 2 && olderAnswer.entries.length === 1 && savedCopies.join(' | ') === `${uid(700)},${uid(702)}`, `An older live read answering last must not overwrite the newer saved copy. Writes: ${savedCopies.join(' | ')}`)
   const laterRead = await orderQueued.getData()
-  assert(laterRead.entries.length === 2 && savedCopies.length === 2, 'A live read that starts after the newest write still updates the saved copy.')
+  assert(laterRead.entries.length === 2 && savedCopies.length === 2 && savedCopies[1] === `${uid(700)},${uid(702)}`, 'A live read that starts after the newest write still updates the saved copy.')
   console.log('SupabaseFieldLogRepository regression passed (15 coverage groups)')
 }
 void run()
