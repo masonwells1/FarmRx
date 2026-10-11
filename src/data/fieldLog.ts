@@ -30,7 +30,7 @@ export interface FieldLogData {
   viewer: { user_id: string; role: FarmViewerRole }
   /** Present only when the server could not be reached and the answer is this device's saved copy. */
   offline?: true
-  /** On a live answer from the queued repository: ids with a write still waiting on this device when the read started. */
+  /** From the queued repository: ids with a write waiting on this device (on a live answer, when the read started). */
   waitingIds?: string[]
 }
 

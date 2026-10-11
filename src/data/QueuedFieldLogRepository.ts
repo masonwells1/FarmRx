@@ -46,8 +46,9 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
       const readCache = this.d.readWorkspaceCache ?? readWorkspaceCache
       const cached = await readCache<FieldLogData>(cacheScope, operationalCacheMaxAgeMs); await verifyRead()
       if (!cached) throw error
-      const data: FieldLogData = { ...structuredClone(cached.data), offline: true }
-      for (const entry of queue.read().entries) { if (entry.version !== 2) continue; await verifyQueuedOperationContext(this.d, entry.operationContext, entry); if (entry.kind === 'deleteEntry') data.entries = data.entries.filter((row) => row.id !== entry.entryId); else if (!fieldId || entry.draft.field_id === fieldId) { const row = pendingEntry(entry, context); data.entries = data.entries.some((item) => item.id === row.id) ? data.entries.map((item) => item.id === row.id ? { ...row, created_at: item.created_at } : item) : [...data.entries, row] } }
+      const data: FieldLogData = { ...structuredClone(cached.data), offline: true }; const waitingIds: string[] = []
+      for (const entry of queue.read().entries) { if (entry.version !== 2) continue; await verifyQueuedOperationContext(this.d, entry.operationContext, entry); waitingIds.push(entry.kind === 'saveEntry' ? entry.draft.id! : entry.entryId); if (entry.kind === 'deleteEntry') data.entries = data.entries.filter((row) => row.id !== entry.entryId); else if (!fieldId || entry.draft.field_id === fieldId) { const row = pendingEntry(entry, context); data.entries = data.entries.some((item) => item.id === row.id) ? data.entries.map((item) => item.id === row.id ? { ...row, created_at: item.created_at } : item) : [...data.entries, row] } }
+      data.waitingIds = waitingIds
       await verifyRead(); return data
     }
   }

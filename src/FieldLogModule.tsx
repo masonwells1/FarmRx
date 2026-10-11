@@ -18,11 +18,11 @@ const inches = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maxi
 /** An entry this page's forms saved or kept on the device, with how many reloads had started when it was kept. */
 type LocalEntry = { entry: FieldLogEntry; readsBefore: number }
 /** Whether a local entry still shows after a reload. An answer from the device's saved copy settles nothing, except that a
- * write waiting on this device for the same entry (from another tab) replaces a confirmed local copy. A live answer from a
+ * write waiting on this device for the same entry (another tab's edit or delete) replaces a confirmed local copy. A live answer from a
  * reload that started after the entry was kept settles it, unless it is still waiting on the device: the server's rows
  * then show, so an entry deleted on another phone goes away instead of keeping an Edit button that would save it back. */
 function staysLocal(local: LocalEntry, log: FieldLogData, read: number) {
-  if (log.offline) return local.entry.pending === true || !log.entries.some((entry) => entry.id === local.entry.id && entry.pending)
+  if (log.offline) return local.entry.pending === true || !(log.waitingIds ? log.waitingIds.includes(local.entry.id) : log.entries.some((entry) => entry.id === local.entry.id && entry.pending))
   if (read <= local.readsBefore) return true
   return local.entry.pending === true && (log.waitingIds?.includes(local.entry.id) ?? true)
 }

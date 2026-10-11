@@ -46,7 +46,7 @@ const fieldLogRepository = {
     if (mode === 'online') { if (liveRead > cachedFrom) { cachedFrom = liveRead; cached = structuredClone(snapshot) } return queueUnreadable ? { entries: snapshot, viewer } : { entries: snapshot, viewer, waitingIds } }
     if (mode === 'no copy') throw new Error('network down')
     const overlay = (rows: FieldLogEntry[], kept: FieldLogEntry) => upsert(rows, { ...kept, created_at: rows.find((row) => row.id === kept.id)?.created_at ?? kept.created_at })
-    return { entries: waiting.reduce(overlay, structuredClone(cached)).filter((row) => !waitingDeletes.includes(row.id)), viewer, offline: true as const }
+    return { entries: waiting.reduce(overlay, structuredClone(cached)).filter((row) => !waitingDeletes.includes(row.id)), viewer, offline: true as const, waitingIds }
   },
   saveEntry: async (draft: FieldLogEntryDraft) => {
     saves.push(draft)
@@ -234,6 +234,16 @@ try {
   await addNote(N, 'Synthetic online note')
   assert(!timeline(S).includes('0.14 in'), `Sent rain deleted on another phone before a good reload must go away. South: ${timeline(S)}`)
   signal = 'stale copy'
+
+  // Another tab on this device queues a delete of rain this page saved: the next answer from the saved copy leaves the row
+  // out and lists it as waiting, so the confirmed local copy steps aside instead of keeping the deleted rain on screen.
+  await saveInCard(N, buttonIn(card(N), 'Add rain'), { rainfall: '0.18' })
+  const northDrizzle = server.find((entry) => entry.rainfall_in === 0.18)!
+  assert(timeline(N).includes('0.18 in'), `Rain saved without signal must show. North: ${timeline(N)}`)
+  waitingDeletes.push(northDrizzle.id)
+  await saveRainForBoth('0.21')
+  assert(!timeline(N).includes('0.18 in') && row(N, '0.21 in').textContent?.includes('Not sent yet'), `Another tab's waiting delete must take the confirmed local copy away. North: ${timeline(N)}`)
+  sendWaiting()
 
   // Another tab on this device queues an edit of rain this page saved: the next answer from the saved copy shows that
   // waiting edit, so the confirmed local copy steps aside instead of offering Edit on the older amount.
