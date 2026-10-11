@@ -15,7 +15,11 @@ function pendingEntry(entry: Extract<FieldLogQueueEntry, { kind: 'saveEntry' }>,
   return { id: entry.draft.id!, farm_id: context.farmId, field_id: entry.draft.field_id, entry_type: entry.draft.entry_type, observed_on: entry.draft.observed_on, rainfall_in: entry.draft.rainfall_in, note: entry.draft.note, created_by: context.userId, created_at: entry.enqueuedAt, updated_at: entry.enqueuedAt, pending: true }
 }
 export class QueuedFieldLogRepository implements FieldLogRepository {
-  constructor(private readonly live: SupabaseFieldLogRepository, private readonly d: { getContext: () => Promise<Context>; projectRef: string; storage: StorageLike; createId: () => string; clock: () => string; isOffline: () => boolean; readWorkspaceCache?: typeof readWorkspaceCache }) {}
+  // Live reads started, and for each saved copy the newest live read that wrote it: an older read that answers last must
+  // not put back a copy from before a newer one, because the page trusts the saved copy once a live read settled an entry.
+  private liveReadsStarted = 0
+  private readonly savedCopyReads = new Map<string, number>()
+  constructor(private readonly live: SupabaseFieldLogRepository, private readonly d: { getContext: () => Promise<Context>; projectRef: string; storage: StorageLike; createId: () => string; clock: () => string; isOffline: () => boolean; readWorkspaceCache?: typeof readWorkspaceCache; writeWorkspaceCache?: typeof writeWorkspaceCache }) {}
   private async source() { const operationContext = await captureQueuedOperationContext(this.d); const context = { userId: operationContext.userId, farmId: operationContext.farmId }; return { context, operationContext, queue: new FieldLogWriteQueue(this.d.storage, fieldLogWriteQueueKey(this.d.projectRef, context.userId, context.farmId)) } }
   private locked<T>(storageKey: string, task: (verify: () => void) => Promise<T>) { return queueTransaction(storageKey, this.d.storage, this.d.createId, task) }
   async getNeedsAttentionQueueKey() { return (await this.source()).queue.key }
@@ -23,19 +27,28 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
     const { context, operationContext, queue } = await this.source()
     const verifyRead = () => verifyQueuedReadContext(this.d, operationContext)
     const cacheScope = { projectRef: this.d.projectRef, ...context, module: `fieldLog:${fieldId ?? 'all'}` }
+    const savedCopyKey = `${cacheScope.projectRef}:${cacheScope.userId}:${cacheScope.farmId}:${cacheScope.module}`
     try {
       const cacheFence = captureWorkspaceCacheFence(cacheScope)
+      this.liveReadsStarted += 1; const liveRead = this.liveReadsStarted
+      // Ids of writes still waiting when the read starts, so the page keeps its copies of them; unreadable bytes report none.
+      let waitingIds: string[] | undefined
+      try { waitingIds = queue.read().entries.flatMap((entry) => entry.version !== 2 ? [] : [entry.kind === 'saveEntry' ? entry.draft.id! : entry.entryId]) } catch { waitingIds = undefined }
       const data = await this.live.getData(fieldId); await verifyRead()
-      await writeWorkspaceCache(cacheScope, data, cacheFence); await verifyRead()
-      return data
+      if (liveRead > (this.savedCopyReads.get(savedCopyKey) ?? 0)) {
+        this.savedCopyReads.set(savedCopyKey, liveRead)
+        await (this.d.writeWorkspaceCache ?? writeWorkspaceCache)(cacheScope, data, cacheFence); await verifyRead()
+      }
+      return waitingIds ? { ...data, waitingIds } : data
     } catch (error) {
       await verifyRead()
       if (!isTransportFailure(error, this.d.isOffline())) throw error
       const readCache = this.d.readWorkspaceCache ?? readWorkspaceCache
       const cached = await readCache<FieldLogData>(cacheScope, operationalCacheMaxAgeMs); await verifyRead()
       if (!cached) throw error
-      const data = structuredClone(cached.data)
-      for (const entry of queue.read().entries) { if (entry.version !== 2) continue; await verifyQueuedOperationContext(this.d, entry.operationContext, entry); if (entry.kind === 'deleteEntry') data.entries = data.entries.filter((row) => row.id !== entry.entryId); else if (!fieldId || entry.draft.field_id === fieldId) { const row = pendingEntry(entry, context); data.entries = data.entries.some((item) => item.id === row.id) ? data.entries.map((item) => item.id === row.id ? row : item) : [...data.entries, row] } }
+      const data: FieldLogData = { ...structuredClone(cached.data), offline: true }; const waitingIds: string[] = []
+      for (const entry of queue.read().entries) { if (entry.version !== 2) continue; await verifyQueuedOperationContext(this.d, entry.operationContext, entry); waitingIds.push(entry.kind === 'saveEntry' ? entry.draft.id! : entry.entryId); if (entry.kind === 'deleteEntry') data.entries = data.entries.filter((row) => row.id !== entry.entryId); else if (!fieldId || entry.draft.field_id === fieldId) { const row = pendingEntry(entry, context); data.entries = data.entries.some((item) => item.id === row.id) ? data.entries.map((item) => item.id === row.id ? { ...row, created_at: item.created_at } : item) : [...data.entries, row] } }
+      data.waitingIds = waitingIds
       await verifyRead(); return data
     }
   }

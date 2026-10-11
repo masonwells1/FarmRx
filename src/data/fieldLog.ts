@@ -28,6 +28,10 @@ export interface FieldLogEntryDraft {
 export interface FieldLogData {
   entries: FieldLogEntry[]
   viewer: { user_id: string; role: FarmViewerRole }
+  /** Present only when the server could not be reached and the answer is this device's saved copy. */
+  offline?: true
+  /** From the queued repository: ids with a write waiting on this device (on a live answer, when the read started). */
+  waitingIds?: string[]
 }
 
 export interface FieldLogDeleteReceipt { id: string; deleted: true; pending?: boolean }
