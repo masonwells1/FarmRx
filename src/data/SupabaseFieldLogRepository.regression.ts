@@ -159,6 +159,7 @@ async function run() {
   await labelQueued.saveEntry({ ...draft(uid(601)), rainfall_in: 1.5 }); const editedRow = (await labelQueued.getData()).entries.find((entry) => entry.id === uid(601))
   assert(editedRow?.pending && editedRow.rainfall_in === 1.5 && editedRow.created_at === stamp, 'A waiting edit laid over the saved copy must keep the row\'s created time, so it keeps its place.')
   await labelQueued.deleteEntry(uid(601)); const deletedAnswer = await labelQueued.getData()
+  assert([...(deletedAnswer.waitingIds ?? [])].sort().join() === [uid(601), uid(601), uid(603)].sort().join(), `The saved-copy answer must list waiting deletes as well as saves. Got: ${deletedAnswer.waitingIds?.join()}`)
   assert(deletedAnswer.offline === true && deletedAnswer.entries.map((entry) => entry.id).join() === uid(603), `A waiting delete must take its row out of the saved-copy answer. Got: ${deletedAnswer.entries.map((entry) => entry.id).join()}`)
   labelGateway.loadFailure = null; const liveWhileWaiting = await labelQueued.getData()
   assert(liveWhileWaiting.offline === undefined && liveWhileWaiting.entries.map((entry) => entry.id).join() === uid(600), 'A live answer carries the server rows only, not the writes still waiting on this device.')
