@@ -1,7 +1,7 @@
 # Profitability Grand Upgrade Plan — Farm Rx
 
 **Owner:** Mason · **Authored:** 2026-07-13 (Fable, C:\ session) · **Status:** ACTIVE — Claude
-orchestrates, Codex builds, every chunk gated by Sol review + Claude browser-proof, then
+orchestrates, Codex builds, every chunk gated by Claude browser-proof, then
 committed and pushed (Mason pre-approved pushes for this loop 2026-07-13; pushes auto-deploy
 to farm-rx.vercel.app). **Live-DB migrations still pause for Mason's explicit OK.**
 
@@ -30,7 +30,7 @@ use and competitors do poorly (hands-on Farm Profit Manager teardown, 2026-07-13
    landlord-ready report to close out the reports tab.
 
 Everything follows the new Modern Farmstead design system and ships in small chunks —
-each one built by Codex, adversarially reviewed, proven in a real browser on the live dev
+each one built by Codex, proven in a real browser on the live dev
 farm, then pushed. Nothing touches the database without your explicit OK first.
 
 **Your two action items** (blockers for specific chunks, not for starting):
@@ -64,7 +64,7 @@ farm, then pushed. Nothing touches the database without your explicit OK first.
 - Manual prices remain the math source (TradingView tiles display-only; CME licensing).
 - DB: additive migrations only, drafted → Claude review → **Mason explicit OK** → apply.
   No SELECT..FOR UPDATE under RLS (0017 lesson).
-- Gate per chunk: Codex build → Sol adversarial review → fixes → `npx tsc -b --force`
+- Gate per chunk: Codex build → `npx tsc -b --force`
   clean + `npm run regression` green → Claude browser-proof on the live dev farm
   (farmtest) → commit → push.
 

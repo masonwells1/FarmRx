@@ -132,7 +132,7 @@ versions unchanged.
    browser lanes on desktop and phone; directly exercise denied writes as well
    as hidden navigation.
 3. Prove both epoch advances, exact task insert/completion, zero denied writes,
-   and stale private-content removal. Require fresh Sol adversarial review.
+   and stale private-content removal.
 4. Make a product change only if this exact execution exposes a defect. Any
    broader task-receipt tranche remains separately governed.
 
@@ -192,7 +192,7 @@ link exists or is requested.
    separately bounded existing-save hardening slice.
 3. Build the deterministic Prairie fixture and desktop/phone UI gauntlet, plus
    SQL verification of exact snapshots, 7.50-gal arithmetic, one receipt, and
-   every named non-write. Require fresh Sol adversarial review.
+   every named non-write.
 
 ## HR — Harvest Ridge Grain truth
 
@@ -252,8 +252,7 @@ with identical final database state and no hidden coupled mutation.
    cross-operation non-coupling regressions.
 3. Build deterministic HR baseline and exact SQL verifier. Run normal and
    reverse November orders from separate clean resets on desktop and phone.
-4. Compare complete relevant table sets after each step and final state; require
-   fresh Sol adversarial review.
+4. Compare complete relevant table sets after each step and final state.
 
 ## CC — Cedar Creek weather and scouting
 
@@ -321,7 +320,7 @@ part of CC.
 3. Add exact Playwright fulfill/abort routes and cache-byte assertions; fail on
    any unhandled external request.
 4. Run fresh and stale lanes plus manual Spray and Scouting on desktop and
-   phone; verify exact SQL writes/non-writes and require fresh Sol review.
+   phone; verify exact SQL writes/non-writes.
 
 ## PH — Pine Hill offline custody and revocation
 
@@ -408,7 +407,7 @@ undismissed. The valid PH queue must still be durably quarantined and exported.
    localStorage/IndexedDB byte assertions, and SQL verifier for one connected
    write, zero revoked writes, epoch mutation, receipts, and all non-writes.
 4. Add separate corrupt active-queue and corrupt recovery-vault negative lanes.
-   Run full regression/build/disposable reset and fresh Sol adversarial review.
+   Run full regression/build/disposable reset.
 
 ## Governed execution order
 
@@ -424,7 +423,6 @@ The smallest coherent implementation order is:
    per scenario; no live services or customer data.
 4. **Browser gauntlets:** desktop and phone, pinned clocks, controlled network,
    exact storage/UI checks, and complete write/non-write comparisons.
-5. **Acceptance:** immutable commits, fresh-context Sol adversarial review for
-   each bounded tranche, then a final governed-scenario review. No push,
+5. **Acceptance:** immutable commits for each bounded tranche. No push,
    deployment, live migration, secret/auth change, customer action, or
    destructive action occurs without its explicit approval gate.

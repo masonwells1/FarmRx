@@ -10,7 +10,7 @@ This file is a current-state index, not proof by itself. It must never upgrade a
 
 | Status | Meaning |
 |---|---|
-| **PROVEN** | Durable repository evidence records the required runtime/database/browser proof and fresh Sol acceptance for the identified immutable commit. This does not imply the current HEAD or release is proven. |
+| **PROVEN** | Durable repository evidence records the required runtime/database/browser proof for the identified immutable commit. This does not imply the current HEAD or release is proven. |
 | **STATIC-ACCEPTED** | Contract, source, or harness shape was reviewed and accepted, but the required runtime evidence is absent or incomplete. |
 | **RUNTIME-BLOCKED** | The lane exists but a named environment, fixture, browser, or evidence blocker prevents acceptable runtime proof. |
 | **PRODUCT-BLOCKED** | An existing claimed workflow has a concrete behavior or trust defect that must be repaired and proven. |
@@ -101,9 +101,9 @@ The required Maple run resets once before January and preserves the same disposa
 
 1. Read the controlling contract and append-only ledger; inspect the exact branch, HEAD, worktree, migrations, manifests, harnesses, and evidence files. Treat every recorded publication or deployment identity as a dated observation unless a fresh live check proves it is still current.
 2. Change a status only from durable evidence for the exact identified commit. Chat-reported runs or verdicts may locate work but cannot establish **PROVEN**.
-3. For every runtime claim, record command and exit code, exact SHA and parent, migration/manifest hashes, simulated instant, role/farm/network, browser project/viewport, UI evidence, focused database writes/non-writes, artifact paths, scope/credential checks, and fresh read-only Sol verdict.
-4. Append a new ledger entry or correction; never rewrite prior ledger history. A repair is a new immutable commit and receives a new fresh-context Sol review.
-5. Re-evaluate the full 11-step verification ladder on the resulting exact HEAD. Month passes do not imply full-year or release readiness.
+3. For every runtime claim, record command and exit code, exact SHA and parent, migration/manifest hashes, simulated instant, role/farm/network, browser project/viewport, UI evidence, focused database writes/non-writes, artifact paths, and scope/credential checks.
+4. Append a new ledger entry or correction; never rewrite prior ledger history. A repair is a new immutable commit.
+5. Re-evaluate the full 10-step verification ladder on the resulting exact HEAD. Month passes do not imply full-year or release readiness.
 6. Never convert **APPROVAL-GATED** based on silence or prior local authority. Record the exact approved action and its actual result after it occurs.
 
 The initiative is **RELEASE CANDIDATE READY** for the accepted six-scenario packet at `8a9565a08a760e0ec920170bfacee1d9132cba47` and the accepted recovery repair chain at source `9ecc6cba7bbaa9bea063054fe3b996cd22ea9555`. PR #17 preserves the accepted source/runtime publication; PR #18 and PR #19 preserve the accepted governance corrections; PR #21 preserves the accepted Deno verification repair; PR #24 preserves the accepted two-High security repair. SR-062 records the dated PR #24 merge, Vercel deployment, schema-only migration, exact Edge deployment, and original closeout claims; SR-063 corrects the function-ACL and live-UI evidence boundaries without rewriting SR-062. Recovery domain/DNS/TLS, exact Supabase redirect, redacted Auth-server event chain, used-link failure, password-grant login, and disposable-user cleanup remain durably recorded. The SR-062 live password-form check and external-Chrome mailbox/UI/service-worker recovery facts remain **OPERATOR-OBSERVED**. Both physical iPhone/Safari and Android/Chrome installed-PWA journeys remain unperformed, so Farm Rx is explicitly not **COMPLETE**. Any different publish, deploy, Auth, live-service, customer, or destructive action remains separately approval-gated.

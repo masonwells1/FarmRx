@@ -29,9 +29,8 @@ The main checkout at `C:\FarmRx` is not this initiative's writer checkout. Prese
 4. **Assign one writer.** Give a Sol or Terra worker the exact files, behavior, fixture IDs, negative assertions, proof, and prohibition on delegation or outward action.
 5. **Verify the slice.** Run focused proof first. Then run the relevant exact-SHA repository gates, disposable backend assertions, and browser scenarios. Preserve failures; do not weaken tests to obtain green output.
 6. **Commit only the tranche.** Check the diff, allowlist, untracked files, secrets, generated artifacts, and `git diff --check`. A commit is local unless Mason separately authorizes publication.
-7. **Fresh Sol review.** Freeze writers. A fresh-context, read-only Sol reviews the exact commit SHA, requirements, diff, source, and proof. It receives no implementation defense and makes no fixes during the review.
-8. **Adjudicate.** Record every finding with ID, severity, evidence, owner, and disposition. Any repair is a new bounded tranche and a new commit; never amend or silently rewrite the reviewed commit. The repair receives its own fresh-context, read-only Sol exact-SHA review.
-9. **Report and stop.** Append the final evidence/result entry, report the canonical status by linking to `GOAL.md`, and ask for the single next approval needed.
+7. **Repairs.** Any repair is a new bounded tranche and a new commit; never amend or silently rewrite a recorded commit.
+8. **Report and stop.** Append the final evidence/result entry, report the canonical status by linking to `GOAL.md`, and ask for the single next approval needed.
 
 Never combine unrelated repairs merely to reduce commit count. “One tranche/commit at a time” means each reviewable behavior change has one immutable commit identity; it does not authorize a commit that Mason has not approved when approval is required.
 
@@ -59,7 +58,6 @@ Run only what the tranche can safely own, then complete the entire ladder before
 8. Required browser matrix at representative desktop and phone sizes.
 9. All scenarios in `WORKFLOWS-AND-SCENARIOS.md`, including continuous Maple Ridge proof.
 10. `git diff --check`, exact changed-file/scope review, untracked-file review, and a credential-like scan that does not print values.
-11. Fresh-context, read-only Sol review of the exact commit.
 
 Do not infer the full gate from one green test. A failed or unrun required lane remains explicit in the ledger and status report.
 

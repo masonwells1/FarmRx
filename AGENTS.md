@@ -16,7 +16,7 @@ This is the small shared contract every coding agent loads. Detailed procedures 
 - Enduring product, privacy, domain, and architecture rules: `docs/farm-rx-handoff.md`.
 - Development, data, UI, and verification rules: `docs/agent-development-guide.md` and, for UI work, `docs/design/README.md`.
 - Season-readiness scenarios: `docs/season-readiness/WORKFLOWS-AND-SCENARIOS.md` and `docs/season-readiness/ORCHESTRATOR-RUNBOOK.md`.
-- Protected delivery, CodeRabbit, and outward-action gates: `docs/agent-delivery.md`.
+- Protected delivery and outward-action gates: `docs/agent-delivery.md`.
 - Customer go-live: `docs/ship-checklist.md`.
 - Dated branch evidence: `docs/branch-inventory-2026-09-03.md`; reverify before relying on it.
 
@@ -47,7 +47,7 @@ Current source, executable tests, migrations, and live read-only evidence outran
 
 ## Hard outward gates
 
-Agents may push branches and open, update, label, and comment on pull requests without asking (Mason, 2026-09-05). The agent posts the manual CodeRabbit review command itself, once per candidate freeze, as described in the delivery guide; never ask Mason to post it (Mason, 2026-10-03). The pre-push hook still refuses any push that targets `main`.
+Agents may push branches and open, update, label, and comment on pull requests without asking (Mason, 2026-09-05). No CodeRabbit or adversarial review is required (Mason, 2026-10-19). The pre-push hook still refuses any push that targets `main`.
 
 Get Mason's explicit approval in the current conversation before merge; deploy; live migration or live data change; secrets, authentication, or permissions change; customer account action; customer communication; destructive action; purchase; or binding commitment. Local edits, tests, verification, commits, branch pushes, and pull-request work do not authorize a later hard-gated action.
 

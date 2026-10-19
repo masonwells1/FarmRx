@@ -45,7 +45,7 @@ Mason authorizes two new bounded build initiatives beyond the season-readiness p
 
 ### Shared rules for both initiatives
 
-- Each initiative runs on its own branch and worktree cut from current `main`, follows the discipline of [`season-readiness/ORCHESTRATOR-RUNBOOK.md`](season-readiness/ORCHESTRATOR-RUNBOOK.md) — one bounded tranche, one immutable commit, fresh-context read-only Sol review of each exact commit, repairs as new commits — and keeps its own append-only ledger at `docs/initiatives/<initiative>/LEDGER.md`.
+- Each initiative runs on its own branch and worktree cut from current `main`, follows the discipline of [`season-readiness/ORCHESTRATOR-RUNBOOK.md`](season-readiness/ORCHESTRATOR-RUNBOOK.md) — one bounded tranche, one immutable commit, repairs as new commits — and keeps its own append-only ledger at `docs/initiatives/<initiative>/LEDGER.md`.
 - All runbook approval gates remain: no push, pull-request mutation, merge, deploy, live migration, live data, secret/auth/permission, customer, or destructive action without Mason's named approval.
 - **Recorded backlog, not authorized:** a Today/home "needs attention" view summarizing all modules. Do not build it under this amendment. *(Superseded on 2026-09-05: the owner amendment below authorizes the Today home screen as Initiative FD.)*
 
@@ -108,8 +108,8 @@ Small, visible repairs to existing screens. No schema change except the additive
 
 ### Verification tiers (decision 8)
 
-- **Full runbook discipline** ([`season-readiness/ORCHESTRATOR-RUNBOOK.md`](season-readiness/ORCHESTRATOR-RUNBOOK.md): one tranche, one immutable commit, fresh-context read-only Sol review of the exact commit, repairs as new commits, disposable-backend database assertions) applies to any tranche that adds or changes a migration, Row Level Security, a permission or capability check, grain or financial privacy, money math, an edge function, or anything that writes to bins, contracts, deliveries, or on-hand quantities. In this amendment: FS persistence and seed migrations, FD-1's and FD-2's capability-gated data loading and financial suppression (proven with the existing owner / worker-without-financials / named-rep role matrix and a database assertion that a member without `can_read_private_financials` receives no grain or financial row on Today), GL-1, GL-2, all of LD, CM-1, CM-2's allocation-scoped, prorated, completeness-flagged cost math (proven with disposable-backend assertions covering a partial allocation, an all-unpriced Program, and an application product without a cost snapshot), CM-3's migration, IP-1's schema use, IP-2, IP-3, IP-4's write paths.
-- **Screen tier** applies to tranches that only change presentation, navigation, labels, layout, or read-only display of existing data: forced TypeScript (`npx tsc -b --force`), `npm run regression`, `npm run build`, browser proof at one desktop and one phone size, and one fresh-context read-only review. In this amendment: FS dialog/label/layout work, FD-1's and FD-2's layout, navigation, and copy once the data-loading portion above has passed, GL-3's presentation changes, CM-2's card layout once its cost math has passed the full tier, CM-4's export UI.
+- **Full runbook discipline** ([`season-readiness/ORCHESTRATOR-RUNBOOK.md`](season-readiness/ORCHESTRATOR-RUNBOOK.md): one tranche, one immutable commit, repairs as new commits, disposable-backend database assertions) applies to any tranche that adds or changes a migration, Row Level Security, a permission or capability check, grain or financial privacy, money math, an edge function, or anything that writes to bins, contracts, deliveries, or on-hand quantities. In this amendment: FS persistence and seed migrations, FD-1's and FD-2's capability-gated data loading and financial suppression (proven with the existing owner / worker-without-financials / named-rep role matrix and a database assertion that a member without `can_read_private_financials` receives no grain or financial row on Today), GL-1, GL-2, all of LD, CM-1, CM-2's allocation-scoped, prorated, completeness-flagged cost math (proven with disposable-backend assertions covering a partial allocation, an all-unpriced Program, and an application product without a cost snapshot), CM-3's migration, IP-1's schema use, IP-2, IP-3, IP-4's write paths.
+- **Screen tier** applies to tranches that only change presentation, navigation, labels, layout, or read-only display of existing data: forced TypeScript (`npx tsc -b --force`), `npm run regression`, `npm run build`, and browser proof at one desktop and one phone size. In this amendment: FS dialog/label/layout work, FD-1's and FD-2's layout, navigation, and copy once the data-loading portion above has passed, GL-3's presentation changes, CM-2's card layout once its cost math has passed the full tier, CM-4's export UI.
 - Every initiative keeps its own append-only ledger at `docs/initiatives/<initiative>/LEDGER.md`.
 
 ### Shared rules
@@ -155,8 +155,7 @@ A release packet is incomplete without all of the following on the exact reviewe
 - browser proof for the approved scenario matrix at representative desktop and phone sizes;
 - full Maple Ridge 12-month season proof;
 - explicit expected-write and expected-non-write results for every scenario;
-- exact-SHA credential/scope/diff checks;
-- a fresh-context, read-only Sol adversarial review; and
+- exact-SHA credential/scope/diff checks; and
 - append-only entries in [`docs/season-readiness/LEDGER.md`](season-readiness/LEDGER.md).
 
 The operating loop and authority boundaries are in [`docs/season-readiness/ORCHESTRATOR-RUNBOOK.md`](season-readiness/ORCHESTRATOR-RUNBOOK.md).
@@ -167,7 +166,7 @@ These are the only status definitions for this initiative. Other files may repor
 
 ### RELEASE CANDIDATE READY
 
-**RELEASE CANDIDATE READY** means local exact-SHA disposable-backend, browser, foundation, and season proof has passed and a fresh-context, read-only Sol review has accepted that exact commit. It does not mean anything was pushed, merged, deployed, migrated, enabled, or used on a physical device or live service.
+**RELEASE CANDIDATE READY** means local exact-SHA disposable-backend, browser, foundation, and season proof has passed on that exact commit. It does not mean anything was pushed, merged, deployed, migrated, enabled, or used on a physical device or live service.
 
 ### COMPLETE
 

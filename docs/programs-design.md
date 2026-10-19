@@ -444,7 +444,7 @@ Season progress groups first by exact field/crop/year/planting sequence and then
 
 ## 9. Build plan — loop-sized and independently provable
 
-No chunk applies SQL or deploys without Mason's separate approval. Each chunk gets the normal Sol adversarial review after its builder pass.
+No chunk applies SQL or deploys without Mason's separate approval.
 
 ### Chunk 1 — schema and RPC contract (Terra)
 
