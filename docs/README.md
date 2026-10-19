@@ -14,7 +14,7 @@ Start here when deciding what Farm Rx does now, what remains open, or whether an
 
 - [`../AGENTS.md`](../AGENTS.md) — small shared behavior, authority, and safety contract loaded by every coding agent.
 - [`agent-development-guide.md`](agent-development-guide.md) — implementation, data, UI, simplicity, and verification rules; read when changing or reviewing code.
-- [`agent-delivery.md`](agent-delivery.md) — protected pull-request, CodeRabbit, approval, merge, deployment, and outward-action procedure; read only when work is ready to leave the local checkout.
+- [`agent-delivery.md`](agent-delivery.md) — protected pull-request, approval, merge, deployment, and outward-action procedure; read only when work is ready to leave the local checkout.
 - [`../CLAUDE.md`](../CLAUDE.md) — Claude-only router; shared policy remains in `AGENTS.md`.
 - [`database-migrations.md`](database-migrations.md) — how a migration reaches the live database, and why merging a pull request never does it by itself.
 

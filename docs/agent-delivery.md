@@ -9,7 +9,7 @@ Farm Rx `main` is connected to the production Vercel project. A merge to `main` 
 1. Confirm the worktree, branch, status, diff, and current `origin/main`. Preserve unrelated work.
 2. Run the focused proof required by `docs/agent-development-guide.md` and every broader check justified by risk.
 3. Review the complete in-scope diff. Resolve real findings and rerun affected proof.
-4. Create a clear local commit. For business-critical data, privacy, auth, money, inventory, migrations, or offline mutation behavior, require a fresh independent exact-commit adversarial review before asking to push.
+4. Create a clear local commit.
 5. State the exact commit, proof observed, remaining risk, rollback path, and requested outward action in plain English.
 
 After local proof is green, the agent may push the feature branch, create and maintain its pull request, and complete review without asking. Stop at `READY FOR APPROVAL` before merge or another hard-gated action and provide the exact short reply needed.
@@ -19,15 +19,9 @@ After local proof is green, the agent may push the feature branch, create and ma
 1. Push a feature branch; never push directly to `main` and never force-push.
 2. Open or update the pull request with auto-merge off.
 3. Bring the branch current with `main` and require all reported checks, including Foundation and Vercel, to be green.
-4. Finish implementation and the separate exact-commit review before spending the CodeRabbit review.
-5. Freeze the candidate and record its exact head SHA.
-6. The delivering agent posts exactly `@coderabbitai review` on the pull request once per candidate freeze (`gh pr comment <n> --body "@coderabbitai review"`). Never ask Mason to post it (Mason, 2026-10-03). Do not apply a trigger label or use a workflow to request the review. If CodeRabbit replies that the review was rate limited, post the same comment once more after the wait it names.
-7. Read the delivered review. Fix every real finding. A new commit or base update invalidates the candidate; rerun checks, freeze the new head, and post the exact comment once for that new freeze. A reopen or draft/ready conversion that leaves the head SHA unchanged keeps an existing `APPROVED` review on that SHA valid and needs no new command; re-verify the merge gate below instead.
-8. Never use `@coderabbitai resume`. Use `@coderabbitai full review` only when a deliberately justified complete reread is needed.
+4. Freeze the candidate and record its exact head SHA. A new commit or base update invalidates the candidate; rerun checks and freeze the new head.
 
-CodeRabbit automatic and incremental reviews stay disabled in `.coderabbit.yaml`. Its automatic skipped-review status is also disabled. Pull-request creation, pushes, descriptions, labels, and GitHub workflows must remain silent; the candidate is reviewed only when the agent posts the command on the frozen head. This keeps the CodeRabbit budget FarmRx shares with CRX Manager to one review per finished candidate.
-
-Reference: [CodeRabbit automatic-review controls](https://docs.coderabbit.ai/configuration/auto-review).
+No CodeRabbit review and no separate adversarial review is required before merge (Mason, 2026-10-19). CodeRabbit stays installed but silent: automatic, incremental, label, and description-triggered reviews stay disabled in `.coderabbit.yaml` so it never spends the review budget FarmRx shares with CRX Manager. Do not request a CodeRabbit review unless Mason asks for one.
 
 ## Merge gate
 
@@ -35,12 +29,11 @@ A green status row alone is not approval. Immediately before asking Mason to app
 
 - the pull request is open, non-draft, mergeable, current with `main`, and auto-merge is off;
 - every reported required check is green;
-- the formal CodeRabbit review is `APPROVED`, applies to the final `headRefOid`, and is not stale or dismissed;
 - no unresolved real review finding or change request remains;
-- the frozen SHA, reviewed SHA, and final pull-request head are identical; and
+- the frozen SHA and final pull-request head are identical; and
 - the current branch protection still enforces the expected pull-request and approval gates.
 
-Merge only with the exact reviewed SHA (`--match-head-commit <sha>`). Never use an admin override, bypass a hook or check, or ask Mason to waive a red, pending, stale, ambiguous, or unreviewed gate.
+Merge only with the exact frozen SHA (`--match-head-commit <sha>`). Never use an admin override, bypass a hook or check, or ask Mason to waive a red, pending, stale, ambiguous, or unreviewed gate.
 
 ## After an approved merge
 

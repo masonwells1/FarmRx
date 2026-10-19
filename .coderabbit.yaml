@@ -8,13 +8,12 @@ language: en-US
 # non-coder owner; signal matters more than volume.
 reviews:
   profile: chill
-  # A manual final review must produce a formal APPROVED/CHANGES_REQUESTED
-  # review so GitHub can enforce the exact-candidate approval gate.
+  # CodeRabbit review is not required for merge (Mason, 2026-10-19); it runs
+  # only if someone posts `@coderabbitai review` by hand.
   request_changes_workflow: true
   high_level_summary: true
   poem: false
-  # Stay silent when a pull request opens; the delivering agent requests the
-  # review by posting the command on the frozen head.
+  # Stay silent when a pull request opens.
   review_status: false
   collapse_walkthrough: false
 
@@ -77,15 +76,14 @@ reviews:
     - "!**/*.eot"
 
   auto_review:
-    # The delivering agent starts a review by posting `@coderabbitai review`
-    # once on the frozen pull request. PR creation, pushes, labels, descriptions,
-    # and GitHub workflows must never start a review automatically.
+    # PR creation, pushes, labels, descriptions, and GitHub workflows must never
+    # start a review automatically; this protects the budget shared with CRX Manager.
     enabled: false
     auto_incremental_review: false
     drafts: false
     # An empty list prevents any label from opting a pull request into review.
     labels: []
-    # Keep description opt-in disabled; the agent's PR comment is the only trigger.
+    # Keep description opt-in disabled.
     description_keyword: ""
 
   # Project-specific review guidance so CodeRabbit flags Farm Rx's real risk

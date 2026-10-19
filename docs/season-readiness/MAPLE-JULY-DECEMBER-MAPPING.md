@@ -8,7 +8,7 @@
 
 This document began as a read-only design map and now also records the bounded static hardening implemented from it. It records source-derived UI paths, data ownership, expected writes and non-writes, repaired defects, fixture needs, and the proof still required for Maple Ridge July through December. It is **not** runtime evidence, an accepted evidence packet, or a claim that any month below has passed.
 
-The continuous Maple scenario must reset once before January and preserve the same disposable local database through December. A month cannot be upgraded to **PROVEN** from this mapping, a committed harness, chat-reported output, or a narrow test. The runbook's full evidence and fresh exact-SHA Sol review requirements still apply.
+The continuous Maple scenario must reset once before January and preserve the same disposable local database through December. A month cannot be upgraded to **PROVEN** from this mapping, a committed harness, chat-reported output, or a narrow test. The runbook's full evidence requirements still apply.
 
 No new module, integration, vendor, automatic coupling, year-end finalization entity, or proof-only product column is authorized. The implemented repairs are limited to honest save receipts on existing writes and startup preflights that avoid hidden zero-effect generation writes.
 
@@ -232,7 +232,6 @@ Required focused repair proof:
 4. Same-operation replay and a lost response return the same result without duplicates.
 5. Reusing an operation ID across an eligibility change cannot produce a different canonical result; prove the chosen consumption rule explicitly.
 6. A later startup after canonical items exist again preflights to no work and writes nothing.
-7. Fresh Sol review inspects concurrency, lost-response, operation-consumption, and idempotency semantics.
 
 ### Other background-writer fences
 
@@ -256,11 +255,11 @@ Required focused repair proof:
 3. Run the committed fail-closed July browser/SQL lane continuously from June and record desktop plus phone-sized evidence.
 4. Build and run August through November browser/SQL lanes in order, each chaining from the previous month without reset.
 5. Build December closeout and run the full continuous January–December packet on one exact HEAD.
-6. Give each runtime tranche the required regressions/build, focused database proof, and fresh exact-SHA Sol adversarial review.
+6. Give each runtime tranche the required regressions/build, and focused database proof.
 7. Update [`SCORECARD.md`](SCORECARD.md) and append [`LEDGER.md`](LEDGER.md) only from durable executed evidence. Never promote a month from static hardening alone.
 
 ## Required evidence packet contents
 
-For every month, record exact commit and parent SHA, migration head, manifest hash, simulated instant, farm/role/network, browser project and viewport, UI evidence paths, before/after SQL evidence, command plus exit code, changed-file/credential checks, and fresh read-only Sol verdict. The eventual full-year packet must additionally prove one reset before January, no reset through December, retained month-to-month identities and totals, and all required non-writes.
+For every month, record exact commit and parent SHA, migration head, manifest hash, simulated instant, farm/role/network, browser project and viewport, UI evidence paths, before/after SQL evidence, command plus exit code, and changed-file/credential checks. The eventual full-year packet must additionally prove one reset before January, no reset through December, retained month-to-month identities and totals, and all required non-writes.
 
 No push, pull request, merge, deployment, live database/data, secret/auth/permission, customer account, communication, or destructive action is authorized by this mapping.
