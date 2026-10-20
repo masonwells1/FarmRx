@@ -34,6 +34,14 @@ const waitingId = (entry: FieldLogQueueEntryV2) => entry.kind === 'saveEntry' ? 
 /** Lays writes waiting on this device over rows, in queue order: a waiting save shows as pending, keeping a listed row's
  * created time so it keeps its place, and a waiting delete takes its row out. A change parked in Needs attention has left
  * the queue, so it is never laid over. */
+/** A change the server confirmed, as the saved copy keeps it. */
+type ConfirmedChange = { saved: FieldLogEntry } | { deletedId: string }
+/** Lays one confirmed change on a saved copy: a save replaces or adds its row, a delete takes its row out. */
+function applyConfirmed(copy: FieldLogData, change: ConfirmedChange): FieldLogData {
+  if ('deletedId' in change) return { ...copy, entries: copy.entries.filter((row) => row.id !== change.deletedId) }
+  const { saved } = change
+  return { ...copy, entries: copy.entries.some((row) => row.id === saved.id) ? copy.entries.map((row) => row.id === saved.id ? saved : row) : [...copy.entries, saved] }
+}
 function layWaitingWrites(rows: FieldLogEntry[], waiting: FieldLogQueueEntryV2[], fieldId: string | undefined, context: Context) {
   let entries = rows
   for (const entry of waiting) {
@@ -53,14 +61,14 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
   private previousSavedCopyScope(context: Context, fieldId?: string) { return { projectRef: this.d.projectRef, ...context, module: `fieldLog:${fieldId ?? 'all'}` } }
   /** Writes the saved copy in turn order with every tab on this device (see takeWorkspaceCacheTurn), so the page can trust it
    * once a live read settled an entry: an older answer never puts back rows from before a newer one. */
-  private writeSavedCopy(scope: ReturnType<QueuedFieldLogRepository['savedCopyScope']>, write: OrderedWorkspaceWrite<FieldLogData>, turn: number | null, fence: FarmOperationContext | null) { return (this.d.writeWorkspaceCacheInOrder ?? writeWorkspaceCacheInOrder)(scope, write, turn, fence) }
+  private writeSavedCopy(scope: ReturnType<QueuedFieldLogRepository['savedCopyScope']>, write: OrderedWorkspaceWrite<FieldLogData, ConfirmedChange>, turn: number | null, fence: FarmOperationContext | null) { return (this.d.writeWorkspaceCacheInOrder ?? writeWorkspaceCacheInOrder)(scope, write, turn, fence, applyConfirmed) }
   /** A save or delete the server confirmed goes into the whole-farm saved copy straight away, so an answer without signal
    * shows it before the next live read. A single field's copy, which no screen asks for, is refreshed by its own live reads.
    * Only a confirmed change comes here: a refused one is parked in Needs attention and never reaches the saved copy. Best
    * effort: without a saved copy, or once the farm's access changed, nothing is written and the save still stands. */
   private async keepInSavedCopy(entry: FieldLogQueueEntryV2, confirmed: FieldLogEntry | FieldLogDeleteReceipt) {
     const scope = this.savedCopyScope({ userId: entry.userId, farmId: entry.farmId }); const turn = await takeWorkspaceCacheTurn(scope); const id = waitingId(entry)
-    const change = (copy: FieldLogData): FieldLogData => ({ ...copy, entries: 'deleted' in confirmed ? copy.entries.filter((row) => row.id !== id) : copy.entries.some((row) => row.id === id) ? copy.entries.map((row) => row.id === id ? confirmed : row) : [...copy.entries, confirmed] })
+    const change: ConfirmedChange = 'deleted' in confirmed ? { deletedId: id } : { saved: confirmed }
     await this.writeSavedCopy(scope, { change }, turn, entry.operationContext)
   }
   async getNeedsAttentionQueueKey() { return (await this.source()).queue.key }

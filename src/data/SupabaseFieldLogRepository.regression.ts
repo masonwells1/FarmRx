@@ -367,9 +367,9 @@ async function run() {
 
   // Group 23: two tabs on one device share one queue and one saved copy. Rain one tab keeps without signal shows as not
   // sent yet on the other tab's live answer; once it is sent, the first tab's answer without signal shows it as sent. Then
-  // the ordering rule itself, straight on a saved copy: a whole copy needs a later turn than the stored one, a confirmed
-  // change lands only on an existing copy from an earlier turn, and turns taken at the same moment all differ, in the order
-  // they were asked for, and never fall behind the stored copy's turn.
+  // the ordering rule itself, straight on a saved copy: a whole copy needs a later turn than the stored copy's read and gets
+  // the changes confirmed after its read laid back on top, a confirmed change lands only on an existing copy read before it,
+  // and turns taken at the same moment all differ, in the order they were asked for, after every turn kept with the copy.
   const tabsDevice = deviceCache(); const tabsProject = 'two-tabs-field-log'; const tabsGateway = new FakeGateway(); let tabsOffline = false; let tabsId = 850
   tabsGateway.entries = [canonical(draft(uid(840)))]
   const tabsTab = () => new QueuedFieldLogRepository(live(tabsGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: tabsProject, storage: tabsDevice.storage, createId: () => uid(tabsId++), clock: tabsDevice.clock, isOffline: () => tabsOffline })
@@ -381,18 +381,21 @@ async function run() {
     tabsOffline = false; await tabTwo.inspectAndReplay(); await tabOne.inspectAndReplay()
     tabsGateway.loadFailure = new TypeError('Failed to fetch'); const sentInTabOne = await tabOne.getData()
     assert(sentInTabOne.offline && rowsOf(sentInTabOne) === `${uid(840)}:0.8,${uid(841)}:0.8` && tabsGateway.saves.length === 1, `Once sent, the first tab's answer without signal must show the rain as sent. Got: ${rowsOf(sentInTabOne)}`)
-    type RuleCopy = { rows: string[] }
+    type RuleCopy = { rows: string[] }; type RuleChange = { key: string; value: string }
     const ruleScope = { projectRef: tabsProject, userId: actor, farmId: farm, module: 'fieldLog:rule' }; const ruleFence = captureFarmRevocationFence(tabsDevice.storage, ruleScope)
     const ruleRows = () => ((tabsDevice.records.get(`${tabsProject}:${actor}:${farm}:fieldLog:rule`) as { data?: RuleCopy } | undefined)?.data?.rows ?? []).join()
-    const ruleWrite = (turn: number, write: { replace: RuleCopy } | { change: (stored: RuleCopy) => RuleCopy }) => writeWorkspaceCacheInOrder<RuleCopy>(ruleScope, write, turn, ruleFence)
-    const add = (row: string) => ({ change: (stored: RuleCopy) => ({ rows: [...stored.rows, row] }) })
-    assert(!(await ruleWrite(10, add('lone change'))) && ruleRows() === '', 'A confirmed change must not make a saved copy of its own.')
-    assert(await ruleWrite(10, { replace: { rows: ['read 10'] } }), 'A first whole copy must be written.')
-    assert(!(await ruleWrite(10, { replace: { rows: ['read 10 again'] } })) && !(await ruleWrite(9, { replace: { rows: ['read 9'] } })) && ruleRows() === 'read 10', `A whole copy needs a later turn than the stored one. Got: ${ruleRows()}`)
-    assert(!(await ruleWrite(9, add('change 9'))) && await ruleWrite(11, add('change 11')) && ruleRows() === 'read 10,change 11', `A confirmed change lands only on a copy from an earlier turn. Got: ${ruleRows()}`)
-    assert(await ruleWrite(12, { replace: { rows: ['read 12'] } }) && ruleRows() === 'read 12', 'A whole copy from a later turn replaces the stored one.')
+    const ruleApply = (copy: RuleCopy, change: RuleChange): RuleCopy => ({ rows: [...copy.rows.filter((row) => !row.startsWith(`${change.key}=`)), `${change.key}=${change.value}`] })
+    const ruleWrite = (turn: number, write: { replace: RuleCopy } | { change: RuleChange }) => writeWorkspaceCacheInOrder<RuleCopy, RuleChange>(ruleScope, write, turn, ruleFence, ruleApply)
+    const set = (key: string, value: string) => ({ change: { key, value } }); const read = (...rows: string[]) => ({ replace: { rows } })
+    assert(!(await ruleWrite(10, set('lone', 'change'))) && ruleRows() === '', 'A confirmed change must not make a saved copy of its own.')
+    assert(await ruleWrite(10, read('a=read 10')), 'A first whole copy must be written.')
+    assert(!(await ruleWrite(10, read('a=read 10 again'))) && !(await ruleWrite(9, read('a=read 9'))) && ruleRows() === 'a=read 10', `A whole copy needs a later turn than the stored copy's read. Got: ${ruleRows()}`)
+    assert(!(await ruleWrite(9, set('b', 'change 9'))) && await ruleWrite(20, set('b', 'change 20')) && ruleRows() === 'a=read 10,b=change 20', `A confirmed change lands only on a copy read before it. Got: ${ruleRows()}`)
+    assert(await ruleWrite(15, read('a=read 15', 'c=other phone')) && ruleRows() === 'a=read 15,c=other phone,b=change 20', `A whole copy read after the stored copy's read but before a confirmed change replaces it, with that change laid back on top. Got: ${ruleRows()}`)
+    assert(await ruleWrite(25, read('a=read 25', 'b=edited on another phone')) && ruleRows() === 'a=read 25,b=edited on another phone', `A whole copy read after a confirmed change already has it, and keeps a later edit from elsewhere. Got: ${ruleRows()}`)
+    assert(await ruleWrite(31, set('d', 'late')) && await ruleWrite(30, set('d', 'early')) && ruleRows() === 'a=read 25,b=edited on another phone,d=late', `Confirmed changes landing out of order keep the later one for each row. Got: ${ruleRows()}`)
     const sameMoment = await Promise.all([takeWorkspaceCacheTurn(ruleScope), takeWorkspaceCacheTurn(ruleScope), takeWorkspaceCacheTurn(ruleScope)])
-    assert(sameMoment.every((turn) => turn !== null && turn > 12) && sameMoment[0]! < sameMoment[1]! && sameMoment[1]! < sameMoment[2]!, `Turns taken at the same moment must all differ, in the order asked, after the stored copy's turn. Got: ${sameMoment.join()}`)
+    assert(sameMoment.every((turn) => turn !== null && turn > 31) && sameMoment[0]! < sameMoment[1]! && sameMoment[1]! < sameMoment[2]!, `Turns taken at the same moment must all differ, in the order asked, after every turn kept with the stored copy. Got: ${sameMoment.join()}`)
   } finally { tabsDevice.restore() }
 
   // Group 24: where a refused replay (groups 17-20) meets the saved copy and the live overlay (groups 21-23). A change the
@@ -449,6 +452,31 @@ async function run() {
     previousGateway.loadFailure = new TypeError('Failed to fetch'); const afterPreviousTabWrite = await previousQueued.getData()
     assert(afterPreviousTabWrite.offline && rowsOf(afterPreviousTabWrite) === `${uid(950)}:0.8,${uid(951)}:0.8` && previousDevice.savedIds(previousProject) === `${uid(950)},${uid(951)}`, `A previous-version tab's late write must not replace the ordered copy. Got: ${rowsOf(afterPreviousTabWrite)}`)
   } finally { previousDevice.restore() }
-  console.log('SupabaseFieldLogRepository regression passed (25 coverage groups)')
+
+  // Group 26: a live read in another tab that starts after the server committed a save, but before that save took its
+  // turn, sees the save and whatever else changed on the server by then (here another phone's rain). The save goes into
+  // the saved copy first; the read's newer whole copy must still replace it afterwards, with the save laid back on top, so
+  // an answer without signal shows both (Codex, PR #72).
+  class HeldSaveGateway extends HeldGateway { saveHold: Promise<void> | null = null; saveHolding = false; override async saveEntry(input: { farmId: string; operationId: string; entry: FieldLogEntryDraft }, context: FarmOperationContext) { const result = await super.saveEntry(input, context); if (this.saveHold) { const wait = this.saveHold; this.saveHold = null; this.saveHolding = true; await wait } return result } }
+  const commitDevice = deviceCache(); const commitProject = 'post-commit-read-field-log'; const commitGateway = new HeldSaveGateway(); let commitId = 980
+  commitGateway.entries = [canonical(draft(uid(970)))]
+  const commitTab = () => new QueuedFieldLogRepository(live(commitGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: commitProject, storage: commitDevice.storage, createId: () => uid(commitId++), clock: commitDevice.clock, isOffline: () => false })
+  const commitTabA = commitTab(); const commitTabB = commitTab()
+  try {
+    await commitTabA.getData()
+    let releaseSave = () => {}; commitGateway.saveHold = new Promise<void>((resolve) => { releaseSave = resolve })
+    const saving = commitTabA.saveEntry(draft(uid(971)))
+    await until(() => commitGateway.saveHolding, 'The save never reached the server.')
+    commitGateway.entries.push(canonical(draft(uid(972))))
+    const releaseRead = holdNextRead(commitGateway); const reading = commitTabB.getData()
+    await until(() => commitGateway.holding, 'The read in the other tab never reached the server.')
+    releaseSave(); const saved = await saving
+    assert(!saved.pending && commitDevice.savedIds(commitProject) === `${uid(970)},${uid(971)}`, `The confirmed save must go into the saved copy first. Saved copy: ${commitDevice.savedIds(commitProject)}`)
+    releaseRead(); await reading
+    assert(commitDevice.savedIds(commitProject) === `${uid(970)},${uid(971)},${uid(972)}`, `A read that started after the save was committed must replace the copy the save patched, keeping the save. Saved copy: ${commitDevice.savedIds(commitProject)}`)
+    commitGateway.loadFailure = new TypeError('Failed to fetch'); const commitOffline = await commitTabA.getData()
+    assert(commitOffline.offline && commitOffline.entries.map((entry) => entry.id).join() === `${uid(970)},${uid(971)},${uid(972)}`, 'An answer without signal must show the other phone\'s rain and the save.')
+  } finally { commitDevice.restore() }
+  console.log('SupabaseFieldLogRepository regression passed (26 coverage groups)')
 }
 void run()
