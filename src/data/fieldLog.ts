@@ -43,6 +43,7 @@ export interface FieldLogRepository {
   getNeedsAttentionQueueKey?(): Promise<string>
   /** Resolves with the entry when it is still waiting to send, so the page can show it as not sent yet. */
   retryNeedsAttention?(queueKey: string, operationId: string): Promise<FieldLogEntry | null>
+  dismissNeedsAttention?(queueKey: string, operationId: string): Promise<void>
   saveEntry(draft: FieldLogEntryDraft): Promise<FieldLogEntry>
   deleteEntry(id: string): Promise<FieldLogDeleteReceipt>
 }

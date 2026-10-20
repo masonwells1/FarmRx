@@ -245,6 +245,18 @@ async function run() {
   await rejects(() => regrantParkQueued.retryNeedsAttention(regrantParkKey, regrantParked[0]!.id), 'A retry after a revoke and regrant must be refused.')
   assert(readNeedsAttention(regrantParkStore, regrantParkKey).length === 1 && regrantParkGateway.saves.length === 1 && new FieldLogWriteQueue(regrantParkStore, regrantParkKey).read().entries.length === 0, 'A refused retry must keep the save in Needs attention and send nothing.')
 
+  // Dismiss is guarded the same way: only from the account and farm whose queue the page showed, and only a change that is
+  // really there; a revoke and regrant does not trap it (the farmer can still let it go).
+  assert(!!regrantParkQueued.dismissNeedsAttention, 'The Field Log repository must offer a guarded dismiss.')
+  await rejects(() => regrantParkQueued.dismissNeedsAttention(fieldLogWriteQueueKey(regrantParkProject, actor, otherFarm), regrantParked[0]!.id), 'A dismiss for another farm queue must be refused.')
+  await rejects(() => regrantParkQueued.dismissNeedsAttention(regrantParkKey, uid(899)), 'A dismiss for an unknown change must be refused.')
+  let dismissFarm = farm; const switchedDismiss = new QueuedFieldLogRepository(live(regrantParkGateway), { getContext: async () => ({ userId: actor, farmId: dismissFarm }), projectRef: regrantParkProject, storage: regrantParkStore, createId: () => uid(regrantParkId++), clock: () => stamp, isOffline: () => false })
+  dismissFarm = otherFarm; resetFarmGrantFromLive(regrantParkStore, { projectRef: regrantParkProject, userId: actor, farmId: otherFarm }, 1, stamp)
+  await rejects(() => switchedDismiss.dismissNeedsAttention(regrantParkKey, regrantParked[0]!.id), 'A page left open across a farm switch must not dismiss the old farm\'s change.')
+  assert(readNeedsAttention(regrantParkStore, regrantParkKey).length === 1, 'Refused dismissals must keep the change in Needs attention.')
+  await regrantParkQueued.dismissNeedsAttention(regrantParkKey, regrantParked[0]!.id)
+  assert(readNeedsAttention(regrantParkStore, regrantParkKey).length === 0 && regrantParkGateway.saves.length === 1, 'A dismiss from the right farm removes the change and sends nothing.')
+
   // Group 19: losing signal still waits, and an access refusal (no permission, access changed) or a database failure that
   // goes away on retry (serialization, deadlock) still holds the whole queue: those are not about the entry, so nothing is
   // parked and nothing behind it is sent.

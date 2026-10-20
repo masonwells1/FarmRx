@@ -8,7 +8,7 @@ import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCach
 import { queueTransaction } from './queueTransaction'
 import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 import type { FarmOperationContext } from './farmOperationContext'
-import { dismissNeedsAttention, readNeedsAttention } from './needsAttentionStore'
+import { dismissNeedsAttention as dismissParked, readNeedsAttention } from './needsAttentionStore'
 
 const blocked = 'Saved changes on this device need attention. Nothing was deleted.'
 const parked = 'This save needs attention before it can be retried.'
@@ -114,10 +114,21 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
       if (active && JSON.stringify(active) !== JSON.stringify(entry)) throw new Error(blocked)
       if (!active) queue.append(entry)
       verify(); await verifyQueuedOperationContext(this.d, entry.operationContext, entry)
-      dismissNeedsAttention(this.d.storage, queue.key, operationId)
+      dismissParked(this.d.storage, queue.key, operationId)
     })
     await this.inspectAndReplay()
     let waiting: FieldLogQueueEntry | undefined; try { waiting = queue.read().entries.find((candidate) => candidate.operationId === operationId) } catch { waiting = undefined }
     return waiting?.kind === 'saveEntry' ? pendingEntry(waiting, context) : null
+  }
+  /** Dismiss from Needs attention, only from the account and farm whose queue the page showed, so a page left open across a
+   * switch cannot discard another queue's change. The change's own custody is not required: the farmer can always let it go. */
+  async dismissNeedsAttention(expectedQueueKey: string, operationId: string) {
+    const { context, operationContext, queue } = await this.source()
+    await this.locked(queue.key, async (verify) => {
+      await verifyQueuedOperationContext(this.d, operationContext, context); verify()
+      if (queue.key !== expectedQueueKey || !readNeedsAttention(this.d.storage, queue.key).some((item) => item.id === operationId)) throw new Error(blocked)
+      dismissParked(this.d.storage, queue.key, operationId)
+    })
+    this.syncOrParked(queue)
   }
 }

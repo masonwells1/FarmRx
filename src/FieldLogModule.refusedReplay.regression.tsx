@@ -113,8 +113,24 @@ assert(timeline('Pine North 80').includes('Not sent yet') && timeline('Pine Sout
   offline = false; await act(async () => { await repository.inspectAndReplay(); await flush() })
   await until(() => attention().includes('Field log entry removal'), 'the refused delete is in Needs attention')
   await until(() => timeline('Pine North 80').includes('1.25 in'), 'the refused delete shows the rain again')
+  assert(!card('Pine North 80').textContent?.includes('Deleted on this device'), 'Once the delete is refused the card must not still promise it will finish syncing.')
   await click(buttonIn(container.querySelector('[aria-label="Saves that need attention"]')!, 'Dismiss')); await click(buttonIn(container.querySelector('[aria-label="Saves that need attention"]')!, 'Yes, dismiss'))
   await until(() => !container.querySelector('[aria-label="Saves that need attention"]'), 'the dismissed delete leaves Needs attention')
   assert(timeline('Pine North 80').includes('1.25 in') && server.some((row) => row.field_id === north), `After dismissing the refused delete the rain must still show, as the server has it. Shown: ${timeline('Pine North 80')}`)
+
+  // Another tab sends the queue and parks a refused save: this page hears it through the storage event and moves the rain
+  // from the timeline to Needs attention without a reload (Codex, PR #71).
+  offline = true
+  await click(buttonIn(card('Pine South 80'), 'Add rain'))
+  const southForm = card('Pine South 80').querySelector('form.field-log-form') as HTMLFormElement; assert(southForm, 'South\'s rain form did not open.')
+  ;(southForm.querySelector('input[name="rainfall"]') as HTMLInputElement).value = '2.5'
+  await act(async () => { southForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush(); await flush() })
+  await until(() => timeline('Pine South 80').includes('2.50 in') && timeline('Pine South 80').includes('Not sent yet'), 'South\'s second rain is kept on this device')
+  const waitingSouth = new FieldLogWriteQueue(win.localStorage, queueKey).read().entries[0]; assert(waitingSouth, 'South\'s second rain must wait in the queue.')
+  win.localStorage.setItem(`${queueKey}:needs-attention`, JSON.stringify({ version: 1, records: [{ id: waitingSouth.operationId, module: 'fieldLog', createdAt: waitingSouth.enqueuedAt, message: 'This save needs attention before it can be retried.', entry: waitingSouth }] }))
+  win.localStorage.setItem(queueKey, JSON.stringify({ version: 1, entries: [] }))
+  await act(async () => { win.dispatchEvent(new win.StorageEvent('storage', { key: `${queueKey}:needs-attention` })); await flush() })
+  await until(() => attention().includes('Pine South 80'), 'the other tab\'s refused rain shows in Needs attention')
+  assert(!timeline('Pine South 80').includes('2.50') && !timeline('Pine South 80').includes('Not sent yet'), `South's timeline must drop the rain another tab parked. Shown: ${timeline('Pine South 80')}`)
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
-console.log('Field Log refused replay page regression passed (parked, later save sent, honest timeline, retry, dismissed delete)')
+console.log('Field Log refused replay page regression passed (parked, later save sent, honest timeline, retry, dismissed delete, other tab)')
