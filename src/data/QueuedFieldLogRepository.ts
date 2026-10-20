@@ -46,7 +46,11 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
   constructor(private readonly live: SupabaseFieldLogRepository, private readonly d: { getContext: () => Promise<Context>; projectRef: string; storage: StorageLike; createId: () => string; clock: () => string; isOffline: () => boolean; readWorkspaceCache?: typeof readWorkspaceCache; writeWorkspaceCacheInOrder?: typeof writeWorkspaceCacheInOrder }) {}
   private async source() { const operationContext = await captureQueuedOperationContext(this.d); const context = { userId: operationContext.userId, farmId: operationContext.farmId }; return { context, operationContext, queue: new FieldLogWriteQueue(this.d.storage, fieldLogWriteQueueKey(this.d.projectRef, context.userId, context.farmId)) } }
   private locked<T>(storageKey: string, task: (verify: () => void) => Promise<T>) { return queueTransaction(storageKey, this.d.storage, this.d.createId, task) }
-  private savedCopyScope(context: Context, fieldId?: string) { return { projectRef: this.d.projectRef, ...context, module: `fieldLog:${fieldId ?? 'all'}` } }
+  /** The saved copy written in turn order. It has its own key: a tab still on the previous app version writes the older
+   * `fieldLog:<scope>` copy without the turn check, and must not overwrite this one. */
+  private savedCopyScope(context: Context, fieldId?: string) { return { projectRef: this.d.projectRef, ...context, module: `fieldLog:${fieldId ?? 'all'}:ordered` } }
+  /** The copy the previous app version saved: read without signal only while no ordered copy exists yet, as that version did. */
+  private previousSavedCopyScope(context: Context, fieldId?: string) { return { projectRef: this.d.projectRef, ...context, module: `fieldLog:${fieldId ?? 'all'}` } }
   /** Writes the saved copy in turn order with every tab on this device (see takeWorkspaceCacheTurn), so the page can trust it
    * once a live read settled an entry: an older answer never puts back rows from before a newer one. */
   private writeSavedCopy(scope: ReturnType<QueuedFieldLogRepository['savedCopyScope']>, write: OrderedWorkspaceWrite<FieldLogData>, turn: number | null, fence: FarmOperationContext | null) { return (this.d.writeWorkspaceCacheInOrder ?? writeWorkspaceCacheInOrder)(scope, write, turn, fence) }
@@ -86,7 +90,8 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
       await verifyRead()
       if (!isTransportFailure(error, this.d.isOffline())) throw error
       const readCache = this.d.readWorkspaceCache ?? readWorkspaceCache
-      const cached = await readCache<FieldLogData>(cacheScope, operationalCacheMaxAgeMs); await verifyRead()
+      let cached = await readCache<FieldLogData>(cacheScope, operationalCacheMaxAgeMs); await verifyRead()
+      if (!cached) { cached = await readCache<FieldLogData>(this.previousSavedCopyScope(context, fieldId), operationalCacheMaxAgeMs); await verifyRead() }
       if (!cached) throw error
       const waiting = queue.read().entries.filter((entry): entry is FieldLogQueueEntryV2 => entry.version === 2)
       for (const entry of waiting) await verifyQueuedOperationContext(this.d, entry.operationContext, entry)

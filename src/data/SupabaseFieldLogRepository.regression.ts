@@ -8,7 +8,7 @@ import { readNeedsAttention } from './needsAttentionStore'
 import { getModuleSyncStatus } from './syncStatus'
 import { quarantineRevokedFarmWork, readRevokedFarmRecovery } from './revokedFarmRecovery'
 import type { FieldLogData, FieldLogEntryDraft } from './fieldLog'
-import { takeWorkspaceCacheTurn, writeWorkspaceCacheInOrder } from './workspaceCache'
+import { captureWorkspaceCacheFence, takeWorkspaceCacheTurn, writeWorkspaceCache, writeWorkspaceCacheInOrder } from './workspaceCache'
 import type { StorageLike } from './writeQueue'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -42,7 +42,7 @@ function deviceCache() {
   const factory = { open: () => { const handle: { result?: unknown; onsuccess?: () => void } = {}; setTimeout(() => { handle.result = database; handle.onsuccess?.() }); return handle } }
   const prior = { indexedDB: Object.getOwnPropertyDescriptor(globalThis, 'indexedDB'), localStorage: Object.getOwnPropertyDescriptor(globalThis, 'localStorage') }
   Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: factory }); Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage })
-  const savedCopy = (projectRef: string) => (records.get(`${projectRef}:${actor}:${farm}:fieldLog:all`) as { data?: FieldLogData } | undefined)?.data
+  const savedCopy = (projectRef: string) => (records.get(`${projectRef}:${actor}:${farm}:fieldLog:all:ordered`) as { data?: FieldLogData } | undefined)?.data
   return {
     storage, records, clock: () => new Date(now++).toISOString(), savedCopy,
     savedIds: (projectRef: string) => savedCopy(projectRef)?.entries.map((entry) => entry.id).join() ?? 'no saved copy',
@@ -429,6 +429,26 @@ async function run() {
     const afterMeetDismiss = await meetQueued.getData()
     assert(!parkedOperation(uid(945)) && !!parkedOperation(uid(941)) && meetCopy() === `${uid(941)}:0.8,${uid(943)}:0.8,${uid(942)}:0.8` && rowsOf(afterMeetDismiss) === `${uid(941)}:0.8,${uid(943)}:0.8,${uid(942)}:0.8`, `Dismiss must let a refused save go without touching the saved copy or the answer. Saved copy: ${meetCopy()} Answer: ${rowsOf(afterMeetDismiss)}`)
   } finally { meetDevice.restore() }
-  console.log('SupabaseFieldLogRepository regression passed (24 coverage groups)')
+
+  // Group 25: a tab still on the previous app version writes its saved copy without turns, under the older key (Codex,
+  // PR #72). It cannot overwrite the ordered copy: an answer without signal shows the ordered copy, not that tab's late,
+  // older answer. Only while no ordered copy exists yet, as right after the update, does an answer without signal use the
+  // older copy, which is what the previous version showed.
+  const previousDevice = deviceCache(); const previousProject = 'previous-version-tab-field-log'; const previousGateway = new FakeGateway(); let previousId = 960
+  previousGateway.entries = [canonical(draft(uid(950)))]
+  const previousQueued = new QueuedFieldLogRepository(live(previousGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: previousProject, storage: previousDevice.storage, createId: () => uid(previousId++), clock: previousDevice.clock, isOffline: () => false })
+  const previousScope = { projectRef: previousProject, userId: actor, farmId: farm, module: 'fieldLog:all' }
+  const previousTabWrites = async (ids: number[]) => { assert(await writeWorkspaceCache(previousScope, { entries: ids.map((n) => canonical(draft(uid(n)))), viewer: { user_id: actor, role: 'worker' } }, captureWorkspaceCacheFence(previousScope, previousDevice.storage)), 'The previous-version tab must be able to write its own copy.') }
+  try {
+    await previousQueued.getNeedsAttentionQueueKey()
+    await previousTabWrites([949])
+    previousGateway.loadFailure = new TypeError('Failed to fetch'); const beforeAnyOrderedCopy = await previousQueued.getData()
+    assert(beforeAnyOrderedCopy.offline && rowsOf(beforeAnyOrderedCopy) === `${uid(949)}:0.8`, `Without an ordered copy yet, an answer without signal must use the previous version's copy. Got: ${rowsOf(beforeAnyOrderedCopy)}`)
+    previousGateway.loadFailure = null; previousGateway.entries.push(canonical(draft(uid(951)))); await previousQueued.getData()
+    await previousTabWrites([948])
+    previousGateway.loadFailure = new TypeError('Failed to fetch'); const afterPreviousTabWrite = await previousQueued.getData()
+    assert(afterPreviousTabWrite.offline && rowsOf(afterPreviousTabWrite) === `${uid(950)}:0.8,${uid(951)}:0.8` && previousDevice.savedIds(previousProject) === `${uid(950)},${uid(951)}`, `A previous-version tab's late write must not replace the ordered copy. Got: ${rowsOf(afterPreviousTabWrite)}`)
+  } finally { previousDevice.restore() }
+  console.log('SupabaseFieldLogRepository regression passed (25 coverage groups)')
 }
 void run()
