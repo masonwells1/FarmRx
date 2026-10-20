@@ -17,7 +17,8 @@ import { resetFarmGrantFromLive } from './data/farmRevocationFence'
 // A rain total kept on the device that the server refuses when it is finally sent (PR #69, "Not changed") must show in
 // Needs attention with its field, amount and reason, must not show in the field's timeline as if it were saved or still
 // on its way, and must not hold up the rain behind it. Retry sends the same change again once the server will take it.
-// The page runs on the real queued repository and queue; only the server is a fake.
+// The page runs on the real queued repository and queue; only the server is a fake. Offline reloads answer from a saved
+// copy with the waiting saves laid over it, so the refused rain is also in the page's loaded rows (Codex, PR #71).
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 const win = new Window({ url: 'http://farmrx.test/field-log' })
@@ -49,7 +50,7 @@ const gateway: FieldLogDataGateway = {
 }
 const context = { projectRef: 'refused-replay-page', userId: user, farmId: farm, generation: 1, token: uid(900), serverEpoch: 1 }
 const live = new SupabaseFieldLogRepository({ gateway, getFarmId: async () => farm, getUserId: async () => user, getOperationContext: async () => context, verifyOperationContext: async () => undefined, createId: () => uid(nextId++) })
-const repository = new QueuedFieldLogRepository(live, { getContext: async () => ({ userId: user, farmId: farm }), projectRef: context.projectRef, storage: win.localStorage, createId: () => uid(nextId++), clock: () => stamp, isOffline: () => offline, readWorkspaceCache: async () => null, writeWorkspaceCache: async () => true })
+const repository = new QueuedFieldLogRepository(live, { getContext: async () => ({ userId: user, farmId: farm }), projectRef: context.projectRef, storage: win.localStorage, createId: () => uid(nextId++), clock: () => stamp, isOffline: () => offline, readWorkspaceCache: async <T,>() => ({ data: { entries: [], viewer: { user_id: user, role: 'worker' } } as T, cachedAt: stamp }), writeWorkspaceCache: async () => true })
 const queueKey = fieldLogWriteQueueKey(context.projectRef, user, farm)
 resetFarmGrantFromLive(win.localStorage, { projectRef: context.projectRef, userId: user, farmId: farm }, 1, stamp)
 
