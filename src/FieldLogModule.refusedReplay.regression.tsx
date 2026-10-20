@@ -50,7 +50,7 @@ const gateway: FieldLogDataGateway = {
 }
 const context = { projectRef: 'refused-replay-page', userId: user, farmId: farm, generation: 1, token: uid(900), serverEpoch: 1 }
 const live = new SupabaseFieldLogRepository({ gateway, getFarmId: async () => farm, getUserId: async () => user, getOperationContext: async () => context, verifyOperationContext: async () => undefined, createId: () => uid(nextId++) })
-const repository = new QueuedFieldLogRepository(live, { getContext: async () => ({ userId: user, farmId: farm }), projectRef: context.projectRef, storage: win.localStorage, createId: () => uid(nextId++), clock: () => stamp, isOffline: () => offline, readWorkspaceCache: async <T,>() => ({ data: { entries: [], viewer: { user_id: user, role: 'worker' } } as T, cachedAt: stamp }), writeWorkspaceCache: async () => true })
+const repository = new QueuedFieldLogRepository(live, { getContext: async () => ({ userId: user, farmId: farm }), projectRef: context.projectRef, storage: win.localStorage, createId: () => uid(nextId++), clock: () => stamp, isOffline: () => offline, readWorkspaceCache: async <T,>() => ({ data: { entries: structuredClone(server), viewer: { user_id: user, role: 'worker' } } as T, cachedAt: stamp }), writeWorkspaceCache: async () => true })
 const queueKey = fieldLogWriteQueueKey(context.projectRef, user, farm)
 resetFarmGrantFromLive(win.localStorage, { projectRef: context.projectRef, userId: user, farmId: farm }, 1, stamp)
 
@@ -132,5 +132,22 @@ assert(timeline('Pine North 80').includes('Not sent yet') && timeline('Pine Sout
   await act(async () => { win.dispatchEvent(new win.StorageEvent('storage', { key: `${queueKey}:needs-attention` })); await flush() })
   await until(() => attention().includes('Pine South 80'), 'the other tab\'s refused rain shows in Needs attention')
   assert(!timeline('Pine South 80').includes('2.50') && !timeline('Pine South 80').includes('Not sent yet'), `South's timeline must drop the rain another tab parked. Shown: ${timeline('Pine South 80')}`)
+
+  // An offline edit of saved rain, shown after an offline reload in place of the server's copy, that another tab parks:
+  // the page shows the server's copy again rather than losing the entry (Codex, PR #71).
+  const savedNorth = [...card('Pine North 80').querySelectorAll('.field-log-row')].find((item) => item.textContent?.includes('1.25 in')) as HTMLElement | undefined; assert(savedNorth, 'North\'s saved rain row did not render before the edit.')
+  await click(buttonIn(savedNorth, 'Edit'))
+  const editForm = card('Pine North 80').querySelector('form.field-log-form') as HTMLFormElement; assert(editForm, 'North\'s edit form did not open.')
+  ;(editForm.querySelector('input[name="rainfall"]') as HTMLInputElement).value = '3'
+  await act(async () => { editForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush(); await flush() })
+  await until(() => timeline('Pine North 80').includes('3.00 in') && timeline('Pine North 80').includes('Not sent yet'), 'the offline edit is kept on this device')
+  await remount(); await until(() => timeline('Pine North 80').includes('3.00 in') && timeline('Pine North 80').includes('Not sent yet'), 'the offline reload shows the waiting edit in place of the server copy')
+  const waitingEdit = new FieldLogWriteQueue(win.localStorage, queueKey).read().entries[0]; assert(waitingEdit?.kind === 'saveEntry' && waitingEdit.draft.rainfall_in === 3, 'North\'s edit must wait in the queue.')
+  const parkedBefore = JSON.parse(win.localStorage.getItem(`${queueKey}:needs-attention`) ?? '{"version":1,"records":[]}') as { version: 1; records: unknown[] }
+  win.localStorage.setItem(`${queueKey}:needs-attention`, JSON.stringify({ version: 1, records: [...parkedBefore.records, { id: waitingEdit.operationId, module: 'fieldLog', createdAt: waitingEdit.enqueuedAt, message: 'This save needs attention before it can be retried.', entry: waitingEdit }] }))
+  win.localStorage.setItem(queueKey, JSON.stringify({ version: 1, entries: [] }))
+  await act(async () => { win.dispatchEvent(new win.StorageEvent('storage', { key: `${queueKey}:needs-attention` })); await flush() })
+  await until(() => timeline('Pine North 80').includes('1.25 in'), 'North shows the server\'s copy again after its edit is parked')
+  assert(!timeline('Pine North 80').includes('3.00') && !timeline('Pine North 80').includes('Not sent yet') && attention().includes('3 in'), `The parked edit must show only in Needs attention. Timeline: ${timeline('Pine North 80')}`)
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
-console.log('Field Log refused replay page regression passed (parked, later save sent, honest timeline, retry, dismissed delete, other tab)')
+console.log('Field Log refused replay page regression passed (parked, later save sent, honest timeline, retry, dismissed delete, other tab, parked edit)')

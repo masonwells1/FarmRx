@@ -70,8 +70,11 @@ export function FieldLogPage({ fieldLogRepository, fieldsRepository }: { fieldLo
     } finally { setLoading(false) }
   }
   useEffect(() => { void reload() }, [])
-  // A refused save moves to Needs attention while the page is open; it then shows there, not as "Not sent yet" in a timeline.
-  useSyncExternalStore(subscribeNeedsAttention, getNeedsAttentionVersion, getNeedsAttentionVersion)
+  // A refused save moves to Needs attention while the page is open, in this tab or another; it then shows there, not as
+  // "Not sent yet" in a timeline, and the page reloads so a row an offline reload showed in place of the server's comes back.
+  const attentionVersion = useSyncExternalStore(subscribeNeedsAttention, getNeedsAttentionVersion, getNeedsAttentionVersion)
+  const firstAttentionVersion = useRef(attentionVersion)
+  useEffect(() => { if (attentionVersion !== firstAttentionVersion.current) void reload() }, [attentionVersion])
   if (loading && !fieldsData) return <section className="page field-log-page"><p className="loading-state">Loading field log…</p></section>
   if (!fieldsData) return <section className="page field-log-page"><h1>Field Log</h1><p className="form-error">{error ?? 'Farm Rx could not load the field log.'}</p><button className="secondary-action" onClick={() => void reload()}>Try again</button></section>
   const activeFields = fieldsData.fields.filter((field) => field.is_active)
