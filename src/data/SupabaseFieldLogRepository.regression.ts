@@ -6,7 +6,8 @@ import type { FarmOperationContext } from './farmOperationContext'
 import { captureFarmRevocationFence, resetFarmGrantFromLive, resetFarmRevokedFromLive } from './farmRevocationFence'
 import { readNeedsAttention } from './needsAttentionStore'
 import { quarantineRevokedFarmWork, readRevokedFarmRecovery } from './revokedFarmRecovery'
-import type { FieldLogEntryDraft } from './fieldLog'
+import type { FieldLogData, FieldLogEntryDraft } from './fieldLog'
+import { writeWorkspaceCacheInOrder } from './workspaceCache'
 import type { StorageLike } from './writeQueue'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -22,6 +23,30 @@ class FakeGateway implements FieldLogDataGateway {
   async loadViewerRole() { if (this.loadFailure) throw this.loadFailure; return structuredClone(this.role) }
   async saveEntry(input: { farmId: string; operationId: string; entry: FieldLogEntryDraft }, context: FarmOperationContext) { this.saves.push({ operationId: input.operationId, entry: structuredClone(input.entry), context: structuredClone(context) }); const existing = this.entries.find((entry) => (entry as { id: string }).id === input.entry.id); const result = existing ?? canonical(input.entry, input.farmId); if (!existing) this.entries.push(result); if (this.saveFailure) throw this.saveFailure; return structuredClone(this.mutateSave(result)) }
   async deleteEntry(input: { farmId: string; entryId: string }, context: FarmOperationContext) { this.deletes.push({ entryId: input.entryId, context: structuredClone(context) }); this.entries = this.entries.filter((entry) => (entry as { farm_id: string; id: string }).farm_id !== input.farmId || (entry as { id: string }).id !== input.entryId); return structuredClone(this.mutateDelete({ id: input.entryId, deleted: true })) }
+}
+async function until(check: () => boolean, failure: string) { for (let tries = 0; !check(); tries += 1) { if (tries > 1_000) throw new Error(failure); await new Promise<void>((resolve) => setTimeout(resolve, 0)) } }
+/** One device for saved-copy tests, shared by every tab on it: its localStorage, a small IndexedDB stand-in that, like the
+ * browser, runs one transaction at a time, and a device clock that moves on a millisecond each time it is read. */
+function deviceCache() {
+  const storage = memory(); const records = new Map<string, unknown>(); let transactions = Promise.resolve(); let now = Date.UTC(2026, 6, 13, 9)
+  const later = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+  const database = { objectStoreNames: { contains: (name: string) => name === 'workspaces' }, close: () => undefined, transaction: () => {
+    const steps: Array<() => void> = []
+    const request = (run: () => unknown) => { const handle: { result?: unknown; onsuccess?: () => void } = {}; steps.push(() => { handle.result = run(); handle.onsuccess?.() }); return handle }
+    const store = { get: (key: string) => request(() => structuredClone(records.get(key))), put: (value: { key: string }) => request(() => { records.set(value.key, structuredClone(value)) }), delete: (key: string) => request(() => { records.delete(key) }) }
+    const transaction: { oncomplete?: () => void; onerror?: () => void; onabort?: () => void; objectStore: () => typeof store } = { objectStore: () => store }
+    transactions = transactions.then(async () => { await later(); while (steps.length) { try { steps.shift()!() } catch { /* a failed step ends only its own work */ } await later() } transaction.oncomplete?.() })
+    return transaction
+  } }
+  const factory = { open: () => { const handle: { result?: unknown; onsuccess?: () => void } = {}; setTimeout(() => { handle.result = database; handle.onsuccess?.() }); return handle } }
+  const prior = { indexedDB: Object.getOwnPropertyDescriptor(globalThis, 'indexedDB'), localStorage: Object.getOwnPropertyDescriptor(globalThis, 'localStorage') }
+  Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: factory }); Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage })
+  const savedCopy = (projectRef: string) => (records.get(`${projectRef}:${actor}:${farm}:fieldLog:all`) as { data?: FieldLogData } | undefined)?.data
+  return {
+    storage, records, clock: () => new Date(now++).toISOString(), savedCopy,
+    savedIds: (projectRef: string) => savedCopy(projectRef)?.entries.map((entry) => entry.id).join() ?? 'no saved copy',
+    restore: () => { for (const [name, descriptor] of Object.entries(prior)) { if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name) } },
+  }
 }
 function live(gateway: FakeGateway, farmId = farm) { let next = 100; const operationContext = { projectRef: 'test', userId: actor, farmId, generation: 1, token: uid(900), serverEpoch: 1 }; return new SupabaseFieldLogRepository({ gateway, getFarmId: async () => farmId, getUserId: async () => actor, getOperationContext: async () => operationContext, verifyOperationContext: async () => undefined, createId: () => uid(next++) }) }
 
@@ -162,33 +187,42 @@ async function run() {
   assert([...(deletedAnswer.waitingIds ?? [])].sort().join() === [uid(601), uid(601), uid(603)].sort().join(), `The saved-copy answer must list waiting deletes as well as saves. Got: ${deletedAnswer.waitingIds?.join()}`)
   assert(deletedAnswer.offline === true && deletedAnswer.entries.map((entry) => entry.id).join() === uid(603), `A waiting delete must take its row out of the saved-copy answer. Got: ${deletedAnswer.entries.map((entry) => entry.id).join()}`)
   labelGateway.loadFailure = null; const liveWhileWaiting = await labelQueued.getData()
-  assert(liveWhileWaiting.offline === undefined && liveWhileWaiting.entries.map((entry) => entry.id).join() === uid(600), 'A live answer carries the server rows only, not the writes still waiting on this device.')
+  assert(liveWhileWaiting.offline === undefined && liveWhileWaiting.entries.map((entry) => `${entry.id}:${entry.pending === true}`).join() === `${uid(600)}:false,${uid(603)}:true`, `A live answer lays the writes still waiting on this device over the server rows. Got: ${liveWhileWaiting.entries.map((entry) => entry.id).join()}`)
   assert([...(liveWhileWaiting.waitingIds ?? [])].sort().join() === [uid(601), uid(601), uid(603)].sort().join(), `A live answer must list the ids still waiting on this device, one per waiting write. Got: ${liveWhileWaiting.waitingIds?.join()}`)
   const lostSignal = new TypeError('Failed to fetch'); labelGateway.loadFailure = lostSignal; let noCopyError: unknown = null
   const noCopyQueued = new QueuedFieldLogRepository(live(labelGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'offline-label-no-copy', storage: memory(), createId: () => uid(604), clock: () => stamp, isOffline: () => true, readWorkspaceCache: async () => null })
   try { await noCopyQueued.getData() } catch (caught) { noCopyError = caught }
   assert(noCopyError === lostSignal, 'With no saved copy, a read that cannot reach the server must fail with that error instead of answering.')
 
-  // Group 15: a live read that started first and answers last does not overwrite the saved copy a newer live read wrote,
-  // because the page relies on that copy once a live read settled its local entries.
+  // Group 15: the saved copy is written in order with every tab on this device. A live read that started first and answers
+  // last does not overwrite the copy a newer live read wrote, in the same tab or in another tab, because the page relies on
+  // that copy once a live read settled its local entries. A live read that starts later still updates it.
   class HeldGateway extends FakeGateway { hold: Promise<void> | null = null; holding = false; override async loadEntries(farmId: string) { const rows = await super.loadEntries(farmId); if (this.hold) { const wait = this.hold; this.hold = null; this.holding = true; await wait } return rows } }
-  const orderGateway = new HeldGateway(); orderGateway.entries = [canonical(draft(uid(700)))]; const savedCopies: string[] = []
-  const orderQueued = new QueuedFieldLogRepository(live(orderGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: 'saved-copy-order-field-log', storage: memory(), createId: () => uid(701), clock: () => stamp, isOffline: () => false, writeWorkspaceCache: async <T>(_scope: unknown, data: T) => { savedCopies.push((data as { entries: Array<{ id: string }> }).entries.map((entry) => entry.id).join()); return true } })
-  let releaseOlder = () => {}; orderGateway.hold = new Promise<void>((resolve) => { releaseOlder = resolve })
-  const olderRead = orderQueued.getData()
-  for (let tries = 0; !orderGateway.holding; tries += 1) { if (tries > 1_000) throw new Error('The older live read never reached the gateway.'); await new Promise<void>((resolve) => setTimeout(resolve, 0)) }
-  orderGateway.entries.push(canonical(draft(uid(702))))
-  const newerRead = await orderQueued.getData(); releaseOlder(); const olderAnswer = await olderRead
-  assert(newerRead.waitingIds?.length === 0, 'With nothing waiting, a live answer lists no waiting ids.')
-  assert(newerRead.entries.length === 2 && olderAnswer.entries.length === 1 && savedCopies.join(' | ') === `${uid(700)},${uid(702)}`, `An older live read answering last must not overwrite the newer saved copy. Writes: ${savedCopies.join(' | ')}`)
-  const laterRead = await orderQueued.getData()
-  assert(laterRead.entries.length === 2 && savedCopies.length === 2 && savedCopies[1] === `${uid(700)},${uid(702)}`, 'A live read that starts after the newest write still updates the saved copy.')
+  const holdNextRead = (gateway: HeldGateway) => { let release = () => {}; gateway.holding = false; gateway.hold = new Promise<void>((resolve) => { release = resolve }); return () => release() }
+  const orderDevice = deviceCache(); const orderProject = 'saved-copy-order-field-log'; const orderGateway = new HeldGateway(); orderGateway.entries = [canonical(draft(uid(700)))]
+  const orderTab = () => new QueuedFieldLogRepository(live(orderGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: orderProject, storage: orderDevice.storage, createId: () => uid(709), clock: orderDevice.clock, isOffline: () => false })
+  const orderTabA = orderTab(); const orderTabB = orderTab(); const orderCopy = () => orderDevice.savedIds(orderProject)
+  try {
+    let releaseOlder = holdNextRead(orderGateway); let olderRead = orderTabA.getData()
+    await until(() => orderGateway.holding, 'The older live read never reached the gateway.')
+    orderGateway.entries.push(canonical(draft(uid(702))))
+    const newerRead = await orderTabA.getData(); releaseOlder(); const olderAnswer = await olderRead
+    assert(newerRead.waitingIds?.length === 0, 'With nothing waiting, a live answer lists no waiting ids.')
+    assert(newerRead.entries.length === 2 && olderAnswer.entries.length === 1 && orderCopy() === `${uid(700)},${uid(702)}`, `An older live read answering last must not overwrite the newer saved copy. Saved copy: ${orderCopy()}`)
+    releaseOlder = holdNextRead(orderGateway); olderRead = orderTabA.getData()
+    await until(() => orderGateway.holding, 'The older live read in the first tab never reached the gateway.')
+    orderGateway.entries.push(canonical(draft(uid(703))))
+    await orderTabB.getData(); releaseOlder(); await olderRead
+    assert(orderCopy() === `${uid(700)},${uid(702)},${uid(703)}`, `An older live read in one tab answering last must not overwrite the copy a newer read in another tab wrote. Saved copy: ${orderCopy()}`)
+    orderGateway.entries.push(canonical(draft(uid(704)))); await orderTabA.getData()
+    assert(orderCopy() === `${uid(700)},${uid(702)},${uid(703)},${uid(704)}`, `A live read that starts after the newest write still updates the saved copy. Saved copy: ${orderCopy()}`)
+  } finally { orderDevice.restore() }
 
   // Group 16: the waiting list is read before the server, so a write sent during the read is still listed (its row may
   // already be in the answer, and the page keeps its copy one reload longer rather than dropping it); unreadable queue
   // bytes never break a live read, they only leave the list unknown.
   const listStore = memory(); const listProject = 'waiting-list-field-log'; const listGateway = new HeldGateway(); let listId = 720; let listOffline = true
-  const listQueued = new QueuedFieldLogRepository(live(listGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: listProject, storage: listStore, createId: () => uid(listId++), clock: () => stamp, isOffline: () => listOffline, writeWorkspaceCache: async () => true })
+  const listQueued = new QueuedFieldLogRepository(live(listGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: listProject, storage: listStore, createId: () => uid(listId++), clock: () => stamp, isOffline: () => listOffline, writeWorkspaceCacheInOrder: async () => true })
   const listed = await listQueued.saveEntry(draft(uid(730))); listOffline = false
   let releaseList = () => {}; listGateway.hold = new Promise<void>((resolve) => { releaseList = resolve })
   const listRead = listQueued.getData()
@@ -198,6 +232,75 @@ async function run() {
   listStore.setItem(fieldLogWriteQueueKey(listProject, actor, farm), '{"version":1,"entries":[{"broken":true}]}')
   const unreadableAnswer = await listQueued.getData()
   assert(unreadableAnswer.waitingIds === undefined && unreadableAnswer.offline === undefined, 'Unreadable queue bytes must leave the waiting list unknown without breaking the live read.')
-  console.log('SupabaseFieldLogRepository regression passed (16 coverage groups)')
+
+  // Group 17: a live answer lays the writes still waiting on this device over the server's rows, as the saved-copy answer
+  // does, so rain kept without signal stays on screen, marked not sent yet, once signal is back and until it is sent (the
+  // reads here reach the server while the writes stay parked). A waiting write from an earlier farm access, which can never
+  // be sent, stays listed as waiting but is not laid over, and the read still answers.
+  const overlayStore = memory(); const overlayProject = 'live-overlay-field-log'; const overlayGateway = new FakeGateway(); let overlayId = 760
+  overlayGateway.entries = [canonical(draft(uid(750))), canonical({ ...draft(uid(751)), rainfall_in: 0.4 })]
+  const overlayQueued = new QueuedFieldLogRepository(live(overlayGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: overlayProject, storage: overlayStore, createId: () => uid(overlayId++), clock: () => '2026-07-13T10:00:00.000Z', isOffline: () => true })
+  await overlayQueued.saveEntry(draft(uid(752))); await overlayQueued.saveEntry({ ...draft(uid(751)), rainfall_in: 0.9 }); await overlayQueued.deleteEntry(uid(750))
+  const overlaid = await overlayQueued.getData(); const overlaidRows = overlaid.entries.map((entry) => `${entry.id}:${entry.pending === true}:${entry.rainfall_in}`).join()
+  assert(overlaid.offline === undefined && overlaidRows === `${uid(751)}:true:0.9,${uid(752)}:true:0.8`, `A live answer must show waiting saves as pending and leave out waiting deletes. Got: ${overlaidRows}`)
+  assert(overlaid.entries[0]?.created_at === stamp && overlaid.waitingIds?.join() === [uid(752), uid(751), uid(750)].join() && overlayGateway.saves.length + overlayGateway.deletes.length === 0, 'On a live answer a waiting edit keeps its row\'s created time, every waiting write is listed, and reading sends nothing.')
+  resetFarmGrantFromLive(overlayStore, { projectRef: overlayProject, userId: actor, farmId: farm }, 2, '2026-07-13T11:00:00.000Z')
+  const afterRegrant = await overlayQueued.getData(); const regrantRows = afterRegrant.entries.map((entry) => `${entry.id}:${entry.pending === true}`).join()
+  assert(regrantRows === `${uid(750)}:false,${uid(751)}:false` && afterRegrant.waitingIds?.length === 3, `Waiting writes from an earlier farm access must not be laid over a live answer, nor break it. Got: ${regrantRows}`)
+
+  // Group 18: a save or delete the server confirmed goes into the saved copy straight away, whether sent at once or later
+  // from the queue, so an answer without signal shows it before the next live read. It only changes a copy that exists:
+  // a copy made from one change would show nothing else without signal.
+  class UpsertGateway extends FakeGateway { override async saveEntry(input: { farmId: string; operationId: string; entry: FieldLogEntryDraft }, context: FarmOperationContext) { this.entries = this.entries.filter((entry) => (entry as { id: string }).id !== input.entry.id); return super.saveEntry(input, context) } }
+  const throughDevice = deviceCache(); const throughProject = 'write-through-field-log'; const throughGateway = new UpsertGateway(); let throughOffline = false; let throughId = 800
+  throughGateway.entries = [canonical(draft(uid(790)))]
+  const throughQueued = new QueuedFieldLogRepository(live(throughGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: throughProject, storage: throughDevice.storage, createId: () => uid(throughId++), clock: throughDevice.clock, isOffline: () => throughOffline })
+  const rowsOf = (data: FieldLogData | undefined) => data?.entries.map((entry) => `${entry.id}:${entry.rainfall_in}${entry.pending ? ':waiting' : ''}`).join() ?? 'no saved copy'
+  const throughCopy = () => rowsOf(throughDevice.savedCopy(throughProject))
+  try {
+    await throughQueued.saveEntry(draft(uid(791)))
+    assert(throughCopy() === 'no saved copy', 'A confirmed save must not make a saved copy from itself alone.')
+    await throughQueued.getData()
+    await throughQueued.saveEntry({ ...draft(uid(791)), rainfall_in: 1.2 }); await throughQueued.saveEntry(draft(uid(792))); await throughQueued.deleteEntry(uid(790))
+    assert(throughCopy() === `${uid(791)}:1.2,${uid(792)}:0.8`, `Confirmed edits, saves and deletes must reach the saved copy. Saved copy: ${throughCopy()}`)
+    throughGateway.loadFailure = new TypeError('Failed to fetch'); const throughNoSignal = await throughQueued.getData()
+    assert(throughNoSignal.offline && rowsOf(throughNoSignal) === `${uid(791)}:1.2,${uid(792)}:0.8`, `An answer without signal must show the confirmed changes. Got: ${rowsOf(throughNoSignal)}`)
+    throughOffline = true; await throughQueued.saveEntry(draft(uid(793))); await throughQueued.deleteEntry(uid(792))
+    assert(throughCopy() === `${uid(791)}:1.2,${uid(792)}:0.8`, `Writes still waiting must not reach the saved copy. Saved copy: ${throughCopy()}`)
+    throughOffline = false; await throughQueued.inspectAndReplay()
+    assert(throughCopy() === `${uid(791)}:1.2,${uid(793)}:0.8`, `Writes sent later from the queue must reach the saved copy too. Saved copy: ${throughCopy()}`)
+    const afterReplay = await throughQueued.getData()
+    assert(afterReplay.offline && rowsOf(afterReplay) === `${uid(791)}:1.2,${uid(793)}:0.8`, `After sending, an answer without signal must show the sent writes as sent. Got: ${rowsOf(afterReplay)}`)
+  } finally { throughDevice.restore() }
+
+  // Group 19: two tabs on one device share one queue and one saved copy. Rain one tab keeps without signal shows as not
+  // sent yet on the other tab's live answer; once it is sent, the first tab's answer without signal shows it as sent. Then
+  // the ordering rule itself, straight on a saved copy: a whole copy must be newer than the stored one, a confirmed change
+  // lands only on an existing copy no newer than itself, and a stored time far ahead of the device clock is not trusted.
+  const tabsDevice = deviceCache(); const tabsProject = 'two-tabs-field-log'; const tabsGateway = new FakeGateway(); let tabsOffline = false; let tabsId = 850
+  tabsGateway.entries = [canonical(draft(uid(840)))]
+  const tabsTab = () => new QueuedFieldLogRepository(live(tabsGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: tabsProject, storage: tabsDevice.storage, createId: () => uid(tabsId++), clock: tabsDevice.clock, isOffline: () => tabsOffline })
+  const tabOne = tabsTab(); const tabTwo = tabsTab()
+  try {
+    await tabTwo.getData()
+    tabsOffline = true; const keptInTabOne = await tabOne.saveEntry(draft(uid(841))); const seenInTabTwo = await tabTwo.getData()
+    assert(keptInTabOne.pending && seenInTabTwo.offline === undefined && rowsOf(seenInTabTwo) === `${uid(840)}:0.8,${uid(841)}:0.8:waiting`, `Rain one tab keeps waiting must show as not sent yet on the other tab's live answer. Got: ${rowsOf(seenInTabTwo)}`)
+    tabsOffline = false; await tabTwo.inspectAndReplay(); await tabOne.inspectAndReplay()
+    tabsGateway.loadFailure = new TypeError('Failed to fetch'); const sentInTabOne = await tabOne.getData()
+    assert(sentInTabOne.offline && rowsOf(sentInTabOne) === `${uid(840)}:0.8,${uid(841)}:0.8` && tabsGateway.saves.length === 1, `Once sent, the first tab's answer without signal must show the rain as sent. Got: ${rowsOf(sentInTabOne)}`)
+    type RuleCopy = { rows: string[] }
+    const ruleScope = { projectRef: tabsProject, userId: actor, farmId: farm, module: 'fieldLog:rule' }; const ruleFence = captureFarmRevocationFence(tabsDevice.storage, ruleScope)
+    const ruleRows = () => ((tabsDevice.records.get(`${tabsProject}:${actor}:${farm}:fieldLog:rule`) as { data?: RuleCopy } | undefined)?.data?.rows ?? []).join()
+    const ruleWrite = (orderedAt: number, write: { replace: RuleCopy } | { change: (stored: RuleCopy) => RuleCopy }) => writeWorkspaceCacheInOrder<RuleCopy>(ruleScope, write, orderedAt, ruleFence)
+    const add = (row: string) => ({ change: (stored: RuleCopy) => ({ rows: [...stored.rows, row] }) })
+    assert(!(await ruleWrite(10, add('lone change'))) && ruleRows() === '', 'A confirmed change must not make a saved copy of its own.')
+    assert(await ruleWrite(10, { replace: { rows: ['read at 10'] } }), 'A first whole copy must be written.')
+    assert(!(await ruleWrite(10, { replace: { rows: ['other read at 10'] } })) && !(await ruleWrite(9, { replace: { rows: ['read at 9'] } })) && ruleRows() === 'read at 10', `A whole copy must be newer than the stored one. Got: ${ruleRows()}`)
+    assert(!(await ruleWrite(9, add('change at 9'))) && await ruleWrite(10, add('change at 10')) && ruleRows() === 'read at 10,change at 10', `A confirmed change lands on a copy from its own time, never on a newer one. Got: ${ruleRows()}`)
+    assert(await ruleWrite(11, { replace: { rows: ['read at 11'] } }) && ruleRows() === 'read at 11', 'A newer whole copy replaces the stored one.')
+    assert(await ruleWrite(Date.now() + 60 * 60 * 1_000, { replace: { rows: ['read with the clock an hour ahead'] } }), 'A copy from a clock set ahead is still written.')
+    assert(await ruleWrite(12, { replace: { rows: ['read after the clock was set back'] } }) && ruleRows() === 'read after the clock was set back', `A stored time far ahead of the device clock must not freeze the saved copy. Got: ${ruleRows()}`)
+  } finally { tabsDevice.restore() }
+  console.log('SupabaseFieldLogRepository regression passed (19 coverage groups)')
 }
 void run()

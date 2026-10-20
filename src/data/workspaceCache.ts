@@ -10,7 +10,7 @@ export const operationalCacheMaxAgeMs = 7 * 24 * 60 * 60 * 1_000
 export type WorkspaceCacheScope = { projectRef: string; userId: string; farmId: string; module: string }
 export type WorkspaceMemoryGuard = { key: string; fence: FarmRevocationSnapshot }
 type WorkspaceEnvelopeV2<T> = WorkspaceCacheScope & { version: 2; key: string; generation: number; fenceToken: string; serverEpoch: number; cachedAt: string; data: T }
-type WorkspaceEnvelopeV3<T> = WorkspaceCacheScope & { version: 3; key: string; generation: number; fenceToken: string; serverEpoch: number; cacheCustody: number; cachedAt: string; data: T }
+type WorkspaceEnvelopeV3<T> = WorkspaceCacheScope & { version: 3; key: string; generation: number; fenceToken: string; serverEpoch: number; cacheCustody: number; cachedAt: string; data: T; orderedAt?: number }
 type WorkspaceEnvelope<T> = WorkspaceEnvelopeV2<T> | WorkspaceEnvelopeV3<T>
 export type WorkspaceCacheNotice = { module: string; cachedAt: string }
 
@@ -126,6 +126,54 @@ export async function writeWorkspaceCache<T>(scope: WorkspaceCacheScope, data: T
     verifyFarmRevocationFence(store, fence)
     if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return false
     return true
+  } catch { return false }
+  finally { database?.close() }
+}
+
+/** A saved-copy write that must not go backwards: a whole new copy, or one change the server confirmed. */
+export type OrderedWorkspaceWrite<T> = { replace: T } | { change: (stored: T) => T }
+
+/** Writes a saved copy in order across every tab on this device. `orderedAt` is the device time its news was known: when a
+ * live read started, or when the server confirmed one change. A whole new copy must be newer than the stored one. A
+ * confirmed change lands only on a stored copy, keeping its cachedAt, and also on a copy from the same moment, which a read
+ * may have taken without it. The check and the write share one IndexedDB transaction, which the browser runs one at a time
+ * across tabs. A stored time more than the allowed clock skew ahead of now is ignored, so a clock set back cannot freeze
+ * the copy. Returns whether it wrote; like writeWorkspaceCache it never throws. */
+export async function writeWorkspaceCacheInOrder<T>(scope: WorkspaceCacheScope, write: OrderedWorkspaceWrite<T>, orderedAt: number, fence: FarmRevocationSnapshot | null, storage?: StorageLike): Promise<boolean> {
+  const store = resolveStorage(storage)
+  if (!available() || !fence || !store || !Number.isFinite(orderedAt)) return false
+  let database: IDBDatabase | null = null
+  try {
+    const cacheCustody = captureWorkspaceCacheCustody(store, scope)
+    database = await open(scope.projectRef)
+    verifyFarmRevocationFence(store, fence)
+    if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return false
+    const transaction = database.transaction(storeName, 'readwrite')
+    const objectStore = transaction.objectStore(storeName)
+    const request = objectStore.get(cacheKey(scope))
+    let written = false
+    request.onsuccess = () => {
+      try {
+        verifyFarmRevocationFence(store, fence)
+        if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return
+        const stored = validEnvelope<T>(request.result, scope, fence, cacheCustody) ? request.result as WorkspaceEnvelope<T> : null
+        const storedOrder = stored && 'orderedAt' in stored ? stored.orderedAt : undefined
+        const storedAt = typeof storedOrder === 'number' && Number.isFinite(storedOrder) && storedOrder <= Date.now() + maximumClockSkewMs ? storedOrder : null
+        const envelope = { version: 3 as const, key: cacheKey(scope), ...scope, generation: fence.generation, fenceToken: fence.token, serverEpoch: fence.serverEpoch, cacheCustody, orderedAt }
+        if ('replace' in write) {
+          if (storedAt !== null && orderedAt <= storedAt) return
+          objectStore.put({ ...envelope, cachedAt: new Date().toISOString(), data: structuredClone(write.replace) } satisfies WorkspaceEnvelope<T>)
+        } else {
+          if (!stored || (storedAt !== null && orderedAt < storedAt)) return
+          objectStore.put({ ...envelope, cachedAt: stored.cachedAt, data: write.change(structuredClone(stored.data)) } satisfies WorkspaceEnvelope<T>)
+        }
+        written = true
+      } catch { written = false }
+    }
+    await complete(transaction)
+    verifyFarmRevocationFence(store, fence)
+    if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return false
+    return written
   } catch { return false }
   finally { database?.close() }
 }

@@ -36,8 +36,8 @@ export function FieldLogPage({ fieldLogRepository, fieldsRepository }: { fieldLo
   // A Today "Rain" tile arrives with a record intent: open the rainfall form on the first field so the farmer types straight away.
   const [openRainfallOnFirstField] = useState(() => parseTodayRecordIntent(location.state)?.record === 'rainfall')
   // Entries this page's forms saved or kept on the device. They show in each field's timeline, over the reload's copy,
-  // until a reload settles them (staysLocal): a reload that loses signal answers from the copy saved on this device
-  // before them, which does not have them yet.
+  // until a reload settles them (staysLocal): a reload that loses signal answers from the copy saved on this device,
+  // which may not have them yet (keeping that copy current is best effort).
   const [localEntries, setLocalEntries] = useState<LocalEntry[]>([])
   const readsStarted = useRef(0); const readsApplied = useRef(0)
   const addLocal = (results: FieldLogEntry[]) => { const readsBefore = readsStarted.current; setLocalEntries((current) => [...current.filter((local) => !results.some((next) => next.id === local.entry.id)), ...results.map((entry) => ({ entry, readsBefore }))]) }
