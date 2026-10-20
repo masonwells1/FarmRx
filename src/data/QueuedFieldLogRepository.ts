@@ -39,7 +39,12 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
   private async source() { const operationContext = await captureQueuedOperationContext(this.d); const context = { userId: operationContext.userId, farmId: operationContext.farmId }; return { context, operationContext, queue: new FieldLogWriteQueue(this.d.storage, fieldLogWriteQueueKey(this.d.projectRef, context.userId, context.farmId)) } }
   private locked<T>(storageKey: string, task: (verify: () => void) => Promise<T>) { return queueTransaction(storageKey, this.d.storage, this.d.createId, task) }
   async getNeedsAttentionQueueKey() { return (await this.source()).queue.key }
-  private syncOrParked(queue: FieldLogWriteQueue) { const count = readNeedsAttention(this.d.storage, queue.key).length; setModuleSyncStatus('fieldLog', count ? { kind: 'blocked', pending: count, message: `${count} saves need attention.` } : { kind: 'synced', pending: 0 }) }
+  /** Status from what is parked and what still waits: "synced" only when nothing is either. */
+  private syncOrParked(queue: FieldLogWriteQueue) {
+    const count = readNeedsAttention(this.d.storage, queue.key).length; if (count) { setModuleSyncStatus('fieldLog', { kind: 'blocked', pending: count, message: `${count} saves need attention.` }); return }
+    let waiting: number; try { waiting = queue.read().entries.length } catch { setModuleSyncStatus('fieldLog', { kind: 'blocked', pending: 0, message: blocked }); return }
+    setModuleSyncStatus('fieldLog', waiting ? { kind: 'pending', pending: waiting } : { kind: 'synced', pending: 0 })
+  }
   async getData(fieldId?: string) {
     const { context, operationContext, queue } = await this.source()
     const verifyRead = () => verifyQueuedReadContext(this.d, operationContext)

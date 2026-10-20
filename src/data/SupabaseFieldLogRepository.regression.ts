@@ -257,6 +257,16 @@ async function run() {
   await regrantParkQueued.dismissNeedsAttention(regrantParkKey, regrantParked[0]!.id)
   assert(readNeedsAttention(regrantParkStore, regrantParkKey).length === 0 && regrantParkGateway.saves.length === 1, 'A dismiss from the right farm removes the change and sends nothing.')
 
+  // Dismissing the last parked change while a later write still waits on the device reports it waiting, not all saved.
+  const waitStore = memory(); const waitProject = 'dismiss-while-waiting-field-log'; const waitGateway = new FakeGateway(); let waitOffline = true; let waitId = 860
+  waitGateway.refuseSave = (entry) => entry.id === uid(861) ? futureRefusal() : entry.id === uid(862) ? new TypeError('Failed to fetch') : null
+  const waitQueued = new QueuedFieldLogRepository(live(waitGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: waitProject, storage: waitStore, createId: () => uid(waitId++), clock: () => stamp, isOffline: () => waitOffline })
+  const waitKey = fieldLogWriteQueueKey(waitProject, actor, farm)
+  await waitQueued.saveEntry(draft(uid(861))); await waitQueued.saveEntry(draft(uid(862))); waitOffline = false; await waitQueued.inspectAndReplay()
+  const waitParked = readNeedsAttention(waitStore, waitKey); assert(waitParked.length === 1 && new FieldLogWriteQueue(waitStore, waitKey).read().entries.length === 1, 'The test needs one parked change and one still waiting.')
+  await waitQueued.dismissNeedsAttention(waitKey, waitParked[0]!.id)
+  const afterDismiss = getModuleSyncStatus('fieldLog'); assert(afterDismiss.kind === 'pending' && afterDismiss.pending === 1, `With a write still waiting, dismissing must not report all changes saved. Got: ${JSON.stringify(afterDismiss)}`)
+
   // Group 19: losing signal still waits, and an access refusal (no permission, access changed) or a database failure that
   // goes away on retry (serialization, deadlock) still holds the whole queue: those are not about the entry, so nothing is
   // parked and nothing behind it is sent.
