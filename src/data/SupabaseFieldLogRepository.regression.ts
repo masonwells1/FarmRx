@@ -396,6 +396,18 @@ async function run() {
     assert(await ruleWrite(31, set('d', 'late')) && await ruleWrite(30, set('d', 'early')) && ruleRows() === 'a=read 25,b=edited on another phone,d=late', `Confirmed changes landing out of order keep the later one for each row. Got: ${ruleRows()}`)
     const sameMoment = await Promise.all([takeWorkspaceCacheTurn(ruleScope), takeWorkspaceCacheTurn(ruleScope), takeWorkspaceCacheTurn(ruleScope)])
     assert(sameMoment.every((turn) => turn !== null && turn > 31) && sameMoment[0]! < sameMoment[1]! && sameMoment[1]! < sameMoment[2]!, `Turns taken at the same moment must all differ, in the order asked, after every turn kept with the stored copy. Got: ${sameMoment.join()}`)
+    // A confirmed change with no ordered copy yet starts one from an older copy valid for this farm's access, with no read
+    // turn, so any live read replaces it (laying the change back when the read began first); an older copy from an earlier
+    // access is never used.
+    const startScope = { ...ruleScope, module: 'fieldLog:start' }; const previousRuleScope = { ...ruleScope, module: 'fieldLog:start-previous' }
+    const startRows = () => ((tabsDevice.records.get(`${tabsProject}:${actor}:${farm}:fieldLog:start`) as { data?: RuleCopy } | undefined)?.data?.rows ?? []).join()
+    const startWrite = (turn: number, write: { replace: RuleCopy } | { change: RuleChange; startFrom?: typeof previousRuleScope }, fence = ruleFence) => writeWorkspaceCacheInOrder<RuleCopy, RuleChange>(startScope, write, turn, fence, ruleApply)
+    assert(await writeWorkspaceCache(previousRuleScope, { rows: ['a=previous version'] }, ruleFence), 'The older copy must be written.')
+    assert(await startWrite(40, { change: { key: 'b', value: 'sent' }, startFrom: previousRuleScope }) && startRows() === 'a=previous version,b=sent', `A confirmed change must start the ordered copy from the older one. Got: ${startRows()}`)
+    assert(await startWrite(35, read('a=live 35')) && startRows() === 'a=live 35,b=sent', `Any live read must replace a started copy, laying back a change confirmed after it began. Got: ${startRows()}`)
+    resetFarmGrantFromLive(tabsDevice.storage, { projectRef: tabsProject, userId: actor, farmId: farm }, 2, '2026-07-13T12:00:00.000Z'); const regrantedFence = captureFarmRevocationFence(tabsDevice.storage, ruleScope)
+    const otherStartScope = { ...ruleScope, module: 'fieldLog:start-after-regrant' }
+    assert(!(await writeWorkspaceCacheInOrder<RuleCopy, RuleChange>(otherStartScope, { change: { key: 'c', value: 'sent' }, startFrom: previousRuleScope }, 50, regrantedFence, ruleApply)) && !tabsDevice.records.has(`${tabsProject}:${actor}:${farm}:fieldLog:start-after-regrant`), 'An older copy from an earlier farm access must not start an ordered copy.')
   } finally { tabsDevice.restore() }
 
   // Group 24: where a refused replay (groups 17-20) meets the saved copy and the live overlay (groups 21-23). A change the
@@ -477,6 +489,27 @@ async function run() {
     commitGateway.loadFailure = new TypeError('Failed to fetch'); const commitOffline = await commitTabA.getData()
     assert(commitOffline.offline && commitOffline.entries.map((entry) => entry.id).join() === `${uid(970)},${uid(971)},${uid(972)}`, 'An answer without signal must show the other phone\'s rain and the save.')
   } finally { commitDevice.restore() }
-  console.log('SupabaseFieldLogRepository regression passed (26 coverage groups)')
+
+  // Group 27: right after the update, a device may hold only the previous version's saved copy, and a write waiting on it
+  // can be sent before the Field Log's first live read (Codex, PR #72). The confirmed save and delete must still reach an
+  // answer without signal: the ordered copy starts from the previous version's copy with them laid on, and the first live
+  // read replaces it as usual.
+  const handoverDevice = deviceCache(); const handoverProject = 'first-ordered-copy-field-log'; const handoverGateway = new FakeGateway(); let handoverOffline = true; let handoverId = 1000
+  handoverGateway.entries = [canonical(draft(uid(990))), canonical(draft(uid(991)))]
+  const handoverQueued = new QueuedFieldLogRepository(live(handoverGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: handoverProject, storage: handoverDevice.storage, createId: () => uid(handoverId++), clock: handoverDevice.clock, isOffline: () => handoverOffline })
+  const handoverScope = { projectRef: handoverProject, userId: actor, farmId: farm, module: 'fieldLog:all' }
+  try {
+    await handoverQueued.getNeedsAttentionQueueKey()
+    assert(await writeWorkspaceCache(handoverScope, { entries: [canonical(draft(uid(990))), canonical(draft(uid(991)))], viewer: { user_id: actor, role: 'worker' } }, captureWorkspaceCacheFence(handoverScope, handoverDevice.storage)), 'The previous version\'s copy must be written.')
+    await handoverQueued.saveEntry(draft(uid(992))); await handoverQueued.deleteEntry(uid(990))
+    handoverOffline = false; await handoverQueued.inspectAndReplay()
+    assert(new FieldLogWriteQueue(handoverDevice.storage, fieldLogWriteQueueKey(handoverProject, actor, farm)).read().entries.length === 0, 'Both waiting writes must be sent before any live read.')
+    assert(handoverDevice.savedIds(handoverProject) === `${uid(991)},${uid(992)}`, `The ordered copy must start from the previous version's copy with the sent writes laid on. Ordered copy: ${handoverDevice.savedIds(handoverProject)}`)
+    handoverGateway.loadFailure = new TypeError('Failed to fetch'); const handoverOfflineAnswer = await handoverQueued.getData()
+    assert(handoverOfflineAnswer.offline && handoverOfflineAnswer.entries.map((entry) => entry.id).join() === `${uid(991)},${uid(992)}`, `An answer without signal must show the sent save and not the sent delete. Got: ${handoverOfflineAnswer.entries.map((entry) => entry.id).join()}`)
+    handoverGateway.loadFailure = null; handoverGateway.entries.push(canonical(draft(uid(993)))); await handoverQueued.getData()
+    assert(handoverDevice.savedIds(handoverProject) === `${uid(991)},${uid(992)},${uid(993)}`, `The first live read must replace the started copy. Ordered copy: ${handoverDevice.savedIds(handoverProject)}`)
+  } finally { handoverDevice.restore() }
+  console.log('SupabaseFieldLogRepository regression passed (27 coverage groups)')
 }
 void run()

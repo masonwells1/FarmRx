@@ -69,7 +69,8 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
   private async keepInSavedCopy(entry: FieldLogQueueEntryV2, confirmed: FieldLogEntry | FieldLogDeleteReceipt) {
     const scope = this.savedCopyScope({ userId: entry.userId, farmId: entry.farmId }); const turn = await takeWorkspaceCacheTurn(scope); const id = waitingId(entry)
     const change: ConfirmedChange = 'deleted' in confirmed ? { deletedId: id } : { saved: confirmed }
-    await this.writeSavedCopy(scope, { change }, turn, entry.operationContext)
+    // Right after the update only the previous version's copy may exist: the change then starts the ordered copy from it.
+    await this.writeSavedCopy(scope, { change, startFrom: this.previousSavedCopyScope({ userId: entry.userId, farmId: entry.farmId }) }, turn, entry.operationContext)
   }
   async getNeedsAttentionQueueKey() { return (await this.source()).queue.key }
   /** Status from what is parked and what still waits: "synced" only when nothing is either. */
