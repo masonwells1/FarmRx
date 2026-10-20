@@ -4,7 +4,7 @@ import { setModuleSyncStatus } from './syncStatus'
 import { validateFieldLogDraft, type FieldLogData, type FieldLogDeleteReceipt, type FieldLogEntry, type FieldLogEntryDraft, type FieldLogRepository } from './fieldLog'
 import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
 import type { SupabaseFieldLogRepository } from './SupabaseFieldLogRepository'
-import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, writeWorkspaceCacheInOrder, type OrderedWorkspaceWrite } from './workspaceCache'
+import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, takeWorkspaceCacheTurn, writeWorkspaceCacheInOrder, type OrderedWorkspaceWrite } from './workspaceCache'
 import { queueTransaction } from './queueTransaction'
 import { captureQueuedOperationContext, verifyQueuedOperationContext, verifyQueuedReadContext } from './queuedOperationGuard'
 import { verifyFarmOperationContext, type FarmOperationContext } from './farmOperationContext'
@@ -30,16 +30,16 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
   private async source() { const operationContext = await captureQueuedOperationContext(this.d); const context = { userId: operationContext.userId, farmId: operationContext.farmId }; return { context, operationContext, queue: new FieldLogWriteQueue(this.d.storage, fieldLogWriteQueueKey(this.d.projectRef, context.userId, context.farmId)) } }
   private locked<T>(storageKey: string, task: (verify: () => void) => Promise<T>) { return queueTransaction(storageKey, this.d.storage, this.d.createId, task) }
   private savedCopyScope(context: Context, fieldId?: string) { return { projectRef: this.d.projectRef, ...context, module: `fieldLog:${fieldId ?? 'all'}` } }
-  /** Writes the saved copy in order with every tab on this device (see writeWorkspaceCacheInOrder), so the page can trust it
+  /** Writes the saved copy in turn order with every tab on this device (see takeWorkspaceCacheTurn), so the page can trust it
    * once a live read settled an entry: an older answer never puts back rows from before a newer one. */
-  private writeSavedCopy(scope: ReturnType<QueuedFieldLogRepository['savedCopyScope']>, write: OrderedWorkspaceWrite<FieldLogData>, orderedAt: number, fence: FarmOperationContext | null) { return (this.d.writeWorkspaceCacheInOrder ?? writeWorkspaceCacheInOrder)(scope, write, orderedAt, fence) }
+  private writeSavedCopy(scope: ReturnType<QueuedFieldLogRepository['savedCopyScope']>, write: OrderedWorkspaceWrite<FieldLogData>, turn: number | null, fence: FarmOperationContext | null) { return (this.d.writeWorkspaceCacheInOrder ?? writeWorkspaceCacheInOrder)(scope, write, turn, fence) }
   /** A save or delete the server confirmed goes into the whole-farm saved copy straight away, so an answer without signal
    * shows it before the next live read. A single field's copy, which no screen asks for, is refreshed by its own live reads.
    * Best effort: without a saved copy, or once the farm's access changed, nothing is written and the save still stands. */
-  private async keepInSavedCopy(entry: FieldLogQueueEntryV2, confirmed: FieldLogEntry | FieldLogDeleteReceipt, confirmedAt: number) {
-    const id = waitingId(entry)
+  private async keepInSavedCopy(entry: FieldLogQueueEntryV2, confirmed: FieldLogEntry | FieldLogDeleteReceipt) {
+    const scope = this.savedCopyScope({ userId: entry.userId, farmId: entry.farmId }); const turn = await takeWorkspaceCacheTurn(scope); const id = waitingId(entry)
     const change = (copy: FieldLogData): FieldLogData => ({ ...copy, entries: 'deleted' in confirmed ? copy.entries.filter((row) => row.id !== id) : copy.entries.some((row) => row.id === id) ? copy.entries.map((row) => row.id === id ? confirmed : row) : [...copy.entries, confirmed] })
-    await this.writeSavedCopy(this.savedCopyScope({ userId: entry.userId, farmId: entry.farmId }), { change }, confirmedAt, entry.operationContext)
+    await this.writeSavedCopy(scope, { change }, turn, entry.operationContext)
   }
   async getNeedsAttentionQueueKey() { return (await this.source()).queue.key }
   async getData(fieldId?: string) {
@@ -47,13 +47,13 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
     const verifyRead = () => verifyQueuedReadContext(this.d, operationContext)
     const cacheScope = this.savedCopyScope(context, fieldId)
     try {
-      const cacheFence = captureWorkspaceCacheFence(cacheScope); const readStartedAt = Date.parse(this.d.clock())
+      const cacheFence = captureWorkspaceCacheFence(cacheScope); const turn = await takeWorkspaceCacheTurn(cacheScope)
       // Writes still waiting when the read starts, read before the server so one sent during the read still shows (as not
       // sent yet, until the next read). Unreadable bytes never break a live read; they leave the waiting list unknown.
       let waiting: FieldLogQueueEntryV2[] | undefined
       try { waiting = queue.read().entries.filter((entry): entry is FieldLogQueueEntryV2 => entry.version === 2) } catch { waiting = undefined }
       const data = await this.live.getData(fieldId); await verifyRead()
-      await this.writeSavedCopy(cacheScope, { replace: data }, readStartedAt, cacheFence); await verifyRead()
+      await this.writeSavedCopy(cacheScope, { replace: data }, turn, cacheFence); await verifyRead()
       if (!waiting) return data
       // Only writes made under this farm access are laid over the rows: one from an earlier access can never be sent.
       const current = waiting.filter((entry) => { try { verifyFarmOperationContext(this.d.storage, entry.operationContext, operationContext); return true } catch { return false } })
@@ -77,7 +77,7 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
     const operationContext = entry.operationContext
     const source = await this.source(); const { context, queue } = source; if (entry.userId !== context.userId || entry.farmId !== context.farmId) throw new Error(blocked); await verifyQueuedOperationContext(this.d, operationContext, entry)
     return this.locked(queue.key, async (verify) => { const verifyOperation = async () => { verify(); await verifyQueuedOperationContext(this.d, operationContext, entry) }; await verifyOperation(); if (this.d.isOffline() || queue.read().entries.length) { await verifyOperation(); const next = queue.append(entry); setModuleSyncStatus('fieldLog', { kind: 'pending', pending: next.entries.length }); launchReplayInBackground(() => this.inspectAndReplay()); return }
-      try { const result = await this.write(entry); await this.keepInSavedCopy(entry, result, Date.parse(this.d.clock())); await verifyOperation(); setModuleSyncStatus('fieldLog', { kind: 'synced', pending: 0 }); return result } catch (error) { await verifyQueuedOperationContext(this.d, operationContext, entry); if (!isTransportFailure(error, this.d.isOffline())) throw error; await verifyOperation(); const next = queue.append(entry); setModuleSyncStatus('fieldLog', { kind: 'pending', pending: next.entries.length }); launchReplayInBackground(() => this.inspectAndReplay()); return } })
+      try { const result = await this.write(entry); await this.keepInSavedCopy(entry, result); await verifyOperation(); setModuleSyncStatus('fieldLog', { kind: 'synced', pending: 0 }); return result } catch (error) { await verifyQueuedOperationContext(this.d, operationContext, entry); if (!isTransportFailure(error, this.d.isOffline())) throw error; await verifyOperation(); const next = queue.append(entry); setModuleSyncStatus('fieldLog', { kind: 'pending', pending: next.entries.length }); launchReplayInBackground(() => this.inspectAndReplay()); return } })
   }
   async saveEntry(draft: FieldLogEntryDraft) {
     const validation = validateFieldLogDraft(draft); if (validation) throw new Error(validation)
@@ -93,7 +93,7 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
       while (envelope.entries[0]?.version === 1) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); envelope = queue.parkLegacyHead(head.operationId); parkedLegacy = true }
       if (parkedLegacy) { setModuleSyncStatus('fieldLog', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return }
       if (this.d.isOffline()) { setModuleSyncStatus('fieldLog', { kind: 'pending', pending: envelope.entries.length }); return }
-      while (envelope.entries.length) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); if (head.version === 1) { envelope = queue.parkLegacyHead(head.operationId); setModuleSyncStatus('fieldLog', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } await verifyQueuedOperationContext(this.d, head.operationContext, head); setModuleSyncStatus('fieldLog', { kind: 'syncing', pending: envelope.entries.length }); try { const confirmed = await this.write(head); await this.keepInSavedCopy(head, confirmed, Date.parse(this.d.clock())); verify(); await verifyQueuedOperationContext(this.d, head.operationContext, head); envelope = queue.removeConfirmedHead(head.operationId) } catch (error) { await verifyQueuedOperationContext(this.d, head.operationContext, head); if (isTransportFailure(error, this.d.isOffline())) { setModuleSyncStatus('fieldLog', { kind: 'pending', pending: envelope.entries.length }); return } setModuleSyncStatus('fieldLog', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } }
+      while (envelope.entries.length) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); if (head.version === 1) { envelope = queue.parkLegacyHead(head.operationId); setModuleSyncStatus('fieldLog', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } await verifyQueuedOperationContext(this.d, head.operationContext, head); setModuleSyncStatus('fieldLog', { kind: 'syncing', pending: envelope.entries.length }); try { const confirmed = await this.write(head); await this.keepInSavedCopy(head, confirmed); verify(); await verifyQueuedOperationContext(this.d, head.operationContext, head); envelope = queue.removeConfirmedHead(head.operationId) } catch (error) { await verifyQueuedOperationContext(this.d, head.operationContext, head); if (isTransportFailure(error, this.d.isOffline())) { setModuleSyncStatus('fieldLog', { kind: 'pending', pending: envelope.entries.length }); return } setModuleSyncStatus('fieldLog', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } }
       setModuleSyncStatus('fieldLog', { kind: 'synced', pending: 0 }) })
     } catch (error) { if (isFarmReplayContextChangedError(error)) throw error; setModuleSyncStatus('fieldLog', { kind: 'blocked', pending: 0, message: blocked }) }
   }

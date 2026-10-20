@@ -7,7 +7,7 @@ import { captureFarmRevocationFence, resetFarmGrantFromLive, resetFarmRevokedFro
 import { readNeedsAttention } from './needsAttentionStore'
 import { quarantineRevokedFarmWork, readRevokedFarmRecovery } from './revokedFarmRecovery'
 import type { FieldLogData, FieldLogEntryDraft } from './fieldLog'
-import { writeWorkspaceCacheInOrder } from './workspaceCache'
+import { takeWorkspaceCacheTurn, writeWorkspaceCacheInOrder } from './workspaceCache'
 import type { StorageLike } from './writeQueue'
 
 const uid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -196,11 +196,12 @@ async function run() {
 
   // Group 15: the saved copy is written in order with every tab on this device. A live read that started first and answers
   // last does not overwrite the copy a newer live read wrote, in the same tab or in another tab, because the page relies on
-  // that copy once a live read settled its local entries. A live read that starts later still updates it.
+  // that copy once a live read settled its local entries. A live read that starts later still updates it. Every read here
+  // starts in the same millisecond of the device clock (Codex, PR #72): the order comes from turns, not clock times.
   class HeldGateway extends FakeGateway { hold: Promise<void> | null = null; holding = false; override async loadEntries(farmId: string) { const rows = await super.loadEntries(farmId); if (this.hold) { const wait = this.hold; this.hold = null; this.holding = true; await wait } return rows } }
   const holdNextRead = (gateway: HeldGateway) => { let release = () => {}; gateway.holding = false; gateway.hold = new Promise<void>((resolve) => { release = resolve }); return () => release() }
   const orderDevice = deviceCache(); const orderProject = 'saved-copy-order-field-log'; const orderGateway = new HeldGateway(); orderGateway.entries = [canonical(draft(uid(700)))]
-  const orderTab = () => new QueuedFieldLogRepository(live(orderGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: orderProject, storage: orderDevice.storage, createId: () => uid(709), clock: orderDevice.clock, isOffline: () => false })
+  const orderTab = () => new QueuedFieldLogRepository(live(orderGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: orderProject, storage: orderDevice.storage, createId: () => uid(709), clock: () => stamp, isOffline: () => false })
   const orderTabA = orderTab(); const orderTabB = orderTab(); const orderCopy = () => orderDevice.savedIds(orderProject)
   try {
     let releaseOlder = holdNextRead(orderGateway); let olderRead = orderTabA.getData()
@@ -275,8 +276,9 @@ async function run() {
 
   // Group 19: two tabs on one device share one queue and one saved copy. Rain one tab keeps without signal shows as not
   // sent yet on the other tab's live answer; once it is sent, the first tab's answer without signal shows it as sent. Then
-  // the ordering rule itself, straight on a saved copy: a whole copy must be newer than the stored one, a confirmed change
-  // lands only on an existing copy no newer than itself, and a stored time far ahead of the device clock is not trusted.
+  // the ordering rule itself, straight on a saved copy: a whole copy needs a later turn than the stored one, a confirmed
+  // change lands only on an existing copy from an earlier turn, and turns taken at the same moment all differ, in the order
+  // they were asked for, and never fall behind the stored copy's turn.
   const tabsDevice = deviceCache(); const tabsProject = 'two-tabs-field-log'; const tabsGateway = new FakeGateway(); let tabsOffline = false; let tabsId = 850
   tabsGateway.entries = [canonical(draft(uid(840)))]
   const tabsTab = () => new QueuedFieldLogRepository(live(tabsGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: tabsProject, storage: tabsDevice.storage, createId: () => uid(tabsId++), clock: tabsDevice.clock, isOffline: () => tabsOffline })
@@ -291,15 +293,15 @@ async function run() {
     type RuleCopy = { rows: string[] }
     const ruleScope = { projectRef: tabsProject, userId: actor, farmId: farm, module: 'fieldLog:rule' }; const ruleFence = captureFarmRevocationFence(tabsDevice.storage, ruleScope)
     const ruleRows = () => ((tabsDevice.records.get(`${tabsProject}:${actor}:${farm}:fieldLog:rule`) as { data?: RuleCopy } | undefined)?.data?.rows ?? []).join()
-    const ruleWrite = (orderedAt: number, write: { replace: RuleCopy } | { change: (stored: RuleCopy) => RuleCopy }) => writeWorkspaceCacheInOrder<RuleCopy>(ruleScope, write, orderedAt, ruleFence)
+    const ruleWrite = (turn: number, write: { replace: RuleCopy } | { change: (stored: RuleCopy) => RuleCopy }) => writeWorkspaceCacheInOrder<RuleCopy>(ruleScope, write, turn, ruleFence)
     const add = (row: string) => ({ change: (stored: RuleCopy) => ({ rows: [...stored.rows, row] }) })
     assert(!(await ruleWrite(10, add('lone change'))) && ruleRows() === '', 'A confirmed change must not make a saved copy of its own.')
-    assert(await ruleWrite(10, { replace: { rows: ['read at 10'] } }), 'A first whole copy must be written.')
-    assert(!(await ruleWrite(10, { replace: { rows: ['other read at 10'] } })) && !(await ruleWrite(9, { replace: { rows: ['read at 9'] } })) && ruleRows() === 'read at 10', `A whole copy must be newer than the stored one. Got: ${ruleRows()}`)
-    assert(!(await ruleWrite(9, add('change at 9'))) && await ruleWrite(10, add('change at 10')) && ruleRows() === 'read at 10,change at 10', `A confirmed change lands on a copy from its own time, never on a newer one. Got: ${ruleRows()}`)
-    assert(await ruleWrite(11, { replace: { rows: ['read at 11'] } }) && ruleRows() === 'read at 11', 'A newer whole copy replaces the stored one.')
-    assert(await ruleWrite(Date.now() + 60 * 60 * 1_000, { replace: { rows: ['read with the clock an hour ahead'] } }), 'A copy from a clock set ahead is still written.')
-    assert(await ruleWrite(12, { replace: { rows: ['read after the clock was set back'] } }) && ruleRows() === 'read after the clock was set back', `A stored time far ahead of the device clock must not freeze the saved copy. Got: ${ruleRows()}`)
+    assert(await ruleWrite(10, { replace: { rows: ['read 10'] } }), 'A first whole copy must be written.')
+    assert(!(await ruleWrite(10, { replace: { rows: ['read 10 again'] } })) && !(await ruleWrite(9, { replace: { rows: ['read 9'] } })) && ruleRows() === 'read 10', `A whole copy needs a later turn than the stored one. Got: ${ruleRows()}`)
+    assert(!(await ruleWrite(9, add('change 9'))) && await ruleWrite(11, add('change 11')) && ruleRows() === 'read 10,change 11', `A confirmed change lands only on a copy from an earlier turn. Got: ${ruleRows()}`)
+    assert(await ruleWrite(12, { replace: { rows: ['read 12'] } }) && ruleRows() === 'read 12', 'A whole copy from a later turn replaces the stored one.')
+    const sameMoment = await Promise.all([takeWorkspaceCacheTurn(ruleScope), takeWorkspaceCacheTurn(ruleScope), takeWorkspaceCacheTurn(ruleScope)])
+    assert(sameMoment.every((turn) => turn !== null && turn > 12) && sameMoment[0]! < sameMoment[1]! && sameMoment[1]! < sameMoment[2]!, `Turns taken at the same moment must all differ, in the order asked, after the stored copy's turn. Got: ${sameMoment.join()}`)
   } finally { tabsDevice.restore() }
   console.log('SupabaseFieldLogRepository regression passed (19 coverage groups)')
 }

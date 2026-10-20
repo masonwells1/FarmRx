@@ -10,7 +10,7 @@ export const operationalCacheMaxAgeMs = 7 * 24 * 60 * 60 * 1_000
 export type WorkspaceCacheScope = { projectRef: string; userId: string; farmId: string; module: string }
 export type WorkspaceMemoryGuard = { key: string; fence: FarmRevocationSnapshot }
 type WorkspaceEnvelopeV2<T> = WorkspaceCacheScope & { version: 2; key: string; generation: number; fenceToken: string; serverEpoch: number; cachedAt: string; data: T }
-type WorkspaceEnvelopeV3<T> = WorkspaceCacheScope & { version: 3; key: string; generation: number; fenceToken: string; serverEpoch: number; cacheCustody: number; cachedAt: string; data: T; orderedAt?: number }
+type WorkspaceEnvelopeV3<T> = WorkspaceCacheScope & { version: 3; key: string; generation: number; fenceToken: string; serverEpoch: number; cacheCustody: number; cachedAt: string; data: T; turn?: number }
 type WorkspaceEnvelope<T> = WorkspaceEnvelopeV2<T> | WorkspaceEnvelopeV3<T>
 export type WorkspaceCacheNotice = { module: string; cachedAt: string }
 
@@ -132,16 +132,36 @@ export async function writeWorkspaceCache<T>(scope: WorkspaceCacheScope, data: T
 
 /** A saved-copy write that must not go backwards: a whole new copy, or one change the server confirmed. */
 export type OrderedWorkspaceWrite<T> = { replace: T } | { change: (stored: T) => T }
+const turnCounterKey = 'farm-rx-workspace-cache-turn'
+const turnOf = (value: unknown) => { const turn = value && typeof value === 'object' ? (value as { turn?: unknown }).turn : undefined; return typeof turn === 'number' && Number.isSafeInteger(turn) && turn > 0 ? turn : 0 }
 
-/** Writes a saved copy in order across every tab on this device. `orderedAt` is the device time its news was known: when a
- * live read started, or when the server confirmed one change. A whole new copy must be newer than the stored one. A
- * confirmed change lands only on a stored copy, keeping its cachedAt, and also on a copy from the same moment, which a read
- * may have taken without it. The check and the write share one IndexedDB transaction, which the browser runs one at a time
- * across tabs. A stored time more than the allowed clock skew ahead of now is ignored, so a clock set back cannot freeze
- * the copy. Returns whether it wrote; like writeWorkspaceCache it never throws. */
-export async function writeWorkspaceCacheInOrder<T>(scope: WorkspaceCacheScope, write: OrderedWorkspaceWrite<T>, orderedAt: number, fence: FarmRevocationSnapshot | null, storage?: StorageLike): Promise<boolean> {
+/** Takes this device's next saved-copy turn. Every tab draws from one counter kept in IndexedDB, which runs one transaction
+ * at a time, so no two turns are equal, even taken in the same millisecond, and a later turn was always taken later. Take
+ * it when a copy's news is known: before a live read asks the server, or once the server confirmed a change. The counter
+ * never falls behind the turn of the scope's stored copy. Null when offline storage cannot be used; it never throws. */
+export async function takeWorkspaceCacheTurn(scope: WorkspaceCacheScope): Promise<number | null> {
+  if (!available()) return null
+  let database: IDBDatabase | null = null
+  try {
+    database = await open(scope.projectRef)
+    const transaction = database.transaction(storeName, 'readwrite')
+    const objectStore = transaction.objectStore(storeName)
+    const counter = objectStore.get(turnCounterKey); const stored = objectStore.get(cacheKey(scope))
+    let turn: number | null = null
+    stored.onsuccess = () => { turn = Math.max(turnOf(counter.result), turnOf(stored.result)) + 1; objectStore.put({ key: turnCounterKey, turn }) }
+    await complete(transaction)
+    return turn
+  } catch { return null }
+  finally { database?.close() }
+}
+
+/** Writes a saved copy in turn order across every tab on this device (see takeWorkspaceCacheTurn). A whole new copy replaces
+ * the stored one only with a later turn. A confirmed change lands only on a stored copy from an earlier turn, keeping its
+ * cachedAt. The check and the write share one IndexedDB transaction. Returns whether it wrote; like writeWorkspaceCache it
+ * never throws. */
+export async function writeWorkspaceCacheInOrder<T>(scope: WorkspaceCacheScope, write: OrderedWorkspaceWrite<T>, turn: number | null, fence: FarmRevocationSnapshot | null, storage?: StorageLike): Promise<boolean> {
   const store = resolveStorage(storage)
-  if (!available() || !fence || !store || !Number.isFinite(orderedAt)) return false
+  if (!available() || !fence || !store || turn === null) return false
   let database: IDBDatabase | null = null
   try {
     const cacheCustody = captureWorkspaceCacheCustody(store, scope)
@@ -157,16 +177,11 @@ export async function writeWorkspaceCacheInOrder<T>(scope: WorkspaceCacheScope, 
         verifyFarmRevocationFence(store, fence)
         if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return
         const stored = validEnvelope<T>(request.result, scope, fence, cacheCustody) ? request.result as WorkspaceEnvelope<T> : null
-        const storedOrder = stored && 'orderedAt' in stored ? stored.orderedAt : undefined
-        const storedAt = typeof storedOrder === 'number' && Number.isFinite(storedOrder) && storedOrder <= Date.now() + maximumClockSkewMs ? storedOrder : null
-        const envelope = { version: 3 as const, key: cacheKey(scope), ...scope, generation: fence.generation, fenceToken: fence.token, serverEpoch: fence.serverEpoch, cacheCustody, orderedAt }
-        if ('replace' in write) {
-          if (storedAt !== null && orderedAt <= storedAt) return
-          objectStore.put({ ...envelope, cachedAt: new Date().toISOString(), data: structuredClone(write.replace) } satisfies WorkspaceEnvelope<T>)
-        } else {
-          if (!stored || (storedAt !== null && orderedAt < storedAt)) return
-          objectStore.put({ ...envelope, cachedAt: stored.cachedAt, data: write.change(structuredClone(stored.data)) } satisfies WorkspaceEnvelope<T>)
-        }
+        if (stored && turn <= turnOf(stored)) return
+        const envelope = { version: 3 as const, key: cacheKey(scope), ...scope, generation: fence.generation, fenceToken: fence.token, serverEpoch: fence.serverEpoch, cacheCustody, turn }
+        if ('replace' in write) objectStore.put({ ...envelope, cachedAt: new Date().toISOString(), data: structuredClone(write.replace) } satisfies WorkspaceEnvelope<T>)
+        else if (stored) objectStore.put({ ...envelope, cachedAt: stored.cachedAt, data: write.change(structuredClone(stored.data)) } satisfies WorkspaceEnvelope<T>)
+        else return
         written = true
       } catch { written = false }
     }
