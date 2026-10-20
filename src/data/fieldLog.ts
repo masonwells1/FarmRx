@@ -41,6 +41,9 @@ export const FIELD_LOG_OFFLINE_DELETE_MESSAGE = 'Deleted on this device. It will
 export interface FieldLogRepository {
   getData(fieldId?: string): Promise<FieldLogData>
   getNeedsAttentionQueueKey?(): Promise<string>
+  /** Resolves with the entry when it is still waiting to send, so the page can show it as not sent yet. */
+  retryNeedsAttention?(queueKey: string, operationId: string): Promise<FieldLogEntry | null>
+  dismissNeedsAttention?(queueKey: string, operationId: string): Promise<void>
   saveEntry(draft: FieldLogEntryDraft): Promise<FieldLogEntry>
   deleteEntry(id: string): Promise<FieldLogDeleteReceipt>
 }

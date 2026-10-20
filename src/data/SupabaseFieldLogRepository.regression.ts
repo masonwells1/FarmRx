@@ -5,6 +5,7 @@ import { canEditFieldLog, SupabaseFieldLogRepository } from './SupabaseFieldLogR
 import type { FarmOperationContext } from './farmOperationContext'
 import { captureFarmRevocationFence, resetFarmGrantFromLive, resetFarmRevokedFromLive } from './farmRevocationFence'
 import { readNeedsAttention } from './needsAttentionStore'
+import { getModuleSyncStatus } from './syncStatus'
 import { quarantineRevokedFarmWork, readRevokedFarmRecovery } from './revokedFarmRecovery'
 import type { FieldLogEntryDraft } from './fieldLog'
 import type { StorageLike } from './writeQueue'
@@ -17,11 +18,11 @@ function memory(): StorageLike & { values: Map<string, string>; readonly length:
 function draft(id = uid(10), type: 'rainfall' | 'note' = 'rainfall'): FieldLogEntryDraft { return type === 'rainfall' ? { id, field_id: field, entry_type: type, observed_on: '2026-07-10', rainfall_in: 0.8, note: 'Storm total' } : { id, field_id: field, entry_type: type, observed_on: '2026-07-10', rainfall_in: null, note: 'First cutting' } }
 function canonical(value: FieldLogEntryDraft, farmId = farm) { return { id: value.id!, farm_id: farmId, field_id: value.field_id, entry_type: value.entry_type, observed_on: value.observed_on, rainfall_in: value.rainfall_in, note: value.note, created_by: actor, created_at: stamp, updated_at: stamp } }
 class FakeGateway implements FieldLogDataGateway {
-  entries: unknown[] = []; role: unknown = { role: 'worker' }; saves: Array<{ operationId: string; entry: FieldLogEntryDraft; context: FarmOperationContext }> = []; deletes: Array<{ entryId: string; context: FarmOperationContext }> = []; mutateSave: (value: unknown) => unknown = (value) => value; mutateDelete: (value: unknown) => unknown = (value) => value; saveFailure: Error | null = null; loadFailure: Error | null = null
+  entries: unknown[] = []; role: unknown = { role: 'worker' }; saves: Array<{ operationId: string; entry: FieldLogEntryDraft; context: FarmOperationContext }> = []; deletes: Array<{ entryId: string; context: FarmOperationContext }> = []; mutateSave: (value: unknown) => unknown = (value) => value; mutateDelete: (value: unknown) => unknown = (value) => value; saveFailure: Error | null = null; loadFailure: Error | null = null; refuseSave: (entry: FieldLogEntryDraft) => Error | null = () => null; refuseDelete: (entryId: string) => Error | null = () => null
   async loadEntries(farmId: string) { if (this.loadFailure) throw this.loadFailure; return structuredClone(this.entries.filter((entry) => (entry as { farm_id: string }).farm_id === farmId)) }
   async loadViewerRole() { if (this.loadFailure) throw this.loadFailure; return structuredClone(this.role) }
-  async saveEntry(input: { farmId: string; operationId: string; entry: FieldLogEntryDraft }, context: FarmOperationContext) { this.saves.push({ operationId: input.operationId, entry: structuredClone(input.entry), context: structuredClone(context) }); const existing = this.entries.find((entry) => (entry as { id: string }).id === input.entry.id); const result = existing ?? canonical(input.entry, input.farmId); if (!existing) this.entries.push(result); if (this.saveFailure) throw this.saveFailure; return structuredClone(this.mutateSave(result)) }
-  async deleteEntry(input: { farmId: string; entryId: string }, context: FarmOperationContext) { this.deletes.push({ entryId: input.entryId, context: structuredClone(context) }); this.entries = this.entries.filter((entry) => (entry as { farm_id: string; id: string }).farm_id !== input.farmId || (entry as { id: string }).id !== input.entryId); return structuredClone(this.mutateDelete({ id: input.entryId, deleted: true })) }
+  async saveEntry(input: { farmId: string; operationId: string; entry: FieldLogEntryDraft }, context: FarmOperationContext) { this.saves.push({ operationId: input.operationId, entry: structuredClone(input.entry), context: structuredClone(context) }); const refusal = this.refuseSave(input.entry); if (refusal) throw refusal; const existing = this.entries.find((entry) => (entry as { id: string }).id === input.entry.id); const result = existing ?? canonical(input.entry, input.farmId); if (!existing) this.entries.push(result); if (this.saveFailure) throw this.saveFailure; return structuredClone(this.mutateSave(result)) }
+  async deleteEntry(input: { farmId: string; entryId: string }, context: FarmOperationContext) { this.deletes.push({ entryId: input.entryId, context: structuredClone(context) }); const refusal = this.refuseDelete(input.entryId); if (refusal) throw refusal; this.entries = this.entries.filter((entry) => (entry as { farm_id: string; id: string }).farm_id !== input.farmId || (entry as { id: string }).id !== input.entryId); return structuredClone(this.mutateDelete({ id: input.entryId, deleted: true })) }
 }
 function live(gateway: FakeGateway, farmId = farm) { let next = 100; const operationContext = { projectRef: 'test', userId: actor, farmId, generation: 1, token: uid(900), serverEpoch: 1 }; return new SupabaseFieldLogRepository({ gateway, getFarmId: async () => farmId, getUserId: async () => actor, getOperationContext: async () => operationContext, verifyOperationContext: async () => undefined, createId: () => uid(next++) }) }
 
@@ -198,6 +199,96 @@ async function run() {
   listStore.setItem(fieldLogWriteQueueKey(listProject, actor, farm), '{"version":1,"entries":[{"broken":true}]}')
   const unreadableAnswer = await listQueued.getData()
   assert(unreadableAnswer.waitingIds === undefined && unreadableAnswer.offline === undefined, 'Unreadable queue bytes must leave the waiting list unknown without breaking the live read.')
-  console.log('SupabaseFieldLogRepository regression passed (16 coverage groups)')
+
+  // Group 17: a save the server refuses on replay goes to Needs attention, whole and with the reason, and the saves
+  // behind it carry on sending. The refusal is the database's own (code P0001), as PostgREST hands it over.
+  const futureRefusal = () => Object.assign(new Error('observed date cannot be more than one day in the future'), { code: 'P0001', details: null, hint: null })
+  const parkStore = memory(); const parkProject = 'refused-replay-field-log'; const parkGateway = new FakeGateway(); let parkOffline = true; let parkId = 800
+  parkGateway.entries = [canonical(draft(uid(810)))]
+  parkGateway.refuseSave = (entry) => entry.id === uid(801) ? futureRefusal() : null
+  const parkQueued = new QueuedFieldLogRepository(live(parkGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: parkProject, storage: parkStore, createId: () => uid(parkId++), clock: () => stamp, isOffline: () => parkOffline })
+  const parkKey = fieldLogWriteQueueKey(parkProject, actor, farm); const parkQueue = new FieldLogWriteQueue(parkStore, parkKey)
+  await parkQueued.saveEntry(draft(uid(801))); await parkQueued.saveEntry(draft(uid(802), 'note')); await parkQueued.deleteEntry(uid(810))
+  const refusedEntry = parkQueue.read().entries[0]; assert(refusedEntry?.version === 2 && refusedEntry.kind === 'saveEntry' && refusedEntry.draft.id === uid(801) && parkQueue.read().entries.length === 3, 'The refused-replay test needs three waiting writes.')
+  parkOffline = false; await parkQueued.inspectAndReplay()
+  const parked = readNeedsAttention(parkStore, parkKey)
+  assert(parked.length === 1 && parked[0]?.id === refusedEntry.operationId && parked[0].module === 'fieldLog' && JSON.stringify(parked[0].entry) === JSON.stringify(refusedEntry), `A save refused on replay must be kept whole in Needs attention. Got: ${JSON.stringify(parked)}`)
+  assert(parked[0]!.message.includes('more than one day in the future'), `Needs attention must say why the server refused the save. Got: ${parked[0]!.message}`)
+  assert(parkQueue.read().entries.length === 0, `The refused save must not hold up the writes behind it. Waiting: ${parkQueue.read().entries.length}`)
+  assert(parkGateway.saves.some((call) => call.entry.id === uid(802)) && parkGateway.entries.some((entry) => (entry as { id: string }).id === uid(802)), 'A save behind the refused one must still reach the server.')
+  assert(parkGateway.deletes.some((call) => call.entryId === uid(810)) && !parkGateway.entries.some((entry) => (entry as { id: string }).id === uid(810)), 'A delete behind the refused save must still reach the server.')
+  assert(!parkGateway.entries.some((entry) => (entry as { id: string }).id === uid(801)), 'The refused save must not appear saved on the server.')
+  const parkedStatus = getModuleSyncStatus('fieldLog'); assert(parkedStatus.kind === 'blocked' && parkedStatus.pending === 1 && parkedStatus.message === '1 saves need attention.', `The sync status must say a save needs attention, as Grain and Scouting do. Got: ${JSON.stringify(parkedStatus)}`)
+  // A later replay leaves the parked save alone and keeps saying it needs attention.
+  const sendsBefore = parkGateway.saves.length; await parkQueued.inspectAndReplay()
+  assert(parkGateway.saves.length === sendsBefore && readNeedsAttention(parkStore, parkKey).length === 1 && getModuleSyncStatus('fieldLog').kind === 'blocked', 'A later replay must not resend or drop the parked save.')
+
+  // Group 18: Retry puts the same saved change back on the queue under the same custody checks and sends it; a wrong queue
+  // or a changed farm grant refuses the retry and keeps the save in Needs attention.
+  assert(!!parkQueued.retryNeedsAttention, 'The Field Log repository must offer a guarded retry.')
+  await rejects(() => parkQueued.retryNeedsAttention(fieldLogWriteQueueKey(parkProject, actor, otherFarm), refusedEntry.operationId), 'A retry for another farm queue must be refused.')
+  await rejects(() => parkQueued.retryNeedsAttention(parkKey, uid(899)), 'A retry for an unknown save must be refused.')
+  await parkQueued.retryNeedsAttention(parkKey, refusedEntry.operationId)
+  assert(readNeedsAttention(parkStore, parkKey).length === 1 && parkQueue.read().entries.length === 0 && parkGateway.saves.filter((call) => call.entry.id === uid(801)).length === 2, 'A retry the server refuses again must land back in Needs attention, not in the queue.')
+  parkGateway.refuseSave = () => null; await parkQueued.retryNeedsAttention(parkKey, refusedEntry.operationId)
+  const retried = parkGateway.saves.filter((call) => call.entry.id === uid(801))
+  assert(readNeedsAttention(parkStore, parkKey).length === 0 && parkQueue.read().entries.length === 0 && parkGateway.entries.some((entry) => (entry as { id: string }).id === uid(801)), 'A retry the server accepts must save the entry and clear Needs attention.')
+  assert(retried.every((call) => call.operationId === refusedEntry.operationId && JSON.stringify(call.context) === JSON.stringify(refusedEntry.operationContext)), 'A retry must resend the same operation with its saved custody context.')
+  assert(getModuleSyncStatus('fieldLog').kind === 'synced', 'With nothing waiting or parked, the sync status must read synced.')
+  const regrantParkStore = memory(); const regrantParkProject = 'refused-regrant-field-log'; const regrantParkGateway = new FakeGateway(); let regrantParkOffline = true; let regrantParkId = 850
+  regrantParkGateway.refuseSave = () => futureRefusal()
+  const regrantParkQueued = new QueuedFieldLogRepository(live(regrantParkGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: regrantParkProject, storage: regrantParkStore, createId: () => uid(regrantParkId++), clock: () => stamp, isOffline: () => regrantParkOffline })
+  const regrantParkKey = fieldLogWriteQueueKey(regrantParkProject, actor, farm)
+  await regrantParkQueued.saveEntry(draft(uid(851))); regrantParkOffline = false; await regrantParkQueued.inspectAndReplay()
+  const regrantParked = readNeedsAttention(regrantParkStore, regrantParkKey); assert(regrantParked.length === 1, 'The regrant retry test needs a parked save.')
+  resetFarmGrantFromLive(regrantParkStore, { projectRef: regrantParkProject, userId: actor, farmId: farm }, 2, '2026-07-12T13:00:00.000Z'); regrantParkGateway.refuseSave = () => null
+  await rejects(() => regrantParkQueued.retryNeedsAttention(regrantParkKey, regrantParked[0]!.id), 'A retry after a revoke and regrant must be refused.')
+  assert(readNeedsAttention(regrantParkStore, regrantParkKey).length === 1 && regrantParkGateway.saves.length === 1 && new FieldLogWriteQueue(regrantParkStore, regrantParkKey).read().entries.length === 0, 'A refused retry must keep the save in Needs attention and send nothing.')
+
+  // Dismiss is guarded the same way: only from the account and farm whose queue the page showed, and only a change that is
+  // really there; a revoke and regrant does not trap it (the farmer can still let it go).
+  assert(!!regrantParkQueued.dismissNeedsAttention, 'The Field Log repository must offer a guarded dismiss.')
+  await rejects(() => regrantParkQueued.dismissNeedsAttention(fieldLogWriteQueueKey(regrantParkProject, actor, otherFarm), regrantParked[0]!.id), 'A dismiss for another farm queue must be refused.')
+  await rejects(() => regrantParkQueued.dismissNeedsAttention(regrantParkKey, uid(899)), 'A dismiss for an unknown change must be refused.')
+  let dismissFarm = farm; const switchedDismiss = new QueuedFieldLogRepository(live(regrantParkGateway), { getContext: async () => ({ userId: actor, farmId: dismissFarm }), projectRef: regrantParkProject, storage: regrantParkStore, createId: () => uid(regrantParkId++), clock: () => stamp, isOffline: () => false })
+  dismissFarm = otherFarm; resetFarmGrantFromLive(regrantParkStore, { projectRef: regrantParkProject, userId: actor, farmId: otherFarm }, 1, stamp)
+  await rejects(() => switchedDismiss.dismissNeedsAttention(regrantParkKey, regrantParked[0]!.id), 'A page left open across a farm switch must not dismiss the old farm\'s change.')
+  assert(readNeedsAttention(regrantParkStore, regrantParkKey).length === 1, 'Refused dismissals must keep the change in Needs attention.')
+  await regrantParkQueued.dismissNeedsAttention(regrantParkKey, regrantParked[0]!.id)
+  assert(readNeedsAttention(regrantParkStore, regrantParkKey).length === 0 && regrantParkGateway.saves.length === 1, 'A dismiss from the right farm removes the change and sends nothing.')
+
+  // Dismissing the last parked change while a later write still waits on the device reports it waiting, not all saved.
+  const waitStore = memory(); const waitProject = 'dismiss-while-waiting-field-log'; const waitGateway = new FakeGateway(); let waitOffline = true; let waitId = 860
+  waitGateway.refuseSave = (entry) => entry.id === uid(861) ? futureRefusal() : entry.id === uid(862) ? new TypeError('Failed to fetch') : null
+  const waitQueued = new QueuedFieldLogRepository(live(waitGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: waitProject, storage: waitStore, createId: () => uid(waitId++), clock: () => stamp, isOffline: () => waitOffline })
+  const waitKey = fieldLogWriteQueueKey(waitProject, actor, farm)
+  await waitQueued.saveEntry(draft(uid(861))); await waitQueued.saveEntry(draft(uid(862))); waitOffline = false; await waitQueued.inspectAndReplay()
+  const waitParked = readNeedsAttention(waitStore, waitKey); assert(waitParked.length === 1 && new FieldLogWriteQueue(waitStore, waitKey).read().entries.length === 1, 'The test needs one parked change and one still waiting.')
+  const beforeDismiss = getModuleSyncStatus('fieldLog'); assert(beforeDismiss.kind === 'blocked' && beforeDismiss.message === '1 saves need attention.', `A later write losing signal must not hide that a parked change needs attention. Got: ${JSON.stringify(beforeDismiss)}`)
+  await waitQueued.dismissNeedsAttention(waitKey, waitParked[0]!.id)
+  const afterDismiss = getModuleSyncStatus('fieldLog'); assert(afterDismiss.kind === 'pending' && afterDismiss.pending === 1, `With a write still waiting, dismissing must not report all changes saved. Got: ${JSON.stringify(afterDismiss)}`)
+
+  // Group 19: losing signal still waits, and an access refusal (no permission, access changed) or a database failure that
+  // goes away on retry (serialization, deadlock) still holds the whole queue: those are not about the entry, so nothing is
+  // parked and nothing behind it is sent.
+  for (const [label, failure] of [['lost signal', () => new TypeError('Failed to fetch')], ['no permission', () => Object.assign(new Error('you do not have permission to edit this farm'), { code: 'P0001' })], ['access changed', () => Object.assign(new Error('FARM_ACCESS_EPOCH_CHANGED'), { code: 'P0001' })], ['sign-in', () => Object.assign(new Error('JWT expired'), { code: 'PGRST301' })], ['database permission', () => Object.assign(new Error('permission denied for function save_field_log_entry'), { code: '42501' })], ['serialization retry', () => Object.assign(new Error('could not serialize access due to concurrent update'), { code: '40001' })], ['deadlock retry', () => Object.assign(new Error('deadlock detected'), { code: '40P01' })]] as const) {
+    const holdStore = memory(); const holdProject = `hold-${label.replace(/\W+/g, '-')}`; const holdGateway = new FakeGateway(); let holdOffline = true; let holdId = 870
+    holdGateway.refuseSave = (entry) => entry.id === uid(871) ? failure() : null
+    const holdQueued = new QueuedFieldLogRepository(live(holdGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: holdProject, storage: holdStore, createId: () => uid(holdId++), clock: () => stamp, isOffline: () => holdOffline })
+    const holdKey = fieldLogWriteQueueKey(holdProject, actor, farm)
+    await holdQueued.saveEntry(draft(uid(871))); await holdQueued.saveEntry(draft(uid(872))); const holdBytes = holdStore.getItem(holdKey)
+    holdOffline = false; await holdQueued.inspectAndReplay()
+    assert(holdStore.getItem(holdKey) === holdBytes && readNeedsAttention(holdStore, holdKey).length === 0 && !holdGateway.saves.some((call) => call.entry.id === uid(872)), `A ${label} failure must keep the queue whole, park nothing and send nothing behind it.`)
+  }
+
+  // Group 20: a farm switch while the refused save is in flight parks nothing: the queue stays byte-exact for its own farm.
+  const switchStore = memory(); const switchProject = 'refused-switch-field-log'; const switchGateway = new FakeGateway(); let switchOffline = true; let switchId = 890; let switchFarm = farm
+  switchGateway.refuseSave = () => { switchFarm = otherFarm; return futureRefusal() }
+  const switchQueued = new QueuedFieldLogRepository(live(switchGateway), { getContext: async () => ({ userId: actor, farmId: switchFarm }), projectRef: switchProject, storage: switchStore, createId: () => uid(switchId++), clock: () => stamp, isOffline: () => switchOffline })
+  const switchKey = fieldLogWriteQueueKey(switchProject, actor, farm)
+  await switchQueued.saveEntry(draft(uid(891))); await switchQueued.saveEntry(draft(uid(892))); const switchBytes = switchStore.getItem(switchKey)
+  switchOffline = false; try { await switchQueued.inspectAndReplay() } catch { /* a farm change may end the replay */ }
+  assert(switchStore.getItem(switchKey) === switchBytes && readNeedsAttention(switchStore, switchKey).length === 0 && !switchGateway.saves.some((call) => call.entry.id === uid(892)), 'A farm switch during a refused replay must park nothing and send nothing behind it.')
+  console.log('SupabaseFieldLogRepository regression passed (20 coverage groups)')
 }
 void run()
