@@ -14,6 +14,9 @@ export interface FieldLogEntry {
   updated_at: string
   /** Present only for a device-local write that is waiting to sync. */
   pending?: boolean
+  /** On a write waiting to sync: the queued change it came from, so a later change to the same entry is not taken for one
+   * the server refused (which keeps this id in Needs attention). */
+  operationId?: string
 }
 
 export interface FieldLogEntryDraft {
@@ -41,6 +44,9 @@ export const FIELD_LOG_OFFLINE_DELETE_MESSAGE = 'Deleted on this device. It will
 export interface FieldLogRepository {
   getData(fieldId?: string): Promise<FieldLogData>
   getNeedsAttentionQueueKey?(): Promise<string>
+  /** Resolves with the entry when it is still waiting to send, so the page can show it as not sent yet. */
+  retryNeedsAttention?(queueKey: string, operationId: string): Promise<FieldLogEntry | null>
+  dismissNeedsAttention?(queueKey: string, operationId: string): Promise<void>
   saveEntry(draft: FieldLogEntryDraft): Promise<FieldLogEntry>
   deleteEntry(id: string): Promise<FieldLogDeleteReceipt>
 }

@@ -8,7 +8,12 @@ const listeners = new Set<() => void>()
 let version = 0
 const changed = () => { version += 1; listeners.forEach((listener) => listener()) }
 export function getNeedsAttentionVersion() { return version }
-export function subscribeNeedsAttention(listener: () => void) { listeners.add(listener); return () => listeners.delete(listener) }
+let watchingOtherTabs = false
+export function subscribeNeedsAttention(listener: () => void) {
+  // A replay in another tab parks a save in shared storage; its counter is that tab's own, so this tab hears it as a storage event.
+  if (!watchingOtherTabs && typeof window !== 'undefined') { watchingOtherTabs = true; window.addEventListener('storage', (event) => { if (!event.key || event.key.endsWith(':needs-attention')) changed() }) }
+  listeners.add(listener); return () => listeners.delete(listener)
+}
 function parse(value: string | null): Envelope {
   if (value === null) return { version: 1, records: [] }
   try { const parsed: unknown = JSON.parse(value); if (!!parsed && typeof parsed === 'object' && (parsed as { version?: unknown }).version === 1 && Array.isArray((parsed as { records?: unknown }).records) && (parsed as { records: unknown[] }).records.every(valid)) return parsed as Envelope } catch { /* handled below */ }
