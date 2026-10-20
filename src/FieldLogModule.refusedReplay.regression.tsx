@@ -40,7 +40,7 @@ const gateway: FieldLogDataGateway = {
     if (offline) throw new TypeError('Failed to fetch')
     sent.push(input.entry.field_id)
     if (refuseNorth && input.entry.field_id === north) throw Object.assign(new Error('observed date cannot be more than one day in the future'), { code: 'P0001', details: null, hint: null })
-    const row = { ...input.entry, farm_id: input.farmId, created_by: user, created_at: stamp, updated_at: stamp }; server.push(row); return structuredClone(row)
+    const row = { ...input.entry, farm_id: input.farmId, created_by: user, created_at: stamp, updated_at: stamp }; const index = server.findIndex((item) => item.id === row.id); if (index >= 0) server[index] = row; else server.push(row); return structuredClone(row)
   },
   deleteEntry: async (input: { farmId: string; entryId: string }) => {
     if (offline) throw new TypeError('Failed to fetch')
@@ -50,7 +50,7 @@ const gateway: FieldLogDataGateway = {
 }
 const context = { projectRef: 'refused-replay-page', userId: user, farmId: farm, generation: 1, token: uid(900), serverEpoch: 1 }
 const live = new SupabaseFieldLogRepository({ gateway, getFarmId: async () => farm, getUserId: async () => user, getOperationContext: async () => context, verifyOperationContext: async () => undefined, createId: () => uid(nextId++) })
-const repository = new QueuedFieldLogRepository(live, { getContext: async () => ({ userId: user, farmId: farm }), projectRef: context.projectRef, storage: win.localStorage, createId: () => uid(nextId++), clock: () => stamp, isOffline: () => offline, readWorkspaceCache: async <T,>() => ({ data: { entries: structuredClone(server), viewer: { user_id: user, role: 'worker' } } as T, cachedAt: stamp }), writeWorkspaceCache: async () => true })
+const repository = new QueuedFieldLogRepository(live, { getContext: async () => ({ userId: user, farmId: farm }), projectRef: context.projectRef, storage: win.localStorage, createId: () => uid(nextId++), clock: () => stamp, isOffline: () => offline, readWorkspaceCache: async <T,>() => ({ data: { entries: structuredClone(server), viewer: { user_id: user, role: 'worker' } } as T, cachedAt: stamp }), writeWorkspaceCacheInOrder: async () => true })
 const queueKey = fieldLogWriteQueueKey(context.projectRef, user, farm)
 resetFarmGrantFromLive(win.localStorage, { projectRef: context.projectRef, userId: user, farmId: farm }, 1, stamp)
 
@@ -100,7 +100,8 @@ assert(timeline('Pine North 80').includes('Not sent yet') && timeline('Pine Sout
   // Once the server takes it, Retry saves it and Needs attention clears.
   refuseNorth = false
   await click(buttonIn(container.querySelector('[aria-label="Saves that need attention"]')!, 'Retry'))
-  await until(() => timeline('Pine North 80').includes('1.25 in'), 'North shows its retried rain')
+  // While the retried rain is back on the queue and on its way, a reload may show it as not sent yet (PR #72); wait for it to settle.
+  await until(() => timeline('Pine North 80').includes('1.25 in') && !timeline('Pine North 80').includes('Not sent yet'), 'North shows its retried rain as saved')
   assert(readNeedsAttention(win.localStorage, queueKey).length === 0 && !container.querySelector('[aria-label="Saves that need attention"]'), 'An accepted retry must clear Needs attention.')
   assert(timeline('Pine North 80').includes('1.25 in') && !timeline('Pine North 80').includes('Not sent yet') && server.some((row) => row.field_id === north), `North must show its saved rain after the retry. Shown: ${timeline('Pine North 80')}`)
 
@@ -149,5 +150,23 @@ assert(timeline('Pine North 80').includes('Not sent yet') && timeline('Pine Sout
   await act(async () => { win.dispatchEvent(new win.StorageEvent('storage', { key: `${queueKey}:needs-attention` })); await flush() })
   await until(() => timeline('Pine North 80').includes('1.25 in'), 'North shows the server\'s copy again after its edit is parked')
   assert(!timeline('Pine North 80').includes('3.00') && !timeline('Pine North 80').includes('Not sent yet') && attention().includes('3 in'), `The parked edit must show only in Needs attention. Timeline: ${timeline('Pine North 80')}`)
+
+  // Where a parked change meets a live answer that lays waiting writes over the server's rows (PR #72): the farmer edits the
+  // same entry again without signal, so a later write for it waits while the refused edit sits in Needs attention. Opened
+  // afresh once reads work again, the live answer shows that waiting edit in place of the server's row; it must show as not
+  // sent yet rather than the entry vanishing. Once it is sent, the server's copy shows and the parked edit stays parked.
+  const parkedNorth = [...card('Pine North 80').querySelectorAll('.field-log-row')].find((item) => item.textContent?.includes('1.25 in')) as HTMLElement | undefined; assert(parkedNorth, 'North\'s saved rain row did not render before the second edit.')
+  await click(buttonIn(parkedNorth, 'Edit'))
+  const secondEdit = card('Pine North 80').querySelector('form.field-log-form') as HTMLFormElement; assert(secondEdit, 'North\'s second edit form did not open.')
+  ;(secondEdit.querySelector('input[name="rainfall"]') as HTMLInputElement).value = '4'
+  await act(async () => { secondEdit.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush(); await flush() })
+  await until(() => timeline('Pine North 80').includes('4.00 in') && timeline('Pine North 80').includes('Not sent yet'), 'the second edit is kept on this device')
+  assert(new FieldLogWriteQueue(win.localStorage, queueKey).read().entries.length === 1 && attention().includes('3 in'), 'The second edit must wait while the first stays in Needs attention.')
+  offline = false; await remount()
+  await until(() => timeline('Pine North 80').includes('4.00 in'), 'the live answer shows the waiting second edit')
+  assert(timeline('Pine North 80').includes('Not sent yet') && !timeline('Pine North 80').includes('1.25') && attention().includes('3 in'), `A waiting edit of an entry with a parked edit must show as not sent yet. Timeline: ${timeline('Pine North 80')}`)
+  await act(async () => { await repository.inspectAndReplay(); await flush() })
+  await remount(); await until(() => timeline('Pine North 80').includes('4.00 in') && !timeline('Pine North 80').includes('Not sent yet'), 'the sent second edit shows the server\'s copy')
+  assert(server.some((row) => row.field_id === north && row.rainfall_in === 4) && attention().includes('3 in'), 'The second edit must reach the server while the refused one stays in Needs attention.')
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
-console.log('Field Log refused replay page regression passed (parked, later save sent, honest timeline, retry, dismissed delete, other tab, parked edit)')
+console.log('Field Log refused replay page regression passed (parked, later save sent, honest timeline, retry, dismissed delete, other tab, parked edit, waiting edit beside a parked one)')

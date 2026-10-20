@@ -13,7 +13,9 @@ import type { FieldsData, FieldsRepository } from './data/fields'
 // save, which does not have the new entry, or throws when there is no copy. Before, the several-fields form said "Saved
 // for ..." while the rain it had just saved was missing from every card. An edit must show the new amount, not the old one
 // (Codex, PR #69). A live reload that started after a save settles it: the server's copy replaces the local one, and an
-// entry deleted on another phone does not linger with an Edit button that would save it back.
+// entry deleted on another phone does not linger with an Edit button that would save it back. Rain still waiting on the
+// device shows as not sent yet on a page opened afresh once signal is back, and in another tab; a page opened afresh without
+// signal shows the saves and deletes the server confirmed.
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 const win = new Window({ url: 'http://farmrx.test/field-log' })
@@ -25,28 +27,33 @@ const user = uid(1); const farm = uid(2); const north = uid(3); const south = ui
 const field = (id: string, name: string) => ({ id, farm_id: farm, name, total_acres: 80, is_active: true, latitude: null, longitude: null })
 const fieldsData = { farm: { id: farm }, entities: [], fields: [field(north, 'Pine North 80'), field(south, 'Pine South 80')], crop_assignments: [], arrangements: [], commodities: [] } as unknown as FieldsData
 
-// A small server, the copy live reads leave on this device, and the writes waiting on the device. It follows the queued
-// repository: a save or delete waits while anything else waits or when its send loses signal; a live read answers from
-// the server alone (with the ids still waiting) and writes the saved copy unless a newer live read already did; 'stale copy' answers from the saved
-// copy with the waiting writes laid over it, marked offline; 'no copy' throws. A read sees the server as it was when it
-// started, so one can be held open across another save. A 'refused' send is turned down by the server.
+// A small server, the copy saved on this device, and the writes waiting on the device, shared by every tab. It follows the
+// queued repository: a save or delete waits while anything else waits or when its send loses signal; a live read answers
+// from the server with the writes waiting when it started laid over it (and their ids) and writes the saved copy unless a
+// newer read or confirmed change already did; 'stale copy' answers from the saved copy with the waiting writes laid over
+// it, marked offline; 'no copy' throws. A read sees the server and the queue as they were when it started, so one can be
+// held open across another save. A 'refused' send is turned down by the server. While copyKeepsUp is on, a save or delete
+// the server confirms also goes into the saved copy; the repository only tries that (no IndexedDB, or a changed farm
+// fence, and it is skipped), so the page must not rely on it, and the scenarios start with it off.
 let signal: 'online' | 'stale copy' | 'no copy' = 'online'; const sendOutcomes: Array<'sent' | 'lost signal' | 'refused'> = []
 let server: FieldLogEntry[] = []; let cached: FieldLogEntry[] = []; let waiting: FieldLogEntry[] = []; let waitingDeletes: string[] = []
-let queueUnreadable = false; let holdReads = 0; const heldReads: Array<() => void> = []; const heldCount = () => heldReads.length; let liveReadsStarted = 0; let cachedFrom = 0
+let queueUnreadable = false; let holdReads = 0; const heldReads: Array<() => void> = []; const heldCount = () => heldReads.length; let copyKeepsUp = false; let moments = 0; let cachedFrom = 0
 let reads = 0; let nextId = 10; const saves: FieldLogEntryDraft[] = []; const deletes: string[] = []
 const upsert = (rows: FieldLogEntry[], row: FieldLogEntry) => [...rows.filter((item) => item.id !== row.id), row]
 const somethingWaits = () => waiting.length > 0 || waitingDeletes.length > 0
-const sendWaiting = () => { server = waiting.map(({ pending: _pending, ...entry }) => ({ ...entry, created_at: server.find((row) => row.id === entry.id)?.created_at ?? entry.created_at })).reduce(upsert, server).filter((row) => !waitingDeletes.includes(row.id)); waiting = []; waitingDeletes = [] }
+const layWaiting = (rows: FieldLogEntry[], saved: FieldLogEntry[], deleted: string[]) => saved.reduce((list, kept) => upsert(list, { ...kept, created_at: list.find((row) => row.id === kept.id)?.created_at ?? kept.created_at }), rows).filter((row) => !deleted.includes(row.id))
+const confirmInCopy = (change: (rows: FieldLogEntry[]) => FieldLogEntry[]) => { const moment = ++moments; if (copyKeepsUp) { cached = change(cached); cachedFrom = moment } }
+const sendWaiting = () => { const sent = waiting.map(({ pending: _pending, ...entry }) => ({ ...entry, created_at: server.find((row) => row.id === entry.id)?.created_at ?? entry.created_at })); const sentDeletes = waitingDeletes; server = sent.reduce(upsert, server).filter((row) => !sentDeletes.includes(row.id)); confirmInCopy((rows) => sent.reduce(upsert, rows).filter((row) => !sentDeletes.includes(row.id))); waiting = []; waitingDeletes = [] }
 const fieldsRepository = { getData: async () => fieldsData, saveField: async () => { throw new Error('unexpected field mutation') } } satisfies FieldsRepository
 const fieldLogRepository = {
   getData: async () => {
     reads += 1
-    const viewer = { user_id: user, role: 'owner' as const }; const mode = signal; const snapshot = structuredClone(server); const liveRead = mode === 'online' ? ++liveReadsStarted : 0; const waitingIds = [...waiting.map((entry) => entry.id), ...waitingDeletes]
+    const viewer = { user_id: user, role: 'owner' as const }; const mode = signal; const snapshot = structuredClone(server); const liveRead = mode === 'online' ? ++moments : 0
+    const waitingSaves = structuredClone(waiting); const waitingRemovals = [...waitingDeletes]; const waitingIds = [...waitingSaves.map((entry) => entry.id), ...waitingRemovals]
     if (holdReads > 0) { holdReads -= 1; await new Promise<void>((resolve) => { heldReads.push(resolve) }) }
-    if (mode === 'online') { if (liveRead > cachedFrom) { cachedFrom = liveRead; cached = structuredClone(snapshot) } return queueUnreadable ? { entries: snapshot, viewer } : { entries: snapshot, viewer, waitingIds } }
+    if (mode === 'online') { if (liveRead > cachedFrom) { cachedFrom = liveRead; cached = structuredClone(snapshot) } return queueUnreadable ? { entries: snapshot, viewer } : { entries: layWaiting(snapshot, waitingSaves, waitingRemovals), viewer, waitingIds } }
     if (mode === 'no copy') throw new Error('network down')
-    const overlay = (rows: FieldLogEntry[], kept: FieldLogEntry) => upsert(rows, { ...kept, created_at: rows.find((row) => row.id === kept.id)?.created_at ?? kept.created_at })
-    return { entries: waiting.reduce(overlay, structuredClone(cached)).filter((row) => !waitingDeletes.includes(row.id)), viewer, offline: true as const, waitingIds }
+    return { entries: layWaiting(structuredClone(cached), waiting, waitingDeletes), viewer, offline: true as const, waitingIds: [...waiting.map((entry) => entry.id), ...waitingDeletes] }
   },
   saveEntry: async (draft: FieldLogEntryDraft) => {
     saves.push(draft)
@@ -56,20 +63,20 @@ const fieldLogRepository = {
     const outcome = sendOutcomes.shift() ?? 'sent'
     if (outcome === 'refused' && !somethingWaits()) throw new Error('field log entry fields have invalid JSON types')
     if (somethingWaits() || outcome === 'lost signal') { const kept = { ...row, created_at: stamp, pending: true }; waiting = upsert(waiting, kept); return kept }
-    server = upsert(server, row); return row
+    server = upsert(server, row); confirmInCopy((rows) => upsert(rows, row)); return row
   },
   deleteEntry: async (id: string) => {
     deletes.push(id)
     if (somethingWaits()) { waitingDeletes.push(id); return { id, deleted: true as const, pending: true } }
-    server = server.filter((row) => row.id !== id); return { id, deleted: true as const }
+    server = server.filter((row) => row.id !== id); confirmInCopy((rows) => rows.filter((row) => row.id !== id)); return { id, deleted: true as const }
   },
 } as unknown as FieldLogRepository
 
 const container = document.createElement('div'); document.body.append(container); const root = createRoot(container)
 const buttonIn = (scope: ParentNode, text: string) => { const found = [...scope.querySelectorAll('button')].find((item) => item.textContent === text) as HTMLButtonElement | undefined; assert(found, `Button ${text} did not render.`); return found }
-const card = (name: string) => { const found = [...container.querySelectorAll('.field-log-card')].find((item) => item.querySelector('h2')?.textContent === name) as HTMLElement | undefined; assert(found, `The ${name} card did not render.`); return found }
-const row = (name: string, text: string) => { const found = [...card(name).querySelectorAll('.field-log-row')].find((item) => item.textContent?.includes(text)) as HTMLElement | undefined; assert(found, `${name} has no timeline row with ${text}. Timeline: ${timeline(name)}`); return found }
-const timeline = (name: string) => card(name).querySelector('.field-log-timeline')?.textContent ?? ''
+const card = (name: string, tab: ParentNode = container) => { const found = [...tab.querySelectorAll('.field-log-card')].find((item) => item.querySelector('h2')?.textContent === name) as HTMLElement | undefined; assert(found, `The ${name} card did not render.`); return found }
+const row = (name: string, text: string, tab: ParentNode = container) => { const found = [...card(name, tab).querySelectorAll('.field-log-row')].find((item) => item.textContent?.includes(text)) as HTMLElement | undefined; assert(found, `${name} has no timeline row with ${text}. Timeline: ${timeline(name, tab)}`); return found }
+const timeline = (name: string, tab: ParentNode = container) => card(name, tab).querySelector('.field-log-timeline')?.textContent ?? ''
 const seasonTotal = (name: string) => card(name).querySelector('.rain-total strong')?.textContent ?? ''
 async function click(element: HTMLElement) { await act(async () => { element.click(); await flush() }) }
 async function submit(form: HTMLFormElement) { await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush(); await flush() }) }
@@ -84,20 +91,22 @@ async function saveRainForBoth(inches: string) {
   await submit(form)
 }
 /** Saves through one field's own form (Add rain, Add note or a row's Edit), which reloads the page after a confirmed save. */
-async function saveInCard(name: string, open: HTMLElement, values: { rainfall?: string; note?: string }) {
+async function saveInCard(name: string, open: HTMLElement, values: { rainfall?: string; note?: string }, tab: ParentNode = container) {
   await click(open)
-  const form = card(name).querySelector('form.field-log-form') as HTMLFormElement
+  const form = card(name, tab).querySelector('form.field-log-form') as HTMLFormElement
   assert(form, `The ${name} entry form did not open.`)
   if (values.rainfall !== undefined) (form.querySelector('input[name="rainfall"]') as HTMLInputElement).value = values.rainfall
   if (values.note !== undefined) (form.querySelector('textarea[name="note"]') as HTMLTextAreaElement).value = values.note
   await submit(form)
 }
 const addNote = (name: string, note: string) => saveInCard(name, buttonIn(card(name), 'Add note'), { note })
+/** Opens the page afresh, as after leaving the Field Log and coming back: nothing the old page kept on screen carries over. */
+async function reopen(key: string, into = root) { await act(async () => { into.render(createElement(MemoryRouter, { key }, createElement(FieldLogPage, { fieldLogRepository, fieldsRepository }), createElement(ConfirmDialogHost))); await flush(); await flush() }) }
 const N = 'Pine North 80'; const S = 'Pine South 80'
 
 try {
   for (const mode of ['no copy', 'stale copy'] as const) {
-    signal = 'online'; server = []; cached = []; cachedFrom = liveReadsStarted; waiting = []; waitingDeletes = []; reads = 0; saves.length = 0
+    signal = 'online'; server = []; cached = []; cachedFrom = moments; waiting = []; waitingDeletes = []; reads = 0; saves.length = 0
     await act(async () => { root.render(createElement(MemoryRouter, { key: mode }, createElement(FieldLogPage, { fieldLogRepository, fieldsRepository }), createElement(ConfirmDialogHost))); await flush() })
     signal = mode
     await saveRainForBoth('0.75')
@@ -317,6 +326,42 @@ try {
   await act(async () => { heldReads.shift()?.(); await flush(); await flush() })
   assert(timeline(N).includes('0.16 in') && !timeline(N).includes('0.06 in'), `The edit must still show after its own reload answers from the saved copy. North: ${timeline(N)}`)
 
+  // Rain kept on the device while sends have no signal shows, not sent yet, on a page opened afresh once signal is back:
+  // the page keeps no copy of it then, so it comes from the live answer, which lays the waiting writes over the server's
+  // rows. It has no Edit button until it is sent, and a live reload after sending shows the server's copy.
+  signal = 'online'; sendWaiting(); sendOutcomes.push('lost signal')
+  await saveInCard(S, buttonIn(card(S), 'Add rain'), { rainfall: '0.31' })
+  assert(row(S, '0.31 in').textContent?.includes('Not sent yet'), `Rain whose send lost signal must show as not sent yet. South: ${timeline(S)}`)
+  await reopen('reopened with signal')
+  assert(waiting.length === 1 && row(S, '0.31 in').textContent?.includes('Not sent yet') && !row(S, '0.31 in').textContent?.includes('Edit'), `Waiting rain must show as not sent yet on a page opened afresh with signal. South: ${timeline(S)}`)
+  sendWaiting(); await addNote(S, 'Synthetic reopened note')
+  assert(timeline(S).includes('0.31 in') && !row(S, '0.31 in').textContent?.includes('Not sent yet') && row(S, '0.31 in').textContent?.includes('Edit'), `Sent rain must settle on the next live reload. South: ${timeline(S)}`)
+
+  // While reloads have no signal, a confirmed save and a confirmed delete go into the device's saved copy: a page opened
+  // afresh without signal shows the new rain and not the deleted note, with no copies kept by the page.
+  copyKeepsUp = true; signal = 'stale copy'
+  await saveInCard(N, buttonIn(card(N), 'Add rain'), { rainfall: '0.33' })
+  await click(buttonIn(row(S, 'Synthetic reopened note'), 'Delete')); await click(dialogButton('Delete entry')); await act(async () => { await flush() })
+  assert(server.some((entry) => entry.rainfall_in === 0.33) && !server.some((entry) => entry.note === 'Synthetic reopened note'), 'The save and the delete must reach the server.')
+  await reopen('reopened without signal')
+  assert(timeline(N).includes('0.33 in') && !timeline(N).includes('Not sent yet') && !timeline(S).includes('Synthetic reopened note'), `A page opened afresh without signal must show confirmed saves and deletes. North: ${timeline(N)} South: ${timeline(S)}`)
+
+  // Two tabs on one device share the queue and the saved copy. Rain the first tab keeps waiting shows, not sent yet, in a
+  // second tab opened with signal; once it is sent, the second tab opened afresh without signal shows it as sent, and its
+  // next live reload shows the server's copy.
+  signal = 'online'; sendOutcomes.push('lost signal')
+  await saveInCard(N, buttonIn(card(N), 'Add rain'), { rainfall: '0.44' })
+  const secondTab = document.createElement('div'); document.body.append(secondTab); const secondRoot = createRoot(secondTab)
+  try {
+    await reopen('second tab', secondRoot)
+    assert(row(N, '0.44 in', secondTab).textContent?.includes('Not sent yet') && !row(N, '0.44 in', secondTab).textContent?.includes('Edit'), `The second tab must show the first tab's waiting rain as not sent yet. North: ${timeline(N, secondTab)}`)
+    sendWaiting(); signal = 'stale copy'; await reopen('second tab without signal', secondRoot)
+    assert(timeline(N, secondTab).includes('0.44 in') && !timeline(N, secondTab).includes('Not sent yet'), `Once sent, a page opened afresh without signal must show the rain as sent. North: ${timeline(N, secondTab)}`)
+    signal = 'online'; await saveInCard(S, buttonIn(card(S, secondTab), 'Add note'), { note: 'Synthetic note from the second tab' }, secondTab)
+    assert(timeline(N, secondTab).includes('0.44 in') && !timeline(N, secondTab).includes('Not sent yet') && timeline(S, secondTab).includes('Synthetic note from the second tab'), `The second tab's live reload must show the server's copies. North: ${timeline(N, secondTab)}`)
+  } finally { await act(async () => { secondRoot.unmount() }); secondTab.remove() }
+  copyKeepsUp = false
+
   // Same-date rows are ordered by created time as instants: the server writes '…T15:00:00+00:00' and the device
   // '…T15:00:00.400Z', and comparing the text would put the older row first.
   const stampedNote = (id: string, createdAt: string, note: string) => ({ id, farm_id: farm, field_id: north, entry_type: 'note', observed_on: '2027-08-04', rainfall_in: null, note, created_by: user, created_at: createdAt, updated_at: createdAt })
@@ -324,4 +369,4 @@ try {
   await act(async () => { root.render(createElement(MemoryRouter, { key: 'order' }, createElement(FieldLogPage, { fieldLogRepository: orderRepository, fieldsRepository }), createElement(ConfirmDialogHost))); await flush() })
   assert(timeline(N).indexOf('Device stamp row') >= 0 && timeline(N).indexOf('Device stamp row') < timeline(N).indexOf('Server stamp row'), `The later row must come first whatever its stamp format. North: ${timeline(N)}`)
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
-console.log('Field Log local copies regression passed (several-fields and one-field saves, edits, deletes, reload order)')
+console.log('Field Log local copies regression passed (several-fields and one-field saves, edits, deletes, reload order, waiting rain on a reopened page and a second tab, saved copy kept current)')
