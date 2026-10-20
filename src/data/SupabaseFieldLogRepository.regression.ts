@@ -429,6 +429,14 @@ async function run() {
     const afterMeetDismiss = await meetQueued.getData()
     assert(!parkedOperation(uid(945)) && !!parkedOperation(uid(941)) && meetCopy() === `${uid(941)}:0.8,${uid(943)}:0.8,${uid(942)}:0.8` && rowsOf(afterMeetDismiss) === `${uid(941)}:0.8,${uid(943)}:0.8,${uid(942)}:0.8`, `Dismiss must let a refused save go without touching the saved copy or the answer. Saved copy: ${meetCopy()} Answer: ${rowsOf(afterMeetDismiss)}`)
   } finally { meetDevice.restore() }
-  console.log('SupabaseFieldLogRepository regression passed (24 coverage groups)')
+  // Group 25: a saved-copy write that throws never turns a confirmed save into a failure, and on replay never holds or parks it.
+  const throwStore = memory(); const throwProject = 'copy-write-throws-field-log'; const throwGateway = new FakeGateway(); let throwOffline = false; let throwId = 960
+  const throwQueued = new QueuedFieldLogRepository(live(throwGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: throwProject, storage: throwStore, createId: () => uid(throwId++), clock: () => stamp, isOffline: () => throwOffline, writeWorkspaceCacheInOrder: async () => { throw new Error('saved copy write failed') } })
+  const throwKey = fieldLogWriteQueueKey(throwProject, actor, farm)
+  const direct = await throwQueued.saveEntry(draft(uid(951)))
+  assert(!direct.pending && throwGateway.entries.some((entry) => (entry as { id: string }).id === uid(951)), 'A confirmed save must stand when the saved-copy write throws.')
+  throwOffline = true; await throwQueued.saveEntry(draft(uid(952))); throwOffline = false; await throwQueued.inspectAndReplay()
+  assert(new FieldLogWriteQueue(throwStore, throwKey).read().entries.length === 0 && readNeedsAttention(throwStore, throwKey).length === 0 && getModuleSyncStatus('fieldLog').kind === 'synced' && throwGateway.entries.some((entry) => (entry as { id: string }).id === uid(952)), `A replayed save must leave the queue as sent when the saved-copy write throws. Status: ${JSON.stringify(getModuleSyncStatus('fieldLog'))}`)
+  console.log('SupabaseFieldLogRepository regression passed (25 coverage groups)')
 }
 void run()

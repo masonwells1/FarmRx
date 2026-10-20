@@ -53,11 +53,14 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
   /** A save or delete the server confirmed goes into the whole-farm saved copy straight away, so an answer without signal
    * shows it before the next live read. A single field's copy, which no screen asks for, is refreshed by its own live reads.
    * Only a confirmed change comes here: a refused one is parked in Needs attention and never reaches the saved copy. Best
-   * effort: without a saved copy, or once the farm's access changed, nothing is written and the save still stands. */
+   * effort: without a saved copy, or once the farm's access changed, nothing is written and the save still stands. It never
+   * throws: a confirmed write must not read as a failure, and on replay a failure here would park a saved change. */
   private async keepInSavedCopy(entry: FieldLogQueueEntryV2, confirmed: FieldLogEntry | FieldLogDeleteReceipt) {
-    const scope = this.savedCopyScope({ userId: entry.userId, farmId: entry.farmId }); const turn = await takeWorkspaceCacheTurn(scope); const id = waitingId(entry)
-    const change = (copy: FieldLogData): FieldLogData => ({ ...copy, entries: 'deleted' in confirmed ? copy.entries.filter((row) => row.id !== id) : copy.entries.some((row) => row.id === id) ? copy.entries.map((row) => row.id === id ? confirmed : row) : [...copy.entries, confirmed] })
-    await this.writeSavedCopy(scope, { change }, turn, entry.operationContext)
+    try {
+      const scope = this.savedCopyScope({ userId: entry.userId, farmId: entry.farmId }); const turn = await takeWorkspaceCacheTurn(scope); const id = waitingId(entry)
+      const change = (copy: FieldLogData): FieldLogData => ({ ...copy, entries: 'deleted' in confirmed ? copy.entries.filter((row) => row.id !== id) : copy.entries.some((row) => row.id === id) ? copy.entries.map((row) => row.id === id ? confirmed : row) : [...copy.entries, confirmed] })
+      await this.writeSavedCopy(scope, { change }, turn, entry.operationContext)
+    } catch { /* the save stands; the next live read refreshes the copy */ }
   }
   async getNeedsAttentionQueueKey() { return (await this.source()).queue.key }
   /** Status from what is parked and what still waits: "synced" only when nothing is either. */

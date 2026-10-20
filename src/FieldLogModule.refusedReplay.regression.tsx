@@ -166,7 +166,16 @@ assert(timeline('Pine North 80').includes('Not sent yet') && timeline('Pine Sout
   await until(() => timeline('Pine North 80').includes('4.00 in'), 'the live answer shows the waiting second edit')
   assert(timeline('Pine North 80').includes('Not sent yet') && !timeline('Pine North 80').includes('1.25') && attention().includes('3 in'), `A waiting edit of an entry with a parked edit must show as not sent yet. Timeline: ${timeline('Pine North 80')}`)
   await act(async () => { await repository.inspectAndReplay(); await flush() })
+  // Sent in the background with no reload, then a page render without a reload (South rain kept without signal): the
+  // second edit still shows, because only the parked change itself is hidden.
+  offline = true; await click(buttonIn(card('Pine South 80'), 'Add rain'))
+  const southRainForm = card('Pine South 80').querySelector('form.field-log-form') as HTMLFormElement; assert(southRainForm, 'South\'s rain form did not open.')
+  ;(southRainForm.querySelector('input[name="rainfall"]') as HTMLInputElement).value = '0.5'
+  await act(async () => { southRainForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush(); await flush() })
+  await until(() => timeline('Pine South 80').includes('0.50 in'), 'South keeps its rain on the device')
+  assert(timeline('Pine North 80').includes('4.00 in'), `A sent second edit must keep showing until the next reload. Timeline: ${timeline('Pine North 80')}`)
+  offline = false
   await remount(); await until(() => timeline('Pine North 80').includes('4.00 in') && !timeline('Pine North 80').includes('Not sent yet'), 'the sent second edit shows the server\'s copy')
   assert(server.some((row) => row.field_id === north && row.rainfall_in === 4) && attention().includes('3 in'), 'The second edit must reach the server while the refused one stays in Needs attention.')
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
-console.log('Field Log refused replay page regression passed (parked, later save sent, honest timeline, retry, dismissed delete, other tab, parked edit, waiting edit beside a parked one)')
+console.log('Field Log refused replay page regression passed (parked, later save sent, honest timeline, retry, dismissed delete, other tab, parked edit, waiting edit beside a parked one, sent edit through a render without a reload)')
