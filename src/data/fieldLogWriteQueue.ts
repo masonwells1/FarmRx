@@ -63,12 +63,15 @@ export class FieldLogWriteQueue {
   private persist(next: FieldLogQueueEnvelopeV1) { const raw = JSON.stringify(next); parseFieldLogQueue(raw); this.storage.setItem(this.key, raw); if (this.storage.getItem(this.key) !== raw) throw new Error('This log entry could not be saved on this device. Keep this screen open and try again.') }
   append(entry: FieldLogQueueEntry) { const current = this.read(); const next = { version: 1 as const, entries: current.entries.some((item) => item.operationId === entry.operationId) ? current.entries : [...current.entries, entry] }; verifyFieldLogQueueCustody(this.storage, next); this.persist(next); return next }
   removeConfirmedHead(operationId: string) { const current = this.read(); if (current.entries[0]?.operationId !== operationId) throw new Error(blocked); const next = { version: 1 as const, entries: current.entries.slice(1) }; this.persist(next); return next }
-  parkLegacyHead(operationId: string) {
+  parkLegacyHead(operationId: string) { if (this.read().entries[0]?.version !== 1) throw new Error(blocked); return this.parkHead(operationId, legacyBlocked) }
+  /** Moves the head, whole, to Needs attention so the writes behind it carry on. Needs attention bytes this device cannot
+   * read are never overwritten, because appending would drop the records in them. */
+  parkHead(operationId: string, message: string) {
     const current = this.read(); const head = current.entries[0]
-    if (!head || head.operationId !== operationId || head.version !== 1) throw new Error(blocked)
+    if (!head || head.operationId !== operationId) throw new Error(blocked)
     const attentionKey = needsAttentionKey(this.key); const priorAttention = this.storage.getItem(attentionKey)
     if (priorAttention !== null && priorAttention !== JSON.stringify({ version: 1, records: readNeedsAttention(this.storage, this.key) })) throw new Error(blocked)
-    appendNeedsAttention(this.storage, this.key, { id: head.operationId, module: 'fieldLog', createdAt: head.enqueuedAt, message: legacyBlocked, entry: head })
+    appendNeedsAttention(this.storage, this.key, { id: head.operationId, module: 'fieldLog', createdAt: head.enqueuedAt, message, entry: head })
     const next = { version: 1 as const, entries: current.entries.slice(1) }; this.persist(next); return next
   }
 }
