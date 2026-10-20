@@ -264,6 +264,7 @@ async function run() {
   const waitKey = fieldLogWriteQueueKey(waitProject, actor, farm)
   await waitQueued.saveEntry(draft(uid(861))); await waitQueued.saveEntry(draft(uid(862))); waitOffline = false; await waitQueued.inspectAndReplay()
   const waitParked = readNeedsAttention(waitStore, waitKey); assert(waitParked.length === 1 && new FieldLogWriteQueue(waitStore, waitKey).read().entries.length === 1, 'The test needs one parked change and one still waiting.')
+  const beforeDismiss = getModuleSyncStatus('fieldLog'); assert(beforeDismiss.kind === 'blocked' && beforeDismiss.message === '1 saves need attention.', `A later write losing signal must not hide that a parked change needs attention. Got: ${JSON.stringify(beforeDismiss)}`)
   await waitQueued.dismissNeedsAttention(waitKey, waitParked[0]!.id)
   const afterDismiss = getModuleSyncStatus('fieldLog'); assert(afterDismiss.kind === 'pending' && afterDismiss.pending === 1, `With a write still waiting, dismissing must not report all changes saved. Got: ${JSON.stringify(afterDismiss)}`)
 
