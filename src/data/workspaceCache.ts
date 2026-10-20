@@ -10,7 +10,7 @@ export const operationalCacheMaxAgeMs = 7 * 24 * 60 * 60 * 1_000
 export type WorkspaceCacheScope = { projectRef: string; userId: string; farmId: string; module: string }
 export type WorkspaceMemoryGuard = { key: string; fence: FarmRevocationSnapshot }
 type WorkspaceEnvelopeV2<T> = WorkspaceCacheScope & { version: 2; key: string; generation: number; fenceToken: string; serverEpoch: number; cachedAt: string; data: T }
-type WorkspaceEnvelopeV3<T> = WorkspaceCacheScope & { version: 3; key: string; generation: number; fenceToken: string; serverEpoch: number; cacheCustody: number; cachedAt: string; data: T }
+type WorkspaceEnvelopeV3<T> = WorkspaceCacheScope & { version: 3; key: string; generation: number; fenceToken: string; serverEpoch: number; cacheCustody: number; cachedAt: string; data: T; turn?: number; changes?: Array<{ turn: number; change: unknown }> }
 type WorkspaceEnvelope<T> = WorkspaceEnvelopeV2<T> | WorkspaceEnvelopeV3<T>
 export type WorkspaceCacheNotice = { module: string; cachedAt: string }
 
@@ -126,6 +126,102 @@ export async function writeWorkspaceCache<T>(scope: WorkspaceCacheScope, data: T
     verifyFarmRevocationFence(store, fence)
     if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return false
     return true
+  } catch { return false }
+  finally { database?.close() }
+}
+
+/** A saved-copy write that must not go backwards: a whole new copy from a live read, or one change the server confirmed.
+ * A change may name an older copy to start from when no ordered copy exists yet (one an earlier app version saved). */
+export type OrderedWorkspaceWrite<T, C> = { replace: T } | { change: C; startFrom?: WorkspaceCacheScope }
+type KeptChange<C> = { turn: number; change: C }
+const turnCounterKey = 'farm-rx-workspace-cache-turn'
+const turnOf = (value: unknown) => { const turn = value && typeof value === 'object' ? (value as { turn?: unknown }).turn : undefined; return typeof turn === 'number' && Number.isSafeInteger(turn) && turn > 0 ? turn : 0 }
+function keptChangesOf<C>(value: unknown): KeptChange<C>[] {
+  const changes = value && typeof value === 'object' ? (value as { changes?: unknown }).changes : undefined
+  return Array.isArray(changes) ? changes.filter((item): item is KeptChange<C> => turnOf(item) > 0 && Object.hasOwn(item as object, 'change')).sort((a, b) => a.turn - b.turn) : []
+}
+const latestTurnOf = (value: unknown) => Math.max(turnOf(value), ...keptChangesOf(value).map((item) => item.turn))
+
+/** Takes this device's next saved-copy turn. Every tab draws from one counter kept in IndexedDB, which runs one transaction
+ * at a time, so no two turns are equal, even taken in the same millisecond, and a later turn was always taken later. Take
+ * it when a copy's news is known: before a live read asks the server, or once the server confirmed a change. The counter
+ * never falls behind the turns kept with the scope's stored copy. Null when offline storage cannot be used; it never throws. */
+export async function takeWorkspaceCacheTurn(scope: WorkspaceCacheScope): Promise<number | null> {
+  if (!available()) return null
+  let database: IDBDatabase | null = null
+  try {
+    database = await open(scope.projectRef)
+    const transaction = database.transaction(storeName, 'readwrite')
+    const objectStore = transaction.objectStore(storeName)
+    const counter = objectStore.get(turnCounterKey); const stored = objectStore.get(cacheKey(scope))
+    let turn: number | null = null
+    stored.onsuccess = () => { turn = Math.max(turnOf(counter.result), latestTurnOf(stored.result)) + 1; objectStore.put({ key: turnCounterKey, turn }) }
+    await complete(transaction)
+    return turn
+  } catch { return null }
+  finally { database?.close() }
+}
+
+/** Writes a saved copy in turn order across every tab on this device (see takeWorkspaceCacheTurn). The stored copy carries
+ * the turn of the live read it came from, and the changes confirmed since, each with its own turn.
+ * - A whole new copy replaces it only with a later turn than that read. A change confirmed after the new copy's read began
+ *   may be missing from it, so those kept changes are laid back on top; older ones are already in it and are dropped.
+ * - A confirmed change lands only on a stored copy whose read began before the change's turn (a later read already has
+ *   it). It is laid on the copy, the changes confirmed after it are laid again so the latest wins per row, and it is kept.
+ *   It leaves the copy's turn and cachedAt as they were, so a newer read still replaces the copy. With no stored copy it
+ *   starts one from `startFrom` when that copy is valid for this farm's fence, with no read turn, so any live read
+ *   replaces it; without either, nothing is written.
+ * `apply` lays one change on a copy; it must give the same row whether or not the copy had it. The check and the write
+ * share one IndexedDB transaction. Returns whether it wrote; like writeWorkspaceCache it never throws. */
+export async function writeWorkspaceCacheInOrder<T, C>(scope: WorkspaceCacheScope, write: OrderedWorkspaceWrite<T, C>, turn: number | null, fence: FarmRevocationSnapshot | null, apply: (data: T, change: C) => T, storage?: StorageLike): Promise<boolean> {
+  const store = resolveStorage(storage)
+  if (!available() || !fence || !store || turn === null) return false
+  let database: IDBDatabase | null = null
+  try {
+    const cacheCustody = captureWorkspaceCacheCustody(store, scope)
+    const startFrom = 'change' in write ? write.startFrom : undefined
+    let startCustody: number | null = null; if (startFrom) { try { startCustody = captureWorkspaceCacheCustody(store, startFrom) } catch { startCustody = null } }
+    database = await open(scope.projectRef)
+    verifyFarmRevocationFence(store, fence)
+    if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return false
+    const transaction = database.transaction(storeName, 'readwrite')
+    const objectStore = transaction.objectStore(storeName)
+    const request = objectStore.get(cacheKey(scope))
+    let written = false
+    const envelope = { version: 3 as const, key: cacheKey(scope), ...scope, generation: fence.generation, fenceToken: fence.token, serverEpoch: fence.serverEpoch, cacheCustody }
+    const putChange = (change: C, base: WorkspaceEnvelope<T>, readTurn: number, kept: KeptChange<C>[]) => {
+      const changes = [...kept, { turn: turn!, change }].sort((a, b) => a.turn - b.turn)
+      objectStore.put({ ...envelope, ...(readTurn ? { turn: readTurn } : {}), changes, cachedAt: base.cachedAt, data: changes.filter((item) => item.turn >= turn!).reduce((data, item) => apply(data, item.change), structuredClone(base.data)) } satisfies WorkspaceEnvelope<T>)
+      written = true
+    }
+    request.onsuccess = () => {
+      try {
+        verifyFarmRevocationFence(store, fence)
+        if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return
+        const stored = validEnvelope<T>(request.result, scope, fence, cacheCustody) ? request.result as WorkspaceEnvelope<T> : null
+        const readTurn = stored ? turnOf(stored) : 0; const kept = stored ? keptChangesOf<C>(stored) : []
+        if (turn <= readTurn) return
+        if ('replace' in write) {
+          const later = kept.filter((item) => item.turn > turn)
+          objectStore.put({ ...envelope, turn, changes: later, cachedAt: new Date().toISOString(), data: later.reduce((data, item) => apply(data, item.change), structuredClone(write.replace)) } satisfies WorkspaceEnvelope<T>)
+          written = true
+        } else if (stored) putChange(write.change, stored, readTurn, kept)
+        else if (startFrom && startCustody !== null) {
+          const previous = objectStore.get(cacheKey(startFrom))
+          previous.onsuccess = () => {
+            try {
+              verifyFarmRevocationFence(store, fence)
+              if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody) || !verifyWorkspaceCacheCustody(store, startFrom, startCustody!)) return
+              if (validEnvelope<T>(previous.result, startFrom, fence, startCustody!)) putChange(write.change, previous.result as WorkspaceEnvelope<T>, 0, [])
+            } catch { written = false }
+          }
+        }
+      } catch { written = false }
+    }
+    await complete(transaction)
+    verifyFarmRevocationFence(store, fence)
+    if (!verifyWorkspaceCacheCustody(store, scope, cacheCustody)) return false
+    return written
   } catch { return false }
   finally { database?.close() }
 }

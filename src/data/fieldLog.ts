@@ -14,6 +14,9 @@ export interface FieldLogEntry {
   updated_at: string
   /** Present only for a device-local write that is waiting to sync. */
   pending?: boolean
+  /** On a write waiting to sync: the queued change it came from, so a later change to the same entry is not taken for one
+   * the server refused (which keeps this id in Needs attention). */
+  operationId?: string
 }
 
 export interface FieldLogEntryDraft {

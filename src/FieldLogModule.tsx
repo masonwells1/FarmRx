@@ -27,16 +27,17 @@ function staysLocal(local: LocalEntry, log: FieldLogData, read: number) {
   if (read <= local.readsBefore) return true
   return local.entry.pending === true && (log.waitingIds?.includes(local.entry.id) ?? true)
 }
-/** Entries whose save or delete the server refused and that now wait in Needs attention instead of the queue. */
+/** Saves and deletes the server refused that now wait in Needs attention instead of the queue: the saves by the queued
+ * change they came from (and by entry, for a waiting row that does not name its change), the deletes by entry. */
 function parkedIds(queueKey: string | null) {
-  const saves = new Set<string>(); const deletes = new Set<string>()
-  if (typeof window === 'undefined' || !queueKey) return { saves, deletes }
+  const saves = new Set<string>(); const saveOperations = new Set<string>(); const deletes = new Set<string>()
+  if (typeof window === 'undefined' || !queueKey) return { saves, saveOperations, deletes }
   for (const record of readNeedsAttention(window.localStorage, queueKey)) {
     const entry = record.entry as { kind?: unknown; draft?: { id?: unknown }; entryId?: unknown } | null
-    if (entry?.kind === 'saveEntry' && typeof entry.draft?.id === 'string') saves.add(entry.draft.id)
+    if (entry?.kind === 'saveEntry' && typeof entry.draft?.id === 'string') { saves.add(entry.draft.id); saveOperations.add(record.id) }
     if (entry?.kind === 'deleteEntry' && typeof entry.entryId === 'string') deletes.add(entry.entryId)
   }
-  return { saves, deletes }
+  return { saves, saveOperations, deletes }
 }
 /** The server's order for timeline rows: newest date, then newest created, then id. Created times are compared as
  * instants because the server's stamps and the device's are written differently. */
@@ -48,8 +49,8 @@ export function FieldLogPage({ fieldLogRepository, fieldsRepository }: { fieldLo
   // A Today "Rain" tile arrives with a record intent: open the rainfall form on the first field so the farmer types straight away.
   const [openRainfallOnFirstField] = useState(() => parseTodayRecordIntent(location.state)?.record === 'rainfall')
   // Entries this page's forms saved or kept on the device. They show in each field's timeline, over the reload's copy,
-  // until a reload settles them (staysLocal): a reload that loses signal answers from the copy saved on this device
-  // before them, which does not have them yet.
+  // until a reload settles them (staysLocal): a reload that loses signal answers from the copy saved on this device,
+  // which may not have them yet (keeping that copy current is best effort).
   const [localEntries, setLocalEntries] = useState<LocalEntry[]>([])
   const readsStarted = useRef(0); const readsApplied = useRef(0)
   const addLocal = (results: FieldLogEntry[]) => { const readsBefore = readsStarted.current; setLocalEntries((current) => [...current.filter((local) => !results.some((next) => next.id === local.entry.id)), ...results.map((entry) => ({ entry, readsBefore }))]) }
@@ -80,8 +81,10 @@ export function FieldLogPage({ fieldLogRepository, fieldsRepository }: { fieldLo
   const activeFields = fieldsData.fields.filter((field) => field.is_active)
   const fieldNames = new Map(fieldsData.fields.map((field) => [field.id, field.name]))
   const parked = parkedIds(attentionQueueKey)
-  // A refused save shows only in Needs attention: not from this page's forms, nor from an offline reload that laid it over the saved copy.
-  const notParked = (entry: FieldLogEntry) => !(entry.pending && parked.saves.has(entry.id))
+  // A refused save shows only in Needs attention: not from this page's forms, nor from a reload that laid it over the rows.
+  // A later change to the same entry still waiting on this device is a different queued change: it shows as not sent yet,
+  // so the entry does not vanish while a reload shows that waiting change in place of the server's row.
+  const notParked = (entry: FieldLogEntry) => !(entry.pending && (entry.operationId ? parked.saveOperations.has(entry.operationId) : parked.saves.has(entry.id)))
   const shownLocal = localEntries.map((local) => local.entry).filter(notParked)
   const retry = fieldLogRepository.retryNeedsAttention ? async (row: { queueKey: string; id: string }) => { const waiting = await fieldLogRepository.retryNeedsAttention!(row.queueKey, row.id); if (waiting) addLocal([waiting]) } : undefined
   const dismiss = fieldLogRepository.dismissNeedsAttention ? (row: { queueKey: string; id: string }) => fieldLogRepository.dismissNeedsAttention!(row.queueKey, row.id) : undefined
