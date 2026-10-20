@@ -4,6 +4,7 @@ import { act } from 'react'
 import { MemoryRouter } from 'react-router'
 import { createRoot } from 'react-dom/client'
 import { FieldLogPage } from './FieldLogModule'
+import { ConfirmDialogHost } from './components/ConfirmDialog'
 import type { FieldLogEntryDraft } from './data/fieldLog'
 import type { FieldLogDataGateway } from './data/FieldLogDataGateway'
 import type { FieldsData, FieldsRepository } from './data/fields'
@@ -29,7 +30,7 @@ const field = (id: string, name: string) => ({ id, farm_id: farm, name, total_ac
 const fieldsData = { farm: { id: farm }, entities: [], fields: [field(north, 'Pine North 80'), field(south, 'Pine South 80')], crop_assignments: [], arrangements: [], commodities: [] } as unknown as FieldsData
 const fieldsRepository = { getData: async () => fieldsData, saveField: async () => { throw new Error('unexpected field mutation') } } satisfies FieldsRepository
 
-let refuseNorth = true; let offline = true; let nextId = 100
+let refuseNorth = true; let refuseDelete = false; let offline = true; let nextId = 100
 const server: Array<Record<string, unknown>> = []; const sent: string[] = []
 const gateway: FieldLogDataGateway = {
   loadEntries: async () => { if (offline) throw new TypeError('Failed to fetch'); return structuredClone(server) },
@@ -40,7 +41,11 @@ const gateway: FieldLogDataGateway = {
     if (refuseNorth && input.entry.field_id === north) throw Object.assign(new Error('observed date cannot be more than one day in the future'), { code: 'P0001', details: null, hint: null })
     const row = { ...input.entry, farm_id: input.farmId, created_by: user, created_at: stamp, updated_at: stamp }; server.push(row); return structuredClone(row)
   },
-  deleteEntry: async () => { throw new Error('unexpected delete') },
+  deleteEntry: async (input: { farmId: string; entryId: string }) => {
+    if (offline) throw new TypeError('Failed to fetch')
+    if (refuseDelete) throw Object.assign(new Error('field log entry could not be removed'), { code: 'P0001', details: null, hint: null })
+    const index = server.findIndex((row) => row.id === input.entryId); if (index >= 0) server.splice(index, 1); return { id: input.entryId, deleted: true }
+  },
 }
 const context = { projectRef: 'refused-replay-page', userId: user, farmId: farm, generation: 1, token: uid(900), serverEpoch: 1 }
 const live = new SupabaseFieldLogRepository({ gateway, getFarmId: async () => farm, getUserId: async () => user, getOperationContext: async () => context, verifyOperationContext: async () => undefined, createId: () => uid(nextId++) })
@@ -49,10 +54,11 @@ const queueKey = fieldLogWriteQueueKey(context.projectRef, user, farm)
 resetFarmGrantFromLive(win.localStorage, { projectRef: context.projectRef, userId: user, farmId: farm }, 1, stamp)
 
 const container = document.createElement('div'); document.body.append(container); let root = createRoot(container)
-const render = async () => { await act(async () => { root.render(createElement(MemoryRouter, null, createElement(FieldLogPage, { fieldLogRepository: repository, fieldsRepository }))); await flush(); await flush() }) }
+const render = async () => { await act(async () => { root.render(createElement(MemoryRouter, null, createElement(FieldLogPage, { fieldLogRepository: repository, fieldsRepository }), createElement(ConfirmDialogHost))); await flush(); await flush() }) }
 const remount = async () => { await act(async () => { root.unmount() }); root = createRoot(container); await render() }
 const buttonIn = (scope: ParentNode, text: string) => { const found = [...scope.querySelectorAll('button')].find((item) => item.textContent === text) as HTMLButtonElement | undefined; assert(found, `Button ${text} did not render.`); return found }
 const card = (name: string) => { const found = [...container.querySelectorAll('article.field-log-card')].find((item) => item.querySelector('h2')?.textContent === name) as HTMLElement | undefined; assert(found, `Card ${name} did not render.`); return found }
+const dialogButton = (text: string) => { const found = [...document.querySelectorAll('[role="dialog"] button')].find((item) => item.textContent === text) as HTMLButtonElement | undefined; assert(found, `Dialog button ${text} did not render.`); return found }
 const timeline = (name: string) => card(name).querySelector('.field-log-timeline')?.textContent ?? ''
 const attention = () => container.querySelector('[aria-label="Saves that need attention"]')?.textContent ?? ''
 /** Waits, a tick at a time, until the page has settled into what the step expects (the queue lock can take several ticks). */
@@ -96,5 +102,18 @@ assert(timeline('Pine North 80').includes('Not sent yet') && timeline('Pine Sout
   await until(() => timeline('Pine North 80').includes('1.25 in'), 'North shows its retried rain')
   assert(readNeedsAttention(win.localStorage, queueKey).length === 0 && !container.querySelector('[aria-label="Saves that need attention"]'), 'An accepted retry must clear Needs attention.')
   assert(timeline('Pine North 80').includes('1.25 in') && !timeline('Pine North 80').includes('Not sent yet') && server.some((row) => row.field_id === north), `North must show its saved rain after the retry. Shown: ${timeline('Pine North 80')}`)
+
+  // A delete kept on the device that the server refuses puts the rain back on the timeline, and it stays there once the
+  // farmer dismisses the refused delete: the server still has it (Codex, PR #71).
+  offline = true; refuseDelete = true
+  const northRow = [...card('Pine North 80').querySelectorAll('.field-log-row')].find((item) => item.textContent?.includes('1.25 in')) as HTMLElement | undefined; assert(northRow, 'North\'s saved rain row did not render.')
+  await click(buttonIn(northRow, 'Delete')); await click(dialogButton('Delete entry'))
+  await until(() => !timeline('Pine North 80').includes('1.25'), 'the kept delete hides the row')
+  offline = false; await act(async () => { await repository.inspectAndReplay(); await flush() })
+  await until(() => attention().includes('Field log entry removal'), 'the refused delete is in Needs attention')
+  await until(() => timeline('Pine North 80').includes('1.25 in'), 'the refused delete shows the rain again')
+  await click(buttonIn(container.querySelector('[aria-label="Saves that need attention"]')!, 'Dismiss')); await click(buttonIn(container.querySelector('[aria-label="Saves that need attention"]')!, 'Yes, dismiss'))
+  await until(() => !container.querySelector('[aria-label="Saves that need attention"]'), 'the dismissed delete leaves Needs attention')
+  assert(timeline('Pine North 80').includes('1.25 in') && server.some((row) => row.field_id === north), `After dismissing the refused delete the rain must still show, as the server has it. Shown: ${timeline('Pine North 80')}`)
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
-console.log('Field Log refused replay page regression passed (parked, later save sent, honest timeline, retry)')
+console.log('Field Log refused replay page regression passed (parked, later save sent, honest timeline, retry, dismissed delete)')

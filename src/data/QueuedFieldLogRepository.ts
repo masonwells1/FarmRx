@@ -18,11 +18,12 @@ const refusalReasons: Array<[RegExp, string]> = [
   [/field does not belong to this farm/, 'Not saved: this field is no longer on this farm.'],
   [/entry does not belong to/, 'Not saved: this entry is now on a different field or farm.'],
 ]
-/** Why the server refused this entry, or null when the failure is not the database refusing the entry itself. Access
- * refusals (no permission, signed out, access changed) are about the farm, not the entry, so they still hold the queue. */
+/** Why the server refused this entry, or null when the failure is not the database refusing the entry itself: only its
+ * own refusals (P0001) and bad or conflicting data (classes 22 and 23) qualify. Access refusals (no permission, signed out,
+ * access changed) are about the farm, and failures such as a deadlock pass on a retry, so those still hold the queue. */
 function refusedEntryReason(error: unknown) {
   const code = (error as { code?: unknown } | null)?.code; const message = String((error as { message?: unknown } | null)?.message ?? '')
-  if (typeof code !== 'string' || !/^[0-9A-Z]{5}$/.test(code) || code === '42501' || /permission|authenticat|jwt|farm_access_epoch_changed/i.test(message)) return null
+  if (typeof code !== 'string' || !/^(P0001|2[23][0-9A-Z]{3})$/.test(code) || /permission|authenticat|jwt|farm_access_epoch_changed/i.test(message)) return null
   return refusalReasons.find(([pattern]) => pattern.test(message))?.[1] ?? parked
 }
 type Context = { userId: string; farmId: string }

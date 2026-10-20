@@ -245,9 +245,10 @@ async function run() {
   await rejects(() => regrantParkQueued.retryNeedsAttention(regrantParkKey, regrantParked[0]!.id), 'A retry after a revoke and regrant must be refused.')
   assert(readNeedsAttention(regrantParkStore, regrantParkKey).length === 1 && regrantParkGateway.saves.length === 1 && new FieldLogWriteQueue(regrantParkStore, regrantParkKey).read().entries.length === 0, 'A refused retry must keep the save in Needs attention and send nothing.')
 
-  // Group 19: losing signal still waits, and an access refusal (no permission, access changed) still holds the whole
-  // queue: those are not about the entry, so nothing is parked and nothing behind it is sent.
-  for (const [label, failure] of [['lost signal', () => new TypeError('Failed to fetch')], ['no permission', () => Object.assign(new Error('you do not have permission to edit this farm'), { code: 'P0001' })], ['access changed', () => Object.assign(new Error('FARM_ACCESS_EPOCH_CHANGED'), { code: 'P0001' })], ['sign-in', () => Object.assign(new Error('JWT expired'), { code: 'PGRST301' })], ['database permission', () => Object.assign(new Error('permission denied for function save_field_log_entry'), { code: '42501' })]] as const) {
+  // Group 19: losing signal still waits, and an access refusal (no permission, access changed) or a database failure that
+  // goes away on retry (serialization, deadlock) still holds the whole queue: those are not about the entry, so nothing is
+  // parked and nothing behind it is sent.
+  for (const [label, failure] of [['lost signal', () => new TypeError('Failed to fetch')], ['no permission', () => Object.assign(new Error('you do not have permission to edit this farm'), { code: 'P0001' })], ['access changed', () => Object.assign(new Error('FARM_ACCESS_EPOCH_CHANGED'), { code: 'P0001' })], ['sign-in', () => Object.assign(new Error('JWT expired'), { code: 'PGRST301' })], ['database permission', () => Object.assign(new Error('permission denied for function save_field_log_entry'), { code: '42501' })], ['serialization retry', () => Object.assign(new Error('could not serialize access due to concurrent update'), { code: '40001' })], ['deadlock retry', () => Object.assign(new Error('deadlock detected'), { code: '40P01' })]] as const) {
     const holdStore = memory(); const holdProject = `hold-${label.replace(/\W+/g, '-')}`; const holdGateway = new FakeGateway(); let holdOffline = true; let holdId = 870
     holdGateway.refuseSave = (entry) => entry.id === uid(871) ? failure() : null
     const holdQueued = new QueuedFieldLogRepository(live(holdGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: holdProject, storage: holdStore, createId: () => uid(holdId++), clock: () => stamp, isOffline: () => holdOffline })
