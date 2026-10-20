@@ -510,6 +510,18 @@ async function run() {
     handoverGateway.loadFailure = null; handoverGateway.entries.push(canonical(draft(uid(993)))); await handoverQueued.getData()
     assert(handoverDevice.savedIds(handoverProject) === `${uid(991)},${uid(992)},${uid(993)}`, `The first live read must replace the started copy. Ordered copy: ${handoverDevice.savedIds(handoverProject)}`)
   } finally { handoverDevice.restore() }
-  console.log('SupabaseFieldLogRepository regression passed (27 coverage groups)')
+
+  // Group 28: keeping a confirmed write in the saved copy never turns it into a failure. With a saved-copy writer that
+  // throws, a direct save still answers as saved and is on the server, and a replay still empties the queue, parks nothing
+  // and reads as synced, sending the write once: a throw there must not hold the queue and send the confirmed write again.
+  const throwingStore = memory(); const throwingProject = 'saved-copy-throws-field-log'; const throwingGateway = new FakeGateway(); let throwingOffline = false; let throwingId = 1020
+  const throwingQueued = new QueuedFieldLogRepository(live(throwingGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: throwingProject, storage: throwingStore, createId: () => uid(throwingId++), clock: () => stamp, isOffline: () => throwingOffline, writeWorkspaceCacheInOrder: async () => { throw new Error('The saved copy could not be written.') } })
+  const throwingKey = fieldLogWriteQueueKey(throwingProject, actor, farm); const onServer = (n: number) => throwingGateway.entries.some((entry) => (entry as { id: string }).id === uid(n))
+  let directSave: Awaited<ReturnType<typeof throwingQueued.saveEntry>> | null = null; try { directSave = await throwingQueued.saveEntry(draft(uid(1010))) } catch { directSave = null }
+  assert(directSave !== null && !directSave.pending && onServer(1010), 'A direct save must answer as saved, and be on the server, when the saved copy cannot take it.')
+  throwingOffline = true; await throwingQueued.saveEntry(draft(uid(1011))); throwingOffline = false; await throwingQueued.inspectAndReplay()
+  const throwingStatus = getModuleSyncStatus('fieldLog')
+  assert(new FieldLogWriteQueue(throwingStore, throwingKey).read().entries.length === 0 && readNeedsAttention(throwingStore, throwingKey).length === 0 && throwingStatus.kind === 'synced' && onServer(1011) && throwingGateway.saves.filter((call) => call.entry.id === uid(1011)).length === 1, `A replayed write must leave the queue, park nothing and read as synced when the saved copy cannot take it. Status: ${JSON.stringify(throwingStatus)}`)
+  console.log('SupabaseFieldLogRepository regression passed (28 coverage groups)')
 }
 void run()

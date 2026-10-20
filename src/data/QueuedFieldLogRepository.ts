@@ -65,12 +65,16 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
   /** A save or delete the server confirmed goes into the whole-farm saved copy straight away, so an answer without signal
    * shows it before the next live read. A single field's copy, which no screen asks for, is refreshed by its own live reads.
    * Only a confirmed change comes here: a refused one is parked in Needs attention and never reaches the saved copy. Best
-   * effort: without a saved copy, or once the farm's access changed, nothing is written and the save still stands. */
+   * effort: without a saved copy, or once the farm's access changed, nothing is written and the save still stands. It
+   * never throws: it runs inside the write's own try, where a throw would make a confirmed save read as a failure and, on
+   * replay, hold the queue and send the confirmed write again. */
   private async keepInSavedCopy(entry: FieldLogQueueEntryV2, confirmed: FieldLogEntry | FieldLogDeleteReceipt) {
-    const scope = this.savedCopyScope({ userId: entry.userId, farmId: entry.farmId }); const turn = await takeWorkspaceCacheTurn(scope); const id = waitingId(entry)
-    const change: ConfirmedChange = 'deleted' in confirmed ? { deletedId: id } : { saved: confirmed }
-    // Right after the update only the previous version's copy may exist: the change then starts the ordered copy from it.
-    await this.writeSavedCopy(scope, { change, startFrom: this.previousSavedCopyScope({ userId: entry.userId, farmId: entry.farmId }) }, turn, entry.operationContext)
+    try {
+      const scope = this.savedCopyScope({ userId: entry.userId, farmId: entry.farmId }); const turn = await takeWorkspaceCacheTurn(scope); const id = waitingId(entry)
+      const change: ConfirmedChange = 'deleted' in confirmed ? { deletedId: id } : { saved: confirmed }
+      // Right after the update only the previous version's copy may exist: the change then starts the ordered copy from it.
+      await this.writeSavedCopy(scope, { change, startFrom: this.previousSavedCopyScope({ userId: entry.userId, farmId: entry.farmId }) }, turn, entry.operationContext)
+    } catch { /* the save stands; the next live read refreshes the copy */ }
   }
   async getNeedsAttentionQueueKey() { return (await this.source()).queue.key }
   /** Status from what is parked and what still waits: "synced" only when nothing is either. */
