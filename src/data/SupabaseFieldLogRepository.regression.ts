@@ -555,6 +555,13 @@ async function run() {
     assert(farmerError(directRefusal, 'save this field log entry') === 'Someone deleted this entry, so this change was not saved. Add it again if you still need it.', `The farmer must be told the entry was deleted, not to try again. Got: ${farmerError(directRefusal, 'save this field log entry')}`)
     assert(goneQueue.read().entries.length === 0 && readNeedsAttention(goneDevice.storage, goneKey).length === 1 && !goneOnServer(1111), 'A direct edit the server refuses must be neither queued, parked nor saved.')
     assert(!goneDevice.savedIds(goneProject).includes(uid(1111)), `A direct edit refused as deleted must take its entry out of the saved copy too. Saved copy: ${goneDevice.savedIds(goneProject)}`)
+    // A save that reached the server but lost its response waits to be sent again; deleted elsewhere meanwhile, the repeat is
+    // refused too (the server no longer answers it from its receipt with the old row), so it parks and the entry stays gone.
+    goneGateway.saveFailure = new TypeError('Failed to fetch'); await goneQueued.saveEntry(draft(uid(1113))); goneGateway.saveFailure = null
+    assert(goneOnServer(1113) && goneQueue.read().entries.length === 1, 'The lost-response test needs the save on the server and waiting on the device.')
+    deleteElsewhere(1113); await goneQueued.inspectAndReplay()
+    const lostParked = readNeedsAttention(goneDevice.storage, goneKey).find((record) => (record.entry as { draft?: { id?: string } }).draft?.id === uid(1113))
+    assert(lostParked?.message === FIELD_LOG_DELETED_ENTRY_MESSAGE && goneQueue.read().entries.length === 0 && !goneOnServer(1113) && !goneDevice.savedIds(goneProject).includes(uid(1113)), `A repeat of a save whose entry was deleted since must park, and leave the entry gone everywhere. Saved copy: ${goneDevice.savedIds(goneProject)}`)
     // Any other refusal leaves the saved copy alone: only "deleted" says the entry is gone.
     goneGateway.refuseSave = () => Object.assign(new Error('observed date cannot be more than one day in the future'), { code: 'P0001', details: null, hint: null })
     try { await goneQueued.saveEntry({ ...draft(uid(1112)), rainfall_in: 3 }) } catch { /* refused, as set up */ }

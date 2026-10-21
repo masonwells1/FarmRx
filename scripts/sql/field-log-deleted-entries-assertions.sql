@@ -5,8 +5,9 @@
 --
 -- What is proved: an edit saved after the entry was deleted is refused with the one message the
 -- client recognises, leaves no row behind, and is refused the same way when its replay comes
--- again; a replay of an edit that was saved before the delete still answers from its receipt
--- without bringing the entry back; a new entry still saves; a direct table insert of a deleted id
+-- again; a repeat of a save (same operation, after a lost response) answers from its receipt
+-- while the entry stands, and once the entry is deleted is refused too rather than answered with
+-- the old row; a new entry still saves; a direct table insert of a deleted id
 -- is refused too, a direct table delete is remembered, and an entry's id cannot be changed;
 -- deleting a field remembers its entries; deleting a farm that still has entries works and takes
 -- its remembered ids with it; and no client role holds any privilege or policy on the remembered
@@ -43,6 +44,9 @@ begin
   if (v_saved ->> 'rainfall_in')::numeric <> 0.5 then raise exception 'the first save returned %', v_saved; end if;
   v_saved := public.save_field_log_entry(v_farm, '00000000-0000-4000-8000-000000000b31', jsonb_build_object('id', v_entry, 'field_id', v_north, 'entry_type', 'rainfall', 'observed_on', '2026-10-01', 'rainfall_in', 0.6));
   if (v_saved ->> 'rainfall_in')::numeric <> 0.6 then raise exception 'an edit of a live entry did not update it: %', v_saved; end if;
+  -- A repeat of that edit (the response was lost) answers from its receipt while the entry stands.
+  v_saved := public.save_field_log_entry(v_farm, '00000000-0000-4000-8000-000000000b31', jsonb_build_object('id', v_entry, 'field_id', v_north, 'entry_type', 'rainfall', 'observed_on', '2026-10-01', 'rainfall_in', 0.6));
+  if (v_saved ->> 'rainfall_in')::numeric <> 0.6 or (select count(*) from public.field_log_entries where id = v_entry) <> 1 then raise exception 'a repeated save of a live entry did not answer from its receipt: %', v_saved; end if;
   perform public.delete_field_log_entry(v_farm, v_entry);
   if exists (select 1 from public.field_log_entries where id = v_entry) then raise exception 'the delete left the entry'; end if;
 
@@ -71,11 +75,22 @@ begin
     if sqlerrm <> 'field log entry was deleted and cannot be saved again' then raise; end if;
   end;
 
-  -- A lost-response replay of the edit saved before the delete answers from its receipt, as it
-  -- always has, and does not bring the entry back.
-  v_saved := public.save_field_log_entry(v_farm, '00000000-0000-4000-8000-000000000b31', jsonb_build_object('id', v_entry, 'field_id', v_north, 'entry_type', 'rainfall', 'observed_on', '2026-10-01', 'rainfall_in', 0.6));
-  if (v_saved ->> 'id')::uuid <> v_entry or (v_saved ->> 'rainfall_in')::numeric <> 0.6 then raise exception 'the receipt replay returned %', v_saved; end if;
-  if exists (select 1 from public.field_log_entries where id = v_entry) then raise exception 'the receipt replay brought the entry back'; end if;
+  -- The same repeat after the delete: answering from the receipt would hand the device the old
+  -- row as saved, and it would put the entry back on screen. It is refused like any other save.
+  begin
+    perform public.save_field_log_entry(v_farm, '00000000-0000-4000-8000-000000000b31', jsonb_build_object('id', v_entry, 'field_id', v_north, 'entry_type', 'rainfall', 'observed_on', '2026-10-01', 'rainfall_in', 0.6));
+    raise exception 'a repeated save of a deleted entry was answered from its receipt';
+  exception when raise_exception then
+    if sqlerrm <> 'field log entry was deleted and cannot be saved again' then raise; end if;
+  end;
+  if exists (select 1 from public.field_log_entries where id = v_entry) then raise exception 'the repeated save brought the entry back'; end if;
+  -- The first save of the entry, repeated, is refused the same way.
+  begin
+    perform public.save_field_log_entry(v_farm, '00000000-0000-4000-8000-000000000b30', jsonb_build_object('id', v_entry, 'field_id', v_north, 'entry_type', 'rainfall', 'observed_on', '2026-10-01', 'rainfall_in', 0.5));
+    raise exception 'a repeated first save of a deleted entry was answered from its receipt';
+  exception when raise_exception then
+    if sqlerrm <> 'field log entry was deleted and cannot be saved again' then raise; end if;
+  end;
 
   -- A new entry, with its own new id, still saves.
   v_saved := public.save_field_log_entry(v_farm, '00000000-0000-4000-8000-000000000b34', jsonb_build_object('id', v_new, 'field_id', v_north, 'entry_type', 'rainfall', 'observed_on', '2026-10-02', 'rainfall_in', 0.25));
@@ -199,13 +214,21 @@ begin
     raise exception 'field_log_deleted_entries has a policy, so a client role could reach it';
   end if;
   foreach v_function in array array['public.remember_deleted_field_log_entry()', 'public.refuse_deleted_field_log_entry()'] loop
-    if not (select prosecdef and proconfig @> array['search_path=public, pg_temp'] from pg_catalog.pg_proc where oid = v_function::regprocedure) then
+    -- coalesce: a function without a SET clause has a null proconfig, which would read as unknown, not false.
+    if not coalesce((select prosecdef and proconfig @> array['search_path=public, pg_temp'] from pg_catalog.pg_proc where oid = v_function::regprocedure), false) then
       raise exception '% is not security definer with a fixed search_path', v_function;
     end if;
     if has_function_privilege('anon', v_function, 'execute') or has_function_privilege('authenticated', v_function, 'execute') then
       raise exception '% is executable by a client role', v_function;
     end if;
   end loop;
+  -- The replaced save function keeps its security posture and its grants.
+  if not coalesce((select prosecdef and proconfig @> array['search_path=public, pg_temp'] from pg_catalog.pg_proc where oid = 'public.save_field_log_entry(uuid,uuid,jsonb)'::regprocedure), false) then
+    raise exception 'save_field_log_entry lost security definer or its fixed search_path';
+  end if;
+  if has_function_privilege('anon', 'public.save_field_log_entry(uuid,uuid,jsonb)', 'execute') or not has_function_privilege('authenticated', 'public.save_field_log_entry(uuid,uuid,jsonb)', 'execute') then
+    raise exception 'save_field_log_entry grants changed';
+  end if;
   if (select count(*) from pg_catalog.pg_trigger where tgrelid = 'public.field_log_entries'::regclass and tgname in ('field_log_entries_remember_delete', 'field_log_entries_refuse_deleted') and tgenabled = 'O' and not tgisinternal) <> 2 then
     raise exception 'the two field log delete triggers are not both installed and enabled';
   end if;
