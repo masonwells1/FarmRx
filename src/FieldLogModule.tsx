@@ -4,6 +4,7 @@ import { confirmDialog } from './components/ConfirmDialog'
 import type { Field, FieldsData, FieldsRepository } from './data/fields'
 import { FIELD_LOG_OFFLINE_DELETE_MESSAGE, fieldLogMaximumObservedOn, validateFieldLogDraft, type FieldLogData, type FieldLogEntry, type FieldLogEntryDraft, type FieldLogRepository } from './data/fieldLog'
 import { growingDegreeDays, weatherService } from './data/weatherService'
+import { WeatherCredit } from './components/WeatherCredit'
 import { farmerError } from './lib/farmerErrors'
 import { formatFarmDate } from './lib/farmDate'
 import { farmLocalCalendarDate } from './data/farmDates'
@@ -174,5 +175,5 @@ function Gdd({ field, plantingDate }: { field: Field; plantingDate: string | nul
   if (plantingDate > today()) return <p className="gdd-prompt">Growing degree days will appear once this season has enough weather history.</p>
   if (state.error) return <p className="gdd-prompt">Growing degree days will appear once this season has enough weather history.</p>
   if (state.value === null) return <p className="gdd-prompt">Loading growing degree days…</p>
-  return <p className="gdd-line"><strong>GDD since planting: {state.value.toLocaleString()}</strong><small>{state.stale ? 'Saved weather data — reconnect for the latest.' : state.through && state.through < today() ? `Weather data through ${state.through}.` : 'Based on daily high and low temperatures.'}</small></p>
+  return <><p className="gdd-line"><strong>GDD since planting: {state.value.toLocaleString()}</strong><small>{state.stale ? 'Saved weather data — reconnect for the latest.' : state.through && state.through < today() ? `Weather data through ${state.through}.` : 'Based on daily high and low temperatures.'}</small></p><WeatherCredit /></>
 }

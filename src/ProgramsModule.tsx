@@ -36,6 +36,7 @@ import { farmLocalCalendarDate } from "./data/farmDates";
 import { createSubmitLock, createSubmitLockMap } from "./lib/submitLock";
 import { formatFarmDate } from "./lib/farmDate";
 import { evaluateSprayWindow, isActionablyFresh, weatherService } from "./data/weatherService";
+import { WeatherCredit } from "./components/WeatherCredit";
 const emptyProgram = (): ProgramDraft => ({
   id: null,
   name: "",
@@ -1220,17 +1221,20 @@ function SprayLight({
     };
   }, [assignment.latitude, assignment.longitude, pass.id]);
   return (
-    <p
-      className={`spray-pass-light ${state.level ?? "unavailable"}`}
-      role="status"
-    >
-      <strong>
-        {state.level
-          ? state.level[0].toUpperCase() + state.level.slice(1)
-          : "Spray conditions"}
-      </strong>{" "}
-      · {state.text}
-    </p>
+    <>
+      <p
+        className={`spray-pass-light ${state.level ?? "unavailable"}`}
+        role="status"
+      >
+        <strong>
+          {state.level
+            ? state.level[0].toUpperCase() + state.level.slice(1)
+            : "Spray conditions"}
+        </strong>{" "}
+        · {state.text}
+      </p>
+      {state.level && <WeatherCredit />}
+    </>
   );
 }
 function AssignmentCost({ assignment }: { assignment: ProgramAssignment }) {

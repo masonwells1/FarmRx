@@ -60,6 +60,10 @@ try {
   await act(async () => { root.render(createElement(MemoryRouter, { initialEntries: ['/today'] }, createElement(FarmAccessProvider, { value: access, children: createElement(TodayPage, { fieldsRepository, equipmentTasksRepository, notificationsRepository, inventoryRepository, programsRepository, grainRepository }) }))); await flush(); await flush() })
   const cardText = () => container.querySelector('.today-spray-card')?.textContent ?? ''
   assert(cardText().includes('Good spray window until'), `A fresh cached forecast did not render a spray verdict (saw: ${cardText()}).`)
+  // Open-Meteo's CC BY 4.0 licence: their credit sits next to the forecast-based verdict, and only while one shows.
+  const credit = () => container.querySelector('.today-spray-card + .town-credit')
+  assert(credit()?.textContent === 'Weather data by Open-Meteo.com (CC BY 4.0).', `The spray verdict showed without the Open-Meteo credit (saw: ${credit()?.textContent}).`)
+  assert(credit()?.querySelector('a[href="https://open-meteo.com/"]'), 'The Open-Meteo credit did not link to open-meteo.com.')
   assert(intervals.length === 1, `Today did not start exactly one clock (saw ${intervals.length}).`)
   const tickAll = () => { for (const handler of intervals) handler() }
   // Ninety minutes later the forecast is still inside the two-hour ceiling.
@@ -71,6 +75,7 @@ try {
   await act(async () => { tickAll(); await flush() })
   assert(!cardText().includes('Good spray'), `A stale forecast kept showing a spray verdict after the ceiling (saw: ${cardText()}).`)
   assert(cardText().includes('Check the spray window'), `The stale card did not fall back to the Weather link (saw: ${cardText()}).`)
+  assert(!container.querySelector('.town-credit'), 'The Open-Meteo credit stayed after the forecast verdict was dropped.')
   // FD-015: the snapshots are re-read when the farm's day turns over while Today stays open, and when the app comes back into view.
   const readsBeforeMidnight = equipmentReads
   clock = loadedAt + 13 * 60 * 60_000
