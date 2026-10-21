@@ -11,6 +11,7 @@ import type { PendingPassOutcome, ProgramsRepository } from './data/programs'
 import type { GrainRepository, GrainWorkspace } from './data/grain'
 import { todayGrainLine, todayNextUp, todayRecordTiles, todaySprayWindow, type TodayGrainLine, type TodayNextUpItem, type TodayRecordKind, type TodaySprayCard } from './data/today'
 import { readCachedForecast } from './data/weatherService'
+import { WeatherCredit } from './components/WeatherCredit'
 import { farmerError } from './lib/farmerErrors'
 
 // Today (GOAL.md, Initiative FD-1) is the front door: a read-only projection of records the modules already own. It reads through
@@ -139,7 +140,7 @@ function GrainLine({ line }: { line: TodayGrainLine }) {
 }
 function SprayCard({ card, fieldsLoaded }: { card: TodaySprayCard | null; fieldsLoaded: boolean }) {
   if (!card) return <Link className="today-spray-card is-unknown" to="/weather"><span className="today-spray-icon" aria-hidden="true">{glyph('M6 16a4 4 0 0 1 .5-8 6 6 0 0 1 11.5 1.5A3.5 3.5 0 0 1 17.5 16z')}</span><span className="today-spray-body"><strong>{fieldsLoaded ? 'Check the spray window' : 'Weather & Spray'}</strong><span>{fieldsLoaded ? 'Open Weather for a current forecast on your fields.' : 'Open Weather to see field conditions.'}</span></span><span className="today-chevron" aria-hidden="true">›</span></Link>
-  return <Link className={`today-spray-card is-${card.level}`} to="/weather"><span className="today-spray-icon" aria-hidden="true">{glyph('M6 16a4 4 0 0 1 .5-8 6 6 0 0 1 11.5 1.5A3.5 3.5 0 0 1 17.5 16z')}</span><span className="today-spray-body"><strong>{card.headline}</strong><span>{card.details.join(' · ')} · {card.fieldName}</span></span><span className="today-chevron" aria-hidden="true">›</span></Link>
+  return <><Link className={`today-spray-card is-${card.level}`} to="/weather"><span className="today-spray-icon" aria-hidden="true">{glyph('M6 16a4 4 0 0 1 .5-8 6 6 0 0 1 11.5 1.5A3.5 3.5 0 0 1 17.5 16z')}</span><span className="today-spray-body"><strong>{card.headline}</strong><span>{card.details.join(' · ')} · {card.fieldName}</span></span><span className="today-chevron" aria-hidden="true">›</span></Link><WeatherCredit /></>
 }
 
 function NextUpRow({ item }: { item: TodayNextUpItem }) {
