@@ -62,6 +62,9 @@ try {
   # derivation uses, and the proof that a "free" bushel is one the bin will actually let go.
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/ld3-committed-free-assertions.sql')) 'LD3_COMMITTED_FREE_DISPOSABLE_PASS' 'LD-3 committed vs free assertions failed.'
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/ld4-bin-origin-lot-assertions.sql')) 'LD4_BIN_ORIGIN_LOT_DISPOSABLE_PASS' 'LD-4 bin origin lot assertions failed.'
+  # A deleted Field Log entry stays deleted: an edit that reaches the server after the delete is
+  # refused, whichever path it takes, and deleting a field or a farm still works.
+  Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/field-log-deleted-entries-assertions.sql')) 'FIELD_LOG_DELETED_ENTRIES_DISPOSABLE_PASS' 'Field Log deleted entries assertions failed.'
 
   $passed = $true
 } finally {

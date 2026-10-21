@@ -64,3 +64,7 @@ echo LD3_COMMITTED_FREE_DISPOSABLE_PASS
 # balance question is still answered in exactly one place.
 psql_ -d farmrx_disposable -f "$root/scripts/sql/ld4-bin-origin-lot-assertions.sql" | grep -q LD4_BIN_ORIGIN_LOT_DISPOSABLE_PASS || { echo "LD-4 bin origin lot assertions failed" >&2; exit 1; }
 echo LD4_BIN_ORIGIN_LOT_DISPOSABLE_PASS
+# A deleted Field Log entry stays deleted: an edit that reaches the server after the delete is
+# refused, whichever path it takes, and deleting a field or a farm still works.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/field-log-deleted-entries-assertions.sql" | grep -q FIELD_LOG_DELETED_ENTRIES_DISPOSABLE_PASS || { echo "Field Log deleted entries assertions failed" >&2; exit 1; }
+echo FIELD_LOG_DELETED_ENTRIES_DISPOSABLE_PASS
