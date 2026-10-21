@@ -183,7 +183,15 @@ begin
     end if;
     -- An entry deleted since this save is refused like any other save of a deleted entry.
     -- Answering with the receipt's old row would put the entry back on a device that sent
-    -- the save again after losing the response.
+    -- the save again after losing the response. The entry lock (the one delete_field_log_entry
+    -- and the save below take) comes first, so a delete still in progress finishes, and its
+    -- remembered id becomes visible, before the check.
+    if (v_result ->> 'id') is not null then
+      perform pg_advisory_xact_lock(
+        hashtext('field-log-entry'),
+        hashtext(p_farm_id::text || ':' || (v_result ->> 'id'))
+      );
+    end if;
     if exists (
       select 1
       from public.field_log_deleted_entries d

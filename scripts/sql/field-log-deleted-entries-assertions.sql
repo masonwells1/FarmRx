@@ -226,6 +226,14 @@ begin
   if not coalesce((select prosecdef and proconfig @> array['search_path=public, pg_temp'] from pg_catalog.pg_proc where oid = 'public.save_field_log_entry(uuid,uuid,jsonb)'::regprocedure), false) then
     raise exception 'save_field_log_entry lost security definer or its fixed search_path';
   end if;
+  -- The receipt check waits on the entry lock that delete_field_log_entry holds until it commits:
+  -- the race it closes needs two sessions, so the order is pinned in the function's own text.
+  if not coalesce((
+    select strpos(prosrc, 'hashtext(p_farm_id::text || ' || quote_literal(':') || ' || (v_result ->> ' || quote_literal('id') || '))') between 1 and strpos(prosrc, 'from public.field_log_deleted_entries d') - 1
+    from pg_catalog.pg_proc where oid = 'public.save_field_log_entry(uuid,uuid,jsonb)'::regprocedure
+  ), false) then
+    raise exception 'save_field_log_entry checks a receipt for a deleted entry without first taking the entry lock';
+  end if;
   if has_function_privilege('anon', 'public.save_field_log_entry(uuid,uuid,jsonb)', 'execute') or not has_function_privilege('authenticated', 'public.save_field_log_entry(uuid,uuid,jsonb)', 'execute') then
     raise exception 'save_field_log_entry grants changed';
   end if;
