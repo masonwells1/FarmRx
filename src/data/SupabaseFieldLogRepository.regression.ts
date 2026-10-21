@@ -8,7 +8,6 @@ import { readNeedsAttention } from './needsAttentionStore'
 import { getModuleSyncStatus } from './syncStatus'
 import { quarantineRevokedFarmWork, readRevokedFarmRecovery } from './revokedFarmRecovery'
 import { FIELD_LOG_DELETED_ENTRY_MESSAGE, isFieldLogDeletedEntryRefusal, type FieldLogData, type FieldLogEntryDraft } from './fieldLog'
-import { cannotRetry } from '../components/NeedsAttentionList'
 import { farmerError } from '../lib/farmerErrors'
 import { captureWorkspaceCacheFence, takeWorkspaceCacheTurn, writeWorkspaceCache, writeWorkspaceCacheInOrder } from './workspaceCache'
 import type { StorageLike } from './writeQueue'
@@ -525,8 +524,8 @@ async function run() {
   const throwingStatus = getModuleSyncStatus('fieldLog')
   assert(new FieldLogWriteQueue(throwingStore, throwingKey).read().entries.length === 0 && readNeedsAttention(throwingStore, throwingKey).length === 0 && throwingStatus.kind === 'synced' && onServer(1011) && throwingGateway.saves.filter((call) => call.entry.id === uid(1011)).length === 1, `A replayed write must leave the queue, park nothing and read as synced when the saved copy cannot take it. Status: ${JSON.stringify(throwingStatus)}`)
   // Group 29: an edit of an entry someone deleted. The server refuses it (migration 20261021150000) rather than bringing the
-  // entry back. On replay the edit goes to Needs attention in farmer wording, without a Retry that could never work, and the
-  // writes behind it carry on; a direct edit answers with the refusal at once, and is neither queued nor parked.
+  // entry back. On replay the edit goes to Needs attention in farmer wording (the page offers only Dismiss for it, see
+  // FieldLogModule.refusedReplay.regression.tsx), and the writes behind it carry on; a direct edit answers with the refusal at once, and is neither queued nor parked.
   const deletedRefusal = () => Object.assign(new Error('field log entry was deleted and cannot be saved again'), { code: 'P0001', details: null, hint: null })
   const goneStore = memory(); const goneProject = 'deleted-entry-field-log'; const goneGateway = new FakeGateway(); let goneOffline = false; let goneId = 1100
   const deletedElsewhere = new Set<string>(); const goneOnServer = (n: number) => goneGateway.entries.some((entry) => (entry as { id: string }).id === uid(n))
@@ -539,7 +538,6 @@ async function run() {
   deleteElsewhere(1110); goneOffline = false; await goneQueued.inspectAndReplay()
   const goneParked = readNeedsAttention(goneStore, goneKey)
   assert(goneParked.length === 1 && (goneParked[0]!.entry as { draft?: { id?: string } }).draft?.id === uid(1110) && goneParked[0]!.message === FIELD_LOG_DELETED_ENTRY_MESSAGE, `An edit of a deleted entry must wait in Needs attention, saying why. Got: ${JSON.stringify(goneParked)}`)
-  assert(cannotRetry(goneParked[0]!), 'Needs attention must not offer Retry for an edit of a deleted entry: the server refuses it every time.')
   assert(!goneOnServer(1110), 'The edit must not bring the deleted entry back.')
   assert(goneOnServer(1112) && goneQueue.read().entries.length === 0, 'A new entry behind the refused edit must still save.')
   deleteElsewhere(1111)
@@ -547,8 +545,6 @@ async function run() {
   assert(isFieldLogDeletedEntryRefusal(directRefusal), `A direct edit of a deleted entry must answer with the server's refusal. Got: ${String(directRefusal)}`)
   assert(farmerError(directRefusal, 'save this field log entry') === 'Someone deleted this entry, so this change was not saved. Add it again if you still need it.', `The farmer must be told the entry was deleted, not to try again. Got: ${farmerError(directRefusal, 'save this field log entry')}`)
   assert(goneQueue.read().entries.length === 0 && readNeedsAttention(goneStore, goneKey).length === 1 && !goneOnServer(1111), 'A direct edit the server refuses must be neither queued, parked nor saved.')
-  // Other refusals keep their own wording and their Retry.
-  assert(!cannotRetry({ entry: goneParked[0]!.entry, message: 'This save needs attention before it can be retried.' }), 'Only the deleted-entry refusal loses its Retry.')
 
   console.log('SupabaseFieldLogRepository regression passed (29 coverage groups)')
 }
