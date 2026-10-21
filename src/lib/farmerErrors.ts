@@ -26,6 +26,8 @@ export function farmerError(error: unknown, action = 'save this field') {
   // The earlier attempt did commit; only its response was lost. Saying "try again" would be wrong.
   if (/farm_rx_correction_already_saved/.test(message)) return 'Your earlier correction was saved. Reload the contract before making another change.'
   if (/farm_rx_contract_already_deleted/.test(message)) return 'This contract was already deleted. Reload to see the current contracts.'
+  // The server never brings a deleted Field Log entry back, so trying again cannot work.
+  if (/field log entry was deleted/.test(message)) return 'Someone deleted this entry, so this change was not saved. Add it again if you still need it.'
   if (/a correction must change something|a correction must name at least one field/.test(message)) return 'Nothing has changed on this contract yet.'
   if (/connect to the internet before correcting a contract/.test(message)) return 'Connect to the internet before correcting a contract.'
   if (/connect to the internet before deleting a contract/.test(message)) return 'Connect to the internet before deleting a contract.'

@@ -40,6 +40,11 @@ export interface FieldLogData {
 export interface FieldLogDeleteReceipt { id: string; deleted: true; pending?: boolean }
 /** Audit P2-10: an offline delete succeeded on this device — it must never read as a failure. */
 export const FIELD_LOG_OFFLINE_DELETE_MESSAGE = 'Deleted on this device. It will finish syncing when you reconnect.'
+/** Needs attention wording for a change to an entry someone deleted: the server never brings a deleted entry back, so the
+ * change can only be let go, or entered again as new rain or a new note. */
+export const FIELD_LOG_DELETED_ENTRY_MESSAGE = 'Not saved: someone deleted this entry. Add it again if you still need it.'
+/** The server's refusal of a save for an entry that was deleted (migration 20261021150000). */
+export function isFieldLogDeletedEntryRefusal(error: unknown) { return /field log entry was deleted/i.test(String((error as { message?: unknown } | null)?.message ?? '')) }
 
 export interface FieldLogRepository {
   getData(fieldId?: string): Promise<FieldLogData>

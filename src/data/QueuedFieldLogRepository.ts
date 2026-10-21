@@ -1,7 +1,7 @@
 import { isTransportFailure } from './QueuedFieldsRepository'
 import { FieldLogWriteQueue, fieldLogWriteQueueKey, parseFieldLogQueueForScope, type FieldLogQueueEntry, type FieldLogQueueEntryV2 } from './fieldLogWriteQueue'
 import { setModuleSyncStatus } from './syncStatus'
-import { validateFieldLogDraft, type FieldLogData, type FieldLogDeleteReceipt, type FieldLogEntry, type FieldLogEntryDraft, type FieldLogRepository } from './fieldLog'
+import { FIELD_LOG_DELETED_ENTRY_MESSAGE, validateFieldLogDraft, type FieldLogData, type FieldLogDeleteReceipt, type FieldLogEntry, type FieldLogEntryDraft, type FieldLogRepository } from './fieldLog'
 import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
 import type { SupabaseFieldLogRepository } from './SupabaseFieldLogRepository'
 import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, takeWorkspaceCacheTurn, writeWorkspaceCacheInOrder, type OrderedWorkspaceWrite } from './workspaceCache'
@@ -17,6 +17,7 @@ const refusalReasons: Array<[RegExp, string]> = [
   [/more than one day in the future/, 'Not saved: the observed date cannot be more than one day in the future. Check the date on this device.'],
   [/field does not belong to this farm/, 'Not saved: this field is no longer on this farm.'],
   [/entry does not belong to/, 'Not saved: this entry is now on a different field or farm.'],
+  [/field log entry was deleted/, FIELD_LOG_DELETED_ENTRY_MESSAGE],
 ]
 /** Why the server refused this entry, or null when the failure is not the database refusing the entry itself: only its
  * own refusals (P0001) and bad or conflicting data (classes 22 and 23) qualify. Access refusals (no permission, signed out,

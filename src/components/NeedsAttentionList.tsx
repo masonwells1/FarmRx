@@ -6,6 +6,7 @@ import { dismissNeedsAttention, getNeedsAttentionVersion, readNeedsAttention, su
 import { ProfitabilityWriteQueue } from '../data/profitabilityWriteQueue'
 import { ScoutingWriteQueue } from '../data/scoutingWriteQueue'
 import { SAVE_DURABILITY_UPDATE_MESSAGE } from '../data/saveDurability'
+import { FIELD_LOG_DELETED_ENTRY_MESSAGE } from '../data/fieldLog'
 
 type Module = 'inventory' | 'grain' | 'equipment_tasks' | 'profitability' | 'scouting' | 'fieldLog' | 'soilRx'
 type Row = NeedsAttentionRecord & { queueKey: string }
@@ -28,7 +29,7 @@ function fieldLogDetail(entry: unknown) {
 }
 export function cannotRetry(row: Pick<NeedsAttentionRecord, 'entry' | 'reason' | 'message'>) {
   const entry = row.entry as { kind?: unknown; legacyUnknownSnapshot?: unknown }
-  return entry?.legacyUnknownSnapshot === true || legacyFieldLog(entry) || row.reason === 'database_update_required' || row.message === SAVE_DURABILITY_UPDATE_MESSAGE || row.message.includes('original matrix snapshot is unknown')
+  return entry?.legacyUnknownSnapshot === true || legacyFieldLog(entry) || row.reason === 'database_update_required' || row.message === SAVE_DURABILITY_UPDATE_MESSAGE || row.message === FIELD_LOG_DELETED_ENTRY_MESSAGE || row.message.includes('original matrix snapshot is unknown')
 }
 function append(module: Module, queueKey: string, entry: unknown) {
   if (module === 'fieldLog') throw new Error('This legacy Field Log change cannot be retried automatically.')

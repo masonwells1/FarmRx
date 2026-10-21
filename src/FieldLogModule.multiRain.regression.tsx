@@ -34,11 +34,12 @@ const fieldsData = { farm: { id: farm }, entities: [], fields: [field(north, 'Pi
 // it, marked offline; 'no copy' throws. A read sees the server and the queue as they were when it started, so one can be
 // held open across another save. A 'refused' send is turned down by the server. While copyKeepsUp is on, a save or delete
 // the server confirms also goes into the saved copy; the repository only tries that (no IndexedDB, or a changed farm
-// fence, and it is skipped), so the page must not rely on it, and the scenarios start with it off.
+// fence, and it is skipped), so the page must not rely on it, and the scenarios start with it off. A save sent for an entry
+// deleted elsewhere is refused, as the server does since migration 20261021150000.
 let signal: 'online' | 'stale copy' | 'no copy' = 'online'; const sendOutcomes: Array<'sent' | 'lost signal' | 'refused'> = []
 let server: FieldLogEntry[] = []; let cached: FieldLogEntry[] = []; let waiting: FieldLogEntry[] = []; let waitingDeletes: string[] = []
 let queueUnreadable = false; let holdReads = 0; const heldReads: Array<() => void> = []; const heldCount = () => heldReads.length; let copyKeepsUp = false; let moments = 0; let cachedFrom = 0
-let reads = 0; let nextId = 10; const saves: FieldLogEntryDraft[] = []; const deletes: string[] = []
+let reads = 0; let nextId = 10; const saves: FieldLogEntryDraft[] = []; const deletes: string[] = []; const deletedElsewhere = new Set<string>()
 const upsert = (rows: FieldLogEntry[], row: FieldLogEntry) => [...rows.filter((item) => item.id !== row.id), row]
 const somethingWaits = () => waiting.length > 0 || waitingDeletes.length > 0
 const layWaiting = (rows: FieldLogEntry[], saved: FieldLogEntry[], deleted: string[]) => saved.reduce((list, kept) => upsert(list, { ...kept, created_at: list.find((row) => row.id === kept.id)?.created_at ?? kept.created_at }), rows).filter((row) => !deleted.includes(row.id))
@@ -62,6 +63,7 @@ const fieldLogRepository = {
     const row = { ...draft, id: draft.id ?? uid(nextId++), farm_id: farm, created_by: user, created_at: createdAt, updated_at: stamp } as FieldLogEntry
     const outcome = sendOutcomes.shift() ?? 'sent'
     if (outcome === 'refused' && !somethingWaits()) throw new Error('field log entry fields have invalid JSON types')
+    if (outcome === 'sent' && !somethingWaits() && deletedElsewhere.has(row.id)) throw Object.assign(new Error('field log entry was deleted and cannot be saved again'), { code: 'P0001' })
     if (somethingWaits() || outcome === 'lost signal') { const kept = { ...row, created_at: stamp, pending: true }; waiting = upsert(waiting, kept); return kept }
     server = upsert(server, row); confirmInCopy((rows) => upsert(rows, row)); return row
   },
@@ -362,6 +364,20 @@ try {
   } finally { await act(async () => { secondRoot.unmount() }); secondTab.remove() }
   copyKeepsUp = false
 
+  // Rain deleted on another phone is still on this screen, and the farmer edits it: the server refuses the edit rather than
+  // bring the rain back. The form closes, the card says why in plain words, and the reload that follows takes the rain away.
+  signal = 'online'; server = []; cached = []; cachedFrom = moments; waiting = []; waitingDeletes = []; sendOutcomes.length = 0
+  await reopen('deleted elsewhere')
+  await saveInCard(N, buttonIn(card(N), 'Add rain'), { rainfall: '0.61' }); await saveInCard(N, buttonIn(card(N), 'Add rain'), { rainfall: '0.62' })
+  const goneRain = server.find((entry) => entry.rainfall_in === 0.61); assert(goneRain, 'The deleted-elsewhere scene needs its rain on the server.')
+  server = server.filter((entry) => entry.id !== goneRain.id); deletedElsewhere.add(goneRain.id)
+  assert(timeline(N).includes('0.61 in'), `Until a reload, the rain deleted elsewhere is still on this screen. North: ${timeline(N)}`)
+  await saveInCard(N, buttonIn(row(N, '0.61 in'), 'Edit'), { rainfall: '0.91' })
+  assert(card(N).querySelector('.form-error')?.textContent === 'Someone deleted this entry, so this change was not saved. Add it again if you still need it.', `The card must say the entry was deleted. North: ${card(N).textContent}`)
+  assert(!card(N).querySelector('form.field-log-form'), 'The edit form must close once the server says the entry is gone.')
+  assert(!timeline(N).includes('0.61 in') && !timeline(N).includes('0.91 in') && timeline(N).includes('0.62 in'), `The deleted rain must leave the timeline and the other rain stay. North: ${timeline(N)}`)
+  assert(!server.some((entry) => entry.id === goneRain.id), 'The edit must not bring the deleted rain back.')
+
   // Same-date rows are ordered by created time as instants: the server writes '…T15:00:00+00:00' and the device
   // '…T15:00:00.400Z', and comparing the text would put the older row first.
   const stampedNote = (id: string, createdAt: string, note: string) => ({ id, farm_id: farm, field_id: north, entry_type: 'note', observed_on: '2027-08-04', rainfall_in: null, note, created_by: user, created_at: createdAt, updated_at: createdAt })
@@ -369,4 +385,4 @@ try {
   await act(async () => { root.render(createElement(MemoryRouter, { key: 'order' }, createElement(FieldLogPage, { fieldLogRepository: orderRepository, fieldsRepository }), createElement(ConfirmDialogHost))); await flush() })
   assert(timeline(N).indexOf('Device stamp row') >= 0 && timeline(N).indexOf('Device stamp row') < timeline(N).indexOf('Server stamp row'), `The later row must come first whatever its stamp format. North: ${timeline(N)}`)
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
-console.log('Field Log local copies regression passed (several-fields and one-field saves, edits, deletes, reload order, waiting rain on a reopened page and a second tab, saved copy kept current)')
+console.log('Field Log local copies regression passed (several-fields and one-field saves, edits, deletes, reload order, waiting rain on a reopened page and a second tab, saved copy kept current, edit of rain deleted elsewhere)')
