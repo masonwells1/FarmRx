@@ -525,26 +525,41 @@ async function run() {
   assert(new FieldLogWriteQueue(throwingStore, throwingKey).read().entries.length === 0 && readNeedsAttention(throwingStore, throwingKey).length === 0 && throwingStatus.kind === 'synced' && onServer(1011) && throwingGateway.saves.filter((call) => call.entry.id === uid(1011)).length === 1, `A replayed write must leave the queue, park nothing and read as synced when the saved copy cannot take it. Status: ${JSON.stringify(throwingStatus)}`)
   // Group 29: an edit of an entry someone deleted. The server refuses it (migration 20261021150000) rather than bringing the
   // entry back. On replay the edit goes to Needs attention in farmer wording (the page offers only Dismiss for it, see
-  // FieldLogModule.refusedReplay.regression.tsx), and the writes behind it carry on; a direct edit answers with the refusal at once, and is neither queued nor parked.
+  // FieldLogModule.refusedReplay.regression.tsx), and the writes behind it carry on; a direct edit answers with the refusal
+  // at once, and is neither queued nor parked. Either way the refusal confirms the entry is gone, so the device's saved copy
+  // drops it: an answer without signal must not offer it again with Edit and Delete.
   const deletedRefusal = () => Object.assign(new Error('field log entry was deleted and cannot be saved again'), { code: 'P0001', details: null, hint: null })
-  const goneStore = memory(); const goneProject = 'deleted-entry-field-log'; const goneGateway = new FakeGateway(); let goneOffline = false; let goneId = 1100
+  const goneDevice = deviceCache(); const goneProject = 'deleted-entry-field-log'; const goneGateway = new FakeGateway(); let goneOffline = false; let goneId = 1100
   const deletedElsewhere = new Set<string>(); const goneOnServer = (n: number) => goneGateway.entries.some((entry) => (entry as { id: string }).id === uid(n))
   const deleteElsewhere = (n: number) => { goneGateway.entries = goneGateway.entries.filter((entry) => (entry as { id: string }).id !== uid(n)); deletedElsewhere.add(uid(n)) }
   goneGateway.entries = [canonical(draft(uid(1110))), canonical(draft(uid(1111)))]
   goneGateway.refuseSave = (entry) => entry.id && deletedElsewhere.has(entry.id) ? deletedRefusal() : null
-  const goneQueued = new QueuedFieldLogRepository(live(goneGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: goneProject, storage: goneStore, createId: () => uid(goneId++), clock: () => stamp, isOffline: () => goneOffline })
-  const goneKey = fieldLogWriteQueueKey(goneProject, actor, farm); const goneQueue = new FieldLogWriteQueue(goneStore, goneKey)
-  goneOffline = true; await goneQueued.saveEntry({ ...draft(uid(1110)), rainfall_in: 1.4 }); await goneQueued.saveEntry(draft(uid(1112)))
-  deleteElsewhere(1110); goneOffline = false; await goneQueued.inspectAndReplay()
-  const goneParked = readNeedsAttention(goneStore, goneKey)
-  assert(goneParked.length === 1 && (goneParked[0]!.entry as { draft?: { id?: string } }).draft?.id === uid(1110) && goneParked[0]!.message === FIELD_LOG_DELETED_ENTRY_MESSAGE, `An edit of a deleted entry must wait in Needs attention, saying why. Got: ${JSON.stringify(goneParked)}`)
-  assert(!goneOnServer(1110), 'The edit must not bring the deleted entry back.')
-  assert(goneOnServer(1112) && goneQueue.read().entries.length === 0, 'A new entry behind the refused edit must still save.')
-  deleteElsewhere(1111)
-  let directRefusal: unknown = null; try { await goneQueued.saveEntry({ ...draft(uid(1111)), rainfall_in: 2 }) } catch (error) { directRefusal = error }
-  assert(isFieldLogDeletedEntryRefusal(directRefusal), `A direct edit of a deleted entry must answer with the server's refusal. Got: ${String(directRefusal)}`)
-  assert(farmerError(directRefusal, 'save this field log entry') === 'Someone deleted this entry, so this change was not saved. Add it again if you still need it.', `The farmer must be told the entry was deleted, not to try again. Got: ${farmerError(directRefusal, 'save this field log entry')}`)
-  assert(goneQueue.read().entries.length === 0 && readNeedsAttention(goneStore, goneKey).length === 1 && !goneOnServer(1111), 'A direct edit the server refuses must be neither queued, parked nor saved.')
+  const goneQueued = new QueuedFieldLogRepository(live(goneGateway), { getContext: async () => ({ userId: actor, farmId: farm }), projectRef: goneProject, storage: goneDevice.storage, createId: () => uid(goneId++), clock: goneDevice.clock, isOffline: () => goneOffline })
+  const goneKey = fieldLogWriteQueueKey(goneProject, actor, farm); const goneQueue = new FieldLogWriteQueue(goneDevice.storage, goneKey)
+  const goneNoSignal = async () => { goneGateway.loadFailure = new TypeError('Failed to fetch'); try { return await goneQueued.getData() } finally { goneGateway.loadFailure = null } }
+  try {
+    await goneQueued.getData()
+    assert(goneDevice.savedIds(goneProject) === [uid(1110), uid(1111)].join(), `A live read must save both entries on the device first. Saved copy: ${goneDevice.savedIds(goneProject)}`)
+    goneOffline = true; await goneQueued.saveEntry({ ...draft(uid(1110)), rainfall_in: 1.4 }); await goneQueued.saveEntry(draft(uid(1112)))
+    deleteElsewhere(1110); goneOffline = false; await goneQueued.inspectAndReplay()
+    const goneParked = readNeedsAttention(goneDevice.storage, goneKey)
+    assert(goneParked.length === 1 && (goneParked[0]!.entry as { draft?: { id?: string } }).draft?.id === uid(1110) && goneParked[0]!.message === FIELD_LOG_DELETED_ENTRY_MESSAGE, `An edit of a deleted entry must wait in Needs attention, saying why. Got: ${JSON.stringify(goneParked)}`)
+    assert(!goneOnServer(1110), 'The edit must not bring the deleted entry back.')
+    assert(goneOnServer(1112) && goneQueue.read().entries.length === 0, 'A new entry behind the refused edit must still save.')
+    assert(!goneDevice.savedIds(goneProject).includes(uid(1110)) && goneDevice.savedIds(goneProject).includes(uid(1111)), `The refused edit's entry must leave the saved copy, and only it. Saved copy: ${goneDevice.savedIds(goneProject)}`)
+    const replayNoSignal = await goneNoSignal()
+    assert(replayNoSignal.offline && !replayNoSignal.entries.some((entry) => entry.id === uid(1110)), `An answer without signal must not show the deleted entry again. Got: ${rowsOf(replayNoSignal)}`)
+    deleteElsewhere(1111)
+    let directRefusal: unknown = null; try { await goneQueued.saveEntry({ ...draft(uid(1111)), rainfall_in: 2 }) } catch (error) { directRefusal = error }
+    assert(isFieldLogDeletedEntryRefusal(directRefusal), `A direct edit of a deleted entry must answer with the server's refusal. Got: ${String(directRefusal)}`)
+    assert(farmerError(directRefusal, 'save this field log entry') === 'Someone deleted this entry, so this change was not saved. Add it again if you still need it.', `The farmer must be told the entry was deleted, not to try again. Got: ${farmerError(directRefusal, 'save this field log entry')}`)
+    assert(goneQueue.read().entries.length === 0 && readNeedsAttention(goneDevice.storage, goneKey).length === 1 && !goneOnServer(1111), 'A direct edit the server refuses must be neither queued, parked nor saved.')
+    assert(!goneDevice.savedIds(goneProject).includes(uid(1111)), `A direct edit refused as deleted must take its entry out of the saved copy too. Saved copy: ${goneDevice.savedIds(goneProject)}`)
+    // Any other refusal leaves the saved copy alone: only "deleted" says the entry is gone.
+    goneGateway.refuseSave = () => Object.assign(new Error('observed date cannot be more than one day in the future'), { code: 'P0001', details: null, hint: null })
+    try { await goneQueued.saveEntry({ ...draft(uid(1112)), rainfall_in: 3 }) } catch { /* refused, as set up */ }
+    assert(goneDevice.savedIds(goneProject).includes(uid(1112)), `A refusal that is not about a deleted entry must not take the entry out of the saved copy. Saved copy: ${goneDevice.savedIds(goneProject)}`)
+  } finally { goneDevice.restore() }
 
   console.log('SupabaseFieldLogRepository regression passed (29 coverage groups)')
 }

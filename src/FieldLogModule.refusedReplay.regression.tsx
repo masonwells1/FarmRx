@@ -31,11 +31,12 @@ const field = (id: string, name: string) => ({ id, farm_id: farm, name, total_ac
 const fieldsData = { farm: { id: farm }, entities: [], fields: [field(north, 'Pine North 80'), field(south, 'Pine South 80')], crop_assignments: [], arrangements: [], commodities: [] } as unknown as FieldsData
 const fieldsRepository = { getData: async () => fieldsData, saveField: async () => { throw new Error('unexpected field mutation') } } satisfies FieldsRepository
 
-let refuseNorth = true; let refuseDelete = false; let offline = true; let nextId = 100
+let refuseNorth = true; let refuseDelete = false; let offline = true; let readsFail = false; let nextId = 100
 const server: Array<Record<string, unknown>> = []; const sent: string[] = []; const deletedElsewhere = new Set<string>()
 const gateway: FieldLogDataGateway = {
-  loadEntries: async () => { if (offline) throw new TypeError('Failed to fetch'); return structuredClone(server) },
-  loadViewerRole: async () => { if (offline) throw new TypeError('Failed to fetch'); return { role: 'worker' } },
+  // readsFail: sends go through but the page's reloads time out, so they answer from the saved copy.
+  loadEntries: async () => { if (offline || readsFail) throw new TypeError('Failed to fetch'); return structuredClone(server) },
+  loadViewerRole: async () => { if (offline || readsFail) throw new TypeError('Failed to fetch'); return { role: 'worker' } },
   saveEntry: async (input: { farmId: string; operationId: string; entry: FieldLogEntryDraft }) => {
     if (offline) throw new TypeError('Failed to fetch')
     sent.push(input.entry.field_id)
@@ -173,7 +174,8 @@ assert(timeline('Pine North 80').includes('Not sent yet') && timeline('Pine Sout
 
   // An edit kept on the device for rain another phone then deletes: the server refuses it rather than bring the rain back.
   // The rain leaves the timeline, and Needs attention says so in plain words with only Dismiss: a Retry is refused every
-  // time, and nothing here waits on an app update.
+  // time, and nothing here waits on an app update. The page's reloads time out throughout, so they answer from the saved
+  // copy, which keeps every waiting copy the page holds: once dismissed, the edit must not come back as not sent yet.
   const southRain = server.find((row) => row.field_id === south); assert(southRain, 'South needs saved rain for the deleted-elsewhere scene.')
   offline = true
   const savedSouth = [...card('Pine South 80').querySelectorAll('.field-log-row')].find((item) => item.textContent?.includes('1.25 in')) as HTMLElement | undefined; assert(savedSouth, "South's saved rain row did not render before the edit.")
@@ -183,15 +185,16 @@ assert(timeline('Pine North 80').includes('Not sent yet') && timeline('Pine Sout
   await act(async () => { goneEdit.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flush(); await flush() })
   await until(() => timeline('Pine South 80').includes('5.00 in') && timeline('Pine South 80').includes('Not sent yet'), "the edit of South's rain is kept on this device")
   server.splice(server.indexOf(southRain), 1); deletedElsewhere.add(String(southRain.id))
-  offline = false; await act(async () => { await repository.inspectAndReplay(); await flush() })
+  offline = false; readsFail = true; await act(async () => { await repository.inspectAndReplay(); await flush() })
   await until(() => attention().includes('Not saved: someone deleted this entry.'), 'the refused edit of deleted rain is in Needs attention')
-  await remount(); await until(() => !timeline('Pine South 80').includes('5.00') && attention().includes('· 5 in'), "South's deleted rain leaves the timeline")
+  await until(() => !timeline('Pine South 80').includes('5.00') && attention().includes('· 5 in'), "South's deleted rain leaves the timeline")
   const goneRecord = [...container.querySelectorAll('[aria-label="Saves that need attention"] article')].find((item) => item.textContent?.includes('· 5 in')) as HTMLElement | undefined; assert(goneRecord, 'The refused edit of deleted rain did not render in Needs attention.')
   assert(goneRecord.textContent?.includes('Pine South 80') && [...goneRecord.querySelectorAll('p')].some((item) => item.textContent === 'Not saved: someone deleted this entry. Add it again if you still need it.'), `Needs attention must name the field and say the rain was deleted. Shown: ${goneRecord.textContent}`)
   assert(![...goneRecord.querySelectorAll('button')].some((item) => item.textContent === 'Retry') && !goneRecord.textContent.includes('Update needed') && !goneRecord.textContent.includes('Reload the app'), `Only Dismiss may be offered for deleted rain, with no talk of an update. Shown: ${goneRecord.textContent}`)
   assert(!timeline('Pine South 80').includes('1.25') && !timeline('Pine South 80').includes('Not sent yet') && !server.some((row) => row.id === southRain.id), `The deleted rain must stay deleted. Timeline: ${timeline('Pine South 80')}`)
   await click(buttonIn(goneRecord, 'Dismiss')); await click(buttonIn(container.querySelector('[aria-label="Saves that need attention"]')!, 'Yes, dismiss'))
   await until(() => !attention().includes('· 5 in'), 'the dismissed edit of deleted rain leaves Needs attention')
-  assert(!timeline('Pine South 80').includes('5.00') && !timeline('Pine South 80').includes('1.25'), `Dismissing must not bring the deleted rain back. Timeline: ${timeline('Pine South 80')}`)
+  assert(!timeline('Pine South 80').includes('5.00') && !timeline('Pine South 80').includes('1.25') && !timeline('Pine South 80').includes('Not sent yet'), `Dismissing must not bring the deleted rain or the dismissed edit back. Timeline: ${timeline('Pine South 80')}`)
+  readsFail = false
 } finally { await act(async () => { root.unmount() }); container.remove(); win.close() }
 console.log('Field Log refused replay page regression passed (parked, later save sent, honest timeline, retry, dismissed delete, other tab, parked edit, waiting edit beside a parked one, edit of rain deleted elsewhere)')

@@ -254,6 +254,7 @@ begin
   from (values
     ('alert_rule_states'),
     ('farm_access_epochs'),
+    ('field_log_deleted_entries'),
     ('push_deliveries'),
     ('push_delivery_targets'),
     ('repository_write_receipts'),
@@ -275,7 +276,7 @@ begin
       select 1 from pg_catalog.pg_policy p where p.polrelid = c.oid
     );
 
-  if v_internal_tables <> 7 then
+  if v_internal_tables <> 8 then
     raise exception 'internal deny-by-default table posture changed';
   end if;
 end $$;

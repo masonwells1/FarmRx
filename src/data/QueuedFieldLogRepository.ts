@@ -1,7 +1,7 @@
 import { isTransportFailure } from './QueuedFieldsRepository'
 import { FieldLogWriteQueue, fieldLogWriteQueueKey, parseFieldLogQueueForScope, type FieldLogQueueEntry, type FieldLogQueueEntryV2 } from './fieldLogWriteQueue'
 import { setModuleSyncStatus } from './syncStatus'
-import { FIELD_LOG_DELETED_ENTRY_MESSAGE, validateFieldLogDraft, type FieldLogData, type FieldLogDeleteReceipt, type FieldLogEntry, type FieldLogEntryDraft, type FieldLogRepository } from './fieldLog'
+import { FIELD_LOG_DELETED_ENTRY_MESSAGE, isFieldLogDeletedEntryRefusal, validateFieldLogDraft, type FieldLogData, type FieldLogDeleteReceipt, type FieldLogEntry, type FieldLogEntryDraft, type FieldLogRepository } from './fieldLog'
 import { isFarmReplayContextChangedError, launchReplayInBackground, type StorageLike } from './writeQueue'
 import type { SupabaseFieldLogRepository } from './SupabaseFieldLogRepository'
 import { captureWorkspaceCacheFence, operationalCacheMaxAgeMs, readWorkspaceCache, takeWorkspaceCacheTurn, writeWorkspaceCacheInOrder, type OrderedWorkspaceWrite } from './workspaceCache'
@@ -65,7 +65,8 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
   private writeSavedCopy(scope: ReturnType<QueuedFieldLogRepository['savedCopyScope']>, write: OrderedWorkspaceWrite<FieldLogData, ConfirmedChange>, turn: number | null, fence: FarmOperationContext | null) { return (this.d.writeWorkspaceCacheInOrder ?? writeWorkspaceCacheInOrder)(scope, write, turn, fence, applyConfirmed) }
   /** A save or delete the server confirmed goes into the whole-farm saved copy straight away, so an answer without signal
    * shows it before the next live read. A single field's copy, which no screen asks for, is refreshed by its own live reads.
-   * Only a confirmed change comes here: a refused one is parked in Needs attention and never reaches the saved copy. Best
+   * Only a confirmed change comes here: a refused one is parked in Needs attention and never reaches the saved copy (a
+   * refusal saying the entry was deleted confirms a delete, see dropDeletedFromSavedCopy). Best
    * effort: without a saved copy, or once the farm's access changed, nothing is written and the save still stands. It
    * never throws: it runs inside the write's own try, where a throw would make a confirmed save read as a failure and, on
    * replay, hold the queue and send the confirmed write again. */
@@ -76,6 +77,11 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
       // Right after the update only the previous version's copy may exist: the change then starts the ordered copy from it.
       await this.writeSavedCopy(scope, { change, startFrom: this.previousSavedCopyScope({ userId: entry.userId, farmId: entry.farmId }) }, turn, entry.operationContext)
     } catch { /* the save stands; the next live read refreshes the copy */ }
+  }
+  /** The server refused a save because the entry was deleted: that refusal confirms the entry is gone, so the saved copy
+   * drops it too, or an answer without signal would show it again with Edit and Delete. Never throws, like keepInSavedCopy. */
+  private async dropDeletedFromSavedCopy(entry: FieldLogQueueEntryV2, error: unknown) {
+    if (entry.kind === 'saveEntry' && isFieldLogDeletedEntryRefusal(error)) await this.keepInSavedCopy(entry, { id: entry.draft.id!, deleted: true })
   }
   async getNeedsAttentionQueueKey() { return (await this.source()).queue.key }
   /** Status from what is parked and what still waits: "synced" only when nothing is either. */
@@ -120,7 +126,7 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
     const operationContext = entry.operationContext
     const source = await this.source(); const { context, queue } = source; if (entry.userId !== context.userId || entry.farmId !== context.farmId) throw new Error(blocked); await verifyQueuedOperationContext(this.d, operationContext, entry)
     return this.locked(queue.key, async (verify) => { const verifyOperation = async () => { verify(); await verifyQueuedOperationContext(this.d, operationContext, entry) }; await verifyOperation(); if (this.d.isOffline() || queue.read().entries.length) { await verifyOperation(); queue.append(entry); this.syncOrParked(queue); launchReplayInBackground(() => this.inspectAndReplay()); return }
-      try { const result = await this.write(entry); await this.keepInSavedCopy(entry, result); await verifyOperation(); this.syncOrParked(queue); return result } catch (error) { await verifyQueuedOperationContext(this.d, operationContext, entry); if (!isTransportFailure(error, this.d.isOffline())) throw error; await verifyOperation(); queue.append(entry); this.syncOrParked(queue); launchReplayInBackground(() => this.inspectAndReplay()); return } })
+      try { const result = await this.write(entry); await this.keepInSavedCopy(entry, result); await verifyOperation(); this.syncOrParked(queue); return result } catch (error) { await verifyQueuedOperationContext(this.d, operationContext, entry); if (!isTransportFailure(error, this.d.isOffline())) { await this.dropDeletedFromSavedCopy(entry, error); throw error } await verifyOperation(); queue.append(entry); this.syncOrParked(queue); launchReplayInBackground(() => this.inspectAndReplay()); return } })
   }
   async saveEntry(draft: FieldLogEntryDraft) {
     const validation = validateFieldLogDraft(draft); if (validation) throw new Error(validation)
@@ -138,7 +144,7 @@ export class QueuedFieldLogRepository implements FieldLogRepository {
       if (this.d.isOffline()) { this.syncOrParked(queue); return }
       while (envelope.entries.length) { const head = envelope.entries[0]; if (head.userId !== context.userId || head.farmId !== context.farmId) throw new Error(blocked); if (head.version === 1) { envelope = queue.parkLegacyHead(head.operationId); setModuleSyncStatus('fieldLog', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } await verifyQueuedOperationContext(this.d, head.operationContext, head); setModuleSyncStatus('fieldLog', { kind: 'syncing', pending: envelope.entries.length }); try { const confirmed = await this.write(head); await this.keepInSavedCopy(head, confirmed); verify(); await verifyQueuedOperationContext(this.d, head.operationContext, head); envelope = queue.removeConfirmedHead(head.operationId) } catch (error) { await verifyQueuedOperationContext(this.d, head.operationContext, head); if (isTransportFailure(error, this.d.isOffline())) { this.syncOrParked(queue); return }
           // A refusal of this entry moves it to Needs attention so the saves behind it carry on; anything else still holds the queue.
-          const reason = refusedEntryReason(error); if (!reason) { setModuleSyncStatus('fieldLog', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } verify(); envelope = queue.parkHead(head.operationId, reason) } }
+          const reason = refusedEntryReason(error); if (!reason) { setModuleSyncStatus('fieldLog', { kind: 'blocked', pending: envelope.entries.length, message: blocked }); return } await this.dropDeletedFromSavedCopy(head, error); verify(); envelope = queue.parkHead(head.operationId, reason) } }
       this.syncOrParked(queue) })
     } catch (error) { if (isFarmReplayContextChangedError(error)) throw error; setModuleSyncStatus('fieldLog', { kind: 'blocked', pending: 0, message: blocked }) }
   }

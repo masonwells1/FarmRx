@@ -365,18 +365,34 @@ try {
   copyKeepsUp = false
 
   // Rain deleted on another phone is still on this screen, and the farmer edits it: the server refuses the edit rather than
-  // bring the rain back. The form closes, the card says why in plain words, and the reload that follows takes the rain away.
+  // bring the rain back. The card says why, out loud for a screen reader; the reload that follows takes the deleted rain
+  // away; and what the farmer typed reopens as new rain, so one tap adds it back under a new id.
   signal = 'online'; server = []; cached = []; cachedFrom = moments; waiting = []; waitingDeletes = []; sendOutcomes.length = 0
   await reopen('deleted elsewhere')
   await saveInCard(N, buttonIn(card(N), 'Add rain'), { rainfall: '0.61' }); await saveInCard(N, buttonIn(card(N), 'Add rain'), { rainfall: '0.62' })
   const goneRain = server.find((entry) => entry.rainfall_in === 0.61); assert(goneRain, 'The deleted-elsewhere scene needs its rain on the server.')
   server = server.filter((entry) => entry.id !== goneRain.id); deletedElsewhere.add(goneRain.id)
   assert(timeline(N).includes('0.61 in'), `Until a reload, the rain deleted elsewhere is still on this screen. North: ${timeline(N)}`)
-  await saveInCard(N, buttonIn(row(N, '0.61 in'), 'Edit'), { rainfall: '0.91' })
-  assert(card(N).querySelector('.form-error')?.textContent === 'Someone deleted this entry, so this change was not saved. Add it again if you still need it.', `The card must say the entry was deleted. North: ${card(N).textContent}`)
-  assert(!card(N).querySelector('form.field-log-form'), 'The edit form must close once the server says the entry is gone.')
+  await saveInCard(N, buttonIn(row(N, '0.61 in'), 'Edit'), { rainfall: '0.91', note: 'Gauge re-read' })
+  const cardError = card(N).querySelector('.form-error')
+  assert(cardError?.textContent === 'Someone deleted this entry, so your change was not saved. It is still in the form: save it to add it again, or cancel.' && cardError.getAttribute('role') === 'alert', `The card must say, as an alert, that the entry was deleted. North: ${card(N).textContent}`)
   assert(!timeline(N).includes('0.61 in') && !timeline(N).includes('0.91 in') && timeline(N).includes('0.62 in'), `The deleted rain must leave the timeline and the other rain stay. North: ${timeline(N)}`)
   assert(!server.some((entry) => entry.id === goneRain.id), 'The edit must not bring the deleted rain back.')
+  const reopened = card(N).querySelector('form.field-log-form') as HTMLFormElement | null
+  assert(reopened?.querySelector('h3')?.textContent === 'Add rain' && (reopened.querySelector('input[name="rainfall"]') as HTMLInputElement).value === '0.91' && (reopened.querySelector('textarea[name="note"]') as HTMLTextAreaElement).value === 'Gauge re-read' && (reopened.querySelector('input[name="date"]') as HTMLInputElement).value === goneRain.observed_on, `What the farmer typed must reopen as new rain. Form: ${reopened?.textContent}`)
+  await submit(reopened)
+  const addedBack = server.find((entry) => entry.rainfall_in === 0.91)
+  assert(addedBack && addedBack.id !== goneRain.id && addedBack.note === 'Gauge re-read' && timeline(N).includes('0.91 in · Gauge re-read'), `Saving the reopened form must add the rain as a new entry. North: ${timeline(N)}`)
+  assert(!card(N).querySelector('.form-error') && !card(N).querySelector('form.field-log-form'), `Once added back, the form closes and the message goes. North: ${card(N).textContent}`)
+  // Opening another form after such a refusal clears the message and starts that form empty.
+  const goneAgain = server.find((entry) => entry.rainfall_in === 0.62); assert(goneAgain, 'The second refusal needs the other North rain.')
+  server = server.filter((entry) => entry.id !== goneAgain.id); deletedElsewhere.add(goneAgain.id)
+  await saveInCard(N, buttonIn(row(N, '0.62 in'), 'Edit'), { rainfall: '0.66', note: 'Second read' })
+  assert(card(N).querySelector('.form-error'), 'The second refused edit must show its message.')
+  await click(buttonIn(card(N), 'Add note'))
+  const noteForm = card(N).querySelector('form.field-log-form') as HTMLFormElement | null
+  assert(!card(N).querySelector('.form-error') && noteForm?.querySelector('h3')?.textContent === 'Add note' && (noteForm.querySelector('textarea[name="note"]') as HTMLTextAreaElement).value === '', `Add note must clear the message and start empty. North: ${card(N).textContent}`)
+  await click(buttonIn(noteForm, 'Cancel'))
 
   // Same-date rows are ordered by created time as instants: the server writes '…T15:00:00+00:00' and the device
   // '…T15:00:00.400Z', and comparing the text would put the older row first.

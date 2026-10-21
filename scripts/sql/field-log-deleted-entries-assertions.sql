@@ -4,12 +4,14 @@
 -- failure raises; the last line prints FIELD_LOG_DELETED_ENTRIES_DISPOSABLE_PASS.
 --
 -- What is proved: an edit saved after the entry was deleted is refused with the one message the
--- client recognises, and leaves no row and no receipt behind; a replay of an edit that was saved
--- before the delete still answers from its receipt without bringing the entry back; a new entry
--- still saves; a direct table insert of a deleted id is refused too, and a direct table delete is
--- remembered; deleting a field remembers its entries; deleting a farm still works and takes its
--- remembered ids with it; and no client role can read or write the remembered ids or run the two
--- trigger functions.
+-- client recognises, leaves no row behind, and is refused the same way when its replay comes
+-- again; a replay of an edit that was saved before the delete still answers from its receipt
+-- without bringing the entry back; a new entry still saves; a direct table insert of a deleted id
+-- is refused too, a direct table delete is remembered, and an entry's id cannot be changed;
+-- deleting a field remembers its entries; deleting a farm that still has entries works and takes
+-- its remembered ids with it; and no client role holds any privilege or policy on the remembered
+-- ids or can run the trigger functions. (The migration's fill-in of ids deleted before it ran
+-- reads earlier receipts, so it is proved against a database with history, not here.)
 
 \set ON_ERROR_STOP on
 \set O   '''00000000-0000-4000-8000-000000000b01'''
@@ -52,6 +54,14 @@ begin
     if sqlerrm <> 'field log entry was deleted and cannot be saved again' then raise; end if;
   end;
   if exists (select 1 from public.field_log_entries where id = v_entry) then raise exception 'the refused edit left a row'; end if;
+  -- The same queued edit, sent again (a Retry, or a replay after a lost response), is refused the
+  -- same way: a refusal leaves no receipt that could make it read as saved.
+  begin
+    perform public.save_field_log_entry(v_farm, '00000000-0000-4000-8000-000000000b32', jsonb_build_object('id', v_entry, 'field_id', v_north, 'entry_type', 'rainfall', 'observed_on', '2026-10-01', 'rainfall_in', 0.9));
+    raise exception 'the refused edit, sent again, was answered as saved';
+  exception when raise_exception then
+    if sqlerrm <> 'field log entry was deleted and cannot be saved again' then raise; end if;
+  end;
 
   -- The same refusal for a note, which takes the same insert.
   begin
@@ -97,6 +107,24 @@ begin
   exception when raise_exception then
     if sqlerrm <> 'field log entry was deleted and cannot be saved again' then raise; end if;
   end;
+  -- An entry's id cannot change: not to a deleted id, which would bring it back, nor to a new one,
+  -- which would let the old id go without being remembered. Other columns still update.
+  insert into public.field_log_entries(id, farm_id, field_id, entry_type, observed_on, rainfall_in, created_by)
+  values ('00000000-0000-4000-8000-000000000b24', v_farm, v_north, 'rainfall', '2026-10-04', 0.4, v_owner);
+  begin
+    update public.field_log_entries set id = '00000000-0000-4000-8000-000000000b20' where id = '00000000-0000-4000-8000-000000000b24';
+    raise exception 'an entry took a deleted entry''s id';
+  exception when raise_exception then
+    if sqlerrm <> 'field log entry id cannot change' then raise; end if;
+  end;
+  begin
+    update public.field_log_entries set id = '00000000-0000-4000-8000-000000000b26' where id = '00000000-0000-4000-8000-000000000b24';
+    raise exception 'an entry''s id changed';
+  exception when raise_exception then
+    if sqlerrm <> 'field log entry id cannot change' then raise; end if;
+  end;
+  update public.field_log_entries set rainfall_in = 0.45 where id = '00000000-0000-4000-8000-000000000b24';
+  if (select rainfall_in from public.field_log_entries where id = '00000000-0000-4000-8000-000000000b24') <> 0.45 then raise exception 'an ordinary update of an entry was refused'; end if;
   -- A direct delete (the delete policy allows it) is remembered like the function's.
   delete from public.field_log_entries where id = '00000000-0000-4000-8000-000000000b21';
   begin
@@ -115,9 +143,6 @@ begin
   if (select count(*) from public.field_log_deleted_entries where farm_id = '00000000-0000-4000-8000-000000000b10') <> 2 then
     raise exception 'remembered ids for the farm: %, expected the two deleted entries', (select count(*) from public.field_log_deleted_entries where farm_id = '00000000-0000-4000-8000-000000000b10');
   end if;
-  if exists (select 1 from public.repository_write_receipts where operation_id in ('00000000-0000-4000-8000-000000000b32', '00000000-0000-4000-8000-000000000b33')) then
-    raise exception 'a refused save left a receipt, so its replay would read as saved';
-  end if;
 end $$;
 
 -- ------------------------------------------------- 4. a field's entries, and the farm itself
@@ -132,9 +157,19 @@ begin
     raise exception 'an entry removed with its field was not remembered';
   end if;
 end $$;
+-- The farm still has entries when it goes, so the delete runs through the remember trigger.
+insert into public.field_log_entries(id, farm_id, field_id, entry_type, observed_on, rainfall_in, created_by)
+values ('00000000-0000-4000-8000-000000000b25', :F, :FN, 'rainfall', '2026-10-05', 0.2, :O);
+do $$
+begin
+  if (select count(*) from public.field_log_entries where farm_id = '00000000-0000-4000-8000-000000000b10') < 2 then
+    raise exception 'the farm-deletion check needs entries on the farm';
+  end if;
+end $$;
 delete from public.farms where id = :F;
 do $$
 begin
+  if exists (select 1 from public.field_log_entries where farm_id = '00000000-0000-4000-8000-000000000b10') then raise exception 'deleting the farm left its entries'; end if;
   if exists (select 1 from public.farms where id = '00000000-0000-4000-8000-000000000b10') then raise exception 'the farm was not deleted'; end if;
   if exists (select 1 from public.field_log_deleted_entries where farm_id = '00000000-0000-4000-8000-000000000b10') then
     raise exception 'deleting the farm left its remembered ids';
@@ -148,9 +183,20 @@ begin
   if not (select relrowsecurity from pg_catalog.pg_class where oid = 'public.field_log_deleted_entries'::regclass) then
     raise exception 'field_log_deleted_entries does not have row level security';
   end if;
-  if has_table_privilege('anon', 'public.field_log_deleted_entries', 'select,insert,update,delete')
-    or has_table_privilege('authenticated', 'public.field_log_deleted_entries', 'select,insert,update,delete') then
+  -- The table's own access list, read directly: it must be explicit (the migration's revoke makes
+  -- it so, and on Supabase it is what removes the default grants) and name no client role.
+  if (select relacl from pg_catalog.pg_class where oid = 'public.field_log_deleted_entries'::regclass) is null then
+    raise exception 'field_log_deleted_entries still has the default access list: the revoke did not run';
+  end if;
+  if exists (
+    select 1 from pg_catalog.pg_class c, aclexplode(c.relacl) a
+    where c.oid = 'public.field_log_deleted_entries'::regclass
+      and (a.grantee = 0 or a.grantee in (select oid from pg_catalog.pg_roles where rolname in ('anon', 'authenticated')))
+  ) then
     raise exception 'a client role holds a privilege on field_log_deleted_entries';
+  end if;
+  if exists (select 1 from pg_catalog.pg_policy where polrelid = 'public.field_log_deleted_entries'::regclass) then
+    raise exception 'field_log_deleted_entries has a policy, so a client role could reach it';
   end if;
   foreach v_function in array array['public.remember_deleted_field_log_entry()', 'public.refuse_deleted_field_log_entry()'] loop
     if not (select prosecdef and proconfig @> array['search_path=public, pg_temp'] from pg_catalog.pg_proc where oid = v_function::regprocedure) then
