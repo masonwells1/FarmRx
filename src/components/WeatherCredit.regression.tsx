@@ -34,8 +34,10 @@ const rule = (selector: string) => creditRules.find((item) => item.selector === 
 assert(/font-size:\s*18px/.test(rule('.town-credit')), 'The credit text must be at least 18px (Farm Rx text contract).')
 assert(/min-height:\s*48px/.test(rule('.town-credit a')) && /display:\s*inline-flex/.test(rule('.town-credit a')), 'Each credit link needs a 48px tap target.')
 for (const item of creditRules) {
-  for (const size of item.body.matchAll(/font-size:\s*([\d.]+)(px|rem)/g)) assert(Number(size[1]) * (size[2] === 'rem' ? 16 : 1) >= 18, `${item.selector} shrinks the credit below 18px.`)
-  assert(!/min-height:\s*(?!48px)/.test(item.body) || item.selector === '.town-credit a', `${item.selector} overrides the credit link tap target.`)
+  // Compare each declared value; a unit other than px or rem cannot be checked here, so it fails.
+  const px = (value: string) => { const match = /^([\d.]+)(px|rem)$/.exec(value.trim()); return match ? Number(match[1]) * (match[2] === 'rem' ? 16 : 1) : Number.NaN }
+  for (const size of item.body.matchAll(/font-size:([^;]*)/g)) assert(px(size[1]) >= 18, `${item.selector} sets the credit text below 18px (${size[1].trim()}).`)
+  for (const height of item.body.matchAll(/min-height:([^;]*)/g)) assert(px(height[1]) >= 48, `${item.selector} sets a credit link tap target below 48px (${height[1].trim()}).`)
 }
 
 console.log('Weather credit regression passed')
