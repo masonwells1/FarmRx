@@ -41,28 +41,6 @@ alter table public.field_log_deleted_entries enable row level security;
 revoke all on table public.field_log_deleted_entries
   from public, anon, authenticated;
 
--- Entries deleted before this migration: every save through save_field_log_entry wrote the
--- saved row into its receipt, so a Field Log receipt whose entry is gone names a deleted entry.
--- (Rows written without the function, such as seeds, have no receipt and are not covered.)
--- This runs before the access-epoch guard below is attached, as the migration has no farm
--- request context.
-insert into public.field_log_deleted_entries (entry_id, farm_id)
-select distinct (r.result ->> 'id')::uuid, r.farm_id
-from public.repository_write_receipts r
-where r.result ?& array['id', 'field_id', 'entry_type', 'observed_on', 'rainfall_in', 'note']
-  and r.result ->> 'entry_type' in ('rainfall', 'note')
-  and exists (select 1 from public.farms f where f.id = r.farm_id)
-  and not exists (
-    select 1 from public.field_log_entries e where e.id = (r.result ->> 'id')::uuid
-  )
-on conflict (entry_id) do nothing;
-
--- Access-epoch fencing (migration 0040): every farm-scoped table carries the row guard. A row is
--- only ever written here by the delete that the guard on field_log_entries already let through.
-create trigger farm_access_epoch_guard
-before insert or update or delete on public.field_log_deleted_entries
-for each row execute function public.guard_row_farm_access_epoch();
-
 create function public.remember_deleted_field_log_entry()
 returns trigger
 language plpgsql
@@ -119,6 +97,30 @@ for each row execute function public.remember_deleted_field_log_entry();
 create trigger field_log_entries_refuse_deleted
 before insert or update of id on public.field_log_entries
 for each row execute function public.refuse_deleted_field_log_entry();
+
+-- Entries deleted before this migration: every save through save_field_log_entry wrote the
+-- saved row into its receipt, so a Field Log receipt whose entry is gone names a deleted entry.
+-- (Rows written without the function, such as seeds, have no receipt and are not covered.)
+-- This runs after the two triggers above are installed: creating them locked field_log_entries
+-- against writes until this migration commits, so a delete that finished earlier is found here
+-- and one that comes later fires the remember trigger; none falls between the two. It runs
+-- before the access-epoch guard below is attached, as the migration has no farm request context.
+insert into public.field_log_deleted_entries (entry_id, farm_id)
+select distinct (r.result ->> 'id')::uuid, r.farm_id
+from public.repository_write_receipts r
+where r.result ?& array['id', 'field_id', 'entry_type', 'observed_on', 'rainfall_in', 'note']
+  and r.result ->> 'entry_type' in ('rainfall', 'note')
+  and exists (select 1 from public.farms f where f.id = r.farm_id)
+  and not exists (
+    select 1 from public.field_log_entries e where e.id = (r.result ->> 'id')::uuid
+  )
+on conflict (entry_id) do nothing;
+
+-- Access-epoch fencing (migration 0040): every farm-scoped table carries the row guard. A row is
+-- only ever written here by the delete that the guard on field_log_entries already let through.
+create trigger farm_access_epoch_guard
+before insert or update or delete on public.field_log_deleted_entries
+for each row execute function public.guard_row_farm_access_epoch();
 
 -- save_field_log_entry as migration 0019 created it (never redefined since), with one change in
 -- the receipt branch: a repeat of a save whose entry was deleted since is refused rather than
