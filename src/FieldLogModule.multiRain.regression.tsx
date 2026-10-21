@@ -393,6 +393,18 @@ try {
   const noteForm = card(N).querySelector('form.field-log-form') as HTMLFormElement | null
   assert(!card(N).querySelector('.form-error') && noteForm?.querySelector('h3')?.textContent === 'Add note' && (noteForm.querySelector('textarea[name="note"]') as HTMLTextAreaElement).value === '', `Add note must clear the message and start empty. North: ${card(N).textContent}`)
   await click(buttonIn(noteForm, 'Cancel'))
+  // The same refusal for rain this page holds as its own confirmed copy (the reload after its save answered from a saved
+  // copy that lacks it), with the reload after the refusal answering from that copy too: the card must still take the
+  // rain away rather than keep showing the page's copy, with Edit, under the message.
+  signal = 'stale copy'
+  await saveInCard(N, buttonIn(card(N), 'Add rain'), { rainfall: '0.63' })
+  const keptRain = server.find((entry) => entry.rainfall_in === 0.63); assert(keptRain, 'The kept-copy scene needs its rain on the server.')
+  assert(timeline(N).includes('0.63 in'), `The page keeps its own copy of rain the saved copy lacks. North: ${timeline(N)}`)
+  server = server.filter((entry) => entry.id !== keptRain.id); deletedElsewhere.add(keptRain.id)
+  await saveInCard(N, buttonIn(row(N, '0.63 in'), 'Edit'), { rainfall: '0.64' })
+  assert(card(N).querySelector('.form-error') && !timeline(N).includes('0.63 in') && !timeline(N).includes('0.64 in'), `Rain refused as deleted must leave the timeline even when the reload keeps the page's copy. North: ${timeline(N)}`)
+  await click(buttonIn(card(N).querySelector('form.field-log-form')!, 'Cancel'))
+  signal = 'online'
 
   // Same-date rows are ordered by created time as instants: the server writes '…T15:00:00+00:00' and the device
   // '…T15:00:00.400Z', and comparing the text would put the older row first.
