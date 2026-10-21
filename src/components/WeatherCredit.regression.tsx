@@ -10,7 +10,7 @@ Object.assign(globalThis, { React })
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 
 const html = renderToStaticMarkup(createElement(WeatherCredit))
-assert(html === '<p class="town-credit">Weather data by <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo.com</a> (<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>).</p>', `The credit lost its wording or links (saw: ${html}).`)
+assert(html === '<p class="town-credit">Weather data by <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo.com</a> <span class="credit-keep">(<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>).</span></p>', `The credit lost its wording or links (saw: ${html}).`)
 
 const source = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
 const screens: Array<{ file: string; after: string; where: string }> = [
@@ -26,5 +26,18 @@ for (const screen of screens) {
 // Every screen that reads Open-Meteo data must carry the credit; a new reader fails here until it does.
 const readers = readdirSync(new URL('../', import.meta.url)).filter((file) => file.endsWith('.tsx') && !file.includes('.regression.') && /from ['"]\.\/data\/weatherService['"]/.test(source(file))).sort()
 assert(readers.join() === screens.map((screen) => screen.file).sort().join(), `Screens reading weather data changed (now: ${readers.join(', ')}); add <WeatherCredit /> next to the new one and list it here.`)
+
+// The credit is licence-required text, so it follows the farmer rules: 18px text and 48px link tap targets.
+const css = source('styles/app.css')
+const creditRules = [...css.matchAll(/([^{}]*\.town-credit[^{}]*)\{([^}]*)\}/g)].map((match) => ({ selector: match[1].trim(), body: match[2] }))
+const rule = (selector: string) => creditRules.find((item) => item.selector === selector)?.body ?? ''
+assert(/font-size:\s*18px/.test(rule('.town-credit')), 'The credit text must be at least 18px (Farm Rx text contract).')
+assert(/min-height:\s*48px/.test(rule('.town-credit a')) && /display:\s*inline-flex/.test(rule('.town-credit a')), 'Each credit link needs a 48px tap target.')
+for (const item of creditRules) {
+  // Compare each declared value; a unit other than px or rem cannot be checked here, so it fails.
+  const px = (value: string) => { const match = /^([\d.]+)(px|rem)$/.exec(value.trim()); return match ? Number(match[1]) * (match[2] === 'rem' ? 16 : 1) : Number.NaN }
+  for (const size of item.body.matchAll(/font-size:([^;]*)/g)) assert(px(size[1]) >= 18, `${item.selector} sets the credit text below 18px (${size[1].trim()}).`)
+  for (const height of item.body.matchAll(/min-height:([^;]*)/g)) assert(px(height[1]) >= 48, `${item.selector} sets a credit link tap target below 48px (${height[1].trim()}).`)
+}
 
 console.log('Weather credit regression passed')
