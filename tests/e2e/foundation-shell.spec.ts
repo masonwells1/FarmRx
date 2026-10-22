@@ -155,12 +155,13 @@ const productA = '00000000-0000-4000-8000-000000000701'
 function todayRows(farm: FarmFixture): Readonly<Partial<Record<string, unknown[]>>> {
   return {
     // FD-2 grain line: 5,320 of the 15,200 bu estimate signed (35%); a plan whose cumulative percent is 40% from March on; two
-    // farmer-entered Cargill bids (4.07 then 4.12) and a newer USDA feed row that must never count as a local bid.
+    // farmer-entered Cargill bids (4.07 then 4.12, for October 2026 delivery, so they speak for the 2026 crop) and a newer USDA
+    // feed row that must never count as a local bid.
     grain_contracts: [{ id: '00000000-0000-4000-8000-000000000061', farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, contract_type: 'forward_cash', buyer: 'Cargill Olney', bushels: 5320, futures_price: null, basis: null, cash_price: 4.2, delivery_start: '2026-10-01', delivery_end: '2026-11-30', contract_number: null, premium_cents_per_bu: 0, notes: null, created_at: now, updated_at: now }],
     marketing_plan_targets: [['00000000-0000-4000-8000-000000000071', '2026-01-01', 10], ['00000000-0000-4000-8000-000000000072', '2026-02-01', 15], ['00000000-0000-4000-8000-000000000073', '2026-03-01', 15]].map(([id, target_month, target_pct_of_production]) => ({ id, farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, target_month, target_pct_of_production, target_price: null, breakeven_relative_pct: null, deadline: null, notes: null, created_at: now, updated_at: now })),
     cash_bids: [
-      { id: '00000000-0000-4000-8000-000000000081', farm_id: farm.id, elevator: 'Cargill Olney', commodity_id: commodityId, bid_date: '2026-07-10', basis: -0.35, cash_price: 4.07, delivery_start: null, delivery_end: null, notes: null, created_at: now, updated_at: now },
-      { id: '00000000-0000-4000-8000-000000000082', farm_id: farm.id, elevator: 'Cargill Olney', commodity_id: commodityId, bid_date: '2026-07-14', basis: -0.3, cash_price: 4.12, delivery_start: null, delivery_end: null, notes: null, created_at: now, updated_at: now },
+      { id: '00000000-0000-4000-8000-000000000081', farm_id: farm.id, elevator: 'Cargill Olney', commodity_id: commodityId, bid_date: '2026-07-10', basis: -0.35, cash_price: 4.07, delivery_start: '2026-10-01', delivery_end: '2026-10-31', notes: null, created_at: now, updated_at: now },
+      { id: '00000000-0000-4000-8000-000000000082', farm_id: farm.id, elevator: 'Cargill Olney', commodity_id: commodityId, bid_date: '2026-07-14', basis: -0.3, cash_price: 4.12, delivery_start: '2026-10-01', delivery_end: '2026-10-31', notes: null, created_at: now, updated_at: now },
       { id: '00000000-0000-4000-8000-000000000083', farm_id: farm.id, elevator: 'Cedar Rapids', commodity_id: commodityId, bid_date: '2026-07-15', basis: -0.1, cash_price: 4.5, delivery_start: null, delivery_end: null, notes: '[USDA MARS 2850 · Iowa] basis range -0.15 to -0.05', feed_source: 'usda_mars', feed_report_id: '2850', feed_geography: 'IA', created_at: now, updated_at: now },
     ],
     equipment: [{ id: equipmentA, farm_id: farm.id, name: 'John Deere 8R 340', category: 'tractor', make: null, model: null, model_year: null, serial_or_vin: null, purchase_date: null, purchase_price: null, meter_unit: 'hours', warranty_expires_on: null, warranty_notes: null, status: 'active', notes: null, created_by: userId, created_at: now, updated_at: now }],
@@ -1691,6 +1692,49 @@ test('Today opens by default with record tiles and Next up, and hands the Rain a
   await expect(page.getByRole('button', { name: 'Add contract' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Record a sale instead' }).click()
   await expect(page.getByRole('button', { name: 'Add contract' })).toBeVisible()
+  expect(unexpected).toEqual([])
+})
+
+// Grain trust repair: a finished basis contract stores a cash price that already includes its premium, so the
+// screens must count that premium once; a crop that is all under contract is never called unpriced; and a bid
+// can be entered for a later delivery month, which is what lets a new-crop HTA be valued at a new-crop basis.
+test('a finished basis contract counts its premium once, and a new-crop bid keeps its delivery month', async ({ page, context }) => {
+  await seedSession(context)
+  const farm = farms[0]!
+  const contract = (id: string, buyer: string, extra: Record<string, unknown>) => ({ id, farm_id: farm.id, crop_year: 2026, commodity_id: commodityId, operating_entity_id: null, enterprise_label: null, contract_type: 'basis', buyer, bushels: 7_600, futures_price: null, basis: null, cash_price: null, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, firm_offer_id: null, created_at: now, updated_at: now, ...extra })
+  // $5.00 futures - $0.30 basis + 10¢ premium, stored by finalize_contract_price_leg as $4.80.
+  const finished = contract('00000000-0000-4000-8000-0000000000a1', 'Finished Basis', { futures_price: 5, basis: -0.3, premium_cents_per_bu: 10, cash_price: 4.8 })
+  const futuresOpen = contract('00000000-0000-4000-8000-0000000000a2', 'Futures Open', { basis: -0.25 })
+  const unexpected = await mockSupabase(page, [farm], [], true, 1, ownerProfile, userId, {}, { grain_contracts: [finished, futuresOpen], grain_contract_deliveries: [], grain_contract_audit: [] })
+  const savedBids: Array<Record<string, unknown>> = []
+  await page.route('https://*.supabase.co/rest/v1/cash_bids*', async (route) => {
+    const request = route.request()
+    if (request.method() === 'GET' && new URL(request.url()).searchParams.has('id')) { await fulfillJson(route, []); return }
+    if (request.method() !== 'POST') { await route.fallback(); return }
+    const body = request.postDataJSON() as Record<string, unknown>
+    savedBids.push(body)
+    const row = { ...body, created_at: now, updated_at: now }
+    await fulfillJson(route, (request.headers()['accept'] ?? '').includes('vnd.pgrst.object') ? row : [row])
+  })
+  await page.goto('/grain')
+  const positionCard = page.locator('article.position-card').first()
+  // 7,600 of 15,200 bu fully priced at $4.80 (never $4.90), and the other 7,600 bu are under a basis contract, not unpriced.
+  await expect(positionCard.locator('p.position-hero')).toHaveText('50% priced at $4.80 average · 0 bu not under contract')
+  await expect(positionCard.getByText('7,600 bu', { exact: true }).first()).toBeVisible()
+  await page.goto('/grain/contracts')
+  const finishedRow = page.locator('tr.contract-row').filter({ hasText: 'Finished Basis' })
+  await expect(finishedRow).toContainText('$4.80')
+  await expect(finishedRow).not.toContainText('$4.90')
+  await page.goto('/grain/storage')
+  const bidForm = page.locator('form.basis-entry')
+  await bidForm.getByLabel('Elevator').fill('Cargill Olney')
+  await bidForm.getByLabel('Basis ($/bu)').fill('-0.25')
+  await bidForm.getByLabel(/Delivery month/).fill('2027-11')
+  await bidForm.getByRole('button', { name: 'Add basis' }).click()
+  await expect.poll(() => savedBids.length).toBe(1)
+  expect(savedBids[0]).toMatchObject({ elevator: 'Cargill Olney', basis: -0.25, delivery_start: '2027-11-01', delivery_end: '2027-11-30' })
+  await expect(bidForm.getByLabel(/Delivery month/)).toHaveValue('')
+  await expect(page.getByRole('alert')).toHaveCount(0)
   expect(unexpected).toEqual([])
 })
 

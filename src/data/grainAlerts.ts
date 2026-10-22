@@ -1,7 +1,7 @@
 import { supabase } from '../lib/supabaseClient'
 import type { GrainWorkspace } from './grain'
 import { evaluateMarketingAlertRules } from './marketingAlerts'
-import { isMarsBid } from './basisMath'
+import { cropYearBids } from './basisMath'
 import { getOperationalIntegrityCapability } from './operationalIntegrityCapability'
 import { farmCalendarDate } from './farmDates'
 import { currentFarmContext } from '../auth/farmContext'
@@ -26,7 +26,7 @@ export function evaluateGrainAlerts(workspace: GrainWorkspace, now = new Date())
   const today = farmCalendarDate(now, workspace.fields.farm.time_zone); const alerts: GrainAlert[] = []
   const name = (id: string) => workspace.fields.commodities.find((commodity) => commodity.id === id)?.name ?? id
   for (const target of workspace.marketing_plan_targets) {
-    if (target.target_price !== null) { const candidates = workspace.cash_bids.filter((bid) => bid.commodity_id === target.commodity_id && bid.cash_price !== null && !isMarsBid(bid) && observationFresh(bid.bid_date, now)); const highest = candidates.sort((left, right) => (right.cash_price! - left.cash_price!) || right.bid_date.localeCompare(left.bid_date))[0]; if (highest && highest.cash_price! >= target.target_price) alerts.push({ key: `price:${target.id}:${target.target_price}:${highest.id}`, kind: 'price_target', targetId: target.id, observationId: highest.id, message: `${target.crop_year} ${name(target.commodity_id)} cash bid ${quarterCent.format(highest.cash_price!)} (${highest.elevator}) reached your ${quarterCent.format(target.target_price)} target.` }) }
+    if (target.target_price !== null) { const candidates = cropYearBids(workspace, target).filter((bid) => bid.cash_price !== null && bid.bid_date <= today && observationFresh(bid.bid_date, now)); const highest = candidates.sort((left, right) => (right.cash_price! - left.cash_price!) || right.bid_date.localeCompare(left.bid_date))[0]; if (highest && highest.cash_price! >= target.target_price) alerts.push({ key: `price:${target.id}:${target.target_price}:${highest.id}`, kind: 'price_target', targetId: target.id, observationId: highest.id, message: `${target.crop_year} ${name(target.commodity_id)} cash bid ${quarterCent.format(highest.cash_price!)} (${highest.elevator}) reached your ${quarterCent.format(target.target_price)} target.` }) }
     if (target.deadline && (target.deadline === today || target.deadline === addDays(today, 7))) { const window = target.deadline === today ? 'due' : 'seven-days'; alerts.push({ key: `deadline:${target.id}:${target.deadline}:${window}`, kind: 'target_deadline', targetId: target.id, message: target.deadline === today ? `${target.crop_year} ${name(target.commodity_id)} marketing target deadline is today (${readableDate(target.deadline)}).` : `${target.crop_year} ${name(target.commodity_id)} marketing target deadline is in seven days (${readableDate(target.deadline)}).` }) }
   }
   for (const report of workspace.usda_report_dates) if (report.report_date === today || report.report_date === addDays(today, 7)) { const window = report.report_date === today ? 'due' : 'seven-days'; alerts.push({ key: `report:${report.id}:${report.report_date}:${window}`, kind: 'usda_report', reportId: report.id, message: report.report_date === today ? `${report.report_name} is scheduled today.` : `${report.report_name} is scheduled in seven days.` }) }

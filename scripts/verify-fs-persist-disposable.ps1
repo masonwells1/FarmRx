@@ -65,6 +65,8 @@ try {
   # A deleted Field Log entry stays deleted: an edit that reaches the server after the delete is
   # refused, whichever path it takes, and deleting a field or a farm still works.
   Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/field-log-deleted-entries-assertions.sql')) 'FIELD_LOG_DELETED_ENTRIES_DISPOSABLE_PASS' 'Field Log deleted entries assertions failed.'
+  # Grain trust repair: finishing a contract price or recording a delivery needs financial access.
+  Invoke-ProbeExpecting (Get-Content -Raw (Join-Path $root 'scripts/sql/grain-finance-gate-assertions.sql')) 'GRAIN_FINANCE_GATE_DISPOSABLE_PASS' 'Grain finance gate assertions failed.'
 
   $passed = $true
 } finally {

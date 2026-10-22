@@ -248,10 +248,11 @@ async function run() {
   const dupMonthTargets: MarketingPlanTarget[] = [{ ...baseTarget, id: uid(972), target_month: '2026-09-01', target_pct_of_production: 10 }, { ...baseTarget, id: uid(973), target_month: '2026-09-01', target_pct_of_production: 10 }]
   await rejects(() => repo.replaceMarketingPlanTargets(gateway.state.scope, dupMonthTargets), 'A duplicate-month marketing plan must reject.')
   assert(gateway.planInputs.length === planCallsBeforeValidation, 'A duplicate-month marketing plan reached the gateway; it must reject before that call.')
-  // 20: the extracted basisMath module must exclude MARS feed rows and use manual bids, even when MARS is the newest row.
-  const marsRow: CashBid = { ...data.cash_bids[0], id: uid(980), bid_date: '2026-07-20', basis: -0.05 }
-  const manualRow: CashBid = { ...data.cash_bids[0], id: uid(981), bid_date: '2026-07-12', basis: -0.18, notes: null }
-  const olderManualRow: CashBid = { ...data.cash_bids[0], id: uid(982), bid_date: '2026-07-05', basis: -0.3, notes: null }
+  // 20 (dates in September: a spot bid speaks for the crop year whose marketing year holds its date, so these are 2026-crop bids):
+  // the extracted basisMath module must exclude MARS feed rows and use manual bids, even when MARS is the newest row.
+  const marsRow: CashBid = { ...data.cash_bids[0], id: uid(980), bid_date: '2026-09-20', basis: -0.05 }
+  const manualRow: CashBid = { ...data.cash_bids[0], id: uid(981), bid_date: '2026-09-12', basis: -0.18, notes: null }
+  const olderManualRow: CashBid = { ...data.cash_bids[0], id: uid(982), bid_date: '2026-09-05', basis: -0.3, notes: null }
   const basisWorkspace: GrainWorkspace = { ...data, cash_bids: [marsRow, manualRow, olderManualRow] }
   assert(isMarsBid(marsRow) && !isMarsBid(manualRow) && !isMarsBid(olderManualRow), 'isMarsBid must classify MARS-tagged and manual rows correctly.')
   // GL-1: any MARS provenance is a feed row, not only the 2850 pilot note; the provenance columns count even without a note.
@@ -259,7 +260,7 @@ async function run() {
   const otherReportNote: CashBid = { ...manualRow, id: uid(984), notes: '[USDA MARS 3101 · Illinois] basis range -0.4 to -0.3' }
   assert(isMarsBid(columnOnly) && isMarsBid(otherReportNote), 'A feed row is recognized by its provenance column or by any MARS note, whatever the report.')
   assert(marsBidLabel(columnOnly) === 'USDA MARS 3101 · IL' && marsBidLabel(otherReportNote) === 'USDA MARS 3101 · Illinois' && marsBidLabel(marsRow) === 'USDA MARS 2850', `Labels read the row's own provenance: ${marsBidLabel(columnOnly)} / ${marsBidLabel(otherReportNote)} / ${marsBidLabel(marsRow)}`)
-  assert(latestBasis({ ...basisWorkspace, cash_bids: [{ ...columnOnly, bid_date: '2026-07-25' }, manualRow] }, gateway.state.scope) === manualRow.basis, 'A column-only feed row never supplies the basis.')
+  assert(latestBasis({ ...basisWorkspace, cash_bids: [{ ...columnOnly, bid_date: '2026-09-25' }, manualRow] }, gateway.state.scope) === manualRow.basis, 'A column-only feed row never supplies the basis.')
   assert(data.usda_market_reports.length === 1 && data.usda_market_reports[0].verified_at === null && data.usda_market_reports[0].geography === 'IA', 'The report mapping maps through with its verification state.')
   assert(latestBasis(basisWorkspace, gateway.state.scope) === manualRow.basis, 'latestBasis must use the latest manual bid and exclude the MARS feed row even when MARS is newest.')
   // 21: firm offers use the same bound-farm save/delete gateway seam and reject an invalid DB-check shape first.

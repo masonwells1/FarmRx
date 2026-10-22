@@ -68,3 +68,6 @@ echo LD4_BIN_ORIGIN_LOT_DISPOSABLE_PASS
 # refused, whichever path it takes, and deleting a field or a farm still works.
 psql_ -d farmrx_disposable -f "$root/scripts/sql/field-log-deleted-entries-assertions.sql" | grep -q FIELD_LOG_DELETED_ENTRIES_DISPOSABLE_PASS || { echo "Field Log deleted entries assertions failed" >&2; exit 1; }
 echo FIELD_LOG_DELETED_ENTRIES_DISPOSABLE_PASS
+# Grain trust repair: finishing a contract price or recording a delivery needs financial access.
+psql_ -d farmrx_disposable -f "$root/scripts/sql/grain-finance-gate-assertions.sql" | grep -q GRAIN_FINANCE_GATE_DISPOSABLE_PASS || { echo "Grain finance gate assertions failed" >&2; exit 1; }
+echo GRAIN_FINANCE_GATE_DISPOSABLE_PASS

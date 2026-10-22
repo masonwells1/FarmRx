@@ -60,10 +60,11 @@ import {
   validateBinTransaction,
   validateGrainBin,
 } from "./data/binLedger";
-import { knownCounterparties, isMarsBid, latestBasis, marsBidLabel } from "./data/basisMath";
+import { cropYearBids, knownCounterparties, isMarsBid, latestBasis, marsBidLabel } from "./data/basisMath";
 import { GrainCostOfCarry } from "./GrainCostOfCarry";
 import { scopeLabel } from "./data/grainScopeLabel";
 import {
+  deliveryWindow,
   displayFirmOfferStatus,
   offerToContract,
   pendingFirmOfferBushels,
@@ -3243,9 +3244,9 @@ export function PositionCard({
   // cards of the same commodity apart; the crop family only repeated the name below it.
   const scopeName = scope.enterprise_label ?? (scope.operating_entity_id === null ? null : workspace.fields.entities.find((item) => item.id === scope.operating_entity_id)?.name ?? null);
   const lotGap = lotGapText(workspace, estimate.commodity_id, estimate.crop_year, committedFree.free);
-  // HTAs are valued at the newest farmer-entered bid's basis (latestBasis), which is $0 until there is one, or while the
-  // newest one was entered as a cash price only. The note follows that same bid.
-  const newestManualBid = workspace.cash_bids.filter((bid) => !isMarsBid(bid) && bid.farm_id === scope.farm_id && bid.commodity_id === scope.commodity_id).sort((left, right) => right.bid_date.localeCompare(left.bid_date))[0];
+  // HTAs are valued at the newest farmer-entered bid's basis for this crop year (latestBasis), which is $0 until there is
+  // one, or while the newest one was entered as a cash price only. The note follows that same bid.
+  const newestManualBid = cropYearBids(workspace, scope)[0];
   const htaBasisMissing = newestManualBid?.basis === null || newestManualBid?.basis === undefined;
   const htaOpen = basisOpen.length > 0;
   return (
@@ -3303,7 +3304,7 @@ export function PositionCard({
       <p className="position-hero">
         <strong>{Math.round(pricedPct)}% priced</strong>
         {average === null ? "" : ` at ${pricePerBu.format(average)} average`} ·{" "}
-        <strong>{bushels.format(outrightOpen)} bu</strong> still unpriced
+        <strong>{bushels.format(outrightOpen)} bu</strong> not under contract
       </p>
       {/* LD-3: what is actually in the bins for THIS crop year, against what is still owed on this
           crop year's contracts. A line rather than a fourth tile, because GL-3 settled this card at
@@ -3338,7 +3339,7 @@ export function PositionCard({
             plannedRevenue === null
               ? "add a cash price target"
               : htaOpen && htaBasisMissing
-                ? "HTAs counted at $0 basis until you enter a local bid with a basis on Bins & basis"
+                ? `HTAs counted at $0 basis until you enter a ${estimate.crop_year}-crop local bid with a basis on Bins & basis`
                 : "priced contracts as signed; HTAs at your latest basis; basis contracts and unpriced grain at your target"
           }
         />
@@ -3365,7 +3366,7 @@ export function PositionCard({
           {bushels.format(
             futuresOpen.reduce((sum, contract) => sum + contract.bushels, 0),
           )}{" "}
-          bu futures open. {bushels.format(outrightOpen)} bu unpriced
+          bu futures open. {bushels.format(outrightOpen)} bu not under contract
           {plannedPrice === null
             ? ". Add a cash price target to estimate it."
             : ` using your cash price target of ${pricePerBu.format(plannedPrice)}.`}
@@ -5091,6 +5092,9 @@ export function Basis({
   const farmToday = () => planDateFor(new Date(), workspace.fields.farm.time_zone);
   const today = farmToday();
   const [bidDate, setBidDate] = useState(today);
+  // Blank is a spot bid. A month ("2027-11") makes it a forward bid, which is what lets a new-crop bid
+  // value new-crop HTAs instead of today's old-crop basis.
+  const [deliveryMonth, setDeliveryMonth] = useState("");
   const [error, setError] = useState("");
   const submitLock = useRef(createSubmitLock());
   const submit = async (event: FormEvent) => {
@@ -5105,6 +5109,11 @@ export function Basis({
     }
     if (!bidDate || bidDate > farmToday()) {
       setError("Pick the date of this bid. It cannot be after today.");
+      return;
+    }
+    const delivery = deliveryWindow(deliveryMonth || null);
+    if (deliveryMonth && delivery.start === null) {
+      setError("Pick a delivery month, or leave it blank for a spot bid.");
       return;
     }
     if (!submitLock.current.acquire()) return;
@@ -5122,8 +5131,8 @@ export function Basis({
         bid_date: bidDate,
         basis: parsedBasis,
         cash_price: parsedCashPrice,
-        delivery_start: null,
-        delivery_end: null,
+        delivery_start: delivery.start,
+        delivery_end: delivery.end,
         notes: null,
         feed_source: null,
         feed_report_id: null,
@@ -5135,6 +5144,7 @@ export function Basis({
       setCashPrice("");
       // Back to today, so the next bid is not quietly saved under the date of the last one.
       setBidDate(farmToday());
+      setDeliveryMonth("");
       setError("");
       await onSaved();
     } catch (exception) {
@@ -5271,6 +5281,14 @@ export function Basis({
             onChange={(event) => setBidDate(event.target.value)}
           />
         </label>
+        <label>
+          Delivery month <small>blank = spot</small>
+          <input
+            type="month"
+            value={deliveryMonth}
+            onChange={(event) => setDeliveryMonth(event.target.value)}
+          />
+        </label>
         <button className="secondary-action" type="submit">
           Add basis
         </button>
@@ -5327,6 +5345,7 @@ export function Basis({
                   { month: "short", day: "numeric" },
                 )}
                 {allElevators ? ` · ${bid.elevator}` : ""}
+                {bid.delivery_start ? ` · for ${monthLabel(bid.delivery_start)}` : ""}
               </span>
               <strong>
                 {bid.basis > 0 ? "+" : ""}
