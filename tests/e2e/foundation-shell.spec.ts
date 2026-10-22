@@ -1740,6 +1740,34 @@ test('a finished basis contract counts its premium once, and a new-crop bid keep
   expect(unexpected).toEqual([])
 })
 
+test('Carry shows quarter-cent prices to four decimals instead of rounding them away', async ({ page, context }) => {
+  await seedSession(context)
+  const unexpected = await mockSupabase(page, [farms[0]!], [], true, 1, ownerProfile, userId, {}, {})
+  const savedGrids: Array<Record<string, unknown>> = []
+  await page.route('https://*.supabase.co/rest/v1/grain_carry_grids*', async (route) => {
+    const request = route.request()
+    // The save first reads the row it would replace (none yet), then inserts it.
+    if (request.method() === 'GET' && new URL(request.url()).searchParams.has('id')) { await fulfillJson(route, []); return }
+    if (request.method() !== 'POST') { await route.fallback(); return }
+    const body = request.postDataJSON() as Record<string, unknown>
+    savedGrids.push(body)
+    const row = { ...body, created_at: now, updated_at: now }
+    await fulfillJson(route, (request.headers()['accept'] ?? '').includes('vnd.pgrst.object') ? row : [row])
+  })
+  await page.goto('/grain/carry')
+  const harvestRow = page.locator('table.carry-table tbody tr').first()
+  await harvestRow.locator('input').first().fill('4.1025')
+  await harvestRow.locator('input').nth(1).fill('-0.30')
+  const harvestCash = page.locator('.carry-kpis article').filter({ hasText: 'Harvest cash / bu' })
+  // $4.1025 - $0.30 = $3.8025: two decimals would have shown $3.80, a quarter cent the farmer typed and lost.
+  await expect(harvestCash.locator('.stat-value')).toHaveText('$3.8025')
+  await expect(harvestRow.locator('td[data-label="Cash price"]')).toHaveText('$3.8025')
+  // The typed quarter-cent price is what gets saved, too.
+  await expect.poll(() => JSON.stringify(savedGrids.at(-1)?.rows ?? null)).toContain('4.1025')
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  expect(unexpected).toEqual([])
+})
+
 // GL-3b: a contract typed wrong was a dead end -- no edit, no delete, and a marketing position that
 // stayed wrong forever. The control appears only for a contract with no deliveries, it requires a
 // reason, and it sends only the fields the farmer actually touched.

@@ -48,7 +48,6 @@ import {
   evaluateMarketingAlertRules,
   ruleSentence,
 } from "./data/marketingAlerts";
-import { localCalendarDay } from "./data/marketingAlerts";
 import { farmCalendarDate } from "./data/farmDates";
 import {
   deriveBinPosition,
@@ -2057,7 +2056,7 @@ function OfferList({
     (status) =>
       [
         status,
-        offers.filter((offer) => displayFirmOfferStatus(offer) === status),
+        offers.filter((offer) => displayFirmOfferStatus(offer, new Date(), workspace.fields.farm.time_zone) === status),
       ] as const,
   );
   return (
@@ -2072,7 +2071,7 @@ function OfferList({
               ({rows.length})
             </summary>
             {rows.map((offer) => {
-              const displayed = displayFirmOfferStatus(offer);
+              const displayed = displayFirmOfferStatus(offer, new Date(), workspace.fields.farm.time_zone);
               const commodity =
                 workspace.fields.commodities.find(
                   (item) => item.id === offer.commodity_id,
@@ -2273,7 +2272,7 @@ function FirmOfferForm({
       const priceNotAboveZero = type !== "basis" && price !== "" && !(Number(price) > 0);
       const errors = [
         ...(priceNotAboveZero ? ["Enter a price above $0.00."] : []),
-        ...(expires && expires !== (start?.expires_on ?? "") && expires < localCalendarDay(new Date()) ? ["The expiry date is in the past. Pick today or later, or leave it blank."] : []),
+        ...(expires && expires !== (start?.expires_on ?? "") && expires < planDateFor(new Date(), workspace.fields.farm.time_zone) ? ["The expiry date is in the past. Pick today or later, or leave it blank."] : []),
         // The shared rule's "zero or more" would contradict "above $0.00" just above it, about the same box.
         ...validateFirmOffer(next).filter((problem) => !(priceNotAboveZero && problem === "Price must be zero or more.")),
       ];
@@ -2308,7 +2307,7 @@ function FirmOfferForm({
         : "Cash $/bu";
   const contracted = scopeRows(workspace.grain_contracts, scope).reduce((sum, item) => sum + item.bushels, 0);
   // Take this offer out only when it already counts as pending: an open offer past its date is counted nowhere.
-  const otherPending = pendingFirmOfferBushels(workspace, scope) - (offer && displayFirmOfferStatus(offer) === "open" ? offer.bushels : 0);
+  const otherPending = pendingFirmOfferBushels(workspace, scope) - (offer && displayFirmOfferStatus(offer, new Date(), workspace.fields.farm.time_zone) === "open" ? offer.bushels : 0);
   const saleLimitMessage = saleLimitWarning(saleLimit, contracted, otherPending, typedAmount(amount) ?? (amount.trim() ? Number.NaN : 0), "save");
   // noValidate: the checks in submit say each problem in plain words next to Save, instead of the browser's own bubble.
   return (
@@ -2381,7 +2380,7 @@ function FirmOfferForm({
         Expires on <small>optional</small>
         <input
           type="date"
-          min={offer ? undefined : localCalendarDay(new Date())}
+          min={offer ? undefined : planDateFor(new Date(), workspace.fields.farm.time_zone)}
           value={expires}
           onChange={(event) => setExpires(event.target.value)}
         />
@@ -3719,6 +3718,7 @@ export function ContractEntry({
         initialOffer,
         "00000000-0000-4000-8000-000000000000",
         new Date().toISOString(),
+        workspace.fields.farm.time_zone,
       )
     : null;
   const [buyer, setBuyer] = useState(initialOffer?.buyer ?? "");
@@ -3806,7 +3806,7 @@ export function ContractEntry({
         ...draft,
         id: contractId,
         notes: initialOffer
-          ? offerToContract(initialOffer, contractId, timestamp).notes
+          ? offerToContract(initialOffer, contractId, timestamp, workspace.fields.farm.time_zone).notes
           : null,
       };
       onReceipt(contract.id);
@@ -4480,7 +4480,7 @@ export function Bins({
           const heldFamily = heldLots
             .map((lot) => workspace.fields.commodities.find((item) => item.id === lot.commodityId)?.crop_family ?? null)
             .reduce<Parameters<typeof safeStorageMoisture>[0]>((strictest, family) => family && (!strictest || safeStorageMoisture(family) < safeStorageMoisture(strictest)) ? family : strictest, null);
-          const moisture = moistureStatus(bin, new Date(), heldFamily);
+          const moisture = moistureStatus(bin, new Date(), heldFamily, workspace.fields.farm.time_zone);
           // Up to two decimals, as typed: 15.04% shown as "15.0%" would read as equal to the limit it is flagged over.
           const moisturePct = bin.moisture_pct === null ? "" : new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(bin.moisture_pct);
           const moistureText =
@@ -4699,7 +4699,7 @@ function BinForm({
         created_at: bin?.created_at ?? timestamp,
         updated_at: timestamp,
       };
-      const errors = validateGrainBin(next);
+      const errors = validateGrainBin(next, planDateFor(new Date(), workspace.fields.farm.time_zone));
       if (errors.length) {
         setError(errors.join(" "));
         return;
@@ -4818,12 +4818,12 @@ function MovementForm({
   const allowedCommodities = movementCommodityOptions(workspace.fields.commodities, inventory, prior);
   // An empty bin offers every crop. The ones this farm grew this year or last come first, and the
   // first of them is the starting choice, so the default is a crop the farm actually has.
-  const thisYear = Number(localCalendarDay(new Date()).slice(0, 4));
+  const thisYear = Number(planDateFor(new Date(), workspace.fields.farm.time_zone).slice(0, 4));
   const grown = new Set(workspace.fields.crop_assignments.filter((assignment) => assignment.crop_year >= thisYear - 1).map((assignment) => assignment.commodity_id));
   const commodityChoices = [...allowedCommodities].sort((a, b) => Number(grown.has(b.id)) - Number(grown.has(a.id)) || a.name.localeCompare(b.name));
   const [direction, setDirection] = useState<BinTransaction["direction"]>("in");
   const [bushelsValue, setBushelsValue] = useState("");
-  const [occurredOn, setOccurredOn] = useState(localCalendarDay(new Date()));
+  const [occurredOn, setOccurredOn] = useState(() => planDateFor(new Date(), workspace.fields.farm.time_zone));
   const [note, setNote] = useState("");
   const [commodity, setCommodity] = useState(
     commodityId || commodityChoices[0]?.id || "",

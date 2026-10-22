@@ -1,4 +1,4 @@
-import { localCalendarDay } from './marketingAlerts'
+import { farmCalendarDate } from './farmDates'
 import type { BinInventory, BinTransaction, GrainBin } from './grain'
 
 const calendarDate = /^\d{4}-\d{2}-\d{2}$/
@@ -6,7 +6,11 @@ const validDate = (value: string) => calendarDate.test(value) && new Date(`${val
 
 export const PRE_BASELINE_BIN_MOVEMENT_MESSAGE = "This movement is dated on or before the bin's baseline — use a date after the baseline."
 
-export function validateGrainBin(value: GrainBin): string[] {
+/** The latest calendar day anywhere (UTC+14). A check with no farm day to hand allows up to it, so no device's clock can
+ * refuse a reading dated the farm's real today; the screen passes the farm's own day for the strict check. */
+const latestDayAnywhere = (now = new Date()) => farmCalendarDate(now, 'Etc/GMT-14')
+
+export function validateGrainBin(value: GrainBin, today = latestDayAnywhere()): string[] {
   const errors: string[] = []
   if (!value.name.trim() || value.name.trim().length > 160) errors.push('Bin name is required and must be 160 characters or fewer.')
   if (!Number.isFinite(value.capacity_bu) || value.capacity_bu <= 0) errors.push('Capacity must be greater than zero bushels.')
@@ -14,7 +18,7 @@ export function validateGrainBin(value: GrainBin): string[] {
   if (value.moisture_pct !== null && (!Number.isFinite(value.moisture_pct) || value.moisture_pct < 0 || value.moisture_pct > 40)) errors.push('Moisture must be from 0 to 40%.')
   if ((value.moisture_pct === null) !== (value.moisture_checked_on === null)) errors.push('Enter both a moisture percentage and the date it was checked, or leave both blank.')
   if (value.moisture_checked_on !== null && !validDate(value.moisture_checked_on)) errors.push('Choose a real moisture check date.')
-  if (value.moisture_checked_on !== null && value.moisture_checked_on > localCalendarDay(new Date())) errors.push('Moisture check date cannot be after today.')
+  if (value.moisture_checked_on !== null && value.moisture_checked_on > today) errors.push('Moisture check date cannot be after today.')
   return errors
 }
 
@@ -79,11 +83,11 @@ export function safeStorageMoisture(cropFamily?: 'corn' | 'soybeans' | 'wheat' |
   return cropFamily === 'soybeans' ? 13 : cropFamily === 'wheat' ? 13.5 : 15
 }
 
-export function moistureStatus(bin: GrainBin, now = new Date(), cropFamily?: 'corn' | 'soybeans' | 'wheat' | null) {
+export function moistureStatus(bin: GrainBin, now = new Date(), cropFamily?: 'corn' | 'soybeans' | 'wheat' | null, timeZone?: string | null) {
   if (bin.moisture_pct !== null && bin.moisture_checked_on === null) return { flagged: true, message: 'Moisture reading has no date.', daysSinceChecked: null }
   if (bin.moisture_pct === null && bin.moisture_checked_on !== null) return { flagged: true, message: 'Moisture check date has no reading.', daysSinceChecked: null }
   if (bin.moisture_pct === null || bin.moisture_checked_on === null) return { flagged: false, message: 'No moisture reading', daysSinceChecked: null }
-  const today = localCalendarDay(now)
+  const today = farmCalendarDate(now, timeZone)
   const checkedOn = bin.moisture_checked_on > today ? today : bin.moisture_checked_on
   const daysSinceChecked = Math.max(0, Math.round((new Date(`${today}T00:00:00.000Z`).getTime() - new Date(`${checkedOn}T00:00:00.000Z`).getTime()) / 86_400_000))
   const limit = safeStorageMoisture(cropFamily)

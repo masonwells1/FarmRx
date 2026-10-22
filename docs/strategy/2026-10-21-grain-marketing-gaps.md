@@ -51,6 +51,13 @@ paged totals, #8's plan-grid year aliasing (lands with Phase 5's plan window), #
 check inside the `deliver-grain-alert` edge function (needs an edge-function deploy). Separately, the
 existing `TodayModule.sprayClock` regression already fails on `main` (unrelated to grain).
 
+**Phase 1 status (2026-10-22):** #7 paged totals in PR #79. App-only parts of #9 in the next PR: a 0 bu
+estimate no longer trips a %-marketed alert the server can't judge; firm-offer expiry, the offer fill day and
+bin dates use the farm's time zone; Carry gives a negative harvest price no interest, treats float dust as a
+tie, and shows up to four decimals. Still open, each needing a database change: #6 server-sent alert email
+with retry, #9's load-retry check (the reused-ID comparison skips weights, moisture, ticket, truck, photo,
+notes), and the plan-target crop-year check in `deliver-grain-alert`.
+
 ## Phase 2 — a real grain ledger, old crop and new crop clean
 
 10. **Crop-year labels**: show "2025 crop · 2026 crop · 2027 crop" as the primary label, with a context

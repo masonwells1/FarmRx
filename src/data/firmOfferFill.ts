@@ -1,5 +1,5 @@
 import type { FirmOffer, FirmOfferFill, GrainContract, GrainRepository } from './grain'
-import { localCalendarDay } from './marketingAlerts'
+import { farmCalendarDate } from './farmDates'
 
 export const FIRM_OFFER_FILL_PARTIAL_SUCCESS = 'FIRM_OFFER_FILL_PARTIAL_SUCCESS'
 
@@ -23,7 +23,7 @@ export async function fillFirmOfferFallback(repository: Pick<GrainRepository, 'g
   const existing = current.grain_contracts.find((row) => row.id === contractId)
   if (!currentOffer) throw new Error('This firm offer is no longer available. Reload before trying again.')
   if (existing && !belongsToOffer(existing, currentOffer)) throw new Error('A different contract already uses this record — review your contracts before filling this offer.')
-  if (currentOffer.expires_on !== null && currentOffer.expires_on < localCalendarDay(now)) throw new Error('This firm offer has expired and cannot be filled.')
+  if (currentOffer.expires_on !== null && currentOffer.expires_on < farmCalendarDate(now, current.fields?.farm.time_zone)) throw new Error('This firm offer has expired and cannot be filled.')
   if (currentOffer.status !== 'open' || currentOffer.filled_contract_id) {
     if (existing) return { contract: existing, offer: currentOffer }
     throw new Error('This firm offer is no longer open. No second sale was created. Reload before trying again.')
