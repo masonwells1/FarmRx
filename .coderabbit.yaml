@@ -133,4 +133,6 @@ knowledge_base:
       - "docs/agent-delivery.md"
 
 chat:
-  auto_reply: true
+  # Answer only when tagged; an untagged PR comment must never draw a reply
+  # (Mason, 2026-10-21: CodeRabbit runs only when he asks for it).
+  auto_reply: false

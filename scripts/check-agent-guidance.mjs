@@ -47,6 +47,8 @@ export function validateGuidanceText({ agents, claude, development, delivery }) 
 
 export function validateManualCodeRabbit({ codeRabbit, automationSources }) {
   const failures = []
+  // Drop comment lines so a commented-out `enabled: false` cannot satisfy a check.
+  codeRabbit = codeRabbit.replace(/^[ \t]*#.*(\r?\n|$)/gm, '')
   const autoReview = codeRabbit.match(/^  auto_review:\s*\r?\n((?:^    .*\r?\n?)*)/m)?.[0] ?? ''
 
   requireText(failures, '.coderabbit.yaml', codeRabbit, 'review_status: false', 'automatic skipped-review status messages must stay disabled')
@@ -54,6 +56,8 @@ export function validateManualCodeRabbit({ codeRabbit, automationSources }) {
   requireText(failures, '.coderabbit.yaml', autoReview, 'auto_incremental_review: false', 'automatic incremental reviews must stay disabled')
   requireText(failures, '.coderabbit.yaml', autoReview, 'labels: []', 'label-triggered reviews must stay disabled')
   requireText(failures, '.coderabbit.yaml', autoReview, 'description_keyword: ""', 'description-triggered reviews must stay disabled')
+  const chat = codeRabbit.match(/^chat:\s*\r?\n((?:^  .*\r?\n?)*)/m)?.[0] ?? ''
+  requireText(failures, '.coderabbit.yaml', chat, 'auto_reply: false', 'untagged chat replies must stay disabled')
 
   for (const [file, source] of Object.entries(automationSources)) {
     for (const trigger of ['@coderabbitai review', 'ready-for-coderabbit', 'coderabbit-review-requested']) {

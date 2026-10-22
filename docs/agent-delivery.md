@@ -21,7 +21,7 @@ After local proof is green, the agent may push the feature branch, create and ma
 3. Bring the branch current with `main` and require all reported checks, including Foundation and Vercel, to be green.
 4. Freeze the candidate and record its exact head SHA. A new commit or base update invalidates the candidate; rerun checks and freeze the new head.
 
-No CodeRabbit review and no separate adversarial review is required before merge (Mason, 2026-10-19). CodeRabbit stays installed but silent: automatic, incremental, label, and description-triggered reviews stay disabled in `.coderabbit.yaml` so it never spends the review budget FarmRx shares with CRX Manager. Do not request a CodeRabbit review unless Mason asks for one.
+No CodeRabbit review and no separate adversarial review is required before merge (Mason, 2026-10-19). CodeRabbit stays installed but silent: automatic, incremental, label, and description-triggered reviews stay disabled in `.coderabbit.yaml` so it never spends the review budget FarmRx shares with CRX Manager. Untagged chat replies are off too (`chat.auto_reply: false`). Do not request a CodeRabbit review or tag `@coderabbitai` unless Mason asks for one; a Claude hook (`.claude/hooks/coderabbit-ask.mjs`) stops any `gh` command that mentions it and asks him first.
 
 ## Merge gate
 
