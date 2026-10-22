@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import { HARVEST_LOAD_SUM_LIMIT, READ_PAGE_SIZE, readAllPages } from './SupabaseGrainDataGateway'
 
 // A stand-in for PostgREST answering a keyset page (`order=id`, `id=gt.<after>`, `limit`): at most `cap`
-// rows, silently, the way the real server does, with the exact total only when `withCount` is set.
+// rows, silently, the way the real server does. Its exact count is, like the real one, the number of rows
+// the request's filter matches -- the rows after the cursor, not the whole table -- and only when
+// `withCount` is set.
 // `between` runs after each page, so a test can change the table mid-read the way another device would.
 const id = (index: number) => `row-${String(index).padStart(6, '0')}`
 function server(total: number, cap: number, options: { withCount?: boolean; failAtPage?: number; between?: (table: string[], pageIndex: number) => void } = {}) {
@@ -11,8 +13,9 @@ function server(total: number, cap: number, options: { withCount?: boolean; fail
   const page = async (afterId: string | null) => {
     const pageIndex = pages++
     if (pageIndex === options.failAtPage) return { data: null, error: { message: 'boom' }, count: null }
-    const rows = [...table].sort().filter((value) => afterId === null || value > afterId).slice(0, Math.min(cap, READ_PAGE_SIZE)).map((value) => ({ id: value }))
-    const count = options.withCount === false ? null : table.length
+    const matching = [...table].sort().filter((value) => afterId === null || value > afterId)
+    const rows = matching.slice(0, Math.min(cap, READ_PAGE_SIZE)).map((value) => ({ id: value }))
+    const count = options.withCount === false ? null : matching.length
     options.between?.(table, pageIndex)
     return { data: rows, error: null, count }
   }
@@ -28,8 +31,14 @@ const range = (total: number) => Array.from({ length: total }, (_, index) => id(
   assert.equal(fake.pages(), 3, 'Three pages for 2,500 rows')
 }
 {
-  // A server capped below the page size returns 400 of the 1,000 asked for; the exact count keeps the read going.
-  everyRowOnce((await readAllPages(server(1_000, 400).page)).data, range(1_000), 'A cap smaller than the page size still yields every row')
+  // A server capped below the page size returns 400 of the 1,000 asked for; the count of rows still after the
+  // cursor (1,000, then 600, then 200) keeps the read going until the page that holds all of them.
+  const capped = server(1_000, 400)
+  everyRowOnce((await readAllPages(capped.page)).data, range(1_000), 'A cap smaller than the page size still yields every row')
+  assert.equal(capped.pages(), 3, 'Three 400-row pages read 1,000 rows')
+  everyRowOnce((await readAllPages(server(2_500, 400).page)).data, range(2_500), 'A low cap over several pages still yields every row')
+  // The harvest total under a low cap still reads past its limit, so a partial figure is never called complete.
+  assert.ok(ids((await readAllPages(server(7_000, 400).page, HARVEST_LOAD_SUM_LIMIT)).data).length > HARVEST_LOAD_SUM_LIMIT, 'Under a low cap the harvest read still passes its limit')
 }
 {
   everyRowOnce((await readAllPages(server(2_500, 1_000, { withCount: false }).page)).data, range(2_500), 'Without a count, a short page is the end and nothing is lost before it')

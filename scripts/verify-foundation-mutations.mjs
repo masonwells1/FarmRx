@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 405
+const expectedMutationCount = 406
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -989,6 +989,9 @@ try {
   reset()
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace("return afterId === null ? ordered : ordered.gt('id', afterId)", 'return ordered'))
   detected('every page re-reads the first rows, so a capped table is never read past them', 'grain:summed-reads-page')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('result.data.length >= remaining', 'all.length >= remaining'))
+  detected('a low row cap ends the read early, comparing the whole read to one page remaining count', 'grain:summed-reads-page')
   reset()
   mutate('src/HarvestModule.tsx', (source) => source.replace('canEdit && loadsComplete && !confirming', 'canEdit && !confirming'))
   detected('Use load total is offered for a figure that may be short', 'ld2:a-summed-figure-says-when-it-is-short')

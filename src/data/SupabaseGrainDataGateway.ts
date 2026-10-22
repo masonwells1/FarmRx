@@ -29,8 +29,9 @@ export const HARVEST_LOAD_SUM_LIMIT = 5000
  * pages shift every later page, counting one row twice and missing another; by id, every row that
  * exists for the whole read arrives exactly once, and a row added or removed mid-read is simply read as
  * of just before or after that change. The exact count is asked for so a server capped below the page
- * size is still read to the end; without a count (an older server, a test double) a short page is the
- * end. `stopAfter` ends early once more rows than the caller can use have arrived. Rows come back in id
+ * size is still read to the end. That count is of the rows the page's own filter matches -- after the
+ * cursor, not the whole table -- so a page is the last one exactly when it holds that many; without a
+ * count (an older server, a test double) a short page is the end. `stopAfter` ends early once more rows than the caller can use have arrived. Rows come back in id
  * order; a caller that needs another order sorts them. */
 export const READ_PAGE_SIZE = 1000
 type PageResult = { data: unknown; error: unknown; count?: number | null }
@@ -42,8 +43,8 @@ export async function readAllPages<T extends PageResult>(page: (afterId: string 
     if (result.error || !Array.isArray(result.data)) return result
     all.push(...result.data)
     const lastId = (result.data.at(-1) as { id?: unknown } | undefined)?.id
-    const total = typeof result.count === 'number' ? result.count : null
-    const done = typeof lastId !== 'string' || (result.data.length < READ_PAGE_SIZE && (total === null || all.length >= total))
+    const remaining = typeof result.count === 'number' ? result.count : null
+    const done = typeof lastId !== 'string' || (remaining === null ? result.data.length < READ_PAGE_SIZE : result.data.length >= remaining)
     if (done || all.length > stopAfter) return { ...result, data: all }
     afterId = lastId
   }
