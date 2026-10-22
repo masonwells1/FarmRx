@@ -1372,10 +1372,11 @@ export function foundationStaticGuard(root = process.cwd()) {
     // can be told from a full one: a figure that is quietly short would let "Use load total"
     // overwrite a typed harvest with a partial total. Codex found this on PR #51 after it merged.
     requireText(errors, gateway, 'if (done || all.length > stopAfter) return { ...result, data: all }', 'ld2:a-summed-figure-says-when-it-is-short')
-    requireText(errors, gateway, ".order('load_date', { ascending: false }).order('id', { ascending: false }).range(from, to), context), HARVEST_LOAD_SUM_LIMIT)", 'ld2:a-summed-figure-says-when-it-is-short')
-    // Grain trust repair: PostgREST caps a reply silently, so every summed grain read pages to the exact count.
-    for (const table of ['grain_contracts', 'grain_contract_deliveries', 'bin_transactions', 'firm_offers']) requireText(errors, gateway, `readAllPages((from, to) => supabase.from('${table}').select('*', { count: 'exact' })`, 'grain:summed-reads-page')
-    requireText(errors, gateway, 'const from = all.length', 'grain:summed-reads-page')
+    requireText(errors, gateway, ".eq('effect_harvest', true).is('voided_at', null), afterId), context), HARVEST_LOAD_SUM_LIMIT)", 'ld2:a-summed-figure-says-when-it-is-short')
+    // Grain trust repair: PostgREST caps a reply silently, so every summed grain read pages, by id (keyset,
+    // so a row written mid-read can never be counted twice or push another out), to the exact count.
+    for (const table of ['grain_contracts', 'grain_contract_deliveries', 'bin_transactions', 'firm_offers']) requireText(errors, gateway, `readAllPages((afterId) => afterIdPage(supabase.from('${table}').select('*', { count: 'exact' })`, 'grain:summed-reads-page')
+    requireText(errors, gateway, "return afterId === null ? ordered : ordered.gt('id', afterId)", 'grain:summed-reads-page')
     const harvestModule = read(root, 'src/HarvestModule.tsx')
     requireText(errors, harvestModule, 'canEdit && loadsComplete && !confirming', 'ld2:a-summed-figure-says-when-it-is-short')
     // While the migration is not applied the load form shows no effects and says the save records

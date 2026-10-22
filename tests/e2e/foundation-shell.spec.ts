@@ -210,14 +210,15 @@ const programsSharedShapes: Record<string, (farm: FarmFixture) => Record<string,
 }
 const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, string> | Array<Record<string, string>>> = {
   production_estimates: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
-  // Summed reads page (readAllPages): each asks for a range and the exact count, so a capped reply is never a short total.
-  grain_contracts: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,delivery_start.asc,id.asc', offset: '0', limit: '1000' }),
-  grain_contract_deliveries: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'delivered_on.asc,id.asc', offset: '0', limit: '1000' }),
+  // Summed reads page by id (readAllPages): the first page of each is the first 1,000 rows in id order, with the exact
+  // count asked for, so a capped reply is never a short total. The repository restores the display order.
+  grain_contracts: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'id.asc', limit: '1000' }),
+  grain_contract_deliveries: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'id.asc', limit: '1000' }),
   marketing_plan_targets: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,target_month.asc,id.asc' }),
   insurance_units: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,unit_name.asc,id.asc' }),
   grain_bins: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'name.asc,id.asc' }),
   bin_inventory: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
-  bin_transactions: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'occurred_on.desc,created_at.desc,id.desc', offset: '0', limit: '1000' }),
+  bin_transactions: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'id.asc', limit: '1000' }),
   // GL-2 repair: two bounded slices, newest first -- the recent window, and the farm's own bids so they
   // survive however much USDA feed history sits in front of them.
   cash_bids: (farm) => [
@@ -233,7 +234,7 @@ const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, str
   // query pass unexamined, which is the mock defect LD-1 recorded against `equipment`.
   grain_loads: (farm) => [
     { select: '*', farm_id: `eq.${farm.id}`, order: 'load_date.desc,created_at.desc,id.desc', limit: '500' },
-    { select: '*', farm_id: `eq.${farm.id}`, effect_harvest: 'eq.true', voided_at: 'is.null', order: 'load_date.desc,id.desc', offset: '0', limit: '1000' },
+    { select: '*', farm_id: `eq.${farm.id}`, effect_harvest: 'eq.true', voided_at: 'is.null', order: 'id.asc', limit: '1000' },
     // LD-2's capability probe: it has to name a column the migration adds, because select('*') on
     // this table succeeds against an LD-1 database and tells the client nothing.
     { select: 'id,effect_harvest', farm_id: `eq.${farm.id}`, limit: '1' },
@@ -242,7 +243,7 @@ const grainReadQueries: Record<string, (farm: FarmFixture) => Record<string, str
   usda_report_dates: () => ({ select: '*', order: 'report_date.asc,id.asc' }),
   usda_market_reports: () => ({ select: '*', order: 'report_id.asc' }),
   marketing_alert_rules: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,created_at.asc,id.asc' }),
-  firm_offers: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,created_at.asc,id.asc', offset: '0', limit: '1000' }),
+  firm_offers: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'id.asc', limit: '1000' }),
   grain_alert_settings: (farm) => ({ select: '*', farm_id: `eq.${farm.id}` }),
   grain_sale_limits: (farm) => ({ select: '*', farm_id: `eq.${farm.id}`, order: 'crop_year.asc,commodity_id.asc,id.asc' }),
   grain_carry_settings: (farm) => ({ select: '*', farm_id: `eq.${farm.id}` }),
