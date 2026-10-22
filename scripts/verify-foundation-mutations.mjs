@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 403
+const expectedMutationCount = 406
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -981,8 +981,17 @@ try {
   mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('.limit(RECENT_GRAIN_LOAD_LIMIT)', ''))
   detected('the loads read loses its bound and a hauling season pushes the current tickets past the cap', 'ld1:the-newest-tickets-are-the-ones-loaded')
   reset()
-  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('.limit(HARVEST_LOAD_SUM_LIMIT + 1)', '.limit(HARVEST_LOAD_SUM_LIMIT)'))
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('all.length > stopAfter', 'all.length >= stopAfter'))
   detected('the harvest sum can no longer tell a truncated answer from a whole one', 'ld2:a-summed-figure-says-when-it-is-short')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace("readAllPages((afterId) => afterIdPage(supabase.from('grain_contract_deliveries').select('*', { count: 'exact' })", "((afterId) => afterIdPage(supabase.from('grain_contract_deliveries').select('*', { count: 'exact' })"))
+  detected('deliveries are read in one capped reply and a long history shows short totals', 'grain:summed-reads-page')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace("return afterId === null ? ordered : ordered.gt('id', afterId)", 'return ordered'))
+  detected('every page re-reads the first rows, so a capped table is never read past them', 'grain:summed-reads-page')
+  reset()
+  mutate('src/data/SupabaseGrainDataGateway.ts', (source) => source.replace('result.data.length >= remaining', 'all.length >= remaining'))
+  detected('a low row cap ends the read early, comparing the whole read to one page remaining count', 'grain:summed-reads-page')
   reset()
   mutate('src/HarvestModule.tsx', (source) => source.replace('canEdit && loadsComplete && !confirming', 'canEdit && !confirming'))
   detected('Use load total is offered for a figure that may be short', 'ld2:a-summed-figure-says-when-it-is-short')
