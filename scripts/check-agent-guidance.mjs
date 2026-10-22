@@ -47,6 +47,8 @@ export function validateGuidanceText({ agents, claude, development, delivery }) 
 
 export function validateManualCodeRabbit({ codeRabbit, automationSources }) {
   const failures = []
+  // Drop comment lines so a commented-out `enabled: false` cannot satisfy a check.
+  codeRabbit = codeRabbit.replace(/^[ \t]*#.*(\r?\n|$)/gm, '')
   const autoReview = codeRabbit.match(/^  auto_review:\s*\r?\n((?:^    .*\r?\n?)*)/m)?.[0] ?? ''
 
   requireText(failures, '.coderabbit.yaml', codeRabbit, 'review_status: false', 'automatic skipped-review status messages must stay disabled')

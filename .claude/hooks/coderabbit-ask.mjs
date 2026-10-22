@@ -3,14 +3,14 @@
 // asks him first, even though `gh pr comment` is otherwise allowed.
 import { readFileSync } from 'node:fs'
 
-let command = ''
+// An unreadable payload asks too, so a broken hook shows up instead of
+// silently letting a command through.
+let command = null
 try {
   command = JSON.parse(readFileSync(0, 'utf8'))?.tool_input?.command ?? ''
-} catch {
-  process.exit(0)
-}
+} catch {}
 
-if (/\bgh\b/.test(command) && /@coderabbit/i.test(command)) {
+if (command === null || (/\bgh\b/.test(command) && /@coderabbit/i.test(command))) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
