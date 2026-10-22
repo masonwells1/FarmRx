@@ -70,5 +70,18 @@
       "Write(//c/CRX_Manager/**)",
       "Edit(//c/CRX_Manager/**)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/coderabbit-ask.mjs\""
+          }
+        ]
+      }
+    ]
   }
 }

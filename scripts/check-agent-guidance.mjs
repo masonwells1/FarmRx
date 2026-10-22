@@ -54,6 +54,8 @@ export function validateManualCodeRabbit({ codeRabbit, automationSources }) {
   requireText(failures, '.coderabbit.yaml', autoReview, 'auto_incremental_review: false', 'automatic incremental reviews must stay disabled')
   requireText(failures, '.coderabbit.yaml', autoReview, 'labels: []', 'label-triggered reviews must stay disabled')
   requireText(failures, '.coderabbit.yaml', autoReview, 'description_keyword: ""', 'description-triggered reviews must stay disabled')
+  const chat = codeRabbit.match(/^chat:\s*\r?\n((?:^  .*\r?\n?)*)/m)?.[0] ?? ''
+  requireText(failures, '.coderabbit.yaml', chat, 'auto_reply: false', 'untagged chat replies must stay disabled')
 
   for (const [file, source] of Object.entries(automationSources)) {
     for (const trigger of ['@coderabbitai review', 'ready-for-coderabbit', 'coderabbit-review-requested']) {

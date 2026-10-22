@@ -101,6 +101,14 @@ assert(
 assert(
   validateManualCodeRabbit({
     ...manualCodeRabbit,
+    codeRabbit: manualCodeRabbit.codeRabbit.replace('  auto_reply: false', '  auto_reply: true'),
+  }).some((failure) => failure.includes('untagged chat replies must stay disabled')),
+  'Enabling untagged chat replies must fail validation.',
+)
+
+assert(
+  validateManualCodeRabbit({
+    ...manualCodeRabbit,
     automationSources: { '.github/workflows/automation.yml': 'run: gh pr comment --body "@coderabbitai review"' },
   }).some((failure) => failure.includes('must not automate CodeRabbit review requests')),
   'A workflow-posted review command must fail validation.',
