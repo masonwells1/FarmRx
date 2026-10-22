@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 403')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 405')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -1367,11 +1367,15 @@ export function foundationStaticGuard(root = process.cwd()) {
     // requireText, dropping the bound from either read still left the other to satisfy it.
     const gateway = read(root, 'src/data/SupabaseGrainDataGateway.ts')
     requireText(errors, gateway, '.limit(RECENT_GRAIN_LOAD_LIMIT)', 'ld1:the-newest-tickets-are-the-ones-loaded')
-    // The harvest read is a SUM, not a display list, so it does not share the display cap. It asks
-    // for one row past its own bound precisely so a truncated answer can be told from a full one:
-    // a figure that is quietly short would let "Use load total" overwrite a typed harvest with a
-    // partial total. Codex found this on PR #51 after it merged.
-    requireText(errors, gateway, '.limit(HARVEST_LOAD_SUM_LIMIT + 1)', 'ld2:a-summed-figure-says-when-it-is-short')
+    // The harvest read is a SUM, not a display list, so it does not share the display cap. It reads
+    // past its own bound (readAllPages stops only after MORE than it) precisely so a truncated answer
+    // can be told from a full one: a figure that is quietly short would let "Use load total"
+    // overwrite a typed harvest with a partial total. Codex found this on PR #51 after it merged.
+    requireText(errors, gateway, 'if (done || all.length > stopAfter) return { ...result, data: all }', 'ld2:a-summed-figure-says-when-it-is-short')
+    requireText(errors, gateway, ".order('load_date', { ascending: false }).order('id', { ascending: false }).range(from, to), context), HARVEST_LOAD_SUM_LIMIT)", 'ld2:a-summed-figure-says-when-it-is-short')
+    // Grain trust repair: PostgREST caps a reply silently, so every summed grain read pages to the exact count.
+    for (const table of ['grain_contracts', 'grain_contract_deliveries', 'bin_transactions', 'firm_offers']) requireText(errors, gateway, `readAllPages((from, to) => supabase.from('${table}').select('*', { count: 'exact' })`, 'grain:summed-reads-page')
+    requireText(errors, gateway, 'const from = all.length', 'grain:summed-reads-page')
     const harvestModule = read(root, 'src/HarvestModule.tsx')
     requireText(errors, harvestModule, 'canEdit && loadsComplete && !confirming', 'ld2:a-summed-figure-says-when-it-is-short')
     // While the migration is not applied the load form shows no effects and says the save records

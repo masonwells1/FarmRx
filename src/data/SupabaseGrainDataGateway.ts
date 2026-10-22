@@ -18,9 +18,31 @@ export const MANUAL_CASH_BID_LIMIT = 250
 export const RECENT_GRAIN_LOAD_LIMIT = 500
 /** LD-2 repair: the harvest figure SUMS its rows, so a display cap would understate it silently and
  * "Use load total" would overwrite a typed harvest with a partial total. This bound is generous
- * enough for a season's tickets, and one row past it is fetched deliberately so a farm that does
- * exceed it is told the figure is incomplete rather than shown a wrong number. */
+ * enough for a season's tickets. The read pages (readAllPages) and stops only once it holds every ticket
+ * or more than this many, so a farm that exceeds it is told the figure is incomplete rather than shown a
+ * wrong number -- a single capped request could not tell those apart. */
 export const HARVEST_LOAD_SUM_LIMIT = 5000
+/** PostgREST caps every response (Supabase's default is 1,000 rows) and says nothing when it does, so a
+ * read whose rows are summed -- contract bushels, deliveries, bin movements, harvest tickets -- would
+ * quietly lose rows and show a wrong total. Such reads page in a stable order and ask for the exact row
+ * count, and keep reading until they hold that many; without a count (an older server, a test double)
+ * a short page is the end. `stopAfter` ends early once more rows than the caller can use have arrived. */
+export const READ_PAGE_SIZE = 1000
+type PageResult = { data: unknown; error: unknown; count?: number | null }
+export async function readAllPages<T extends PageResult>(page: (from: number, to: number) => PromiseLike<T>, stopAfter = Number.POSITIVE_INFINITY): Promise<T> {
+  const all: unknown[] = []
+  for (;;) {
+    // The next page starts after the last row actually received: a server whose cap is below the page
+    // size returns fewer rows than asked, and stepping a whole page would skip the ones in between.
+    const from = all.length
+    const result = await page(from, from + READ_PAGE_SIZE - 1)
+    if (result.error || !Array.isArray(result.data)) return result
+    all.push(...result.data)
+    const total = typeof result.count === 'number' ? result.count : null
+    const done = result.data.length === 0 || (total === null ? result.data.length < READ_PAGE_SIZE : all.length >= total)
+    if (done || all.length > stopAfter) return { ...result, data: all }
+  }
+}
 /** LD-4: a bin id no farm has, so the capability probe below asks whether the function exists
  * without reading a single row. */
 const NIL_UUID = '00000000-0000-0000-0000-000000000000'
@@ -122,13 +144,13 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
     const [permission, production_estimates, grain_contracts, grain_contract_deliveries, marketing_plan_targets, insurance_units, grain_bins, bin_inventory, bin_transactions, cash_bids, manual_cash_bids, per_commodity_cash_bids, usda_report_dates, usda_market_reports, marketing_alert_rules, firm_offers, grain_alert_settings, grain_sale_limits, grain_carry_settings, grain_carry_grids, contract_audit_probe, load_effects_probe, bin_lots_probe, grain_loads] = await Promise.all([
       supabase.rpc('can_read_private_financials', { target_farm_id: farmId }),
       supabase.from('production_estimates').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('id'),
-      supabase.from('grain_contracts').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('delivery_start').order('id'),
-      supabase.from('grain_contract_deliveries').select('*').eq('farm_id', farmId).order('delivered_on').order('id'),
+      readAllPages((from, to) => supabase.from('grain_contracts').select('*', { count: 'exact' }).eq('farm_id', farmId).order('crop_year').order('commodity_id').order('delivery_start').order('id').range(from, to)),
+      readAllPages((from, to) => supabase.from('grain_contract_deliveries').select('*', { count: 'exact' }).eq('farm_id', farmId).order('delivered_on').order('id').range(from, to)),
       supabase.from('marketing_plan_targets').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('target_month').order('id'),
       supabase.from('insurance_units').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('unit_name').order('id'),
       supabase.from('grain_bins').select('*').eq('farm_id', farmId).order('name').order('id'),
       supabase.from('bin_inventory').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('id'),
-      supabase.from('bin_transactions').select('*').eq('farm_id', farmId).order('occurred_on', { ascending: false }).order('created_at', { ascending: false }).order('id', { ascending: false }),
+      readAllPages((from, to) => supabase.from('bin_transactions').select('*', { count: 'exact' }).eq('farm_id', farmId).order('occurred_on', { ascending: false }).order('created_at', { ascending: false }).order('id', { ascending: false }).range(from, to)),
       // GL-2 repair (Codex P1 on 64cf24c): newest first, and bounded. GL-1 turned cash_bids from a
       // handful of typed rows into a table the USDA feed writes to every market day, so it will cross
       // PostgREST's row cap. Ascending and unbounded, the browser would then receive the OLDEST rows,
@@ -156,7 +178,7 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
       supabase.from('usda_report_dates').select('*').order('report_date').order('id'),
       supabase.from('usda_market_reports').select('*').order('report_id'),
       supabase.from('marketing_alert_rules').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('created_at').order('id'),
-      supabase.from('firm_offers').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('created_at').order('id'),
+      readAllPages((from, to) => supabase.from('firm_offers').select('*', { count: 'exact' }).eq('farm_id', farmId).order('crop_year').order('commodity_id').order('created_at').order('id').range(from, to)),
       supabase.from('grain_alert_settings').select('*').eq('farm_id', farmId).maybeSingle(),
       supabase.from('grain_sale_limits').select('*').eq('farm_id', farmId).order('crop_year').order('commodity_id').order('id'),
       supabase.from('grain_carry_settings').select('*').eq('farm_id', farmId).maybeSingle(),
@@ -238,7 +260,7 @@ export class SupabaseGrainDataGateway implements GrainDataGateway {
    * the migration has not reached reports 42703/PGRST204 on effect_harvest, and an LD-1 database has
    * no effect column at all, so an absent column reads as no contributing loads rather than an error
    * on a screen that has nothing to do with grain. */
-  async listHarvestLoads(farmId: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.from('grain_loads').select('*').eq('farm_id', farmId).eq('effect_harvest', true).is('voided_at', null).order('load_date', { ascending: false }).limit(HARVEST_LOAD_SUM_LIMIT + 1), context); if (error && (columnMissing(error) || tableMissing(error))) return []; return rows(data, error) }
+  async listHarvestLoads(farmId: string, context: FarmOperationContext) { const { data, error } = await readAllPages((from, to) => bindFarmOperationRequest(supabase.from('grain_loads').select('*', { count: 'exact' }).eq('farm_id', farmId).eq('effect_harvest', true).is('voided_at', null).order('load_date', { ascending: false }).order('id', { ascending: false }).range(from, to), context), HARVEST_LOAD_SUM_LIMIT); if (error && (columnMissing(error) || tableMissing(error))) return []; return rows(data, error) }
   async assignBinMovementCropYearRpc(farmId: string, transactionId: string, cropYear: number, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('assign_bin_movement_crop_year', { p_farm_id: farmId, p_transaction_id: transactionId, p_crop_year: cropYear }), context); if (error) throw error; return row(data, null) }
   async saveGrainLoadRpc(farmId: string, id: string, draft: GrainLoadDraft, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('save_grain_load', { p_farm_id: farmId, p_load: grainLoadPayload(id, draft) }), context); if (error) throw error; return row(data, null) }
   async voidGrainLoadRpc(farmId: string, loadId: string, reason: string, context: FarmOperationContext) { const { data, error } = await bindFarmOperationRequest(supabase.rpc('void_grain_load', { p_farm_id: farmId, p_load_id: loadId, p_reason: reason }), context); if (error) throw error; return row(data, null) }

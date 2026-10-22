@@ -241,8 +241,8 @@ export class SupabaseGrainRepository implements GrainRepository, GrainOperationW
     if (!read) return { loads: [], complete: true }
     const farmId = await this.operationFarmId(context)
     const raw = await read.call(this.dependencies.gateway, farmId, context)
-    // The gateway asks for one row past the bound precisely so this can tell a full answer from a
-    // truncated one. A summed figure that is quietly short is worse than one that says it is short.
+    // The gateway reads past the bound (readAllPages stops only after more than it) precisely so this
+    // can tell a full answer from a truncated one. A summed figure that is quietly short is worse than one that says it is short.
     const complete = raw.length <= HARVEST_LOAD_SUM_LIMIT
     const loads = raw.slice(0, HARVEST_LOAD_SUM_LIMIT).map(grainLoad)
     // Same farm check every other private read makes: a row from another farm is never displayed.
