@@ -36,6 +36,9 @@ assert(result.firedRuleIds.length === 0, 'A rule re-fired across the UTC boundar
 const orphanScope = { ...scope, operating_entity_id: uid(99) }
 result = evaluateMarketingAlertRules({ ...workspace, marketing_alert_rules: [{ ...marketed, ...orphanScope }] }, now)
 assert(result.firedRuleIds.length === 0, 'A percent-marketed rule fired without a matching production estimate.')
+// Phase 1 #9: an estimate of 0 bu leaves the percent undefined, as in the sweep and the email re-check, so the goal is not missed.
+result = evaluateMarketingAlertRules({ ...workspace, production_estimates: workspace.production_estimates.map((estimate) => ({ ...estimate, expected_bushels: 0 })), marketing_alert_rules: [marketed] }, now)
+assert(result.firedRuleIds.length === 0 && result.conditions.every((condition) => !condition.met), 'A percent-marketed rule fired on a 0 bu estimate the server cannot judge.')
 assert(validateMarketingAlertRule({ ...price, direction: null }).length > 0 && validateMarketingAlertRule({ ...marketed, direction: 'at_or_above' }).length > 0 && validateMarketingAlertRule({ ...deadline, threshold: 1 }).length > 0, 'Per-type database constraint mirror accepted an invalid shape.')
 assert(validateAlertEmails(['farmer@example.com', 'advisor@example.com']).length === 0 && validateAlertEmails([' bad@example.com']).length > 0 && validateAlertEmails(['a@b.co', 'c@d.co', 'e@f.co', 'g@h.co']).length > 0, 'Email validation did not mirror the applied settings constraints.')
 assert(cashTargetRevenue(10_000, 4.80) === 48_000, 'A $4.80 cash target with a separate -$0.20 basis must value 10,000 open bushels at $48,000, not $46,000.')

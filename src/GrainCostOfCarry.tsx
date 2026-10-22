@@ -13,7 +13,8 @@ import { clearSettingsDraft, readSettingsDrafts, writeSettingsDraft, type Settin
 // Keyed per farm: one device can serve several farms and their storage costs differ.
 const settingsKey = (farmId: string) => `farm-rx.grain.carry-settings.v1.${farmId}`
 const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+// Up to four decimals, as bids trade (to the quarter cent): a 0.25¢ storage advantage must not read +$0.00 beside a "Store" verdict.
+const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 })
 type PriceRow = { marketPrice: string; basis: string }
 type CommodityCarry = { harvestMonth: number; defaultBasis: string; rows: PriceRow[] }
 const defaultSettings: CarrySettings = { mode: 'monthly', monthlyRateCentsPerBuMonth: 4, flatRatePerBu: 0.18, interestRatePct: 7, truckingPerBu: 0.12 }

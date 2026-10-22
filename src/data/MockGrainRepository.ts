@@ -3,7 +3,8 @@ import { isLotMovementSuperseded } from './committedFree'
 import type { BinTransaction, BinTransactionDirection, CashBid, FirmOffer, FuturesQuote, GrainAlertSettings, GrainBin, GrainCarryGrid, GrainCarrySettings, GrainContract, GrainContractCorrection, GrainContractDelivery, GrainData, GrainLoad, GrainLoadDraft, GrainRepository, GrainSaleLimit, GrainWorkspace, LoadVoidBlocker, LoadVoidResult, MarketDataService, MarketingAlertRule, MarketingPlanTarget, PositionScope, ProductionEstimate, UsdaMarketReport, UsdaReportDate } from './grain'
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
 import { contractIsCorrectable, typedAmount, contractIsDeletable, enterpriseLabelFits, isCalendarDate, MARKETING_PLAN_PERCENT_TOLERANCE, validateTarget, loadEffectsAvailable, loadLotFor, lotsSaveResolvesAgainst, recordedBinLots, sameScope, scopeOf, validateAssignedCropYear, validateContractCorrectionReason, validateGrainContract, validateGrainLoad, validateGrainLoadShape, validateLoadVoidReason } from './grain'
-import { localCalendarDay, validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
+import { validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
+import { farmCalendarDate } from './farmDates'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { DELETE_PERMISSION_MESSAGE } from './saveDurability'
 import { activeBinCommodityIds, deriveBinOnHand, PRE_BASELINE_BIN_MOVEMENT_MESSAGE, validateBinTransaction, validateGrainBin } from './binLedger'
@@ -11,7 +12,7 @@ import { activeBinCommodityIds, deriveBinOnHand, PRE_BASELINE_BIN_MOVEMENT_MESSA
 const STORAGE_KEY = 'farm-rx-local-data'
 const STORAGE_VERSION = 2
 const now = () => new Date().toISOString()
-export const mockFirmOfferIsExpired = (offer: FirmOffer, at = new Date()) => offer.expires_on !== null && offer.expires_on < localCalendarDay(at)
+export const mockFirmOfferIsExpired = (offer: FirmOffer, at = new Date(), timeZone?: string | null) => offer.expires_on !== null && offer.expires_on < farmCalendarDate(at, timeZone)
 export const createGrainId = () => crypto.randomUUID()
 const seedId = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 const year = new Date().getFullYear()
@@ -548,7 +549,7 @@ export class MockGrainRepository implements GrainRepository {
     persist({ ...grainSlice(workspace), firm_offers: rows })
   }
   async fillFirmOffer(offer: FirmOffer, contract: GrainContract) { const workspace = await load(this.fieldsRepository); const current = workspace.firm_offers.find((row) => row.id === offer.id); if (!current) throw new Error('This firm offer is no longer available. Reload before trying again.'); if (current.status === 'filled' && current.filled_contract_id) { const existing = workspace.grain_contracts.find((row) => row.id === current.filled_contract_id); if (existing) return { contract: existing, offer: current }; throw new Error('This firm offer is marked filled but its contract cannot be found. Reload before retrying.'); }
-    if (current.status !== 'open' || mockFirmOfferIsExpired(current)) throw new Error('This firm offer is no longer open. Reload before trying again.');
+    if (current.status !== 'open' || mockFirmOfferIsExpired(current, new Date(), workspace.fields.farm.time_zone)) throw new Error('This firm offer is no longer open. Reload before trying again.');
     if (validateGrainContract(contract, new Set(workspace.fields.commodities.map((commodity) => commodity.id))).length) throw new Error('Farm Rx could not record this grain contract.');
     // Refusal audit (LD-010): fill_firm_offer inserts the contract, and its on-conflict clause covers
     // firm_offer_id only, so an id another contract already holds is a primary-key refusal.

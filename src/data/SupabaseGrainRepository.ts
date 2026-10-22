@@ -6,6 +6,7 @@ import type { BinInventory, BinTransaction, CashBid, FirmOffer, GrainAlertSettin
 import { normalizeGrainCarryGrid, normalizeGrainCarrySettings, normalizeGrainSaleLimit, validateGrainCarryGrid, validateGrainCarrySettings, validateGrainSaleLimit } from './grainSettings'
 import { CONTRACT_REPAIR_PENDING, CROP_YEAR_RECONCILE_PENDING, LOAD_RECORD_PENDING, MARKETING_PLAN_PERCENT_TOLERANCE, sameScope, scopeKey, validateAssignedCropYear, validateTarget, validateContractCorrectionReason, validateGrainLoadShape, validateLoadVoidReason, validateGrainContract } from './grain'
 import { validateAlertEmails, validateMarketingAlertRule } from './marketingAlerts'
+import { farmCalendarDate } from './farmDates'
 import { FILLED_OFFER_DELETE_MESSAGE, validateFirmOffer } from './firmOffers'
 import { PRE_BASELINE_BIN_MOVEMENT_MESSAGE, validateBinTransaction, validateGrainBin } from './binLedger'
 import { functionMissing, HARVEST_LOAD_SUM_LIMIT } from './SupabaseGrainDataGateway'
@@ -368,7 +369,7 @@ export class SupabaseGrainRepository implements GrainRepository, GrainOperationW
     this.validateScope(offerValue, farmId, fields); this.validateScope(contractValue, farmId, fields)
     if (!uuid.test(offerValue.id) || !uuid.test(contractValue.id) || validateFirmOffer(offerValue).length || validateGrainContract(contractValue, new Set(fields.commodities.map((item) => item.id))).length) fail('Farm Rx could not record this firm-offer sale.')
     try {
-      const raw = await this.dependencies.gateway.fillFirmOffer(farmId, offerValue.id, contractValue, context); await this.dependencies.verifyOperationContext(context); const response = object(raw); const savedContract = contract(required(response, 'contract')); const savedOffer = offer(required(response, 'offer'))
+      const raw = await this.dependencies.gateway.fillFirmOffer(farmId, offerValue.id, contractValue, context, farmCalendarDate(new Date(), fields.farm.time_zone)); await this.dependencies.verifyOperationContext(context); const response = object(raw); const savedContract = contract(required(response, 'contract')); const savedOffer = offer(required(response, 'offer'))
       if (!sameScope(savedContract, offerValue) || savedOffer.id !== offerValue.id || savedOffer.status !== 'filled' || savedOffer.filled_contract_id !== savedContract.id) fail('Farm Rx could not confirm the firm offer was filled.')
       return { contract: savedContract, offer: savedOffer }
     } catch (error) {

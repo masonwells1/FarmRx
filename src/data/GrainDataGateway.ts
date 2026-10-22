@@ -35,7 +35,8 @@ export interface GrainDataGateway {
   upsertMarketingAlertRule(farmId: string, row: MarketingAlertRule, context: FarmOperationContext): Promise<unknown>
   deleteMarketingAlertRule(farmId: string, id: string, context: FarmOperationContext): Promise<void>
   upsertFirmOffer(farmId: string, row: FirmOffer, context: FarmOperationContext): Promise<unknown>
-  fillFirmOffer(farmId: string, offerId: string, contract: GrainContract, context: FarmOperationContext): Promise<unknown>
+  /** `localDate` is the farm's calendar day, which the server accepts within a day of its own when judging expiry. */
+  fillFirmOffer(farmId: string, offerId: string, contract: GrainContract, context: FarmOperationContext, localDate?: string): Promise<unknown>
   deleteFirmOffer(farmId: string, id: string, context: FarmOperationContext): Promise<void>
   upsertGrainBin(farmId: string, row: GrainBin, context: FarmOperationContext): Promise<unknown>
   appendBinTransactionRpc?(farmId: string, row: BinTransaction, context: FarmOperationContext): Promise<unknown>

@@ -1,7 +1,7 @@
 import { isMarsBid } from './basisMath'
 import { cashBidEligibleForCropYear } from './marketingYear'
 import { farmCalendarDate, farmLocalCalendarDate } from './farmDates'
-import { marketedPercent, sameScope, type CashBid, type GrainWorkspace, type MarketingAlertRule } from './grain'
+import { activeProductionForScope, marketedPercent, sameScope, type CashBid, type GrainWorkspace, type MarketingAlertRule } from './grain'
 import { formatFarmDate } from '../lib/farmDate'
 
 export type MarketingAlertEvent = { ruleId: string; key: string; kind: 'marketing_price_target' | 'marketing_pct_marketed_goal' | 'marketing_deadline'; message: string }
@@ -64,7 +64,9 @@ export function latestAlertEligibleCashBid(workspace: GrainWorkspace, rule: Pick
 
 function commodityName(workspace: GrainWorkspace, rule: MarketingAlertRule) { return workspace.fields.commodities.find((item) => item.id === rule.commodity_id)?.name ?? rule.commodity_id }
 function hasFiredToday(rule: MarketingAlertRule, today: string, timeZone: string | null | undefined) { return rule.last_triggered_at !== null && farmCalendarDate(new Date(rule.last_triggered_at), timeZone) === today }
-function hasProductionEstimate(workspace: GrainWorkspace, rule: MarketingAlertRule) { return workspace.production_estimates.some((estimate) => sameScope(estimate, rule)) }
+// Production above zero, as the sweep and the email re-check require (`v_production > 0`): an estimate of 0 bu leaves the
+// percent undefined there, so the page must not call the goal missed and record a condition the email would then refuse.
+function hasProductionEstimate(workspace: GrainWorkspace, rule: MarketingAlertRule) { return activeProductionForScope(workspace, rule) > 0 }
 
 /** The page's read of the same rules the server sweep evaluates every fifteen minutes. The sweep is
  * the monitor and the authority; this evaluation exists so the page agrees with the email that arrives. */

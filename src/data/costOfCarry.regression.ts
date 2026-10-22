@@ -64,5 +64,15 @@ check('fill-down keeps each row basis', fillFuturesFromNext(sparse)[0].basis, '-
 check('fill-down is offered when a blank month has a typed month below it', canFillFuturesFromNext(sparse), true)
 check('fill-down is not offered once nothing can be filled', canFillFuturesFromNext(fillFuturesFromNext(sparse)), false)
 
+// Phase 1 #9: a negative harvest value earns no interest, and a float-noise "advantage" is zero, not a Store verdict.
+const negativeHarvest = carryRow({ monthsStored: 6, harvestCashPrice: -1, cashPrice: -1, settings: { ...monthly, interestRatePct: 12, monthlyRateCentsPerBuMonth: 0, truckingPerBu: 0 } })
+check('a negative harvest value has no negative interest cost', negativeHarvest.interestCost, 0, 0)
+check('a negative harvest value cannot make storing look better', negativeHarvest.netVsHarvest, 0, 0)
+const zeroCost: CarrySettings = { ...monthly, monthlyRateCentsPerBuMonth: 0, interestRatePct: 0, truckingPerBu: 0 }
+const dust = carryRow({ monthsStored: 1, harvestCashPrice: 4.1 + -0.3, cashPrice: 3.8, settings: zeroCost })
+check('float dust between equal cash prices is exactly zero', dust.netVsHarvest, 0, 0)
+check('a tie made of float dust stays a harvest verdict', verdict([carryRow({ monthsStored: 0, harvestCashPrice: 3.8, cashPrice: 3.8, settings: zeroCost }), dust]).kind, 'harvest')
+check('a quarter-cent advantage is kept to the hundredth of a cent', carryRow({ monthsStored: 1, harvestCashPrice: 4, cashPrice: 4.0025, settings: zeroCost }).netVsHarvest, 0.0025, 0)
+
 if (failures > 0) { console.error(`${failures} cost-of-carry regression check(s) FAILED`); process.exit(1) }
 console.log('costOfCarry regression: all checks passed')

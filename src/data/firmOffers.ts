@@ -1,6 +1,6 @@
 import type { FirmOffer, GrainContract, GrainWorkspace, PositionScope } from './grain'
 import { sameScope } from './grain'
-import { localCalendarDay } from './marketingAlerts'
+import { farmCalendarDate } from './farmDates'
 
 function isCalendarDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
@@ -42,13 +42,15 @@ export function validateFirmOffer(value: FirmOffer): string[] {
   return errors
 }
 
-/** Display only: an open row past the farmer device's local calendar day is expired. */
-export function displayFirmOfferStatus(offer: FirmOffer, now = new Date()): FirmOffer['status'] {
-  return offer.status === 'open' && offer.expires_on !== null && offer.expires_on < localCalendarDay(now) ? 'expired' : offer.status
+/** Display only: an open row past the farm's calendar day (its stored time zone) is expired, so every device shows the same
+ * offers open at the same moment wherever it is. Without a time zone, the device's day. */
+export function displayFirmOfferStatus(offer: FirmOffer, now = new Date(), timeZone?: string | null): FirmOffer['status'] {
+  return offer.status === 'open' && offer.expires_on !== null && offer.expires_on < farmCalendarDate(now, timeZone) ? 'expired' : offer.status
 }
 
 export function pendingFirmOfferBushels(workspace: GrainWorkspace, scope?: PositionScope, now = new Date()): number {
-  return workspace.firm_offers.filter((offer) => displayFirmOfferStatus(offer, now) === 'open' && (!scope || sameScope(offer, scope))).reduce((total, offer) => total + offer.bushels, 0)
+  const timeZone = workspace.fields?.farm.time_zone
+  return workspace.firm_offers.filter((offer) => displayFirmOfferStatus(offer, now, timeZone) === 'open' && (!scope || sameScope(offer, scope))).reduce((total, offer) => total + offer.bushels, 0)
 }
 
 /** A filled offer is the audit trail that links a sale to its contract; it must never be deletable (audit P3-01). */
@@ -62,10 +64,10 @@ export function cashOfferContractType(contractMonth: string | null, fillCalendar
   return window.start !== null && window.start > fillCalendarDay ? 'forward_cash' : 'cash_spot'
 }
 
-export function offerToContract(offer: FirmOffer, id: string, timestamp: string): GrainContract {
+export function offerToContract(offer: FirmOffer, id: string, timestamp: string, timeZone?: string | null): GrainContract {
   const delivery = deliveryWindow(offer.contract_month)
   const locationNote = offer.delivery_location ? `Delivery location: ${offer.delivery_location}` : null
   const note = [locationNote, offer.notes].filter((item): item is string => !!item).join('\n') || null
-  const fillDay = localCalendarDay(Number.isNaN(Date.parse(timestamp)) ? new Date() : new Date(timestamp))
+  const fillDay = farmCalendarDate(Number.isNaN(Date.parse(timestamp)) ? new Date() : new Date(timestamp), timeZone)
   return { id, farm_id: offer.farm_id, crop_year: offer.crop_year, commodity_id: offer.commodity_id, operating_entity_id: offer.operating_entity_id, enterprise_label: offer.enterprise_label, contract_type: offer.offer_type === 'cash' ? cashOfferContractType(offer.contract_month, fillDay) : offer.offer_type, buyer: offer.buyer, bushels: offer.bushels, cash_price: offer.offer_type === 'cash' ? offer.price : null, futures_price: offer.offer_type === 'hta' ? offer.price : null, basis: offer.offer_type === 'basis' ? offer.basis : null, delivery_start: delivery.start, delivery_end: delivery.end, contract_number: null, premium_cents_per_bu: 0, notes: note, created_at: timestamp, updated_at: timestamp }
 }

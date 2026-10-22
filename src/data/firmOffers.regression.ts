@@ -77,4 +77,12 @@ collisionWorkspace = { ...workspace, firm_offers: [{ ...base }], grain_contracts
 let scopeMismatch = ''
 try { await fillFirmOfferFallback(collisionRepository(), base, fallbackDraft, new Date('2026-07-13T12:00:00')) } catch (error) { scopeMismatch = error instanceof Error ? error.message : '' }
 assert(scopeMismatch === 'A different contract already uses this record — review your contracts before filling this offer.', 'A hashed fallback ID with a mismatched farm, crop year, or commodity must stop instead of being adopted.')
+// Phase 1 #9: expiry is judged on the farm's calendar day, not the device's. 01:00 UTC on Jul 14 is still Jul 13 in Chicago,
+// so an offer expiring Jul 13 stays open and pending there, whatever zone the device runs in.
+const lateChicago = new Date('2026-07-14T01:00:00.000Z')
+assert(displayFirmOfferStatus(base, lateChicago, 'America/Chicago') === 'open', "An offer expiring on the farm's today must stay open in the farm's zone.")
+assert(displayFirmOfferStatus(base, lateChicago, 'Etc/UTC') === 'expired', 'The same instant is the next day in UTC.')
+const chicagoWorkspace = { firm_offers: [base], fields: { farm: { time_zone: 'America/Chicago' } } } as unknown as GrainWorkspace
+assert(pendingFirmOfferBushels(chicagoWorkspace, base, lateChicago) === 12000, "Pending bushels must follow the farm's day.")
+assert(offerToContract({ ...base, contract_month: '2026-07' }, contractId, '2026-07-01T03:00:00.000Z', 'America/Chicago').contract_type === 'forward_cash', "A July cash offer filled on Chicago's Jun 30 is a forward sale.")
 console.log('Firm offer regressions passed.')

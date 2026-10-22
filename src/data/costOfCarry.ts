@@ -29,10 +29,14 @@ export function carryRow(inputs: CarryRowInput): CarryRow {
   const storageCost = monthsStored === 0 ? 0 : settings.mode === 'monthly'
     ? monthsStored * settings.monthlyRateCentsPerBuMonth / 100
     : settings.flatRatePerBu
-  const interestCost = inputs.harvestCashPrice * settings.interestRatePct / 100 * monthsStored / 12
+  // Interest is what the harvest sale would have earned. Grain worth nothing (or less) at harvest earns nothing: a negative
+  // harvest price would otherwise produce a negative interest cost and make storing look better than it is.
+  const interestCost = Math.max(0, inputs.harvestCashPrice) * settings.interestRatePct / 100 * monthsStored / 12
   const truckingCost = monthsStored === 0 ? 0 : settings.truckingPerBu
   const totalCarry = storageCost + interestCost + truckingCost
-  return { ...inputs, monthsStored, storageCost, interestCost, truckingCost, totalCarry, netVsHarvest: inputs.cashPrice - inputs.harvestCashPrice - totalCarry }
+  // Judged to the hundredth of a cent the screen shows, so floating-point dust (4.10 - 0.30 vs 3.80) never reads as a win of $0.0000.
+  const netVsHarvest = Math.round((inputs.cashPrice - inputs.harvestCashPrice - totalCarry) * 10_000) / 10_000
+  return { ...inputs, monthsStored, storageCost, interestCost, truckingCost, totalCarry, netVsHarvest: netVsHarvest === 0 ? 0 : netVsHarvest }
 }
 
 /** The best non-harvest delivery row, even when every storage choice loses money. */

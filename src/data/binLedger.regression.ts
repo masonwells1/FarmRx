@@ -56,4 +56,11 @@ queue.append(entry)
 assert(queue.read().entries.length === 1, 'Valid movement must survive enqueue and parse.')
 await rejects(async () => { parseGrainQueue(JSON.stringify({ version: 1, entries: [{ ...entry, row: { ...entry.row, bushels: 0 } }] })) }, 'Queue parser accepted zero-bushel movement.')
 await rejects(async () => { parseGrainQueue(JSON.stringify({ version: 1, entries: [{ ...entry, row: { ...entry.row, direction: 'sideways' } }] })) }, 'Queue parser accepted unknown movement direction.')
+// Phase 1 #9: bin dates follow the farm's calendar day. A reading dated the farm's today is accepted on the screen's strict
+// check, and a check with no farm day (reading a saved row, replaying the queue) never refuses a real today anywhere.
+assert(validateGrainBin({ ...bin, moisture_checked_on: '2026-07-14' }, '2026-07-14').length === 0, "A reading dated the farm's today must save.")
+assert(validateGrainBin({ ...bin, moisture_checked_on: '2026-07-15' }, '2026-07-14').length > 0, "A reading after the farm's today must be refused.")
+assert(validateGrainBin({ ...bin, moisture_checked_on: new Date().toISOString().slice(0, 10) }).length === 0, 'A row dated today in UTC must never be refused when no farm day is given.')
+const chicagoEvening = new Date('2026-07-14T03:00:00.000Z')
+assert(moistureStatus({ ...bin, moisture_checked_on: '2026-06-13' }, chicagoEvening, null, 'America/Chicago').daysSinceChecked === 30, "Reading age counts to the farm's day (Jul 13 in Chicago), not UTC's Jul 14.")
 console.log('Bin ledger regressions passed.')
