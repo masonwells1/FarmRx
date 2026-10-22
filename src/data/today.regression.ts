@@ -408,7 +408,7 @@ const grainScope = { farm_id: farmA, crop_year: 2026, commodity_id: 'corn_yellow
 const estimate = (id: string, crop_year: number, expected_bushels: number): ProductionEstimate => ({ ...grainScope, crop_year, id, planted_acres: 500, aph_yield: 200, expected_bushels, actual_bushels: null, drives_math: 'projected', notes: null, created_at: now, updated_at: now })
 const contract = (id: string, bushels: number, crop_year = 2026): GrainContract => ({ ...grainScope, crop_year, id, contract_type: 'forward_cash', buyer: 'Cargill Olney', bushels, futures_price: null, basis: null, cash_price: 4.2, delivery_start: null, delivery_end: null, contract_number: null, premium_cents_per_bu: 0, notes: null, created_at: now, updated_at: now })
 const target = (id: string, target_month: string, target_pct_of_production: number): MarketingPlanTarget => ({ ...grainScope, id, target_month, target_pct_of_production, target_price: null, breakeven_relative_pct: null, deadline: null, notes: null, created_at: now, updated_at: now })
-const bid = (id: string, elevator: string, bid_date: string, cash_price: number | null, basis: number, notes: string | null = null): CashBid => ({ id, farm_id: farmA, elevator, commodity_id: 'corn_yellow', bid_date, basis, cash_price, delivery_start: null, delivery_end: null, notes, feed_source: null, feed_report_id: null, feed_geography: null, created_at: now, updated_at: now })
+const bid = (id: string, elevator: string, bid_date: string, cash_price: number | null, basis: number, notes: string | null = null): CashBid => ({ id, farm_id: farmA, elevator, commodity_id: 'corn_yellow', bid_date, basis, cash_price, delivery_start: '2026-10-01', delivery_end: '2026-10-31', notes, feed_source: null, feed_report_id: null, feed_geography: null, created_at: now, updated_at: now })
 const corn2026 = estimate('00000000-0000-4000-8000-000000000e01', 2026, 100000)
 const grainWorkspace: GrainWorkspace = {
   fields: { ...fieldsData, commodities: [{ id: 'corn_yellow', name: 'Corn', crop_family: 'corn' } as GrainWorkspace['fields']['commodities'][number]] },
@@ -427,8 +427,11 @@ assert.equal(todayGrainLine({ profile: worker, grain: grainWorkspace, today }), 
 assert.ok(todayGrainLine({ profile: financialWorker, grain: grainWorkspace, today }) && todayGrainLine({ profile: namedRep, grain: grainWorkspace, today }), 'A worker with financial access and a named rep see the line.')
 assert.equal(todayGrainLine({ profile: owner, grain: null, today }), null, 'Without the grain snapshot there is no line.')
 assert.equal(todayGrainLine({ profile: owner, grain: { ...grainWorkspace, production_estimates: [] }, today }), null, 'Without a production estimate there is no line.')
+// A July 2026 spot bid is old crop: the 2026 corn marketing year starts Sept 1, so it never sits beside the 2026 position.
+const spotOnly = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, cash_bids: [{ ...bid('00000000-0000-4000-8000-000000000e81', 'Cargill Olney', '2026-07-14', 4.12, -0.3), delivery_start: null, delivery_end: null }] }, today })
+assert.equal(spotOnly?.detail, 'Plan says 40% by now · No 2026-crop local bid yet', 'An old-crop spot bid is never shown against the new crop.')
 const sparse = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, marketing_plan_targets: [], cash_bids: [] }, today })
-assert.equal(sparse?.detail, 'No plan yet · No local bid yet', 'Absent plan and bids are said plainly.')
+assert.equal(sparse?.detail, 'No plan yet · No 2026-crop local bid yet', 'Absent plan and bids are said plainly.')
 const decemberLine = todayGrainLine({ profile: owner, grain: grainWorkspace, today: '2026-12-03' })
 assert.equal(decemberLine?.detail.split(' · ')[0], 'Plan says 60% by now', 'The plan figure accumulates every target month through the current month.')
 const nextYearTarget = todayGrainLine({ profile: owner, grain: { ...grainWorkspace, marketing_plan_targets: [...grainWorkspace.marketing_plan_targets, target('00000000-0000-4000-8000-000000000e25', '2027-03-01', 10)] }, today })

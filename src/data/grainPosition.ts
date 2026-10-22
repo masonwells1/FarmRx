@@ -17,11 +17,15 @@ export function hasUnsupportedSavedCoverage(insuranceUnits: InsuranceUnit[], bud
   return insuranceUnits.some((unit) => !isIndividualRevenueProtectionCoverage(unit.coverage_level_pct)) || budgetCoverage.some((coverage) => !isIndividualRevenueProtectionCoverage(coverage))
 }
 
+/** A basis or HTA contract is priced from its two legs. Finishing the second leg also stores
+ * cash_price, but that stored figure already includes the premium (0033), so it is never read here:
+ * adding the premium to it again overstated every finished basis/HTA contract that had one. */
 export function finalCashPrice(contract: GrainContract): number | null {
   const premium = contract.premium_cents_per_bu / 100
-  if (contract.cash_price !== null) return contract.cash_price + premium
-  if (contract.futures_price !== null && contract.basis !== null) return contract.futures_price + contract.basis + premium
-  return null
+  if (contract.contract_type === 'basis' || contract.contract_type === 'hta') {
+    return contract.futures_price !== null && contract.basis !== null ? contract.futures_price + contract.basis + premium : null
+  }
+  return contract.cash_price === null ? null : contract.cash_price + premium
 }
 
 /** Cash targets are all-in prices. Never add an inferred or contract premium here. */

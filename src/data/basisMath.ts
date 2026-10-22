@@ -1,4 +1,5 @@
 import type { CashBid, GrainWorkspace, PositionScope } from './grain'
+import { cashBidEligibleForCropYear } from './marketingYear'
 
 const marsNote = /^\[USDA MARS (\S+)(?: · ([^\]]+))?\]/
 
@@ -17,11 +18,27 @@ export function marsBidLabel(bid: Pick<CashBid, 'notes'> & Partial<Pick<CashBid,
   return `USDA MARS${report ? ` ${report}` : ''}${geography ? ` · ${geography}` : ''}`
 }
 
-/** Latest basis used in position/revenue math must come from a farmer-entered bid, never the MARS feed. */
-export function latestBasis(workspace: GrainWorkspace, scope: PositionScope) {
+/** Newest first: bid date, then entry time, then id, so two bids on one day always resolve the same way. */
+export function newestBidFirst(left: CashBid, right: CashBid) {
+  return right.bid_date.localeCompare(left.bid_date) || right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id)
+}
+
+/** The farmer-entered bids that can speak for one crop year, newest first. A bid belongs to a crop year
+ * when its delivery window sits inside that crop's marketing year, or, with no window (spot), when its
+ * bid date does — the same rule the alert sweep uses. Without it, today's old-crop spot basis valued
+ * next year's HTAs and fed the new-crop line on Today. MARS feed rows are never a local bid. */
+export function cropYearBids(workspace: GrainWorkspace, scope: Pick<PositionScope, 'farm_id' | 'commodity_id' | 'crop_year'>): CashBid[] {
+  const commodity = workspace.fields.commodities.find((item) => item.id === scope.commodity_id)
   return workspace.cash_bids
-    .filter((bid) => !isMarsBid(bid) && bid.farm_id === scope.farm_id && bid.commodity_id === scope.commodity_id)
-    .sort((left, right) => right.bid_date.localeCompare(left.bid_date))[0]?.basis ?? 0
+    .filter((bid) => !isMarsBid(bid) && bid.farm_id === scope.farm_id && bid.commodity_id === scope.commodity_id
+      && cashBidEligibleForCropYear(commodity, scope.crop_year, bid.bid_date, bid.delivery_start, bid.delivery_end))
+    .sort(newestBidFirst)
+}
+
+/** Latest basis used in position/revenue math: the newest farmer-entered bid for this crop year, or 0
+ * when there is none (the position card says so). */
+export function latestBasis(workspace: GrainWorkspace, scope: PositionScope) {
+  return cropYearBids(workspace, scope)[0]?.basis ?? 0
 }
 
 /** GL-3: the buyers and elevators this farm has actually dealt with, for the type-ahead suggestions on

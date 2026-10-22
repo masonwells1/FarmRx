@@ -8,7 +8,8 @@ function isCalendarDate(value: string): boolean {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
 }
 
-function deliveryWindow(contractMonth: string | null): { start: string | null; end: string | null } {
+/** "2027-11" → the first and last day of that month; anything else → no window. */
+export function deliveryWindow(contractMonth: string | null): { start: string | null; end: string | null } {
   const match = /^(\d{4})-(\d{2})$/.exec(contractMonth ?? '')
   if (!match) return { start: null, end: null }
   const year = Number(match[1]); const month = Number(match[2])

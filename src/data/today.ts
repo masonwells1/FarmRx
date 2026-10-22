@@ -4,8 +4,8 @@ import type { InventoryUnit, InventoryWorkspace } from './inventory'
 import type { Field } from './fields'
 import type { Notification } from './notifications'
 import type { PendingPassOutcome } from './programs'
-import { deliveryDefaultEstimate, marketedPercent, plannedPercentThroughDate, sameScope, scopeOf, type CashBid, type GrainWorkspace } from './grain'
-import { isMarsBid } from './basisMath'
+import { deliveryDefaultEstimate, marketedPercent, plannedPercentThroughDate, sameScope, scopeOf, type CashBid, type GrainWorkspace, type PositionScope } from './grain'
+import { cropYearBids } from './basisMath'
 import type { ForecastBundle, SprayLevel } from './weather'
 import { bestWindowToday, compassLabel, daylight, evaluateSprayWindow, fieldWallClockDate, formatHour, formatMph, isActionablyFresh } from './weatherService'
 import { todayGrainLineIntent } from './todayIntents'
@@ -200,10 +200,10 @@ export type TodayGrainLine = { headline: string; detail: string; to: string; sta
 const price = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const bidDay = (date: string) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00.000Z`))
 const centsChange = (delta: number) => { const cents = Math.round(Math.abs(delta) * 100); return cents === 0 ? 'unchanged' : `${delta > 0 ? 'up' : 'down'} ${cents}¢` }
-/** The latest farmer-entered cash bid for a commodity and the one before it at the same elevator. USDA feed rows are history the
- * Overview charts but never a local bid, so they never appear here (the same rule the position math follows). */
-function latestLocalBids(workspace: GrainWorkspace, farmId: string, commodityId: string): { latest: CashBid; previous: CashBid | null } | null {
-  const bids = workspace.cash_bids.filter((bid) => !isMarsBid(bid) && bid.farm_id === farmId && bid.commodity_id === commodityId).sort((a, b) => b.bid_date.localeCompare(a.bid_date) || b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
+/** The latest farmer-entered cash bid for the position's crop year and the one before it at the same elevator. A 2027 position
+ * is never paired with today's 2026 spot bid; USDA feed rows never appear here (the same rules the position math follows). */
+function latestLocalBids(workspace: GrainWorkspace, scope: PositionScope): { latest: CashBid; previous: CashBid | null } | null {
+  const bids = cropYearBids(workspace, scope)
   const latest = bids[0]
   if (!latest) return null
   return { latest, previous: bids.find((bid) => bid !== latest && bid.elevator === latest.elevator) ?? null }
@@ -230,8 +230,8 @@ export function todayGrainLine(input: { profile: FarmAccessProfile; grain: Grain
   // is the one the farmer sees after tapping through.
   const planThrough = plannedPercentThroughDate(targets, today)
   const plan = targets.length === 0 ? 'No plan yet' : `Plan says ${Math.round(planThrough)}% by now`
-  const bids = latestLocalBids(grain, scope.farm_id, scope.commodity_id)
-  let bid = 'No local bid yet'
+  const bids = latestLocalBids(grain, scope)
+  let bid = `No ${scope.crop_year}-crop local bid yet`
   if (bids) {
     const { latest, previous } = bids
     if (latest.cash_price !== null) {

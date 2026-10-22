@@ -72,9 +72,9 @@ assert(transitionStart >= 0 && serverFence > transitionStart && stateLock > serv
 {
   const stamp = '2026-07-13T12:00:00.000Z'
   const alertNow = new Date('2026-07-13T18:00:00.000Z')
-  const bid = (id: number, cash_price: number, extra: Record<string, unknown> = {}) => ({ id: uid(id), farm_id: uid(2), elevator: 'Local elevator', commodity_id: 'corn', bid_date: '2026-07-13', basis: -0.3, cash_price, delivery_start: null, delivery_end: null, notes: null, feed_source: null, feed_report_id: null, feed_geography: null, created_at: stamp, updated_at: stamp, ...extra })
+  const bid = (id: number, cash_price: number, extra: Record<string, unknown> = {}) => ({ id: uid(id), farm_id: uid(2), elevator: 'Local elevator', commodity_id: 'corn', bid_date: '2026-07-13', basis: -0.3, cash_price, delivery_start: '2026-10-01', delivery_end: '2026-10-31', notes: null, feed_source: null, feed_report_id: null, feed_geography: null, created_at: stamp, updated_at: stamp, ...extra })
   const target = { id: uid(20), farm_id: uid(2), crop_year: 2026, commodity_id: 'corn', operating_entity_id: null, enterprise_label: null, target_month: '2026-09', target_pct_of_production: 10, target_price: 4.5, breakeven_relative_pct: null, deadline: null, notes: null, created_at: stamp, updated_at: stamp }
-  const workspace = { fields: { farm: { id: uid(2), time_zone: 'America/Chicago' }, commodities: [{ id: 'corn', name: 'Corn' }], crop_assignments: [], entities: [], fields: [] }, production_estimates: [], grain_contracts: [], grain_contract_deliveries: [], marketing_plan_targets: [target], insurance_units: [], grain_bins: [], bin_inventory: [], bin_transactions: [], cash_bids: [], usda_report_dates: [], usda_market_reports: [], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null, grain_sale_limits: [], grain_carry_settings: null, grain_carry_grids: [] } as unknown as GrainWorkspace
+  const workspace = { fields: { farm: { id: uid(2), time_zone: 'America/Chicago' }, commodities: [{ id: 'corn', name: 'Corn', crop_family: 'corn' }], crop_assignments: [], entities: [], fields: [] }, production_estimates: [], grain_contracts: [], grain_contract_deliveries: [], marketing_plan_targets: [target], insurance_units: [], grain_bins: [], bin_inventory: [], bin_transactions: [], cash_bids: [], usda_report_dates: [], usda_market_reports: [], marketing_alert_rules: [], firm_offers: [], grain_alert_settings: null, grain_sale_limits: [], grain_carry_settings: null, grain_carry_grids: [] } as unknown as GrainWorkspace
   const feedByColumn = bid(30, 4.9, { elevator: 'Cedar Rapids', feed_source: 'usda_mars', feed_report_id: '2850', feed_geography: 'IA', notes: '[USDA MARS 2850 · Iowa]' })
   const feedByNote = bid(31, 4.9, { elevator: 'Cedar Rapids', notes: '[USDA MARS 2850] basis -0.35' })
   const manualBelow = bid(32, 4.2)
@@ -90,6 +90,12 @@ assert(transitionStart >= 0 && serverFence > transitionStart && stateLock > serv
   // Quarter cents stay visible: a $4.1275 bid must not read as the same price as a $4.13 target.
   const quarter = evaluateGrainAlerts({ ...workspace, marketing_plan_targets: [{ ...target, target_price: 4.125 }], cash_bids: [bid(35, 4.1275)] } as unknown as GrainWorkspace, alertNow).filter((alert) => alert.kind === 'price_target')
   assert(quarter[0]?.message === '2026 Corn cash bid $4.1275 (Local elevator) reached your $4.125 target.', `The plan-target price message must keep quarter cents: ${quarter[0]?.message}`)
+  // Old crop never fires a new-crop target: a July 2026 spot bid belongs to the 2025 crop (corn's year starts Sept 1).
+  assert(priceAlerts([bid(36, 4.9, { delivery_start: null, delivery_end: null })]).length === 0, 'An old-crop spot bid must not fire a 2026-crop target.')
+  // Nor does a bid for another crop year's delivery.
+  assert(priceAlerts([bid(37, 4.9, { delivery_start: '2027-10-01', delivery_end: '2027-10-31' })]).length === 0, 'A 2027-delivery bid must not fire a 2026-crop target.')
+  // A bid dated after the farm's today is never fresh.
+  assert(priceAlerts([bid(38, 4.9, { bid_date: '2026-09-15' })]).length === 0, 'A future-dated bid must not fire a target.')
   const due = evaluateGrainAlerts({ ...workspace, marketing_plan_targets: [{ ...target, target_price: null, deadline: '2026-07-20' }] } as unknown as GrainWorkspace, alertNow).filter((alert) => alert.kind === 'target_deadline')
   assert(due.length === 1 && due[0]!.message === '2026 Corn marketing target deadline is in seven days (Jul 20, 2026).' && due[0]!.key === `deadline:${target.id}:2026-07-20:seven-days`, `The plan-target deadline message must name the crop and a written date: ${due[0]?.message}`)
 }

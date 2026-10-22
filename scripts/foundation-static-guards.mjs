@@ -402,7 +402,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactStaticSource = read(root, 'scripts/foundation-static-guards.mjs')
   const artifactMutationSource = read(root, 'scripts/verify-foundation-mutations.mjs')
   if ((artifactStaticSource.split(artifactStaticBegin).length - 1) !== 1 || (artifactStaticSource.split(artifactStaticEnd).length - 1) !== 1) errors.push('artifact:soil-static-proof-span')
-  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 402')) errors.push('artifact:soil-mutation-proof')
+  if ((artifactMutationSource.split(artifactMutationBegin).length - 1) !== 1 || (artifactMutationSource.split(artifactMutationEnd).length - 1) !== 1 || !artifactMutationSource.includes('const expectedMutationCount = 403')) errors.push('artifact:soil-mutation-proof')
   for (const marker of ['artifactDiscoveryMutations.length !== 36', 'artifactReplacementMutations.length !== 19', 'artifactOmissionMutations.length !== 3', 'SOIL_ARTIFACT_MUTATION_MATRIX_PASS discovery=36 artifact=19 omission=3', 'FAKETIME_ARTIFACT_REPLACEMENT_GIT_AST_CHILD_PROOF_PASS']) {
     if (!artifactMutationSource.includes(marker) && !artifactSources[5].includes(marker)) errors.push('artifact:soil-mutation-proof')
   }
@@ -563,7 +563,10 @@ export function foundationStaticGuard(root = process.cwd()) {
   const marsOrchestrator = read(root, 'supabase/functions/_shared/marsFeedOrchestrator.ts')
   requireText(errors, marsOrchestrator, 'if (priorReportDates.some((reportDate) => reportDate === null || reportDate >= marketDate)) {', 'mars-feed:stale-report-refetched')
   const grainAlerts = read(root, 'src/data/grainAlerts.ts')
-  requireText(errors, grainAlerts, "bid.commodity_id === target.commodity_id && bid.cash_price !== null && !isMarsBid(bid) && observationFresh(bid.bid_date, now)", 'mars-feed:plan-target-ignores-feed')
+  requireText(errors, grainAlerts, "cropYearBids(workspace, target).filter((bid) => bid.cash_price !== null && !isMarsBid(bid) && bid.bid_date <= today && observationFresh(bid.bid_date, now))", 'mars-feed:plan-target-ignores-feed')
+  // Grain trust repair: HTA valuation, Today's bid line and plan-target alerts read bids through one crop-year
+  // reader, which must keep the feed fence.
+  requireText(errors, basisMath, "!isMarsBid(bid) && bid.farm_id === scope.farm_id && bid.commodity_id === scope.commodity_id", 'grain:crop-year-bids-exclude-feed')
   const deliverGrainAlert = read(root, 'supabase/functions/deliver-grain-alert/index.ts')
   // GL-2 narrowed GL-004 here: the plan-target confirm keeps its feed fence (exactly one), while the
   // marketing-rule re-check deliberately admits feed rows through the shared selection below.
