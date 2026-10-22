@@ -5,7 +5,7 @@ import { foundationStaticGuard } from './foundation-static-guards.mjs'
 
 const root = resolve(process.cwd())
 const temporary = mkdtempSync(join(tmpdir(), 'farmrx-foundation-mutations-'))
-const expectedMutationCount = 402
+const expectedMutationCount = 403
 let mutationCount = 0
 const artifactStaticBegin = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_BEGIN'
 const artifactStaticEnd = '// SOIL_' + 'ARTIFACT_STATIC_GUARD_END'
@@ -584,8 +584,11 @@ try {
   mutate('supabase/functions/_shared/marsFeedOrchestrator.ts', (source) => source.replace('if (priorReportDates.some((reportDate) => reportDate === null || reportDate >= marketDate)) {', 'if (priorReportDates.length > 0) {'))
   detected('MARS stale-report run treated as done for the day', 'mars-feed:stale-report-refetched')
   reset()
-  mutate('src/data/grainAlerts.ts', (source) => source.replace(' && !isMarsBid(bid) && observationFresh(bid.bid_date, now)', ' && observationFresh(bid.bid_date, now)'))
+  mutate('src/data/grainAlerts.ts', (source) => source.replace(' && !isMarsBid(bid) && bid.bid_date <= today', ' && bid.bid_date <= today'))
   detected('MARS feed row can reach a plan-target price alert', 'mars-feed:plan-target-ignores-feed')
+  reset()
+  mutate('src/data/basisMath.ts', (source) => source.replace('!isMarsBid(bid) && bid.farm_id === scope.farm_id', 'bid.farm_id === scope.farm_id'))
+  detected('MARS feed row can value an HTA or reach Today and plan alerts', 'grain:crop-year-bids-exclude-feed')
   reset()
   mutate('supabase/functions/deliver-grain-alert/index.ts', (source) => source.replace(".eq('farm_id',farmId).is('feed_source',null).maybeSingle()", ".eq('farm_id',farmId).maybeSingle()"))
   detected('MARS feed row can confirm a plan-target alert on the server', 'mars-feed:alert-recheck-ignores-feed')
