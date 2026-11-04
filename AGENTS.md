@@ -55,6 +55,12 @@ Standing approval (Mason, 2026-09-30): an agent may, without asking again, (a) a
 
 Never expose secrets, bypass hooks or required checks, force-push, push directly to `main`, use destructive recovery, or infer approval from silence. Before protected delivery or another outward action, follow `docs/agent-delivery.md` and recheck the current state.
 
+## Knowledge vaults
+
+- Business context (customers, suppliers, past decisions, the "why") lives in Mason's Obsidian vaults, not in this repo. Read the vault's `index.md` first, then the notes it points to. Code and live data win over notes.
+- `C:\Users\mason\Documents\CRX Notes` is the shared CRX/Farm Rx app-knowledge vault (Ingest/Query/Lint workflows in its `CLAUDE.md`; never bypass its privacy guard). `C:\Users\mason\Documents\Obsidian Vault` is private: read-only from this repo, and none of its private facts (customer names, money, contacts, account numbers) go into code, commits, PRs or this public repo.
+- Cloud sessions and other machines lack these paths; skip this section there.
+
 ## Keep this file lean
 
 Put task procedures in `docs/`, repeatable workflows in scripts, and hard guarantees in tests or hooks. If removing a line would not change every agent's behavior, move or remove it.
