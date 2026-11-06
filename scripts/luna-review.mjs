@@ -65,7 +65,7 @@ export function classify({ status, error, finalText, canary }) {
   if (!verdict) return { outcome: 'void', reason: `The last line is not a verdict: '${lines.at(-1)}'` }
   if (verdict[1]) return { outcome: 'findings', count: Number(verdict[1]) }
   // A CLEAN verdict under a listed finding contradicts itself, so it is not a pass.
-  if (lines.some((l) => /^[-*\s]*(?:\*\*)?(?:BLOCKER|HIGH|MED|LOW)\b/.test(l))) return { outcome: 'void', reason: 'The reply lists a finding but says CLEAN.' }
+  if (lines.some((l) => /^[-*#\d.)\s]*(?:\*\*)?(?:BLOCKER|HIGH|MED|LOW)\b/.test(l))) return { outcome: 'void', reason: 'The reply lists a finding but says CLEAN.' }
   return { outcome: 'clean' }
 }
 
