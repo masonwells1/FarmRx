@@ -12,7 +12,7 @@ Farm Rx `main` is connected to the production Vercel project. A merge to `main` 
 4. Create a clear local commit.
 5. State the exact commit, proof observed, remaining risk, rollback path, and requested outward action in plain English.
 
-After local proof is green, the agent may push the feature branch, create and maintain its pull request, and complete review without asking. Stop at `READY FOR APPROVAL` before merge or another hard-gated action and provide the exact short reply needed, unless the standing approval in `AGENTS.md` (Mason, 2026-09-30) covers it: an agent may merge its own pull request once every check is green, it has no merge conflict, and no review thread is open, after the merge-gate checks below. `/ship` (`.claude/skills/ship/SKILL.md`) runs this whole path.
+After local proof is green, the agent may push the feature branch, create and maintain its pull request, and complete review without asking. Stop at `READY FOR APPROVAL` before merge or another hard-gated action and provide the exact short reply needed. There is no standing merge approval (Mason, 2026-11-06): merge only when Mason told this session in the current conversation, at its start or later, that it may merge this work, and only after the merge-gate checks below. Because a merge to `main` is the production deploy, his yes to that merge covers the Vercel deploy it triggers, and nothing else. `/ship` (`.claude/skills/ship/SKILL.md`) runs this whole path.
 
 ## Protected pull-request path
 

@@ -53,17 +53,20 @@ No CodeRabbit review (Mason, 2026-10-19).
 3. `gh pr create` with auto-merge off. Body: what changed in plain English, proof observed, risk, and whether a migration rides along.
 4. Wait for the `foundation` and Vercel checks. A red check or a review comment is a defect: fix it on the **same** PR, run a Luna round on the fix (step 5), push, wait again.
 
-## 7. Merge (standing approval, Mason 2026-09-30)
+## 7. Merge (only with Mason's yes in this conversation; Mason, 2026-11-06)
 
-`AGENTS.md` › Hard outward gates lists merge as needing approval, then grants this exception in its "Standing approval" paragraph: an agent may, without asking again, "merge its own pull request once CI is green, it has no merge conflict, and no review thread is open" (and apply a migration already merged to main). So you may merge your own PR without asking when **all** of these are true. Check them live first:
+A merge to `main` is the production deploy, so there is no standing merge approval. If Mason said in this conversation (at the start, e.g. "ship it and merge it", or later) that you may merge this work, merge when the checks below pass. Otherwise stop with `READY FOR APPROVAL`: say in plain English what goes live, the proof, the risk and rollback, and the exact reply he can send ("merge it"). His yes covers the merge and the Vercel deploy it triggers, nothing else.
+
+Before merging, check **all** of these live (`docs/agent-delivery.md` › Merge gate):
 
 - `gh pr view <n> --json state,isDraft,mergeable,mergeStateStatus,headRefOid,statusCheckRollup`: open, not draft, mergeable, current with `main`, every check green.
 - No unresolved review thread or change request.
 - The head SHA is the one you proved, and Luna's last round on it left no BLOCKER or HIGH.
+- `main`'s branch protection still requires the `foundation` check and blocks force-pushes (`gh api repos/masonwells1/FarmRx/branches/main/protection`).
 
 Then: `gh pr merge <n> --merge --match-head-commit <sha>`. Never `--admin`, never `--auto`.
 
-**Stop with `READY FOR APPROVAL`** (and the exact reply Mason should send) instead of merging when the PR:
+**Even with a merge yes, stop with `READY FOR APPROVAL`** and ask again when the PR:
 - changes secrets, logins, who can see or share a farm (RLS, grants, sharing), or permissions;
 - deploys an edge function or makes any production change outside the merge;
 - deletes or rewrites existing data, or contacts a customer.
