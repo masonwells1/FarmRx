@@ -33,7 +33,7 @@ globalThis.setInterval = ((handler: () => void, delay?: number, ...rest: unknown
 const flush = async () => { await Promise.resolve(); await new Promise<void>((resolve) => setTimeout(() => resolve(), 0)); await Promise.resolve() }
 
 const stamp = '2026-07-15T11:30:00.000Z'
-const farm = { id: farmA, name: 'Clock Farm', share_with_rep: false, created_by: userA, created_at: stamp, updated_at: stamp }
+const farm = { id: farmA, name: 'Clock Farm', time_zone: 'America/Chicago', share_with_rep: false, created_by: userA, created_at: stamp, updated_at: stamp }
 const field: Field = { id: '00000000-0000-4000-8000-000000000101', farm_id: farmA, operating_entity_id: '00000000-0000-4000-8000-000000000020', name: 'North Forty', legal_description: null, county: null, state: null, total_acres: 80, fsa_farm_number: null, fsa_tract_number: null, soil_productivity_index: null, latitude: 41.5, longitude: -93.6, location_source: 'gps', is_active: true, created_at: stamp, updated_at: stamp } as Field
 const fieldsData: FieldsData = { farm, entities: [], fields: [field], crop_assignments: [], arrangements: [], commodities: [] }
 const workspace: EquipmentTasksWorkspace = { fields: fieldsData, viewer: { user_id: userA, role: 'owner' }, equipment: [], meter_readings: [], intervals: [], service_log: [], service_due: [], members: [], tasks: [] }
@@ -78,7 +78,8 @@ try {
   assert(!container.querySelector('.town-credit'), 'The Open-Meteo credit stayed after the forecast verdict was dropped.')
   // FD-015: the snapshots are re-read when the farm's day turns over while Today stays open, and when the app comes back into view.
   const readsBeforeMidnight = equipmentReads
-  clock = loadedAt + 13 * 60 * 60_000
+  // 18 hours after 07:00 in Chicago is 01:00 the next farm day, whatever zone the test machine is in.
+  clock = loadedAt + 18 * 60 * 60_000
   await act(async () => { tickAll(); await flush(); await flush() })
   assert(equipmentReads === readsBeforeMidnight + 1, `Crossing the farm's midnight must re-read the snapshots once (reads ${readsBeforeMidnight} -> ${equipmentReads}).`)
   await act(async () => { document.dispatchEvent(new Event('visibilitychange')); await flush(); await flush() })
