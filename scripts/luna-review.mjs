@@ -63,7 +63,10 @@ export function classify({ status, error, finalText, canary }) {
   if (lines.filter((l) => l.startsWith('LUNA_REVIEW:')).length !== 1) return { outcome: 'void', reason: 'Expected exactly one LUNA_REVIEW line.' }
   const verdict = /^LUNA_REVIEW: (?:CLEAN|FINDINGS ([1-9]\d*))$/.exec(lines.at(-1))
   if (!verdict) return { outcome: 'void', reason: `The last line is not a verdict: '${lines.at(-1)}'` }
-  return verdict[1] ? { outcome: 'findings', count: Number(verdict[1]) } : { outcome: 'clean' }
+  if (verdict[1]) return { outcome: 'findings', count: Number(verdict[1]) }
+  // A CLEAN verdict under a listed finding contradicts itself, so it is not a pass.
+  if (lines.some((l) => /^[-*\s]*(?:\*\*)?(?:BLOCKER|HIGH|MED|LOW)\b/.test(l))) return { outcome: 'void', reason: 'The reply lists a finding but says CLEAN.' }
+  return { outcome: 'clean' }
 }
 
 function git(args) {

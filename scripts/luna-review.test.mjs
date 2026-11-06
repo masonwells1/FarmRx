@@ -11,6 +11,8 @@ assert.equal(ok('LUNA_REVIEW: CLEAN').outcome, 'void', 'missing canary means the
 assert.equal(ok(`${canary}-END\nfindings after the canary\nLUNA_REVIEW: CLEAN`).outcome, 'void', 'canary must sit just above the verdict')
 assert.equal(ok(`${canary}-END\nLUNA_REVIEW: CLEAN\nLUNA_REVIEW: FINDINGS 2`).outcome, 'void', 'two verdicts')
 assert.equal(ok(`${canary}-END\nLUNA_REVIEW: CLEAN\nmore text`).outcome, 'void', 'verdict must be last')
+assert.equal(ok(`- **HIGH — a.ts:1** bug\n${canary}-END\nLUNA_REVIEW: CLEAN`).outcome, 'void', 'CLEAN under a listed finding')
+assert.deepEqual(ok(`No BLOCKER or HIGH issues found.\n${canary}-END\nLUNA_REVIEW: CLEAN`), { outcome: 'clean' })
 assert.equal(ok(`${canary}-END\nLUNA_REVIEW: FINDINGS 0`).outcome, 'void', 'zero findings is not a verdict')
 assert.equal(classify({ status: 1, error: null, finalText: `${canary}-END\nLUNA_REVIEW: CLEAN`, canary }).outcome, 'void')
 assert.equal(classify({ status: null, error: new Error('ETIMEDOUT'), finalText: '', canary }).outcome, 'void')

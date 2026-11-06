@@ -29,7 +29,7 @@ A green status row alone is not approval. Immediately before asking Mason to app
 
 - the pull request is open, non-draft, mergeable, current with `main`, and auto-merge is off;
 - every reported required check is green;
-- no unresolved real review finding or change request remains;
+- no unresolved real review finding or change request remains (a Luna MED/LOW named as a deferral in the pull request counts as handled; a BLOCKER or HIGH never does);
 - the frozen SHA and final pull-request head are identical; and
 - the current branch protection still enforces the expected pull-request and approval gates.
 
