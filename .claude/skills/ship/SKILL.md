@@ -37,7 +37,7 @@ Tests passing is not proof on its own: say what you ran and what you saw.
 
 ## 5. Review: yours, then Luna's
 
-1. Commit everything (both reviews below read committed work only; `git status --short` must be empty). Then read the whole diff once (`git diff origin/main...HEAD`) as a reviewer: wrong logic, missed callers, leftover debug code, anything outside the job. Fix what you find and commit again.
+1. Commit this job's files (both reviews below read committed work only). Stage them by name; never commit someone else's uncommitted work, and leave theirs untouched. Then read the whole diff once (`git diff origin/main...HEAD`) as a reviewer: wrong logic, missed callers, leftover debug code, anything outside the job. Fix what you find and commit again.
 2. Run `node scripts/luna-review.mjs` (Luna, high effort, adversarial; Mason, 2026-11-06). It can take several minutes, so run it in the background.
    - Exit 0: clean. Exit 1: findings. Exit 2: Luna did not run, which is never a pass; fix the cause and rerun.
    - Check each finding against the code. Fix every real BLOCKER and HIGH, rerun step 4, commit, and run Luna again until none remains. Fix MED/LOW, or list each one you defer in the pull request.
@@ -55,7 +55,7 @@ No CodeRabbit review (Mason, 2026-10-19).
 
 ## 7. Merge (standing approval, Mason 2026-09-30)
 
-You may merge your own PR without asking when **all** of these are true. Check them live first:
+`AGENTS.md` › Hard outward gates lists merge as needing approval, then grants this exception in its "Standing approval" paragraph: an agent may, without asking again, "merge its own pull request once CI is green, it has no merge conflict, and no review thread is open" (and apply a migration already merged to main). So you may merge your own PR without asking when **all** of these are true. Check them live first:
 
 - `gh pr view <n> --json state,isDraft,mergeable,mergeStateStatus,headRefOid,statusCheckRollup`: open, not draft, mergeable, current with `main`, every check green.
 - No unresolved review thread or change request.
