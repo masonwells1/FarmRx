@@ -12,7 +12,7 @@ Farm Rx `main` is connected to the production Vercel project. A merge to `main` 
 4. Create a clear local commit.
 5. State the exact commit, proof observed, remaining risk, rollback path, and requested outward action in plain English.
 
-After local proof is green, the agent may push the feature branch, create and maintain its pull request, and complete review without asking. Stop at `READY FOR APPROVAL` before merge or another hard-gated action and provide the exact short reply needed.
+After local proof is green, the agent may push the feature branch, create and maintain its pull request, and complete review without asking. Stop at `READY FOR APPROVAL` before merge or another hard-gated action and provide the exact short reply needed. There is no standing merge approval (Mason, 2026-11-06): merge only when Mason told this session in the current conversation, at its start or later, that it may merge this work, and only after the merge-gate checks below. Because a merge to `main` is the production deploy, his yes to that merge covers the Vercel deploy it triggers, and nothing else. `/ship` (`.claude/skills/ship/SKILL.md`) runs this whole path.
 
 ## Protected pull-request path
 
@@ -21,7 +21,7 @@ After local proof is green, the agent may push the feature branch, create and ma
 3. Bring the branch current with `main` and require all reported checks, including Foundation and Vercel, to be green.
 4. Freeze the candidate and record its exact head SHA. A new commit or base update invalidates the candidate; rerun checks and freeze the new head.
 
-No CodeRabbit review and no separate adversarial review is required before merge (Mason, 2026-10-19). CodeRabbit stays installed but silent: automatic, incremental, label, and description-triggered reviews stay disabled in `.coderabbit.yaml` so it never spends the review budget FarmRx shares with CRX Manager. Untagged chat replies are off too (`chat.auto_reply: false`). Do not request a CodeRabbit review or tag `@coderabbitai` unless Mason asks for one; a Claude hook (`.claude/hooks/coderabbit-ask.mjs`) stops any `gh` command that mentions it and asks him first.
+Luna review (Mason, 2026-11-06): before a pull request opens, run `node scripts/luna-review.mjs` (Codex `gpt-6-luna` at high effort, adversarial, on the branch diff against `origin/main`). Fix or refute every BLOCKER and HIGH with evidence and rerun until none remains; fix MED/LOW or name each as a deferral in the pull request. Exit 2 means Luna did not run, which is never a pass. A fix pushed after the pull request opens gets another Luna round before the push. No CodeRabbit review is required before merge (Mason, 2026-10-19). CodeRabbit stays installed but silent: automatic, incremental, label, and description-triggered reviews stay disabled in `.coderabbit.yaml` so it never spends the review budget FarmRx shares with CRX Manager. Untagged chat replies are off too (`chat.auto_reply: false`). Do not request a CodeRabbit review or tag `@coderabbitai` unless Mason asks for one; a Claude hook (`.claude/hooks/coderabbit-ask.mjs`) stops any `gh` command that mentions it and asks him first.
 
 ## Merge gate
 
@@ -29,7 +29,7 @@ A green status row alone is not approval. Immediately before asking Mason to app
 
 - the pull request is open, non-draft, mergeable, current with `main`, and auto-merge is off;
 - every reported required check is green;
-- no unresolved real review finding or change request remains;
+- no unresolved real review finding or change request remains (a Luna MED/LOW named as a deferral in the pull request counts as handled; a BLOCKER or HIGH never does);
 - the frozen SHA and final pull-request head are identical; and
 - the current branch protection still enforces the expected pull-request and approval gates.
 
