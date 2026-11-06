@@ -1,6 +1,6 @@
 // Self-check for the Luna verdict parser: only a complete, single, final verdict counts.
 import assert from 'node:assert/strict'
-import { buildPrompt, classify } from './luna-review.mjs'
+import { buildPrompt, classify, codexCommand } from './luna-review.mjs'
 
 const canary = 'FARMRX-TEST'
 const ok = (body) => classify({ status: 0, error: null, finalText: body, canary })
@@ -20,3 +20,8 @@ assert.equal(classify({ status: null, error: new Error('ETIMEDOUT'), finalText: 
 assert.match(buildPrompt('+x', canary), /tail canary: FARMRX-TEST-END/)
 
 console.log('Luna review parser tests passed.')
+
+// No shell, so a path with spaces stays one argument (Codex App finding on PR #82).
+assert.deepEqual(codexCommand({ platform: 'linux' }), ['codex'])
+assert.throws(() => codexCommand({ platform: 'win32', appData: 'C:\No Such Dir' }), /Codex CLI not found/)
+console.log('Luna launcher tests passed.')

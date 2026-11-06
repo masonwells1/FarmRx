@@ -13,7 +13,7 @@
 //   * The verdict comes from the -o final-message file, never the transcript, which echoes the prompt.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -70,6 +70,15 @@ export function classify({ status, error, finalText, canary }) {
   return { outcome: 'clean' }
 }
 
+// No shell: a shell would split paths that contain spaces. On Windows the npm `codex` command is a
+// .cmd shim, which cannot start without a shell, so run its JavaScript entry with this Node instead.
+export function codexCommand({ platform = process.platform, appData = process.env.APPDATA ?? '' } = {}) {
+  if (platform !== 'win32') return ['codex']
+  const entry = path.join(appData, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+  if (!existsSync(entry)) throw new Error(`Codex CLI not found at ${entry}. Install it with npm install -g @openai/codex.`)
+  return [process.execPath, entry]
+}
+
 function git(args) {
   const run = spawnSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   if (run.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${run.stderr.trim()}`)
@@ -104,10 +113,11 @@ function main(argv) {
   try {
     const finalPath = path.join(workDir, 'final.txt')
     console.error(`Luna (${LUNA_MODEL}, ${LUNA_EFFORT}) is reviewing ${diff.split('\n').length} diff lines...`)
-    const run = spawnSync('codex', [
-      'exec', '--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--sandbox', 'read-only',
+    const [command, ...prefix] = codexCommand()
+    const run = spawnSync(command, [
+      ...prefix, 'exec','--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--sandbox', 'read-only',
       '-C', workDir, '-m', LUNA_MODEL, '-c', `model_reasoning_effort="${LUNA_EFFORT}"`, '-o', finalPath, '-',
-    ], { input: buildPrompt(diff, canary), encoding: 'utf8', shell: process.platform === 'win32', timeout: 30 * 60 * 1000, maxBuffer: 256 * 1024 * 1024 })
+    ], { input: buildPrompt(diff, canary), encoding: 'utf8', timeout: 30 * 60 * 1000, maxBuffer: 256 * 1024 * 1024 })
     let finalText = ''
     try { finalText = readFileSync(finalPath, 'utf8') } catch {}
     const result = classify({ status: run.status, error: run.error, finalText, canary })
@@ -122,7 +132,7 @@ function main(argv) {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     process.exitCode = main(process.argv.slice(2))
   } catch (error) {
