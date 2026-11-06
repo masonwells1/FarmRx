@@ -37,8 +37,8 @@ Tests passing is not proof on its own: say what you ran and what you saw.
 
 ## 5. Review: yours, then Luna's
 
-1. Read the whole diff once (`git diff origin/main...`) as a reviewer: wrong logic, missed callers, leftover debug code, anything outside the job. Fix what you find.
-2. Commit, then run `node scripts/luna-review.mjs` (Luna, high effort, adversarial; Mason, 2026-11-06). It can take several minutes, so run it in the background.
+1. Commit everything (both reviews below read committed work only; `git status --short` must be empty). Then read the whole diff once (`git diff origin/main...HEAD`) as a reviewer: wrong logic, missed callers, leftover debug code, anything outside the job. Fix what you find and commit again.
+2. Run `node scripts/luna-review.mjs` (Luna, high effort, adversarial; Mason, 2026-11-06). It can take several minutes, so run it in the background.
    - Exit 0: clean. Exit 1: findings. Exit 2: Luna did not run, which is never a pass; fix the cause and rerun.
    - Check each finding against the code. Fix every real BLOCKER and HIGH, rerun step 4, commit, and run Luna again until none remains. Fix MED/LOW, or list each one you defer in the pull request.
    - A finding you reject needs evidence (file and line showing why it can't happen).
@@ -48,7 +48,7 @@ No CodeRabbit review (Mason, 2026-10-19).
 
 ## 6. Commit, push, pull request
 
-1. Commit with a plain message saying what changed and why.
+1. Make sure each commit message says in plain words what changed and why.
 2. `git push -u origin <branch>` (the pre-push hook rechecks TypeScript and refuses `main`).
 3. `gh pr create` with auto-merge off. Body: what changed in plain English, proof observed, risk, and whether a migration rides along.
 4. Wait for the `foundation` and Vercel checks. A red check or a review comment is a defect: fix it on the **same** PR, run a Luna round on the fix (step 5), push, wait again.
