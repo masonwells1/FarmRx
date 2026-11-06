@@ -35,16 +35,23 @@ Run what the change reaches, and fix anything red before moving on:
 
 Tests passing is not proof on its own: say what you ran and what you saw.
 
-## 5. Review your own diff
+## 5. Review: yours, then Luna's
 
-Read the whole diff once (`git diff origin/main...`) as a reviewer: wrong logic, missed callers, leftover debug code, anything outside the job. Fix and rerun step 4 if anything changed. No CodeRabbit and no second-model review (Mason, 2026-10-19).
+1. Read the whole diff once (`git diff origin/main...`) as a reviewer: wrong logic, missed callers, leftover debug code, anything outside the job. Fix what you find.
+2. Commit, then run `node scripts/luna-review.mjs` (Luna, high effort, adversarial; Mason, 2026-11-06). It can take several minutes, so run it in the background.
+   - Exit 0: clean. Exit 1: findings. Exit 2: Luna did not run, which is never a pass; fix the cause and rerun.
+   - Check each finding against the code. Fix every real BLOCKER and HIGH, rerun step 4, commit, and run Luna again until none remains. Fix MED/LOW, or list each one you defer in the pull request.
+   - A finding you reject needs evidence (file and line showing why it can't happen).
+3. Tell Mason in plain English what Luna found and what you did about it.
+
+No CodeRabbit review (Mason, 2026-10-19).
 
 ## 6. Commit, push, pull request
 
 1. Commit with a plain message saying what changed and why.
 2. `git push -u origin <branch>` (the pre-push hook rechecks TypeScript and refuses `main`).
 3. `gh pr create` with auto-merge off. Body: what changed in plain English, proof observed, risk, and whether a migration rides along.
-4. Wait for the `foundation` and Vercel checks. A red check is a defect: fix it on the **same** PR, push, wait again.
+4. Wait for the `foundation` and Vercel checks. A red check or a review comment is a defect: fix it on the **same** PR, run a Luna round on the fix (step 5), push, wait again.
 
 ## 7. Merge (standing approval, Mason 2026-09-30)
 
@@ -52,7 +59,7 @@ You may merge your own PR without asking when **all** of these are true. Check t
 
 - `gh pr view <n> --json state,isDraft,mergeable,mergeStateStatus,headRefOid,statusCheckRollup`: open, not draft, mergeable, current with `main`, every check green.
 - No unresolved review thread or change request.
-- The head SHA is the one you proved.
+- The head SHA is the one you proved, and Luna's last round on it left no BLOCKER or HIGH.
 
 Then: `gh pr merge <n> --merge --match-head-commit <sha>`. Never `--admin`, never `--auto`.
 

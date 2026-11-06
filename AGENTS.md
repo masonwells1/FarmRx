@@ -47,7 +47,7 @@ Current source, executable tests, migrations, and live read-only evidence outran
 
 ## Hard outward gates
 
-Agents may push branches and open, update, label, and comment on pull requests without asking (Mason, 2026-09-05). No CodeRabbit or adversarial review is required (Mason, 2026-10-19). The pre-push hook still refuses any push that targets `main`.
+Agents may push branches and open, update, label, and comment on pull requests without asking (Mason, 2026-09-05). No CodeRabbit review is required (Mason, 2026-10-19). Every change gets a Luna high-effort adversarial review (`node scripts/luna-review.mjs`) before its pull request opens, repeated after fixes until no BLOCKER or HIGH finding remains (Mason, 2026-11-06). The pre-push hook still refuses any push that targets `main`.
 
 Get Mason's explicit approval in the current conversation before merge; deploy; live migration or live data change; secrets, authentication, or permissions change; customer account action; customer communication; destructive action; purchase; or binding commitment. Local edits, tests, verification, commits, branch pushes, and pull-request work do not authorize a later hard-gated action.
 
