@@ -46,7 +46,8 @@ Hunt these first, then anything else:
 For each finding: severity BLOCKER/HIGH/MED/LOW, file:line, what breaks, and a concrete failure
 scenario (inputs -> wrong result).
 Then echo the tail canary from the final marker line verbatim on its own line.
-End with exactly one final line: LUNA_REVIEW: CLEAN  or  LUNA_REVIEW: FINDINGS <count>
+Start every finding line with its severity word. End with exactly one final line:
+LUNA_REVIEW: CLEAN (only if you found nothing at any severity)  or  LUNA_REVIEW: FINDINGS <count>
 
 ===== CANDIDATE DIFF (canary: ${canary}) =====
 ${diff}
