@@ -8,6 +8,7 @@ const ok = (body) => classify({ status: 0, error: null, finalText: body, canary 
 assert.deepEqual(ok(`no issues\n${canary}-END\nLUNA_REVIEW: CLEAN`), { outcome: 'clean' })
 assert.deepEqual(ok(`HIGH a.ts:1 bug\n${canary}-END\nLUNA_REVIEW: FINDINGS 1\n`), { outcome: 'findings', count: 1 })
 assert.equal(ok('LUNA_REVIEW: CLEAN').outcome, 'void', 'missing canary means the diff was not read')
+assert.equal(ok(`${canary}-END\nfindings after the canary\nLUNA_REVIEW: CLEAN`).outcome, 'void', 'canary must sit just above the verdict')
 assert.equal(ok(`${canary}-END\nLUNA_REVIEW: CLEAN\nLUNA_REVIEW: FINDINGS 2`).outcome, 'void', 'two verdicts')
 assert.equal(ok(`${canary}-END\nLUNA_REVIEW: CLEAN\nmore text`).outcome, 'void', 'verdict must be last')
 assert.equal(ok(`${canary}-END\nLUNA_REVIEW: FINDINGS 0`).outcome, 'void', 'zero findings is not a verdict')
