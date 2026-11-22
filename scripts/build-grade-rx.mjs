@@ -2,10 +2,11 @@ import { execFileSync } from 'node:child_process'
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
+import { loadEnv } from 'vite'
 
 const { GRADE_RX_SOURCE_TOKEN, ...buildEnv } = process.env
 const gradeSourceCommit = '25c4f8d7623db6034f197a63480e9e4f19124aa7'
-const pilot = buildEnv.VITE_GRADE_RX_PILOT_USER_ID
+const { VITE_GRADE_RX_PILOT_USER_ID: pilot } = loadEnv('production', process.cwd(), 'VITE_GRADE_RX_PILOT_USER_ID')
 if (!pilot) process.exit(0)
 if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(pilot)) {
   throw new Error('Grade Rx pilot account must be a Farm Rx user ID.')
