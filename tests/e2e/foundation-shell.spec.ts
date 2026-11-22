@@ -953,6 +953,29 @@ test('multi-farm access requires an explicit choice and keeps both farms usable'
   expect(unexpected).toEqual([])
 })
 
+test('Fields opens the protected Grade Rx preview in a separate tab', async ({ page, context }) => {
+  const previewUrl = 'https://grade-mjoy2bg5d-mason-wells-projects.vercel.app/'
+  const launchLink = page.getByRole('link', { name: 'Open Grade Rx (new tab)' })
+  await page.goto('/fields')
+  await expect(page).toHaveURL(/\/login/)
+  await expect(launchLink).toHaveCount(0)
+
+  await seedSession(context)
+  const unexpected = await mockSupabase(page, [farms[0]])
+  await page.goto('/fields')
+  await expect(launchLink).toBeVisible()
+  await expect(launchLink).toHaveAttribute('href', previewUrl)
+  expect((await launchLink.boundingBox())?.height).toBeGreaterThanOrEqual(48)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
+
+  await context.route(previewUrl, (route) => route.fulfill({ contentType: 'text/html', body: '<title>Grade Rx test destination</title>' }))
+  const [preview] = await Promise.all([context.waitForEvent('page'), launchLink.click()])
+  await expect(preview).toHaveURL(previewUrl)
+  expect(await preview.evaluate(() => ({ opener: window.opener, referrer: document.referrer }))).toEqual({ opener: null, referrer: '' })
+  await expect(page).toHaveURL(/\/fields$/)
+  expect(unexpected).toEqual([])
+})
+
 test('a long valid farm name keeps the phone farm switcher inside its summary', async ({ page, context }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-phone', 'Phone layout proof runs in the phone browser project.')
   await page.setViewportSize({ width: 390, height: 844 })
