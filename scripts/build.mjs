@@ -1,21 +1,38 @@
 import { execFileSync } from 'node:child_process'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
-import { loadEnv } from 'vite'
+import { fileURLToPath } from 'node:url'
 
 const { GRADE_RX_SOURCE_TOKEN, ...buildEnv } = process.env
+delete process.env.GRADE_RX_SOURCE_TOKEN
+const { loadEnv } = await import('vite')
 const gradeSourceCommit = '25c4f8d7623db6034f197a63480e9e4f19124aa7'
 const { VITE_GRADE_RX_PILOT_USER_ID: pilot } = loadEnv('production', process.cwd(), 'VITE_GRADE_RX_PILOT_USER_ID')
-if (!pilot) process.exit(0)
-if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(pilot)) {
+if (pilot && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(pilot)) {
   throw new Error('Grade Rx pilot account must be a Farm Rx user ID.')
 }
+
+function runFarmBuild(entry, ...args) {
+  execFileSync(process.execPath, [fileURLToPath(new URL(entry, import.meta.url)), ...args], { env: buildEnv, stdio: 'inherit' })
+}
+
+runFarmBuild('../node_modules/typescript/bin/tsc', '-b')
+runFarmBuild('../node_modules/vite/bin/vite.js', 'build')
+if (!pilot) process.exit(0)
 
 function copyWorkspace(source) {
   const html = readFileSync(join(source, 'index.html'), 'utf8')
   if (!html.includes('<title>GradeRx · Crop RX Solutions</title>') || !html.includes('src="/grade-rx-app/assets/')) {
     throw new Error('Expected a Grade Rx build made with --mode farm-rx.')
+  }
+  const resources = [...html.matchAll(/\b(?:href|src)="\/grade-rx-app\/((?:assets\/)?[\w.-]+)"/g)].map((match) => match[1])
+  if (!resources.some((resource) => resource.startsWith('assets/') && resource.endsWith('.js'))) {
+    throw new Error('Grade Rx build has no workspace script.')
+  }
+  for (const resource of [...resources, 'atlas14-il.json', 'atlas14-il.bin']) {
+    const file = statSync(join(source, resource), { throwIfNoEntry: false })
+    if (!file?.isFile() || !file.size) throw new Error(`Grade Rx build is missing ${resource}.`)
   }
   cpSync(source, 'dist/grade-rx-app', { recursive: true })
 }
