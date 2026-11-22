@@ -115,6 +115,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 h1 { margin: 0; color: var(--charcoal); font-size: 34px; font-weight: 700; letter-spacing: -.01em; line-height: 1.12; }
 h1 .accent-word { font-weight: 500; color: var(--crx-green); }
 .page-heading p { margin: 6px 0 0; color: var(--matte-gray); }
+.grade-rx-workspace { display: block; width: 100%; height: clamp(420px, 74dvh, 900px); border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); }
 .primary-action { min-width: 48px; min-height: 52px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 12px; padding: 12px 20px; background: var(--crx-green); color: var(--on-dark); font-weight: 700; text-decoration: none; transition: background-color 180ms ease-out, transform 180ms ease-out; }
 .primary-action:hover { background: var(--deep-green); }
 .primary-action:active { transform: translateY(1px); }

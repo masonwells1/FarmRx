@@ -9,6 +9,8 @@ cleanupOutdatedCaches()
 precacheAndRoute(self.__WB_MANIFEST)
 self.skipWaiting()
 clientsClaim()
+// Grade Rx has its own document and must never receive the Farm Rx app shell.
+registerRoute(({ request, url }) => request.mode === 'navigate' && url.pathname.startsWith('/grade-rx-app/'), ({ request }) => fetch(request))
 // A one-time recovery token is consumed before Supabase redirects here. Never let an older
 // precached app shell handle that redirect: recovery must load the current network shell.
 registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html'), { denylist: [/^\/update-password(?:[/?]|$)/] }))

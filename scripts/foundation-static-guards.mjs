@@ -142,7 +142,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   const artifactMutationBegin = '// SOIL_' + 'ARTIFACT_MUTATION_MATRIX_BEGIN'
   const artifactMutationEnd = '// SOIL_' + 'ARTIFACT_MUTATION_MATRIX_END'
   const app = read(root, 'src/App.tsx')
-  const expectedRoutes = ['/today', '/fields', '/fields/new', '/fields/:id', '/fields/:id/edit', '/grain/*', '/inventory', '/profitability/*', '/equipment', '/tasks', '/weather', '/field-log', '/scouting', '/harvest', '/programs', '/notifications', '/soil-rx', '/privacy', '*', '/login', '/update-password', '/*']
+  const expectedRoutes = ['/today', '/fields', '/fields/grade-rx', '/fields/new', '/fields/:id', '/fields/:id/edit', '/grain/*', '/inventory', '/profitability/*', '/equipment', '/tasks', '/weather', '/field-log', '/scouting', '/harvest', '/programs', '/notifications', '/soil-rx', '/privacy', '*', '/login', '/update-password', '/*']
   const actualRoutes = [...app.matchAll(/<Route\b[^>]*?\bpath="([^"]+)"/g)].map((match) => match[1])
   if (actualRoutes.length !== expectedRoutes.length || actualRoutes.some((route, index) => route !== expectedRoutes[index])) errors.push('routes:exact-ordered-manifest')
   requireText(errors, app, 'mobilePrimaryOrder = ["/today", "/grain", "/fields"]', 'mobile:primary-destinations')
@@ -459,6 +459,7 @@ export function foundationStaticGuard(root = process.cwd()) {
   requireText(errors, cache, 'financialCacheMaxAgeMs = 24 * 60 * 60 * 1_000', 'cache:financial-expiry')
   const serviceWorker = read(root, 'src/sw.ts')
   requireText(errors, serviceWorker, "registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html'), { denylist: [/^\\/update-password(?:[/?]|$)/] }))", 'service-worker:recovery-network-shell')
+  requireText(errors, serviceWorker, "request.mode === 'navigate' && url.pathname.startsWith('/grade-rx-app/'), ({ request }) => fetch(request)", 'service-worker:grade-rx-network-shell')
   const passwordRecovery = read(root, 'src/auth/passwordRecovery.ts')
   requireText(errors, passwordRecovery, "passwordRecoveryOrigin = 'https://recovery.croprxsolutions.app'", 'auth:worker-free-recovery-origin')
   requireText(errors, passwordRecovery, "canonicalFarmRxOrigin = 'https://farm-rx.vercel.app'", 'auth:canonical-app-origin')
@@ -520,9 +521,14 @@ export function foundationStaticGuard(root = process.cwd()) {
   const vercel = JSON.parse(read(root, 'vercel.json'))
   const appRule = vercel.headers.find((rule) => rule.source.includes('?!market-quote-frame'))
   const frameRule = vercel.headers.find((rule) => rule.source === '/market-quote-frame.html')
+  const gradeFrameRule = vercel.headers.find((rule) => rule.source === '/grade-rx-app/index.html')
   const headers = Object.fromEntries(appRule.headers.map(({ key, value }) => [key, value]))
   for (const directive of ["default-src 'self'", "object-src 'none'", "frame-ancestors 'none'"]) if (!headers['Content-Security-Policy']?.includes(directive)) errors.push(`csp:${directive}`)
   if (headers['Content-Security-Policy']?.match(/script-src[^;]*tradingview/)) errors.push('csp:third-party-parent-script')
+  const gradeCsp = gradeFrameRule?.headers.find(({ key }) => key === 'Content-Security-Policy')?.value
+  if (!gradeCsp?.includes("frame-ancestors 'self'") || !gradeCsp?.includes("script-src 'self'")) errors.push('csp:grade-rx-same-origin-frame')
+  if (!gradeFrameRule || new RegExp(`^${appRule.source}$`).test(gradeFrameRule.source)) errors.push('csp:grade-rx-frame-excluded-from-app-rule')
+  if (/nationalmap\.gov|waterdata\.usgs\.gov|sdmdataaccess\.sc\.egov\.usda\.gov/.test(headers['Content-Security-Policy'] ?? '')) errors.push('csp:grade-rx-data-sources-limited-to-frame')
   const frameCsp = Object.fromEntries(frameRule.headers.map(({ key, value }) => [key, value]))['Content-Security-Policy']
   if (!frameCsp?.includes('https://s3.tradingview.com')) errors.push('csp:frame-script-source')
   const frameDocument = read(root, 'public/market-quote-frame.html')

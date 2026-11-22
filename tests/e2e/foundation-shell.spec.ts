@@ -954,6 +954,7 @@ test('multi-farm access requires an explicit choice and keeps both farms usable'
 })
 
 test('Fields opens the protected Grade Rx preview in a separate tab', async ({ page, context }) => {
+  test.skip(process.env.VITE_GRADE_RX_PILOT_USER_ID === userId, 'The pilot uses the in-app workspace.')
   const previewUrl = 'https://grade-mjoy2bg5d-mason-wells-projects.vercel.app/'
   const launchLink = page.getByRole('link', { name: 'Open Grade Rx (new tab)' })
   await page.goto('/fields')
@@ -973,6 +974,56 @@ test('Fields opens the protected Grade Rx preview in a separate tab', async ({ p
   await expect(preview).toHaveURL(previewUrl)
   expect(await preview.evaluate(() => ({ opener: window.opener, referrer: document.referrer }))).toEqual({ opener: null, referrer: '' })
   await expect(page).toHaveURL(/\/fields$/)
+  await page.goto('/fields/grade-rx')
+  await expect(page).toHaveURL(/\/fields$/)
+  await expect(page.getByTitle('Grade Rx drainage workspace')).toHaveCount(0)
+  expect(unexpected).toEqual([])
+})
+
+test('Fields opens Grade Rx with the configured Farm Rx account', async ({ page, context }, testInfo) => {
+  test.skip(process.env.VITE_GRADE_RX_PILOT_USER_ID !== userId, 'Enable the Grade Rx build with the synthetic pilot user.')
+  const path = '/fields/grade-rx'
+  const workspace = page.getByTitle('Grade Rx drainage workspace')
+  await page.goto(path)
+  await expect(page).toHaveURL(/\/login/)
+  await expect(workspace).toHaveCount(0)
+
+  await seedSession(context)
+  const unexpected = await mockSupabase(page)
+  await page.goto('/fields')
+  await page.getByRole('button', { name: 'Prairie View' }).click()
+  await expect(page).toHaveURL(/\/today$/)
+  await page.goto('/fields')
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready
+    if (!navigator.serviceWorker.controller) await new Promise<void>((resolve) => navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), { once: true }))
+  })
+  const launch = page.getByRole('link', { name: 'Open Grade Rx', exact: true })
+  await expect(launch).toBeVisible()
+  await expect(launch).toHaveAttribute('href', path)
+  expect((await launch.boundingBox())?.height).toBeGreaterThanOrEqual(48)
+  await launch.click()
+  await expect(page).toHaveURL(/\/fields\/grade-rx$/)
+  await expect(workspace).toHaveAttribute('data-grade-scope', `${userId}:${farmA}`)
+  await expect(workspace.contentFrame().getByRole('heading', { name: 'Your fields' })).toBeVisible()
+  expect(context.pages()).toHaveLength(1)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
+  await page.screenshot({ path: testInfo.outputPath('grade-rx-fields.png') })
+
+  await page.getByRole('link', { name: 'Back to Fields' }).click()
+  await expect(workspace).toHaveCount(0)
+  await launch.click()
+  await expect(workspace.contentFrame().getByRole('heading', { name: 'Your fields' })).toBeVisible()
+  await page.getByLabel('Active farm').selectOption(farmB)
+  await expect(page).toHaveURL(/\/today$/)
+  await expect(workspace).toHaveCount(0)
+  await page.goto('/fields')
+  await launch.click()
+  await expect(workspace).toHaveAttribute('data-grade-scope', `${userId}:${farmB}`)
+  await expect(workspace.contentFrame().getByRole('heading', { name: 'Your fields' })).toBeVisible()
+  await page.getByRole('button', { name: 'Sign out' }).click()
+  await expect(page).toHaveURL(/\/login/)
+  await expect(workspace).toHaveCount(0)
   expect(unexpected).toEqual([])
 })
 
