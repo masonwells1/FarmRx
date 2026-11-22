@@ -598,6 +598,20 @@ export function FieldsPage() {
           Add field
         </Link>
       </div>
+      <section className="page-heading" aria-labelledby="grade-rx-heading">
+        <div>
+          <h2 id="grade-rx-heading">Grade Rx preview</h2>
+          <p>Map drainage and compare dry dams and diversions. Plans are saved in the browser you use for Grade Rx. Sign in to Vercel to open the preview.</p>
+        </div>
+        <a
+          className="secondary-action"
+          href="https://grade-mjoy2bg5d-mason-wells-projects.vercel.app/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Open Grade Rx (new tab)
+        </a>
+      </section>
       <div className="stats-grid" aria-label="Farm totals">
         <StatCard
           label="Fields"
