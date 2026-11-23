@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 const { GRADE_RX_SOURCE_TOKEN, ...buildEnv } = process.env
 delete process.env.GRADE_RX_SOURCE_TOKEN
 const { loadEnv } = await import('vite')
-const gradeSourceCommit = '25c4f8d7623db6034f197a63480e9e4f19124aa7'
+const gradeSourceCommit = '3ee6c0a043ae34e5806a5a82451f8036069f6e92'
 const { VITE_GRADE_RX_PILOT_USER_ID: pilot } = loadEnv('production', process.cwd(), 'VITE_GRADE_RX_PILOT_USER_ID')
 if (pilot && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(pilot)) {
   throw new Error('Grade Rx pilot account must be a Farm Rx user ID.')
