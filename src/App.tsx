@@ -226,8 +226,10 @@ function allowedNavigation(access: FarmAccessContextValue): NavigationItem[] {
 }
 
 // Grade Rx sits under /fields but has its own nav item, so Fields is not also marked current there.
+// Matches NavLink: case-insensitive, trailing slash ignored.
 function isNavActive(path: string, pathname: string): boolean {
-  return pathname === path || (pathname.startsWith(`${path}/`) && pathname !== gradeRxPath);
+  const current = pathname.toLowerCase().replace(/\/+$/, "");
+  return current === path || (current.startsWith(`${path}/`) && current !== gradeRxPath);
 }
 
 function CapabilityRoute({ module, editOnly = false, lockWrites = false, children }: { module: FarmAppModule; editOnly?: boolean; lockWrites?: boolean; children: ReactNode }) {

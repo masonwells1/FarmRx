@@ -960,6 +960,7 @@ test('Grade Rx stays out of navigation and Fields outside the pilot', async ({ p
   await page.goto('/fields')
   await expect(page.getByText('North Forty')).toBeVisible()
   await expect(page.getByText(/Grade Rx/)).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
   if (testInfo.project.name === 'chromium-phone') {
     await page.getByRole('navigation', { name: 'Farm Rx navigation' }).getByRole('button', { name: 'More' }).click()
     await expect(page.getByRole('region', { name: 'More Farm Rx destinations' }).getByRole('link', { name: 'Alerts' })).toBeVisible()
@@ -982,7 +983,7 @@ test('the sidebar opens Grade Rx with the configured Farm Rx account', async ({ 
     if (phone) await page.getByRole('navigation', { name: 'Farm Rx navigation' }).getByRole('button', { name: 'More' }).click()
     const link = (phone ? page.getByRole('region', { name: 'More Farm Rx destinations' }) : page.locator('.sidebar')).getByRole('link', { name: 'Grade Rx' })
     await expect(link).toHaveAttribute('href', path)
-    expect((await link.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+    expect((await link.boundingBox())?.height).toBeGreaterThanOrEqual(48)
     await link.click()
   }
   await page.goto(path)
