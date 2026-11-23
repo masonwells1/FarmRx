@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  readonly VITE_GRADE_RX_PILOT_USER_ID?: string
   readonly VITE_PASSWORD_EMAIL_DELIVERY_ENABLED?: string
   readonly VITE_LOCAL_SUPABASE_PROJECT_REF?: string
   readonly VITE_LOCAL_SUPABASE_URL?: string

@@ -19,6 +19,7 @@ import { settlePendingSettingsWork } from "./data/pendingSettingsWork";
 import { beginFarmReplayAuthorization, canAccessFarmModule, canEditFarmModule, canReplayFarmModule, createFarmAccessValidationGate, FarmAccessStorageUnsafeError, hasPendingFarmWork, loadFarmAccess, loadFarmAccessProfile, publishFarmReadyAuthorization, selectFarm, type FarmAccess, type FarmAppModule, type LoadedFarmAccessProfile } from "./auth/farmContext";
 import { RevokedFarmRecovery } from './components/RevokedFarmRecovery';
 import { LazyRouteErrorBoundary } from "./components/LazyRouteErrorBoundary";
+import { GradeRxPage } from "./GradeRxPage";
 import { createSubmitLock } from "./lib/submitLock";
 import { RequireSession } from "./auth/RequireSession";
 import { NotificationsPage, NotificationBell } from "./NotificationsModule";
@@ -333,6 +334,7 @@ function AppLayout() {
             <Routes>
             <Route path="/today" element={<CapabilityRoute module="fields"><TodayPage fieldsRepository={fieldsRepository} equipmentTasksRepository={equipmentTasksRepository} notificationsRepository={notificationsRepository} inventoryRepository={inventoryRepository} programsRepository={programsRepository} grainRepository={grainServices.grainRepository} /></CapabilityRoute>} />
             <Route path="/fields" element={<CapabilityRoute module="fields" lockWrites><FieldsPage /></CapabilityRoute>} />
+            <Route path="/fields/grade-rx" element={<CapabilityRoute module="fields"><GradeRxPage /></CapabilityRoute>} />
             <Route path="/fields/new" element={<CapabilityRoute module="fields" editOnly><FieldFormPage /></CapabilityRoute>} />
             <Route path="/fields/:id" element={<CapabilityRoute module="fields" lockWrites><FieldDetailPage readHarvestLoads={readHarvestLoads} /></CapabilityRoute>} />
             <Route path="/fields/:id/edit" element={<CapabilityRoute module="fields" editOnly><FieldFormPage /></CapabilityRoute>} />

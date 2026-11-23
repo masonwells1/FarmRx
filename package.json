@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "node scripts/build.mjs",
     "test:e2e": "playwright test",
     "test:e2e:update": "playwright test --update-snapshots",
     "test:agent-guidance": "node scripts/luna-review.test.mjs && node scripts/check-agent-guidance.test.mjs && node scripts/check-agent-guidance.mjs",
